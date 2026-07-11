@@ -2,11 +2,18 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
+#include "network/AssetSyncService.h"
+#include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
@@ -51,6 +58,25 @@ size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp)
 size_t fileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     return fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
+}
+
+/// @brief 以二进制写入模式打开更新临时文件。
+/// @param path 需要创建或覆盖的文件路径。
+/// @return 打开成功时返回文件句柄，失败时返回空指针。
+FILE* openBinaryWriteFile(const std::filesystem::path& path)
+{
+#if defined(_WIN32) && defined(_MSC_VER) && !defined(__MINGW32__) && \
+    !defined(__MINGW64__)
+    FILE* file = nullptr;
+    if ( _wfopen_s(&file, path.wstring().c_str(), L"wb") != 0 ) {
+        return nullptr;
+    }
+    return file;
+#elif defined(_WIN32)
+    return _wfopen(path.wstring().c_str(), L"wb");
+#else
+    return fopen(path.c_str(), "wb");
+#endif
 }
 
 /// @brief 写入更新启动失败原因。
@@ -116,6 +142,51 @@ bool ensureExecutablePermission(const std::filesystem::path& path,
 }
 #endif
 
+/// @brief 从 JSON 对象读取字符串字段。
+/// @param object JSON 对象。
+/// @param key 字段名。
+/// @return 字段缺失或类型错误时返回空字符串。
+std::string jsonString(const json& object, const char* key)
+{
+    if ( !object.is_object() ) return {};
+    auto it = object.find(key);
+    if ( it == object.end() || !it->is_string() ) return {};
+    return it->get_ref<const std::string&>();
+}
+
+/// @brief 从 JSON 对象读取非负字节数字段。
+/// @param object JSON 对象。
+/// @param key 字段名。
+/// @return 字段缺失或类型错误时返回 0。
+int64_t jsonByteSize(const json& object, const char* key)
+{
+    if ( !object.is_object() ) return 0;
+    auto it = object.find(key);
+    if ( it == object.end() || !it->is_number() ) return 0;
+    const double value = it->get<double>();
+    if ( !std::isfinite(value) || value < 0.0 ||
+         value > static_cast<double>(std::numeric_limits<int64_t>::max()) ) {
+        return 0;
+    }
+    return static_cast<int64_t>(value);
+}
+
+/// @brief 归一化 SHA256 文本。
+/// @param value 原始 SHA256 文本。
+/// @return 合法时返回小写 64 位十六进制字符串，否则返回空。
+std::string normalizeSha256(std::string value)
+{
+    if ( value.size() != 64 ) return {};
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    const bool valid = std::all_of(value.begin(), value.end(), [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+    });
+    return valid ? value : std::string{};
+}
+
 }  // namespace
 
 UpdateChecker::~UpdateChecker()
@@ -174,10 +245,22 @@ bool UpdateChecker::parseVersion(const std::string& verStr, int& major,
                                          std::regex::ECMAScript);
     std::smatch             match;
     if ( std::regex_search(verStr, match, versionRegex) && match.size() >= 3 ) {
-        major = std::stoi(match[1].str());
-        minor = std::stoi(match[2].str());
+        auto parseInt = [](const std::ssub_match& token, int& value) -> bool {
+            const std::string text = token.str();
+            const auto [ptr, ec] =
+                std::from_chars(text.data(), text.data() + text.size(), value);
+            return ec == std::errc{} && ptr == text.data() + text.size();
+        };
+
+        if ( !parseInt(match[1], major) || !parseInt(match[2], minor) ) {
+            major = minor = patch = 0;
+            return false;
+        }
         if ( match.size() >= 4 && match[3].matched ) {
-            patch = std::stoi(match[3].str());
+            if ( !parseInt(match[3], patch) ) {
+                major = minor = patch = 0;
+                return false;
+            }
         }
         return true;
     }
@@ -296,10 +379,10 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 #if defined(_WIN32)
     std::filesystem::path dlPath    = Config::utf8ToPath(downloadedFilePath);
     std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
-    std::wstring cmdLine = L"\"" + updaterPath.wstring() + L"\" \"" +
+    std::wstring          cmdLine   = L"\"" + updaterPath.wstring() + L"\" \"" +
                            dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
                            L"\" " + std::to_wstring(pid);
-    STARTUPINFOW si{ sizeof(si) };
+    STARTUPINFOW        si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessW(nullptr,
                         cmdLine.data(),
@@ -359,9 +442,12 @@ bool UpdateChecker::checkStartupUpdateMarker()
     std::filesystem::path markerPath =
         Config::utf8ToPath(exePath).parent_path() / ".mm_update_success";
 
-    if ( !std::filesystem::exists(markerPath) ) return false;
+    std::error_code markerError;
+    if ( !std::filesystem::exists(markerPath, markerError) || markerError ) {
+        return false;
+    }
 
-    std::filesystem::remove(markerPath);
+    std::filesystem::remove(markerPath, markerError);
     return true;
 }
 
@@ -464,35 +550,44 @@ void UpdateChecker::checkAsync()
                 }
             }
 
-            try {
-                json data = json::parse(responseBody);
+            json data = json::parse(responseBody, nullptr, false);
+            if ( data.is_discarded() || !data.is_object() ) {
+                result.status       = UpdateStatus::kError;
+                result.errorMessage = "JSON parse error";
+                XERROR("UpdateChecker: {}", result.errorMessage);
+            } else {
+                result.latestVersion = jsonString(data, "version");
+                result.changelog     = jsonString(data, "changelog");
+                result.releaseDate   = jsonString(data, "release_date");
 
-                result.latestVersion = data.value("version", "");
-                result.changelog     = data.value("changelog", "");
-                result.releaseDate   = data.value("release_date", "");
+                const char* platform    = MMM_PLATFORM;
+                auto        platformsIt = data.find("platforms");
+                if ( platformsIt != data.end() && platformsIt->is_object() ) {
+                    auto platformIt = platformsIt->find(platform);
+                    if ( platformIt != platformsIt->end() &&
+                         platformIt->is_object() ) {
+                        const auto& plat    = *platformIt;
+                        result.downloadUrl  = jsonString(plat, "url");
+                        result.downloadSize = jsonByteSize(plat, "size");
+                        result.checksum     = jsonString(plat, "checksum");
 
-                const char* platform = MMM_PLATFORM;
-                if ( data.contains("platforms") &&
-                     data["platforms"].contains(platform) ) {
-                    auto& plat          = data["platforms"][platform];
-                    result.downloadUrl  = plat.value("url", "");
-                    result.downloadSize = plat.value("size", 0);
-                    result.checksum     = plat.value("checksum", "");
+                        // 拼接完整 URL
+                        if ( !result.downloadUrl.empty() &&
+                             result.downloadUrl[0] == '/' ) {
+                            result.downloadUrl =
+                                "https://mmm.xiang233.top" + result.downloadUrl;
+                        }
 
-                    // 拼接完整 URL
-                    if ( !result.downloadUrl.empty() &&
-                         result.downloadUrl[0] == '/' ) {
-                        result.downloadUrl =
-                            "https://mmm.xiang233.top" + result.downloadUrl;
-                    }
-
-                    // 解析更新器地址
-                    if ( plat.contains("updater") ) {
-                        result.updaterUrl = plat["updater"].value("url", "");
-                        if ( !result.updaterUrl.empty() &&
-                             result.updaterUrl[0] == '/' ) {
-                            result.updaterUrl =
-                                "https://mmm.xiang233.top" + result.updaterUrl;
+                        // 解析更新器地址
+                        auto updaterIt = plat.find("updater");
+                        if ( updaterIt != plat.end() &&
+                             updaterIt->is_object() ) {
+                            result.updaterUrl = jsonString(*updaterIt, "url");
+                            if ( !result.updaterUrl.empty() &&
+                                 result.updaterUrl[0] == '/' ) {
+                                result.updaterUrl = "https://mmm.xiang233.top" +
+                                                    result.updaterUrl;
+                            }
                         }
                     }
                 }
@@ -511,11 +606,6 @@ void UpdateChecker::checkAsync()
                     XINFO("UpdateChecker: Already up to date ({})",
                           result.currentVersion);
                 }
-            } catch ( const std::exception& e ) {
-                result.status = UpdateStatus::kError;
-                result.errorMessage =
-                    fmt::format("JSON parse error: {}", e.what());
-                XERROR("UpdateChecker: {}", result.errorMessage);
             }
 
             {
@@ -577,11 +667,7 @@ void UpdateChecker::downloadAsync()
                 "MusicMapMaker_updater";
 #endif
 
-#ifdef _WIN32
-            FILE* uFile = _wfopen(updaterTempPath.wstring().c_str(), L"wb");
-#else
-            FILE* uFile = fopen(updaterTempPath.c_str(), "wb");
-#endif
+            FILE* uFile = openBinaryWriteFile(updaterTempPath);
             if ( !uFile ) {
                 fail("Failed to create updater temp file");
                 return;
@@ -623,7 +709,8 @@ void UpdateChecker::downloadAsync()
             curl_easy_cleanup(uCurl);
 
             if ( uRes != CURLE_OK ) {
-                std::filesystem::remove(updaterTempPath);
+                std::error_code removeError;
+                std::filesystem::remove(updaterTempPath, removeError);
                 if ( isCancelRequested() ) {
                     return;
                 }
@@ -634,7 +721,8 @@ void UpdateChecker::downloadAsync()
 
 #if !defined(_WIN32)
             if ( !ensureExecutablePermission(updaterTempPath, nullptr) ) {
-                std::filesystem::remove(updaterTempPath);
+                std::error_code removeError;
+                std::filesystem::remove(updaterTempPath, removeError);
                 fail("Failed to mark updater executable");
                 return;
             }
@@ -653,11 +741,7 @@ void UpdateChecker::downloadAsync()
         std::filesystem::path mainTempPath =
             std::filesystem::temp_directory_path() / "MusicMapMaker_update";
 
-#ifdef _WIN32
-        FILE* mFile = _wfopen(mainTempPath.wstring().c_str(), L"wb");
-#else
-        FILE* mFile = fopen(mainTempPath.c_str(), "wb");
-#endif
+        FILE* mFile = openBinaryWriteFile(mainTempPath);
         if ( !mFile ) {
             fail("Failed to create main temp file");
             return;
@@ -708,12 +792,27 @@ void UpdateChecker::downloadAsync()
         curl_easy_cleanup(mCurl);
 
         if ( mRes != CURLE_OK ) {
-            std::filesystem::remove(mainTempPath);
+            std::error_code removeError;
+            std::filesystem::remove(mainTempPath, removeError);
             if ( isCancelRequested() ) {
                 return;
             }
             fail(fmt::format("Download error: {}", curl_easy_strerror(mRes)));
             return;
+        }
+
+        if ( !result.checksum.empty() ) {
+            const std::string expectedChecksum =
+                normalizeSha256(result.checksum);
+            const std::string actualChecksum =
+                AssetSyncService::sha256File(mainTempPath);
+            if ( expectedChecksum.empty() || actualChecksum.empty() ||
+                 actualChecksum != expectedChecksum ) {
+                std::error_code removeError;
+                std::filesystem::remove(mainTempPath, removeError);
+                fail("Downloaded update checksum verification failed");
+                return;
+            }
         }
 
         result.downloadProgress   = 1.0;

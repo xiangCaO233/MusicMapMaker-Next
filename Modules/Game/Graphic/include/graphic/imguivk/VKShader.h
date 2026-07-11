@@ -55,8 +55,7 @@ public:
 
     /**
      * @brief 获取渲染管线所需的着色器阶段创建信息列表
-     * @return std::vector<vk::PipelineShaderStageCreateInfo>
-     *         包含所有已加载 Shader 的 Stage 配置信息
+     * @return 包含所有已加载 Shader 阶段配置的创建信息列表
      */
     std::vector<vk::PipelineShaderStageCreateInfo> getShaderStageCreateInfos();
 

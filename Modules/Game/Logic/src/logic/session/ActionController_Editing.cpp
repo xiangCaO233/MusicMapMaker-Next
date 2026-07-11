@@ -76,6 +76,22 @@ bool isPlaceableCreatedNote(const NoteComponent& note)
     return true;
 }
 
+/// @brief 移除 Malody timing 拍位缓存。
+/// @param metadata 待修改的 Timing 元数据。
+void clearMalodyTimingBeatMetadata(::MMM::TimingMetadata& metadata)
+{
+    auto sourceIt =
+        metadata.timing_properties.find(::MMM::TimingMetadataType::MALODY);
+    if ( sourceIt == metadata.timing_properties.end() ) {
+        return;
+    }
+
+    sourceIt->second.erase("beat");
+    if ( sourceIt->second.empty() ) {
+        metadata.timing_properties.erase(sourceIt);
+    }
+}
+
 /// @brief 复制粘贴分拍换算使用的 BPM 时间点。
 struct ClipboardBeatTimelinePoint {
     double timestamp{ 0.0 };  ///< BPM 时间点，单位秒
@@ -886,7 +902,7 @@ private:
     double m_afterPreferenceBpm{ 120.0 };
 };
 
-// --- Editing Handlers ---
+// --- 编辑命令处理 ---
 
 void ActionController::handleCommand(const CmdUndo& cmd)
 {
@@ -1359,7 +1375,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 }
 
-// --- Timeline Handlers ---
+// --- 时间线命令处理 ---
 
 void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
 {
@@ -1368,6 +1384,11 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         auto newTl = oldTl;
         newTl.m_timestamp = cmd.newTime;
         newTl.m_value     = cmd.newValue;
+        if ( cmd.metadataOverride ) {
+            newTl.m_metadata = *cmd.metadataOverride;
+        } else if ( std::abs(newTl.m_timestamp - oldTl.m_timestamp) > 1e-6 ) {
+            clearMalodyTimingBeatMetadata(newTl.m_metadata);
+        }
 
         auto action = std::make_unique<TimelineAction>(
             TimelineAction::Type::Update, cmd.entity, oldTl, newTl);
@@ -1408,7 +1429,8 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
         entries.push_back(
             { entt::null,
               std::nullopt,
-              TimelineComponent{ event.time, event.type, event.value } });
+              TimelineComponent{
+                  event.time, event.type, event.value, event.metadata } });
     }
 
     auto action =
@@ -1541,14 +1563,14 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
 
-    // Helper function to extract common beat divisors from the skin
+    // 从皮肤配置中读取常用分拍。
     auto getCommonDivisorsFromSkin = []() -> std::vector<int> {
         return MMM::Config::SkinManager::instance().getCommonDivisors();
     };
 
     std::vector<int> commonDivisors = getCommonDivisorsFromSkin();
 
-    // Gather BPM/Timing events
+    // 收集 BPM/Timing 事件。
     auto tlView = m_ctx.timelineRegistry.view<const TimelineComponent>();
     std::vector<const TimelineComponent*> bpmEvents;
     for ( auto entity : tlView ) {
@@ -1574,7 +1596,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         double bestSnappedTime  = rawTime;
         double minWeightedError = std::numeric_limits<double>::max();
 
-        // Find the timing event containing rawTime
+        // 查找包含 rawTime 的 Timing 事件。
         const TimelineComponent* currentBPM = nullptr;
         double                   bpmTime    = 0.0;
         double                   bpmVal     = 120.0;
@@ -1707,7 +1729,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     std::unordered_map<entt::entity, NoteComponent> newNotes = originalNotes;
 
-    // Align non-polyline notes and child subnotes
+    // 对齐非折线音符和子音符。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type != ::MMM::NoteType::POLYLINE ) {
             bool shouldAlign = false;
@@ -1730,7 +1752,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         }
     }
 
-    // Sync subnotes within parent polylines
+    // 同步父折线中的子音符顺序。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
             struct ChildInfo {
@@ -1782,7 +1804,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         }
     }
 
-    // Generate BatchNoteAction entries
+    // 生成 BatchNoteAction 条目。
     for ( auto entity : toAlign ) {
         entries.push_back({ entity, originalNotes[entity], newNotes[entity] });
     }

@@ -185,8 +185,11 @@ private:
     /// @brief 上一次同步到元数据编辑副本的谱面路径。
     std::string m_lastBeatmapPath;
 
-    /// @brief 下一帧是否聚焦设置窗口。
-    bool m_focusNextFrame{ true };
+    /// @brief 新建停靠窗口首帧可能覆盖焦点请求，因此连续请求两帧。
+    static constexpr uint8_t FOCUS_REQUEST_FRAME_COUNT = 2;
+
+    /// @brief 设置窗口剩余的聚焦请求帧数。
+    uint8_t m_focusRequestFramesRemaining{ 0 };
 
     /// @brief 下一帧是否尝试将设置窗口停靠到主编辑区中心。
     bool m_dockToCenterNextFrame{ true };

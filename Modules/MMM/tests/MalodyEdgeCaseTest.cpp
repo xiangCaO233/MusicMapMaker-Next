@@ -563,6 +563,98 @@ void test_sound_column_does_not_expand_key_count()
     XINFO("PASS: SOUND column ignored for key count");
 }
 
+/// @brief 确认近空 Malody 谱面中的字符串 BPM 可以无异常加载。
+void testStringBpmInNearlyEmptyMapLoads()
+{
+    XINFO("=== Test: Nearly empty Malody map with string BPM loads ===");
+
+    const fs::path outPath = std::filesystem::temp_directory_path() /
+                             "edge_nearly_empty_string_bpm.mc";
+
+    json  fileData;
+    auto& meta             = fileData["meta"];
+    meta["$ver"]           = 0;
+    meta["creator"]        = "Test";
+    meta["background"]     = "background.png";
+    meta["version"]        = "4K HD";
+    meta["id"]             = 0;
+    meta["mode"]           = 7;
+    meta["mode_ext"]       = json::object();
+    meta["song"]["title"]  = "NearlyEmpty";
+    meta["song"]["artist"] = "Test";
+
+    json timing;
+    timing["beat"]     = json::array({ 0, 0, 1 });
+    timing["bpm"]      = "234";
+    fileData["time"]   = json::array({ timing });
+    fileData["effect"] = json::array();
+
+    json playableNote;
+    playableNote["beat"] = json::array({ 0, 0, 4 });
+    playableNote["x"]    = 32;
+
+    json soundNote;
+    soundNote["beat"]  = json::array({ 0, 0, 1 });
+    soundNote["sound"] = "audio.mp3";
+    soundNote["type"]  = 1;
+    fileData["note"]   = json::array({ playableNote, soundNote });
+
+    std::ofstream ofs(outPath);
+    TEST_ASSERT(ofs.good(), "should open string BPM temp Malody file");
+    ofs << fileData.dump();
+    ofs.close();
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outPath);
+
+    TEST_ASSERT(reloaded.m_timings.size() == 1,
+                "string BPM map should have one timing");
+    TEST_ASSERT(reloaded.m_timings.front().m_bpm == 234.0,
+                "string BPM should parse as 234");
+    TEST_ASSERT(reloaded.m_baseMapMetadata.preference_bpm == 234.0,
+                "string BPM should become preferred BPM");
+    TEST_ASSERT(reloaded.m_allNotes.size() == 1,
+                "SOUND node should not become a playable note");
+
+    XINFO("PASS: Nearly empty Malody map with string BPM loaded");
+}
+
+/// @brief 确认只有元数据且缺少 time、effect、note 段的 Malody 谱面可加载。
+void testMetadataOnlyMapLoadsWithDefaults()
+{
+    XINFO("=== Test: Metadata-only Malody map loads with defaults ===");
+
+    const fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_metadata_only.mc";
+
+    json  fileData;
+    auto& meta             = fileData["meta"];
+    meta["$ver"]           = 0;
+    meta["creator"]        = "Test";
+    meta["version"]        = "Empty";
+    meta["mode"]           = 7;
+    meta["mode_ext"]       = json::object();
+    meta["song"]["title"]  = "MetadataOnly";
+    meta["song"]["artist"] = "Test";
+
+    std::ofstream ofs(outPath);
+    TEST_ASSERT(ofs.good(), "should open metadata-only temp Malody file");
+    ofs << fileData.dump();
+    ofs.close();
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outPath);
+
+    TEST_ASSERT(reloaded.m_allNotes.empty(),
+                "metadata-only map should have no notes");
+    TEST_ASSERT(reloaded.m_timings.size() == 1,
+                "metadata-only map should receive a default timing");
+    TEST_ASSERT(reloaded.m_timings.front().m_bpm == 120.0,
+                "metadata-only map should use the default BPM");
+    TEST_ASSERT(reloaded.m_baseMapMetadata.track_count == 4,
+                "metadata-only map should use four default tracks");
+
+    XINFO("PASS: Metadata-only Malody map loaded with defaults");
+}
+
 void test_original_structure_not_leaked()
 {
     XINFO("=== Test: original_structure key not leaked into output ===");
@@ -683,6 +775,8 @@ int main()
     test_internal_offset_metadata_not_exported();
     test_empty_version_exports_default_metadata();
     test_sound_column_does_not_expand_key_count();
+    testStringBpmInNearlyEmptyMapLoads();
+    testMetadataOnlyMapLoadsWithDefaults();
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();
 

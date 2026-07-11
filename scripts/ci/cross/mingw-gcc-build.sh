@@ -10,12 +10,14 @@ Configure and build the Windows MinGW GCC cross target on Linux.
 Options:
   --build-dir <path>      Build directory. Default: build_cross_mingw_gcc
   --build-type <type>     CMake build type. Default: RelWithDebInfo
-  --compiler-tag <tag>    Prebuilt compiler tag. Default: gcc14-win32
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: ucrt64
   --jobs <count>          Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>        PROJECT_LINKAGE value: static or shared. Default: static
-  --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32
-  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/x86_64-w64-mingw32
+  --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32ucrt
+  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/<prefix>
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-gcc.cmake
+  --sources-build         Configure with SOURCES_BUILD=ON.
+  --prebuilt-targets      Build only third-party targets used for staging.
   --configure-only        Configure and generate, then stop
   --fresh                 Remove the build directory before configuring
   -h, --help              Show this help
@@ -88,7 +90,13 @@ detectMingwSysroot() {
         fi
     fi
 
-    printf "/usr/x86_64-w64-mingw32\n"
+    local prefixedSysroot="/usr/${toolPrefix}"
+    if [[ -d "${prefixedSysroot}" ]]; then
+        printf "%s\n" "${prefixedSysroot}"
+        return
+    fi
+
+    printf "/usr/x86_64-w64-mingw32ucrt\n"
 }
 
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,11 +105,13 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 buildDir="build_cross_mingw_gcc"
 buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
-compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-gcc14-win32}"
+compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-ucrt64}"
 projectLinkage="static"
-toolPrefix="x86_64-w64-mingw32"
+toolPrefix="x86_64-w64-mingw32ucrt"
 mingwSysroot=""
 toolchainFile="cmake/toolchain/cross-mingw-gcc.cmake"
+sourcesBuild="OFF"
+prebuiltTargets=0
 configureOnly=0
 freshBuild=0
 
@@ -171,6 +181,14 @@ while (( $# > 0 )); do
             toolchainFile="$2"
             shift 2
             ;;
+        --sources-build)
+            sourcesBuild="ON"
+            shift
+            ;;
+        --prebuilt-targets)
+            prebuiltTargets=1
+            shift
+            ;;
         --configure-only)
             configureOnly=1
             shift
@@ -228,6 +246,10 @@ requireCommand cmake
 requireCommand "${toolPrefix}-gcc"
 requireCommand "${toolPrefix}-g++"
 requireCommand "${toolPrefix}-windres"
+requireCommand "${toolPrefix}-ar"
+requireCommand "${toolPrefix}-ranlib"
+requireCommand "${toolPrefix}-strip"
+requireCommand "${toolPrefix}-objcopy"
 
 if [[ ! -d "${MINGW_SYSROOT}" ]]; then
     printf "error: MINGW_SYSROOT does not exist: %s\n" "${MINGW_SYSROOT}" >&2
@@ -252,8 +274,11 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
     -DMINGW_SYSROOT="${MINGW_SYSROOT}" \
     -DMINGW_TOOLCHAIN_PREFIX="${toolPrefix}" \
+    -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
+    -DICE_LINKAGE="${projectLinkage}" \
     -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
+    -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
@@ -263,4 +288,30 @@ if (( configureOnly )); then
     exit 0
 fi
 
-cmake --build "${buildDir}" --parallel "${buildJobs}"
+if (( prebuiltTargets )); then
+    cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
+        zlib_project \
+        lame_project \
+        ffmpeg_project \
+        fftw_project \
+        rubberband_project \
+        samplerate \
+        IonCachyEngine-static \
+        3rd_implot \
+        3rd_miniz \
+        imgui-static \
+        freetype \
+        glfw \
+        ImGuiFileDialog \
+        nfd \
+        lunasvg \
+        plutovg \
+        libcurl_static \
+        fmt \
+        spdlog \
+        OpenAL \
+        SDL3-static \
+        luajit_build
+else
+    cmake --build "${buildDir}" --parallel "${buildJobs}"
+fi

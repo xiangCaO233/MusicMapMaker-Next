@@ -196,7 +196,7 @@ private:
     ///@brief 图集 UV 缓存，用于同步给逻辑线程
     std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
 
-    // --- Vulkan devices for dynamic loading ---
+    // --- 动态加载使用的 Vulkan 设备 ---
     vk::PhysicalDevice m_physicalDevice{ nullptr };
     vk::Device         m_logicalDevice{ nullptr };
     vk::CommandPool    m_cmdPool{ nullptr };

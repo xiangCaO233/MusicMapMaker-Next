@@ -52,8 +52,8 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
   set(LJ_OUTPUT_PDB "")
   # shared 依赖偏好构建 lua51.dll，运行库必须跟随主项目使用 /MD(d)。
   set(LJ_USE_DLL_CRT OFF)
-  if(PROJECT_LINKAGE STREQUAL "shared"
-     OR CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+  if(PROJECT_LINKAGE STREQUAL "shared" OR CMAKE_MSVC_RUNTIME_LIBRARY MATCHES
+                                          "DLL")
     set(LJ_USE_DLL_CRT ON)
   endif()
   if(PROJECT_LINKAGE STREQUAL "shared")
@@ -123,10 +123,38 @@ elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
   set(CROSS_COMPILE_ARGS "")
   if(CMAKE_CROSSCOMPILING)
     set(CROSS_COMPILE_ARGS "HOST_CC=gcc" "TARGET_SYS=Windows")
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-      list(APPEND CROSS_COMPILE_ARGS "CROSS=x86_64-w64-mingw32-")
+    if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+      # clang64 预编译包必须使用当前 CMake 工具链的 clang 目标参数，不能退回 x86_64-w64-mingw32-gcc 前缀。
+      set(LJ_TARGET_FLAGS "")
+      if(CMAKE_C_COMPILER_TARGET)
+        string(APPEND LJ_TARGET_FLAGS " --target=${CMAKE_C_COMPILER_TARGET}")
+      endif()
+      if(CMAKE_SYSROOT)
+        string(APPEND LJ_TARGET_FLAGS " --sysroot=${CMAKE_SYSROOT}")
+      endif()
+      string(STRIP "${LJ_TARGET_FLAGS}" LJ_TARGET_FLAGS)
+      set(LJ_TARGET_LINK_FLAGS "${LJ_TARGET_FLAGS} ${CMAKE_EXE_LINKER_FLAGS}")
+      string(STRIP "${LJ_TARGET_LINK_FLAGS}" LJ_TARGET_LINK_FLAGS)
+      list(
+        APPEND
+        CROSS_COMPILE_ARGS
+        "TARGET_CC=${CMAKE_C_COMPILER} ${LJ_TARGET_FLAGS}"
+        "TARGET_STCC=${CMAKE_C_COMPILER} ${LJ_TARGET_FLAGS}"
+        "TARGET_LD=${CMAKE_C_COMPILER} ${LJ_TARGET_LINK_FLAGS}"
+        "TARGET_AR=${CMAKE_AR} rcus"
+        "TARGET_STRIP=${CMAKE_STRIP}")
     else()
-      list(APPEND CROSS_COMPILE_ARGS "CROSS=i686-w64-mingw32-")
+      if(DEFINED MINGW_TOOLCHAIN_PREFIX AND NOT MINGW_TOOLCHAIN_PREFIX STREQUAL
+                                            "")
+        # GCC MinGW 的 UCRT64 与 win32 线程模型使用不同前缀，LuaJIT 必须继承当前工具链。
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=${MINGW_TOOLCHAIN_PREFIX}-")
+      elseif(CMAKE_C_COMPILER_TARGET)
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=${CMAKE_C_COMPILER_TARGET}-")
+      elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=x86_64-w64-mingw32-")
+      else()
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=i686-w64-mingw32-")
+      endif()
     endif()
   endif()
 
@@ -176,7 +204,9 @@ add_custom_target(luajit_build DEPENDS "${LJ_BUILD_STAMP}")
 
 # 定义为静态导入库
 set(LUAJIT_IMPORTED_TYPE STATIC)
-if(MSVC AND PROJECT_LINKAGE STREQUAL "shared" AND NOT CMAKE_CROSSCOMPILING)
+if(MSVC
+   AND PROJECT_LINKAGE STREQUAL "shared"
+   AND NOT CMAKE_CROSSCOMPILING)
   set(LUAJIT_IMPORTED_TYPE SHARED)
 endif()
 add_library(luajit ${LUAJIT_IMPORTED_TYPE} IMPORTED GLOBAL)
@@ -185,7 +215,9 @@ add_library(luajit::luajit ALIAS luajit)
 add_dependencies(luajit luajit_build)
 
 set_target_properties(luajit PROPERTIES IMPORTED_LOCATION "${LJ_OUTPUT_LIB}")
-if(MSVC AND PROJECT_LINKAGE STREQUAL "shared" AND NOT CMAKE_CROSSCOMPILING)
+if(MSVC
+   AND PROJECT_LINKAGE STREQUAL "shared"
+   AND NOT CMAKE_CROSSCOMPILING)
   set_target_properties(luajit PROPERTIES IMPORTED_IMPLIB "${LJ_OUTPUT_LIB}"
                                           IMPORTED_LOCATION "${LJ_OUTPUT_DLL}")
   add_custom_command(

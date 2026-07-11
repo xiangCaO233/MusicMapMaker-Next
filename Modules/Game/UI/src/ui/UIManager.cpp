@@ -26,7 +26,8 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/manager/SettingsView.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
@@ -53,6 +54,20 @@ constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
 
 /// @brief 主窗口标题栏宿主 ImGui 窗口名。
 constexpr std::string_view TOP_MENU_BAR_HOST_NAME = "TopMenuBarHost";
+
+/// @brief 判断主窗口当前是否允许播放 UI 交互音效。
+/// @param window 主原生窗口观察指针。
+/// @return 未最小化或没有绑定窗口时返回 true。
+/// @warning UI 热路径：每帧查询一次 GLFW 窗口标志，只读取平台窗口状态。
+bool isInteractionFeedbackAllowed(Graphic::NativeWindow* window)
+{
+    if ( !window || !window->getWindowHandle() ) {
+        return true;
+    }
+
+    return glfwGetWindowAttrib(window->getWindowHandle(), GLFW_ICONIFIED) !=
+           GLFW_TRUE;
+}
 
 /// @brief 判断两个拖拽矩形是否相交。
 /// @param lhs 第一个矩形。
@@ -329,7 +344,8 @@ void UIManager::captureProjectWorkspaceState()
 /// @param tab 需要激活的设置标签页。
 void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
 {
-    auto* settingsView = getView<SettingsView>(SETTINGS_VIEW_NAME);
+    auto*      settingsView = getView<SettingsView>(SETTINGS_VIEW_NAME);
+    const bool wasOpen      = settingsView && settingsView->isOpen();
     if ( !settingsView ) {
         auto view =
             std::make_unique<SettingsView>(TR("title.settings_manager").data());
@@ -341,6 +357,9 @@ void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
         settingsView->open(tab);
         settingsView->requestDockToCenter();
         settingsView->requestFocus();
+        if ( !wasOpen ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
     }
 }
 
@@ -533,15 +552,6 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
     }
 
-    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
-        workspace.m_overlapCheckOpen =
-            mainDock->m_mainMenuview.isOverlapCheckWindowOpen();
-        workspace.m_metadataEditorOpen =
-            mainDock->m_mainMenuview.isMetadataEditorWindowOpen();
-        workspace.m_noteMetadataEditorOpen =
-            mainDock->m_mainMenuview.isNoteMetadataEditorWindowOpen();
-    }
-
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
         SideBarTab activeTab = SideBarTab::None;
         if ( sideBarManager->isVisible() ) {
@@ -628,15 +638,6 @@ void UIManager::restoreProjectWorkspaceViews(
 
     if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
-    }
-
-    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
-        mainDock->m_mainMenuview.setOverlapCheckWindowOpen(
-            workspace.m_overlapCheckOpen);
-        mainDock->m_mainMenuview.setMetadataEditorWindowOpen(
-            workspace.m_metadataEditorOpen);
-        mainDock->m_mainMenuview.setNoteMetadataEditorWindowOpen(
-            workspace.m_noteMetadataEditorOpen);
     }
 }
 
@@ -762,6 +763,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 void UIManager::onUpdateUI()
 {
     Logic::EditorEngine::instance().publishRenderFps(ImGui::GetIO().Framerate);
+    SetInteractionFeedbackEnabled(isInteractionFeedbackAllowed(m_nativeWindow));
+    ProcessGlobalMouseFeedback();
 
     syncProjectWorkspaceState();
 

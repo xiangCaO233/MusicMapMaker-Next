@@ -4,8 +4,11 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/feedback/SaveResultFeedback.h"
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/MainMenuView.h"
+#include "ui/imgui/status/StatusMessageService.h"
+#include "ui/imgui/windows/PgoUploadConsentWindow.h"
 #include <functional>
 #include <memory>
 
@@ -139,7 +142,16 @@ public:
     ///@brief 是否需要重载
     bool m_needReload{ true };
 
-    ///@brief 主菜单
+    /// @brief 跨菜单 action 和状态栏共享的临时状态消息服务。
+    StatusMessageService m_statusMessageService;
+
+    /// @brief 保存结果事件反馈气泡组件。
+    SaveResultFeedback m_saveResultFeedback;
+
+    /// @brief PGO 性能数据上传授权窗口组件。
+    PgoUploadConsentWindow m_pgoUploadConsentWindow;
+
+    /// @brief 主菜单注册与绘制视图。
     MainMenuView m_mainMenuview;
 
     ///@brief 工具栏

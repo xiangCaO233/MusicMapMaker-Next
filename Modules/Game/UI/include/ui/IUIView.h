@@ -14,6 +14,12 @@ namespace MMM::UI
 class UIManager;
 class IParallelUiPreparable;
 
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互反馈。
+/// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
+/// @param pOpen 传给 ImGui::Begin 的打开状态指针。
+/// @warning UI 热路径：窗口 Begin 后调用，只读取 ImGui 状态并触发预加载音效。
+void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen);
+
 /// @brief 视图类型判别枚举,替代 dynamic_cast (支持 -fno-rtti)
 enum class ViewType : uint8_t {
     Base,           ///< 基础 IUIView
@@ -121,11 +127,14 @@ public:
             ImGui::SetNextWindowDockID(dockId, dockCond);
         }
 
+        const bool wasOpenBeforeBegin = p_open != nullptr && *p_open;
+
         if ( custom_window_flags ) {
             ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);
         } else {
             ImGui::Begin(iwindow_name.c_str(), p_open);
         }
+        FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, p_open);
 
         // 核心修复：Begin 后立即弹出标题字体，使内容使用默认（content）字体
         if ( titleFont ) ImGui::PopFont();

@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <exception>
 #include <fmt/format.h>
 #include <fstream>
 #include <iomanip>
@@ -74,7 +73,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
 {
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool ok = (byte >= 'a' && byte <= 'z') ||
+        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -136,6 +135,64 @@ bool writeBytesToFile(const std::filesystem::path& path, const void* data,
                    static_cast<std::streamsize>(size));
     }
     return static_cast<bool>(file);
+}
+
+/// @brief 以临时文件替换方式写入项目描述文件。
+/// @param project 需要序列化的项目。
+/// @param projectFile 项目描述文件路径。
+/// @return 写入和替换成功时返回 true。
+bool writeProjectFile(const Project&               project,
+                      const std::filesystem::path& projectFile)
+{
+    const auto parentPath = projectFile.parent_path();
+    if ( !parentPath.empty() ) {
+        std::error_code createDirectoryError;
+        std::filesystem::create_directories(parentPath, createDirectoryError);
+        if ( createDirectoryError ) {
+            XERROR("Failed to create project directory: {}. Error: {}",
+                   Config::pathToUtf8(parentPath),
+                   createDirectoryError.message());
+            return false;
+        }
+    }
+
+    nlohmann::json        jsonData = project;
+    std::filesystem::path tempPath = projectFile;
+    tempPath += ".tmp";
+    {
+        std::ofstream file(tempPath);
+        if ( !file.is_open() ) {
+            XERROR("Failed to open project temp file: {}",
+                   Config::pathToUtf8(tempPath));
+            return false;
+        }
+        file << std::setw(4) << jsonData << '\n';
+        if ( !file.good() ) {
+            XERROR("Failed to write project temp file: {}",
+                   Config::pathToUtf8(tempPath));
+            return false;
+        }
+    }
+
+    std::error_code replaceError;
+    std::filesystem::rename(tempPath, projectFile, replaceError);
+    if ( !replaceError ) return true;
+
+    std::error_code copyError;
+    std::filesystem::copy_file(
+        tempPath,
+        projectFile,
+        std::filesystem::copy_options::overwrite_existing,
+        copyError);
+    std::error_code removeTempError;
+    std::filesystem::remove(tempPath, removeTempError);
+    if ( copyError ) {
+        XERROR("Failed to replace project file: {}. Error: {}",
+               Config::pathToUtf8(projectFile),
+               copyError.message());
+        return false;
+    }
+    return true;
 }
 
 /// @brief 将 zip 包内路径归一化为通用分隔符。
@@ -990,15 +1047,28 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             return result;
         }
         actualProjectPath = makeAbsoluteNormalizedPath(actualProjectPath);
-    } else if ( std::filesystem::exists(requestedProjectPath) &&
-                std::filesystem::is_regular_file(requestedProjectPath) ) {
-        targetBeatmapPath = requestedProjectPath;
-        actualProjectPath =
-            makeAbsoluteNormalizedPath(requestedProjectPath.parent_path());
+    } else {
+        std::error_code requestedPathError;
+        const bool      requestedPathIsFile =
+            std::filesystem::exists(requestedProjectPath, requestedPathError) &&
+            !requestedPathError &&
+            std::filesystem::is_regular_file(requestedProjectPath,
+                                             requestedPathError) &&
+            !requestedPathError;
+        if ( requestedPathIsFile ) {
+            targetBeatmapPath = requestedProjectPath;
+            actualProjectPath =
+                makeAbsoluteNormalizedPath(requestedProjectPath.parent_path());
+        }
     }
 
-    if ( !std::filesystem::exists(actualProjectPath) ||
-         !std::filesystem::is_directory(actualProjectPath) ) {
+    std::error_code actualPathError;
+    const bool      actualProjectPathIsDirectory =
+        std::filesystem::exists(actualProjectPath, actualPathError) &&
+        !actualPathError &&
+        std::filesystem::is_directory(actualProjectPath, actualPathError) &&
+        !actualPathError;
+    if ( !actualProjectPathIsDirectory ) {
         const std::string message =
             "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
@@ -1022,56 +1092,61 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     newProject->m_metadata.m_title =
         Config::pathToUtf8(actualProjectPath.filename());
 
-    try {
-        /// @brief 当前项目目录扫描结果。
-        auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
-        if ( !directoryScan.m_success ) {
-            XERROR("Error while scanning project directory: {}",
-                   Config::pathToUtf8(actualProjectPath));
-        }
-
-        m_projectResourceService.buildInitialResources(*newProject,
-                                                       directoryScan);
-    } catch ( const std::exception& e ) {
-        XERROR("Error while scanning project directory: {}", e.what());
+    /// @brief 当前项目目录扫描结果。
+    auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+    if ( !directoryScan.m_success ) {
+        XERROR("Error while scanning project directory: {}",
+               Config::pathToUtf8(actualProjectPath));
     }
+
+    m_projectResourceService.buildInitialResources(*newProject, directoryScan);
 
     /// @brief 项目描述文件路径。
     std::filesystem::path projectFile = actualProjectPath / "mmm_project.json";
     /// @brief 项目描述文件是否已存在。
-    const bool projectFileExists = std::filesystem::exists(projectFile);
+    std::error_code projectFileExistsError;
+    const bool      projectFileExists =
+        std::filesystem::exists(projectFile, projectFileExistsError) &&
+        !projectFileExistsError;
     if ( projectFileExists ) {
-        try {
-            /// @brief 项目描述文件输入流。
-            std::ifstream file(projectFile);
+        /// @brief 项目描述文件输入流。
+        std::ifstream file(projectFile);
+        if ( !file.is_open() ) {
+            XWARN(
+                "Failed to open existing mmm_project.json, using scanned "
+                "results.");
+        } else {
             /// @brief 项目描述 JSON 数据。
-            nlohmann::json jsonData;
-            file >> jsonData;
-            /// @brief 从项目描述文件反序列化出的项目配置。
-            Project loadedProject  = jsonData.get<Project>();
-            newProject->m_metadata = loadedProject.m_metadata;
-            newProject->m_settings = loadedProject.m_settings;
-            newProject->m_excludedBeatmapPaths =
-                loadedProject.m_excludedBeatmapPaths;
-            newProject->m_excludedAudioPaths =
-                loadedProject.m_excludedAudioPaths;
+            nlohmann::json jsonData =
+                nlohmann::json::parse(file, nullptr, false);
+            if ( jsonData.is_discarded() || !jsonData.is_object() ||
+                 file.bad() ) {
+                XWARN(
+                    "Failed to parse existing mmm_project.json, using scanned "
+                    "results.");
+            } else {
+                /// @brief 从项目描述文件反序列化出的项目配置。
+                Project loadedProject  = jsonData.get<Project>();
+                newProject->m_metadata = loadedProject.m_metadata;
+                newProject->m_settings = loadedProject.m_settings;
+                newProject->m_excludedBeatmapPaths =
+                    loadedProject.m_excludedBeatmapPaths;
+                newProject->m_excludedAudioPaths =
+                    loadedProject.m_excludedAudioPaths;
 
-            for ( auto& resource : newProject->m_audioResources ) {
-                for ( const auto& loadedResource :
-                      loadedProject.m_audioResources ) {
-                    if ( resource.m_id == loadedResource.m_id ) {
-                        resource.m_type   = loadedResource.m_type;
-                        resource.m_config = loadedResource.m_config;
-                        break;
+                for ( auto& resource : newProject->m_audioResources ) {
+                    for ( const auto& loadedResource :
+                          loadedProject.m_audioResources ) {
+                        if ( resource.m_id == loadedResource.m_id ) {
+                            resource.m_type   = loadedResource.m_type;
+                            resource.m_config = loadedResource.m_config;
+                            break;
+                        }
                     }
                 }
-            }
 
-            XINFO("Project configuration loaded from mmm_project.json");
-        } catch ( ... ) {
-            XWARN(
-                "Failed to load existing mmm_project.json, using scanned "
-                "results.");
+                XINFO("Project configuration loaded from mmm_project.json");
+            }
         }
     }
 
@@ -1108,14 +1183,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             Config::utf8ToPath(newProject->m_beatmaps.front().m_filePath);
     }
 
-    try {
-        /// @brief 项目描述文件输出流。
-        std::ofstream file(projectFile);
-        /// @brief 即将写入的项目描述 JSON 数据。
-        nlohmann::json jsonData = *newProject;
-        file << std::setw(4) << jsonData << std::endl;
-    } catch ( ... ) {
-    }
+    (void)writeProjectFile(*newProject, projectFile);
 
     for ( const auto& resource : newProject->m_audioResources ) {
         if ( resource.m_type != AudioTrackType::Effect ) {
@@ -1125,7 +1193,9 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         /// @brief 音效资源在项目目录中的绝对路径。
         auto absolutePath =
             actualProjectPath / Config::utf8ToPath(resource.m_path);
-        if ( !std::filesystem::exists(absolutePath) ) {
+        std::error_code resourcePathError;
+        if ( !std::filesystem::exists(absolutePath, resourcePathError) ||
+             resourcePathError ) {
             continue;
         }
 
@@ -1351,12 +1421,8 @@ ProjectController::scanProjectDirectory()
     /// @brief 当前项目目录扫描结果。
     ProjectDirectoryScanner::ScanResult directoryScan;
 
-    try {
-        directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
-        if ( !directoryScan.m_success ) {
-            return result;
-        }
-    } catch ( ... ) {
+    directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+    if ( !directoryScan.m_success ) {
         return result;
     }
 
@@ -1375,19 +1441,15 @@ bool ProjectController::saveProject()
         m_currentProject->m_projectRoot / "mmm_project.json";
     XINFO("Saving project to {}", Config::pathToUtf8(projectFile));
 
-    try {
-        /// @brief 项目描述文件输出流。
-        std::ofstream file(projectFile);
-        /// @brief 即将写入的项目描述 JSON 数据。
-        nlohmann::json jsonData = *m_currentProject;
-        file << std::setw(4) << jsonData << std::endl;
-        XINFO("Project saved successfully.");
-        return true;
-    } catch ( const std::exception& e ) {
-        XERROR("Failed to save project: {}", e.what());
+    if ( !writeProjectFile(*m_currentProject, projectFile) ) {
+        return false;
     }
 
-    return false;
+    XINFO("Project saved successfully.");
+    Event::EventBus::instance().publish(Event::ProjectSavedEvent{
+        .m_projectFilePath = Config::pathToUtf8(projectFile),
+    });
+    return true;
 }
 
 /// @brief 创建谱面文件并登记到当前项目。

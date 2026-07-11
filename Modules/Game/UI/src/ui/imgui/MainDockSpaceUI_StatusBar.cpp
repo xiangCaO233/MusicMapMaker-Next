@@ -99,9 +99,11 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGui::SetCursorPosY(offsetY);
 
         // 渲染状态栏内容
-        std::string menuStatus = m_mainMenuview.getStatusMessage();
-        if ( !menuStatus.empty() ) {
-            ImGui::Text("%s", menuStatus.c_str());
+        const std::string_view statusMessage =
+            m_statusMessageService.getStatusMessage();
+        if ( !statusMessage.empty() ) {
+            ImGui::TextUnformatted(statusMessage.data(),
+                                   statusMessage.data() + statusMessage.size());
         } else {
             ImGui::Text("%s", TR("ui.status.ready").data());
         }
@@ -155,6 +157,20 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 // 物件数量与最大连击数统计由逻辑线程写入快照，避免 UI 每帧访问
                 // Session 锁和 ECS。
                 if ( snapshot->hasBeatmap ) {
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text("BPM: %.3f", snapshot->currentBpm);
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text("SV: %.4f", snapshot->currentSv);
+
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

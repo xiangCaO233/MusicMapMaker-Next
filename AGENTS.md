@@ -188,6 +188,7 @@ XERROR("Failed to load skin lua: {}", err.what());
 ## 6. UI 与渲染规范
 
 - **ImGui 停靠稳定性**: 标题动态变化的窗口必须使用 `###` 固定内部 ID，例如 `ImGui::Begin("标题###StaticID")`。
+- **按钮反馈统一入口**: 项目业务 UI 中所有可见 ImGui 按钮必须使用 `MMM::UI::FeedbackButton` 或 `MMM::UI::FeedbackSmallButton`，并通过 `ui/utils/UIWidgetUtils.h` 引入；禁止直接使用 `ImGui::Button` / `ImGui::SmallButton`，以确保悬浮音效、点击音效和悬浮色渐变统一生效。只有 `FeedbackButton` / `FeedbackSmallButton` 的实现内部，或明确没有可见按钮外观的自定义 hit zone，才允许直接调用原始 ImGui 按钮 API。
 - **批处理性能**: `Brush` 绘制时应减少纹理切换，合并相同状态的 Draw Call。
 
 ## 7. Git 与测试资源

@@ -706,11 +706,6 @@ void VKRenderer::render(NativeWindow&                window,
         // 设置用法
         // 只提交一次,提交完就不用了
         .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    // 生命周期覆盖整个渲染流程
-    // .setFlags(vk::CommandBufferUsageFlagBits::eRenderPassContinue);
-    // 无限复用
-    // .setFlags(vk::CommandBufferUsageFlagBits::eSimultaneousUse);
-
     // 渲染区域
     auto swapchainCreateInfo = m_vkSwapChain.info();
     // 清除掩码 - 类似 OpenGL 的清屏颜色
@@ -741,7 +736,7 @@ void VKRenderer::render(NativeWindow&                window,
         for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
               ++taskSlot ) {
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {

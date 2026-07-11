@@ -134,7 +134,7 @@ inline int compareIMDChunks(const std::filesystem::path& origPath,
 
     int passed = 0;
 
-    // ---- Chunk 1: Header (8 bytes): int32 map_length + int32 timing_count ----
+    // ---- 分块 1：文件头（8 字节）：int32 map_length + int32 timing_count ----
     {
         bool ok = (orig.size() >= 8 && expo.size() >= 8 &&
                    compareRawBytes(orig.data(), expo.data(), 8));
@@ -169,7 +169,7 @@ inline int compareIMDChunks(const std::filesystem::path& origPath,
     size_t  origTimingSize = static_cast<size_t>(origTC) * 12;
     size_t  expoTimingSize = static_cast<size_t>(expoTC) * 12;
 
-    // ---- Chunk 2: Timing Data (timing_count × 12 bytes) ----
+    // ---- 分块 2：Timing 数据（timing_count × 12 字节） ----
     {
         bool rawOk =
             (orig.size() >= 8 + origTimingSize &&
@@ -195,7 +195,7 @@ inline int compareIMDChunks(const std::filesystem::path& origPath,
     size_t origMagicOff = 8 + origTimingSize;
     size_t expoMagicOff = 8 + expoTimingSize;
 
-    // ---- Chunk 3: Magic Marker (2 bytes): 0x0303 ----
+    // ---- 分块 3：魔数标记（2 字节）：0x0303 ----
     {
         bool ok =
             (orig.size() >= origMagicOff + 2 &&
@@ -214,7 +214,7 @@ inline int compareIMDChunks(const std::filesystem::path& origPath,
     size_t origTRCOff = origMagicOff + 2;
     size_t expoTRCOff = expoMagicOff + 2;
 
-    // ---- Chunk 4: Table Row Count (4 bytes): int32 ----
+    // ---- 分块 4：表格行数（4 字节）：int32 ----
     {
         bool ok =
             (orig.size() >= origTRCOff + 4 && expo.size() >= expoTRCOff + 4 &&
@@ -246,7 +246,7 @@ inline int compareIMDChunks(const std::filesystem::path& origPath,
     size_t origNoteOff = origTRCOff + 4;
     size_t expoNoteOff = expoTRCOff + 4;
 
-    // ---- Chunk 5: Note Records (table_rows × 11 bytes) ----
+    // ---- 分块 5：音符记录（table_rows × 11 字节） ----
     {
         bool rawOk = (orig.size() >= origNoteOff + origNoteSize &&
                       expo.size() >= expoNoteOff + expoNoteSize &&
@@ -306,12 +306,8 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
     auto loadJson = [](const std::filesystem::path& p) -> json {
         std::ifstream fs(p);
         if ( !fs.is_open() ) return {};
-        json j;
-        try {
-            fs >> j;
-        } catch ( ... ) {
-            return {};
-        }
+        json j = json::parse(fs, nullptr, false);
+        if ( j.is_discarded() ) return {};
         return j;
     };
 
@@ -324,7 +320,7 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
 
     int passed = 0;
 
-    // ---- Section 1: meta ----
+    // ---- 分段 1：meta ----
     {
         bool hasOrig = orig.contains("meta");
         bool hasExpo = expo.contains("meta");

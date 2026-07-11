@@ -1,12 +1,12 @@
 # Linux 到 Windows MinGW GCC 交叉工具链。
 #
-# 远端 CI 的 Debian MinGW GCC 工具链当前为 GCC 14 win32 线程模型；默认匹配 mingw/gcc14-win32
+# 远端 CI 的 Debian MinGW GCC 工具链默认使用 GCC 14 UCRT64 运行库；默认匹配 mingw/ucrt64
 # 预编译库目录。需要切换其它运行时布局时，通过 -DPROJECT_PREBUILT_COMPILER_TAG=<tag> 或脚本参数覆盖。
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 set(MINGW_TOOLCHAIN_PREFIX
-    "x86_64-w64-mingw32"
+    "x86_64-w64-mingw32ucrt"
     CACHE STRING "Prefix for MinGW GCC and binutils.")
 
 if(DEFINED ENV{MINGW_SYSROOT} AND NOT "$ENV{MINGW_SYSROOT}" STREQUAL "")
@@ -19,7 +19,12 @@ else()
 endif()
 
 if(MINGW_SYSROOT_DEFAULT STREQUAL "")
-  set(MINGW_SYSROOT_DEFAULT "/usr/x86_64-w64-mingw32")
+  if(EXISTS "/usr/${MINGW_TOOLCHAIN_PREFIX}/include"
+     AND EXISTS "/usr/${MINGW_TOOLCHAIN_PREFIX}/lib")
+    set(MINGW_SYSROOT_DEFAULT "/usr/${MINGW_TOOLCHAIN_PREFIX}")
+  else()
+    set(MINGW_SYSROOT_DEFAULT "/usr/x86_64-w64-mingw32ucrt")
+  endif()
 endif()
 
 # CMake 外部项目会把相对的 ar/ranlib 解析到子构建目录下；工具链入口统一解析为绝对路径。 这样 try-compile 与
@@ -75,7 +80,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
-# 预编译库目录默认使用远端 CI 产出的 GCC 14 win32 布局。
+# 预编译库目录默认使用远端 CI 产出的 GCC 14 UCRT64 布局。
 set(PROJECT_PREBUILT_PLATFORM
     "windows"
     CACHE STRING "Prebuilt platform directory name." FORCE)
@@ -87,7 +92,7 @@ if(DEFINED ENV{MINGW_GCC_PREBUILT_COMPILER_TAG}
    AND NOT "$ENV{MINGW_GCC_PREBUILT_COMPILER_TAG}" STREQUAL "")
   set(_mingw_gcc_prebuilt_tag "$ENV{MINGW_GCC_PREBUILT_COMPILER_TAG}")
 else()
-  set(_mingw_gcc_prebuilt_tag "gcc14-win32")
+  set(_mingw_gcc_prebuilt_tag "ucrt64")
 endif()
 
 set(PROJECT_PREBUILT_COMPILER_TAG

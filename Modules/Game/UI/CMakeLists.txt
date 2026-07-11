@@ -2,19 +2,69 @@ add_library(
   UI STATIC
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
+  src/ui/utils/UIWidgetUtils.cpp
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
   src/ui/imgui/MainDockSpaceUI_Docking.cpp
   src/ui/imgui/MainDockSpaceUI_StatusBar.cpp
   src/ui/imgui/FloatingManagerUI.cpp
   src/ui/imgui/SideBarUI.cpp
+  src/ui/imgui/feedback/SaveResultFeedback.cpp
   src/ui/imgui/menu/MainMenuView.cpp
-  src/ui/imgui/menu/MainMenuView_FileDialogs.cpp
-  src/ui/imgui/menu/MainMenuView_Metadata.cpp
-  src/ui/imgui/menu/MainMenuView_Overlap.cpp
-  src/ui/imgui/menu/package/MainMenuView_Package.cpp
-  src/ui/imgui/menu/MainMenuView_SpeedExport.cpp
-  src/ui/imgui/menu/MainMenuView_UpdatePopups.cpp
+  src/ui/imgui/menu/MainMenuNavigationController.cpp
+  src/ui/imgui/menu/MainMenuRegistry.cpp
+  src/ui/imgui/menu/actions/edit/CopyAction.cpp
+  src/ui/imgui/menu/actions/edit/CutAction.cpp
+  src/ui/imgui/menu/actions/edit/MirrorAction.cpp
+  src/ui/imgui/menu/actions/edit/MirrorPasteAction.cpp
+  src/ui/imgui/menu/actions/edit/MetadataEditorWindowRenderers.cpp
+  src/ui/imgui/menu/actions/edit/OpenBeatmapSettingsAction.cpp
+  src/ui/imgui/menu/actions/edit/OpenNoteMetadataAction.cpp
+  src/ui/imgui/menu/actions/edit/PasteAction.cpp
+  src/ui/imgui/menu/actions/edit/RedoAction.cpp
+  src/ui/imgui/menu/actions/edit/SelectAllAction.cpp
+  src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp
+  src/ui/imgui/menu/actions/edit/UndoAction.cpp
+  src/ui/imgui/menu/actions/file/CloseProjectAction.cpp
+  src/ui/imgui/menu/actions/file/OpenAudioImportAction.cpp
+  src/ui/imgui/menu/actions/file/OpenNewBeatmapWizardAction.cpp
+  src/ui/imgui/menu/actions/file/OpenNewProjectWizardAction.cpp
+  src/ui/imgui/menu/actions/file/OpenProjectAction.cpp
+  src/ui/imgui/menu/actions/file/OpenRecentProjectAction.cpp
+  src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp
+  src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp
+  src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp
+  src/ui/imgui/menu/actions/help/CheckUpdateAction.cpp
+  src/ui/imgui/menu/actions/help/ShowAboutAction.cpp
+  src/ui/imgui/menu/actions/tools/AlignSelectedToCommonBeatsAction.cpp
+  src/ui/imgui/menu/actions/tools/BpmAutoDetector.cpp
+  src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp
+  src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
+  src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
+  src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
+  src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
+  src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp
+  src/ui/imgui/menu/actions/view/FixedToolWindowToggleAction.cpp
+  src/ui/imgui/menu/actions/view/ManagerLabelsToggleAction.cpp
+  src/ui/imgui/menu/actions/view/PreviewWindowToggleAction.cpp
+  src/ui/imgui/menu/actions/view/TimelineWindowToggleAction.cpp
+  src/ui/imgui/menu/actions/view/ToolLabelsToggleAction.cpp
+  src/ui/imgui/menu/interfaces/IMainMenuItem.cpp
+  src/ui/imgui/menu/interfaces/IMainMenuItemActionHandler.cpp
+  src/ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.cpp
+  src/ui/imgui/menu/items/MainMenuActionItem.cpp
+  src/ui/imgui/menu/items/MainMenuEdit.cpp
+  src/ui/imgui/menu/items/MainMenuFile.cpp
+  src/ui/imgui/menu/items/MainMenuHelp.cpp
+  src/ui/imgui/menu/items/MainMenuItemUtils.cpp
+  src/ui/imgui/menu/items/MainMenuRecentProjectsItem.cpp
+  src/ui/imgui/menu/items/MainMenuSeparatorItem.cpp
+  src/ui/imgui/menu/items/MainMenuTools.cpp
+  src/ui/imgui/menu/items/MainMenuToggleItem.cpp
+  src/ui/imgui/menu/items/MainMenuViewMenu.cpp
+  src/ui/imgui/menu/utils/MenuUtil.cpp
+  src/ui/imgui/status/StatusMessageService.cpp
+  src/ui/imgui/windows/PgoUploadConsentWindow.cpp
   src/ui/imgui/manager/FileManagerView.cpp
   src/ui/imgui/manager/FileManagerView_Hierarchy.cpp
   src/ui/imgui/manager/FileManagerView_Interactions.cpp
@@ -38,8 +88,6 @@ add_library(
   src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
   src/ui/imgui/audio/AudioWaveformView.cpp
   src/ui/imgui/audio/AudioSpectrumView.cpp
-  src/ui/imgui/tools/BpmAutoDetector.cpp
-  src/ui/imgui/tools/BpmMeasurementToolView.cpp
   src/ui/imgui/DebugWindowUI.cpp
   src/ui/imgui/CanvasTabManager.cpp
   src/ui/layout/CLayWrapperCore.cpp
@@ -73,3 +121,15 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
+
+mmm_add_test_executable(UI BpmPlaybackRoutingTest
+                        tests/BpmPlaybackRoutingTest.cpp)
+target_include_directories(BpmPlaybackRoutingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
+
+mmm_add_test_executable(UI PackageDefaultSelectionTest
+                        tests/PackageDefaultSelectionTest.cpp)
+target_include_directories(PackageDefaultSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME PackageDefaultSelectionTest COMMAND PackageDefaultSelectionTest)

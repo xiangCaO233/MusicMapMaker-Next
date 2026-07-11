@@ -6,6 +6,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -121,55 +122,55 @@ private:
         /// @brief 页脚控制标签列宽度。
         float footerLabelWidth{ 0.0f };
 
-        /// @brief Clay layout outer padding for the audio manager content.
+        /// @brief 音频管理器内容的 Clay 布局外侧留白。
         float rootPadding{ 0.0f };
 
-        /// @brief Main vertical gap between audio manager sections.
+        /// @brief 音频管理器分区之间的主纵向间距。
         float sectionSpacing{ 0.0f };
 
-        /// @brief Spacing between compact audio list rows.
+        /// @brief 紧凑音频列表行之间的间距。
         float listRowSpacing{ 0.0f };
 
-        /// @brief Height for normal list rows and audio items.
+        /// @brief 普通列表行和音频条目的高度。
         float audioItemHeight{ 0.0f };
 
-        /// @brief Height for the empty-project hint spacer.
+        /// @brief 空项目提示间隔行高度。
         float hintSpacerHeight{ 0.0f };
 
-        /// @brief Height for the empty-project hint text row.
+        /// @brief 空项目提示文本行高度。
         float hintRowHeight{ 0.0f };
 
-        /// @brief Horizontal padding for the global-controls footer.
+        /// @brief 全局控制页脚横向留白。
         float footerPaddingX{ 0.0f };
 
-        /// @brief Vertical gap inside the global-controls footer.
+        /// @brief 全局控制页脚内部纵向间距。
         float footerSpacing{ 0.0f };
 
-        /// @brief Height for the global-controls header.
+        /// @brief 全局控制标题行高度。
         float footerHeaderHeight{ 0.0f };
 
-        /// @brief Height for each global audio control row.
+        /// @brief 每个全局音频控制行的高度。
         float controlRowHeight{ 0.0f };
 
-        /// @brief Gap between label, button, and slider in control rows.
+        /// @brief 控制行中标签、按钮和滑块之间的间距。
         float controlColumnGap{ 0.0f };
 
-        /// @brief Gap between label text and filler inside label columns.
+        /// @brief 标签列中文本和填充区之间的间距。
         float labelColumnGap{ 0.0f };
 
-        /// @brief Size of the mute icon button in control rows.
+        /// @brief 控制行中静音图标按钮的尺寸。
         float muteButtonSize{ 0.0f };
 
-        /// @brief Height of the full-width import-audio button.
+        /// @brief 全宽导入音频按钮高度。
         float importButtonHeight{ 0.0f };
 
-        /// @brief Gap above the import-audio button.
+        /// @brief 导入音频按钮上方间距。
         float importButtonGap{ 0.0f };
 
-        /// @brief Total footer height, including the import-audio button.
+        /// @brief 页脚总高度，包含导入音频按钮。
         float footerHeight{ 0.0f };
 
-        /// @brief Height consumed by global controls before the import button.
+        /// @brief 导入按钮前全局控制区域消耗的高度。
         float globalControlsHeight{ 0.0f };
 
         /// @brief 子视图内容最小尺寸。
@@ -185,7 +186,13 @@ private:
         Type,
 
         /// @brief 按音频资源路径排序。
-        Path
+        Path,
+
+        /// @brief 按音频文件大小排序。
+        Size,
+
+        /// @brief 按音频文件最后修改时间排序。
+        ModifiedTime
     };
 
     /// @brief 音频资源表格排序方向。
@@ -199,6 +206,9 @@ private:
 
     /// @brief 音频资源表格行来源。
     enum class AudioTableRowKind {
+        /// @brief 皮肤界面交互音效。
+        InteractionSfx,
+
         /// @brief 皮肤常驻音效。
         PermanentSfx,
 
@@ -222,6 +232,18 @@ private:
 
         /// @brief 表格行来源。
         AudioTableRowKind m_kind{ AudioTableRowKind::ProjectSfx };
+
+        /// @brief 音频文件大小字节数；读取失败时保持为 0。
+        std::uintmax_t m_size{ 0 };
+
+        /// @brief 是否成功读取音频文件大小。
+        bool m_hasSize{ false };
+
+        /// @brief 音频文件最后修改时间；读取失败时不参与精确排序。
+        std::filesystem::file_time_type m_lastWriteTime{};
+
+        /// @brief 是否成功读取最后修改时间。
+        bool m_hasLastWriteTime{ false };
     };
 
     /// @brief 当前是否展开全局设置段落。

@@ -1,3 +1,7 @@
+#ifndef IMGUI_DEFINE_MATH_OPERATORS
+#    define IMGUI_DEFINE_MATH_OPERATORS
+#endif
+
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
@@ -19,9 +23,14 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
+#include <imgui_internal.h>
 #include <nfd.h>
+#include <system_error>
 #include <utility>
 
 namespace MMM::UI
@@ -37,8 +46,40 @@ enum AudioTableColumn : int {
     AudioTableColumnType = 1,
 
     /// @brief 音频资源路径列。
-    AudioTableColumnPath = 2
+    AudioTableColumnPath = 2,
+
+    /// @brief 音频文件大小列。
+    AudioTableColumnSize = 3,
+
+    /// @brief 修改时间列。
+    AudioTableColumnModifiedTime = 4
 };
+
+/// @brief 文件系统元数据读取结果。
+struct FileMetadata {
+    /// @brief 文件大小字节数；读取失败时保持为 0。
+    std::uintmax_t size{ 0 };
+
+    /// @brief 是否成功读取文件大小。
+    bool hasSize{ false };
+
+    /// @brief 文件最后修改时间；读取失败时不参与精确排序。
+    std::filesystem::file_time_type lastWriteTime{};
+
+    /// @brief 是否成功读取最后修改时间。
+    bool hasLastWriteTime{ false };
+};
+
+/// @brief 使用独立交互音量的音效 key 前缀。
+constexpr const char* INTERACTION_SFX_KEY_PREFIX = "ui.";
+
+/// @brief 判断皮肤音效是否属于界面交互音效。
+/// @param key 音效 ID。
+/// @return 属于交互音效时返回 true。
+bool isInteractionSfxKey(const std::string& key)
+{
+    return key.rfind(INTERACTION_SFX_KEY_PREFIX, 0) == 0;
+}
 
 /// @brief 按音频管理器实际字体计算不可折行文本宽度。
 float measureAudioManagerText(const char* text)
@@ -96,6 +137,169 @@ std::string toLowerAscii(std::string value)
 int compareAsciiText(const std::string& lhs, const std::string& rhs)
 {
     return toLowerAscii(lhs).compare(toLowerAscii(rhs));
+}
+
+/// @brief 读取文件大小和修改时间。
+/// @param filePath 需要查询的绝对文件路径。
+/// @return 文件系统元数据；读取失败的字段保持无效。
+FileMetadata queryFileMetadata(const std::filesystem::path& filePath)
+{
+    FileMetadata metadata;
+
+    std::error_code filesystemError;
+    const auto size = std::filesystem::file_size(filePath, filesystemError);
+    if ( !filesystemError ) {
+        metadata.size    = size;
+        metadata.hasSize = true;
+    }
+
+    filesystemError.clear();
+    const auto modifiedTime =
+        std::filesystem::last_write_time(filePath, filesystemError);
+    if ( !filesystemError ) {
+        metadata.lastWriteTime    = modifiedTime;
+        metadata.hasLastWriteTime = true;
+    }
+    return metadata;
+}
+
+/// @brief 生成文件大小显示文本。
+/// @param size 文件字节数。
+/// @return 适合列表展示的大小文本。
+std::string formatFileSize(std::uintmax_t size)
+{
+    constexpr double kibi = 1024.0;
+    constexpr double mebi = kibi * 1024.0;
+    constexpr double gibi = mebi * 1024.0;
+
+    if ( size < 1024 ) {
+        return TR_FMT("ui.file_manager.size_bytes", size);
+    }
+    const double value = static_cast<double>(size);
+    if ( value < mebi ) {
+        return TR_FMT("ui.file_manager.size_kib", value / kibi);
+    }
+    if ( value < gibi ) {
+        return TR_FMT("ui.file_manager.size_mib", value / mebi);
+    }
+    return TR_FMT("ui.file_manager.size_gib", value / gibi);
+}
+
+/// @brief 将文件系统时间转换为本地时间文本。
+/// @param time 文件系统时间。
+/// @return 本地时间文本，格式为 yyyy/mm/dd HH:MM。
+std::string formatModifiedTime(std::filesystem::file_time_type time)
+{
+    const auto systemTime =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            time - std::filesystem::file_time_type::clock::now() +
+            std::chrono::system_clock::now());
+    const std::time_t timeValue =
+        std::chrono::system_clock::to_time_t(systemTime);
+
+    std::tm localTime{};
+#ifdef _WIN32
+    localtime_s(&localTime, &timeValue);
+#else
+    localtime_r(&timeValue, &localTime);
+#endif
+
+    char buffer[32]{};
+    if ( std::strftime(buffer, sizeof(buffer), "%Y/%m/%d %H:%M", &localTime) ==
+         0 ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return buffer;
+}
+
+/// @brief 生成文件大小列文本。
+/// @param hasSize 是否成功读取大小。
+/// @param size 文件大小字节数。
+/// @return 大小或未知占位。
+std::string formatSizeColumn(bool hasSize, std::uintmax_t size)
+{
+    if ( !hasSize ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return formatFileSize(size);
+}
+
+/// @brief 生成修改时间列文本。
+/// @param hasLastWriteTime 是否成功读取修改时间。
+/// @param lastWriteTime 文件修改时间。
+/// @return 修改时间或未知占位。
+std::string formatModifiedColumn(bool hasLastWriteTime,
+                                 std::filesystem::file_time_type lastWriteTime)
+{
+    if ( !hasLastWriteTime ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return formatModifiedTime(lastWriteTime);
+}
+
+/// @brief 比较两个可选数值。
+/// @tparam T 可比较数值类型。
+/// @param lhs 左值。
+/// @param lhsValid 左值是否有效。
+/// @param rhs 右值。
+/// @param rhsValid 右值是否有效。
+/// @return 小于返回 -1，大于返回 1，相等返回 0。
+template<typename T>
+int compareOptionalValue(const T& lhs, bool lhsValid, const T& rhs,
+                         bool rhsValid)
+{
+    if ( lhsValid != rhsValid ) {
+        return lhsValid ? -1 : 1;
+    }
+    if ( !lhsValid ) {
+        return 0;
+    }
+    if ( lhs < rhs ) return -1;
+    if ( rhs < lhs ) return 1;
+    return 0;
+}
+
+/// @brief 组合排序菜单项显示文本。
+/// @param columnLabel 排序字段显示名。
+/// @param ascending 是否升序。
+/// @return 带方向后缀的菜单文本。
+std::string makeSortMenuLabel(const char* columnLabel, bool ascending)
+{
+    return ascending
+               ? TR_FMT("ui.resource_table.sort_ascending_fmt", columnLabel)
+               : TR_FMT("ui.resource_table.sort_descending_fmt", columnLabel);
+}
+
+/// @brief 查询表格列当前是否有效显示。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 当前帧列有效显示时返回 true。
+bool isTableColumnEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsEnabled;
+}
+
+/// @brief 查询表格列的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 用户设置为显示时返回 true。
+bool isTableColumnUserEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsUserEnabled;
+}
+
+/// @brief 排队设置表格列下一帧的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @param enabled 是否显示。
+void queueTableColumnEnabled(ImGuiTable* table, int column, bool enabled)
+{
+    if ( !table || column < 0 || column >= table->ColumnsCount ) {
+        return;
+    }
+    table->Columns[column].IsUserEnabledNextFrame = enabled;
 }
 
 /// @brief 绘制可裁剪、超宽自动滚动的表格单元格文本。
@@ -291,16 +495,17 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font             = snapshot.fileManagerFont
-                                   ? snapshot.fileManagerFont
-                                   : (snapshot.contentFont ? snapshot.contentFont
-                                                           : snapshot.fallbackFont);
+    ImFont* font = snapshot.fileManagerFont
+                       ? snapshot.fileManagerFont
+                       : (snapshot.contentFont ? snapshot.contentFont
+                                               : snapshot.fallbackFont);
 
-    const std::array<const char*, 4> controlLabels{
+    const std::array<const char*, 5> controlLabels{
         TR("ui.audio_manager.output_device").data(),
         TR("ui.audio_manager.global_volume").data(),
         TR("ui.audio_manager.bgm_gain").data(),
-        TR("ui.audio_manager.sfx_gain").data()
+        TR("ui.audio_manager.sfx_gain").data(),
+        TR("ui.audio_manager.interaction_sfx_volume").data()
     };
 
     float labelWidth = 0.0f;
@@ -318,10 +523,12 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float sliderMinW = sliderValueW + snapshot.framePadding.x * 4.0f +
                              std::floor(48.0f * scale);
 
-    const std::array<const char*, 4> headers{
+    const std::array<const char*, 6> headers{
         TR("ui.audio_manager.column_id").data(),
         TR("ui.audio_manager.column_type").data(),
         TR("ui.audio_manager.column_path").data(),
+        TR("ui.audio_manager.column_size").data(),
+        TR("ui.audio_manager.column_modified_time").data(),
         TR("ui.audio_manager.global_settings").data(),
     };
 
@@ -336,7 +543,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float        listHeight = 0.0f;
@@ -358,7 +565,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
 
     float footerH = cache.footerHeaderHeight;
     if ( input.showGlobalSettings ) {
-        footerH += 4.0f * controlRowH + 4.0f * footerSpacing;
+        footerH += 5.0f * controlRowH + 5.0f * footerSpacing;
     }
     footerH += importButtonH + importButtonGap;
     cache.globalControlsHeight = footerH - (importButtonH + importButtonGap);
@@ -421,7 +628,11 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
     return getLayoutMetrics(dpiScale).minContentSize;
 }
 
-// 内部绘制逻辑 (Clay/ImGui)
+/// @brief 使用 Clay 与 ImGui 渲染音频管理器主界面。
+/// @param layoutContext 当前布局上下文。
+/// @param sourceManager 当前 UI 管理器，用于打开音轨控制器。
+/// @warning UI 热路径：每帧执行；只允许读取已缓存表格数据和响应用户交互，
+/// 资源扫描必须通过脏标记触发。
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                 UIManager*     sourceManager)
 {
@@ -533,9 +744,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
                 Utils::pushFixedButtonStyleVars();
-                if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
-                                   ImVec2(layoutMetrics.muteButtonSize,
-                                          layoutMetrics.muteButtonSize)) ) {
+                if ( ::MMM::UI::FeedbackButton(
+                         (std::string(icon) + "##Btn" + id).c_str(),
+                         ImVec2(layoutMetrics.muteButtonSize,
+                                layoutMetrics.muteButtonSize)) ) {
                     onMuteChange(!muted);
                 }
                 Utils::popFixedButtonStyleVars();
@@ -543,11 +755,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::PopStyleColor();
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s (%s)",
-                                      tooltip,
-                                      muted
-                                          ? TR("ui.audio_manager.unmute").data()
+                    const std::string tooltipText =
+                        fmt::format("{} ({})",
+                                    tooltip,
+                                    muted ? TR("ui.audio_manager.unmute").data()
                                           : TR("ui.audio_manager.mute").data());
+                    Utils::renderTooltip(tooltipText.c_str());
                 }
             });
 
@@ -563,15 +776,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     { r.x, r.y + (r.height - frameH) * 0.5f });
                 ImGui::SetNextItemWidth(r.width);
                 float val = volume;
-                if ( ImGui::SliderFloat((std::string("##Slider") + id).c_str(),
-                                        &val,
-                                        minVal,
-                                        maxVal,
-                                        format) ) {
+                if ( ::MMM::UI::FeedbackSliderFloat(
+                         (std::string("##Slider") + id).c_str(),
+                         &val,
+                         minVal,
+                         maxVal,
+                         format) ) {
                     onVolumeChange(val);
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s", tooltip);
+                    Utils::renderTooltip(tooltip);
                 }
             });
 
@@ -636,14 +850,15 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::SetCursorScreenPos(
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo((std::string("##Combo") + id).c_str(),
-                                       previewName.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo(
+                         (std::string("##Combo") + id).c_str(),
+                         previewName.c_str()) ) {
                     for ( const auto& device : m_cachedOutputDevices ) {
                         const std::string optionLabel =
                             device.isDefault ? defaultDeviceLabel : device.name;
                         const bool selected = currentDeviceName == device.name;
-                        if ( ImGui::Selectable(optionLabel.c_str(),
-                                               selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(optionLabel.c_str(),
+                                                           selected) ) {
                             if ( audioManager.setOutputDeviceName(
                                      device.name) ) {
                                 m_outputDevicesDirty = true;
@@ -653,11 +868,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s",
+                    Utils::renderTooltip(
                         TR("ui.audio_manager.output_device_tooltip").data());
                 }
             });
@@ -676,6 +890,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto audioTableTypeLabel = [](AudioTableRowKind kind) -> std::string {
         switch ( kind ) {
+        case AudioTableRowKind::InteractionSfx:
+            return TR("ui.audio_manager.type_interaction_sfx").data();
         case AudioTableRowKind::PermanentSfx:
             return TR("ui.audio_manager.type_permanent_sfx").data();
         case AudioTableRowKind::MainTrack:
@@ -688,11 +904,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto audioTableTypeSortRank = [](AudioTableRowKind kind) {
         switch ( kind ) {
-        case AudioTableRowKind::PermanentSfx: return 0;
-        case AudioTableRowKind::MainTrack: return 1;
-        case AudioTableRowKind::ProjectSfx: return 2;
+        case AudioTableRowKind::InteractionSfx: return 0;
+        case AudioTableRowKind::PermanentSfx: return 1;
+        case AudioTableRowKind::MainTrack: return 2;
+        case AudioTableRowKind::ProjectSfx: return 3;
         }
-        return 3;
+        return 4;
     };
 
     auto rebuildAudioTableRows = [&]() {
@@ -707,7 +924,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             row.m_id   = key;
             row.m_path = Config::pathToUtf8(path);
             row.m_type = AudioTrackType::Effect;
-            row.m_kind = AudioTableRowKind::PermanentSfx;
+            row.m_kind = isInteractionSfxKey(key)
+                             ? AudioTableRowKind::InteractionSfx
+                             : AudioTableRowKind::PermanentSfx;
+            const FileMetadata metadata = queryFileMetadata(path);
+            row.m_size                  = metadata.size;
+            row.m_hasSize               = metadata.hasSize;
+            row.m_lastWriteTime         = metadata.lastWriteTime;
+            row.m_hasLastWriteTime      = metadata.hasLastWriteTime;
             m_audioTableRows.push_back(std::move(row));
         }
 
@@ -720,6 +944,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 row.m_kind = audio.m_type == AudioTrackType::Main
                                  ? AudioTableRowKind::MainTrack
                                  : AudioTableRowKind::ProjectSfx;
+                const auto filePath =
+                    project->m_projectRoot / Config::utf8ToPath(audio.m_path);
+                const FileMetadata metadata = queryFileMetadata(filePath);
+                row.m_size                  = metadata.size;
+                row.m_hasSize               = metadata.hasSize;
+                row.m_lastWriteTime         = metadata.lastWriteTime;
+                row.m_hasLastWriteTime      = metadata.hasLastWriteTime;
                 m_audioTableRows.push_back(std::move(row));
             }
         }
@@ -739,6 +970,17 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     break;
                 case AudioTableSortKey::Path:
                     compareResult = compareAsciiText(lhs.m_path, rhs.m_path);
+                    break;
+                case AudioTableSortKey::Size:
+                    compareResult = compareOptionalValue(
+                        lhs.m_size, lhs.m_hasSize, rhs.m_size, rhs.m_hasSize);
+                    break;
+                case AudioTableSortKey::ModifiedTime:
+                    compareResult =
+                        compareOptionalValue(lhs.m_lastWriteTime,
+                                             lhs.m_hasLastWriteTime,
+                                             rhs.m_lastWriteTime,
+                                             rhs.m_hasLastWriteTime);
                     break;
                 }
 
@@ -773,6 +1015,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             newSortKey = AudioTableSortKey::Type;
         } else if ( primarySpec.ColumnIndex == AudioTableColumnPath ) {
             newSortKey = AudioTableSortKey::Path;
+        } else if ( primarySpec.ColumnIndex == AudioTableColumnSize ) {
+            newSortKey = AudioTableSortKey::Size;
+        } else if ( primarySpec.ColumnIndex == AudioTableColumnModifiedTime ) {
+            newSortKey = AudioTableSortKey::ModifiedTime;
         }
 
         const SortDirection newDirection =
@@ -788,9 +1034,162 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         sortSpecs->SpecsDirty = false;
     };
 
+    auto resetAudioTableSort = [&]() {
+        if ( m_audioTableSortKey != AudioTableSortKey::Id ||
+             m_audioTableSortDirection != SortDirection::Ascending ) {
+            m_audioTableSortKey        = AudioTableSortKey::Id;
+            m_audioTableSortDirection  = SortDirection::Ascending;
+            m_audioTableSortCacheDirty = true;
+        }
+    };
+
+    auto applyAudioTableSort = [&](AudioTableSortKey sortKey,
+                                   SortDirection     direction) {
+        if ( m_audioTableSortKey != sortKey ||
+             m_audioTableSortDirection != direction ) {
+            m_audioTableSortKey        = sortKey;
+            m_audioTableSortDirection  = direction;
+            m_audioTableSortCacheDirty = true;
+        }
+    };
+
+    auto renderAudioTableHeaderContextMenu = [&]() {
+        ImGuiTable* table = ImGui::GetCurrentTable();
+        if ( !table ) return;
+
+        ImGuiStyle&  style = ImGui::GetStyle();
+        const ImVec2 popupPadding(std::max(style.WindowPadding.x, 8.0f),
+                                  std::max(style.WindowPadding.y, 6.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(std::max(style.ItemSpacing.x, 8.0f),
+                                   std::max(style.ItemSpacing.y, 4.0f)));
+        const bool popupOpen = ImGui::TableBeginContextMenuPopup(table);
+        if ( !popupOpen ) {
+            ImGui::PopStyleVar(2);
+            return;
+        }
+
+        const int contextColumn =
+            table->ContextPopupColumn >= 0 &&
+                    table->ContextPopupColumn < table->ColumnsCount
+                ? table->ContextPopupColumn
+                : -1;
+        if ( contextColumn >= 0 && isTableColumnEnabled(table, contextColumn) &&
+             ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.audio_manager.table_menu.size_column_fit").data()) ) {
+            ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
+        }
+
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.audio_manager.table_menu.size_all_default").data()) ) {
+            ImGui::TableSetColumnWidthAutoAll(table);
+        }
+
+        auto sortMenuItem = [&](AudioTableSortKey sortKey,
+                                SortDirection     direction,
+                                const char*       columnLabel) {
+            const std::string label = makeSortMenuLabel(
+                columnLabel, direction == SortDirection::Ascending);
+            const bool selected = m_audioTableSortKey == sortKey &&
+                                  m_audioTableSortDirection == direction;
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     label.c_str(), nullptr, selected) ) {
+                applyAudioTableSort(sortKey, direction);
+            }
+        };
+        if ( ::MMM::UI::FeedbackBeginMenu(
+                 TR("ui.resource_table.sort").data()) ) {
+            sortMenuItem(AudioTableSortKey::Id,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_id").data());
+            sortMenuItem(AudioTableSortKey::Id,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_id").data());
+            sortMenuItem(AudioTableSortKey::Type,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_type").data());
+            sortMenuItem(AudioTableSortKey::Type,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_type").data());
+            sortMenuItem(AudioTableSortKey::Path,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_path").data());
+            sortMenuItem(AudioTableSortKey::Path,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_path").data());
+            sortMenuItem(AudioTableSortKey::Size,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_size").data());
+            sortMenuItem(AudioTableSortKey::Size,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_size").data());
+            sortMenuItem(AudioTableSortKey::ModifiedTime,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_modified_time").data());
+            sortMenuItem(AudioTableSortKey::ModifiedTime,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_modified_time").data());
+            ::MMM::UI::FeedbackEndMenu();
+        }
+
+        if ( ::MMM::UI::FeedbackBeginMenu(
+                 TR("ui.audio_manager.table_menu.reset").data()) ) {
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_all").data()) ) {
+                ImGui::TableResetSettings(table);
+                resetAudioTableSort();
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_columns").data()) ) {
+                ImGui::TableSetColumnWidthAutoAll(table);
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.show_all_columns")
+                         .data()) ) {
+                for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                    queueTableColumnEnabled(table, column, true);
+                }
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_sort").data()) ) {
+                resetAudioTableSort();
+            }
+            ::MMM::UI::FeedbackEndMenu();
+        }
+
+        ImGui::Separator();
+
+        const std::array<const char*, 5> columnLabels{
+            TR("ui.audio_manager.column_id").data(),
+            TR("ui.audio_manager.column_type").data(),
+            TR("ui.audio_manager.column_path").data(),
+            TR("ui.audio_manager.column_size").data(),
+            TR("ui.audio_manager.column_modified_time").data()
+        };
+        int enabledColumnCount = 0;
+        for ( int column = 0; column < table->ColumnsCount; ++column ) {
+            if ( isTableColumnUserEnabled(table, column) ) {
+                enabledColumnCount++;
+            }
+        }
+        for ( int column = 0; column < table->ColumnsCount; ++column ) {
+            const bool enabled   = isTableColumnUserEnabled(table, column);
+            const bool canToggle = !enabled || enabledColumnCount > 1;
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     columnLabels[column], nullptr, enabled, canToggle) ) {
+                queueTableColumnEnabled(table, column, !enabled);
+            }
+        }
+
+        ImGui::EndPopup();
+        ImGui::PopStyleVar(2);
+    };
+
     auto renderAudioResourcesTable = [&](Clay_BoundingBox r, bool) {
         ImGui::SetCursorScreenPos({ r.x, r.y });
-        const ImGuiTableFlags tableFlags =
+        Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
+        const ImGuiTableFlags              tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
@@ -798,7 +1197,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             ImGuiTableFlags_SizingStretchProp;
 
         if ( ImGui::BeginTable(
-                 "AudioManagerTable", 3, tableFlags, { r.width, r.height }) ) {
+                 "AudioManagerTable", 5, tableFlags, { r.width, r.height }) ) {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_id").data(),
@@ -814,8 +1213,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 TR("ui.audio_manager.column_path").data(),
                 ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
+            ImGui::TableSetupColumn(
+                TR("ui.audio_manager.column_size").data(),
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortAscending,
+                std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
+            ImGui::TableSetupColumn(
+                TR("ui.audio_manager.column_modified_time").data(),
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortDescending,
+                std::max(168.0f,
+                         ImGui::CalcTextSize("0000/00/00 00:00").x +
+                             ImGui::GetStyle().CellPadding.x * 4.0f +
+                             ImGui::GetFrameHeight()));
+            if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                table->DisableDefaultContextMenu = true;
+            }
             ImGui::TableHeadersRow();
             syncAudioTableSortSpecs();
+            renderAudioTableHeaderContextMenu();
 
             const size_t projectAudioCount =
                 project ? project->m_audioResources.size() : 0;
@@ -846,11 +1264,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                                           rowData.m_id,
                                                           rowData.m_path,
                                                           row);
-                    const bool        clicked =
-                        ImGui::Selectable(rowId.c_str(),
-                                          false,
-                                          ImGuiSelectableFlags_SpanAllColumns,
-                                          { 0.0f, rowHeight });
+                    const bool        clicked = ::MMM::UI::FeedbackSelectable(
+                        rowId.c_str(),
+                        false,
+                        ImGuiSelectableFlags_SpanAllColumns,
+                        { 0.0f, rowHeight });
                     const bool hovered = ImGui::IsItemHovered();
                     if ( clicked ) {
                         const auto controllerType =
@@ -862,18 +1280,20 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
 
                     if ( hovered &&
-                         rowData.m_kind != AudioTableRowKind::PermanentSfx &&
+                         (rowData.m_kind == AudioTableRowKind::MainTrack ||
+                          rowData.m_kind == AudioTableRowKind::ProjectSfx) &&
                          ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
                         m_manageTrackId   = rowData.m_id;
                         m_manageTrackType = rowData.m_type;
                         m_openManageModal = true;
                     }
                     if ( hovered ) {
-                        ImGui::SetTooltip(
-                            "%s\n%s: %s",
+                        const std::string tooltipText = fmt::format(
+                            "{}\n{}: {}",
                             rowData.m_path.c_str(),
                             TR("ui.audio_manager.column_type").data(),
                             typeText.c_str());
+                        Utils::renderTooltip(tooltipText.c_str());
                     }
 
                     const std::string idText =
@@ -892,6 +1312,21 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                              ImGui::GetCursorScreenPos(),
                                              ImGui::GetContentRegionAvail().x,
                                              rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(
+                        formatSizeColumn(rowData.m_hasSize, rowData.m_size),
+                        ImGui::GetCursorScreenPos(),
+                        ImGui::GetContentRegionAvail().x,
+                        rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(
+                        formatModifiedColumn(rowData.m_hasLastWriteTime,
+                                             rowData.m_lastWriteTime),
+                        ImGui::GetCursorScreenPos(),
+                        ImGui::GetContentRegionAvail().x,
+                        rowHeight);
                 }
             }
             ImGui::EndTable();
@@ -980,6 +1415,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             "%.2f",
             [&](float v) { audioManager.setSFXGain(v); },
             [&](bool m) { audioManager.setSFXGainMute(m); });
+
+        addControlRow(
+            footerVBox,
+            "InteractionSFXGain",
+            TR("ui.audio_manager.interaction_sfx_volume").data(),
+            maxLabelW,
+            audioManager.getInteractionSFXGain(),
+            audioManager.isInteractionSFXGainMuted(),
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            TR("ui.audio_manager.interaction_sfx_volume").data(),
+            "%.2f",
+            [&](float v) { audioManager.setInteractionSFXGain(v); },
+            [&](bool m) { audioManager.setInteractionSFXGainMute(m); });
     }
 
     // --- 执行分段渲染 ---
@@ -1069,12 +1520,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                   ImGui::ColorConvertFloat4ToU32(bgCol),
                                   rounding);
 
-                if ( ImGui::Button(
+                if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ImportAudio", ICON_MMM_PLUS).c_str(),
                          ImVec2(r.width, r.height)) ) {
                     auto& settings = engine.getEditorConfig().settings;
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = {
                             { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
@@ -1097,19 +1549,26 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             ImGuiFileDialogFlags_Modal |
                             ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        const bool wasOpen =
+                            ImGuiFileDialog::Instance()->IsOpened(
+                                "AudioImportPicker");
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AudioImportPicker",
                             TR("ui.audio_manager.import_audio").data(),
                             ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a",
                             fdConfig);
+                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                                             "AudioImportPicker") ) {
+                            ::MMM::UI::PlayPopupOpenFeedback();
+                        }
                     }
                 }
 
                 Utils::popFixedButtonStyleVars();
                 ImGui::PopStyleColor(4);
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.audio_manager.import_audio").data());
+                    Utils::renderTooltip(
+                        TR("ui.audio_manager.import_audio").data());
                 }
             });
 
@@ -1122,21 +1581,21 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     bool showManageModal = !m_manageTrackId.empty();
     if ( showManageModal ) {
         std::string windowTitle =
-            fmt::format("{} {}",
+            fmt::format("{} {}###AudioTrackManageWindow",
                         TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
         if ( m_openManageModal ) {
+            ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
-        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
-                                           &showManageModal,
-                                           ImGuiWindowFlags_NoCollapse,
-                                           { 420 * dpiScale, 0.0f }) ) {
-            if ( !showManageModal ) {
-                m_manageTrackId = "";
-            }
-
+        const bool                     manageWindowOpened =
+            manageWindowScope.begin(windowTitle.c_str(),
+                                    &showManageModal,
+                                    ImGuiWindowFlags_NoCollapse,
+                                    { 420 * dpiScale, 0.0f });
+        bool closeManageModal = !showManageModal;
+        if ( manageWindowOpened ) {
             // --- 使用 Clay 重构对话框内容 ---
             CLayVBox    modalLayout;
             const auto& modalStyle = ImGui::GetStyle();
@@ -1201,13 +1660,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 "TypeCombo",
                 Sizing::Grow(),
                 Sizing::Fixed(modalComboH),
-                [=, this, &engine](Clay_BoundingBox r, bool) {
+                [=, this, &engine, &closeManageModal](Clay_BoundingBox r,
+                                                      bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     int currentType =
                         (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
                     const char* typeNames[] = { "Main", "Effect" };
                     ImGui::SetNextItemWidth(r.width);
-                    if ( ImGui::Combo(
+                    if ( ::MMM::UI::FeedbackCombo(
                              "##TrackType", &currentType, typeNames, 2) ) {
                         m_manageTrackType =
                             (currentType == 0 ? AudioTrackType::Main
@@ -1215,7 +1675,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(Logic::CmdUpdateAudioResource{
                             m_manageTrackId, m_manageTrackType });
-                        ImGui::CloseCurrentPopup();
+                        closeManageModal = true;
                     }
                 });
             modalLayout.addLayout("TypeRow",
@@ -1244,21 +1704,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 Sizing::Fixed(modalButtonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(
+                    if ( ::MMM::UI::FeedbackButton(
                              TR("ui.audio_manager.remove_track").data(),
                              { r.width, r.height }) ) {
-                        ImGui::OpenPopup("RemoveTrackConfirm");
+                        ::MMM::UI::FeedbackOpenPopup("RemoveTrackConfirm");
                     }
                 });
             btnRow.addElement(
                 "CancelBtn",
                 Sizing::Fixed(cancelButtonW),
                 Sizing::Fixed(modalButtonH),
-                [=, this](Clay_BoundingBox r, bool) {
+                [=, this, &closeManageModal](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { r.width, r.height }) ) {
-                        m_manageTrackId = "";
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { r.width, r.height }) ) {
+                        closeManageModal = true;
                     }
                 });
             modalLayout.addLayout(
@@ -1278,23 +1739,33 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::Text("%s",
                                 TR("ui.audio_manager.remove_confirm").data());
                     ImGui::Spacing();
-                    if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.confirm").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(
                             Logic::CmdRemoveAudioResource{ m_manageTrackId });
-                        m_manageTrackId = "";
+                        closeManageModal = true;
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::SameLine();
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndPopup();
                 }
             }
 
-            ImGui::End();
+            if ( closeManageModal ) {
+                showManageModal = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if ( !showManageModal ) {
+            m_manageTrackId.clear();
         }
     }
 

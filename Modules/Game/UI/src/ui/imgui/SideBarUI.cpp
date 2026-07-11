@@ -110,7 +110,8 @@ void SideBarUI::update(UIManager* sourceManager)
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    float sidebarBaseW = parseSidebarLayoutFloat(
+        skinCfg.getLayoutConfig("side_bar.width"), 32.0f);
     float sidebarWidth = GetSidebarWidth(dpiScale);
     float btnSize      = std::floor(sidebarBaseW * dpiScale);
     bool  showManagerLabels =
@@ -191,7 +192,8 @@ void SideBarUI::update(UIManager* sourceManager)
             // 1. 绘制按钮交互背景
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
             std::string btnId = "##tab_btn_" + std::to_string((int)tab);
-            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
+            if ( ::MMM::UI::FeedbackButton(btnId.c_str(),
+                                           { rect.width, rect.height }) ) {
                 if ( tab == SideBarTab::Settings ) {
                     sourceManager->openSettingsWindow(
                         Event::SettingsTab::Software);

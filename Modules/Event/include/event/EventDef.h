@@ -16,7 +16,7 @@ template<typename T> struct EventTraits {
 
 // 辅助宏：用于方便地定义事件的父类关系
 // 使用方法：MMM_EVENT_REGISTER_PARENTS(MyDerivedEvent, MyBaseEvent1,
-// MyBaseEvent2)
+// MyBaseEvent2)，也可继续追加更多父类。
 #define EVENT_REGISTER_PARENTS(Derived, ...)     \
     namespace MMM::Event                         \
     {                                            \

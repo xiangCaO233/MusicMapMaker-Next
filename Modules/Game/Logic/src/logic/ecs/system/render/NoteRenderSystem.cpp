@@ -20,12 +20,11 @@ namespace MMM::Logic::System
 namespace
 {
 
-/// @brief UI playback interpolation window in steady-clock seconds.
-/// @warning Snapshot hot path constant; keep in sync with
-/// CanvasSnapshotPrepare.
+/// @brief UI 播放补间窗口，单位为 steady-clock 秒。
+/// @warning 快照热路径常量；需与 CanvasSnapshotPrepare 保持同步。
 constexpr double UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS = 0.1;
 
-/// @brief Timeline UI interpolation safety window in steady-clock seconds.
+/// @brief Timeline UI 补间安全窗口，单位为 steady-clock 秒。
 /// @warning Snapshot hot path constant：Timeline 使用屏幕 Y 补偿，窗口取接近
 /// 辅助视图快照间隔的保守值，避免密集 Timing 过度关闭补间。
 constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
@@ -179,8 +178,8 @@ void NoteRenderSystem::generateSnapshot(
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-            singleTrackW = 0;
-    float   renderScaleY = 1.0f;
+          singleTrackW = 0;
+    float renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
@@ -341,8 +340,8 @@ void NoteRenderSystem::generateSnapshot(
 
         if ( cameraId == "Preview" ) {
             // 预览区逻辑：若全局开启，则由预览区具体开关决定；若全局关闭，则强制关闭
-            shouldDrawBeatLines   = config.visual.drawBeatLines &&
-                                    config.visual.previewConfig.drawBeatLines;
+            shouldDrawBeatLines = config.visual.drawBeatLines &&
+                                  config.visual.previewConfig.drawBeatLines;
             shouldDrawTimingLines = config.visual.previewConfig.drawTimingLines;
         }
 
@@ -700,7 +699,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y = judgmentLineY -
+                    float y             = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
@@ -809,7 +808,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects == 0 ) continue;
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float y = judgmentLineY -
+        float        y           = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;

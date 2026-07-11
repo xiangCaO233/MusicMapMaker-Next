@@ -1,6 +1,7 @@
 #include "common/MessageBox.h"
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -99,7 +100,7 @@ public:
         const std::string popupId =
             std::string(TR("ui.pgo.upload.title").data()) +
             "###PgoShutdownUploadProgressModal";
-        ImGui::OpenPopup(popupId.c_str());
+        ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
         const float dpiScale =
             Config::AppConfig::instance().getWindowContentScale();
@@ -252,12 +253,21 @@ int main(int argc, char* argv[])
 
     // 载入皮肤配置
     const auto startupSkinPath = Main::resolveStartupSkinPath(defaultSkinPath);
-    if ( !SkinManager::instance().loadSkin(
-             Config::pathToUtf8(startupSkinPath)) &&
-         startupSkinPath != defaultSkinPath ) {
+    bool       skinLoaded =
+        SkinManager::instance().loadSkin(Config::pathToUtf8(startupSkinPath));
+    if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
         XWARN("Fallback to default skin: {}",
               Config::pathToUtf8(defaultSkinPath));
-        SkinManager::instance().loadSkin(Config::pathToUtf8(defaultSkinPath));
+        skinLoaded = SkinManager::instance().loadSkin(
+            Config::pathToUtf8(defaultSkinPath));
+    }
+    if ( skinLoaded && resetUnavailableFontPreferences(
+                           AppConfig::instance().getEditorSettings(),
+                           SkinManager::instance()) ) {
+        XWARN("Unavailable font preference reset to skin default");
+        if ( !AppConfig::instance().save() ) {
+            XERROR("Failed to save reset font preference");
+        }
     }
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
 
@@ -271,7 +281,7 @@ int main(int argc, char* argv[])
 
     // 检查 Vulkan 环境
     if ( !gameLoop.g_vkContext ) {
-        // 这里会打印 VKContext::get() 的 catch 块里填入的 e.what()
+        // 这里会打印 VKContext::get() 返回的初始化失败原因。
         XERROR("Start Failed, graphic enc initialize failed with:\n {}",
                gameLoop.g_vkContext.error());
         return 1;

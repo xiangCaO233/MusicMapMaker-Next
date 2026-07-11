@@ -228,7 +228,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -303,7 +303,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                         std::abs(screen.renderScaleY) > 1e-6f;
+                   std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -352,10 +352,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1 = screen.judgmentLineY -
-                      static_cast<float>(startAbsY - screen.currentAbsY) *
-                          screen.renderScaleY;
-    const float  y2 =
+    const float  y1        = screen.judgmentLineY -
+                     static_cast<float>(startAbsY - screen.currentAbsY) *
+                         screen.renderScaleY;
+    const float y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -392,9 +392,9 @@ void includeCarrierRect(SelectionRect&                target,
                                TextureID::HoldBodyVertical,
                                screen.noteW,
                                screen.noteH);
-        const float x  = screen.leftX +
-                         static_cast<float>(trackIndex) * screen.singleTrackW +
-                         (screen.singleTrackW - bodySize.x) * 0.5f;
+        const float x = screen.leftX +
+                        static_cast<float>(trackIndex) * screen.singleTrackW +
+                        (screen.singleTrackW - bodySize.x) * 0.5f;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
             screen,
@@ -436,9 +436,9 @@ void includePolylineTransitionRect(SelectionRect&                target,
                                   (current.type == ::MMM::NoteType::FLICK
                                        ? static_cast<float>(current.dtrack)
                                        : 0.0f);
-    const float currentX        = screen.leftX +
-                                  currentEndTrack * screen.singleTrackW +
-                                  (screen.singleTrackW - bodySize.x) * 0.5f;
+    const float currentX = screen.leftX +
+                           currentEndTrack * screen.singleTrackW +
+                           (screen.singleTrackW - bodySize.x) * 0.5f;
     const float nextX =
         screen.leftX +
         static_cast<float>(next.trackIndex) * screen.singleTrackW +
@@ -707,13 +707,13 @@ bool collectMarqueeBoxCandidates(SessionContext&                   ctx,
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedTopY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const double absB   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedBottomY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA          = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedTopY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const double absB = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedBottomY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -780,7 +780,7 @@ InteractionController::InteractionController(SessionContext& ctx) : m_ctx(ctx)
     m_tools[EditTool::Draw]    = std::make_unique<DrawTool>();
 }
 
-// --- Interaction Handlers ---
+// --- 交互命令处理 ---
 
 void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
 {

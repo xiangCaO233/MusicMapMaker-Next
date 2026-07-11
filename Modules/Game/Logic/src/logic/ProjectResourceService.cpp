@@ -482,30 +482,29 @@ std::optional<std::string> ProjectResourceService::probeMainAudioTrackId(
     const std::string&               filename,
     std::unordered_set<std::string>& mainAudioPaths, bool warnOnFailure)
 {
-    try {
-        /// @brief 临时加载的谱面，用于读取主音轨元数据。
-        auto beatMap = BeatMap::loadFromFile(mapPath);
-        normalizeBeatmapMetadataPathsForProject(beatMap, project);
-        if ( beatMap.m_baseMapMetadata.main_audio_path.empty() ) {
-            return std::nullopt;
-        }
-
-        /// @brief 主音轨在文件系统中的项目根目录拼接路径。
-        auto absoluteAudioPath = resolveProjectPath(
-            project, beatMap.m_baseMapMetadata.main_audio_path);
-        /// @brief 主音轨相对于项目根目录的 UTF-8 路径。
-        auto relativeAudioPath =
-            Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
-
-        mainAudioPaths.insert(relativeAudioPath);
-        return Config::pathToUtf8(absoluteAudioPath.filename());
-    } catch ( ... ) {
+    /// @brief 临时加载的谱面，用于读取主音轨元数据。
+    auto beatMap = BeatMap::loadFromFile(mapPath);
+    if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
         if ( warnOnFailure ) {
             XWARN("Failed to probe main audio for beatmap: {}", filename);
         }
+        return std::nullopt;
     }
 
-    return std::nullopt;
+    normalizeBeatmapMetadataPathsForProject(beatMap, project);
+    if ( beatMap.m_baseMapMetadata.main_audio_path.empty() ) {
+        return std::nullopt;
+    }
+
+    /// @brief 主音轨在文件系统中的项目根目录拼接路径。
+    auto absoluteAudioPath =
+        resolveProjectPath(project, beatMap.m_baseMapMetadata.main_audio_path);
+    /// @brief 主音轨相对于项目根目录的 UTF-8 路径。
+    auto relativeAudioPath =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
+
+    mainAudioPaths.insert(relativeAudioPath);
+    return Config::pathToUtf8(absoluteAudioPath.filename());
 }
 
 /// @brief 创建默认音轨配置。

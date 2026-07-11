@@ -10,7 +10,7 @@ namespace MMM::Test
 
 inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
 {
-    // 1. Metadata
+    // 1. 元数据。
     if ( m1.m_baseMapMetadata.track_count !=
          m2.m_baseMapMetadata.track_count ) {
         XERROR("Track count mismatch: {} vs {}",
@@ -19,7 +19,7 @@ inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
         return false;
     }
 
-    // 2. Timing
+    // 2. Timing 事件。
     if ( m1.m_timings.size() != m2.m_timings.size() ) {
         XERROR("Timing count mismatch: {} vs {}",
                m1.m_timings.size(),

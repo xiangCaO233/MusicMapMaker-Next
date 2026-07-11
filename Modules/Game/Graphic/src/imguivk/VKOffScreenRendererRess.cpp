@@ -656,40 +656,12 @@ void VKOffScreenRenderer::updateDescriptorSets()
                                    nullptr));
     }
     m_device.updateDescriptorSets(writes, nullptr);
-
-    // 更新描述符集，指向 m_uniformBuffer
-    // vk::DescriptorBufferInfo bufferInfo(
-    //     m_uniformBuffer->m_vkBuffer, 0, sizeof(VKTestTimeUniform));
-    // vk::WriteDescriptorSet write(m_offScreenDescriptorSet,
-    //                              0,
-    //                              0,
-    //                              1,
-    //                              vk::DescriptorType::eUniformBuffer,
-    //                              nullptr,
-    //                              &bufferInfo);
-    // m_device.updateDescriptorSets(write, nullptr);
 }
 
 /**
  * @brief 上传uniform缓冲区到GPU
  */
-void VKOffScreenRenderer::uploadUniformBuffer2GPU()
-{
-    // static float currentTime{ 0.f };
-    // // 获取当前时间
-    // static auto start_time =
-    //     std::chrono::high_resolution_clock::now().time_since_epoch();
-    // auto since_start =
-    //     std::chrono::high_resolution_clock::now().time_since_epoch() -
-    //     start_time;
-    // auto current_time_ms =
-    //     std::chrono::duration_cast<std::chrono::milliseconds>(since_start);
-    // currentTime = static_cast<float>(current_time_ms.count()) / 1000.f;
-
-    // // 更新 Uniform 数据 (时间)
-    // VKTestTimeUniform ubo{ currentTime };
-    // m_uniformBuffer->uploadData(&ubo, sizeof(ubo));
-}
+void VKOffScreenRenderer::uploadUniformBuffer2GPU() {}
 
 std::unique_ptr<VKShader> createShaderModule(
     std::vector<std::string> main_shader_sources, std::string module_name,

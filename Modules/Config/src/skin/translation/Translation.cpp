@@ -22,42 +22,53 @@ void Translator::loadLanguage(const std::string& langLuaFile)
 
     XINFO("Loading language: {}", langID);
 
-    try {
-        sol::state lua;
-        lua.open_libraries(sol::lib::base, sol::lib::table);
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
 
-        std::ifstream file(path, std::ios::in | std::ios::binary);
-        if ( !file ) {
-            XERROR("Failed to open lang file: {}", langLuaFile);
-            return;
+    std::ifstream file(path, std::ios::in | std::ios::binary);
+    if ( !file ) {
+        XERROR("Failed to open lang file: {}", langLuaFile);
+        return;
+    }
+    std::string script((std::istreambuf_iterator<char>(file)),
+                       std::istreambuf_iterator<char>());
+    auto        result =
+        lua.safe_script(script, sol::script_pass_on_error, langLuaFile);
+
+    if ( !result.valid() ) {
+        sol::error err = result;
+        XERROR("Error loading lang: {}", err.what());
+        return;
+    }
+
+    sol::object resultObject = result;
+    if ( !resultObject.is<sol::table>() ) {
+        XERROR("Language file did not return a table: {}", langLuaFile);
+        return;
+    }
+
+    sol::table langTable = resultObject.as<sol::table>();
+    Dictionary newDict;
+
+    // 遍历 Lua 表，将字符串键转换为 uint32 Hash 存入 Map。
+    for ( const auto& kv : langTable ) {
+        if ( !kv.first.is<std::string>() || !kv.second.is<std::string>() ) {
+            continue;
         }
-        std::string script((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
-        auto        result = lua.script(script, langLuaFile);
 
-        if ( !result.valid() ) return;
+        std::string keyStr = kv.first.as<std::string>();
+        std::string valStr = kv.second.as<std::string>();
 
-        sol::table langTable = result;
-        Dictionary newDict;
+        // 运行时计算 Hash，只在加载时发生一次。
+        uint32_t keyHash = MMM::Hash::hash_str(keyStr);
 
-        // 遍历 Lua 表，将 String Key 转换为 uint32 Hash 存入 Map
-        for ( const auto& kv : langTable ) {
-            std::string keyStr = kv.first.as<std::string>();
-            std::string valStr = kv.second.as<std::string>();
+        newDict[keyHash] = valStr;
+    }
 
-            // 运行时计算 Hash (只在加载时发生一次)
-            uint32_t keyHash = MMM::Hash::hash_str(keyStr);
+    m_Dictionarys[langID] = std::move(newDict);
 
-            newDict[keyHash] = valStr;
-        }
-
-        m_Dictionarys[langID] = std::move(newDict);
-
-        if ( m_currentDictionary == nullptr ) {
-            switchLang(langID);
-        }
-    } catch ( const std::exception& e ) {
-        XERROR("Error loading lang: {}", e.what());
+    if ( m_currentDictionary == nullptr ) {
+        switchLang(langID);
     }
 }
 
@@ -80,6 +91,7 @@ void Translator::clear()
     m_Dictionarys.clear();
     m_currentDictionary = nullptr;
     m_pointerCache.clear();
+    m_stringPool.clear();
     ++m_version;
 }
 

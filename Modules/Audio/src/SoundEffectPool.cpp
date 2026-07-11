@@ -4,6 +4,7 @@
 #include <ice/core/MixBus.hpp>
 #include <ice/core/PlayCallBack.hpp>
 #include <ice/core/SourceNode.hpp>
+#include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioTrack.hpp>
 
 namespace MMM::Audio
@@ -48,9 +49,9 @@ SoundEffectPool::SoundEffectPool(std::shared_ptr<ice::AudioTrack> track)
 SoundEffectPool::~SoundEffectPool()
 {
     std::lock_guard<std::mutex> lock(m_mtx);
-    for ( auto& node : m_allNodes ) {
+    for ( auto& instance : m_allInstances ) {
         if ( m_localMixer ) {
-            m_localMixer->remove_source(node);
+            m_localMixer->remove_source(instance->pitchStretcher);
         }
     }
 }
@@ -60,45 +61,65 @@ std::shared_ptr<ice::MixBus> SoundEffectPool::getMixer() const
     return m_localMixer;
 }
 
+std::shared_ptr<SoundEffectPool::SFXPlayInstance>
+SoundEffectPool::createInstance()
+{
+    auto instance            = std::make_shared<SFXPlayInstance>();
+    instance->source         = std::make_shared<ice::SourceNode>(m_track);
+    instance->pitchStretcher = std::make_shared<ice::TimeStretcher>();
+    auto callback =
+        std::make_shared<SFXPlayCallback>(shared_from_this(), instance->source);
+    instance->source->add_playcallback(callback);
+    instance->pitchStretcher->set_inputnode(instance->source);
+
+    if ( m_localMixer ) {
+        m_localMixer->add_source(instance->pitchStretcher);
+    }
+    return instance;
+}
+
+std::shared_ptr<SoundEffectPool::SFXPlayInstance>
+SoundEffectPool::acquireInstance()
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if ( m_readyQueue.empty() ) {
+        auto instance = createInstance();
+        m_allInstances.push_back(instance);
+        return instance;
+    }
+
+    auto instance = m_readyQueue.front();
+    m_readyQueue.pop_front();
+    return instance;
+}
+
 void SoundEffectPool::init(int count)
 {
     std::lock_guard<std::mutex> lock(m_mtx);
     for ( int i = 0; i < count; ++i ) {
-        auto node = std::make_shared<ice::SourceNode>(m_track);
-        auto callback =
-            std::make_shared<SFXPlayCallback>(shared_from_this(), node);
-        node->add_playcallback(callback);
-        m_allNodes.push_back(node);
-        m_readyQueue.push_back(node);
-        if ( m_localMixer ) {
-            m_localMixer->add_source(node);
-        }
+        auto instance = createInstance();
+        m_allInstances.push_back(instance);
+        m_readyQueue.push_back(instance);
     }
 }
 
 void SoundEffectPool::play(float volume)
 {
-    std::shared_ptr<ice::SourceNode> node;
-    {
-        std::lock_guard<std::mutex> lock(m_mtx);
-        if ( m_readyQueue.empty() ) {
-            // 如果池空了，动态创建一个 (或者复用最老的，这里简单处理为扩容)
-            node = std::make_shared<ice::SourceNode>(m_track);
-            auto callback =
-                std::make_shared<SFXPlayCallback>(shared_from_this(), node);
-            node->add_playcallback(callback);
-            m_allNodes.push_back(node);
-            if ( m_localMixer ) {
-                m_localMixer->add_source(node);
-            }
-        } else {
-            node = m_readyQueue.front();
-            m_readyQueue.pop_front();
-        }
-    }
+    play(volume, 0.0);
+}
+
+void SoundEffectPool::play(float volume, double pitchSemitones)
+{
+    auto instance = acquireInstance();
+    auto node     = instance ? instance->source : nullptr;
 
     if ( node ) {
+        if ( instance->pitchStretcher ) {
+            instance->pitchStretcher->set_pitch_semitones(pitchSemitones);
+        }
         node->set_scheduled_start_frame(0);  // 确保没有残留的预定
+        node->set_reference_pos_provider(std::function<size_t()>());
+        node->set_playpos(static_cast<size_t>(0));
         node->setvolume(volume);
         node->play();
         {
@@ -111,25 +132,13 @@ void SoundEffectPool::play(float volume)
 void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
                                     std::function<size_t()> refProvider)
 {
-    std::shared_ptr<ice::SourceNode> node;
-    {
-        std::lock_guard<std::mutex> lock(m_mtx);
-        if ( m_readyQueue.empty() ) {
-            node = std::make_shared<ice::SourceNode>(m_track);
-            auto callback =
-                std::make_shared<SFXPlayCallback>(shared_from_this(), node);
-            node->add_playcallback(callback);
-            m_allNodes.push_back(node);
-            if ( m_localMixer ) {
-                m_localMixer->add_source(node);
-            }
-        } else {
-            node = m_readyQueue.front();
-            m_readyQueue.pop_front();
-        }
-    }
+    auto instance = acquireInstance();
+    auto node     = instance ? instance->source : nullptr;
 
     if ( node ) {
+        if ( instance->pitchStretcher ) {
+            instance->pitchStretcher->set_pitch_semitones(0.0);
+        }
         node->set_scheduled_start_frame(targetFrame);
         node->set_reference_pos_provider(std::move(refProvider));
         node->setvolume(volume);
@@ -143,12 +152,15 @@ void SoundEffectPool::stopAll()
     std::lock_guard<std::mutex> lock(m_mtx);
     m_readyQueue.clear();
 
-    for ( auto& node : m_allNodes ) {
-        node->pause();
-        node->set_playpos(static_cast<size_t>(0));
-        node->set_scheduled_start_frame(0);
-        node->set_reference_pos_provider(std::function<size_t()>());
-        m_readyQueue.push_back(node);
+    for ( auto& instance : m_allInstances ) {
+        instance->source->pause();
+        instance->source->set_playpos(static_cast<size_t>(0));
+        instance->source->set_scheduled_start_frame(0);
+        instance->source->set_reference_pos_provider(std::function<size_t()>());
+        if ( instance->pitchStretcher ) {
+            instance->pitchStretcher->set_pitch_semitones(0.0);
+        }
+        m_readyQueue.push_back(instance);
     }
     m_latestNode.reset();
 }
@@ -156,9 +168,19 @@ void SoundEffectPool::stopAll()
 void SoundEffectPool::releaseNode(std::shared_ptr<ice::SourceNode> node)
 {
     std::lock_guard<std::mutex> lock(m_mtx);
-    if ( std::find(m_readyQueue.begin(), m_readyQueue.end(), node) ==
+    auto                        instanceIt =
+        std::find_if(m_allInstances.begin(),
+                     m_allInstances.end(),
+                     [&](const std::shared_ptr<SFXPlayInstance>& instance) {
+                         return instance && instance->source == node;
+                     });
+    if ( instanceIt == m_allInstances.end() ) {
+        return;
+    }
+
+    if ( std::find(m_readyQueue.begin(), m_readyQueue.end(), *instanceIt) ==
          m_readyQueue.end() ) {
-        m_readyQueue.push_back(std::move(node));
+        m_readyQueue.push_back(*instanceIt);
     }
 }
 
@@ -174,8 +196,8 @@ void SoundEffectPool::updateEffectiveVolume(float globalVolume, bool muted)
 {
     std::lock_guard<std::mutex> lock(m_mtx);
     float effectiveVolume = muted ? 0.0f : m_volume * globalVolume;
-    for ( auto& node : m_allNodes ) {
-        node->setvolume(effectiveVolume);
+    for ( auto& instance : m_allInstances ) {
+        instance->source->setvolume(effectiveVolume);
     }
 }
 

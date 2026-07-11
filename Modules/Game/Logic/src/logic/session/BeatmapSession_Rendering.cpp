@@ -3,6 +3,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/PreviewDensity.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -163,6 +164,71 @@ void accumulateNoteStats(const NoteComponent&  note,
     }
 }
 
+/// @brief 判断物件类型是否应计入预览密度统计。
+/// @param type 物件类型。
+/// @return 可计数的 Note、Hold 或 Flick 返回 true。
+bool isPreviewDensityObjectType(::MMM::NoteType type)
+{
+    return type == ::MMM::NoteType::NOTE || type == ::MMM::NoteType::HOLD ||
+           type == ::MMM::NoteType::FLICK;
+}
+
+/// @brief 将单个顶层音符组件的可计数时间写入密度时间缓存。
+/// @param note 当前音符组件。
+/// @param objectTimes 输出的物件时间缓存。
+/// @warning 逻辑低频缓存重建路径：仅随音符排序或删减脏标记调用。
+void appendPreviewDensityObjectTimes(const NoteComponent& note,
+                                     std::vector<double>& objectTimes)
+{
+    if ( note.m_isSubNote ) {
+        return;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& subNote : note.m_subNotes ) {
+            if ( isPreviewDensityObjectType(subNote.type) &&
+                 std::isfinite(subNote.timestamp) &&
+                 subNote.timestamp >= 0.0 ) {
+                objectTimes.push_back(subNote.timestamp);
+            }
+        }
+        return;
+    }
+
+    if ( isPreviewDensityObjectType(note.m_type) &&
+         std::isfinite(note.m_timestamp) && note.m_timestamp >= 0.0 ) {
+        objectTimes.push_back(note.m_timestamp);
+    }
+}
+
+/// @brief 在物件或全谱时长变化时重建预览密度样本。
+/// @param ctx 当前会话上下文。
+/// @param totalDuration 当前谱面与音轨合并后的总时长，单位秒。
+/// @warning 逻辑热路径低频分支：每个 update 只做常量级脏标记检查；实际
+/// O(N+B) 重建仅在物件缓存或总时长变化时执行。
+void rebuildPreviewDensitySnapshotIfNeeded(SessionContext& ctx,
+                                           double          totalDuration)
+{
+    double effectiveDuration =
+        std::isfinite(totalDuration) && totalDuration > 0.0 ? totalDuration
+                                                            : 0.0;
+    if ( !ctx.previewDensityObjectTimes.empty() ) {
+        effectiveDuration =
+            std::max(effectiveDuration, ctx.previewDensityObjectTimes.back());
+    }
+
+    constexpr double DURATION_EPSILON = 1e-6;
+    const bool durationChanged = std::abs(ctx.previewDensityCache.duration -
+                                          effectiveDuration) > DURATION_EPSILON;
+    if ( !ctx.isPreviewDensityDirty && !durationChanged ) {
+        return;
+    }
+
+    ctx.previewDensityCache = buildPreviewDensitySnapshot(
+        ctx.previewDensityObjectTimes, effectiveDuration);
+    ctx.isPreviewDensityDirty = false;
+}
+
 /// @brief 计算预览区相对主画布的纵向渲染缩放倍率。
 /// @param ctx 当前会话上下文。
 /// @param previewCamera 预览区相机信息。
@@ -263,9 +329,15 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         bool isActiveSession)
 {
-    auto rebuildNotePrefixAndStats = [this](bool rebuildStats) {
+    auto rebuildNotePrefixAndStats = [this](bool rebuildStats,
+                                            bool rebuildDensity) {
         m_ctx->sortedNoteMaxEndPrefix.clear();
         m_ctx->sortedNoteMaxEndPrefix.reserve(m_ctx->sortedNoteEntities.size());
+        if ( rebuildDensity ) {
+            m_ctx->previewDensityObjectTimes.clear();
+            m_ctx->previewDensityObjectTimes.reserve(
+                m_ctx->sortedNoteEntities.size());
+        }
 
         BeatmapStatusStats stats;
         const auto*        beatmap    = m_ctx->currentBeatmap.get();
@@ -280,6 +352,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 m_ctx->noteRegistry.get<const NoteComponent>(entity);
             if ( rebuildStats ) {
                 accumulateNoteStats(note, beatmap, stats);
+            }
+            if ( rebuildDensity ) {
+                appendPreviewDensityObjectTimes(
+                    note, m_ctx->previewDensityObjectTimes);
             }
 
             double noteEnd = note.m_timestamp + std::max(0.0, note.m_duration);
@@ -298,9 +374,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             m_ctx->maxCombo         = stats.maxCombo;
             m_ctx->isNoteStatsDirty = false;
         }
+        if ( rebuildDensity ) {
+            std::sort(m_ctx->previewDensityObjectTimes.begin(),
+                      m_ctx->previewDensityObjectTimes.end());
+            m_ctx->isPreviewDensityDirty = true;
+        }
     };
 
-    // Rebuild sorted note entities cache if needed
+    // 在需要时重建已排序音符实体缓存。
     if ( m_ctx->isNoteOrderDirty ) {
         auto noteView = m_ctx->noteRegistry.view<const NoteComponent>();
         m_ctx->sortedNoteEntities.assign(noteView.begin(), noteView.end());
@@ -312,7 +393,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                              m_ctx->noteRegistry.get<const NoteComponent>(b)
                                  .m_timestamp;
                   });
-        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync, true);
         ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNoteOrderDirty = false;
         m_ctx->isNotePruneDirty = false;
@@ -326,11 +407,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                            m_ctx->sortedNoteEntities.end(),
                            isEntityInvalid),
             m_ctx->sortedNoteEntities.end());
-        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync, true);
         ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNotePruneDirty = false;
     } else if ( m_ctx->isNoteStatsDirty && !m_ctx->m_needsNotesSync ) {
-        rebuildNotePrefixAndStats(true);
+        rebuildNotePrefixAndStats(true, false);
     }
 
     if ( auto** sortedEntitiesPtr =
@@ -396,6 +477,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
     const double snapshotTotalTime =
         SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
+    rebuildPreviewDensitySnapshotIfNeeded(*m_ctx, snapshotTotalTime);
     const double snapshotSysTime =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch())
@@ -449,6 +531,19 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 track.duration = snapshotTotalTime;
             }
             snapshotMainAudioTracks.push_back(track);
+        }
+    }
+
+    double snapshotCurrentBpm = snapshotFallbackBpm;
+    double snapshotCurrentSv  = 1.0;
+    if ( const auto* cache =
+             m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() ) {
+        const auto timingState = cache->getTimingStateAt(m_ctx->animateTime);
+        if ( std::isfinite(timingState.bpm) && timingState.bpm > 0.0 ) {
+            snapshotCurrentBpm = timingState.bpm;
+        }
+        if ( std::isfinite(timingState.sv) ) {
+            snapshotCurrentSv = timingState.sv;
         }
     }
 
@@ -508,8 +603,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->snapshotSysTime   = snapshotSysTime;
         snapshot->playbackSpeed     = snapshotPlaybackSpeed;
         snapshot->fallbackBpm       = snapshotFallbackBpm;
+        snapshot->currentBpm        = snapshotCurrentBpm;
+        snapshot->currentSv         = snapshotCurrentSv;
         snapshot->hasBeatmap        = hasBeatmap;
         snapshot->lastActionMessage = m_ctx->lastActionMessage;
+        if ( cameraId == "Preview" ) {
+            snapshot->previewDensity = m_ctx->previewDensityCache;
+        }
 
         if ( hasBeatmap ) {
             snapshot->backgroundPath  = snapshotBackgroundPath;

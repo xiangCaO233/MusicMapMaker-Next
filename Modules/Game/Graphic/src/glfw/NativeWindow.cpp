@@ -206,8 +206,7 @@ void publishWindowMaximizedState(bool isMaximized)
 constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
     L"MMMRestoreMaximizedAfterMinimize";
 
-/// @brief Win32 WINDOWPLACEMENT flag that restores a minimized window to
-/// maximized state on the next activation.
+/// @brief 让最小化窗口在下一次激活时恢复为最大化的 Win32 WINDOWPLACEMENT 标志。
 constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
 
 /// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。
@@ -293,12 +292,11 @@ bool hasWin32RestoreMaximizedProperty(GLFWwindow* window)
     return hwnd && GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr;
 }
 
-/// @brief Determine whether a Win32 minimize/restore transition should keep
-/// the previous maximized state.
-/// @param window GLFW window handle.
-/// @param lastRequestedMaximized Last maximized state requested by the app.
-/// @param cachedRestoreMaximized Previously cached iconify restore state.
-/// @return True if taskbar or Alt+Tab restore should return to maximized.
+/// @brief 判断 Win32 最小化/恢复流程是否应保留之前的最大化状态。
+/// @param window GLFW 窗口句柄。
+/// @param lastRequestedMaximized 应用最近一次请求的最大化状态。
+/// @param cachedRestoreMaximized 之前缓存的最小化恢复状态。
+/// @return 任务栏或 Alt+Tab 恢复时应回到最大化则返回 true。
 bool shouldPreserveWin32MaximizedRestore(GLFWwindow* window,
                                          bool        lastRequestedMaximized,
                                          bool        cachedRestoreMaximized)
@@ -317,9 +315,9 @@ bool shouldPreserveWin32MaximizedRestore(GLFWwindow* window,
            win32PlacementWantsMaximized(hwnd);
 }
 
-/// @brief Minimize a Win32 window while preserving the system restore target.
-/// @param hwnd Win32 window handle.
-/// @param restoreMaximized Whether the next taskbar restore should maximize.
+/// @brief 最小化 Win32 窗口，同时保留系统恢复目标。
+/// @param hwnd Win32 窗口句柄。
+/// @param restoreMaximized 下一次任务栏恢复时是否应最大化。
 void minimizeWin32Window(HWND hwnd, bool restoreMaximized)
 {
     if ( !hwnd ) {
@@ -446,8 +444,8 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
         glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
 
 #if defined(_WIN32) || defined(__linux__)
-        // 获取 framebuffer 尺寸以检测系统是否已经自动处理了逻辑像素缩放 (如
-        // Wayland)
+        // 获取 framebuffer 尺寸以检测系统是否已经自动处理了逻辑像素缩放，例如
+        // Wayland 环境。
         int fbW, fbH;
         glfwGetFramebufferSize(m_windowHandle, &fbW, &fbH);
         float fbScaleX =

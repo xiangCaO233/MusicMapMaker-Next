@@ -2,17 +2,16 @@
 
 /**
  * @file Icons.h
- * @brief Font icon definitions for the MusicMapMaker UI.
+ * @brief MusicMapMaker UI 使用的字体图标定义。
  *
- * This file contains UTF-8 encoded strings for FontAwesome 6 icons used in the
- * application. Using these constants instead of hardcoded hex strings ensures
- * consistency and easier maintenance.
+ * 本文件保存 FontAwesome 6 图标的 UTF-8 字符串常量，避免在业务代码中散落
+ * 硬编码十六进制字符串。
  */
 
 namespace MMM::UI
 {
 
-// --- General UI Icons ---
+// --- 通用 UI 图标 ---
 constexpr const char* ICON_MMM_DESKTOP = "\xef\x84\x88";  ///< \uf108 desktop
 constexpr const char* ICON_MMM_EYE     = "\xef\x81\xae";  ///< \uf06e eye
 constexpr const char* ICON_MMM_FOLDER  = "\xef\x81\xbb";  ///< \uf07b folder
@@ -34,12 +33,12 @@ constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
 constexpr const char* ICON_MMM_LINK = "\xef\x83\x81";  ///< \uf0c1 link
 
-// --- Playback Icons ---
+// --- 播放控制图标 ---
 constexpr const char* ICON_MMM_PLAY  = "\xef\x81\x8b";  ///< \uf04b play
 constexpr const char* ICON_MMM_PAUSE = "\xef\x81\x8c";  ///< \uf04c pause
 constexpr const char* ICON_MMM_STOP  = "\xef\x81\x8d";  ///< \uf04d stop
 
-// --- Edit Tool Icons ---
+// --- 编辑工具图标 ---
 constexpr const char* ICON_MMM_MOUSE = "\xef\xa3\x8c";  ///< \uf8cc mouse
 constexpr const char* ICON_MMM_MOUSE_POINTER =
     "\xef\x89\x85";  ///< \uf245 mouse-pointer (Move Tool)
@@ -72,7 +71,7 @@ constexpr const char* ICON_MMM_ARROW_DOWN =
 constexpr const char* ICON_MMM_BARS =
     "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
 
-// --- Audio Icons ---
+// --- 音频图标 ---
 constexpr const char* ICON_MMM_VOLUME_HIGH =
     "\xef\x80\xa8";  ///< \uf028 volume-high
 constexpr const char* ICON_MMM_VOLUME_LOW =
@@ -86,7 +85,7 @@ constexpr const char* ICON_MMM_HIT_SFX = "\xef\x80\x81";  ///< \uf001 music
 constexpr const char* ICON_MMM_VISUAL_EFFECTS =
     "\xef\x83\xa7";  ///< \uf0e7 bolt
 
-// --- Window Control Icons ---
+// --- 窗口控制图标 ---
 constexpr const char* ICON_MMM_MINIMIZE =
     "\xef\x8b\x91";  ///< \uf2d1 window-minimize
 constexpr const char* ICON_MMM_MAXIMIZE =
@@ -96,7 +95,7 @@ constexpr const char* ICON_MMM_RESTORE =
 constexpr const char* ICON_MMM_CLOSE =
     "\xef\x80\x8d";  ///< \uf00d xmark / close
 
-// --- Help & Update Icons ---
+// --- 帮助与更新图标 ---
 constexpr const char* ICON_MMM_DOWNLOAD =
     "\xef\x8C\x81";  ///< \uf381 cloud-arrow-down
 constexpr const char* ICON_MMM_INFO_CIRCLE =

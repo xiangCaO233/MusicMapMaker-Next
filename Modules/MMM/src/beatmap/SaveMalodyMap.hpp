@@ -2,11 +2,13 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -56,8 +58,79 @@ inline std::optional<int> parseMalodyModeValue(std::string_view text)
     return value;
 }
 
+/// @brief 无异常解析 Malody 元数据整数。
+/// @param text 元数据文本。
+/// @return 成功时返回 64 位整数，否则返回空。
+inline std::optional<int64_t> parseMalodyInt64Value(std::string_view text)
+{
+    text = trimMalodyAsciiWhitespace(text);
+    if ( text.empty() ) return std::nullopt;
+
+    int64_t value = 0;
+    auto    result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 无异常解析 Malody 元数据 JSON。
+/// @param text 元数据文本。
+/// @return 成功时返回 JSON 值，否则返回空。
+inline std::optional<json> parseMalodyJsonValue(std::string_view text)
+{
+    json parsed = json::parse(text.begin(), text.end(), nullptr, false);
+    if ( parsed.is_discarded() ) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
+/// @brief 解析 JSON 元数据，失败时保留原始字符串。
+/// @param text 元数据文本。
+/// @return JSON 值或原始字符串。
+inline json parseMalodyJsonOrString(const std::string& text)
+{
+    if ( auto parsed = parseMalodyJsonValue(text) ) {
+        return *parsed;
+    }
+    return text;
+}
+
+/// @brief 将 Malody beat 数组转换为小数拍号。
+/// @param beatArray Malody beat 数组。
+/// @return 成功时返回小数拍号，否则返回空。
+inline std::optional<double> malodyBeatArrayToDouble(const json& beatArray)
+{
+    if ( !beatArray.is_array() || beatArray.size() < 3 ||
+         !beatArray[0].is_number() || !beatArray[1].is_number() ||
+         !beatArray[2].is_number() ) {
+        return std::nullopt;
+    }
+
+    const double denominator = beatArray[2].get<double>();
+    if ( std::abs(denominator) < std::numeric_limits<double>::epsilon() ) {
+        return std::nullopt;
+    }
+    return beatArray[0].get<double>() +
+           beatArray[1].get<double>() / denominator;
+}
+
+/// @brief 无异常解析并校验 Malody beat 数组。
+/// @param text 元数据文本。
+/// @return 成功时返回合法 beat 数组，否则返回空。
+inline std::optional<json> parseMalodyBeatJsonValue(const std::string& text)
+{
+    auto parsed = parseMalodyJsonValue(text);
+    if ( !parsed || !malodyBeatArrayToDouble(*parsed) ) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
 /// @brief 判断当前导出器是否支持指定 Malody mode。
-/// @param mode Malody mode。
+/// @param mode Malody 模式编号。
 /// @return 支持 key(0) 或 slide(7) 时返回 true。
 inline bool isSupportedMalodyExportMode(int mode)
 {
@@ -103,7 +176,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return column * x_w + center;
     };
 
-    // Meta
+    // 谱面基础元数据
     const std::string malodyVersion = beatMap.m_baseMapMetadata.version.empty()
                                           ? "default"
                                           : beatMap.m_baseMapMetadata.version;
@@ -161,29 +234,17 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 continue;
             }
             if ( key == "mode_ext" ) {
-                try {
-                    meta["mode_ext"] = json::parse(val);
-                } catch ( ... ) {
-                    meta["mode_ext"] = val;
-                }
+                meta["mode_ext"] = parseMalodyJsonOrString(val);
             } else if ( key == "id" || key == "preview" || key == "mode" ) {
-                try {
-                    meta[key] = std::stoll(val);
-                } catch ( ... ) {
+                if ( auto parsedInteger = parseMalodyInt64Value(val) ) {
+                    meta[key] = *parsedInteger;
+                } else {
                     meta[key] = val;
                 }
             } else if ( key == "extra" ) {
-                try {
-                    fileData["extra"] = json::parse(val);
-                } catch ( ... ) {
-                    fileData["extra"] = val;
-                }
+                fileData["extra"] = parseMalodyJsonOrString(val);
             } else {
-                try {
-                    meta[key] = json::parse(val);
-                } catch ( ... ) {
-                    meta[key] = val;
-                }
+                meta[key] = parseMalodyJsonOrString(val);
             }
         }
     }
@@ -205,7 +266,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         double lastTime   = 0;
         double lastBeat   = 0;
 
-        // Find the first BPM timing point to use as origin
+        // 查找首个 BPM 计时点作为拍号原点
         for ( const auto& t : beatMap.m_timings ) {
             if ( t.m_timingEffect == TimingEffect::BPM ) {
                 lastTime   = t.m_timestamp;
@@ -216,14 +277,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          TimingMetadataType::MALODY);
                      it != t.m_metadata.timing_properties.end() ) {
                     if ( it->second.contains("beat") ) {
-                        try {
-                            json bArr = json::parse(it->second.at("beat"));
-                            if ( bArr.is_array() && bArr.size() >= 3 ) {
-                                lastBeat = bArr[0].get<double>() +
-                                           (bArr[1].get<double>() /
-                                            bArr[2].get<double>());
+                        if ( auto beatJson =
+                                 parseMalodyJsonValue(it->second.at("beat")) ) {
+                            if ( auto beatValue =
+                                     malodyBeatArrayToDouble(*beatJson) ) {
+                                lastBeat = *beatValue;
                             }
-                        } catch ( ... ) {
                         }
                     }
                 }
@@ -274,20 +333,16 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
          it != beatMap.m_metadata.map_properties.end() ) {
         if ( it->second.contains("initialDelay") ) {
-            try {
-                initialDelay = std::stod(it->second.at("initialDelay"));
-            } catch ( ... ) {
-            }
+            initialDelay =
+                MMM::Internal::safeStod(it->second.at("initialDelay"), 0.0);
         }
         if ( it->second.contains("audioOffset") ) {
-            try {
-                audioOffset = std::stod(it->second.at("audioOffset"));
-            } catch ( ... ) {
-            }
+            audioOffset =
+                MMM::Internal::safeStod(it->second.at("audioOffset"), 0.0);
         }
     }
 
-    // Time & Effect
+    // 计时与效果数据
     json timeArr = json::array();
     for ( const auto& t : beatMap.m_timings ) {
         if ( t.m_timingEffect == TimingEffect::BPM ) {
@@ -298,10 +353,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      TimingMetadataType::MALODY);
                  it != t.m_metadata.timing_properties.end() ) {
                 if ( it->second.contains("beat") ) {
-                    try {
-                        tj["beat"] = json::parse(it->second.at("beat"));
+                    if ( auto beatJson =
+                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
+                        tj["beat"] = *beatJson;
                         hasBeat    = true;
-                    } catch ( ... ) {
                     }
                 }
             }
@@ -317,11 +372,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  it != t.m_metadata.timing_properties.end() ) {
                 for ( const auto& [key, val] : it->second ) {
                     if ( key != "bpm" ) {  // 已经有 bpm 了，排除
-                        try {
-                            tj[key] = json::parse(val);
-                        } catch ( ... ) {
-                            tj[key] = val;
-                        }
+                        tj[key] = parseMalodyJsonOrString(val);
                     }
                 }
             }
@@ -371,11 +422,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          TimingMetadataType::MALODY);
                      it != t.m_metadata.timing_properties.end() ) {
                     if ( it->second.contains("beat") ) {
-                        try {
-                            resetEj["beat"] =
-                                json::parse(it->second.at("beat"));
-                            hasBeat = true;
-                        } catch ( ... ) {
+                        if ( auto beatJson = parseMalodyBeatJsonValue(
+                                 it->second.at("beat")) ) {
+                            resetEj["beat"] = *beatJson;
+                            hasBeat         = true;
                         }
                     }
                 }
@@ -398,10 +448,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      TimingMetadataType::MALODY);
                  it != t.m_metadata.timing_properties.end() ) {
                 if ( it->second.contains("beat") ) {
-                    try {
-                        ej["beat"] = json::parse(it->second.at("beat"));
+                    if ( auto beatJson =
+                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
+                        ej["beat"] = *beatJson;
                         hasBeat    = true;
-                    } catch ( ... ) {
                     }
                 }
             }
@@ -428,11 +478,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 for ( const auto& [key, val] : it->second ) {
                     if ( key != "scroll" && key != "jump" && key != "hs" &&
                          key != "effect" ) {
-                        try {
-                            ej[key] = json::parse(val);
-                        } catch ( ... ) {
-                            ej[key] = val;
-                        }
+                        ej[key] = parseMalodyJsonOrString(val);
                     }
                 }
             }
@@ -464,10 +510,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      NoteMetadataType::MALODY);
                  it != note.m_metadata.note_properties.end() ) {
                 if ( it->second.contains("beat") ) {
-                    try {
-                        nj["beat"] = json::parse(it->second.at("beat"));
+                    if ( auto beatJson =
+                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
+                        nj["beat"] = *beatJson;
                         hasBeat    = true;
-                    } catch ( ... ) {
                     }
                 }
             }
@@ -690,11 +736,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                              it !=
                              s.original_sn->m_metadata.note_properties.end() ) {
                             if ( it->second.contains("beat") ) {
-                                try {
-                                    sj["beat"] =
-                                        json::parse(it->second.at("beat"));
+                                if ( auto beatJson = parseMalodyBeatJsonValue(
+                                         it->second.at("beat")) ) {
+                                    sj["beat"]      = *beatJson;
                                     hasBeatMetadata = true;
-                                } catch ( ... ) {
                                 }
                             }
                         }
@@ -711,7 +756,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                         sj["x"] = x_offset;
                     }
 
-                    // Restore other segment properties from metadata
+                    // 从元数据中恢复其他段字段
                     if ( s.original_sn ) {
                         if ( auto it =
                                  s.original_sn->m_metadata.note_properties.find(
@@ -722,11 +767,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                                 if ( key != "beat" && key != "x" &&
                                      key != "original_structure" &&
                                      key != "original_structure_flick" ) {
-                                    try {
-                                        sj[key] = json::parse(val);
-                                    } catch ( ... ) {
-                                        sj[key] = val;
-                                    }
+                                    sj[key] = parseMalodyJsonOrString(val);
                                 }
                             }
                         }
@@ -749,11 +790,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      key != "original_structure" &&
                      key != "original_structure_flick" &&
                      (!shouldDropWidth || key != "w") ) {
-                    try {
-                        nj[key] = json::parse(val);
-                    } catch ( ... ) {
-                        nj[key] = val;
-                    }
+                    nj[key] = parseMalodyJsonOrString(val);
                 }
             }
         }
@@ -780,10 +817,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          TimingMetadataType::MALODY);
                      it2 != t.m_metadata.timing_properties.end() ) {
                     if ( it2->second.contains("delay") ) {
-                        try {
-                            initialDelay = std::stod(it2->second.at("delay"));
-                        } catch ( ... ) {
-                        }
+                        initialDelay = MMM::Internal::safeStod(
+                            it2->second.at("delay"), 0.0);
                     }
                 }
             }

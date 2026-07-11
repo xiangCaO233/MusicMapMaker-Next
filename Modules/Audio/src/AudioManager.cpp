@@ -83,7 +83,7 @@ bool containsOutputDeviceName(const std::vector<AudioOutputDevice>& devices,
     });
 }
 
-/// @brief Log OpenAL playback devices visible to the backend.
+/// @brief 记录后端可见的 OpenAL 播放设备。
 void logOpenALDeviceDiagnostics()
 {
     const auto devices = ice::ALPlayer::list_devices();
@@ -115,18 +115,20 @@ AudioManager& AudioManager::instance()
 AudioManager::AudioManager()
 {
     // 从配置初始化音量
-    auto& settings        = Config::AppConfig::instance().getEditorSettings();
-    m_globalVolume        = settings.globalVolume;
-    m_globalMuted         = settings.globalMuted;
-    m_bgmGain             = settings.bgmGain;
-    m_bgmGainMuted        = settings.bgmGainMuted;
-    m_sfxGain             = settings.sfxGain;
-    m_sfxGainMuted        = settings.sfxGainMuted;
-    m_mainTrackVolume     = 0.5f;  // 默认主音轨音量
-    m_playbackBackend     = settings.audioPlaybackBackend;
-    m_sdlOutputDeviceName = settings.sdlAudioOutputDeviceName;
-    m_openALOutputDeviceName = settings.openALAudioOutputDeviceName;
-    m_openALSpatialConfig    = settings.openALSpatialConfig;
+    auto& settings       = Config::AppConfig::instance().getEditorSettings();
+    m_globalVolume       = settings.globalVolume;
+    m_globalMuted        = settings.globalMuted;
+    m_bgmGain            = settings.bgmGain;
+    m_bgmGainMuted       = settings.bgmGainMuted;
+    m_sfxGain            = settings.sfxGain;
+    m_sfxGainMuted       = settings.sfxGainMuted;
+    m_interactionSfxGain = settings.interactionSfxGain;
+    m_interactionSfxGainMuted = settings.interactionSfxGainMuted;
+    m_mainTrackVolume         = 0.5f;  // 默认主音轨音量
+    m_playbackBackend         = settings.audioPlaybackBackend;
+    m_sdlOutputDeviceName     = settings.sdlAudioOutputDeviceName;
+    m_openALOutputDeviceName  = settings.openALAudioOutputDeviceName;
+    m_openALSpatialConfig     = settings.openALSpatialConfig;
 
     // 初始化常驻音效静音状态
     for ( const auto& [key, muted] : settings.sfxConfig.permanentSfxMutes ) {
@@ -174,9 +176,11 @@ void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
     destroyPlaybackBackend();
+    unloadAuditionTrack();
 
     m_bgmTrack.reset();
     m_bgmPath.clear();
+    m_bgmSyncKey.clear();
     m_bgmSource.reset();
     m_stretcher.reset();
     m_mainMixer.reset();

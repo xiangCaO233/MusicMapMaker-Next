@@ -105,22 +105,23 @@ void SettingsView::drawVisualSettings()
              addHeader(TR_CACHE("ui.settings.visual.layout").data(), true) ) {
         // 采用全局统一最大标签宽度 maxLabelW
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.layout_left").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::SliderFloat("##LayoutLeft",
-                                                   &visual.trackLayout.left,
-                                                   0.0f,
-                                                   1.0f) ) {
-                               visual.trackLayout.left =
-                                   std::min(visual.trackLayout.left,
-                                            visual.trackLayout.right - 0.01f);
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.layout_left").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutLeft",
+                                                    &visual.trackLayout.left,
+                                                    0.0f,
+                                                    1.0f) ) {
+                    visual.trackLayout.left =
+                        std::min(visual.trackLayout.left,
+                                 visual.trackLayout.right - 0.01f);
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -128,7 +129,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::SliderFloat(
+                if ( ::MMM::UI::FeedbackSliderFloat(
                          "##LayoutTop", &visual.trackLayout.top, 0.0f, 1.0f) ) {
                     visual.trackLayout.top =
                         std::min(visual.trackLayout.top,
@@ -136,38 +137,40 @@ void SettingsView::drawVisualSettings()
                     changed = true;
                 }
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.layout_right").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::SliderFloat("##LayoutRight",
-                                                   &visual.trackLayout.right,
-                                                   0.0f,
-                                                   1.0f) ) {
-                               visual.trackLayout.right =
-                                   std::max(visual.trackLayout.right,
-                                            visual.trackLayout.left + 0.01f);
-                               changed = true;
-                           }
-                       });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.layout_bottom").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::SliderFloat("##LayoutBottom",
-                                                   &visual.trackLayout.bottom,
-                                                   0.0f,
-                                                   1.0f) ) {
-                               visual.trackLayout.bottom =
-                                   std::max(visual.trackLayout.bottom,
-                                            visual.trackLayout.top + 0.01f);
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.layout_right").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutRight",
+                                                    &visual.trackLayout.right,
+                                                    0.0f,
+                                                    1.0f) ) {
+                    visual.trackLayout.right =
+                        std::max(visual.trackLayout.right,
+                                 visual.trackLayout.left + 0.01f);
+                    changed = true;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.layout_bottom").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBottom",
+                                                    &visual.trackLayout.bottom,
+                                                    0.0f,
+                                                    1.0f) ) {
+                    visual.trackLayout.bottom =
+                        std::max(visual.trackLayout.bottom,
+                                 visual.trackLayout.top + 0.01f);
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -175,7 +178,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##LayoutBoxWidth", &visual.trackBoxLineWidth, 1.0f, 10.0f);
             });
     }
@@ -190,7 +193,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##JudgeLinePos", &visual.judgeline_pos, 0.0f, 1.0f);
             });
     }
@@ -205,7 +208,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##BeatLineAlpha", &visual.beatLineAlpha, 0.0f, 1.0f);
             });
         addSettingItem(
@@ -214,9 +217,9 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
             maxLabelW,
             [&](Clay_BoundingBox, bool) {
-                changed |=
-                    ImGui::Checkbox("##BeatLineBeforeFirstTiming",
-                                    &visual.drawBeatLinesBeforeFirstTiming);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##BeatLineBeforeFirstTiming",
+                    &visual.drawBeatLinesBeforeFirstTiming);
             });
     }
 
@@ -230,7 +233,7 @@ void SettingsView::drawVisualSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat(
+                           changed |= ::MMM::UI::FeedbackSliderFloat(
                                "##NoteScaleX", &visual.noteScaleX, 0.5f, 3.0f);
                        });
         addSettingItem(*sec,
@@ -239,7 +242,7 @@ void SettingsView::drawVisualSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat(
+                           changed |= ::MMM::UI::FeedbackSliderFloat(
                                "##NoteScaleY", &visual.noteScaleY, 0.5f, 3.0f);
                        });
         addSettingItem(
@@ -256,10 +259,10 @@ void SettingsView::drawVisualSettings()
                     TR_CACHE("ui.settings.visual.fill_mode.center").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##NoteFillMode",
-                                  &noteFillMode,
-                                  fillModes,
-                                  IM_ARRAYSIZE(fillModes)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##NoteFillMode",
+                                              &noteFillMode,
+                                              fillModes,
+                                              IM_ARRAYSIZE(fillModes)) ) {
                     visual.noteFillMode =
                         (Config::BackgroundFillMode)noteFillMode;
                     changed = true;
@@ -283,12 +286,12 @@ void SettingsView::drawVisualSettings()
                                   .data())
                         : defaultScheme;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##DefaultNotePalette",
-                                       previewName.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##DefaultNotePalette",
+                                                   previewName.c_str()) ) {
                     const bool skinSelected =
                         defaultScheme ==
                         Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                    if ( ImGui::Selectable(
+                    if ( ::MMM::UI::FeedbackSelectable(
                              TR_CACHE(
                                  "ui.toolbar.note_palette.skin_default_scheme")
                                  .data(),
@@ -301,14 +304,14 @@ void SettingsView::drawVisualSettings()
 
                     for ( const auto& scheme : paletteConfig.schemes ) {
                         const bool selected = defaultScheme == scheme.name;
-                        if ( ImGui::Selectable(scheme.name.c_str(),
-                                               selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                                           selected) ) {
                             defaultScheme = scheme.name;
                             changed       = true;
                         }
                         if ( selected ) ImGui::SetItemDefaultFocus();
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
             });
     }
@@ -331,10 +334,10 @@ void SettingsView::drawVisualSettings()
                     TR_CACHE("ui.settings.visual.fill_mode.center").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##BgFillMode",
-                                  &bgFillMode,
-                                  fillModes,
-                                  IM_ARRAYSIZE(fillModes)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##BgFillMode",
+                                              &bgFillMode,
+                                              fillModes,
+                                              IM_ARRAYSIZE(fillModes)) ) {
                     visual.background.fillMode =
                         (Config::BackgroundFillMode)bgFillMode;
                     changed = true;
@@ -347,7 +350,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##BgOpaque", &visual.background.opaque_ratio, 0.0f, 1.0f);
             });
         addSettingItem(
@@ -357,7 +360,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##BgDarken", &visual.background.darken_ratio, 0.0f, 1.0f);
             });
     }
@@ -387,7 +390,7 @@ void SettingsView::drawVisualSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat(
+                           changed |= ::MMM::UI::FeedbackSliderFloat(
                                "##PreviewRatio",
                                &visual.previewConfig.areaRatio,
                                1.0f,
@@ -401,7 +404,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##EdgeSens",
                     &visual.previewConfig.edgeScrollSensitivity,
                     0.0f,
@@ -415,10 +418,11 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat("##MarginL",
-                                              &visual.previewConfig.margin.left,
-                                              0.0f,
-                                              20.0f);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##MarginL",
+                    &visual.previewConfig.margin.left,
+                    0.0f,
+                    20.0f);
             });
         addSettingItem(
             *sec,
@@ -427,7 +431,7 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat(
+                changed |= ::MMM::UI::FeedbackSliderFloat(
                     "##MarginT", &visual.previewConfig.margin.top, 0.0f, 20.0f);
             });
         addSettingItem(
@@ -437,11 +441,11 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |=
-                    ImGui::SliderFloat("##MarginR",
-                                       &visual.previewConfig.margin.right,
-                                       0.0f,
-                                       20.0f);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##MarginR",
+                    &visual.previewConfig.margin.right,
+                    0.0f,
+                    20.0f);
             });
         addSettingItem(
             *sec,
@@ -450,11 +454,11 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |=
-                    ImGui::SliderFloat("##MarginB",
-                                       &visual.previewConfig.margin.bottom,
-                                       0.0f,
-                                       20.0f);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##MarginB",
+                    &visual.previewConfig.margin.bottom,
+                    0.0f,
+                    20.0f);
             });
         addSettingItem(
             *sec,
@@ -462,8 +466,8 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox("##DrawBeatLines",
-                                           &visual.previewConfig.drawBeatLines);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##DrawBeatLines", &visual.previewConfig.drawBeatLines);
             });
         addSettingItem(
             *sec,
@@ -471,7 +475,7 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
             });
         addSettingItem(
@@ -481,11 +485,11 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat("##TimelineZoom",
-                                              &visual.timelineZoom,
-                                              0.1f,
-                                              5.0f,
-                                              "%.2fx");
+                changed |= ::MMM::UI::FeedbackSliderFloat("##TimelineZoom",
+                                                          &visual.timelineZoom,
+                                                          0.1f,
+                                                          5.0f,
+                                                          "%.2fx");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.visual.timeline_zoom_tooltip").data(),
@@ -499,11 +503,12 @@ void SettingsView::drawVisualSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat("##ScrollAnimationDuration",
-                                              &visual.scrollAnimationDuration,
-                                              0.0f,
-                                              0.5f,
-                                              "%.3f s");
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##ScrollAnimationDuration",
+                    &visual.scrollAnimationDuration,
+                    0.0f,
+                    0.5f,
+                    "%.3f s");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.visual.scroll_animation_tooltip")
@@ -516,7 +521,7 @@ void SettingsView::drawVisualSettings()
                        TR_CACHE("ui.settings.visual.linear_scroll").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox(
+                           changed |= ::MMM::UI::FeedbackCheckbox(
                                "##LinearScroll",
                                &visual.enableLinearScrollMapping);
                        });
@@ -526,11 +531,12 @@ void SettingsView::drawVisualSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat("##SnapThreshold",
-                                                         &visual.snapThreshold,
-                                                         0.0f,
-                                                         48.0f,
-                                                         "%.1f px");
+                           changed |= ::MMM::UI::FeedbackSliderFloat(
+                               "##SnapThreshold",
+                               &visual.snapThreshold,
+                               0.0f,
+                               48.0f,
+                               "%.1f px");
                        });
     }
 
@@ -617,12 +623,13 @@ void SettingsView::drawVisualSettings()
                 }
 
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##SpectrumDetail",
-                                       labels[currentIndex].c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo(
+                         "##SpectrumDetail", labels[currentIndex].c_str()) ) {
                     for ( size_t i = 0; i < detailLevels.size(); ++i ) {
                         const bool selected =
                             currentIndex == static_cast<int>(i);
-                        if ( ImGui::Selectable(labels[i].c_str(), selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(labels[i].c_str(),
+                                                           selected) ) {
                             visual.spectrumDetailLevel = detailLevels[i];
                             changed                    = true;
                         }
@@ -630,7 +637,7 @@ void SettingsView::drawVisualSettings()
                             ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
@@ -643,20 +650,51 @@ void SettingsView::drawVisualSettings()
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
         // 采用全局统一最大标签宽度 maxLabelW
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.visual_offset").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::DragFloat("##VisualOffset",
-                                                 &visual.visualOffset,
-                                                 0.001f,
-                                                 -0.5f,
-                                                 0.5f,
-                                                 "%.3f s") )
-                               changed = true;
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##VisualOffset",
+                                                  &visual.visualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##WaveformVisualOffset",
+                                                  &visual.waveformVisualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##SpectrumVisualOffset",
+                                                  &visual.spectrumVisualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
     }
 
     // 统一执行 Clay 布局渲染

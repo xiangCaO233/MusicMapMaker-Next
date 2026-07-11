@@ -236,18 +236,27 @@ NativeFrameHit resolveNativeFrameHit(const ImGuiViewport& viewport,
 }
 }  // namespace
 
+/// @brief 更新主 DockSpace、顶部菜单、全局文件对话框和应用级模态弹窗。
+/// @param sourceManager 当前 UI 管理器。
+/// @warning UI 热路径：每帧执行；除用户明确触发的文件选择器和窗口关闭确认外，
+/// 禁止加入文件系统扫描、阻塞等待或完整数据重建。
 void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     ensureTemporaryProjectSubscriptions();
     consumeTemporaryProjectQueues();
-    m_mainMenuview.update(sourceManager);
+
+    const float deltaSeconds = ImGui::GetIO().DeltaTime;
+    m_statusMessageService.update(deltaSeconds);
+    m_saveResultFeedback.update(deltaSeconds);
+    m_mainMenuview.update(sourceManager, m_statusMessageService);
 
     auto&                engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     ImGuiViewport*       viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    m_saveResultFeedback.render(dpiScale);
 
-    // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
+    // --- 0. IGFD 翻译，当前因库封装暂跳过 ---
 
     if ( auto* nativeWindow =
              sourceManager ? sourceManager->getNativeWindow() : nullptr ) {
@@ -326,7 +335,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 4. 全局弹出式对话框 ---
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
-        // --- Project Folder Picker ---
+        // --- 项目目录选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
@@ -359,7 +368,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Temporary Project Save Folder Picker ---
+        // --- 临时项目保存目录选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
@@ -393,76 +402,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Save As File Picker ---
-        {
-            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
-            }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "SaveAsFilePicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    std::string filePath =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    filePath = m_mainMenuview.applySaveAsSelectedFormatToPath(
-                        filePath);
-
-                    if ( std::filesystem::exists(
-                             Config::utf8ToPath(filePath)) ) {
-                        m_pendingOverwritePath     = filePath;
-                        this->m_onOverwriteConfirm = [this, filePath]() {
-                            m_mainMenuview.requestSaveBeatmapAs(filePath);
-                        };
-                        m_showOverwriteModal = true;
-                    } else {
-                        m_mainMenuview.requestSaveBeatmapAs(filePath);
-                    }
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
-        }
-
-        // --- Pack File Picker ---
-        {
-            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
-            }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "PackFilePicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    std::string filePath =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    filePath =
-                        m_mainMenuview.applyPackSelectedFormatToPath(filePath);
-
-                    auto config = engine.getEditorConfig();
-                    config.settings.lastFilePickerPath =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
-                    engine.setEditorConfig(config);
-
-                    if ( std::filesystem::exists(
-                             Config::utf8ToPath(filePath)) ) {
-                        m_pendingOverwritePath     = filePath;
-                        this->m_onOverwriteConfirm = [this, filePath]() {
-                            m_mainMenuview.requestPackBeatmapTo(filePath);
-                        };
-                        m_showOverwriteModal = true;
-                    } else {
-                        m_mainMenuview.requestPackBeatmapTo(filePath);
-                    }
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
-        }
-
-        // --- Audio Import Picker ---
+        // --- 音频导入选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker") ) {
@@ -490,7 +430,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Ascii Font Picker ---
+        // --- ASCII 字体选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
@@ -514,7 +454,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Cjk Font Picker ---
+        // --- CJK 字体选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
@@ -541,7 +481,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 5. 音频导入类型选择模态弹窗 ---
     if ( m_showImportTypeModal ) {
-        ImGui::OpenPopup("AudioImportTypeModal");
+        ::MMM::UI::FeedbackOpenPopup("AudioImportTypeModal");
         m_showImportTypeModal = false;
     }
 
@@ -551,22 +491,24 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Text("%s", TR("ui.audio_import.type_hint").data());
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.audio_track.main").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.main").data(),
+                                           { 120, 0 }) ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Main }));
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_track.effect").data(),
-                               { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.effect").data(),
+                                           { 120, 0 }) ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Effect }));
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), { 80, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           { 80, 0 }) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -576,7 +518,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 5.5 文件覆盖确认模态弹窗 ---
     if ( m_showOverwriteModal ) {
-        ImGui::OpenPopup("OverwriteConfirmModal");
+        ::MMM::UI::FeedbackOpenPopup("OverwriteConfirmModal");
         m_showOverwriteModal = false;
     }
 
@@ -594,12 +536,14 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Separator();
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.common.confirm").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.confirm").data(),
+                                           { 120, 0 }) ) {
                 if ( m_onOverwriteConfirm ) m_onOverwriteConfirm();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           { 120, 0 }) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -637,7 +581,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
                 const std::string exitPopupName = fmt::format(
                     "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
-                ImGui::OpenPopup(exitPopupName.c_str());
+                ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
             }
         }
     }
@@ -662,8 +606,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Separator();
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.file.save").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.file.save").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 engine.pushCommand(Logic::CmdSaveBeatmap{});
                 // 注意：由于保存是异步的，这里直接设置退出可能会导致保存未完成
                 // 但在当前的单线程逻辑模型中，指令会按顺序处理
@@ -674,8 +618,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.exit.dont_save").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.exit.dont_save").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 if ( viewport->PlatformHandle ) {
                     glfwSetWindowShouldClose(
                         (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
@@ -683,12 +627,31 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.help.cancel").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
+    }
+
+    // --- 7. 主菜单延迟弹窗宿主 ---
+    {
+        constexpr ImGuiWindowFlags popupHostFlags =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(1.0f, 1.0f), ImGuiCond_Always);
+        if ( ImGui::Begin("MainMenuPopupHost", nullptr, popupHostFlags) ) {
+            m_pgoUploadConsentWindow.render(dpiScale);
+            m_mainMenuview.renderDeferredPopups(
+                sourceManager, dpiScale, m_statusMessageService);
+        }
+        ImGui::End();
     }
 }
 
@@ -753,6 +716,7 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
 
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
         nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
@@ -767,9 +731,15 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
     IGFD::FileDialogConfig fdConfig;
     fdConfig.path              = editorSettings.lastFilePickerPath;
     fdConfig.countSelectionMax = 1;
-    fdConfig.flags             = ImGuiFileDialogFlags_Default;
+    fdConfig.flags             = ImGuiFileDialogFlags_Modal;
+    const bool wasOpen         = ImGuiFileDialog::Instance()->IsOpened(
+        "TemporaryProjectSaveFolderPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "TemporaryProjectSaveFolderPicker", "保存临时项目", nullptr, fdConfig);
+    if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                         "TemporaryProjectSaveFolderPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 /// @brief 渲染临时项目只读和关闭确认弹窗。
@@ -777,7 +747,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                                                    ImGuiViewport* viewport)
 {
     if ( m_showTemporaryProjectReadOnlyModal ) {
-        ImGui::OpenPopup("临时项目只读###TemporaryProjectReadOnlyModal");
+        ::MMM::UI::FeedbackOpenPopup(
+            "临时项目只读###TemporaryProjectReadOnlyModal");
         m_showTemporaryProjectReadOnlyModal = false;
     }
 
@@ -804,8 +775,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             ImGui::Spacing();
 
             ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
-            if ( ImGui::Button("选择保存位置",
-                               ImVec2(140.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("选择保存位置",
+                                           ImVec2(140.0f * dpiScale, 0.0f)) ) {
                 m_temporaryProjectAfterSaveAction =
                     TemporaryProjectAfterSaveAction::None;
                 requestTemporaryProjectSaveFolder();
@@ -813,7 +784,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button("继续只读", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("继续只读",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -822,7 +794,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
     }
 
     if ( m_showTemporaryProjectCloseModal ) {
-        ImGui::OpenPopup("保存临时项目###TemporaryProjectCloseModal");
+        ::MMM::UI::FeedbackOpenPopup(
+            "保存临时项目###TemporaryProjectCloseModal");
         m_showTemporaryProjectCloseModal = false;
     }
 
@@ -847,13 +820,15 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             ImGui::Spacing();
 
             ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
-            if ( ImGui::Button("保存项目", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("保存项目",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 requestTemporaryProjectSaveFolder();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button("不保存", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("不保存",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 if ( m_temporaryProjectAfterSaveAction ==
                      TemporaryProjectAfterSaveAction::ExitApp ) {
                     if ( viewport && viewport->PlatformHandle ) {
@@ -871,8 +846,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.help.cancel").data(),
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 m_temporaryProjectAfterSaveAction =
                     TemporaryProjectAfterSaveAction::None;
                 ImGui::CloseCurrentPopup();

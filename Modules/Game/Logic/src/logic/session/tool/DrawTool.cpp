@@ -171,8 +171,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -228,8 +228,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 int lastIdx =
                     static_cast<int>(parentNote.m_subNotes.size() - 1);
                 if ( ctx.hoveredSubIndex == lastIdx ) {
-                    // 检查是否悬停在能够继续延伸的部分 (Node, Body, HoldEnd,
-                    // FlickArrow)
+                    // 检查是否悬停在能够继续延伸的部分：Node、Body、HoldEnd
+                    // 或 FlickArrow。
                     if ( ctx.hoveredPart ==
                              static_cast<uint8_t>(HoverPart::PolylineNode) ||
                          ctx.hoveredPart ==
@@ -387,8 +387,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -410,8 +410,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                 : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;
@@ -559,8 +559,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             } else if ( last.type == ::MMM::NoteType::FLICK ) {
                 int targetTrack = last.trackIndex + last.dtrack;
                 if ( currentTrack != targetTrack ) {
-                    // 正在横移：更新 dtrack，并重置垂直参考点以防止意外触发
-                    // Hold
+                    // 正在横移：更新
+                    // dtrack，并重置垂直参考点以防止意外触发长按。
                     last.dtrack = currentTrack - last.trackIndex;
                     ctx.brushState.segmentStartMouseY = cmd.mouseY;
 
@@ -879,7 +879,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                         } else {
                             // 【2-2 相同类型】延长尾段，追加剩余 seg
                             if ( targetFirst.type == ::MMM::NoteType::FLICK ) {
-                                // subFlick + subFlick:
+                                // 两个 subFlick 合并：
                                 // 将目标首个 subFlick 的终点替换到用户绘制的
                                 // subFlick 的终点
                                 int targetFirstEnd =
@@ -889,7 +889,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                                 // 以用户绘制的 subFlick 时间为准（不修改时间）
                             } else if ( targetFirst.type ==
                                         ::MMM::NoteType::HOLD ) {
-                                // subHold + subHold:
+                                // 两个 subHold 合并：
                                 // 将目标首个 subHold 的结束时间作为新结束时间
                                 double targetFirstEnd = targetFirst.timestamp +
                                                         targetFirst.duration;

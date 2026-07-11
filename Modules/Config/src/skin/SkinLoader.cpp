@@ -3,6 +3,7 @@
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -109,6 +110,13 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         std::string key       = kv.first.as<std::string>();
         std::string rpath     = kv.second.as<std::string>();
         m_data.fontPaths[key] = makeResPath(rpath);
+    }
+    if ( !m_data.fontPaths.contains("icons") ) {
+        if ( auto asciiFontPath = m_data.fontPaths.find("ascii");
+             asciiFontPath != m_data.fontPaths.end() ) {
+            // 旧皮肤没有独立图标字体字段时，复用 ASCII 字体保持兼容。
+            m_data.fontPaths["icons"] = asciiFontPath->second;
+        }
     }
     XINFO("Fonts loaded: {} font(s)", m_data.fontPaths.size());
 
@@ -359,15 +367,38 @@ void SkinManager::parseAssetsRecursive(const sol::table&  currentTable,
             // 如果是字符串，说明到了叶子节点，保存路径
             std::string rpath = value.as<std::string>();
 
-            // 检查是否是序列帧格式，例如 "image/note/effect/flick/[1 ..
-            // 16].png"
+            // 检查是否是序列帧格式，例如
+            // 示例："image/note/effect/flick/[1 .. 16].png"。
             std::regex  seqRegex(R"(^(.*)\[(\d+)\s*\.\.\s*(\d+)\](.*)$)");
             std::smatch match;
             if ( std::regex_match(rpath, match, seqRegex) ) {
-                std::string prefix = match[1].str();
-                int         start  = std::stoi(match[2].str());
-                int         end    = std::stoi(match[3].str());
-                std::string suffix = match[4].str();
+                std::string prefix    = match[1].str();
+                int         start     = 0;
+                int         end       = 0;
+                std::string suffix    = match[4].str();
+                const auto  startText = match[2].str();
+                const auto  endText   = match[3].str();
+                const auto [startPtr, startEc] =
+                    std::from_chars(startText.data(),
+                                    startText.data() + startText.size(),
+                                    start);
+                const auto [endPtr, endEc] = std::from_chars(
+                    endText.data(), endText.data() + endText.size(), end);
+                if ( startEc != std::errc{} ||
+                     startPtr != startText.data() + startText.size() ||
+                     endEc != std::errc{} ||
+                     endPtr != endText.data() + endText.size() ) {
+                    XWARN("皮肤序列帧范围解析失败: {}", rpath);
+                    continue;
+                }
+
+                constexpr int MAX_EFFECT_SEQUENCE_FRAMES = 4096;
+                const int     frameCount =
+                    (start <= end) ? (end - start + 1) : (start - end + 1);
+                if ( frameCount > MAX_EFFECT_SEQUENCE_FRAMES ) {
+                    XWARN("皮肤序列帧数量过大，已跳过: {}", rpath);
+                    continue;
+                }
 
                 SkinData::EffectSequence seq;
                 int                      step    = (start <= end) ? 1 : -1;
@@ -551,7 +582,7 @@ const SkinData::CanvasConfig& SkinManager::getCanvasConfig(
          canvas_config_it != m_data.canvas_configs.end() ) {
         return canvas_config_it->second;
     }
-    // Fallback to "Basic2DCanvas" if not found
+    // 找不到指定配置时回退到 "Basic2DCanvas"。
     if ( canvasName != "Basic2DCanvas" ) {
         if ( auto canvas_config_it =
                  m_data.canvas_configs.find("Basic2DCanvas");

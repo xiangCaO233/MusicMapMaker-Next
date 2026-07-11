@@ -8,6 +8,9 @@
 #include "ui/IUIView.h"
 #include "ui/brush/Brush.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace MMM::UI
 {
 class Brush;
@@ -53,8 +56,20 @@ public:
     class RenderContext
     {
     public:
+        /// @brief 创建渲染窗口，并可为右侧辅助栏预留独立内容宽度。
+        /// @param view 目标可渲染视图。
+        /// @param window_title ImGui 窗口标题和 ID。
+        /// @param width 首次显示使用的窗口宽度。
+        /// @param height 首次显示使用的窗口高度。
+        /// @param p_open 可选窗口开启状态。
+        /// @param rightReservedWidth 右侧辅助栏期望宽度，单位为逻辑像素。
+        /// @param minRenderableWidth 预留辅助栏后必须保留的最小画布宽度。
+        /// @warning UI 热路径：每帧窗口绘制调用，只执行常量级布局计算、样式
+        /// 栈操作和目标尺寸同步。
         RenderContext(IRenderableView* view, const char* window_title,
-                      int width, int height, bool* p_open = nullptr)
+                      int width, int height, bool* p_open = nullptr,
+                      float rightReservedWidth = 0.0f,
+                      float minRenderableWidth = 1.0f)
             : m_view(view), m_width(width), m_height(height)
         {
             // 1. 在 Begin 之前设置窗口大小
@@ -72,18 +87,28 @@ public:
             ImFont* titleFont = skinMgr.getFont("title");
             if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
+            const bool wasOpenBeforeBegin = p_open != nullptr && *p_open;
             ImGui::Begin(window_title, p_open);
+            FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, p_open);
 
             // Begin 后立即弹出，确保后续内容使用默认字体
             if ( titleFont ) ImGui::PopFont();
 
 
             // 1. 获取 ImGui 窗口分配给内容的实际大小
-            ImVec2 size = ImGui::GetContentRegionAvail();
+            ImVec2      size = ImGui::GetContentRegionAvail();
+            const float safeMinRenderableWidth =
+                std::max(1.0f, minRenderableWidth);
+            m_reservedRightWidth =
+                std::clamp(rightReservedWidth,
+                           0.0f,
+                           std::max(0.0f, size.x - safeMinRenderableWidth));
+            m_renderSize =
+                ImVec2(std::max(0.0f, size.x - m_reservedRightWidth), size.y);
             if ( size.x > 0 && size.y > 0 ) {
                 // 核心修复：通知渲染器目标尺寸及其缩放倍率
-                view->setTargetSize(static_cast<uint32_t>(size.x),
-                                    static_cast<uint32_t>(size.y),
+                view->setTargetSize(static_cast<uint32_t>(m_renderSize.x),
+                                    static_cast<uint32_t>(m_renderSize.y),
                                     dpiScale);
             }
 
@@ -91,9 +116,11 @@ public:
             view->m_brush.clear();
         }
 
+        /// @brief 绘制当前帧离屏纹理并结束对应 ImGui 窗口。
+        /// @warning UI 热路径：每帧只提交一个 Image 或加载提示并恢复样式栈。
         ~RenderContext()
         {
-            ImVec2 size = ImGui::GetContentRegionAvail();
+            const ImVec2 size = m_renderSize;
             if ( size.x > 0 && size.y > 0 ) {
                 vk::DescriptorSet texID = m_view->getDescriptorSet();
                 // 增加判空，防止在重构瞬间崩溃
@@ -107,10 +134,24 @@ public:
             ImGui::PopStyleVar();
         };
 
+        /// @brief 获取扣除右侧辅助栏后的画布逻辑尺寸。
+        /// @return 当前帧用于纹理和交互映射的画布尺寸。
+        /// @warning UI 热路径：只返回构造时缓存的尺寸。
+        ImVec2 getRenderSize() const { return m_renderSize; }
+
+        /// @brief 获取当前帧实际预留的右侧辅助栏宽度。
+        /// @return 经过窄窗口限制后的逻辑像素宽度。
+        /// @warning UI 热路径：只返回构造时缓存的宽度。
+        float getReservedRightWidth() const { return m_reservedRightWidth; }
+
     private:
         IRenderableView* m_view;
         int              m_width;
         int              m_height;
+        /// @brief 当前帧扣除辅助栏后的画布逻辑尺寸。
+        ImVec2 m_renderSize{ 0.0f, 0.0f };
+        /// @brief 当前帧实际预留的右侧辅助栏宽度。
+        float m_reservedRightWidth{ 0.0f };
     };
 
 protected:

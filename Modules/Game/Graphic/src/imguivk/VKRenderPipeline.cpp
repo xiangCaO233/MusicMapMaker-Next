@@ -2,7 +2,6 @@
 #include "graphic/imguivk/mem/VKUniforms.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "log/colorful-log.h"
-#include <cassert>
 #include <glm/glm.hpp>
 
 namespace MMM::Graphic
@@ -84,9 +83,7 @@ VKRenderPipeline::VKRenderPipeline(
     pipelineInputAssemblyStateCreateInfo
         // 图元重置 - 不启用
         .setPrimitiveRestartEnable(false)
-        // 图元装配方式 - 使用点集方便直接几何着色
-        // .setTopology(vk::PrimitiveTopology::ePointList);
-        // 测试着色器使用三角形列表
+        // 图元装配方式：使用三角形列表。
         .setTopology(vk::PrimitiveTopology::eTriangleList);
     graphicsPipelineCreateInfo.setPInputAssemblyState(
         &pipelineInputAssemblyStateCreateInfo);
@@ -151,19 +148,10 @@ VKRenderPipeline::VKRenderPipeline(
                                 : vk::CullModeFlagBits::eBack)
         // 设置如何代表正面 - 逆时针方向代表正面
         .setFrontFace(vk::FrontFace::eClockwise)
-        // 设置多边形绘制模式 - 填充
+        // 设置多边形绘制模式：填充。
         .setPolygonMode(vk::PolygonMode::eFill)
-        // 线框
-        // .setPolygonMode(vk::PolygonMode::eLine)
-        // 点集
-        // .setPolygonMode(vk::PolygonMode::ePoint)
         // 设置线段宽度
-        .setLineWidth(1)
-        // 设置是否启用深度偏移量 - 2D用不到,不知道用在哪
-        // .setDepthBiasEnable(false)
-        // 设置深度偏移量夹逼值 - 用到的话需要设置
-        // .setDepthBiasClamp()
-        ;
+        .setLineWidth(1);
     graphicsPipelineCreateInfo.setPRasterizationState(
         &pipelineRasterizationStateCreateInfo);
 
@@ -222,7 +210,12 @@ VKRenderPipeline::VKRenderPipeline(
     // 4.11:最终创建管线
     auto pipelineCreateResult = logicalDevice.createGraphicsPipeline(
         nullptr, graphicsPipelineCreateInfo);
-    assert(pipelineCreateResult.result == vk::Result::eSuccess);
+    if ( pipelineCreateResult.result != vk::Result::eSuccess ) {
+        XERROR("Failed to create VK Graphics RenderPipeline: {}",
+               vk::to_string(pipelineCreateResult.result));
+        m_graphicsPipeline = nullptr;
+        return;
+    }
     m_graphicsPipeline = pipelineCreateResult.value;
     XDEBUG("Created VK Graphics RenderPipeline.");
 }
@@ -230,15 +223,19 @@ VKRenderPipeline::VKRenderPipeline(
 VKRenderPipeline::~VKRenderPipeline()
 {
     // 销毁图形渲染管线
-    m_logicalDevice.destroyPipeline(m_graphicsPipeline);
-    XDEBUG("Destroyed VK Graphics RenderPipeline.");
+    if ( m_graphicsPipeline ) {
+        m_logicalDevice.destroyPipeline(m_graphicsPipeline);
+        XDEBUG("Destroyed VK Graphics RenderPipeline.");
+    }
 
     // 销毁图形渲染管线布局
-    m_logicalDevice.destroyPipelineLayout(m_graphicsPipelineLayout);
-    XDEBUG("Destroyed VK Graphics RenderPipeline Layout.");
+    if ( m_graphicsPipelineLayout ) {
+        m_logicalDevice.destroyPipelineLayout(m_graphicsPipelineLayout);
+        XDEBUG("Destroyed VK Graphics RenderPipeline Layout.");
+    }
 
     // 销毁Descriptor Set布局
-    if ( m_ownDescriptorSetLayout ) {
+    if ( m_ownDescriptorSetLayout && m_descriptorSetLayout ) {
         m_logicalDevice.destroyDescriptorSetLayout(m_descriptorSetLayout);
         XDEBUG("Destroyed VK Descriptor Set Layout.");
     }

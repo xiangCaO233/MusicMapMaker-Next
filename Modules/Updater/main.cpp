@@ -13,11 +13,13 @@
  * 完全独立，不依赖任何项目库，仅使用标准库和平台 API。
  */
 
+#include <charconv>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 
 #if defined(_WIN32)
@@ -114,18 +116,45 @@ bool launchTarget(const std::string& targetPath)
 
 }  // namespace
 
+/// @brief 向标准错误流写入独立更新器诊断。
+/// @param message 诊断内容。
+void writeStderr(std::string_view message)
+{
+    if ( message.empty() ) return;
+    std::fwrite(message.data(), 1, message.size(), stderr);
+}
+
+/// @brief 解析父进程 PID 参数。
+/// @param text 命令行中的 PID 文本。
+/// @return 解析成功时返回正数 PID，否则返回 0。
+long parseParentPid(std::string_view text)
+{
+    long       value = 0;
+    const auto result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+         value <= 0 ) {
+        return 0;
+    }
+    return value;
+}
+
 int main(int argc, char* argv[])
 {
     if ( argc != 4 ) {
-        std::fprintf(stderr,
-                     "Usage: %s <downloaded_file> <target_exe> <parent_pid>\n",
-                     argv[0]);
+        writeStderr(
+            "Usage: MusicMapMaker-Updater <downloaded_file> <target_exe> "
+            "<parent_pid>\n");
         return 1;
     }
 
     std::string downloadedFile = argv[1];
     std::string targetExe      = argv[2];
-    long        parentPid      = std::atol(argv[3]);
+    long        parentPid      = parseParentPid(argv[3]);
+    if ( parentPid == 0 ) {
+        writeStderr("Invalid parent_pid\n");
+        return 1;
+    }
 
     // 1. 等待父进程退出
 #if defined(_WIN32)
@@ -141,9 +170,24 @@ int main(int argc, char* argv[])
     std::error_code ec;
 #if defined(_WIN32)
     // Windows: 目标文件仍被占用时改用临时方案
-    std::string backupPath = targetExe + ".old";
-    if ( std::filesystem::exists(targetExe) ) {
+    std::string     backupPath = targetExe + ".old";
+    std::error_code cleanupError;
+    std::filesystem::remove(backupPath, cleanupError);
+
+    std::error_code existsError;
+    const bool targetExists = std::filesystem::exists(targetExe, existsError);
+    if ( existsError ) {
+        writeStderr("Failed to check target executable: " +
+                    existsError.message() + "\n");
+        return 1;
+    }
+    if ( targetExists ) {
         std::filesystem::rename(targetExe, backupPath, ec);
+        if ( ec ) {
+            writeStderr("Failed to prepare update backup: " + ec.message() +
+                        "\n");
+            return 1;
+        }
     }
     std::filesystem::copy_file(
         downloadedFile,
@@ -151,34 +195,43 @@ int main(int argc, char* argv[])
         std::filesystem::copy_options::overwrite_existing,
         ec);
     if ( ec ) {
-        std::fprintf(
-            stderr, "Failed to copy update: %s\n", ec.message().c_str());
+        writeStderr("Failed to copy update: " + ec.message() + "\n");
         // 尝试恢复
-        if ( std::filesystem::exists(backupPath) ) {
-            std::filesystem::rename(backupPath, targetExe);
+        std::error_code backupExistsError;
+        if ( std::filesystem::exists(backupPath, backupExistsError) &&
+             !backupExistsError ) {
+            std::error_code restoreError;
+            std::filesystem::rename(backupPath, targetExe, restoreError);
         }
         return 1;
     }
     // 删除备份和下载文件
-    if ( std::filesystem::exists(backupPath) ) {
-        std::filesystem::remove(backupPath);
+    std::error_code backupExistsError;
+    if ( std::filesystem::exists(backupPath, backupExistsError) &&
+         !backupExistsError ) {
+        std::error_code removeBackupError;
+        std::filesystem::remove(backupPath, removeBackupError);
     }
-    std::filesystem::remove(downloadedFile);
+    std::error_code removeDownloadError;
+    std::filesystem::remove(downloadedFile, removeDownloadError);
 #else
     // Linux/macOS: 直接 rename 是原子操作
     std::filesystem::rename(downloadedFile, targetExe, ec);
     if ( ec ) {
         // rename 失败则尝试 copy + remove
+        ec.clear();
         std::filesystem::copy_file(
             downloadedFile,
             targetExe,
             std::filesystem::copy_options::overwrite_existing,
             ec);
-        std::filesystem::remove(downloadedFile);
+        if ( !ec ) {
+            std::error_code removeDownloadError;
+            std::filesystem::remove(downloadedFile, removeDownloadError);
+        }
     }
     if ( ec ) {
-        std::fprintf(
-            stderr, "Failed to replace executable: %s\n", ec.message().c_str());
+        writeStderr("Failed to replace executable: " + ec.message() + "\n");
         return 1;
     }
     // 确保可执行权限
@@ -203,7 +256,7 @@ int main(int argc, char* argv[])
 
     // 3. 启动新版本
     if ( !launchTarget(targetExe) ) {
-        std::fprintf(stderr, "Failed to launch updated executable\n");
+        writeStderr("Failed to launch updated executable\n");
         return 1;
     }
 

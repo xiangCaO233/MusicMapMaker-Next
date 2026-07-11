@@ -2,6 +2,7 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,41 @@ using json = nlohmann::json;
 namespace MMM
 {
 
+/// @brief 无异常读取 Malody JSON 数值，兼容数字与数字字符串。
+/// @param value 待读取的 JSON 值。
+/// @param defaultValue 类型不兼容或解析失败时使用的默认值。
+/// @return 有限的解析结果，失败时返回默认值。
+inline double parseMalodyJsonDouble(const json& value, double defaultValue)
+{
+    if ( value.is_number() ) {
+        const double number = value.get<double>();
+        return std::isfinite(number) ? number : defaultValue;
+    }
+    if ( value.is_string() ) {
+        const double number = Internal::safeStod(
+            value.get_ref<const std::string&>(), defaultValue);
+        return std::isfinite(number) ? number : defaultValue;
+    }
+    return defaultValue;
+}
+
+/// @brief 无异常读取 Malody JSON 对象中的数值字段。
+/// @param object 待读取的 JSON 对象。
+/// @param key 字段名称。
+/// @param defaultValue 字段缺失或解析失败时使用的默认值。
+/// @return 有限的解析结果，失败时返回默认值。
+inline double readMalodyJsonDouble(const json& object, const char* key,
+                                   double defaultValue)
+{
+    if ( !object.is_object() ) return defaultValue;
+    const auto value = object.find(key);
+    if ( value == object.end() ) return defaultValue;
+    return parseMalodyJsonDouble(*value, defaultValue);
+}
+
+/// @brief 从 Malody `.mc` JSON 文件加载谱面。
+/// @param path 待加载的谱面路径。
+/// @return 加载后的谱面；文件或 JSON 无效时返回空谱面。
 inline BeatMap loadMalodyMap(std::filesystem::path path)
 {
     // 创建谱面
@@ -44,12 +80,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     json        fileData;
     std::string fileContent((std::istreambuf_iterator<char>(fs)),
                             std::istreambuf_iterator<char>());
-    try {
-        fileData = json::parse(fileContent, nullptr, true, true);
-    } catch ( ... ) {
-        // Fallback to non-throwing parser if UTF-8 is invalid
-        fileData = json::parse(fileContent, nullptr, false, true);
-    }
+    fileData = json::parse(fileContent, nullptr, false, true);
 
     if ( fileData.is_discarded() ) {
         XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}",
@@ -74,7 +105,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             basemeta.artist_unicode = song.value("artistorg", "");
             basemeta.main_audio_path =
                 Config::utf8ToPath(song.value("file", ""));
-            basemeta.preference_bpm = song.value("bpm", 0.0);
+            basemeta.preference_bpm = readMalodyJsonDouble(song, "bpm", 0.0);
         }
 
         if ( meta.contains("mode_ext") ) {
@@ -125,29 +156,31 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         if ( !b.is_array() || b.size() < 3 ) return 0.0;
         // Malody 的 beat 数组约定：第一个元素即为当前拍数索引，后续为细分偏移
         // 绝对拍数 = beat_index + (numerator / denominator)
-        return static_cast<double>(b[0]) +
-               (static_cast<double>(b[1]) / static_cast<double>(b[2]));
+        const double denominator = parseMalodyJsonDouble(b[2], 1.0);
+        if ( std::abs(denominator) <= 1e-9 ) return 0.0;
+        return parseMalodyJsonDouble(b[0], 0.0) +
+               (parseMalodyJsonDouble(b[1], 0.0) / denominator);
     };
 
     // 2. 收集原始时间事件
     struct RawEvent {
-        /// @brief Malody beat position.
+        /// @brief Malody 拍号位置。
         double beat;
-        /// @brief BPM value for timing events.
+        /// @brief Timing 事件使用的 BPM 值。
         double bpm = -1.0;
-        /// @brief Effect value for non-BPM events.
+        /// @brief 非 BPM 事件使用的效果参数。
         double value = 0.0;
-        /// @brief Original JSON object for round-trip metadata.
+        /// @brief 用于往返保存的原始 JSON 对象。
         json raw;
-        /// @brief Internal timing effect type.
+        /// @brief 内部 Timing 效果类型。
         TimingEffect effect{ TimingEffect::BPM };
-        /// @brief Whether this event comes from the Malody time section.
+        /// @brief 是否来自 Malody 的 time 段。
         bool isBpm = false;
     };
     struct BpmEvent {
-        /// @brief Malody beat position.
+        /// @brief Malody 拍号位置。
         double beat;
-        /// @brief BPM value active from this beat.
+        /// @brief 从该拍号开始生效的 BPM 值。
         double bpm;
     };
     std::vector<RawEvent> rawEvents;
@@ -157,13 +190,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     if ( fileData.contains("time") && fileData["time"].is_array() &&
          !fileData["time"].empty() ) {
         const auto& firstTime = fileData["time"][0];
-        time0Delay            = firstTime.value("delay", 0.0);
+        time0Delay            = readMalodyJsonDouble(firstTime, "delay", 0.0);
     }
     if ( fileData.contains("time") ) {
         for ( const auto& t : fileData["time"] ) {
             RawEvent ev;
             ev.beat  = beatToDouble(t.value("beat", json::array()));
-            ev.bpm   = t.value("bpm", 120.0);
+            ev.bpm   = readMalodyJsonDouble(t, "bpm", 120.0);
             ev.isBpm = true;
             ev.raw   = t;
 
@@ -177,7 +210,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 if ( !e.contains(key) ) return;
                 RawEvent ev;
                 ev.beat   = beatToDouble(e.value("beat", json::array()));
-                ev.value  = e.value(key, 0.0);
+                ev.value  = readMalodyJsonDouble(e, key, 0.0);
                 ev.effect = effect;
                 ev.isBpm  = false;
                 ev.raw    = e;
@@ -381,7 +414,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                          basemeta.main_audio_path ||
                      soundFile.empty() ) {
                     if ( n.contains("offset") ) {
-                        audioOffset        = n.value("offset", 0.0);
+                        audioOffset = readMalodyJsonDouble(n, "offset", 0.0);
                         hasSoundNoteOffset = true;
                     }
                     break;
@@ -406,7 +439,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
 
-    /// @brief Count Malody effect events moved to beat 0 for runtime use.
+    /// @brief 统计被钳制到第 0 拍供运行时使用的 Malody 特效事件数量。
     std::size_t clampedNegativeEffectCount = 0;
 
     for ( auto& ev : rawEvents ) {
@@ -552,7 +585,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                             (uint32_t)std::max(0, basemeta.track_count - 1));
 
                         if ( stepTime > runningTime + 1e-7 ) {
-                            // Hold segment
+                            // 长按段。
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
                             h.m_timestamp = runningTime;
@@ -577,7 +610,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                 poly.m_subFlicks.push_back(f);
                             }
                         } else if ( stepTrack != runningTrack ) {
-                            // Instant Flick (仅在轨道发生变化时创建)
+                            // 瞬时 Flick，仅在轨道发生变化时创建。
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
                             f.m_timestamp = runningTime;

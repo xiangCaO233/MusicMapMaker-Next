@@ -30,8 +30,6 @@ bool hasDeviceExtension(const std::vector<vk::ExtensionProperties>& extensions,
  */
 void VKContext::initLogicDevice()
 {
-    // MY m_vkLogicalDevice Createing
-
     // vk逻辑设备队列优先级表
     std::array vkDeviceQueuePriorities{ 1.f };
 
@@ -68,8 +66,9 @@ void VKContext::initLogicDevice()
             vk::to_string(availableDeviceExtensionsResult.result)));
         logStartupDiagnostics(
             "Failed to enumerate selected GPU device extensions.");
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: Failed to enumerate Vulkan device extensions.");
+        return;
     }
     auto& availableDeviceExtensions = availableDeviceExtensionsResult.value;
     addStartupDiagnostic(
@@ -84,8 +83,9 @@ void VKContext::initLogicDevice()
         logStartupDiagnostics(
             "Required Vulkan swapchain device extension is "
             "missing.");
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: Required Vulkan swapchain device extension is missing.");
+        return;
     }
 
     // 检查是否存在 portability_subset
@@ -119,9 +119,8 @@ void VKContext::initLogicDevice()
         addStartupDiagnostic(fmt::format("vkCreateDevice failed: {}",
                                          vk::to_string(deviceResult.result)));
         logStartupDiagnostics("vkCreateDevice failed.");
-        throw std::runtime_error(
-            "Fatal: Failed to create Vulkan logical "
-            "device.");
+        failInitialization("Fatal: Failed to create Vulkan logical device.");
+        return;
     }
     m_vkLogicalDevice = deviceResult.value;
     addStartupDiagnostic("Vulkan logical device created successfully.");

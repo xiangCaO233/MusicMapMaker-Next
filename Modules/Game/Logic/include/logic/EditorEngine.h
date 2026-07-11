@@ -159,10 +159,8 @@ public:
 
     /**
      * @brief 创建新的画布 Session
-     * @param beatmap
-     * 要加载的谱面（可为 nullptr 表示空白占位）
-     * @param displayName
-     * 显示名称
+     * @param beatmap 要加载的谱面（可为 nullptr 表示空白占位）
+     * @param displayName 显示名称
      * @param isLogoPlaceholder 是否为初始 Logo 画布
      * @param preferredCameraId 工作区恢复时希望复用的稳定画布 ID。
      * @param restoreDockFromWorkspace 是否让 UI 使用项目 ini 中的原停靠状态。
@@ -251,6 +249,29 @@ public:
     {
         return m_sessionRegistry.activeCameraId();
     }
+
+    /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
+    /// @param beatmapPath 待规范化的谱面路径。
+    /// @return 规范化绝对路径键；空路径返回空字符串。
+    /// @warning
+    /// 低频路径：可能访问文件系统解析规范路径，只能在文件选择、打开或打包流程调用。
+    std::string makeBeatmapPathKeyForPath(
+        const std::filesystem::path& beatmapPath) const;
+
+    /// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
+    /// @param audioPath 待规范化的音频路径。
+    /// @return 规范化绝对路径键；空路径返回空字符串。
+    /// @warning
+    /// 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
+    std::string makeMainAudioSyncKeyForPath(
+        const std::filesystem::path& audioPath) const;
+
+    /// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
+    /// @param audioSyncKey 待比较的规范化音频路径键。
+    /// @return 存在有效活动谱面且主音轨键一致时返回 true。
+    /// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
+    /// SessionRegistry 锁，不复制 Session 或路径字符串。
+    bool activeMainAudioSyncKeyMatches(std::string_view audioSyncKey) const;
 
     /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
     /// @param cameraId 目标主画布 cameraId。
@@ -342,6 +363,11 @@ public:
     /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
     bool isActiveSessionDraggingNote() const;
 
+    /// @brief 判断当前活跃 Session 是否正在使用画笔绘制。
+    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
+    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
+    bool isActiveSessionDrawingBrush() const;
+
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
 
@@ -379,7 +405,7 @@ public:
 
     /// @brief 获取逻辑线程发布的软件光标 BPM 同步烟雾寿命。
     /// @return 当前 BPM 对应的一拍时长；无有效谱面或 BPM 时返回 -1。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径/原子：主渲染循环每帧读取；只承载逻辑线程发布的显示状态， 使用
     /// relaxed，避免渲染线程访问 Session 锁和谱面数据。
     float getCursorSmokeLifeOverride() const

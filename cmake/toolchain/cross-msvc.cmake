@@ -3,10 +3,9 @@
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
-# 基础路径定义。默认面向 Debian CI 的 /mnt/cross/windows 布局，
-# 本地机器可通过环境变量或 CMake cache 覆盖。
+# 基础路径定义。默认面向 Debian CI 的 /mnt/cross/windows 布局， 本地机器可通过环境变量或 CMake cache 覆盖。
 if(DEFINED ENV{WINDOWS_CROSS_ROOT} AND NOT "$ENV{WINDOWS_CROSS_ROOT}" STREQUAL
-                                      "")
+                                       "")
   file(TO_CMAKE_PATH "$ENV{WINDOWS_CROSS_ROOT}" WINDOWS_CROSS_ROOT_DEFAULT)
 else()
   set(WINDOWS_CROSS_ROOT_DEFAULT "/mnt/cross/windows")
@@ -24,8 +23,7 @@ else()
 endif()
 set(MSVC_BASE
     "${MSVC_BASE_DEFAULT}"
-    CACHE PATH "MSVC toolset root directory."
-)
+    CACHE PATH "MSVC toolset root directory.")
 
 if(DEFINED ENV{WINSDK_BASE} AND NOT "$ENV{WINSDK_BASE}" STREQUAL "")
   file(TO_CMAKE_PATH "$ENV{WINSDK_BASE}" WINSDK_BASE_DEFAULT)
@@ -46,23 +44,27 @@ set(WINSDK_VER
     "${WINSDK_VER_DEFAULT}"
     CACHE STRING "Windows SDK version directory.")
 
-# 指定编译器。Debian CI 的系统 clang 可能落后于新版 MSVC STL，
-# 因此优先使用 apt.llvm.org 安装的版本化 LLVM 工具。
-find_program(MMM_CLANG_CL NAMES clang-cl-22 clang-cl-21 clang-cl-20 clang-cl)
-find_program(MMM_LLD_LINK NAMES lld-link-22 lld-link-21 lld-link-20 lld-link)
-find_program(MMM_LLVM_RC NAMES llvm-rc-22 llvm-rc-21 llvm-rc-20 llvm-rc llvm-rc-19)
-find_program(MMM_LLVM_MT NAMES llvm-mt-22 llvm-mt-21 llvm-mt-20 llvm-mt llvm-mt-19)
+# 指定 LLVM 22 工具。MSVC 预编译库以 2026 标签发布，必须固定 clang-cl/lld-link/llvm-lib 的主版本，避免 CI
+# 机器上旧版 LLVM 被误选。
+find_program(MMM_CLANG_CL NAMES clang-cl-22)
+find_program(MMM_LLD_LINK NAMES lld-link-22)
+find_program(MMM_LLVM_LIB NAMES llvm-lib-22)
+find_program(MMM_LLVM_RC NAMES llvm-rc-22)
+find_program(MMM_LLVM_MT NAMES llvm-mt-22)
 if(NOT MMM_CLANG_CL)
-  message(FATAL_ERROR "找不到 clang-cl，请安装 LLVM clang-cl 20 或更新版本。")
+  message(FATAL_ERROR "找不到 clang-cl-22，请安装 LLVM 22 clang-cl。")
 endif()
 if(NOT MMM_LLD_LINK)
-  message(FATAL_ERROR "找不到 lld-link，请安装 LLVM lld 20 或更新版本。")
+  message(FATAL_ERROR "找不到 lld-link-22，请安装 LLVM 22 lld。")
+endif()
+if(NOT MMM_LLVM_LIB)
+  message(FATAL_ERROR "找不到 llvm-lib-22，请安装 LLVM 22 llvm-lib。")
 endif()
 if(NOT MMM_LLVM_RC)
-  message(FATAL_ERROR "找不到 llvm-rc，请安装 LLVM resource compiler。")
+  message(FATAL_ERROR "找不到 llvm-rc-22，请安装 LLVM 22 resource compiler。")
 endif()
 if(NOT MMM_LLVM_MT)
-  message(FATAL_ERROR "找不到 llvm-mt，请安装 LLVM manifest tool。")
+  message(FATAL_ERROR "找不到 llvm-mt-22，请安装 LLVM 22 manifest tool。")
 endif()
 set(CMAKE_C_COMPILER
     "${MMM_CLANG_CL}"
@@ -73,6 +75,9 @@ set(CMAKE_CXX_COMPILER
 set(CMAKE_LINKER
     "${MMM_LLD_LINK}"
     CACHE FILEPATH "MSVC-like LLVM linker." FORCE)
+set(CMAKE_AR
+    "${MMM_LLVM_LIB}"
+    CACHE FILEPATH "MSVC-like LLVM static library manager." FORCE)
 set(CMAKE_RC_COMPILER
     "${MMM_LLVM_RC}"
     CACHE FILEPATH "LLVM resource compiler." FORCE)
@@ -101,6 +106,16 @@ set(ALSOFT_ENABLE_MODULES
     OFF
     CACHE BOOL "" FORCE)
 
+# 预编译库的 Debug/RelWithDebInfo 必须生成外置 PDB。CMake 的 MSVC 默认 调试信息策略在 clang-cl
+# 交叉编译下不稳定，这里显式使用 ProgramDatabase。
+if(POLICY CMP0141)
+  cmake_policy(SET CMP0141 NEW)
+endif()
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+    "ProgramDatabase"
+    CACHE STRING "Use external PDB debug information for clang-cl prebuilts."
+          FORCE)
+
 # --- 核心：配置头文件搜索路径 (-imsvc 模拟 MSVC 的包含逻辑) ---
 # 额外包含 lowercase 代理目录以解决 Linux 大小写敏感问题
 set(PROXY_INCLUDE "${CMAKE_SOURCE_DIR}/include_proxy")
@@ -120,8 +135,7 @@ set(MSVC_LIB_PATHS
     "/libpath:\"${MSVC_BASE}/atlmfc/lib/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/ucrt/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/um/x64\""
-    "/libpath:\"${CMAKE_SOURCE_DIR}/lib_proxy\""
-)
+    "/libpath:\"${CMAKE_SOURCE_DIR}/lib_proxy\"")
 
 string(REPLACE ";" " " MSVC_INCLUDE_STR "${MSVC_INCLUDE}")
 string(REPLACE ";" " " MSVC_LIB_STR "${MSVC_LIB_PATHS}")
@@ -132,6 +146,18 @@ set(CMAKE_C_FLAGS
     CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS
     "${FLAGS} ${WIN_VER_FLAGS} ${MSVC_INCLUDE_STR}"
+    CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_DEBUG
+    "/Zi /Ob0 /Od /RTC1"
+    CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG
+    "/Zi /Ob0 /Od /RTC1"
+    CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO
+    "/Zi /O2 /Ob1 /DNDEBUG"
+    CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+    "/Zi /O2 /Ob1 /DNDEBUG"
     CACHE STRING "" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS
     "${MSVC_LIB_STR}"

@@ -58,33 +58,29 @@ bool AppConfig::load(const std::filesystem::path& path)
         return false;
     }
 
-    try {
-        std::ifstream file(finalPath);
-        if ( !file.is_open() ) {
-            XERROR("Failed to open config file for reading: {}",
-                   pathToUtf8(finalPath));
-            return false;
-        }
-
-        nlohmann::json j;
-        file >> j;
-
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_editorConfig = j.get<EditorConfig>();
-        }
-
-        XINFO("Config loaded successfully from: {}", pathToUtf8(finalPath));
-        if ( useDefaultPath && finalPath != getDefaultConfigPath() ) {
-            save();
-        }
-        return true;
-    } catch ( const std::exception& e ) {
-        XERROR("Failed to parse config file: {}. Error: {}",
-               pathToUtf8(finalPath),
-               e.what());
+    std::ifstream file(finalPath);
+    if ( !file.is_open() ) {
+        XERROR("Failed to open config file for reading: {}",
+               pathToUtf8(finalPath));
         return false;
     }
+
+    nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
+    if ( j.is_discarded() || !j.is_object() || file.bad() ) {
+        XERROR("Failed to parse config file: {}", pathToUtf8(finalPath));
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_editorConfig = j.get<EditorConfig>();
+    }
+
+    XINFO("Config loaded successfully from: {}", pathToUtf8(finalPath));
+    if ( useDefaultPath && finalPath != getDefaultConfigPath() ) {
+        save();
+    }
+    return true;
 }
 
 bool AppConfig::save(const std::filesystem::path& path) const
@@ -92,41 +88,62 @@ bool AppConfig::save(const std::filesystem::path& path) const
     std::filesystem::path finalPath =
         path.empty() ? getDefaultConfigPath() : path;
 
-    try {
-        // 确保目录存在
-        if ( auto parent = finalPath.parent_path(); !parent.empty() ) {
-            std::error_code createDirectoryError;
-            std::filesystem::create_directories(parent, createDirectoryError);
-            if ( createDirectoryError ) {
-                XERROR("Failed to create config directory: {}. Error: {}",
-                       pathToUtf8(parent),
-                       createDirectoryError.message());
-                return false;
-            }
+    // 确保目录存在
+    if ( auto parent = finalPath.parent_path(); !parent.empty() ) {
+        std::error_code createDirectoryError;
+        std::filesystem::create_directories(parent, createDirectoryError);
+        if ( createDirectoryError ) {
+            XERROR("Failed to create config directory: {}. Error: {}",
+                   pathToUtf8(parent),
+                   createDirectoryError.message());
+            return false;
         }
+    }
 
-        std::ofstream file(finalPath);
+    nlohmann::json j;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        j = m_editorConfig;
+    }
+
+    std::filesystem::path tempPath = finalPath;
+    tempPath += ".tmp";
+    {
+        std::ofstream file(tempPath);
         if ( !file.is_open() ) {
-            XERROR("Failed to open config file for writing: {}",
-                   pathToUtf8(finalPath));
+            XERROR("Failed to open config temp file for writing: {}",
+                   pathToUtf8(tempPath));
             return false;
         }
 
-        nlohmann::json j;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            j = m_editorConfig;
+        file << std::setw(4) << j << '\n';
+        if ( !file.good() ) {
+            XERROR("Failed to write config temp file: {}",
+                   pathToUtf8(tempPath));
+            return false;
         }
-
-        file << std::setw(4) << j << std::endl;
-        // XINFO("Config saved successfully to: {}", finalPath.string());
-        return true;
-    } catch ( const std::exception& e ) {
-        XERROR("Failed to save config file: {}. Error: {}",
-               pathToUtf8(finalPath),
-               e.what());
-        return false;
     }
+
+    std::error_code replaceError;
+    std::filesystem::rename(tempPath, finalPath, replaceError);
+    if ( replaceError ) {
+        std::error_code copyError;
+        std::filesystem::copy_file(
+            tempPath,
+            finalPath,
+            std::filesystem::copy_options::overwrite_existing,
+            copyError);
+        std::error_code removeTempError;
+        std::filesystem::remove(tempPath, removeTempError);
+        if ( copyError ) {
+            XERROR("Failed to replace config file: {}. Error: {}",
+                   pathToUtf8(finalPath),
+                   copyError.message());
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void AppConfig::addRecentProject(

@@ -77,16 +77,19 @@ void Timing::from_osu_description(std::vector<std::string>& description)
      *是否为非继承时间点（红线）（布尔值）： 字面意思。
      *效果（整型）： 一位影响时间点特殊效果的参数。参见：效果部分。
      */
-    m_timestamp = MMM::Internal::safeStod(description.at(0));
+    m_timestamp =
+        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0));
 
     // 上一个基准bpm
     double last_base_bpm = 0.0;
 
     // 先判断是否继承时间点
-    auto is_inherit_timing = MMM::Internal::safeStod(description.at(6)) == 0;
+    auto is_inherit_timing =
+        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 6)) == 0;
 
-    // beat_length
-    m_beat_length = MMM::Internal::safeStod(description.at(1));
+    // beat_length 字段。
+    m_beat_length =
+        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 1));
 
     if ( is_inherit_timing ) {
         // bpm只存储倍速--并非bpm
@@ -113,7 +116,7 @@ void Timing::from_osu_description(std::vector<std::string>& description)
         m_timingEffect          = TimingEffect::BPM;
     }
 
-    // beats
+    // beat 字段。
     osutiming_prop["beat"] = std::to_string(
         MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 2)));
     osutiming_prop["sampleset"] = std::to_string(

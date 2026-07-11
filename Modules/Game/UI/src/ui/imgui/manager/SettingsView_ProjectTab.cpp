@@ -7,6 +7,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -33,7 +34,7 @@ void SettingsView::drawProjectSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "PRJ_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -175,10 +176,10 @@ void SettingsView::drawProjectSettings()
                 }
 
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##ProjectNotePalette",
-                                       previewName.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##ProjectNotePalette",
+                                                   previewName.c_str()) ) {
                     const bool inheritSelected = projectScheme.empty();
-                    if ( ImGui::Selectable(
+                    if ( ::MMM::UI::FeedbackSelectable(
                              TR_CACHE(
                                  "ui.settings.project.note_palette.inherit")
                                  .data(),
@@ -191,7 +192,7 @@ void SettingsView::drawProjectSettings()
                     const bool skinSelected =
                         projectScheme ==
                         Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                    if ( ImGui::Selectable(
+                    if ( ::MMM::UI::FeedbackSelectable(
                              TR_CACHE(
                                  "ui.toolbar.note_palette.skin_default_scheme")
                                  .data(),
@@ -204,14 +205,14 @@ void SettingsView::drawProjectSettings()
 
                     for ( const auto& scheme : paletteConfig.schemes ) {
                         const bool selected = projectScheme == scheme.name;
-                        if ( ImGui::Selectable(scheme.name.c_str(),
-                                               selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                                           selected) ) {
                             projectScheme = scheme.name;
                             changed       = true;
                         }
                         if ( selected ) ImGui::SetItemDefaultFocus();
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
             });
     }

@@ -206,6 +206,10 @@ struct VisualConfig {
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移
     float visualOffset{ 0.0f };
+    /// @brief 波形图专用采样偏移，仅影响波形采样内容的显示位置
+    float waveformVisualOffset{ 0.0f };
+    /// @brief 频谱图专用采样偏移，仅影响频谱采样内容的显示位置
+    float spectrumVisualOffset{ 0.0f };
     /// @brief 固定的硬件/多平台视觉偏置 (只读，加算到任何使用 visualOffset
     /// 的地方)
     static constexpr float staticVisualOffset{ -0.035f };
@@ -213,6 +217,16 @@ struct VisualConfig {
     float getEffectiveVisualOffset() const
     {
         return visualOffset + staticVisualOffset;
+    }
+    /// @brief 获取波形图采样内容专用偏移量
+    float getWaveformEffectiveVisualOffset() const
+    {
+        return waveformVisualOffset;
+    }
+    /// @brief 获取频谱图采样内容专用偏移量
+    float getSpectrumEffectiveVisualOffset() const
+    {
+        return spectrumVisualOffset;
     }
     /// @brief 时间轴缩放
     float timelineZoom{ 1.0f };
@@ -248,6 +262,8 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
         { "noteScaleY", c.noteScaleY },
         { "noteFillMode", c.noteFillMode },
         { "visualOffset", c.visualOffset },
+        { "waveformVisualOffset", c.waveformVisualOffset },
+        { "spectrumVisualOffset", c.spectrumVisualOffset },
         { "timelineZoom", c.timelineZoom },
         { "scrollAnimationDuration", c.scrollAnimationDuration },
         { "enableLinearScrollMapping", c.enableLinearScrollMapping },
@@ -268,11 +284,13 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
     c.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
     c.judgeline_pos     = j.value("judgeline_pos", 0.85f);
-    c.noteScaleX        = j.value("noteScaleX", 1.0f);
-    c.noteScaleY        = j.value("noteScaleY", 1.0f);
+    c.noteScaleX        = j.value("noteScaleX", VisualConfig{}.noteScaleX);
+    c.noteScaleY        = j.value("noteScaleY", VisualConfig{}.noteScaleY);
     c.noteFillMode      = j.value("noteFillMode", BackgroundFillMode::Stretch);
     c.visualOffset      = j.value("visualOffset", 0.0f);
-    c.timelineZoom      = j.value("timelineZoom", 1.0f);
+    c.waveformVisualOffset      = j.value("waveformVisualOffset", 0.0f);
+    c.spectrumVisualOffset      = j.value("spectrumVisualOffset", 0.0f);
+    c.timelineZoom              = j.value("timelineZoom", 1.0f);
     c.scrollAnimationDuration   = j.value("scrollAnimationDuration", 0.12f);
     c.enableLinearScrollMapping = j.value("enableLinearScrollMapping", false);
     c.snapThreshold             = j.value("snapThreshold", 16.0f);

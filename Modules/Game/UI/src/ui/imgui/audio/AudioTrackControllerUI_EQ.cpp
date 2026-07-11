@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "implot.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <cmath>
 #include <vector>
 
@@ -32,7 +33,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
     int         presetIdx = static_cast<int>(m_currentPreset);
     ImGui::SetCursorPosX((contentWidth - comboWidth) * 0.5f);
     ImGui::SetNextItemWidth(comboWidth);
-    if ( ImGui::Combo(
+    if ( ::MMM::UI::FeedbackCombo(
              "##EQPreset", &presetIdx, presets, IM_ARRAYSIZE(presets)) ) {
         m_currentPreset = static_cast<Audio::EQPreset>(presetIdx);
         audio.createMainTrackEQ(m_currentPreset);
@@ -185,12 +186,13 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 2. 增益滑块 (固定宽度，也要在列内居中)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                      (colWidth - sliderWidth) * 0.5f);
-                if ( ImGui::VSliderFloat("##Gain",
-                                         ImVec2(sliderWidth, gainSliderH),
-                                         &gain,
-                                         -24.0f,
-                                         24.0f,
-                                         "") ) {
+                if ( ::MMM::UI::FeedbackVSliderFloat(
+                         "##Gain",
+                         ImVec2(sliderWidth, gainSliderH),
+                         &gain,
+                         -24.0f,
+                         24.0f,
+                         "") ) {
                     audio.setMainTrackEQBandGain(i, gain);
                     changed = true;
                 }
@@ -204,12 +206,13 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 3. Q 值滑块
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                      (colWidth - sliderWidth) * 0.5f);
-                if ( ImGui::VSliderFloat("##Q",
-                                         ImVec2(sliderWidth, qSliderH),
-                                         &q,
-                                         0.1f,
-                                         10.0f,
-                                         "") ) {
+                if ( ::MMM::UI::FeedbackVSliderFloat(
+                         "##Q",
+                         ImVec2(sliderWidth, qSliderH),
+                         &q,
+                         0.1f,
+                         10.0f,
+                         "") ) {
                     audio.setMainTrackEQBandQ(i, q);
                     changed = true;
                 }
@@ -232,7 +235,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                                  ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnWidth) *
                              0.5f);
-        if ( ImGui::Button(resetLabel) ) {
+        if ( ::MMM::UI::FeedbackButton(resetLabel) ) {
             for ( size_t i = 0; i < bandCount; ++i ) {
                 audio.setMainTrackEQBandGain(i, 0.0f);
                 audio.setMainTrackEQBandQ(i, 1.414f);

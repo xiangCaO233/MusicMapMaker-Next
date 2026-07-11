@@ -22,8 +22,8 @@ struct PackageCandidateFile {
     /// @brief 打包资源分类，用于区分谱面与可被谱面绑定的资源。
     PackageResourceType resourceType{ PackageResourceType::Beatmap };
 
-    /// @brief 是否将该文件写入最终包。
-    bool selected{ true };
+    /// @brief 是否将该文件写入最终包；候选构建后按前台画布策略初始化。
+    bool selected{ false };
 
     /// @brief 选中该谱面时必须一起打包的资源相对路径列表。
     std::vector<std::string> dependencyRelativePaths;
@@ -70,8 +70,14 @@ struct PackageDialogState {
     /// @brief 是否在下一帧打开打包格式选择弹窗。
     bool showFormatPicker{ false };
 
+    /// @brief 打包格式选择弹窗当前是否保持打开。
+    bool formatPickerOpen{ false };
+
     /// @brief 是否显示打包文件复选列表窗口。
     bool showFileSelectionWindow{ false };
+
+    /// @brief 是否在下一帧打开打包文件复选列表弹窗。
+    bool openFileSelectionWindow{ false };
 
     /// @brief 是否显示打包前目标谱面元数据补充窗口。
     bool showBeatmapMetadataWindow{ false };

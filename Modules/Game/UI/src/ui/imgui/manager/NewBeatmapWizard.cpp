@@ -9,18 +9,21 @@
 #include "logic/session/SessionUtils.h"
 #include "mmm/project/Project.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fmt/format.h>
+#include <initializer_list>
 #include <mutex>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -54,6 +57,55 @@ bool resourcePathMatches(const std::filesystem::path& lhs,
     if ( lhsUtf8 == rhsUtf8 ) return true;
     return Config::pathToUtf8(lhs.filename()) ==
            Config::pathToUtf8(rhs.filename());
+}
+
+/// @brief 扫描项目资源，跳过无权限目录和异常文件状态。
+/// @param projectRoot 项目根目录。
+/// @param allowedExtensions 允许的扩展名，必须为小写。
+/// @return 项目根相对路径列表。
+std::vector<std::string> collectProjectResources(
+    const std::filesystem::path&            projectRoot,
+    std::initializer_list<std::string_view> allowedExtensions)
+{
+    std::vector<std::string>                      resources;
+    std::error_code                               filesystemError;
+    std::filesystem::recursive_directory_iterator it(
+        projectRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        filesystemError);
+    std::filesystem::recursive_directory_iterator end;
+    if ( filesystemError ) return resources;
+
+    for ( ; it != end; it.increment(filesystemError) ) {
+        if ( filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+        if ( !it->is_regular_file(filesystemError) || filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+
+        auto ext = Config::pathToUtf8(it->path().extension());
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c)));
+        });
+        const bool accepted = std::any_of(
+            allowedExtensions.begin(),
+            allowedExtensions.end(),
+            [&](std::string_view allowed) { return ext == allowed; });
+        if ( !accepted ) continue;
+
+        auto rel =
+            std::filesystem::relative(it->path(), projectRoot, filesystemError);
+        if ( filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+        resources.push_back(Config::pathToUtf8(rel));
+    }
+    return resources;
 }
 
 /// @brief 判断相对路径是否位于项目根内。
@@ -425,6 +477,7 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
             ImGui::TextDisabled(
                 "%s", TR("ui.wizard.new_beatmap.template.none_open").data());
         } else {
+            Utils::VerticalScrollbarStyleScope verticalScrollbarStyle;
             ImGui::BeginChild(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
@@ -433,7 +486,7 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                                                    option.internalName,
                                                    option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
-                if ( ImGui::Selectable(label.c_str(), selected) ) {
+                if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
                     selectTemplate(option);
                     m_shouldOpenTemplateOptions = true;
                     ImGui::CloseCurrentPopup();
@@ -446,8 +499,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
             ImGui::EndChild();
         }
 
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -464,23 +518,25 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
             TR("ui.wizard.new_beatmap.template.options_title").data());
         ImGui::Separator();
 
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_metadata").data(),
             &m_templateOptions.copyMetadata);
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_timelines").data(),
             &m_templateOptions.copyTimelines);
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_objects").data(),
             &m_templateOptions.copyObjects);
 
         ImGui::Spacing();
-        if ( ImGui::Button(TR("ui.help.ok").data(), ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
+                                       ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -506,15 +562,16 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup()
                 .c_str());
 
         ImGui::Spacing();
-        if ( ImGui::Button(
+        if ( ::MMM::UI::FeedbackButton(
                  TR("ui.wizard.new_beatmap.duplicate_name.continue").data(),
                  ImVec2(140.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
             submitCreateRequest();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -542,8 +599,9 @@ void NewBeatmapWizard::renderTemplateSourceControls(
 
     ImGui::SeparatorText(TR("ui.wizard.new_beatmap.creation_source").data());
 
-    if ( ImGui::RadioButton(TR("ui.wizard.new_beatmap.source.blank").data(),
-                            m_createMode == CreateMode::Blank) ) {
+    if ( ::MMM::UI::FeedbackRadioButton(
+             TR("ui.wizard.new_beatmap.source.blank").data(),
+             m_createMode == CreateMode::Blank) ) {
         m_createMode = CreateMode::Blank;
     }
     ImGui::SameLine();
@@ -551,8 +609,9 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     if ( templateOptions.empty() ) {
         ImGui::BeginDisabled();
     }
-    if ( ImGui::RadioButton(TR("ui.wizard.new_beatmap.source.template").data(),
-                            m_createMode == CreateMode::OpenTemplate) ) {
+    if ( ::MMM::UI::FeedbackRadioButton(
+             TR("ui.wizard.new_beatmap.source.template").data(),
+             m_createMode == CreateMode::OpenTemplate) ) {
         m_createMode                    = CreateMode::OpenTemplate;
         m_shouldOpenTemplatePicker      = true;
         m_templateOptions.copyTimelines = true;
@@ -572,16 +631,18 @@ void NewBeatmapWizard::renderTemplateSourceControls(
                       TR("ui.wizard.new_beatmap.template.not_selected").data());
         ImGui::TextWrapped("%s", selectedText.c_str());
 
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.template.pick").data(),
-                           ImVec2(150.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.template.pick").data(),
+                 ImVec2(150.0f, 0.0f)) ) {
             m_shouldOpenTemplatePicker = true;
         }
         ImGui::SameLine();
         if ( !m_templateBeatmap ) {
             ImGui::BeginDisabled();
         }
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.template.options").data(),
-                           ImVec2(150.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.template.options").data(),
+                 ImVec2(150.0f, 0.0f)) ) {
             m_shouldOpenTemplateOptions = true;
         }
         if ( !m_templateBeatmap ) {
@@ -590,13 +651,13 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     }
 
     if ( m_shouldOpenTemplatePicker ) {
-        ImGui::OpenPopup("NewBeatmapTemplatePicker");
+        ::MMM::UI::FeedbackOpenPopup("NewBeatmapTemplatePicker");
         m_shouldOpenTemplatePicker = false;
     }
     renderTemplatePickerPopup(templateOptions);
 
     if ( m_shouldOpenTemplateOptions ) {
-        ImGui::OpenPopup("NewBeatmapTemplateOptions");
+        ::MMM::UI::FeedbackOpenPopup("NewBeatmapTemplateOptions");
         m_shouldOpenTemplateOptions = false;
     }
     renderTemplateOptionsPopup();
@@ -606,12 +667,6 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) return;
 
-    if ( m_shouldOpen ) {
-        m_shouldOpen = false;
-        ImGui::SetNextWindowFocus();
-        XINFO("NewBeatmapWizard: Opening wizard window...");
-    }
-
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope windowScope(dpiScale);
     constexpr ImGuiWindowFlags     WINDOW_FLAGS =
@@ -619,14 +674,22 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     const std::string windowTitle =
         std::string(TR("ui.wizard.new_beatmap.title").data()) +
         "###NewBeatmapWizardWindow";
+    if ( m_shouldOpen ) {
+        ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
+        m_shouldOpen = false;
+        XINFO("NewBeatmapWizard: Opening wizard window...");
+    }
+
     const bool windowVisible =
-        windowScope.beginWindow(windowTitle.c_str(),
-                                &m_isOpen,
-                                WINDOW_FLAGS,
-                                ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
-                                false);
+        windowScope.begin(windowTitle.c_str(),
+                          &m_isOpen,
+                          WINDOW_FLAGS,
+                          ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
+                          false);
     if ( !windowVisible ) {
-        ImGui::End();
+        if ( !m_isOpen ) {
+            unbindBpmMeasurementTool();
+        }
         return;
     }
 
@@ -657,12 +720,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
     float bpm = (float)m_bpm;
-    if ( ImGui::DragFloat(TR("ui.settings.beatmap.bpm").data(),
-                          &bpm,
-                          0.1f,
-                          0.0f,
-                          1000.0f,
-                          "%.2f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.settings.beatmap.bpm").data(),
+                                      &bpm,
+                                      0.1f,
+                                      0.0f,
+                                      1000.0f,
+                                      "%.2f") ) {
         m_bpm = std::clamp<double>(bpm, 1.0, 999.0);
         if ( m_measuredTimings.size() == 1 ) {
             auto& timing          = m_measuredTimings.front();
@@ -690,7 +753,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::TextColored(Utils::UIThemeUtils::getDangerColor(),
                            "%s",
                            TR("ui.wizard.new_beatmap.no_project").data());
-        ImGui::End();
+        ImGui::EndPopup();
         return;
     }
 
@@ -719,13 +782,14 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                      autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
 
     ImGui::SetNextItemWidth(comboWidth);
-    if ( ImGui::BeginCombo("##NewBeatmapAudioSelect", audioPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapAudioSelect",
+                                       audioPreview.c_str()) ) {
         for ( const auto& res : project->m_audioResources ) {
             if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
             bool        isSelected = (m_selectedAudioTrackId == res.m_id);
             std::string label      = res.m_id + "##" + res.m_path;
-            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(label.c_str(), isSelected) ) {
                 m_selectedAudioTrackId = res.m_id;
                 onAudioSelected(Config::utf8ToPath(res.m_path));
             }
@@ -733,7 +797,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             ImGui::SameLine();
             ImGui::TextDisabled("(%s)", res.m_path.c_str());
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
     ImGui::SameLine();
     if ( m_selectedAudioTrackId.empty() ) {
@@ -742,6 +806,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     auto openBpmTool = [&](bool autoMeasure) {
         auto* tool = sourceManager->getView<BpmMeasurementToolView>(
             BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        const bool wasOpen = tool && tool->isOpen();
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
@@ -763,13 +828,17 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             } else {
                 tool->openWithAudioTrack(m_selectedAudioTrackId);
             }
+            if ( !wasOpen ) {
+                ::MMM::UI::PlayPopupOpenFeedback();
+            }
         }
     };
-    if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(measureBpmLabel,
+                                   ImVec2(measureBpmWidth, 0.0f)) ) {
         openBpmTool(false);
     }
     ImGui::SameLine();
-    if ( ImGui::Button(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
         openBpmTool(true);
     }
     if ( m_selectedAudioTrackId.empty() ) {
@@ -783,37 +852,20 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             : Config::pathToUtf8(m_selectedCoverImgPath);
 
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewBeatmapCoverImageSelect",
-                           coverImgPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapCoverImageSelect",
+                                       coverImgPreview.c_str()) ) {
         // 扫描项目中的图片文件
-        std::vector<std::string> resources;
-        try {
-            for ( const auto& entry :
-                  std::filesystem::recursive_directory_iterator(
-                      project->m_projectRoot) ) {
-                if ( entry.is_regular_file() ) {
-                    auto ext = Config::pathToUtf8(entry.path().extension());
-                    std::transform(
-                        ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                         ext == ".bmp" ) {
-                        auto rel = std::filesystem::relative(
-                            entry.path(), project->m_projectRoot);
-                        resources.push_back(Config::pathToUtf8(rel));
-                    }
-                }
-            }
-        } catch ( ... ) {
-        }
+        std::vector<std::string> resources = collectProjectResources(
+            project->m_projectRoot, { ".png", ".jpg", ".jpeg", ".bmp" });
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverImgPath == resPath);
-            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
                 m_selectedCoverImgPath = resPath;
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     // 背景选择
@@ -823,32 +875,16 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             : Config::pathToUtf8(m_selectedCoverPath);
 
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewBeatmapBackgroundSelect",
-                           coverPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapBackgroundSelect",
+                                       coverPreview.c_str()) ) {
         // 扫描项目中的图片/视频文件
-        std::vector<std::string> resources;
-        try {
-            for ( const auto& entry :
-                  std::filesystem::recursive_directory_iterator(
-                      project->m_projectRoot) ) {
-                if ( entry.is_regular_file() ) {
-                    auto ext = Config::pathToUtf8(entry.path().extension());
-                    std::transform(
-                        ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                         ext == ".bmp" || ext == ".mp4" || ext == ".avi" ) {
-                        auto rel = std::filesystem::relative(
-                            entry.path(), project->m_projectRoot);
-                        resources.push_back(Config::pathToUtf8(rel));
-                    }
-                }
-            }
-        } catch ( ... ) {
-        }
+        std::vector<std::string> resources = collectProjectResources(
+            project->m_projectRoot,
+            { ".png", ".jpg", ".jpeg", ".bmp", ".mp4", ".avi" });
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverPath == resPath);
-            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
                 m_selectedCoverPath = resPath;
 
                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
@@ -864,7 +900,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     ImGui::Spacing();
@@ -880,10 +916,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
 
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.create").data(),
-                       ImVec2(120, 0)) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.create").data(),
+                                   ImVec2(120, 0)) ) {
         if ( hasInternalNameConflict() ) {
-            ImGui::OpenPopup("NewBeatmapDuplicateNameWarning");
+            ::MMM::UI::FeedbackOpenPopup("NewBeatmapDuplicateNameWarning");
         } else {
             submitCreateRequest();
         }
@@ -901,14 +937,17 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
 
     ImGui::SameLine(ImGui::GetWindowWidth() - 130);
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                       ImVec2(120, 0)) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.cancel").data(),
+                                   ImVec2(120, 0)) ) {
         close();
     }
 
     renderDuplicateNameWarningPopup();
 
-    ImGui::End();
+    if ( !m_isOpen ) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void NewBeatmapWizard::open()
@@ -922,7 +961,6 @@ void NewBeatmapWizard::close()
 {
     unbindBpmMeasurementTool();
     m_isOpen = false;
-    ImGui::CloseCurrentPopup();
 }
 
 void NewBeatmapWizard::reset()

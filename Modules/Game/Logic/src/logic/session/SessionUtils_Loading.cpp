@@ -10,6 +10,7 @@
 #include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <stb_image.h>
+#include <system_error>
 
 namespace MMM::Logic
 {
@@ -33,15 +34,17 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.actionStack.clear();
     ctx.sortedNoteEntities.clear();
     ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.previewDensityObjectTimes.clear();
+    ctx.previewDensityCache.clear();
     ctx.lastCameraSnapshotTimes.clear();
-    ctx.isNoteOrderDirty = true;
-    ctx.isNotePruneDirty = false;
-    ctx.isNoteStatsDirty = true;
+    ctx.isNoteOrderDirty      = true;
+    ctx.isNotePruneDirty      = false;
+    ctx.isNoteStatsDirty      = true;
+    ctx.isPreviewDensityDirty = true;
     ctx.loadedMainAudioPath.clear();
     ctx.mainAudioTotalTime = 0.0;
     Audio::AudioManager::instance().stop();
 
-    // m_isPlaying      = true;
     ctx.isPlaying               = false;
     ctx.isMainAudioSyncFollower = false;
     ctx.currentTime             = 0.0;
@@ -74,8 +77,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                  beatmap->m_baseMapMetadata.main_cover_path;
     }
 
+    std::error_code backgroundPathError;
     if ( !beatmap->m_baseMapMetadata.main_cover_path.empty() &&
-         std::filesystem::exists(bgPath) ) {
+         std::filesystem::exists(bgPath, backgroundPathError) &&
+         !backgroundPathError ) {
         int w = 0, h = 0, comp = 0;
         if ( stbi_info(Utf8::pathToUtf8(bgPath).c_str(), &w, &h, &comp) ) {
             ctx.bgSize =

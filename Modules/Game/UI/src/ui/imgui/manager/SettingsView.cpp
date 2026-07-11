@@ -85,7 +85,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 29> labels{
+        const std::array<const char*, 30> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
             TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
@@ -107,6 +107,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
             TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
             TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.animation_transition")
+                .data(),
             TR_CACHE("ui.settings.software.picker_style").data(),
             TR_CACHE("ui.settings.software.save_format").data(),
             TR_CACHE("ui.settings.software.time_format").data(),
@@ -119,7 +121,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 28> labels{
+        const std::array<const char*, 30> labels{
             TR_CACHE("ui.settings.visual.layout_left").data(),
             TR_CACHE("ui.settings.visual.layout_top").data(),
             TR_CACHE("ui.settings.visual.layout_right").data(),
@@ -148,7 +150,9 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.visual.linear_scroll").data(),
             TR_CACHE("ui.settings.visual.snap_threshold").data(),
             TR_CACHE("ui.settings.visual.spectrum_detail").data(),
-            TR_CACHE("ui.settings.visual.visual_offset").data()
+            TR_CACHE("ui.settings.visual.visual_offset").data(),
+            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
+            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
@@ -550,7 +554,7 @@ void SettingsView::open(Event::SettingsTab tab)
 {
     m_currentTab                    = tab;
     m_isOpen                        = true;
-    m_focusNextFrame                = true;
+    m_focusRequestFramesRemaining   = FOCUS_REQUEST_FRAME_COUNT;
     m_dockToCenterNextFrame         = true;
     m_availableSkinDirectoriesDirty = true;
     if ( tab != Event::SettingsTab::Shortcut ) {
@@ -568,7 +572,7 @@ void SettingsView::requestDockToCenter()
 /// @brief 请求下一帧聚焦设置窗口。
 void SettingsView::requestFocus()
 {
-    m_focusNextFrame = true;
+    m_focusRequestFramesRemaining = FOCUS_REQUEST_FRAME_COUNT;
 }
 
 /// @brief 更新并渲染独立设置窗口。
@@ -584,9 +588,9 @@ void SettingsView::update(UIManager* sourceManager)
     if ( m_dockToCenterNextFrame ) {
         dockId = MainDockSpaceUI::getCenterDockId();
     }
-    if ( m_focusNextFrame ) {
+    if ( m_focusRequestFramesRemaining > 0 ) {
         ImGui::SetNextWindowFocus();
-        m_focusNextFrame = false;
+        --m_focusRequestFramesRemaining;
     }
     const float dpiScale =
         MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -623,6 +627,7 @@ void SettingsView::drawContent()
     float btnSize = std::floor(sidebarBaseW * dpiScale);
 
     float sidebarWidth = getCategorySidebarWidth(dpiScale);
+    Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
 
     // 1. 左侧图标侧边栏 (Clay 布局)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -658,7 +663,8 @@ void SettingsView::drawContent()
             ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
             std::string btnId = "##setting_tab_" + std::to_string((int)tab);
-            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
+            if ( ::MMM::UI::FeedbackButton(btnId.c_str(),
+                                           { rect.width, rect.height }) ) {
                 m_currentTab = tab;
                 if ( tab != Event::SettingsTab::Shortcut ) {
                     m_recordingShortcutTarget = ShortcutRecordTarget::None;

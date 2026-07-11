@@ -5,6 +5,7 @@
 #include "vulkan/vulkan.hpp"
 #include <filesystem>
 #include <lunasvg.h>
+#include <system_error>
 
 namespace MMM::UI
 {
@@ -50,7 +51,9 @@ protected:
         vk::Queue&                          q,
         std::optional<std::array<float, 4>> overrideColor = std::nullopt)
     {
-        if ( !std::filesystem::exists(path) ) {
+        std::error_code texturePathError;
+        if ( !std::filesystem::exists(path, texturePathError) ||
+             texturePathError ) {
             auto u8Path = path.u8string();
             XWARN("Texture path not found: {}",
                   std::string(reinterpret_cast<const char*>(u8Path.c_str()),

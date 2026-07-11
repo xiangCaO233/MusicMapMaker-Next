@@ -387,22 +387,36 @@ struct CmdPackBeatmap {
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
 
-/**
- * @brief 滚动指令 (鼠标滚轮)
- */
+/// @brief 滚轮指令的处理意图。
+enum class ScrollCommandIntent {
+    /// @brief 按滚轮增量移动画布时间。
+    MoveTimeline,
+
+    /// @brief 只应用“播放时滚动则停止播放”策略，不移动画布时间。
+    ModifierAdjustment,
+};
+
+/// @brief 滚动指令（鼠标滚轮）。
 struct CmdScroll {
-    std::string cameraId;
-    float       wheel;
-    bool        isShiftDown;
+    std::string cameraId;     ///< 接收滚轮的画布 ID。
+    float       wheel;        ///< 滚轮增量。
+    bool        isShiftDown;  ///< 是否按住 Shift 加速普通时间滚动。
+    /// @brief 本条滚轮指令需要执行的逻辑意图。
+    ScrollCommandIntent intent{ ScrollCommandIntent::MoveTimeline };
 };
 
 /**
  * @brief 更新时间线事件指令
  */
 struct CmdUpdateTimelineEvent {
+    /// @brief 待更新的 Timeline 实体。
     entt::entity entity;
-    double       newTime;
-    double       newValue;
+    /// @brief 新时间戳，单位秒。
+    double newTime;
+    /// @brief 新效果参数。
+    double newValue;
+    /// @brief 可选的新元数据；为空时由逻辑层保留或清理旧元数据。
+    std::optional<::MMM::TimingMetadata> metadataOverride;
 };
 
 /**
@@ -435,6 +449,9 @@ struct CmdCreateTimelineEvents {
 
         /// @brief Timeline 参数值。
         double value{ 0.0 };
+
+        /// @brief 创建后写入 Timeline 组件的原始元数据。
+        ::MMM::TimingMetadata metadata;
     };
 
     /// @brief 待创建 Timeline 事件列表。

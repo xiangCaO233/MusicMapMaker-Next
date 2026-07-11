@@ -13,6 +13,47 @@
 
 namespace MMM::Audio
 {
+namespace
+{
+/// @brief 需要跟随主音轨变速器的打击音效 key 前缀。
+constexpr const char* HIT_SOUND_EFFECT_KEY_PREFIX = "hiteffect.";
+
+/// @brief 使用独立交互音量的音效 key 前缀。
+constexpr const char* INTERACTION_SOUND_EFFECT_KEY_PREFIX = "ui.";
+
+/// @brief 判断音效是否属于谱面打击音效。
+/// @param key 音效池标识。
+/// @return 属于打击音效时返回 true。
+bool isHitSoundEffectKey(const std::string& key)
+{
+    return key.rfind(HIT_SOUND_EFFECT_KEY_PREFIX, 0) == 0;
+}
+
+/// @brief 判断音效是否属于界面交互音效。
+/// @param key 音效池标识。
+/// @return 属于交互音效时返回 true。
+bool isInteractionSoundEffectKey(const std::string& key)
+{
+    return key.rfind(INTERACTION_SOUND_EFFECT_KEY_PREFIX, 0) == 0;
+}
+}  // namespace
+
+/// @brief 根据音效类型获取当前有效基础音量。
+/// @param key 音效池标识。
+/// @return 已包含全局音量和对应总线增益的基础音量。
+float AudioManager::getSFXEffectiveGain(const std::string& key) const
+{
+    if ( m_globalMuted ) return 0.0f;
+
+    if ( isInteractionSoundEffectKey(key) ) {
+        return m_interactionSfxGainMuted
+                   ? 0.0f
+                   : m_globalVolume * m_interactionSfxGain;
+    }
+
+    return m_sfxGainMuted ? 0.0f : m_globalVolume * m_sfxGain;
+}
+
 /// @brief 设置指定音效池音量并按需保存为常驻配置。
 /// @param key 音效池标识。
 /// @param volume 目标音量。
@@ -33,7 +74,8 @@ void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
         }
 
         // 刷新实际音量 (考虑静音)
-        it->second->updateEffectiveVolume(m_globalVolume, getSFXPoolMute(key));
+        it->second->updateEffectiveVolume(getSFXEffectiveGain(key),
+                                          getSFXPoolMute(key));
     }
 }
 
@@ -55,15 +97,12 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
 
     auto it = m_sfxPools.find(key);
     if ( it != m_sfxPools.end() ) {
-        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
-                                ? 0.0f
-                                : m_globalVolume * m_sfxGain;
-        it->second->updateEffectiveVolume(sfxFinalVol, muted);
+        it->second->updateEffectiveVolume(getSFXEffectiveGain(key), muted);
     }
 }
 
-/// @brief 根据同步变速配置切换音效池路由。
-/// @param syncSpeed 是否让音效跟随主音轨变速器。
+/// @brief 根据同步变速配置切换打击音效池路由。
+/// @param syncSpeed 是否让 hiteffect.* 音效跟随主音轨变速器。
 void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
 {
     if ( !m_mainMixer || !m_preStretcherMixer ) return;
@@ -72,11 +111,11 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
         auto mixer = pool->getMixer();
         if ( !mixer ) continue;
 
-        if ( syncSpeed ) {
-            m_mainMixer->remove_source(mixer);
+        m_mainMixer->remove_source(mixer);
+        m_preStretcherMixer->remove_source(mixer);
+        if ( syncSpeed && isHitSoundEffectKey(key) ) {
             m_preStretcherMixer->add_source(mixer);
         } else {
-            m_preStretcherMixer->remove_source(mixer);
             m_mainMixer->add_source(mixer);
         }
     }
@@ -162,12 +201,10 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
     auto pool = std::make_shared<SoundEffectPool>(track);
     pool->init(8);  // 预分配 8 个并发节点
     pool->setVolume(activeVolume);
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
-    pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
+    pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
 
-    // 根据配置决定连接到哪个 Mixer
-    if ( sfxCfg.hitSfxSyncSpeed ) {
+    // 根据配置决定连接到哪个 Mixer，只有打击音效需要跟随主音轨变速。
+    if ( sfxCfg.hitSfxSyncSpeed && isHitSoundEffectKey(key) ) {
         m_preStretcherMixer->add_source(pool->getMixer());
     } else {
         m_mainMixer->add_source(pool->getMixer());
@@ -221,16 +258,18 @@ void AudioManager::clearSoundEffects()
 /// @brief 立即播放指定音效。
 /// @param key 音效池标识。
 /// @param volumeFactor 本次播放额外音量倍率。
-void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
+/// @param pitchSemitones 本次播放的音高偏移，单位为半音。
+void AudioManager::playSoundEffect(const std::string& key, float volumeFactor,
+                                   double pitchSemitones)
 {
     if ( getSFXPoolMute(key) ) return;
 
     auto it = m_sfxPools.find(key);
     if ( it == m_sfxPools.end() ) return;
 
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
-    it->second->play(sfxFinalVol * it->second->getVolume() * volumeFactor);
+    it->second->play(
+        getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
+        pitchSemitones);
 }
 
 /// @brief 获取指定音效池是否正在播放。
@@ -305,10 +344,8 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
         return 0;
     };
 
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
     it->second->playScheduled(
-        sfxFinalVol * it->second->getVolume() * volumeFactor,
+        getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
         targetFrame,
         bgmRef);
 }

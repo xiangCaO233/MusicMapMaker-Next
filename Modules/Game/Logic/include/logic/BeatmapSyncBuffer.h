@@ -2,6 +2,7 @@
 
 #include "common/LogicCommands.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
+#include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
@@ -196,6 +197,9 @@ struct RenderSnapshot {
     std::vector<System::ScrollSegment>
         scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
 
+    /// @brief 预览窗口右侧全谱物件密度缓存；非 Preview 快照保持为空。
+    PreviewDensitySnapshot previewDensity;
+
     /// @brief 重叠检测遮罩区域，使用当前快照的屏幕坐标。
     struct OverlapMask {
         /// @brief 遮罩左上角 X 坐标。
@@ -261,6 +265,12 @@ struct RenderSnapshot {
 
     /// @brief 无效 BPM 事件的会话级回退 BPM。
     double fallbackBpm{ 120.0 };
+
+    /// @brief 当前判定线所在时间段生效的 BPM。
+    double currentBpm{ 120.0 };
+
+    /// @brief 当前判定线所在时间段生效的 SV。
+    double currentSv{ 1.0 };
 
     // 框选盒子快照
     struct MarqueeBoxSnapshot {
@@ -386,6 +396,7 @@ struct RenderSnapshot {
         timelineElements.clear();
         mainAudioTracks.clear();
         scrollSegments.clear();
+        previewDensity.clear();
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();
         backgroundPath.clear();
@@ -399,6 +410,8 @@ struct RenderSnapshot {
         uiInterpolationAbsYSpeed     = 0.0;
         uiInterpolationYOffsetScale  = 1.0;
         fallbackBpm                  = 120.0;
+        currentBpm                   = 120.0;
+        currentSv                    = 1.0;
         currentTool                  = EditTool::Move;
         acceptsInteraction           = false;
         isHoveringCanvas             = false;

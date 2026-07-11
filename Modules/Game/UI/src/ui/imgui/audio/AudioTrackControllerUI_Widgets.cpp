@@ -517,7 +517,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             const ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             Utils::pushFixedButtonStyleVars();
-            if ( ImGui::Button(icon, ImVec2(btnWidth, btnHeight)) ) {
+            if ( ::MMM::UI::FeedbackButton(icon,
+                                           ImVec2(btnWidth, btnHeight)) ) {
                 muted   = !muted;
                 changed = true;
             }
@@ -542,7 +543,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             float sliderWidth = r.width - btnWidth - rowSpacing - lrWidth;
             sliderWidth       = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
-            if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
                 changed = true;
                 if ( muted && volume > 0.0f ) {
                     muted = false;
@@ -566,7 +568,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                         ImVec2(lrPaddingX, style.FramePadding.y));
                     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
                                         ImVec2(0.5f, 0.5f));
-                    if ( ImGui::Button(id, ImVec2(lrButtonW, btnHeight)) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             id, ImVec2(lrButtonW, btnHeight)) ) {
                         channelMode =
                             active ? Audio::MixerChannelMode::Stereo : mode;
                         audio.setMainMixerChannelMode(channelMode);
@@ -740,7 +743,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                 }
 
                 ImGui::PushID(static_cast<int>(i));
-                if ( ImGui::Button(speedPresets[i].c_str()) ) {
+                if ( ::MMM::UI::FeedbackButton(speedPresets[i].c_str()) ) {
                     speed   = targetSpeeds[i];
                     changed = true;
                 }
@@ -756,7 +759,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         labelWidth,
         [&speed, &changed](Clay_BoundingBox r, bool) {
             ImGui::SetNextItemWidth(r.width);
-            if ( ImGui::SliderFloat(
+            if ( ::MMM::UI::FeedbackSliderFloat(
                      "##SpeedSlider", &speed, 0.25f, 2.0f, "%.4fx") ) {
                 changed = true;
             }
@@ -767,31 +770,31 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
             }
         });
 
-    addSettingItem(parent,
-                   rowIndex,
-                   TR_CACHE("ui.audio_manager.stretch_quality").data(),
-                   labelWidth,
-                   [&changed, &audio](Clay_BoundingBox r, bool) {
-                       const char* qualityNames[] = {
-                           TR("ui.audio_manager.quality_fast").data(),
-                           TR("ui.audio_manager.quality_balanced").data(),
-                           TR("ui.audio_manager.quality_finer").data(),
-                           TR("ui.audio_manager.quality_best").data()
-                       };
+    addSettingItem(
+        parent,
+        rowIndex,
+        TR_CACHE("ui.audio_manager.stretch_quality").data(),
+        labelWidth,
+        [&changed, &audio](Clay_BoundingBox r, bool) {
+            const char* qualityNames[] = {
+                TR("ui.audio_manager.quality_fast").data(),
+                TR("ui.audio_manager.quality_balanced").data(),
+                TR("ui.audio_manager.quality_finer").data(),
+                TR("ui.audio_manager.quality_best").data()
+            };
 
-                       int currentQuality =
-                           static_cast<int>(audio.getPlaybackQuality());
-                       ImGui::SetNextItemWidth(r.width);
-                       if ( ImGui::Combo("##StretchQuality",
-                                         &currentQuality,
-                                         qualityNames,
-                                         IM_ARRAYSIZE(qualityNames)) ) {
-                           audio.setPlaybackQuality(
-                               static_cast<Audio::AudioManager::StretchQuality>(
-                                   currentQuality));
-                           changed = true;
-                       }
-                   });
+            int currentQuality = static_cast<int>(audio.getPlaybackQuality());
+            ImGui::SetNextItemWidth(r.width);
+            if ( ::MMM::UI::FeedbackCombo("##StretchQuality",
+                                          &currentQuality,
+                                          qualityNames,
+                                          IM_ARRAYSIZE(qualityNames)) ) {
+                audio.setPlaybackQuality(
+                    static_cast<Audio::AudioManager::StretchQuality>(
+                        currentQuality));
+                changed = true;
+            }
+        });
 
     // 动态计算音高预设按钮自动折行的高度与宽度
     std::string pitchN24 = TR("ui.audio_manager.pitch_n24").data();
@@ -858,7 +861,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                 }
 
                 ImGui::PushID(static_cast<int>(i + 100));
-                if ( ImGui::Button(pitchPresets[i].c_str()) ) {
+                if ( ::MMM::UI::FeedbackButton(pitchPresets[i].c_str()) ) {
                     pitch   = targetPitches[i];
                     changed = true;
                 }
@@ -874,7 +877,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         labelWidth,
         [&pitch, &changed](Clay_BoundingBox r, bool) {
             ImGui::SetNextItemWidth(r.width);
-            if ( ImGui::SliderFloat(
+            if ( ::MMM::UI::FeedbackSliderFloat(
                      "##PitchSlider", &pitch, -24.0f, 24.0f, "%.1f st") ) {
                 changed = true;
             }
@@ -915,7 +918,8 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
             const float playButtonW  = buttonWidth(playText);
             const float pauseButtonW = buttonWidth(pauseText);
 
-            if ( ImGui::Button(playText, ImVec2(playButtonW, buttonHeight)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     playText, ImVec2(playButtonW, buttonHeight)) ) {
                 if ( isPaused ) {
                     audio.resumeSoundEffect(m_trackId);
                 } else {
@@ -925,8 +929,8 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
 
             ImGui::SameLine(0, gap);
 
-            if ( ImGui::Button(pauseText,
-                               ImVec2(pauseButtonW, buttonHeight)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     pauseText, ImVec2(pauseButtonW, buttonHeight)) ) {
                 audio.pauseSoundEffect(m_trackId);
             }
 
@@ -975,10 +979,12 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
         [this, sourceManager, gap, buttonHeight](Clay_BoundingBox r, bool) {
             ImGui::SetCursorScreenPos({ r.x, r.y });
             float btnW = std::max(0.0f, (r.width - gap) * 0.5f);
-            if ( ImGui::Button(TR("ui.audio_manager.open_waveform").data(),
-                               ImVec2(btnW, buttonHeight)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.audio_manager.open_waveform").data(),
+                     ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioWaveform";
                 if ( !sourceManager->getView<AudioWaveformView>(viewName) ) {
+                    ::MMM::UI::PlayPopupOpenFeedback();
                     sourceManager->registerView(
                         viewName,
                         std::make_unique<AudioWaveformView>(
@@ -986,10 +992,12 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                 }
             }
             ImGui::SameLine(0, gap);
-            if ( ImGui::Button(TR("ui.audio_manager.open_spectrum").data(),
-                               ImVec2(btnW, buttonHeight)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.audio_manager.open_spectrum").data(),
+                     ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioSpectrum";
                 if ( !sourceManager->getView<AudioSpectrumView>(viewName) ) {
+                    ::MMM::UI::PlayPopupOpenFeedback();
                     sourceManager->registerView(
                         viewName,
                         std::make_unique<AudioSpectrumView>(

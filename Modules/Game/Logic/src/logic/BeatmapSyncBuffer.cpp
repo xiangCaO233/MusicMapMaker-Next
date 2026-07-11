@@ -12,8 +12,8 @@ BeatmapSyncBuffer::BeatmapSyncBuffer()
     }
 
     // 初始化一个安全的读取帧防止刚开始时 nullptr 崩溃
-    m_reading = new RenderSnapshot();
-    m_storage.push_back(std::unique_ptr<RenderSnapshot>(m_reading));
+    m_storage.push_back(std::make_unique<RenderSnapshot>());
+    m_reading = m_storage.back().get();
 }
 
 RenderSnapshot* BeatmapSyncBuffer::getWorkingSnapshot()
@@ -25,10 +25,10 @@ RenderSnapshot* BeatmapSyncBuffer::getWorkingSnapshot()
 
     // 尝试从空闲队列获取
     if ( !m_freeQueue.try_dequeue(m_working) ) {
-        const size_t MAX_SNAPSHOTS = 64; // 单个 Buffer 最大允许的快照数
+        const size_t MAX_SNAPSHOTS = 64;  // 单个 Buffer 最大允许的快照数
         if ( m_storage.size() < MAX_SNAPSHOTS ) {
-            m_working = new RenderSnapshot();
-            m_storage.push_back(std::unique_ptr<RenderSnapshot>(m_working));
+            m_storage.push_back(std::make_unique<RenderSnapshot>());
+            m_working = m_storage.back().get();
         } else {
             // 已达上限，强行从就绪队列抢夺一个最旧的回来（虽然这会导致跳帧，但总比内存爆炸好）
             if ( !m_readyQueue.try_dequeue(m_working) ) {
@@ -43,7 +43,8 @@ RenderSnapshot* BeatmapSyncBuffer::getWorkingSnapshot()
 void BeatmapSyncBuffer::pushWorkingSnapshot()
 {
     if ( m_working ) {
-        // 积压保护：如果就绪队列太长（说明 UI 线程卡住或没在读），丢弃最旧的快照以防内存膨胀
+        // 积压保护：如果就绪队列太长（说明 UI
+        // 线程卡住或没在读），丢弃最旧的快照以防内存膨胀
         const size_t MAX_READY = 16;
         if ( m_readyQueue.size_approx() > MAX_READY ) {
             RenderSnapshot* stale = nullptr;

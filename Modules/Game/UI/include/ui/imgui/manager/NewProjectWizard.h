@@ -108,10 +108,10 @@ private:
     void copyToBuffer(char* buffer, std::size_t bufferSize,
                       std::string_view value);
 
-    /// @brief 向导弹窗是否打开。
+    /// @brief 向导窗口是否打开。
     bool m_isOpen{ false };
 
-    /// @brief 下一帧是否需要打开弹窗。
+    /// @brief 下一帧是否需要聚焦向导窗口。
     bool m_shouldOpen{ false };
 
     /// @brief 当前向导步骤。

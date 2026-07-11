@@ -26,6 +26,7 @@ add_library(
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
   src/logic/BeatmapSyncBuffer.cpp
+  src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Layout.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
@@ -56,3 +57,12 @@ mmm_add_test_executable(Logic EditorClipboardProtocolTest
                         tests/EditorClipboardProtocolTest.cpp)
 target_link_libraries(EditorClipboardProtocolTest PRIVATE Logic Log)
 add_test(NAME EditorClipboardProtocolTest COMMAND EditorClipboardProtocolTest)
+
+mmm_add_test_executable(Logic PreviewDensityTest tests/PreviewDensityTest.cpp)
+target_link_libraries(PreviewDensityTest PRIVATE Logic Log)
+add_test(NAME PreviewDensityTest COMMAND PreviewDensityTest)
+
+mmm_add_test_executable(Logic TimelineBatchMetadataTest
+                        tests/TimelineBatchMetadataTest.cpp)
+target_link_libraries(TimelineBatchMetadataTest PRIVATE Logic Log)
+add_test(NAME TimelineBatchMetadataTest COMMAND TimelineBatchMetadataTest)

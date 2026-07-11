@@ -86,12 +86,7 @@ VKRenderer::~VKRenderer()
 
     releaseOffscreenRecordResources();
 
-    // 分配的命令缓冲区会自动随pool一起释放
-    // for ( auto& vkCommandBuffer : m_vkCommandBuffers ) {
-    //     m_vkLogicalDevice.freeCommandBuffers(m_vkCommandPool,
-    //     vkCommandBuffer);
-    // }
-    // XINFO("Destroyed VK Command Buffers.");
+    // 分配的命令缓冲区会自动随 pool 一起释放。
 
     m_vkLogicalDevice.destroyCommandPool(m_vkCommandPool);
     XDEBUG("Destroyed VK Command Pool.");

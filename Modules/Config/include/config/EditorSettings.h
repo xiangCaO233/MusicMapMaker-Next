@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -170,6 +171,9 @@ inline void from_json(const nlohmann::json& j, SoftwareCursorConfig& c)
 }
 
 struct UIAestheticsConfig {
+    /// @brief UI 动画过渡时间下限，避免配置为 0 导致速度计算异常。
+    static constexpr float MIN_ANIMATION_TRANSITION_DURATION = 0.02f;
+
     /// @brief 全局窗口圆角半径 (px, 基准值)
     float windowRounding{ 8.0f };
     /// @brief 全局组件圆角半径 (px, 基准值)
@@ -180,6 +184,16 @@ struct UIAestheticsConfig {
     float itemSpacing{ 8.0f };
     /// @brief 全局窗口内边距 (px, 基准值)
     float windowPadding{ 8.0f };
+    /// @brief UI 悬浮、弹窗和面板切换的统一过渡时间，单位秒。
+    float animationTransitionDuration{ 0.12f };
+
+    /// @brief 获取统一 UI 过渡动画速度。
+    /// @return 每秒推进的线性动画进度。
+    float animationTransitionSpeed() const
+    {
+        return 1.0f / std::max(MIN_ANIMATION_TRANSITION_DURATION,
+                               animationTransitionDuration);
+    }
 };
 
 inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
@@ -188,7 +202,9 @@ inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
                         { "frameRounding", c.frameRounding },
                         { "windowGap", c.windowGap },
                         { "itemSpacing", c.itemSpacing },
-                        { "windowPadding", c.windowPadding } };
+                        { "windowPadding", c.windowPadding },
+                        { "animationTransitionDuration",
+                          c.animationTransitionDuration } };
 }
 
 inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
@@ -198,6 +214,9 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowGap      = j.value("windowGap", 8.0f);
     c.itemSpacing    = j.value("itemSpacing", 8.0f);
     c.windowPadding  = j.value("windowPadding", 8.0f);
+    c.animationTransitionDuration =
+        std::max(UIAestheticsConfig::MIN_ANIMATION_TRANSITION_DURATION,
+                 j.value("animationTransitionDuration", 0.12f));
 }
 
 /// @brief 音符调色盘方案中的颜色槽位数量。
@@ -612,6 +631,43 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
                                  { CopyPasteTimeBasis::Beat, "Beat" },
                              })
 
+/// @brief BPM 测量工具中不依赖具体项目或音轨的用户偏好。
+struct BpmMeasurementToolPreferences {
+    /// @brief 黄色拍框宽度，单位为毫秒。
+    double markerWidthMs{ 80.0 };
+
+    /// @brief 分拍线切分数量。
+    int beatDivisor{ 4 };
+
+    /// @brief 最近一次由用户调整的视图中心，单位为秒。
+    double viewCenterSeconds{ 0.0 };
+
+    /// @brief 分析视图在中心点单侧显示的时间跨度，单位为秒。
+    double viewHalfWidthSeconds{ 8.0 };
+};
+
+/// @brief 将 BPM 测量工具用户偏好序列化为 JSON。
+/// @param j 输出 JSON 对象。
+/// @param c 待序列化的 BPM 测量工具偏好。
+inline void to_json(nlohmann::json& j, const BpmMeasurementToolPreferences& c)
+{
+    j = nlohmann::json{ { "markerWidthMs", c.markerWidthMs },
+                        { "beatDivisor", c.beatDivisor },
+                        { "viewCenterSeconds", c.viewCenterSeconds },
+                        { "viewHalfWidthSeconds", c.viewHalfWidthSeconds } };
+}
+
+/// @brief 从 JSON 恢复 BPM 测量工具用户偏好。
+/// @param j 输入 JSON 对象。
+/// @param c 接收结果的 BPM 测量工具偏好。
+inline void from_json(const nlohmann::json& j, BpmMeasurementToolPreferences& c)
+{
+    c.markerWidthMs        = j.value("markerWidthMs", 80.0);
+    c.beatDivisor          = j.value("beatDivisor", 4);
+    c.viewCenterSeconds    = j.value("viewCenterSeconds", 0.0);
+    c.viewHalfWidthSeconds = j.value("viewHalfWidthSeconds", 8.0);
+}
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -701,6 +757,12 @@ struct EditorSettings {
     /// @brief SFX 全局静音
     bool sfxGainMuted{ false };
 
+    /// @brief 交互音效全局音量 (0.0 ~ 1.0)
+    float interactionSfxGain{ 1.0f };
+
+    /// @brief 交互音效全局静音
+    bool interactionSfxGainMuted{ false };
+
     /// @brief 框选模式
     SelectionMode selectionMode{ SelectionMode::Intersection };
 
@@ -739,6 +801,9 @@ struct EditorSettings {
 
     /// @brief 时间线窗口多选是否允许选中 BPM 红线
     bool timelineSelectionIncludesBpm{ false };
+
+    /// @brief BPM 测量工具的全局用户偏好。
+    BpmMeasurementToolPreferences bpmMeasurementToolPreferences;
 
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
@@ -817,6 +882,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "bgmGainMuted", c.bgmGainMuted },
         { "sfxGain", c.sfxGain },
         { "sfxGainMuted", c.sfxGainMuted },
+        { "interactionSfxGain", c.interactionSfxGain },
+        { "interactionSfxGainMuted", c.interactionSfxGainMuted },
         { "selectionMode", c.selectionMode },
         { "marqueeThickness", c.marqueeThickness },
         { "marqueeRounding", c.marqueeRounding },
@@ -831,6 +898,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "selectPastedObjects", c.selectPastedObjects },
         { "copyPasteTimeBasis", c.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
+        { "bpmMeasurementToolPreferences", c.bpmMeasurementToolPreferences },
         { "softwareCursorConfig", c.softwareCursorConfig },
         { "preferredAsciiFont", c.preferredAsciiFont },
         { "preferredCjkFont", c.preferredCjkFont },
@@ -883,15 +951,17 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.autoUploadPgoProfiles        = j.value("autoUploadPgoProfiles", false);
     c.pgoProfileUploadConsentAsked = j.value(
         "pgoProfileUploadConsentAsked", j.contains("autoUploadPgoProfiles"));
-    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
-    c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
-    c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
-    c.globalVolume          = j.value("globalVolume", 0.25f);
-    c.globalMuted           = j.value("globalMuted", false);
-    c.bgmGain               = j.value("bgmGain", 1.0f);
-    c.bgmGainMuted          = j.value("bgmGainMuted", false);
-    c.sfxGain               = j.value("sfxGain", 1.0f);
-    c.sfxGainMuted          = j.value("sfxGainMuted", false);
+    c.fontSizeMultiplier      = j.value("fontSizeMultiplier", 1.15f);
+    c.uiScaleMultiplier       = j.value("uiScaleMultiplier", 1.0f);
+    c.scrollSpeedMultiplier   = j.value("scrollSpeedMultiplier", 4.0f);
+    c.globalVolume            = j.value("globalVolume", 0.25f);
+    c.globalMuted             = j.value("globalMuted", false);
+    c.bgmGain                 = j.value("bgmGain", 1.0f);
+    c.bgmGainMuted            = j.value("bgmGainMuted", false);
+    c.sfxGain                 = j.value("sfxGain", 1.0f);
+    c.sfxGainMuted            = j.value("sfxGainMuted", false);
+    c.interactionSfxGain      = j.value("interactionSfxGain", 1.0f);
+    c.interactionSfxGainMuted = j.value("interactionSfxGainMuted", false);
     c.selectionMode    = j.value("selectionMode", SelectionMode::Intersection);
     c.marqueeThickness = j.value("marqueeThickness", 2.0f);
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
@@ -911,6 +981,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     c.timelineSelectionIncludesBpm =
         j.value("timelineSelectionIncludesBpm", false);
+    BpmMeasurementToolPreferences bpmMeasurementToolPreferencesFallback;
+    bpmMeasurementToolPreferencesFallback.beatDivisor = c.beatDivisor;
+    c.bpmMeasurementToolPreferences                   = j.value(
+        "bpmMeasurementToolPreferences", bpmMeasurementToolPreferencesFallback);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =

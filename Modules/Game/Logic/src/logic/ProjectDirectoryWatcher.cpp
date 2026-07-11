@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 
 #include <chrono>
+#include <unordered_map>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -11,6 +12,63 @@
 
 namespace MMM::Logic
 {
+
+#ifndef _WIN32
+namespace
+{
+/// @brief 非 Windows 备用轮询快照，记录路径和最后修改时间。
+using DirectoryPollingSnapshot =
+    std::unordered_map<std::filesystem::path, std::filesystem::file_time_type>;
+
+/// @brief 采集目录当前状态，所有文件系统错误都以跳过条目处理。
+/// @param root 需要递归采样的根目录。
+/// @param snapshot 输出快照。
+/// @return 根目录可访问时返回 true。
+bool collectDirectoryPollingSnapshot(const std::filesystem::path& root,
+                                     DirectoryPollingSnapshot&    snapshot)
+{
+    snapshot.clear();
+
+    std::error_code rootError;
+    if ( !std::filesystem::exists(root, rootError) || rootError ) {
+        return false;
+    }
+
+    constexpr auto iteratorOptions =
+        std::filesystem::directory_options::skip_permission_denied;
+    std::error_code                               iteratorError;
+    std::filesystem::recursive_directory_iterator iterator(
+        root, iteratorOptions, iteratorError);
+    const std::filesystem::recursive_directory_iterator end;
+    while ( !iteratorError && iterator != end ) {
+        const auto currentPath = iterator->path().lexically_normal();
+
+        std::error_code timeError;
+        const auto      writeTime =
+            std::filesystem::last_write_time(currentPath, timeError);
+        if ( !timeError ) {
+            snapshot[currentPath] = writeTime;
+        }
+
+        iterator.increment(iteratorError);
+    }
+
+    return true;
+}
+
+/// @brief 判断两个目录轮询快照是否存在差异。
+bool directoryPollingSnapshotChanged(const DirectoryPollingSnapshot& previous,
+                                     const DirectoryPollingSnapshot& current)
+{
+    if ( previous.size() != current.size() ) return true;
+    for ( const auto& [path, writeTime] : current ) {
+        auto it = previous.find(path);
+        if ( it == previous.end() || it->second != writeTime ) return true;
+    }
+    return false;
+}
+}  // namespace
+#endif
 
 /// @brief 停止监听线程并释放平台相关监听句柄。
 ProjectDirectoryWatcher::~ProjectDirectoryWatcher()
@@ -190,9 +248,23 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
 
     CloseHandle(changeEvent);
 #else
-    // 非 Windows 平台的模拟实现或备用监听
+    // 非 Windows 平台备用轮询，避免逻辑线程在每帧路径中做文件系统操作。
+    DirectoryPollingSnapshot previousSnapshot;
+    (void)collectDirectoryPollingSnapshot(watchPath, previousSnapshot);
+
     while ( m_running.load(std::memory_order_acquire) ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        DirectoryPollingSnapshot currentSnapshot;
+        if ( !collectDirectoryPollingSnapshot(watchPath, currentSnapshot) ) {
+            continue;
+        }
+
+        if ( directoryPollingSnapshotChanged(previousSnapshot,
+                                             currentSnapshot) ) {
+            previousSnapshot = std::move(currentSnapshot);
+            m_changePending.store(true, std::memory_order_release);
+        }
     }
 #endif
 }

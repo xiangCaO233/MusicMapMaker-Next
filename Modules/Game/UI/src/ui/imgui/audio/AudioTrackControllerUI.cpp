@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <cfloat>
 #include <cmath>
 
@@ -76,7 +77,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     std::string windowTitle =
         m_trackName + "###" + AudioTrackControllerUI::makeViewName(m_trackId);
-    if ( ImGui::Begin(windowTitle.c_str(), &m_isOpen) ) {
+    const bool wasOpenBeforeBegin = m_isOpen;
+    const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isOpen);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_isOpen);
+    if ( opened ) {
         if ( m_pendingDockId != 0 && ImGui::IsWindowDocked() ) {
             m_pendingDockId = 0;
         }

@@ -142,16 +142,22 @@ bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
 /// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
 void cancelActiveEditingState(SessionContext& ctx)
 {
-    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
-                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
+                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
     const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
                               ctx.dragInitialNote.has_value();
+    const bool keepBrush =
+        ctx.currentTool == EditTool::Draw && ctx.brushState.isActive;
 
     if ( keepMoveDrag ) {
-        // 物件拖拽允许在播放开始后继续定位，避免播放键打断尚未提交的移动。
+        // 拖拽物件允许在播放开始后继续定位，避免播放键打断尚未提交的手势。
         ctx.isDragging = true;
+    } else if ( keepBrush ) {
+        // 画笔绘制允许在播放开始后继续定位，但不沿用物件拖拽的部位状态。
+        ctx.isDragging  = true;
+        ctx.draggedPart = HoverPart::None;
     } else {
         ctx.isDragging  = false;
         ctx.draggedPart = HoverPart::None;
@@ -165,11 +171,13 @@ void cancelActiveEditingState(SessionContext& ctx)
         ctx.marqueeBoxes.clear();
     }
 
-    ctx.brushState.isActive = false;
-    ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = -1.0;
-    ctx.brushState.duration      = 0.0;
-    ctx.brushState.dtrack        = 0;
+    if ( !keepBrush ) {
+        ctx.brushState.isActive = false;
+        ctx.brushState.polylineSegments.clear();
+        ctx.brushState.holdStartTime = -1.0;
+        ctx.brushState.duration      = 0.0;
+        ctx.brushState.dtrack        = 0;
+    }
 
     ctx.eraserState.isActive    = false;
     ctx.eraserState.isShiftDown = false;
@@ -284,7 +292,7 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
                                                 audio.getPlaybackSpeed());
 }
 
-/// @brief 处理滚轮滚动时间线命令。
+/// @brief 处理普通时间滚动或仅应用滚动暂停策略的滚轮命令。
 /// @param cmd 滚轮滚动指令。
 /// @warning
 /// 逻辑输入路径：用户滚轮触发时调用；同主音轨后台跟随画布在暂停开关开启时
@@ -308,6 +316,10 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
         // 如果停止了播放，需要同步一下渲染状态 (虽然 seek
         // 也会做，但这里明确一下更好)
+    }
+
+    if ( cmd.intent == ScrollCommandIntent::ModifierAdjustment ) {
+        return;
     }
 
     bool isShiftAccelerated = cmd.isShiftDown;

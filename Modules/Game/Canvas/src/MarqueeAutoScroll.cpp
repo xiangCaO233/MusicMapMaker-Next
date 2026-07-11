@@ -11,19 +11,19 @@ namespace MMM::Canvas
 {
 namespace
 {
-/// @brief Returns the fallback absolute Y speed when no ScrollSegment exists.
-/// @return Fallback absolute Y speed in pixels per second.
+/// @brief 获取没有 ScrollSegment 时使用的兜底绝对 Y 速度。
+/// @return 兜底绝对 Y 速度，单位为像素/秒。
 double defaultSnapshotAbsYSpeed()
 {
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     return 500.0 * static_cast<double>(std::max(0.01f, visual.timelineZoom));
 }
 
-/// @brief Estimates absolute Y from a display time in a render snapshot.
-/// @param snapshot Current UI render snapshot.
-/// @param time Display time in seconds.
-/// @return Absolute Y at the requested display time.
-/// @warning UI hot path: reads only the snapshot scroll segment cache.
+/// @brief 根据渲染快照中的显示时间估算绝对 Y 坐标。
+/// @param snapshot 当前 UI 渲染快照。
+/// @param time 显示时间，单位为秒。
+/// @return 指定显示时间对应的绝对 Y 坐标。
+/// @warning UI 热路径：只读取快照滚动分段缓存。
 double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
 {
     if ( snapshot.scrollSegments.empty() ) {
@@ -44,13 +44,13 @@ double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
     return segment.absY + (time - segment.time) * segment.speed;
 }
 
-/// @brief Attempts to resolve a display time inside one ScrollSegment.
-/// @param snapshot Current UI render snapshot.
-/// @param index Target ScrollSegment index.
-/// @param absY Target absolute Y.
-/// @param outTime Resolved display time in seconds.
-/// @return True when the target absolute Y belongs to the segment.
-/// @warning UI hot path: constant-time segment math only.
+/// @brief 尝试在单个 ScrollSegment 内反解显示时间。
+/// @param snapshot 当前 UI 渲染快照。
+/// @param index 目标 ScrollSegment 索引。
+/// @param absY 目标绝对 Y 坐标。
+/// @param outTime 解析出的显示时间，单位为秒。
+/// @return 目标绝对 Y 坐标位于该分段内时返回 true。
+/// @warning UI 热路径：只做常量时间的分段数学计算。
 bool trySnapshotTimeAtSegmentAbsY(const Logic::RenderSnapshot& snapshot,
                                   size_t index, double absY, double& outTime)
 {
@@ -87,12 +87,11 @@ bool trySnapshotTimeAtSegmentAbsY(const Logic::RenderSnapshot& snapshot,
     return outTime >= segment.time - EPSILON && outTime <= nextTime + EPSILON;
 }
 
-/// @brief Estimates display time from absolute Y in a render snapshot.
-/// @param snapshot Current UI render snapshot.
-/// @param absY Target absolute Y.
-/// @return Display time in seconds at the requested absolute Y.
-/// @warning UI hot path: usually tests the current segment first, scanning all
-/// snapshot segments only when crossing segment boundaries.
+/// @brief 根据渲染快照中的绝对 Y 坐标估算显示时间。
+/// @param snapshot 当前 UI 渲染快照。
+/// @param absY 目标绝对 Y 坐标。
+/// @return 指定绝对 Y 坐标对应的显示时间，单位为秒。
+/// @warning UI 热路径：通常先测试当前分段，只在跨分段时扫描快照分段。
 double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 {
     if ( snapshot.scrollSegments.empty() ) {
@@ -187,7 +186,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }

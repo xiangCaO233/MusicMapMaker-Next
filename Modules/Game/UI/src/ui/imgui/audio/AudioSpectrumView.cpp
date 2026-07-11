@@ -31,6 +31,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
 #include <mutex>
+#include <system_error>
 #include <utility>
 
 #ifndef M_PI
@@ -113,7 +114,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     }
 
     if ( m_isCalculating.load() ) {
-        ImGui::OpenPopup("###SpectrumCalcModal");
+        ::MMM::UI::FeedbackOpenPopup("###SpectrumCalcModal");
     }
 
     {
@@ -146,11 +147,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    float visualOffset = Config::AppConfig::instance()
-                             .getVisualConfig()
-                             .getEffectiveVisualOffset();
+    const auto& visualConfig = Config::AppConfig::instance().getVisualConfig();
+    float       globalVisualOffset = visualConfig.getEffectiveVisualOffset();
+    float       spectrumVisualOffset =
+        visualConfig.getSpectrumEffectiveVisualOffset();
     double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
+    double visualTime = audioTime + globalVisualOffset;
     double totalTime  = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
@@ -162,7 +164,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime  = visualTime - visualOffset;
+        audioTime  = visualTime - globalVisualOffset;
 
         // 亚帧平滑补偿 (同步视觉偏移)
         if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
@@ -256,7 +258,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                   ImGui::Text("%s", TR("ui.waveform.zoom").data());
                   ImGui::SameLine();
                   ImGui::SetNextItemWidth(100);
-                  ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+                  ::MMM::UI::FeedbackSliderFloat(
+                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
               });
     pushGroup(
         "MaxFreqSlider",
@@ -268,7 +271,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120);
-            if ( ImGui::SliderFloat(
+            if ( ::MMM::UI::FeedbackSliderFloat(
                      "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     startAsyncRecalculate();
@@ -284,7 +287,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                   ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
                   ImGui::SameLine();
                   ImGui::SetNextItemWidth(120);
-                  if ( ImGui::SliderFloat(
+                  if ( ::MMM::UI::FeedbackSliderFloat(
                            "##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
                       if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                           startAsyncRecalculate();
@@ -296,7 +299,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
-                  if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
+                  if ( ::MMM::UI::FeedbackButton(
+                           TR("ui.spectrum.sync_effects").data()) ) {
                       startAsyncRecalculate();
                   }
               });
@@ -333,15 +337,20 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     m_vertices.clear();
     m_indices.clear();
     m_spectrumDrawCmds.clear();
-    buildChannelGeometry(
-        m_texturesL, textH, avail.x, plotH, viewStart, viewEnd, visualOffset);
+    buildChannelGeometry(m_texturesL,
+                         textH,
+                         avail.x,
+                         plotH,
+                         viewStart,
+                         viewEnd,
+                         spectrumVisualOffset);
     buildChannelGeometry(m_texturesR,
                          textH + plotH + textH,
                          avail.x,
                          plotH,
                          viewStart,
                          viewEnd,
-                         visualOffset);
+                         spectrumVisualOffset);
 
     vk::DescriptorSet surfaceTexture = getDescriptorSet();
     if ( surfaceTexture != VK_NULL_HANDLE ) {
@@ -371,7 +380,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     leftMax,
                                     viewStart,
                                     viewEnd,
-                                    visualOffset,
+                                    globalVisualOffset,
                                     totalTime,
                                     visualTime,
                                     snapshot);
@@ -380,7 +389,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     rightMax,
                                     viewStart,
                                     viewEnd,
-                                    visualOffset,
+                                    globalVisualOffset,
                                     totalTime,
                                     visualTime,
                                     snapshot);
@@ -419,7 +428,7 @@ void AudioSpectrumView::addSpectrumQuad(float x, float y, float w, float h,
 void AudioSpectrumView::buildChannelGeometry(
     const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
     float plotY, float plotW, float plotH, double viewStart, double viewEnd,
-    float visualOffset)
+    float spectrumVisualOffset)
 {
     if ( textures.empty() || plotW <= 0.0f || plotH <= 0.0f ) return;
 
@@ -427,8 +436,8 @@ void AudioSpectrumView::buildChannelGeometry(
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     const double fftOffset =
         sampleRate > 0.0 ? (2048.0 / 2.0) / sampleRate : 0.0;
-    const double audioViewStart = viewStart - visualOffset - fftOffset;
-    const double audioViewEnd   = viewEnd - visualOffset - fftOffset;
+    const double audioViewStart = viewStart - spectrumVisualOffset - fftOffset;
+    const double audioViewEnd   = viewEnd - spectrumVisualOffset - fftOffset;
     const double pixelStart     = audioViewStart * m_cacheSegmentsPerSecond;
     const double pixelEnd       = audioViewEnd * m_cacheSegmentsPerSecond;
     const double pixelWidth     = pixelEnd - pixelStart;
@@ -453,17 +462,17 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
 
 void AudioSpectrumView::renderChannelInteractionOverlay(
     const char* seekId, ImVec2 groupMin, ImVec2 groupMax, double viewStart,
-    double viewEnd, float visualOffset, double totalTime, double visualTime,
-    const Logic::RenderSnapshot* snapshot)
+    double viewEnd, float globalVisualOffset, double totalTime,
+    double visualTime, const Logic::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
@@ -518,7 +527,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
         const float  relX =
             std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
         const double hoverVisualTime = viewStart + relX * viewRange;
-        const double hoverAudioTime  = hoverVisualTime - visualOffset;
+        const double hoverAudioTime  = hoverVisualTime - globalVisualOffset;
 
         const auto timeText =
             Canvas::formatCanvasTime(hoverVisualTime, snapshot);
@@ -733,7 +742,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
+    m_calcFuture = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1019,9 +1028,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
-                            size_t                      offset,
-                            std::uint8_t                intensity) {
+    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
+                                        size_t                      offset,
+                                        std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -1102,8 +1111,10 @@ std::vector<std::string> AudioSpectrumView::getShaderSources(
         return {};
     }
 
-    const auto shaderPath = shaderModuleIt->second;
-    if ( !std::filesystem::exists(shaderPath) ) {
+    const auto      shaderPath = shaderModuleIt->second;
+    std::error_code shaderPathError;
+    if ( !std::filesystem::exists(shaderPath, shaderPathError) ||
+         shaderPathError ) {
         XWARN("AudioSpectrumView shader module path not found: {}",
               Config::pathToUtf8(shaderPath));
         return {};

@@ -70,7 +70,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
-            bool clicked = ImGui::Button(str_id, ImVec2(btnSize, btnSize));
+            bool clicked =
+                ::MMM::UI::FeedbackButton(str_id, ImVec2(btnSize, btnSize));
 
             if ( tex ) {
                 ImTextureID imTexId  = (ImTextureID)tex->getImTextureID();
@@ -100,7 +101,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
             ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
-            bool clicked = ImGui::Button(icon, ImVec2(btnSize, btnSize));
+            bool clicked =
+                ::MMM::UI::FeedbackButton(icon, ImVec2(btnSize, btnSize));
 
             ImGui::PopStyleColor(3);
             Utils::popFixedButtonStyleVars();
@@ -121,7 +123,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::SetCursorPosX(buttonSize + 4.0f * dpiScale);
 
         ImFont* menuFont = skinCfg.getFont("menu");
-        m_mainMenuview.renderMenus(sourceManager);
+        m_mainMenuview.renderMenus(sourceManager, m_statusMessageService);
         ImGui::PopStyleVar(1);
 
         float barWidth  = ImGui::GetWindowWidth();
@@ -157,9 +159,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         if ( menuFont ) ImGui::PopFont();
 
         // 5. 拖拽区域 (Springs)
-        // Area 1: MenusEnd -> TitleX
-        // Area 2: TitleX -> TitleEnd (标题文字本身)
-        // Area 3: TitleEnd -> ButtonsStartX (包含 FPS 信息)
+        // 区域 1：菜单尾部 -> 标题起点。
+        // 区域 2：标题起点 -> 标题尾部（标题文字本身）。
+        // 区域 3：标题尾部 -> 按钮起点（包含 FPS 信息）。
 
         std::vector<Event::DragArea> currentAreas;
         currentAreas.push_back(

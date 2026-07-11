@@ -2,7 +2,9 @@
 
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <vector>
 
 namespace MMM::UI
@@ -34,6 +36,27 @@ public:
     /// @warning UI 热路径：子视图可见时每帧查询；仅保留轻量文本测量。
     ImVec2 getMinContentSize(float dpiScale) const override;
 
+    /// @brief 谱面表格文件系统元数据缓存。
+    struct FileMetadata {
+        /// @brief 文件大小字节数；读取失败时保持为 0。
+        std::uintmax_t size{ 0 };
+
+        /// @brief 是否成功读取文件大小。
+        bool hasSize{ false };
+
+        /// @brief 文件最后修改时间；读取失败时不参与精确排序。
+        std::filesystem::file_time_type lastWriteTime{};
+
+        /// @brief 是否成功读取最后修改时间。
+        bool hasLastWriteTime{ false };
+
+        /// @brief 谱面元数据 Version 字段；读取失败时为空。
+        std::string version;
+
+        /// @brief 是否成功读取谱面元数据 Version 字段。
+        bool hasVersion{ false };
+    };
+
 private:
     /// @brief 谱面表格排序字段。
     enum class BeatmapSortKey {
@@ -43,8 +66,17 @@ private:
         /// @brief 按谱面文件类型排序。
         Type,
 
+        /// @brief 按谱面元数据 Version 字段排序。
+        Version,
+
         /// @brief 按谱面相对路径排序。
-        Path
+        Path,
+
+        /// @brief 按谱面文件大小排序。
+        Size,
+
+        /// @brief 按谱面文件最后修改时间排序。
+        ModifiedTime
     };
 
     /// @brief 谱面表格排序方向。
@@ -66,6 +98,9 @@ private:
 
     /// @brief 排序后的谱面索引缓存，避免改变项目内谱面顺序。
     std::vector<size_t> m_sortedBeatmapIndices;
+
+    /// @brief 与项目谱面数组下标对齐的文件元数据缓存。
+    std::vector<FileMetadata> m_beatmapFileMetadata;
 
     /// @brief 上次构造排序缓存时的谱面数量。
     size_t m_cachedBeatmapCount{ 0 };

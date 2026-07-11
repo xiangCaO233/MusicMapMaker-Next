@@ -1,230 +1,372 @@
 #pragma once
 
-#include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
 #include "imgui.h"
-#include "imgui_internal.h"
-#include "ui/layout/CLayDefs.h"
-#include <algorithm>
-#include <cmath>
+
 #include <string>
+
+struct Clay_BoundingBox;
+
+namespace MMM::UI
+{
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 按钮。
+/// @param label 按钮显示文本和 ImGui ID。
+/// @param size 按钮尺寸，语义与 ImGui::Button 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧按钮绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackButton(const char* label, const ImVec2& size = ImVec2(0, 0));
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 小按钮。
+/// @param label 按钮显示文本和 ImGui ID。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧按钮绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSmallButton(const char* label);
+
+/// @brief 绘制带统一音效反馈的 ImGui 颜色按钮。
+/// @param descId 颜色按钮描述文本和 ImGui ID。
+/// @param color 按钮显示颜色。
+/// @param flags 颜色按钮标志。
+/// @param size 按钮尺寸，语义与 ImGui::ColorButton 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧颜色按钮绘制路径调用，只做 ImGui 状态读写
+/// 和已预加载 SFX pool 的即时触发。
+bool FeedbackColorButton(const char* descId, const ImVec4& color,
+                         ImGuiColorEditFlags flags = 0,
+                         const ImVec2&       size  = ImVec2(0, 0));
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单入口。
+/// @param label 菜单显示文本和 ImGui ID。
+/// @param enabled 是否允许打开菜单。
+/// @return 菜单本帧打开时返回 true，语义与 ImGui::BeginMenu 保持一致。
+/// @warning UI 热路径：每帧菜单栏绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginMenu(const char* label, bool enabled = true);
+
+/// @brief 结束由 FeedbackBeginMenu 打开的菜单。
+/// @warning UI 热路径：弹出菜单绘制结束时恢复动画样式并调用 ImGui::EndMenu。
+void FeedbackEndMenu();
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut = nullptr,
+                      bool selected = false, bool enabled = true);
+
+/// @brief 绘制可直接修改布尔状态的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param pSelected 可选选中状态指针，语义与 ImGui::MenuItem 保持一致。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut, bool* pSelected,
+                      bool enabled = true);
+
+/// @brief 绘制带图标列的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param icon 图标文本，可为空。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
+                        const char* shortcut = nullptr, bool selected = false,
+                        bool enabled = true);
+
+/// @brief 绘制带统一反馈的 ImGui CollapsingHeader。
+/// @param label Header 显示文本和 ImGui ID。
+/// @param flags Header 标志。
+/// @return Header 本帧展开时返回 true。
+/// @warning UI 热路径：每帧 Header 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Checkbox。
+/// @param label Checkbox 显示文本和 ImGui ID。
+/// @param value 当前布尔值指针。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧勾选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCheckbox(const char* label, bool* value);
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param active 当前是否选中。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, bool active);
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param value 当前整型值指针。
+/// @param buttonValue 本按钮代表的值。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, int* value, int buttonValue);
+
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param selected 当前选中状态。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool selected = false,
+                        ImGuiSelectableFlags flags = 0,
+                        const ImVec2&        size  = ImVec2(0, 0));
+
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param pSelected 可选选中状态指针。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool* pSelected,
+                        ImGuiSelectableFlags flags = 0,
+                        const ImVec2&        size  = ImVec2(0, 0));
+
+/// @brief 绘制带统一反馈的 ImGui BeginCombo。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param previewValue 当前预览文本。
+/// @param flags Combo 标志。
+/// @return 弹出列表打开时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginCombo(const char* label, const char* previewValue,
+                        ImGuiComboFlags flags = 0);
+
+/// @brief 结束由 FeedbackBeginCombo 打开的 Combo 并恢复宿主间距样式。
+/// @warning UI 热路径：先恢复弹层内 ItemSpacing，再调用 ImGui::EndCombo，
+/// 最后恢复在弹层 Begin 前压入的 WindowPadding。
+void FeedbackEndCombo();
+
+/// @brief 绘制带统一反馈的 ImGui Combo 数组辅助控件。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param currentItem 当前选中索引。
+/// @param items 选项文本数组。
+/// @param itemsCount 选项数量。
+/// @param popupMaxHeightInItems 弹出列表最大显示项数。
+/// @return 选中项变化时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCombo(const char* label, int* currentItem,
+                   const char* const items[], int itemsCount,
+                   int popupMaxHeightInItems = -1);
+
+/// @brief 绘制带统一反馈的 ImGui Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderFloat(const char* label, float* value, float minValue,
+                         float maxValue, const char* format = "%.3f",
+                         ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Int 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderInt(const char* label, int* value, int minValue,
+                       int maxValue, const char* format = "%d",
+                       ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
+                          float minValue, float maxValue,
+                          const char*      format = "%.3f",
+                          ImGuiSliderFlags flags  = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragFloat(const char* label, float* value, float speed = 1.0f,
+                       float minValue = 0.0f, float maxValue = 0.0f,
+                       const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragInt2(const char* label, int values[2], float speed = 1.0f,
+                      int minValue = 0, int maxValue = 0,
+                      const char* format = "%d", ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 标量拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
+                        float speed = 1.0f, const void* minValue = nullptr,
+                        const void*      maxValue = nullptr,
+                        const char*      format   = nullptr,
+                        ImGuiSliderFlags flags    = 0);
+
+/// @brief 设置统一 UI 交互音效是否允许播放。
+/// @param enabled 是否允许 hover、点击、鼠标边沿和滑块反馈音效。
+/// @warning UI 热路径：每帧写入一次，只更新内存标志，不执行资源操作。
+void SetInteractionFeedbackEnabled(bool enabled);
+
+/// @brief 打开 ImGui 弹窗，并在弹窗由关闭切换为打开时播放一次提示音。
+/// @param popupId 弹窗显示文本和 ImGui ID。
+/// @warning UI 热路径：部分弹窗会每帧调用；只查询/请求 ImGui 弹窗状态，
+/// 并仅在打开边沿触发已预加载 SFX pool，不执行资源加载。
+void FeedbackOpenPopup(const char* popupId);
+
+/// @brief 播放一次独立弹窗打开提示音。
+/// @warning UI 低频路径：调用方必须只在普通窗口或文件选择器的打开边沿调用；
+/// 只触发已预加载 SFX pool，不执行资源加载。
+void PlayPopupOpenFeedback();
+
+/// @brief 处理全局鼠标左右键按下与松开音效。
+/// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
+/// SFX pool，禁止执行资源加载。
+void ProcessGlobalMouseFeedback();
+
+/// @brief 播放统一的鼠标松开反馈音效。
+/// @warning UI 热路径：只触发已预加载 SFX pool，不执行资源加载。
+void PlayInteractionMouseUpFeedback();
+
+/// @brief 给上一条 ImGui Item 补充统一交互音效。
+/// @param id 独立反馈状态 ID。
+/// @param clicked 上一条 Item 本帧是否被激活。
+/// @warning UI 热路径：用于自绘 hit zone，只做 ImGui 状态读写和已预加载
+/// SFX pool 的即时触发。
+void FeedbackLastItem(ImGuiID id, bool clicked);
+
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一反馈。
+/// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
+/// @param pOpen 传给 ImGui::Begin 的打开状态指针。
+/// @warning UI 热路径：每帧窗口 Begin 后调用，只读取 ImGui 内部交互状态，
+/// 并触发已预加载 SFX pool。
+void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen);
+
+/// @brief 给指定 DockSpace 下的原生节点按钮补充统一反馈。
+/// @param dockspaceId 目标 DockSpace 节点 ID。
+/// @warning UI 热路径：每帧 DockSpace 绘制后调用，只遍历当前 dock 树节点，
+/// 并触发已预加载 SFX pool。
+void FeedbackDockNodeControls(ImGuiID dockspaceId);
+
+}  // namespace MMM::UI
 
 namespace MMM::UI::Utils
 {
 
-/**
- * @brief 渲染一个带有水平自动滚动动画的 Selectable。
- *        当文本宽度超出给定的 width 时，会自动开启往复滚动动画。
- */
-template<typename OnClick>
-static void renderScrollingSelectable(const std::string& id,
-                                      const std::string& text, float width,
-                                      float height, OnClick onClick,
-                                      const std::string& tooltip = "")
-{
-    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-    ImVec2 textSize  = ImGui::CalcTextSize(text.c_str());
+/// @brief Selectable 滚动文本核心绘制结果。
+struct ScrollingSelectableResult {
+    /// @brief 背景 Selectable 本帧是否被点击。
+    bool clicked{ false };
+};
 
-    // 绘制背景 Selectable (不带文本)
-    std::string selectableId = "##selectable_" + id;
-    if ( ImGui::Selectable(
-             selectableId.c_str(), false, 0, ImVec2(width, height)) ) {
+/// @brief 树节点滚动文本核心绘制结果。
+struct ScrollingTreeNodeResult {
+    /// @brief 树节点本帧是否展开。
+    bool open{ false };
+
+    /// @brief 树节点本帧是否被点击且没有触发展开切换。
+    bool clicked{ false };
+};
+
+/// @brief 渲染一个带水平自动滚动文本的 Selectable 核心。
+/// @param id ImGui 控件 ID。
+/// @param text 显示文本。
+/// @param width 控件宽度。
+/// @param height 控件高度。
+/// @param tooltip 悬浮提示文本。
+/// @return 本帧交互结果。
+/// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
+ScrollingSelectableResult renderScrollingSelectableCore(
+    const std::string& id, const std::string& text, float width, float height,
+    const std::string& tooltip = "");
+
+/// @brief 渲染一个带水平自动滚动动画的 Selectable。
+/// @param id ImGui 控件 ID。
+/// @param text 显示文本。
+/// @param width 控件宽度。
+/// @param height 控件高度。
+/// @param onClick 点击回调。
+/// @param tooltip 悬浮提示文本。
+/// @warning UI 热路径：模板层只分发点击回调，绘制逻辑在 .cpp 中。
+template<typename OnClick>
+void renderScrollingSelectable(const std::string& id, const std::string& text,
+                               float width, float height, OnClick onClick,
+                               const std::string& tooltip = "")
+{
+    const auto result =
+        renderScrollingSelectableCore(id, text, width, height, tooltip);
+    if ( result.clicked ) {
         onClick();
     }
-
-    if ( !tooltip.empty() && ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip("%s", tooltip.c_str());
-    }
-
-    // 计算滚动位移
-    float offset       = 0.0f;
-    float padding      = 8.0f;
-    float visibleWidth = width - padding;
-
-    if ( textSize.x > visibleWidth ) {
-        float scrollRange = textSize.x - visibleWidth + 40.0f;
-        float time        = (float)ImGui::GetTime();
-        // 平滑往复滚动，两端停顿
-        float t = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
-        t       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
-        offset  = t * scrollRange;
-    }
-
-    // 垂直居中计算
-    float textH   = ImGui::GetFontSize();
-    float offsetY = (height - textH) * 0.5f;
-
-    // 应用剪切矩形并绘制文本
-    ImGui::PushClipRect(
-        cursorPos, ImVec2(cursorPos.x + width, cursorPos.y + height), true);
-    ImGui::GetWindowDrawList()->AddText(
-        ImVec2(cursorPos.x - offset, cursorPos.y + offsetY),
-        ImGui::GetColorU32(ImGuiCol_Text),
-        text.c_str());
-    ImGui::PopClipRect();
 }
 
-/**
- * @brief 在 Clay 布局块中渲染 CollapsingHeader，并确保其宽度适配布局边界。
- */
-static bool renderCollapsingHeader(const char* label, bool* p_state,
-                                   struct Clay_BoundingBox r,
-                                   ImGuiTreeNodeFlags      flags = 0)
-{
-    ImGui::SetCursorScreenPos({ r.x, r.y });
+/// @brief 在 Clay 布局块中渲染 CollapsingHeader，并确保其宽度适配布局边界。
+/// @param label Header 标签。
+/// @param p_state 展开状态。
+/// @param r Clay 布局边界。
+/// @param flags 额外 TreeNode 标志。
+/// @return 本帧展开状态。
+/// @warning UI 热路径：只做 ImGui 布局边界临时调整和 Header 绘制。
+bool renderCollapsingHeader(const char* label, bool* p_state,
+                            Clay_BoundingBox r, ImGuiTreeNodeFlags flags = 0);
 
-    // 应用 SettingsView_Tabs 中的技巧，使 CollapsingHeader 受到 Clay
-    // 布局边界的影响
-    ImGuiWindow* win         = ImGui::GetCurrentWindow();
-    float        savedWRMaxX = win->WorkRect.Max.x;
-    win->WorkRect.Max.x      = r.x + r.width;
+/// @brief 在 Clay 布局块中渲染带水平自动滚动文本的 CollapsingHeader。
+/// @param id ImGui 内部标识。
+/// @param text 显示文本。
+/// @param p_state 展开状态。
+/// @param r Clay 布局边界。
+/// @param flags 额外 TreeNode 标志。
+/// @return 本帧展开状态。
+/// @warning UI 热路径：只做 ImGui Header 绘制和局部文本滚动计算。
+bool renderScrollingCollapsingHeader(const std::string& id,
+                                     const std::string& text, bool* p_state,
+                                     Clay_BoundingBox   r,
+                                     ImGuiTreeNodeFlags flags = 0);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
+/// @brief 渲染带自动滚动文本的树节点核心。
+/// @param id ImGui 控件 ID。
+/// @param text 显示文本。
+/// @param width 控件宽度。
+/// @param height 控件高度。
+/// @param isLeaf 是否为叶子节点。
+/// @param tooltip 悬浮提示文本。
+/// @return 本帧交互结果。
+/// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
+ScrollingTreeNodeResult renderScrollingTreeNodeCore(
+    const std::string& id, const std::string& text, float width, float height,
+    bool isLeaf, const std::string& tooltip = "");
 
-    bool open = ImGui::CollapsingHeader(
-        label, flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
-    *p_state = open;
-
-    ImGui::PopStyleVar();
-    win->WorkRect.Max.x = savedWRMaxX;
-
-    return open;
-}
-
-/**
- * @brief 在 Clay 布局块中渲染带水平自动滚动文本的 CollapsingHeader。
- */
-static bool renderScrollingCollapsingHeader(const std::string&      id,
-                                            const std::string&      text,
-                                            bool*                   p_state,
-                                            struct Clay_BoundingBox r,
-                                            ImGuiTreeNodeFlags      flags = 0)
-{
-    ImGui::SetCursorScreenPos({ r.x, r.y });
-
-    ImGuiWindow* win         = ImGui::GetCurrentWindow();
-    float        savedWRMaxX = win->WorkRect.Max.x;
-    win->WorkRect.Max.x      = r.x + r.width;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
-
-    const std::string hiddenLabel = "##" + id;
-    bool              open        = ImGui::CollapsingHeader(
-        hiddenLabel.c_str(),
-        flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
-    *p_state = open;
-
-    ImVec2 itemMin = ImGui::GetItemRectMin();
-    ImVec2 itemMax = ImGui::GetItemRectMax();
-
-    ImGui::PopStyleVar();
-    win->WorkRect.Max.x = savedWRMaxX;
-
-    const ImGuiStyle& style        = ImGui::GetStyle();
-    const float       targetHeight = std::max(itemMax.y - itemMin.y, r.height);
-    const float       arrowWidth   = ImGui::GetTreeNodeToLabelSpacing();
-    const float       textPadding  = style.FramePadding.x;
-    const ImVec2      textStartPos = { itemMin.x + arrowWidth, itemMin.y };
-    const float       textAvailableWidth =
-        std::max(0.0f, itemMax.x - textStartPos.x - textPadding);
-    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-
-    float offset       = 0.0f;
-    float visibleWidth = std::max(0.0f, textAvailableWidth);
-    if ( textSize.x > visibleWidth ) {
-        float scrollRange = textSize.x - visibleWidth + 40.0f;
-        float time        = static_cast<float>(ImGui::GetTime());
-        float t           = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
-        t                 = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
-        offset            = t * scrollRange;
-    }
-
-    const float textH   = ImGui::GetFontSize();
-    const float offsetY = (targetHeight - textH) * 0.5f;
-
-    ImGui::PushClipRect(textStartPos,
-                        ImVec2(textStartPos.x + textAvailableWidth,
-                               textStartPos.y + targetHeight),
-                        true);
-    ImGui::GetWindowDrawList()->AddText(
-        ImVec2(textStartPos.x - offset, textStartPos.y + offsetY),
-        ImGui::GetColorU32(ImGuiCol_Text),
-        text.c_str());
-    ImGui::PopClipRect();
-
-    return open;
-}
-
-/**
- * @brief 渲染带自动滚动的树节点（针对文件浏览器）。
- */
+/// @brief 渲染带自动滚动的树节点（针对文件浏览器）。
+/// @param id ImGui 控件 ID。
+/// @param text 显示文本。
+/// @param width 控件宽度。
+/// @param height 控件高度。
+/// @param isLeaf 是否为叶子节点。
+/// @param onClick 点击回调。
+/// @param tooltip 悬浮提示文本。
+/// @return 本帧展开状态。
+/// @warning UI 热路径：模板层只分发点击回调，绘制逻辑在 .cpp 中。
 template<typename OnClick>
-static bool renderScrollingTreeNode(const std::string& id,
-                                    const std::string& text, float width,
-                                    float height, bool isLeaf, OnClick onClick,
-                                    const std::string& tooltip = "")
+bool renderScrollingTreeNode(const std::string& id, const std::string& text,
+                             float width, float height, bool isLeaf,
+                             OnClick onClick, const std::string& tooltip = "")
 {
-    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-    ImVec2 textSize  = ImGui::CalcTextSize(text.c_str());
-
-    const ImGuiStyle& style         = ImGui::GetStyle();
-    const float       targetHeight  = std::max(height, ImGui::GetFrameHeight());
-    const float       framePaddingY = std::max(
-        style.FramePadding.y, (targetHeight - ImGui::GetFontSize()) * 0.5f);
-    ImGuiTreeNodeFlags flags =
-        ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
-        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
-    if ( isLeaf )
-        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-
-    // 强制占满可用宽度
-    ImGui::SetNextItemAllowOverlap();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                        ImVec2(style.FramePadding.x, framePaddingY));
-    bool open      = ImGui::TreeNodeEx(id.c_str(), flags, "");
-    bool isHovered = ImGui::IsItemHovered();
-    bool isClicked = ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
-    ImGui::PopStyleVar();
-
-    if ( !tooltip.empty() && isHovered ) {
-        ImGui::SetTooltip("%s", tooltip.c_str());
+    const auto result =
+        renderScrollingTreeNodeCore(id, text, width, height, isLeaf, tooltip);
+    if ( result.clicked ) {
+        onClick();
     }
-
-    // 绘制滚动文本
-    float arrowWidth = ImGui::GetTreeNodeToLabelSpacing();
-    // 叶子文件没有可展开箭头，文字从名称列内容起点绘制，避免普通文件名相对表头额外右移。
-    float  treeGutterWidth    = isLeaf ? 0.0f : arrowWidth;
-    float  textAvailableWidth = width - treeGutterWidth;
-    ImVec2 textStartPos       = { cursorPos.x + treeGutterWidth, cursorPos.y };
-
-    float offset       = 0.0f;
-    float padding      = 8.0f;
-    float visibleWidth = textAvailableWidth - padding;
-
-    if ( textSize.x > visibleWidth ) {
-        float scrollRange = textSize.x - visibleWidth + 40.0f;
-        float time        = (float)ImGui::GetTime();
-        float t           = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
-        t                 = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
-        offset            = t * scrollRange;
-    }
-
-    float textH   = ImGui::GetFontSize();
-    float offsetY = (targetHeight - textH) * 0.5f;
-
-    ImGui::PushClipRect(textStartPos,
-                        ImVec2(textStartPos.x + textAvailableWidth,
-                               textStartPos.y + targetHeight),
-                        true);
-    ImGui::GetWindowDrawList()->AddText(
-        ImVec2(textStartPos.x - offset, textStartPos.y + offsetY),
-        ImGui::GetColorU32(ImGuiCol_Text),
-        text.c_str());
-    ImGui::PopClipRect();
-
-    if ( isClicked ) onClick();
-
-    return open;
+    return result.open;
 }
 
 enum class TooltipDir { Left, Right };
@@ -232,38 +374,37 @@ enum class TooltipDir { Left, Right };
 /// @brief 将下一个弹出式窗口固定到主视口中心。
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
-static void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f))
+void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f));
+
+/// @brief 在局部作用域内为纵向滚动容器推入 DPI 感知的最小滚动条宽度。
+/// @warning UI 热路径：构造与析构只读取当前 DPI/主题并执行一次 ImGui
+/// 样式栈操作。
+/// @warning ImGuiStyleVar_ScrollbarSize
+/// 同时控制横向滚动条高度，本作用域只能包裹 不生成横向滚动条的容器。
+class VerticalScrollbarStyleScope
 {
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+public:
+    /// @brief 使用当前窗口 DPI 缩放推入纵向滚动条宽度样式。
+    VerticalScrollbarStyleScope();
 
-    const float dpiScale =
-        Config::AppConfig::instance().getWindowContentScale();
-    const float margin      = std::max(16.0f, 28.0f * dpiScale);
-    const auto  maxAxisSize = [margin](float workSize, float preferredMin) {
-        const float insetSize   = std::max(1.0f, workSize - margin * 2.0f);
-        const float clampedMin  = std::min(preferredMin, workSize);
-        const float clampedSize = std::max(clampedMin, insetSize);
-        return std::max(1.0f, std::min(clampedSize, workSize));
-    };
-    const ImVec2 maxWindowSize{
-        maxAxisSize(viewport->WorkSize.x, 160.0f * dpiScale),
-        maxAxisSize(viewport->WorkSize.y, 160.0f * dpiScale),
-    };
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
+    /// @brief 使用指定 DPI 缩放推入纵向滚动条宽度样式。
+    /// @param dpiScale 当前窗口内容缩放。
+    explicit VerticalScrollbarStyleScope(float dpiScale);
 
-    if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
-        if ( desiredSize.x > 0.0f ) {
-            desiredSize.x = std::min(desiredSize.x, maxWindowSize.x);
-        }
-        if ( desiredSize.y > 0.0f ) {
-            desiredSize.y = std::min(desiredSize.y, maxWindowSize.y);
-        }
-        ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
-    }
-}
+    /// @brief 恢复进入作用域前的滚动条宽度样式。
+    ~VerticalScrollbarStyleScope();
+
+    /// @brief 禁止拷贝，避免重复弹出样式栈。
+    VerticalScrollbarStyleScope(const VerticalScrollbarStyleScope&) = delete;
+    /// @brief 禁止拷贝赋值，避免重复管理样式栈。
+    VerticalScrollbarStyleScope& operator=(const VerticalScrollbarStyleScope&) =
+        delete;
+    /// @brief 禁止移动，确保样式栈生命周期与局部作用域一致。
+    VerticalScrollbarStyleScope(VerticalScrollbarStyleScope&&) = delete;
+    /// @brief 禁止移动赋值，确保样式栈生命周期与局部作用域一致。
+    VerticalScrollbarStyleScope& operator=(VerticalScrollbarStyleScope&&) =
+        delete;
+};
 
 /// @brief 全局审美配置驱动的居中模态弹窗作用域。
 /// @warning UI 热路径：仅在模态弹窗绘制帧中使用，只做 ImGui next-window
@@ -271,41 +412,15 @@ static void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f))
 class CenteredModalPopupScope
 {
 public:
+    /// @brief 使用当前窗口 DPI 缩放推入全局窗口样式。
+    CenteredModalPopupScope();
+
     /// @brief 推入全局窗口样式。
     /// @param dpiScale 当前窗口内容缩放。
-    explicit CenteredModalPopupScope(
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale())
-    {
-        const auto& aesthetics =
-            Config::AppConfig::instance().getEditorSettings().aesthetics;
-        const float windowRound =
-            std::floor(aesthetics.windowRounding * dpiScale);
-        const float frameRound =
-            std::floor(aesthetics.frameRounding * dpiScale);
-        const ImVec2 windowPadding{
-            std::floor(aesthetics.windowPadding * dpiScale),
-            std::floor(aesthetics.windowPadding * dpiScale),
-        };
-        const ImVec2 itemSpacing{
-            std::floor(aesthetics.itemSpacing * dpiScale),
-            std::floor(aesthetics.itemSpacing * dpiScale),
-        };
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
-    }
+    explicit CenteredModalPopupScope(float dpiScale);
 
     /// @brief 恢复进入作用域前的字体与样式栈。
-    ~CenteredModalPopupScope()
-    {
-        popTitleFontIfNeeded();
-        ImGui::PopStyleVar(STYLE_VAR_COUNT);
-    }
+    ~CenteredModalPopupScope();
 
     /// @brief 禁止拷贝，避免重复弹出样式栈。
     CenteredModalPopupScope(const CenteredModalPopupScope&) = delete;
@@ -326,20 +441,7 @@ public:
     /// @warning UI 热路径：每帧只设置下一窗口状态，不执行阻塞操作。
     bool begin(const char* name, bool* pOpen = nullptr,
                ImGuiWindowFlags flags = ImGuiWindowFlags_None,
-               ImVec2 desiredSize = ImVec2(0.0f, 0.0f), bool autoResize = true)
-    {
-        prepareCenteredModalWindow(desiredSize);
-
-        flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
-        if ( autoResize ) {
-            flags |= ImGuiWindowFlags_AlwaysAutoResize;
-        }
-
-        pushTitleFont();
-        const bool opened = ImGui::BeginPopupModal(name, pOpen, flags);
-        popTitleFontIfNeeded();
-        return opened;
-    }
+               ImVec2 desiredSize = ImVec2(0.0f, 0.0f), bool autoResize = true);
 
     /// @brief 开始一个使用模态样式的普通弹出窗口。
     /// @param name 窗口标题和 ImGui ID。
@@ -352,41 +454,16 @@ public:
     bool beginWindow(const char* name, bool* pOpen = nullptr,
                      ImGuiWindowFlags flags       = ImGuiWindowFlags_None,
                      ImVec2           desiredSize = ImVec2(0.0f, 0.0f),
-                     bool             autoResize  = true)
-    {
-        prepareCenteredModalWindow(desiredSize);
-
-        flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
-        if ( autoResize ) {
-            flags |= ImGuiWindowFlags_AlwaysAutoResize;
-        }
-
-        pushTitleFont();
-        const bool opened = ImGui::Begin(name, pOpen, flags);
-        popTitleFontIfNeeded();
-        return opened;
-    }
+                     bool             autoResize  = true);
 
 private:
     /// @brief 使用字体加载时的固定尺寸压入弹窗标题字体。
     /// @warning UI 热路径：仅做字体栈操作；显式传入 LegacySize
     /// 以避免动态字号触发字体图集重排。
-    void pushTitleFont()
-    {
-        m_titleFont = Config::SkinManager::instance().getFont("title");
-        if ( m_titleFont ) {
-            ImGui::PushFont(m_titleFont, m_titleFont->LegacySize);
-        }
-    }
+    void pushTitleFont();
 
     /// @brief 弹出 Begin 前推入的标题字体。
-    void popTitleFontIfNeeded()
-    {
-        if ( m_titleFont ) {
-            ImGui::PopFont();
-            m_titleFont = nullptr;
-        }
-    }
+    void popTitleFontIfNeeded();
 
     /// @brief 构造函数中推入的样式变量数量。
     static constexpr int STYLE_VAR_COUNT = 7;
@@ -397,66 +474,16 @@ private:
 
 /// @brief 压入固定尺寸按钮的样式隔离变量，避免主题文字按钮内边距影响图标居中。
 /// @warning 每帧 UI 绘制路径调用，只允许保留轻量 ImGui 样式栈操作。
-static void pushFixedButtonStyleVars()
-{
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-}
+void pushFixedButtonStyleVars();
 
 /// @brief 弹出 pushFixedButtonStyleVars 压入的固定尺寸按钮样式变量。
 /// @warning 每帧 UI 绘制路径调用，只允许保留轻量 ImGui 样式栈操作。
-static void popFixedButtonStyleVars()
-{
-    ImGui::PopStyleVar(2);
-}
+void popFixedButtonStyleVars();
 
 /// @brief 绘制标准的、带有审美风格的 Tooltip。
 /// @param text 文本内容。
 /// @param dir 弹出方向，相对于当前 Item。
-static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
-{
-    if ( ImGui::IsItemHovered() ) {
-        // 动态获取配置
-        auto& aesthetics =
-            Config::AppConfig::instance().getEditorSettings().aesthetics;
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-        float winPadding  = std::floor(aesthetics.windowPadding * dpiScale);
-        float winRounding = std::floor(aesthetics.windowRounding * dpiScale);
-
-        ImVec2 pos    = ImGui::GetItemRectMin();
-        ImVec2 max    = ImGui::GetItemRectMax();
-        float  gap    = 6.0f * dpiScale;
-        ImVec2 target = { 0.0f, 0.0f };
-        ImVec2 pivot  = { 0.0f, 0.0f };
-
-        if ( dir == TooltipDir::Left ) {
-            target = { pos.x - gap, pos.y };
-            pivot  = { 1.0f, 0.0f };
-        } else {
-            target = { max.x + gap, pos.y };
-            pivot  = { 0.0f, 0.0f };
-        }
-
-        ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-        ImGui::SetNextWindowPos(target, ImGuiCond_Always, pivot);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                            ImVec2(winPadding, winPadding));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
-
-        ImFont* contentFont =
-            Config::SkinManager::instance().getFont("content");
-        if ( contentFont )
-            ImGui::PushFont(contentFont, contentFont->LegacySize);
-
-        if ( ImGui::BeginTooltip() ) {
-            ImGui::TextUnformatted(text);
-            ImGui::EndTooltip();
-        }
-
-        if ( contentFont ) ImGui::PopFont();
-        ImGui::PopStyleVar(2);
-    }
-}
+/// @warning UI 热路径：只在当前 Item 悬浮时绘制 Tooltip，不执行资源加载。
+void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right);
 
 }  // namespace MMM::UI::Utils

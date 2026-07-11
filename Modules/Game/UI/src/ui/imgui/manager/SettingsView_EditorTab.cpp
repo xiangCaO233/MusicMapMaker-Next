@@ -106,16 +106,16 @@ void SettingsView::drawEditorSettings()
                        TR_CACHE("ui.settings.editor.reverse_scroll").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox("##ReverseScroll",
-                                                      &settings.reverseScroll);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##ReverseScroll", &settings.reverseScroll);
                        });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.editor.scroll_snap").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox("##ScrollSnap",
-                                                      &settings.scrollSnap);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##ScrollSnap", &settings.scrollSnap);
                        });
         addSettingItem(
             *sec,
@@ -124,7 +124,7 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DisableAccel",
                     &settings.disableScrollAccelerationWhileDrawing);
             });
@@ -135,9 +135,9 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |=
-                    ImGui::Checkbox("##RemoveObjectsOnPolylinePath",
-                                    &settings.removeObjectsOnPolylinePath);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##RemoveObjectsOnPolylinePath",
+                    &settings.removeObjectsOnPolylinePath);
             });
         addSettingItem(
             *sec,
@@ -145,8 +145,8 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox("##SelectPastedObjects",
-                                           &settings.selectPastedObjects);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##SelectPastedObjects", &settings.selectPastedObjects);
             });
         addRadioSetting(
             *sec,
@@ -169,11 +169,12 @@ void SettingsView::drawEditorSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat("##ScrollMul",
-                                              &settings.scrollSpeedMultiplier,
-                                              1.0f,
-                                              10.0f,
-                                              "%.1f");
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##ScrollMul",
+                    &settings.scrollSpeedMultiplier,
+                    1.0f,
+                    10.0f,
+                    "%.1f");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.editor.scroll_multiplier_tooltip")
@@ -189,7 +190,8 @@ void SettingsView::drawEditorSettings()
             [&](Clay_BoundingBox r, bool) {
                 int beatDivisor = settings.beatDivisor;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::SliderInt("##BeatDivisor", &beatDivisor, 1, 64) ) {
+                if ( ::MMM::UI::FeedbackSliderInt(
+                         "##BeatDivisor", &beatDivisor, 1, 64) ) {
                     settings.beatDivisor = beatDivisor;
                     changed              = true;
                 }
@@ -206,12 +208,13 @@ void SettingsView::drawEditorSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::DragFloat("##OverlapTimeWindowMs",
-                                            &settings.overlapTimeWindowMs,
-                                            0.1f,
-                                            0.0f,
-                                            100.0f,
-                                            "%.1f ms");
+                changed |=
+                    ::MMM::UI::FeedbackDragFloat("##OverlapTimeWindowMs",
+                                                 &settings.overlapTimeWindowMs,
+                                                 0.1f,
+                                                 0.0f,
+                                                 100.0f,
+                                                 "%.1f ms");
                 settings.overlapTimeWindowMs =
                     std::max(0.0f, settings.overlapTimeWindowMs);
             });
@@ -240,9 +243,9 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |=
-                    ImGui::Checkbox("##TimelineSelectionIncludesBpm",
-                                    &settings.timelineSelectionIncludesBpm);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##TimelineSelectionIncludesBpm",
+                    &settings.timelineSelectionIncludesBpm);
             });
         addSettingItem(
             *sec,
@@ -251,11 +254,12 @@ void SettingsView::drawEditorSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ImGui::SliderFloat("##MarqueeThick",
-                                              &settings.marqueeThickness,
-                                              1.0f,
-                                              10.0f,
-                                              "%.1f px");
+                changed |=
+                    ::MMM::UI::FeedbackSliderFloat("##MarqueeThick",
+                                                   &settings.marqueeThickness,
+                                                   1.0f,
+                                                   10.0f,
+                                                   "%.1f px");
             });
         addSettingItem(*sec,
                        rowIndex,
@@ -263,12 +267,12 @@ void SettingsView::drawEditorSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |=
-                               ImGui::SliderFloat("##MarqueeRound",
-                                                  &settings.marqueeRounding,
-                                                  0.0f,
-                                                  20.0f,
-                                                  "%.1f px");
+                           changed |= ::MMM::UI::FeedbackSliderFloat(
+                               "##MarqueeRound",
+                               &settings.marqueeRounding,
+                               0.0f,
+                               20.0f,
+                               "%.1f px");
                        });
     }
 
@@ -294,10 +298,10 @@ void SettingsView::drawEditorSettings()
                         .data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##SfxStrategy",
-                                  &strategy,
-                                  strategies,
-                                  IM_ARRAYSIZE(strategies)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##SfxStrategy",
+                                              &strategy,
+                                              strategies,
+                                              IM_ARRAYSIZE(strategies)) ) {
                     settings.sfxConfig.polylineStrategy =
                         (Config::PolylineSfxStrategy)strategy;
                     changed = true;
@@ -309,7 +313,7 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##FlickScale",
                     &settings.sfxConfig.enableFlickWidthVolumeScaling);
             });
@@ -321,7 +325,7 @@ void SettingsView::drawEditorSettings()
                 maxLabelW,
                 [&](Clay_BoundingBox r, bool) {
                     ImGui::SetNextItemWidth(r.width);
-                    changed |= ImGui::SliderFloat(
+                    changed |= ::MMM::UI::FeedbackSliderFloat(
                         "##FlickMul",
                         &settings.sfxConfig.flickWidthVolumeMultiplier,
                         0.0f,
@@ -334,7 +338,7 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                bool syncSpeedChanged = ImGui::Checkbox(
+                bool syncSpeedChanged = ::MMM::UI::FeedbackCheckbox(
                     "##SyncSpeed", &settings.sfxConfig.hitSfxSyncSpeed);
                 if ( syncSpeedChanged ) {
                     changed = true;

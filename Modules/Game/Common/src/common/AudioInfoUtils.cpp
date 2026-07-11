@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include <ice/manage/dec/MediaInfo.hpp>
 #include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
+#include <system_error>
 
 namespace MMM::Utils
 {
@@ -10,7 +11,9 @@ namespace MMM::Utils
 std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
     const std::filesystem::path& filePath)
 {
-    if ( !std::filesystem::exists(filePath) ) {
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(filePath, filesystemError) ||
+         filesystemError ) {
         XERROR("AudioInfoUtils: File not found: {}",
                Config::pathToUtf8(filePath));
         return std::nullopt;

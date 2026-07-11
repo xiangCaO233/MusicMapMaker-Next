@@ -21,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <ice/thread/ThreadPool.hpp>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -196,7 +197,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -437,7 +438,9 @@ std::string getMainAudioSyncKey(const SessionContext& ctx,
     }
 
     const auto& meta = ctx.currentBeatmap->m_baseMapMetadata;
-    return makeMainAudioSyncKey(project, meta.map_path, meta.main_audio_path);
+    const auto  resolvedAudioPath =
+        SessionUtils::resolveMainAudioPath(ctx, project);
+    return makeMainAudioSyncKey(project, meta.map_path, resolvedAudioPath);
 }
 
 /// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
@@ -534,6 +537,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
+    target.settings.bpmMeasurementToolPreferences =
+        source.settings.bpmMeasurementToolPreferences;
 }
 
 /// @brief 判断逻辑指令是否会修改临时项目内容。
@@ -888,10 +893,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -927,14 +932,25 @@ void EditorEngine::openProject(
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
-    if ( !creationOptions && std::filesystem::exists(projectPath) &&
-         std::filesystem::is_regular_file(projectPath) ) {
+    std::error_code       openPathError;
+    if ( !creationOptions &&
+         std::filesystem::exists(projectPath, openPathError) &&
+         !openPathError &&
+         std::filesystem::is_regular_file(projectPath, openPathError) &&
+         !openPathError ) {
         actualProjectPath = projectPath.parent_path();
     }
 
+    openPathError.clear();
+    const bool projectDirectoryExists =
+        std::filesystem::exists(actualProjectPath, openPathError) &&
+        !openPathError;
+    openPathError.clear();
+    const bool isProjectDirectory =
+        std::filesystem::is_directory(actualProjectPath, openPathError) &&
+        !openPathError;
     if ( !creationOptions &&
-         (!std::filesystem::exists(actualProjectPath) ||
-          !std::filesystem::is_directory(actualProjectPath)) ) {
+         (!projectDirectoryExists || !isProjectDirectory) ) {
         const std::string message =
             "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
@@ -1023,14 +1039,13 @@ void EditorEngine::finishOpenProject(
     if ( !openResult.m_targetBeatmapPath.empty() ) {
         XINFO("Auto loading beatmap: {}",
               Config::pathToUtf8(openResult.m_targetBeatmapPath));
-        try {
-            auto map = std::make_shared<BeatMap>(
-                BeatMap::loadFromFile(openResult.m_targetBeatmapPath));
+        auto loadedMap = BeatMap::loadFromFile(openResult.m_targetBeatmapPath);
+        if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
+            XERROR("Failed to auto load beatmap {}",
+                   Config::pathToUtf8(openResult.m_targetBeatmapPath));
+        } else {
+            auto map = std::make_shared<BeatMap>(std::move(loadedMap));
             createSession(map, map->m_baseMapMetadata.name);
-        } catch ( const std::exception& e ) {
-            XERROR("Failed to auto load beatmap {}: {}",
-                   Config::pathToUtf8(openResult.m_targetBeatmapPath),
-                   e.what());
         }
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
@@ -1457,6 +1472,54 @@ void EditorEngine::updateSnapshotAtlasUVMap(
         cameraId, target, targetRevision);
 }
 
+/// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
+/// @param beatmapPath 待规范化的谱面路径。
+/// @return 规范化绝对路径键；空路径返回空字符串。
+/// @warning
+/// 低频路径：可能访问文件系统解析规范路径，只能在文件选择、打开或打包流程调用。
+std::string EditorEngine::makeBeatmapPathKeyForPath(
+    const std::filesystem::path& beatmapPath) const
+{
+    return makeBeatmapPathKey(getCurrentProject(), beatmapPath);
+}
+
+/// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
+/// @param audioPath 待规范化的音频路径。
+/// @return 规范化绝对路径键；空路径返回空字符串。
+/// @warning 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
+std::string EditorEngine::makeMainAudioSyncKeyForPath(
+    const std::filesystem::path& audioPath) const
+{
+    return makeMainAudioSyncKey(getCurrentProject(), {}, audioPath);
+}
+
+/// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
+/// @param audioSyncKey 待比较的规范化音频路径键。
+/// @return 存在有效活动谱面且主音轨键一致时返回 true。
+/// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
+/// SessionRegistry 锁，不复制 Session 或路径字符串。
+bool EditorEngine::activeMainAudioSyncKeyMatches(
+    std::string_view audioSyncKey) const
+{
+    if ( audioSyncKey.empty() ) {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
+    const auto  activeIndex = m_sessionRegistry.activeIndex();
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(sessions.size()) ) {
+        return false;
+    }
+
+    const auto& entry = sessions[static_cast<size_t>(activeIndex)];
+    if ( entry.isLogoPlaceholder || !entry.session ) {
+        return false;
+    }
+    return entry.mainAudioSyncKey == audioSyncKey;
+}
+
 /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
 /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
 /// SessionRegistry 锁。
@@ -1549,6 +1612,22 @@ bool EditorEngine::isActiveSessionDraggingNote() const
         const auto& ctx = sessions[idx].session->getContext();
         return ctx.currentTool == EditTool::Move && ctx.isDragging &&
                ctx.draggedEntity != entt::null;
+    }
+    return false;
+}
+
+/// @brief 判断当前活跃 Session 是否正在使用画笔绘制。
+/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
+/// 的常量状态，且不复制 shared_ptr 所有权。
+bool EditorEngine::isActiveSessionDrawingBrush() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
+         sessions[idx].session ) {
+        const auto& ctx = sessions[idx].session->getContext();
+        return ctx.currentTool == EditTool::Draw && ctx.brushState.isActive;
     }
     return false;
 }
@@ -1816,10 +1895,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -2072,9 +2151,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                     SessionUtils::resolveMainAudioPath(ctx, project);
                 bool targetAudioReady = false;
 
+                std::error_code audioPathError;
                 if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
                           .empty() &&
-                     std::filesystem::exists(audioPath) ) {
+                     std::filesystem::exists(audioPath, audioPathError) &&
+                     !audioPathError ) {
                     AudioTrackConfig config;
                     if ( project ) {
                         for ( const auto& res : project->m_audioResources ) {

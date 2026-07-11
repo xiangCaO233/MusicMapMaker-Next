@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <cstdint>
 #include <string>
 
@@ -107,8 +108,8 @@ void SettingsView::drawDebugSettings()
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos(
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
-                changed |= ImGui::Checkbox("##DebugDrawHitboxes",
-                                           &visual.debugDrawHitboxes);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##DebugDrawHitboxes", &visual.debugDrawHitboxes);
             });
 
         addSettingItem(
@@ -119,8 +120,8 @@ void SettingsView::drawDebugSettings()
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos(
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
-                changed |= ImGui::Checkbox("##RenderProfileLogging",
-                                           &settings.renderProfileLogging);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##RenderProfileLogging", &settings.renderProfileLogging);
             });
     }
 

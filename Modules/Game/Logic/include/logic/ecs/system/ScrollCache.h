@@ -37,6 +37,21 @@ struct ScrollSegment {
     double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒。
     double       hsValue{ 1.0 };    /// @brief HS 原始参数。
     double       hs{ 1.0 };         /// @brief 当前区间生效的 HS 倍率。
+
+    /// @brief 当前区间生效的 BPM；与仅在红线处有效的 bpmValue 区分。
+    double activeBpmValue{ 0.0 };
+
+    /// @brief 当前区间生效的 SV；与仅在绿线处有效的 scrollValue 区分。
+    double activeScrollValue{ 1.0 };
+};
+
+/// @brief 指定时间所在滚动段的节奏状态。
+struct ScrollTimingState {
+    /// @brief 当前生效 BPM；无可用分段时为 0。
+    double bpm{ 0.0 };
+
+    /// @brief 当前生效 SV；无可用分段时为 1。
+    double sv{ 1.0 };
 };
 
 constexpr uint32_t SCROLL_EFFECT_BPM    = 1 << 0;
@@ -97,6 +112,13 @@ public:
 
     /// @brief 获取给定时间戳对应的 Malody HS 音符速度倍率
     double getHsAt(double t) const;
+
+    /// @brief 获取给定时间戳所在滚动段的 BPM 与 SV。
+    /// @param t 查询时间，单位秒。
+    /// @return 当前段落生效的 BPM 与 SV；缓存为空时返回保守默认值。
+    /// @warning 逻辑热路径：每个 Session update 调用一次；只允许二分查找，
+    /// 禁止遍历完整时间线。
+    ScrollTimingState getTimingStateAt(double t) const;
 
     /// @brief 获取从当前卷轴位置到目标时间的显示偏移
     double getDisplayDelta(double t, double currentAbsY,

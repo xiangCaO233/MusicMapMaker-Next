@@ -317,9 +317,10 @@ void NewProjectWizard::renderPreferencesStep()
 
     ImGui::TextUnformatted(TR("ui.settings.project.note_palette").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewProjectNotePalette", previewName.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewProjectNotePalette",
+                                       previewName.c_str()) ) {
         const bool inheritSelected = m_noteColorPaletteSchemeName.empty();
-        if ( ImGui::Selectable(
+        if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.settings.project.note_palette.inherit").data(),
                  inheritSelected) ) {
             m_noteColorPaletteSchemeName.clear();
@@ -329,7 +330,7 @@ void NewProjectWizard::renderPreferencesStep()
         const bool skinSelected =
             m_noteColorPaletteSchemeName ==
             Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-        if ( ImGui::Selectable(
+        if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.toolbar.note_palette.skin_default_scheme").data(),
                  skinSelected) ) {
             m_noteColorPaletteSchemeName =
@@ -339,18 +340,19 @@ void NewProjectWizard::renderPreferencesStep()
 
         for ( const auto& scheme : paletteConfig.schemes ) {
             const bool selected = m_noteColorPaletteSchemeName == scheme.name;
-            if ( ImGui::Selectable(scheme.name.c_str(), selected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                               selected) ) {
                 m_noteColorPaletteSchemeName = scheme.name;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     ImGui::TextUnformatted(TR("ui.wizard.new_project.initial_sidebar").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewProjectInitialSidebar",
-                           sidebarTabLabel(m_initialSideBarTab)) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewProjectInitialSidebar",
+                                       sidebarTabLabel(m_initialSideBarTab)) ) {
         const SideBarTab tabs[] = { SideBarTab::FileExplorer,
                                     SideBarTab::BeatMapExplorer,
                                     SideBarTab::AudioExplorer,
@@ -358,12 +360,13 @@ void NewProjectWizard::renderPreferencesStep()
                                     SideBarTab::None };
         for ( SideBarTab tab : tabs ) {
             const bool selected = m_initialSideBarTab == tab;
-            if ( ImGui::Selectable(sidebarTabLabel(tab), selected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(sidebarTabLabel(tab),
+                                               selected) ) {
                 m_initialSideBarTab = tab;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 }
 
@@ -380,8 +383,9 @@ void NewProjectWizard::renderLocationStep()
 
     const float buttonWidth = std::floor(
         160.0f * Config::AppConfig::instance().getWindowContentScale());
-    if ( ImGui::Button(TR("ui.wizard.new_project.select_parent").data(),
-                       ImVec2(buttonWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.wizard.new_project.select_parent").data(),
+             ImVec2(buttonWidth, 0.0f)) ) {
         requestParentFolderPicker();
     }
 
@@ -442,7 +446,8 @@ void NewProjectWizard::renderFooter()
         std::min(150.0f * dpiScale, (available - spacing * 2.0f) / 3.0f));
     const ImVec2 buttonSize{ std::max(96.0f * dpiScale, buttonWidth), 0.0f };
     ImGui::BeginDisabled(suppressActions || m_currentStep == Step::ProjectInfo);
-    if ( ImGui::Button(TR("ui.wizard.new_project.back").data(), buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_project.back").data(),
+                                   buttonSize) ) {
         if ( m_currentStep == Step::Preferences ) {
             m_currentStep = Step::ProjectInfo;
         } else if ( m_currentStep == Step::Location ) {
@@ -453,8 +458,8 @@ void NewProjectWizard::renderFooter()
 
     ImGui::SameLine();
     ImGui::BeginDisabled(suppressActions);
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                       buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.cancel").data(),
+                                   buttonSize) ) {
         close();
     }
     ImGui::EndDisabled();
@@ -462,9 +467,10 @@ void NewProjectWizard::renderFooter()
     ImGui::SameLine();
     ImGui::BeginDisabled(suppressActions || !canAdvance());
     const bool isLastStep = m_currentStep == Step::Location;
-    if ( ImGui::Button(isLastStep ? TR("ui.wizard.new_project.create").data()
-                                  : TR("ui.wizard.new_project.next").data(),
-                       buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             isLastStep ? TR("ui.wizard.new_project.create").data()
+                        : TR("ui.wizard.new_project.next").data(),
+             buttonSize) ) {
         if ( m_currentStep == Step::ProjectInfo ) {
             m_currentStep = Step::Preferences;
         } else if ( m_currentStep == Step::Preferences ) {
@@ -502,6 +508,7 @@ void NewProjectWizard::processPendingParentFolderPicker()
     }
 
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath = nullptr;
         const nfdresult_t result =
             pickNativeParentFolder(&outPath, defaultPath);
@@ -541,11 +548,17 @@ void NewProjectWizard::openUnifiedParentFolderPicker(
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
                                  ImGuiFileDialogFlags_HideColumnType |
                                  ImGuiFileDialogFlags_ReadOnlyFileNameField;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened(PARENT_FOLDER_PICKER_ID);
     ImGuiFileDialog::Instance()->OpenDialog(
         PARENT_FOLDER_PICKER_ID,
         TR("ui.wizard.new_project.select_parent").data(),
         nullptr,
         fdConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened(PARENT_FOLDER_PICKER_ID) ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 void NewProjectWizard::renderParentFolderPicker(float dpiScale)
@@ -599,6 +612,11 @@ void NewProjectWizard::submitCreateRequest()
     close();
 }
 
+/// @brief 更新并渲染新建项目向导窗口。
+/// @param sourceManager 当前 UI 管理器，保留用于接口一致性。
+/// @warning UI
+/// 热路径：每帧仅在向导打开时渲染；除用户点击浏览目录触发文件选择器外
+/// 禁止加入阻塞操作。
 void NewProjectWizard::update(UIManager* sourceManager)
 {
     (void)sourceManager;
@@ -610,20 +628,23 @@ void NewProjectWizard::update(UIManager* sourceManager)
         Config::AppConfig::instance().getWindowContentScale();
     const std::string windowTitle =
         std::string(TR("ui.wizard.new_project.title").data()) +
-        "###NewProjectWizardPopup";
+        "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(windowTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
         m_shouldOpen = false;
     }
 
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    constexpr ImGuiWindowFlags     WINDOW_FLAGS =
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
-    if ( modalScope.begin(windowTitle.c_str(),
-                          &m_isOpen,
-                          WINDOW_FLAGS,
-                          ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
-                          false) ) {
+    constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoCollapse |
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoDocking;
+    const bool                     windowVisible =
+        modalScope.begin(windowTitle.c_str(),
+                         &m_isOpen,
+                         WINDOW_FLAGS,
+                         ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
+                         false);
+    if ( windowVisible ) {
         renderStepHeader();
 
         const float footerReserve = ImGui::GetFrameHeightWithSpacing() +
@@ -631,23 +652,26 @@ void NewProjectWizard::update(UIManager* sourceManager)
         const float contentHeight =
             std::max(120.0f * dpiScale,
                      ImGui::GetContentRegionAvail().y - footerReserve);
-        ImGui::BeginChild("##NewProjectWizardContent",
-                          ImVec2(0.0f, contentHeight),
-                          false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
-        switch ( m_currentStep ) {
-        case Step::ProjectInfo: renderProjectInfoStep(); break;
-        case Step::Preferences: renderPreferencesStep(); break;
-        case Step::Location: renderLocationStep(); break;
+        {
+            Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
+            ImGui::BeginChild("##NewProjectWizardContent",
+                              ImVec2(0.0f, contentHeight),
+                              false,
+                              ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            switch ( m_currentStep ) {
+            case Step::ProjectInfo: renderProjectInfoStep(); break;
+            case Step::Preferences: renderPreferencesStep(); break;
+            case Step::Location: renderLocationStep(); break;
+            }
+            ImGui::EndChild();
         }
-        ImGui::EndChild();
 
         renderFooter();
+
+        processPendingParentFolderPicker();
+        renderParentFolderPicker(dpiScale);
         ImGui::EndPopup();
     }
-
-    processPendingParentFolderPicker();
-    renderParentFolderPicker(dpiScale);
 }
 
 void NewProjectWizard::open()

@@ -113,6 +113,12 @@ struct TemporaryProjectSaveResultEvent : public ProjectLifecycleEvent {
     std::string m_errorMessage;
 };
 
+/// @brief 当前项目描述文件保存完成事件。
+struct ProjectSavedEvent : public ProjectLifecycleEvent {
+    /// @brief 保存成功的项目描述文件路径，使用 UTF-8 字符串。
+    std::string m_projectFilePath;
+};
+
 }  // namespace MMM::Event
 
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectEvent, MMM::Event::BaseEvent);
@@ -141,4 +147,6 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectSaveResultEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::ProjectSavedEvent,
                        MMM::Event::ProjectLifecycleEvent);

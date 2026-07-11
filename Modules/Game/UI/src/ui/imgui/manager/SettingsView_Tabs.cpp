@@ -1,5 +1,6 @@
 #include "imgui.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -141,8 +142,8 @@ void SettingsView::addRadioSetting(
             [optLabel = optLabel, optValue = optValue, &current, &changed](
                 Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
-                if ( ImGui::RadioButton(optLabel.c_str(),
-                                        current == optValue) ) {
+                if ( ::MMM::UI::FeedbackRadioButton(optLabel.c_str(),
+                                                    current == optValue) ) {
                     current = optValue;
                     changed = true;
                 }

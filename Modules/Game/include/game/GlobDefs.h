@@ -2,7 +2,8 @@
 
 #include <clocale>
 #include <filesystem>
-#include <iostream>
+#include <string>
+#include <system_error>
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -12,10 +13,13 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+#else
+#    include <limits.h>
+#    include <unistd.h>
 #endif
 
-#include "log/colorful-log.h"
 #include "game/CrashHandler.h"
+#include "log/colorful-log.h"
 
 namespace MMM
 {
@@ -50,35 +54,48 @@ struct RTTILogger {
         };
         enableVT(STD_OUTPUT_HANDLE);
         enableVT(STD_ERROR_HANDLE);
-        
+
         // 注册崩溃处理器
         register_crash_handler();
 #endif
         std::setlocale(LC_ALL, ".UTF-8");
-        // 2. 核心逻辑：设置工作目录为可执行程序所在目录
-        try {
-            std::filesystem::path exePath;
+        // 设置工作目录为可执行程序所在目录。
+        std::string           workingDirectoryError;
+        std::filesystem::path exePath;
 #ifdef _WIN32
-            wchar_t buffer[MAX_PATH];
-            GetModuleFileNameW(NULL, buffer, MAX_PATH);
+        wchar_t buffer[MAX_PATH];
+        DWORD   pathLength = GetModuleFileNameW(NULL, buffer, MAX_PATH);
+        if ( pathLength == 0 || pathLength >= MAX_PATH ) {
+            workingDirectoryError = "failed to query executable path";
+        } else {
             exePath = std::filesystem::path(buffer);
+        }
 #else
-            char    buffer[PATH_MAX];
-            ssize_t count = readlink("/proc/self/exe", buffer, PATH_MAX);
-            if ( count != -1 ) {
-                exePath = std::filesystem::path(std::string(buffer, count));
-            }
+        char    buffer[PATH_MAX];
+        ssize_t count = readlink("/proc/self/exe", buffer, PATH_MAX);
+        if ( count < 0 || count >= PATH_MAX ) {
+            workingDirectoryError = "failed to query executable path";
+        } else {
+            exePath = std::filesystem::path(std::string(buffer, count));
+        }
 #endif
-            if ( !exePath.empty() ) {
-                // 取父目录并设置为当前工作目录
-                std::filesystem::current_path(exePath.parent_path());
+        if ( !exePath.empty() ) {
+            std::error_code currentPathError;
+            const auto      executableDirectory = exePath.parent_path();
+            if ( executableDirectory.empty() ) {
+                workingDirectoryError = "empty executable directory";
+            } else {
+                std::filesystem::current_path(executableDirectory,
+                                              currentPathError);
+                if ( currentPathError ) {
+                    workingDirectoryError = currentPathError.message();
+                }
             }
-        } catch ( const std::exception& e ) {
-            // 注意：此时日志系统还没初始化，只能用 std::cerr
-            std::cerr << "Failed to set working directory: " << e.what()
-                      << std::endl;
         }
         XLogger::init("MMM");
+        if ( !workingDirectoryError.empty() ) {
+            XWARN("Failed to set working directory: {}", workingDirectoryError);
+        }
     }
 
     ~RTTILogger() { XLogger::shutdown(); }

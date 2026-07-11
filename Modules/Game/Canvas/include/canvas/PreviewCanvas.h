@@ -7,6 +7,7 @@
 #include "ui/IRenderableView.h"
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 namespace MMM::Logic
@@ -118,6 +119,31 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 绘制预览窗口右侧独立的全谱物件密度栏。
+    /// @param canvasPos 预览画布内容左上角屏幕坐标。
+    /// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+    /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+    /// @param dpiScale 当前窗口 DPI 缩放。
+    /// @param seekPreviewTime 当前拖动预览时间；无交互时使用快照播放时间。
+    /// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
+    /// 遍历、排序、文件访问或共享指针复制。
+    void drawDensityOverview(const ImVec2& canvasPos, const ImVec2& canvasSize,
+                             float reservedWidth, float dpiScale,
+                             std::optional<double> seekPreviewTime) const;
+
+    /// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
+    /// @param canvasPos 预览画布内容左上角屏幕坐标。
+    /// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+    /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+    /// @param dpiScale 当前窗口 DPI 缩放。
+    /// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
+    /// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
+    /// 仅在目标时间变化时发布 Seek。
+    std::optional<double> handleDensitySeekInteraction(const ImVec2& canvasPos,
+                                                       const ImVec2& canvasSize,
+                                                       float reservedWidth,
+                                                       float dpiScale);
+
     /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
     struct LastMouseCommand {
         /// @brief 是否已经记录过一次鼠标命令。
@@ -161,7 +187,7 @@ private:
     ///@brief 图集 UV 缓存
     std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
 
-    // --- Vulkan devices ---
+    // --- Vulkan 设备 ---
     vk::PhysicalDevice m_physicalDevice{ nullptr };
     vk::Device         m_logicalDevice{ nullptr };
     vk::CommandPool    m_cmdPool{ nullptr };
@@ -181,6 +207,12 @@ private:
 
     /// @brief 上一次发送给逻辑线程的鼠标状态。
     LastMouseCommand m_lastMouseCommand;
+
+    /// @brief 上一帧密度栏是否处于拖动激活状态。
+    bool m_wasDensitySeekActive{ false };
+
+    /// @brief 上一次已发布的密度栏目标时间，用于过滤静止拖动帧。
+    double m_lastDensitySeekTime{ 0.0 };
 };
 
 }  // namespace MMM::Canvas

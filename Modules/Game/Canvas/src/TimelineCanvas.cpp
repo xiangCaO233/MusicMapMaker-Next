@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <optional>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -95,23 +96,34 @@ void renderPlaybackSpeedTooltip(float speedValue)
 /// @brief 处理 Timeline 窗格上的修饰键滚轮操作。
 /// @param timelineId Timeline 对应的画布 ID，用于隔离 Alt 滚轮累积量。
 /// @param wheel 当前帧滚轮增量。
-/// @param isCtrlPressed Ctrl 是否按下。
+/// @param isCommandPressed Ctrl 或 Command 是否按下。
 /// @param isAltPressed Alt 是否按下。
 /// @param isShiftPressed Shift 是否按下。
 /// @param speedTooltipValue 输出速度提示窗口需要显示的速度倍率。
 /// @param speedTooltipTimer 输出速度提示窗口剩余显示时间。
 /// @return 已处理修饰滚轮时返回 true。
-/// @warning UI 热路径：Timeline 悬停滚轮时调用；只读取输入状态并发布轻量命令。
+/// @warning UI 热路径：Timeline 悬停滚轮时调用；会按播放配置短暂锁定
+/// SessionRegistry，并发布轻量命令。
 bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
-                                 bool isCtrlPressed, bool isAltPressed,
+                                 bool isCommandPressed, bool isAltPressed,
                                  bool isShiftPressed, float& speedTooltipValue,
                                  float& speedTooltipTimer)
 {
-    if ( !isCtrlPressed && !isAltPressed ) {
+    if ( std::abs(wheel) <= 0.01f || (!isCommandPressed && !isAltPressed) ) {
         return false;
     }
 
-    if ( isCtrlPressed && isAltPressed ) {
+    const bool shouldPlayAdjustmentFeedback =
+        Logic::EditorEngine::instance()
+            .getEditorConfig()
+            .settings.stopPlaybackOnScroll;
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdScroll{ timelineId,
+                          0.0f,
+                          false,
+                          Logic::ScrollCommandIntent::ModifierAdjustment }));
+
+    if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
         double                          currentSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
@@ -138,24 +150,34 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             speedTooltipValue = static_cast<float>(newSpeed);
             speedTooltipTimer = 2.0f;
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
 
-    if ( isCtrlPressed ) {
+    if ( isCommandPressed ) {
         auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
         float step      = 0.1f;
         if ( isShiftPressed ) {
             step *= editorCfg.settings.scrollSpeedMultiplier;
         }
-        editorCfg.visual.timelineZoom += wheel * step;
-        editorCfg.visual.timelineZoom =
-            std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        const float currentZoom = editorCfg.visual.timelineZoom;
+        const float newZoom =
+            std::clamp(currentZoom + wheel * step, 0.1f, 10.0f);
+        if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
+            editorCfg.visual.timelineZoom = newZoom;
+            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
+        }
         return true;
     }
 
-    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    auto      editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    const int originalDivisor = editorCfg.settings.beatDivisor;
     static std::unordered_map<std::string, float> wheelAccumulator;
     float& acc = wheelAccumulator[timelineId];
     acc += wheel;
@@ -196,8 +218,30 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
 
     editorCfg.settings.beatDivisor =
         std::clamp(editorCfg.settings.beatDivisor, 1, 64);
-    Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+    if ( editorCfg.settings.beatDivisor != originalDivisor ) {
+        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        if ( shouldPlayAdjustmentFeedback ) {
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
+        }
+    }
     return true;
+}
+
+/// @brief 根据齿轮颜色选择具有稳定对比度的中性底板颜色。
+/// @param gearColor 齿轮文字颜色。
+/// @param hovered 齿轮当前是否悬浮。
+/// @return 对比色底板的 ImGui 打包颜色。
+/// @warning UI 热路径：每个可见齿轮每帧调用，只执行常量算术。
+ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
+{
+    const float luminance = 0.2126f * gearColor.x * gearColor.x +
+                            0.7152f * gearColor.y * gearColor.y +
+                            0.0722f * gearColor.z * gearColor.z;
+    const int   alpha     = hovered ? 242 : 218;
+    if ( luminance < 0.18f ) {
+        return IM_COL32(248, 250, 255, alpha);
+    }
+    return IM_COL32(8, 11, 18, alpha);
 }
 
 /// @brief Timeline 画布齿轮按钮的类型信息
@@ -269,6 +313,7 @@ uint64_t timelineMarkerKey(uint32_t indexOffset, uint32_t indexCount)
     return (static_cast<uint64_t>(indexOffset) << 32U) |
            static_cast<uint64_t>(indexCount);
 }
+
 }  // namespace
 
 TimelineCanvas::TimelineCanvas(
@@ -283,6 +328,10 @@ TimelineCanvas::TimelineCanvas(
     m_targetHeight = h;
 }
 
+/// @brief 更新 Timeline 窗口、画布交互与叠加控件。
+/// @param sourceManager UI 管理器。
+/// @warning UI 热路径：窗口可见时每帧调用，只做绘制和输入处理。
+/// 禁止引入文件系统访问、阻塞操作或全量排序。
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
     auto& appConfig      = Config::AppConfig::instance();
@@ -335,12 +384,12 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImGui::BeginGroup();
 
             ImVec2 sliderSize(sliderWidth, sliderHeight);
-            if ( ImGui::VSliderFloat("##AudioTimeSlider",
-                                     sliderSize,
-                                     &time,
-                                     0.0f,
-                                     total,
-                                     "") ) {
+            if ( ::MMM::UI::FeedbackVSliderFloat("##AudioTimeSlider",
+                                                 sliderSize,
+                                                 &time,
+                                                 0.0f,
+                                                 total,
+                                                 "") ) {
                 float  visualOffset = Config::AppConfig::instance()
                                           .getVisualConfig()
                                           .getEffectiveVisualOffset();
@@ -383,13 +432,24 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( texID != VK_NULL_HANDLE ) {
             ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
 
-            bool           isHovered = ImGui::IsItemHovered();
-            const ImGuiIO& io        = ImGui::GetIO();
-            float          wheel     = io.MouseWheel;
+            ImVec2 canvasPos = ImGui::GetItemRectMin();
+            ImVec2 mousePos  = ImGui::GetMousePos();
+            bool   isHovered =
+                ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+                (ImGui::IsWindowHovered(
+                     ImGuiHoveredFlags_RootAndChildWindows |
+                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                 mousePos.x >= canvasPos.x &&
+                 mousePos.x <= canvasPos.x + size.x &&
+                 mousePos.y >= canvasPos.y &&
+                 mousePos.y <= canvasPos.y + size.y);
+            const ImGuiIO& io    = ImGui::GetIO();
+            float          wheel = io.MouseWheel;
             if ( isHovered && std::abs(wheel) > 0.01f ) {
                 if ( !handleTimelineModifierWheel(m_name,
                                                   wheel,
-                                                  io.KeyCtrl,
+                                                  io.KeyCtrl || io.KeySuper,
                                                   io.KeyAlt,
                                                   io.KeyShift,
                                                   m_speedTooltipValue,
@@ -401,9 +461,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
 
             // 3. 处理 Timeline Timing 的工具交互和反馈
-            ImVec2 canvasPos = ImGui::GetItemRectMin();
-            ImVec2 mousePos  = ImGui::GetMousePos();
-            bool   windowFocused =
+            bool windowFocused =
                 ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
             const bool timelineMouseClicked =
@@ -587,16 +645,21 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 m_isTimingDrawPreviewing = false;
                 m_isTimingDragging       = false;
                 m_isTimingErasing        = false;
+                m_shouldFocusNextFrame   = false;
                 m_timingEraseTargetEntities.clear();
-                ImGui::OpenPopup("TimelineEventEditor");
+                ::MMM::UI::FeedbackOpenPopup("TimelineEventEditor");
             };
 
+            const bool inlineGearCanOpenEditor =
+                Logic::EditorEngine::instance().getCurrentTool() ==
+                Logic::EditTool::Draw;
             const bool showInlineTimingEditors =
-                isHovered && !overMenuButton && m_currentSnapshot->hasBeatmap &&
-                !m_isTimingDragging && !m_isTimingErasing &&
-                !m_isTimingDrawPreviewing && !m_isPopupOpen &&
-                !m_isCreatePopupOpen;
+                inlineGearCanOpenEditor && isHovered && !overMenuButton &&
+                m_currentSnapshot->hasBeatmap && !m_isTimingDragging &&
+                !m_isTimingErasing && !m_isTimingDrawPreviewing &&
+                !m_isPopupOpen && !m_isCreatePopupOpen;
             std::optional<InlineGearHit> inlineGearHit;
+            bool                         inlineGearEditorOpened = false;
             if ( showInlineTimingEditors ) {
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     if ( !isNearInlineGearTime(el) ) continue;
@@ -630,15 +693,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     if ( inlineGearHit ) break;
                 }
             }
-            if ( inlineGearHit &&
+            if ( inlineGearCanOpenEditor && inlineGearHit &&
                  ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
                 openInlineGearEditor(*inlineGearHit);
+                inlineGearEditorOpened = true;
             }
 
-            handleTimingCanvasInteraction(canvasPos,
-                                          size,
-                                          isHovered && !inlineGearHit,
-                                          hasTimingInteractionFocus);
+            handleTimingCanvasInteraction(
+                canvasPos, size, isHovered, hasTimingInteractionFocus);
             refreshTimelineInteractionDecoration(size);
             if ( editorSettings.timelineProfessionalMode ) {
                 renderProfessionalTimelineOverlay(canvasPos, size);
@@ -670,20 +732,46 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                         gear.label,
                                         el.time,
                                         static_cast<uint32_t>(entity));
+                        const std::string buttonId =
+                            "##TimelineInlineGear_" + id;
                         ImGui::SetNextItemAllowOverlap();
-                        if ( ImGui::InvisibleButton(
-                                 ("##TimelineInlineGear_" + id).c_str(),
-                                 ImVec2(iconSize, iconSize)) ) {
+                        const bool gearClicked = ImGui::InvisibleButton(
+                            buttonId.c_str(), ImVec2(iconSize, iconSize));
+                        ::MMM::UI::FeedbackLastItem(
+                            ImGui::GetID(buttonId.c_str()), gearClicked);
+                        if ( inlineGearCanOpenEditor && gearClicked &&
+                             !inlineGearEditorOpened ) {
                             openInlineGearEditor(
                                 InlineGearHit{ entity,
                                                el.time,
                                                el.*(gear.value),
                                                gear.editType,
                                                gear.label });
+                            inlineGearEditorOpened = true;
                         }
 
-                        const ImVec2 buttonMin = ImGui::GetItemRectMin();
-                        ImGui::GetWindowDrawList()->AddText(
+                        const bool   gearHovered  = ImGui::IsItemHovered();
+                        const ImVec2 buttonMin    = ImGui::GetItemRectMin();
+                        const ImVec2 buttonMax    = ImGui::GetItemRectMax();
+                        ImDrawList*  drawList     = ImGui::GetWindowDrawList();
+                        const float  gearRounding = iconSize * 0.25f;
+                        const ImU32  gearBackground =
+                            timelineGearBackgroundColor(gear.color,
+                                                        gearHovered);
+                        ImVec4 gearBorderColor = gear.color;
+                        gearBorderColor.w      = gearHovered ? 1.0f : 0.82f;
+
+                        // 对比色底板隔离底层同色 glow，确保齿轮轮廓始终清晰。
+                        drawList->AddRectFilled(
+                            buttonMin, buttonMax, gearBackground, gearRounding);
+                        drawList->AddRect(
+                            buttonMin,
+                            buttonMax,
+                            ImGui::ColorConvertFloat4ToU32(gearBorderColor),
+                            gearRounding,
+                            0,
+                            gearHovered ? 2.0f : 1.0f);
+                        drawList->AddText(
                             ImVec2(buttonMin.x +
                                        (iconSize - gearGlyphSize.x) * 0.5f,
                                    buttonMin.y +
@@ -691,7 +779,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             ImGui::ColorConvertFloat4ToU32(gear.color),
                             UI::ICON_MMM_COG);
 
-                        if ( ImGui::IsItemHovered() ) {
+                        if ( gearHovered ) {
                             const auto timeText =
                                 formatCanvasTime(el.time, m_currentSnapshot);
                             ImGui::SetTooltip(
@@ -715,7 +803,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
             UI::Utils::pushFixedButtonStyleVars();
-            if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton(UI::ICON_MMM_BARS,
+                                           ImVec2(30.0f, 30.0f)) ) {
                 ImGui::OpenPopup("TimelineOptionsMenu");
             }
             UI::Utils::popFixedButtonStyleVars();
@@ -729,17 +818,20 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             if ( ImGui::BeginPopup("TimelineOptionsMenu") ) {
                 const bool professionalMode =
                     editorSettings.timelineProfessionalMode;
-                if ( ImGui::MenuItem(
+                if ( ::MMM::UI::FeedbackMenuItem(
                          TR("ui.timeline.menu.professional_mode").data(),
                          nullptr,
                          professionalMode) ) {
                     editorSettings.timelineProfessionalMode = !professionalMode;
                     appConfig.save();
                 }
-                if ( ImGui::MenuItem(
+                if ( ::MMM::UI::FeedbackMenuItem(
                          TR("ui.timeline.menu.open_timing_table").data(),
                          nullptr,
                          m_isTableWindowOpen) ) {
+                    if ( !m_isTableWindowOpen ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
+                    }
                     m_isTableWindowOpen = true;
                 }
                 ImGui::EndPopup();
@@ -1211,8 +1303,10 @@ std::vector<std::string> TimelineCanvas::getShaderSources(
         Config::SkinManager::instance().getCanvasConfig("Basic2DCanvas");
     auto it = canvas_config.canvas_shader_modules.find(shader_name);
     if ( it != canvas_config.canvas_shader_modules.end() ) {
-        auto path = it->second;
-        if ( !std::filesystem::exists(path) ) {
+        auto            path = it->second;
+        std::error_code shaderPathError;
+        if ( !std::filesystem::exists(path, shaderPathError) ||
+             shaderPathError ) {
             XWARN("Timeline shader module {} not defined.", shader_name);
             return {};
         }
@@ -1223,7 +1317,8 @@ std::vector<std::string> TimelineCanvas::getShaderSources(
             Config::pathToUtf8(path / "FragmentShader.spv"));
 
         if ( auto geometryShaderPath = path / "GeometryShader.spv";
-             std::filesystem::exists(geometryShaderPath) ) {
+             std::filesystem::exists(geometryShaderPath, shaderPathError) &&
+             !shaderPathError ) {
             m_shaderSourceCache[shader_name] = { vertexShaderSource,
                                                  Graphic::VKShader::readFile(
                                                      Config::pathToUtf8(

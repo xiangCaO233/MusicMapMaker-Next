@@ -18,6 +18,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -397,7 +398,7 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 /// @param scrolled 输出是否需要执行自动滚动。
 /// @return 自动滚动后的显示时间，单位秒。
 /// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
-/// @param isAccelerated Whether Shift acceleration should be applied.
+/// @param isAccelerated 是否应用 Shift 加速。
 double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
                                    float viewportHeight, float mouseY,
                                    float deltaTime, bool isAccelerated,
@@ -447,7 +448,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -519,7 +520,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -593,18 +594,34 @@ Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 
 /// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
 bool Basic2DCanvasInteraction::shouldSendContinuousEditCommand(
-    LastContinuousEditCommand& last, glm::vec2 pos, bool primaryModifier,
+    LastContinuousEditCommand& last, glm::vec2 pos,
+    const Logic::RenderSnapshot& snapshot, bool primaryModifier,
     bool secondaryModifier)
 {
-    const bool shouldSend =
+    constexpr double visualTimeEpsilon  = 1e-6;
+    constexpr float  renderScaleEpsilon = 1e-5f;
+    const bool       shouldSend =
         !last.valid ||
         std::abs(last.pos.x - pos.x) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
         std::abs(last.pos.y - pos.y) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        std::abs(last.visualTime - snapshot.currentTime) > visualTimeEpsilon ||
+        std::abs(last.visibleTimeStart - snapshot.visibleTimeStart) >
+            visualTimeEpsilon ||
+        std::abs(last.visibleTimeEnd - snapshot.visibleTimeEnd) >
+            visualTimeEpsilon ||
+        std::abs(last.renderScaleY - snapshot.renderScaleY) >
+            renderScaleEpsilon ||
+        last.beatDivisor != snapshot.currentBeatDivisor ||
         last.primaryModifier != primaryModifier ||
         last.secondaryModifier != secondaryModifier;
     if ( shouldSend ) {
         last.valid             = true;
         last.pos               = pos;
+        last.visualTime        = snapshot.currentTime;
+        last.visibleTimeStart  = snapshot.visibleTimeStart;
+        last.visibleTimeEnd    = snapshot.visibleTimeEnd;
+        last.renderScaleY      = snapshot.renderScaleY;
+        last.beatDivisor       = snapshot.currentBeatDivisor;
         last.primaryModifier   = primaryModifier;
         last.secondaryModifier = secondaryModifier;
     }
@@ -618,6 +635,7 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
     m_lastBrushUpdateCommand.valid   = false;
     m_lastMoveUpdateCommand.valid    = false;
     m_lastEraseUpdateCommand.valid   = false;
+    m_rightEraseActive               = false;
 }
 
 void Basic2DCanvasInteraction::update(
@@ -634,25 +652,40 @@ void Basic2DCanvasInteraction::update(
     updateTransientUi();
 }
 
-/// @brief 处理活动主画布上的 Ctrl/Alt 修饰键滚轮。
+/// @brief 处理活动主画布上的 Ctrl/Command/Alt 修饰键滚轮。
 bool Basic2DCanvasInteraction::handleModifierWheel(
-    const Logic::RenderSnapshot* currentSnapshot)
+    const Logic::RenderSnapshot* currentSnapshot, bool allowSelectionScroll)
 {
     if ( !currentSnapshot ) {
         return false;
     }
 
-    const auto& io    = ImGui::GetIO();
-    const float wheel = io.MouseWheel;
-    if ( std::abs(wheel) <= 0.01f || (!io.KeyCtrl && !io.KeyAlt) ) {
+    const auto& io               = ImGui::GetIO();
+    const float wheel            = io.MouseWheel;
+    const bool  isCommandPressed = io.KeyCtrl || io.KeySuper;
+    if ( std::abs(wheel) <= 0.01f || (!isCommandPressed && !io.KeyAlt) ) {
         return false;
     }
 
-    const bool isCtrlPressed  = io.KeyCtrl;
     const bool isAltPressed   = io.KeyAlt;
     const bool isShiftPressed = io.KeyShift;
+    auto&      engine         = Logic::EditorEngine::instance();
+    const bool shouldPlayAdjustmentFeedback =
+        engine.getEditorConfig().settings.stopPlaybackOnScroll;
+    const bool scrollsActiveSelection =
+        allowSelectionScroll && isCommandPressed && !isAltPressed &&
+        currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+        currentSnapshot->isSelecting;
+    if ( !scrollsActiveSelection ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdScroll{
+                m_cameraId,
+                0.0f,
+                false,
+                Logic::ScrollCommandIntent::ModifierAdjustment }));
+    }
 
-    if ( isCtrlPressed && isAltPressed ) {
+    if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
         double                          currentSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
@@ -679,29 +712,38 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             m_speedTooltipValue = static_cast<float>(newSpeed);
             m_speedTooltipTimer = 2.0f;
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
 
-    if ( isCtrlPressed ) {
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
-             currentSnapshot->isSelecting ) {
+    if ( isCommandPressed ) {
+        if ( scrollsActiveSelection ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
         } else {
-            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            auto  editorCfg = engine.getEditorConfig();
             float step      = 0.1f;
             if ( isShiftPressed )
                 step *= editorCfg.settings.scrollSpeedMultiplier;
-            editorCfg.visual.timelineZoom += wheel * step;
-            editorCfg.visual.timelineZoom =
-                std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            const float currentZoom = editorCfg.visual.timelineZoom;
+            const float newZoom =
+                std::clamp(currentZoom + wheel * step, 0.1f, 10.0f);
+            if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
+                editorCfg.visual.timelineZoom = newZoom;
+                engine.setEditorConfig(editorCfg);
+                if ( shouldPlayAdjustmentFeedback ) {
+                    ::MMM::UI::PlayInteractionMouseUpFeedback();
+                }
+            }
         }
         return true;
     }
 
-    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    auto      editorCfg       = engine.getEditorConfig();
+    const int originalDivisor = editorCfg.settings.beatDivisor;
 
     static std::unordered_map<std::string, float> wheelAccumulator;
     float& acc = wheelAccumulator[m_cameraId];
@@ -741,7 +783,12 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         }
         editorCfg.settings.beatDivisor =
             std::clamp(editorCfg.settings.beatDivisor, 1, 64);
-        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        if ( editorCfg.settings.beatDivisor != originalDivisor ) {
+            engine.setEditorConfig(editorCfg);
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
+        }
     }
 
     return true;
@@ -848,13 +895,15 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                      ext == ".mmm" ) {
                     XINFO("Auto-loading beatmap from drop: {}",
                           Config::pathToUtf8(p.filename()));
-                    try {
+                    auto loadedMap = MMM::BeatMap::loadFromFile(p);
+                    if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
+                        XERROR("Failed to load dropped beatmap: {}",
+                               Config::pathToUtf8(p));
+                    } else {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                            MMM::BeatMap::loadFromFile(p));
+                            std::move(loadedMap));
                         Logic::EditorEngine::instance().createSession(
                             loadedBeatmap, Config::pathToUtf8(p.filename()));
-                    } catch ( const std::exception& e ) {
-                        XERROR("Failed to load dropped beatmap: {}", e.what());
                     }
                 }
             }
@@ -906,7 +955,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
 /// @param targetHeight 画布高度。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
@@ -917,7 +966,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -987,8 +1036,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
@@ -1392,6 +1441,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 shouldSendContinuousEditCommand(
                     m_lastMarqueeUpdateCommand,
                     { localMousePos.x, localMousePos.y },
+                    *currentSnapshot,
                     ImGui::GetIO().KeyCtrl,
                     false) ||
                 autoScrolled || playbackScrolled;
@@ -1400,13 +1450,20 @@ void Basic2DCanvasInteraction::handleInteractions(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
                         localMousePos.x, localMousePos.y }));
             }
-        } else if ( m_leftPressStartedOnCanvas && !currentSnapshot->isPlaying &&
-                    currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Draw &&
+                    (!currentSnapshot->isPlaying ||
+                     currentSnapshot->brush.isActive) ) {
+            const bool playbackScrolled = currentSnapshot->hasBeatmap &&
+                                          currentSnapshot->isPlaying &&
+                                          currentSnapshot->brush.isActive;
             if ( shouldSendContinuousEditCommand(
                      m_lastBrushUpdateCommand,
                      { localMousePos.x, localMousePos.y },
+                     *currentSnapshot,
                      ImGui::GetIO().KeyShift,
-                     ImGui::GetIO().KeyCtrl) ) {
+                     ImGui::GetIO().KeyCtrl) ||
+                 playbackScrolled ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateBrush{ m_cameraId,
                                            localMousePos.x,
@@ -1422,6 +1479,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 shouldSendContinuousEditCommand(
                     m_lastMoveUpdateCommand,
                     { localMousePos.x, localMousePos.y },
+                    *currentSnapshot,
                     ImGui::GetIO().KeyCtrl,
                     false) ||
                 playbackScrolled;
@@ -1508,18 +1566,24 @@ void Basic2DCanvasInteraction::handleInteractions(
         resetContinuousEditCommands();
     }
 
+    const bool ctrlRightRemoveMarquee =
+        isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl;
+
     // --- 右键交互：画笔工具下为擦除 ---
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
         if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
-             isHovered ) {
+             isHovered && !ctrlRightRemoveMarquee ) {
             m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = true;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
-        if ( !currentSnapshot->isPlaying && ImGui::IsMouseDragging(1) ) {
+        if ( m_rightEraseActive && !currentSnapshot->isPlaying &&
+             ImGui::IsMouseDragging(1) ) {
             if ( shouldSendContinuousEditCommand(
                      m_lastEraseUpdateCommand,
                      { localMousePos.x, localMousePos.y },
+                     *currentSnapshot,
                      ImGui::GetIO().KeyShift,
                      false) ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -1529,15 +1593,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            ImGui::GetIO().KeyShift }));
             }
         }
-        if ( ImGui::IsMouseReleased(1) ) {
+        if ( m_rightEraseActive && ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = false;
         }
     }
 
     // --- Ctrl+右键：移除框选框（全局可用） ---
-    if ( isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
+    if ( ctrlRightRemoveMarquee ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRemoveMarqueeAt{
                 m_cameraId, localMousePos.x, localMousePos.y }));
@@ -1546,14 +1611,21 @@ void Basic2DCanvasInteraction::handleInteractions(
     // --- 交互：鼠标滚轮控制时间跳转与属性修改 ---
     const auto& io    = ImGui::GetIO();
     float       wheel = io.MouseWheel;
-    if ( isHovered && std::abs(wheel) > 0.01f ) {
+    const bool  isModifierWheelHovered =
+        isInsideCanvas && (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
+        !ImGui::IsAnyMouseDown() &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    if ( (isHovered || isModifierWheelHovered) && std::abs(wheel) > 0.01f ) {
         if ( !handleModifierWheel(currentSnapshot) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, io.KeyShift }));
 
-            if ( !currentSnapshot->isPlaying &&
-                 currentSnapshot->currentTool == Logic::EditTool::Draw &&
-                 ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            const bool canUpdateActiveBrush =
+                currentSnapshot->currentTool == Logic::EditTool::Draw &&
+                ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                (!currentSnapshot->isPlaying ||
+                 currentSnapshot->brush.isActive);
+            if ( canUpdateActiveBrush ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateBrush{ m_cameraId,
                                            localMousePos.x,

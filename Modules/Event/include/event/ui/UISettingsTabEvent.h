@@ -1,4 +1,3 @@
-// event/ui/UISettingsTabEvent.h
 #pragma once
 #include "event/ui/UIEvent.h"
 

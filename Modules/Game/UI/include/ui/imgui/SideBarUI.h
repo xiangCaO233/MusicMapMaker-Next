@@ -6,12 +6,34 @@
 #include "imgui.h"
 #include "ui/IUIView.h"
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <memory>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
 namespace MMM::UI
 {
+
+/// @brief 无异常解析侧边栏布局浮点配置。
+/// @param value 配置字符串。
+/// @param fallback 解析失败时的默认值。
+/// @return 解析成功的有限浮点数或默认值。
+static float parseSidebarLayoutFloat(std::string_view value, float fallback)
+{
+    if ( value.empty() ) return fallback;
+
+    float      parsed = fallback;
+    const auto result =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+         std::isfinite(parsed) && parsed > 0.0f ) {
+        return parsed;
+    }
+    return fallback;
+}
 
 enum class SideBarTab {
     None,             // 无选中
@@ -105,8 +127,7 @@ public:
     {
         Config::SkinManager& skinCfg = Config::SkinManager::instance();
         std::string sidebarBaseWStr = skinCfg.getLayoutConfig("side_bar.width");
-        float       sidebarBaseW =
-            sidebarBaseWStr.empty() ? 32.0f : std::stof(sidebarBaseWStr);
+        float sidebarBaseW = parseSidebarLayoutFloat(sidebarBaseWStr, 32.0f);
 
         float iconAreaW = std::floor(sidebarBaseW * dpiScale);
         if ( !Config::AppConfig::instance()

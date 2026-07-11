@@ -36,6 +36,15 @@ public:
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
 
+    /// @brief 处理当前鼠标所在主画布上的 Ctrl/Command/Alt 修饰键滚轮。
+    /// @param currentSnapshot 当前渲染快照。
+    /// @param allowSelectionScroll 是否允许 Ctrl 滚轮移动活动框选。
+    /// @return 本帧滚轮已被修饰键命令消费时返回 true。
+    /// @warning UI 输入路径：仅在滚轮事件发生时调用；可能发布逻辑命令或广播
+    /// 编辑器配置更新，禁止放入无条件每帧路径。
+    bool handleModifierWheel(const Logic::RenderSnapshot* currentSnapshot,
+                             bool allowSelectionScroll = true);
+
 private:
     struct PendingDrop {
         std::vector<std::string> paths;
@@ -64,6 +73,16 @@ private:
         bool valid{ false };
         /// @brief 上一次发送的本地鼠标坐标。
         glm::vec2 pos{ 0.0f, 0.0f };
+        /// @brief 上一次发送时的画布视觉时间。
+        double visualTime{ 0.0 };
+        /// @brief 上一次发送时的可见时间范围起点。
+        double visibleTimeStart{ 0.0 };
+        /// @brief 上一次发送时的可见时间范围终点。
+        double visibleTimeEnd{ 0.0 };
+        /// @brief 上一次发送时的垂直渲染缩放。
+        float renderScaleY{ 1.0f };
+        /// @brief 上一次发送时的分拍吸附分母。
+        int beatDivisor{ 4 };
         /// @brief 上一次发送时的主修饰键状态。
         bool primaryModifier{ false };
         /// @brief 上一次发送时的副修饰键状态。
@@ -79,21 +98,18 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
-    /// @brief 处理活动主画布窗口内容区上的 Ctrl/Alt 修饰键滚轮。
-    /// @param currentSnapshot 当前渲染快照。
-    /// @return 本帧滚轮已被修饰键命令消费时返回 true。
-    /// @warning UI 热路径：活动画布完整交互调用；只读取 ImGui
-    /// 输入状态并发送轻量命令。
-    bool handleModifierWheel(const Logic::RenderSnapshot* currentSnapshot);
     /// @brief 判断连续拖动编辑命令是否需要发送，并在需要时更新缓存。
     /// @param last 上一次发送的拖动编辑命令状态。
     /// @param pos 当前本地鼠标坐标。
+    /// @param snapshot 当前渲染快照。
     /// @param primaryModifier 当前主修饰键状态。
     /// @param secondaryModifier 当前副修饰键状态。
     /// @return 需要发送命令时返回 true。
     /// @warning UI 热路径：拖动编辑期间每帧调用；只做常量级数值比较。
-    bool shouldSendContinuousEditCommand(LastContinuousEditCommand& last,
-                                         glm::vec2 pos, bool primaryModifier,
+    bool shouldSendContinuousEditCommand(LastContinuousEditCommand&   last,
+                                         glm::vec2                    pos,
+                                         const Logic::RenderSnapshot& snapshot,
+                                         bool primaryModifier,
                                          bool secondaryModifier);
     /// @brief 清空同一左键手势下的连续拖动编辑命令缓存。
     void resetContinuousEditCommands();
@@ -134,6 +150,8 @@ private:
     float m_canvasPanAnchorMouseY{ 0.0f };
     /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
     std::unordered_set<entt::entity> m_colorStrokeEntities;
+    /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。
+    bool m_rightEraseActive{ false };
     /// @brief 上一次发送的框选拖动更新。
     LastContinuousEditCommand m_lastMarqueeUpdateCommand;
     /// @brief 上一次发送的绘制笔刷拖动更新。

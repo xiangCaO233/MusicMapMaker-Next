@@ -403,7 +403,13 @@ private:
     /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
     ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
-    std::string  m_tableBeatmapKey;
+    std::string m_tableBeatmapKey;
+    /// @brief 下一帧表格是否需要滚动到当前判定线时间附近。
+    bool m_tableScrollToCurrentTimePending{ false };
+    /// @brief 表格待滚动定位的目标时间，单位秒。
+    double m_tableScrollTargetTime{ 0.0 };
+    /// @brief 时间点表格 Shift 连续选择使用的锚点实体。
+    entt::entity m_tableSelectionAnchorEntity{ entt::null };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
@@ -415,10 +421,10 @@ private:
     double m_createTimeSnapped{ 0.0 };
     double m_createTimeManual{ 0.0 };
     double m_createValue{ 120.0 };
-    int    m_createType{ 0 };     ///< @brief 0: BPM, 1: Scroll, 2: Jump, 3: HS
-    int    m_createPosType{ 0 };  // 0: Click, 1: Current
-    bool   m_isTimeSnapped{ false };
-    bool   m_keepSpeedOnBpmChange{ false };
+    int  m_createType{ 0 };  ///< @brief 0 为 BPM，1 为滚动，2 为跳转，3 为 HS。
+    int  m_createPosType{ 0 };  // 0: Click, 1: Current
+    bool m_isTimeSnapped{ false };
+    bool m_keepSpeedOnBpmChange{ false };
 
     /// @brief 最近一次新建 Timing 的目标时间（秒），用于表格高亮定位
     double m_lastCreatedTimingTime{ -1.0 };
@@ -474,10 +480,10 @@ private:
     /// @brief Timeline 框选终点 Y 坐标。
     float m_timingMarqueeEndY{ 0.0f };
 
-    /// @brief Timeline marquee start display time in seconds.
+    /// @brief Timeline 框选起点显示时间，单位秒。
     double m_timingMarqueeStartTime{ 0.0 };
 
-    /// @brief Timeline marquee end display time in seconds.
+    /// @brief Timeline 框选终点显示时间，单位秒。
     double m_timingMarqueeEndTime{ 0.0 };
 
     /// @brief Timeline 框选起点 X 坐标。

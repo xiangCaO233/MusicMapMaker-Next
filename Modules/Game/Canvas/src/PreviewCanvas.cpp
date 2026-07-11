@@ -1,4 +1,5 @@
 #include "canvas/PreviewCanvas.h"
+#include "canvas/PreviewDensityInteraction.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -18,10 +19,79 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <system_error>
 #include <utility>
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief 预览密度栏期望宽度，单位为 DPI 缩放前逻辑像素。
+constexpr float PREVIEW_DENSITY_WIDTH = 36.0f;
+
+/// @brief 预览画布与密度栏之间的间隔，单位为 DPI 缩放前逻辑像素。
+constexpr float PREVIEW_DENSITY_GAP = 4.0f;
+
+/// @brief 窄窗口中仍需保留的最小预览画布宽度。
+constexpr float PREVIEW_MIN_CANVAS_WIDTH = 48.0f;
+
+/// @brief 密度栏外框与内部时间轴的屏幕布局。
+struct PreviewDensityRailLayout {
+    /// @brief 密度栏外框左上角。
+    ImVec2 railMin{ 0.0f, 0.0f };
+
+    /// @brief 密度栏外框右下角。
+    ImVec2 railMax{ 0.0f, 0.0f };
+
+    /// @brief 密度时间轴绘制区域左上角。
+    ImVec2 innerMin{ 0.0f, 0.0f };
+
+    /// @brief 密度时间轴绘制区域右下角。
+    ImVec2 innerMax{ 0.0f, 0.0f };
+
+    /// @brief 当前布局是否足够容纳绘制和交互。
+    bool valid{ false };
+};
+
+/// @brief 计算预览画布右侧密度栏布局。
+/// @param canvasPos 预览画布左上角屏幕坐标。
+/// @param canvasSize 预览画布尺寸。
+/// @param reservedWidth 为密度栏预留的总宽度。
+/// @param dpiScale 当前窗口 DPI 缩放。
+/// @return 可供绘制和命中测试共用的密度栏布局。
+/// @warning UI 热路径纯计算：每帧调用，不得引入分配或阻塞操作。
+PreviewDensityRailLayout calculatePreviewDensityRailLayout(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale)
+{
+    PreviewDensityRailLayout layout;
+    if ( reservedWidth <= 1.0f || canvasSize.y <= 1.0f ) {
+        return layout;
+    }
+
+    const float gap =
+        std::min(reservedWidth * 0.25f,
+                 std::max(1.0f, std::floor(PREVIEW_DENSITY_GAP * dpiScale)));
+    layout.railMin = { canvasPos.x + canvasSize.x + gap, canvasPos.y };
+    layout.railMax = { canvasPos.x + canvasSize.x + reservedWidth,
+                       canvasPos.y + canvasSize.y };
+    if ( layout.railMax.x - layout.railMin.x <= 1.0f ) {
+        return layout;
+    }
+
+    const float innerPadding =
+        std::min(std::floor(2.0f * dpiScale),
+                 std::max(0.0f, (layout.railMax.x - layout.railMin.x) * 0.2f));
+    layout.innerMin = { layout.railMin.x + innerPadding,
+                        layout.railMin.y + innerPadding };
+    layout.innerMax = { layout.railMax.x - innerPadding,
+                        layout.railMax.y - innerPadding };
+    layout.valid    = layout.innerMax.x - layout.innerMin.x > 0.0f &&
+                      layout.innerMax.y - layout.innerMin.y > 0.0f;
+    return layout;
+}
+}  // namespace
+
 PreviewCanvas::PreviewCanvas(
     const std::string& name, uint32_t w, uint32_t h,
     std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer)
@@ -34,6 +104,197 @@ PreviewCanvas::PreviewCanvas(
     m_targetHeight = h;
 }
 
+/// @brief 绘制预览窗口右侧独立的全谱物件密度栏。
+/// @param canvasPos 预览画布内容左上角屏幕坐标。
+/// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+/// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+/// @param dpiScale 当前窗口 DPI 缩放。
+/// @param seekPreviewTime 当前拖动预览时间；无交互时使用快照播放时间。
+/// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
+/// 遍历、排序、文件访问或共享指针复制。
+void PreviewCanvas::drawDensityOverview(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale, std::optional<double> seekPreviewTime) const
+{
+    const auto layout = calculatePreviewDensityRailLayout(
+        canvasPos, canvasSize, reservedWidth, dpiScale);
+    if ( !layout.valid ) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float rounding =
+        std::clamp(ImGui::GetStyle().FrameRounding,
+                   0.0f,
+                   std::min(layout.railMax.x - layout.railMin.x,
+                            layout.railMax.y - layout.railMin.y) *
+                       0.5f);
+    drawList->AddRectFilled(layout.railMin,
+                            layout.railMax,
+                            ImGui::GetColorU32(ImGuiCol_FrameBg),
+                            rounding);
+    drawList->AddRect(layout.railMin,
+                      layout.railMax,
+                      ImGui::GetColorU32(ImGuiCol_Border),
+                      rounding);
+
+    if ( !m_currentSnapshot ) {
+        return;
+    }
+    const auto& density = m_currentSnapshot->previewDensity;
+    if ( density.counts.empty() || !std::isfinite(density.duration) ||
+         density.duration <= 0.0 || density.maxCount == 0 ) {
+        return;
+    }
+
+    const float innerWidth  = layout.innerMax.x - layout.innerMin.x;
+    const float innerHeight = layout.innerMax.y - layout.innerMin.y;
+
+    const std::size_t displayRowCount = std::min<std::size_t>(
+        density.counts.size(),
+        static_cast<std::size_t>(std::max(1.0f, std::floor(innerHeight))));
+    const double currentTime =
+        seekPreviewTime && std::isfinite(*seekPreviewTime)
+            ? *seekPreviewTime
+            : (std::isfinite(m_currentSnapshot->currentTime)
+                   ? m_currentSnapshot->currentTime
+                   : 0.0);
+    const double progress =
+        std::clamp(currentTime / density.duration, 0.0, 1.0);
+    const std::size_t currentBin =
+        std::min(density.counts.size() - 1,
+                 static_cast<std::size_t>(
+                     progress * static_cast<double>(density.counts.size())));
+    const ImU32 normalColor = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
+    const ImU32 activeColor = ImGui::GetColorU32(ImGuiCol_PlotHistogramHovered);
+    ImVec4      activeBackground =
+        ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogramHovered);
+    activeBackground.w *= 0.24f;
+    const ImU32 activeBackgroundColor = ImGui::GetColorU32(activeBackground);
+
+    for ( std::size_t row = 0; row < displayRowCount; ++row ) {
+        const std::size_t binBegin =
+            row * density.counts.size() / displayRowCount;
+        const std::size_t binEnd = std::max(
+            binBegin + 1, (row + 1) * density.counts.size() / displayRowCount);
+        std::uint32_t rowCount = 0;
+        for ( std::size_t bin = binBegin; bin < binEnd; ++bin ) {
+            rowCount = std::max(rowCount, density.counts[bin]);
+        }
+
+        // 预览画布的未来时间向上，因此时间升序样本需自底向上排列。
+        const std::size_t visualRow = displayRowCount - 1 - row;
+        const float       rowY0 =
+            layout.innerMin.y + innerHeight * static_cast<float>(visualRow) /
+                                    static_cast<float>(displayRowCount);
+        const float rowY1 = layout.innerMin.y +
+                            innerHeight * static_cast<float>(visualRow + 1) /
+                                static_cast<float>(displayRowCount);
+        const bool  isCurrent = currentBin >= binBegin && currentBin < binEnd;
+        if ( isCurrent ) {
+            drawList->AddRectFilled(ImVec2(layout.innerMin.x, rowY0),
+                                    ImVec2(layout.innerMax.x, rowY1),
+                                    activeBackgroundColor);
+        }
+        if ( rowCount == 0 ) {
+            continue;
+        }
+
+        const float normalized =
+            static_cast<float>(rowCount) / static_cast<float>(density.maxCount);
+        const float barWidth      = std::max(1.0f, innerWidth * normalized);
+        const float verticalInset = rowY1 - rowY0 >= 2.0f
+                                        ? std::min(0.5f, (rowY1 - rowY0) * 0.2f)
+                                        : 0.0f;
+        drawList->AddRectFilled(
+            ImVec2(layout.innerMin.x, rowY0 + verticalInset),
+            ImVec2(layout.innerMin.x + barWidth, rowY1 - verticalInset),
+            isCurrent ? activeColor : normalColor);
+    }
+
+    const float currentY =
+        layout.innerMax.y - static_cast<float>(progress) * innerHeight;
+    drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
+                      ImVec2(layout.innerMax.x, currentY),
+                      activeColor,
+                      std::max(1.0f, std::floor(dpiScale)));
+}
+
+/// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
+/// @param canvasPos 预览画布内容左上角屏幕坐标。
+/// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+/// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+/// @param dpiScale 当前窗口 DPI 缩放。
+/// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
+/// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
+/// 仅在目标时间变化时发布 Seek。
+std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale)
+{
+    const auto layout = calculatePreviewDensityRailLayout(
+        canvasPos, canvasSize, reservedWidth, dpiScale);
+    if ( !layout.valid ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const ImVec2 previousCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(layout.railMin);
+    ImGui::InvisibleButton("##PreviewDensitySeek",
+                           ImVec2(layout.railMax.x - layout.railMin.x,
+                                  layout.railMax.y - layout.railMin.y),
+                           ImGuiButtonFlags_MouseButtonLeft);
+    const bool isHovered   = ImGui::IsItemHovered();
+    const bool isActive    = ImGui::IsItemActive();
+    const bool deactivated = ImGui::IsItemDeactivated();
+    ImGui::SetCursorScreenPos(previousCursor);
+
+    if ( !m_currentSnapshot ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+    const double duration = m_currentSnapshot->previewDensity.duration;
+    const ImVec2 mousePos = ImGui::GetMousePos();
+    if ( !std::isfinite(duration) || duration <= 0.0 ||
+         !ImGui::IsMousePosValid(&mousePos) || !std::isfinite(mousePos.y) ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const auto targetTime = previewDensityTimeAtY(
+        mousePos.y, layout.innerMin.y, layout.innerMax.y, duration);
+    if ( !targetTime ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const bool interactionEnded = deactivated && m_wasDensitySeekActive;
+    const bool interactionFrame = isActive || interactionEnded;
+    if ( interactionFrame &&
+         (!m_wasDensitySeekActive ||
+          std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6) ) {
+        const double visualOffset = Config::AppConfig::instance()
+                                        .getVisualConfig()
+                                        .getEffectiveVisualOffset();
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSeek{ *targetTime - visualOffset }));
+        m_lastDensitySeekTime = *targetTime;
+    }
+    m_wasDensitySeekActive = isActive;
+
+    if ( isHovered || interactionFrame ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        const auto timeText =
+            formatCanvasTimePair(*targetTime, duration, m_currentSnapshot);
+        ImGui::SetTooltip("%s", timeText.c_str());
+    }
+    if ( interactionFrame ) {
+        return targetTime;
+    }
+    return std::nullopt;
+}
+
 /// @brief 更新预览画布 ImGui 窗口和鼠标交互。
 /// @warning
 /// 热路径：主渲染线程每帧执行；只发送变化后的鼠标命令，避免每帧重复事件。
@@ -42,6 +303,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showPreviewWindow ) {
+        m_wasDensitySeekActive = false;
         return;
     }
 
@@ -52,16 +314,26 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
+        m_wasDensitySeekActive           = false;
         editorSettings.showPreviewWindow = false;
         appConfig.save();
         return;
     }
-    RenderContext rctx(this, windowName.c_str(), m_targetWidth, m_targetHeight);
+    const float dpiScale = std::max(1.0f, lctx.m_dpiScale);
+    const float requestedDensityReserve =
+        std::floor((PREVIEW_DENSITY_WIDTH + PREVIEW_DENSITY_GAP) * dpiScale);
+    RenderContext rctx(this,
+                       windowName.c_str(),
+                       m_targetWidth,
+                       m_targetHeight,
+                       nullptr,
+                       requestedDensityReserve,
+                       PREVIEW_MIN_CANVAS_WIDTH * dpiScale);
 
     // --- 交互：发送鼠标位置指令给逻辑线程 ---
     ImVec2     mousePos         = ImGui::GetMousePos();
     ImVec2     windowPos        = ImGui::GetCursorScreenPos();
-    ImVec2     contentSize      = ImGui::GetContentRegionAvail();
+    ImVec2     contentSize      = rctx.getRenderSize();
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
@@ -89,8 +361,16 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0) &&
                       clickStartedInContent && ImGui::IsWindowFocused();
 
-    float viewportWidth  = ImGui::GetWindowWidth();
-    float viewportHeight = ImGui::GetWindowHeight();
+    const auto densitySeekPreview = handleDensitySeekInteraction(
+        windowPos, contentSize, rctx.getReservedRightWidth(), dpiScale);
+    drawDensityOverview(windowPos,
+                        contentSize,
+                        rctx.getReservedRightWidth(),
+                        dpiScale,
+                        densitySeekPreview);
+
+    float viewportWidth  = contentSize.x;
+    float viewportHeight = contentSize.y;
 
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
@@ -147,7 +427,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         // --- 交互：滚轮调整预览区倍率 ---
         float wheel = ImGui::GetIO().MouseWheel;
         if ( std::abs(wheel) > 0.01f && !ImGui::GetIO().KeyCtrl &&
-             !ImGui::GetIO().KeyAlt ) {
+             !ImGui::GetIO().KeySuper && !ImGui::GetIO().KeyAlt ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             float step      = 0.5f;
             if ( ImGui::GetIO().KeyShift ) step *= 2.0f;
@@ -248,8 +528,12 @@ std::vector<std::string> PreviewCanvas::getShaderSources(
     if ( auto it = canvas_config.canvas_shader_modules.find(shader_name);
          it != canvas_config.canvas_shader_modules.end() ) {
 
-        auto path = it->second;
-        if ( !std::filesystem::exists(path) ) return {};
+        auto            path = it->second;
+        std::error_code shaderPathError;
+        if ( !std::filesystem::exists(path, shaderPathError) ||
+             shaderPathError ) {
+            return {};
+        }
 
         std::string vs = Graphic::VKShader::readFile(
             Config::pathToUtf8(path / "VertexShader.spv"));
@@ -258,7 +542,9 @@ std::vector<std::string> PreviewCanvas::getShaderSources(
 
         std::vector<std::string> result;
         auto                     gsPath = path / "GeometryShader.spv";
-        if ( std::filesystem::exists(gsPath) ) {
+        std::error_code          geometryShaderPathError;
+        if ( std::filesystem::exists(gsPath, geometryShaderPathError) &&
+             !geometryShaderPathError ) {
             result = { vs,
                        Graphic::VKShader::readFile(Config::pathToUtf8(gsPath)),
                        fs };

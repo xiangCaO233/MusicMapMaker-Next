@@ -5,6 +5,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 #include "imgui.h"
 
@@ -50,9 +51,9 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     const char* clearLabel  = TR_CACHE("ui.settings.shortcut.clear").data();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
     const float recordW     = ImGui::CalcTextSize(recordLabel).x +
-                              ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float clearW      = ImGui::CalcTextSize(clearLabel).x +
-                              ImGui::GetStyle().FramePadding.x * 2.0f;
+                          ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float clearW = ImGui::CalcTextSize(clearLabel).x +
+                         ImGui::GetStyle().FramePadding.x * 2.0f;
     const float displayW =
         std::max(80.0f, width - recordW - clearW - spacing * 2.0f);
 
@@ -72,17 +73,20 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     std::string clearButtonId =
         std::string(clearLabel) + "###ShortcutClear_" + id;
 
-    if ( ImGui::Button(displayButtonId.c_str(), ImVec2(displayW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(displayButtonId.c_str(),
+                                   ImVec2(displayW, 0.0f)) ) {
         m_recordingShortcutTarget = target;
         ShortcutUtils::setShortcutRecordingActive(true);
     }
     ImGui::SameLine();
-    if ( ImGui::Button(recordButtonId.c_str(), ImVec2(recordW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(recordButtonId.c_str(),
+                                   ImVec2(recordW, 0.0f)) ) {
         m_recordingShortcutTarget = target;
         ShortcutUtils::setShortcutRecordingActive(true);
     }
     ImGui::SameLine();
-    if ( ImGui::Button(clearButtonId.c_str(), ImVec2(clearW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(clearButtonId.c_str(),
+                                   ImVec2(clearW, 0.0f)) ) {
         binding.enabled = false;
         binding.key.clear();
         changed = true;

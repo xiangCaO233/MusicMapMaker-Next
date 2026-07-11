@@ -1,21 +1,26 @@
 -- assets/skins/mmm-default/skin.lua
 local ressPath = __SKINLUA_DIR__
 
-local f_ascii_reg  = "font/ComicShannsMonoNerdFontPropo-Regular.otf"
+local f_ascii_reg = "font/ComicShannsMonoNerdFontPropo-Regular.otf"
 local f_ascii_bold = "font/ComicShannsMonoNerdFontPropo-Bold.otf"
-local f_cjk_reg    = "font/NotoSansMonoCJKsc-Regular.otf"
-local f_cjk_bold   = "font/NotoSansMonoCJKsc-Bold.otf"
+
+local f0x_ascii_reg = "font/0xProtoNerdFontPropo-Regular.ttf"
+local f0x_ascii_italic = "font/0xProtoNerdFontPropo-italic.ttf"
+local f0x_ascii_bold = "font/0xProtoNerdFontPropo-Bold.ttf"
+
+local f_cjk_reg = "font/NotoSansMonoCJKsc-Regular.otf"
+local f_cjk_bold = "font/NotoSansMonoCJKsc-Bold.otf"
 
 -- 拍线配色与线宽变量化复用
-local c_head       = { 1.0, 1.0, 1.0, 1.0 } -- 白色：1分音 (拍头线)
-local c_half       = { 1.0, 0.0, 0.0, 1.0 } -- 红色：2分音
-local c_third      = { 0.5, 0.0, 0.5, 1.0 } -- 紫色：3分音
-local c_quarter    = { 0.0, 1.0, 1.0, 1.0 } -- 青色：4分音
-local c_sixth      = { 0.0, 1.0, 0.0, 1.0 } -- 绿色：6分音
-local c_eighth     = { 1.0, 0.647, 0.0, 1.0 } -- 橙色：8分音
-local c_twelfth    = { 0.0, 0.0, 1.0, 1.0 } -- 蓝色：12分音
-local c_sixteenth  = { 1.0, 1.0, 0.0, 1.0 } -- 黄色：16分音
-local c_default    = { 0.5, 0.5, 0.5, 1.0 } -- 灰色：默认/其他分拍
+local c_head = { 1.0, 1.0, 1.0, 1.0 } -- 白色：1分音 (拍头线)
+local c_half = { 1.0, 0.0, 0.0, 1.0 } -- 红色：2分音
+local c_third = { 0.5, 0.0, 0.5, 1.0 } -- 紫色：3分音
+local c_quarter = { 0.0, 1.0, 1.0, 1.0 } -- 青色：4分音
+local c_sixth = { 0.0, 1.0, 0.0, 1.0 } -- 绿色：6分音
+local c_eighth = { 1.0, 0.647, 0.0, 1.0 } -- 橙色：8分音
+local c_twelfth = { 0.0, 0.0, 1.0, 1.0 } -- 蓝色：12分音
+local c_sixteenth = { 1.0, 1.0, 0.0, 1.0 } -- 黄色：16分音
+local c_default = { 0.5, 0.5, 0.5, 1.0 } -- 灰色：默认/其他分拍
 
 -- 常用分拍定义列表
 local divisor_list = { 1, 2, 3, 4, 6, 8, 12, 16 }
@@ -74,7 +79,7 @@ local Skin = {
 	values = {
 		beat_lines_width = {
 			beat_1 = 4.0,
-			default = 2.0
+			default = 2.0,
 		},
 		glow = {
 			-- 发光后处理分辨率倍率，低于 1 可降低 hover 光效的 GPU 片元开销
@@ -82,8 +87,8 @@ local Skin = {
 		},
 	},
 
-    -- UI 默认主题
-    theme = "Cecilia",
+	-- UI 默认主题
+	theme = "Cecilia",
 
 	-- 音频配置
 	audios = {
@@ -91,9 +96,18 @@ local Skin = {
 			note = { path = "audio/note.wav", lead_in_ms = 0.023 },
 			flick = { path = "audio/flick.wav", lead_in_ms = 0.0 },
 		},
+		ui = {
+			-- UI按钮反馈使用专用短音频，通过音效池混入总线，避免重复加载和削波
+			hover = { path = "audio/ui/hover.wav", lead_in_ms = 0.0 },
+			click = { path = "audio/ui/click.wav", lead_in_ms = 0.0 },
+			click_down = { path = "audio/ui/click_down.wav", lead_in_ms = 0.0 },
+			click_up = { path = "audio/ui/click_up.wav", lead_in_ms = 0.0 },
+			slider = { path = "audio/ui/slider.wav", lead_in_ms = 0.0 },
+			notice = { path = "audio/ui/notice.wav", lead_in_ms = 0.0 },
+		},
 		metronome = {
-			beat_low = { path = "audio/metronome/beat_low.wav", lead_in_ms = 0.023 },
-			downbeat_high = { path = "audio/metronome/downbeat_high.wav", lead_in_ms = 0.023 },
+			beat_low = { path = "audio/metronome/metronome_light.wav", lead_in_ms = 0.023 },
+			downbeat_high = { path = "audio/metronome/metronome_accent.wav", lead_in_ms = 0.023 },
 		},
 	},
 
@@ -102,7 +116,7 @@ local Skin = {
 		glow = {
 			passes = 6,
 			intensity = 0.5,
-		}
+		},
 	},
 
 	-- 翻译配置
@@ -113,14 +127,18 @@ local Skin = {
 
 	-- 字体文件定义
 	fonts = {
-		ascii = f_ascii_reg,
+		ascii = f0x_ascii_reg,
 		cjk = f_cjk_reg,
+		icons = f0x_ascii_reg,
 	},
 
 	-- 可选 ASCII 字体列表
 	ascii_fonts = {
 		["Comic Sans (Regular)"] = f_ascii_reg,
 		["Comic Sans (Bold)"] = f_ascii_bold,
+		["0xProto (Regular)"] = f0x_ascii_reg,
+		["0xProto (Italic)"] = f0x_ascii_italic,
+		["0xProto (Bold)"] = f0x_ascii_bold,
 		["Noto Sans CJK (Regular)"] = f_cjk_reg,
 		["Noto Sans CJK (Bold)"] = f_cjk_bold,
 	},
