@@ -1,52 +1,52 @@
 cmake_minimum_required(VERSION 3.31)
 
 if(CMAKE_BUILD_TYPE STREQUAL "RelWithDbgInfo")
-  message(
+    message(
     WARNING
       "CMAKE_BUILD_TYPE=RelWithDbgInfo is not a standard CMake configuration; "
       "using RelWithDebInfo instead.")
-  set(CMAKE_BUILD_TYPE
+    set(CMAKE_BUILD_TYPE
       "RelWithDebInfo"
       CACHE STRING "Build type" FORCE)
 endif()
 
 if(DEFINED CMAKE_CONFIGURATION_TYPES)
-  list(FIND CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo"
+    list(FIND CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo"
        _MMM_RELWITHDBGINFO_INDEX)
-  if(NOT _MMM_RELWITHDBGINFO_INDEX EQUAL -1)
-    list(REMOVE_ITEM CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo")
-    list(APPEND CMAKE_CONFIGURATION_TYPES "RelWithDebInfo")
-    list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_CONFIGURATION_TYPES
+    if(NOT _MMM_RELWITHDBGINFO_INDEX EQUAL -1)
+        list(REMOVE_ITEM CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo")
+        list(APPEND CMAKE_CONFIGURATION_TYPES "RelWithDebInfo")
+        list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_CONFIGURATION_TYPES
         "${CMAKE_CONFIGURATION_TYPES}"
         CACHE STRING "Available build configurations" FORCE)
-    message(
+        message(
       WARNING
         "CMAKE_CONFIGURATION_TYPES contained non-standard RelWithDbgInfo; "
         "using RelWithDebInfo instead.")
-  endif()
-  unset(_MMM_RELWITHDBGINFO_INDEX)
+    endif()
+    unset(_MMM_RELWITHDBGINFO_INDEX)
 endif()
 
-set(APPVER "0.4.9")
+set(APPVER "0.5.0")
 
 if(APPLE)
-  project(
+    project(
     MusicMapMaker-Next
     VERSION ${APPVER}
     LANGUAGES C CXX OBJC OBJCXX)
 else()
-  project(
+    project(
     MusicMapMaker-Next
     VERSION ${APPVER}
     LANGUAGES C CXX)
 endif()
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE
+    set(CMAKE_BUILD_TYPE
       "${CMAKE_BUILD_TYPE}"
       CACHE STRING "Build type" FORCE)
-  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release
                                                RelWithDebInfo MinSizeRel)
 endif()
 
@@ -56,7 +56,7 @@ set(PROJECT_LINKAGE
 set_property(CACHE PROJECT_LINKAGE PROPERTY STRINGS static shared)
 string(TOLOWER "${PROJECT_LINKAGE}" PROJECT_LINKAGE)
 if(NOT PROJECT_LINKAGE MATCHES "^(static|shared)$")
-  message(FATAL_ERROR "PROJECT_LINKAGE 只能是 static 或 shared。")
+    message(FATAL_ERROR "PROJECT_LINKAGE 只能是 static 或 shared。")
 endif()
 set(PROJECT_LINKAGE
     "${PROJECT_LINKAGE}"
@@ -64,49 +64,49 @@ set(PROJECT_LINKAGE
           FORCE)
 
 if(PROJECT_LINKAGE STREQUAL "shared")
-  set(BUILD_SHARED_LIBS
+    set(BUILD_SHARED_LIBS
       ON
       CACHE BOOL "Prefer shared libraries for third-party dependencies." FORCE)
 else()
-  set(BUILD_SHARED_LIBS
+    set(BUILD_SHARED_LIBS
       OFF
       CACHE BOOL "Prefer shared libraries for third-party dependencies." FORCE)
 endif()
 
 # 动态链接偏好不应携带 GNU/Clang 常见静态运行库参数。
 if(PROJECT_LINKAGE STREQUAL "shared" AND NOT MSVC)
-  foreach(_project_link_flag_var IN
+    foreach(_project_link_flag_var IN
           ITEMS CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS
                 CMAKE_MODULE_LINKER_FLAGS)
-    if(DEFINED ${_project_link_flag_var})
-      set(_project_link_flags "${${_project_link_flag_var}}")
-      foreach(_project_static_runtime_flag IN ITEMS "-static-libstdc++"
+        if(DEFINED ${_project_link_flag_var})
+            set(_project_link_flags "${${_project_link_flag_var}}")
+            foreach(_project_static_runtime_flag IN ITEMS "-static-libstdc++"
                                                     "-static-libgcc" "-static")
-        string(REPLACE "${_project_static_runtime_flag}" "" _project_link_flags
+                string(REPLACE "${_project_static_runtime_flag}" "" _project_link_flags
                        "${_project_link_flags}")
-      endforeach()
-      set(${_project_link_flag_var}
+            endforeach()
+            set(${_project_link_flag_var}
           "${_project_link_flags}"
           CACHE STRING "Linker flags without static runtime options." FORCE)
-    endif()
-  endforeach()
+        endif()
+    endforeach()
 endif()
 
 if(MSVC)
-  # MSVC 构建需要 VCPKG_ROOT，用于查找部分系统级预构建依赖。
-  if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
-    message(
+    # MSVC 构建需要 VCPKG_ROOT，用于查找部分系统级预构建依赖。
+    if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
+        message(
       FATAL_ERROR
         "VCPKG_ROOT environment variable is required when building with MSVC.")
-  endif()
-  file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
-  if(PROJECT_LINKAGE STREQUAL "shared")
-    # 动态链接偏好使用 /MD 或 /MDd，避免把 MSVCRT 静态并入本体。
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-  else()
-    # 静态链接偏好使用 /MT 或 /MTd，保持依赖闭包尽量自包含。
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-  endif()
+    endif()
+    file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
+    if(PROJECT_LINKAGE STREQUAL "shared")
+        # 动态链接偏好使用 /MD 或 /MDd，避免把 MSVCRT 静态并入本体。
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    else()
+        # 静态链接偏好使用 /MT 或 /MTd，保持依赖闭包尽量自包含。
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -122,26 +122,26 @@ set(MMM_TEST_RESOURCE_DIR
     CACHE PATH "Shared test resource directory.")
 
 function(mmm_set_test_target MODULE_NAME TARGET_NAME)
-  set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
-  set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+    set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
+    set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                   "${TEST_RUNTIME_DIR}")
 
-  foreach(CONFIG_NAME Debug Release RelWithDebInfo MinSizeRel)
-    string(TOUPPER "${CONFIG_NAME}" CONFIG_NAME_UPPER)
-    set_target_properties(
+    foreach(CONFIG_NAME Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER "${CONFIG_NAME}" CONFIG_NAME_UPPER)
+        set_target_properties(
       ${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER}
                                 "${TEST_RUNTIME_DIR}")
-  endforeach()
+    endforeach()
 
-  # shared 预编译依赖需要复制到测试可执行文件旁边，否则 Windows 动态加载无法从独立测试目录解析 DLL。
-  if(COMMAND prebuilt_copy_runtime_files)
-    prebuilt_copy_runtime_files(${TARGET_NAME})
-  endif()
+    # shared 预编译依赖需要复制到测试可执行文件旁边，否则 Windows 动态加载无法从独立测试目录解析 DLL。
+    if(COMMAND prebuilt_copy_runtime_files)
+        prebuilt_copy_runtime_files(${TARGET_NAME})
+    endif()
 endfunction()
 
 function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
-  add_executable(${TARGET_NAME} ${ARGN})
-  mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
+    add_executable(${TARGET_NAME} ${ARGN})
+    mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
 endfunction()
 
 # 第三方依赖默认使用预编译库；需要重建依赖时显式开启。
