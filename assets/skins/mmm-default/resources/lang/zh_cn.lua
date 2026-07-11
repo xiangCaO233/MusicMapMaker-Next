@@ -659,7 +659,7 @@ return {
 	["ui.tools.align_beats"] = "对齐至常用分拍",
 	["ui.tools.format"] = "对齐常用分拍",
 	["ui.tools.bpm_measure"] = "BPM测量工具",
-	["ui.tools.bpm_measure.title"] = "BPM测量工具###BpmMeasurementToolWindow",
+	["ui.tools.bpm_measure.title"] = "BPM测量工具",
 	["ui.tools.bpm_measure.audio"] = "音频轨道",
 	["ui.tools.bpm_measure.playback"] = "试听播放",
 	["ui.tools.bpm_measure.params"] = "测量参数",

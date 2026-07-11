@@ -655,7 +655,7 @@ return {
 	["ui.tools.align_beats"] = "Align Selected to Common Beats",
 	["ui.tools.format"] = "Format Beats",
 	["ui.tools.bpm_measure"] = "BPM Measurement Tool",
-	["ui.tools.bpm_measure.title"] = "BPM Measurement Tool###BpmMeasurementToolWindow",
+	["ui.tools.bpm_measure.title"] = "BPM Measurement Tool",
 	["ui.tools.bpm_measure.audio"] = "Audio Track",
 	["ui.tools.bpm_measure.playback"] = "Playback",
 	["ui.tools.bpm_measure.params"] = "Measurement",

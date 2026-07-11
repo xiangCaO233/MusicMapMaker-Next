@@ -11,6 +11,24 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief 判断 BPM 测量工具根窗口或其任意子窗口是否拥有键盘焦点。
+/// @param context 当前 ImGui 上下文。
+/// @return BPM 测量工具窗口层级内拥有焦点时返回 true。
+/// @warning UI 热路径：空格按下时只沿当前焦点窗口的父级链执行短字符串比较。
+bool isBpmMeasurementToolFocused(const ImGuiContext* context)
+{
+    const ImGuiWindow* window = context ? context->NavWindow : nullptr;
+    while ( window ) {
+        if ( window->Name &&
+             isBpmMeasurementToolStableWindowId(
+                 ShortcutUtils::stableWindowId(window->Name)) ) {
+            return true;
+        }
+        window = window->ParentWindow;
+    }
+    return false;
+}
+
 /// @brief 播放暂停切换动作。
 class TogglePlaybackAction final : public IMainMenuItemActionHandler
 {
@@ -46,25 +64,26 @@ public:
         if ( !ImGui::IsKeyPressed(ImGuiKey_Space, false) ) return false;
 
         ImGuiContext* imguiContext = ImGui::GetCurrentContext();
-        const bool    bpmToolFocused =
-            imguiContext && imguiContext->NavWindow &&
-            imguiContext->NavWindow->Name &&
-            isBpmMeasurementToolStableWindowId(
-                ShortcutUtils::stableWindowId(imguiContext->NavWindow->Name));
-        if ( bpmToolFocused ) {
-            auto* bpmTool =
-                context.sourceManager
-                    ? context.sourceManager->getView<BpmMeasurementToolView>(
-                          "BpmMeasurementTool")
-                    : nullptr;
-            const bool hasModifier =
-                io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
-            if ( shouldToggleBpmPlaybackFromSpace(hasModifier,
-                                                  io.WantTextInput) &&
-                 bpmTool ) {
-                // BPM 窗口级空格键优先于当前导航控件，避免同一按键在本帧
-                // 再次激活播放按钮或其它控件。
+        const bool bpmToolFocused  = isBpmMeasurementToolFocused(imguiContext);
+        auto*      bpmTool =
+            bpmToolFocused && context.sourceManager
+                ? context.sourceManager->getView<BpmMeasurementToolView>(
+                      "BpmMeasurementTool")
+                : nullptr;
+        const bool hasModifier =
+            io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
+        const BpmSpaceShortcutDisposition bpmDisposition =
+            resolveBpmSpaceShortcutDisposition(bpmToolFocused,
+                                               hasModifier,
+                                               io.WantTextInput,
+                                               bpmTool != nullptr);
+        if ( bpmDisposition != BpmSpaceShortcutDisposition::NotOwned ) {
+            // BPM 窗口层级拥有空格键时禁止导航控件再次激活，也禁止事件
+            // 穿透至背后的谱面编辑器。
+            if ( imguiContext ) {
                 imguiContext->NavActivateId = 0;
+            }
+            if ( bpmDisposition == BpmSpaceShortcutDisposition::ToggleTool ) {
                 bpmTool->togglePlaybackFromShortcut();
             }
             return true;

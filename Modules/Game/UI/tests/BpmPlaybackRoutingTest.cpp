@@ -1,14 +1,18 @@
 #include "ui/imgui/menu/actions/tools/BpmPlaybackRouting.h"
+#include "ui/imgui/WindowIdUtils.h"
 
 #include <string_view>
 
 namespace
 {
 using MMM::UI::BpmPlaybackRoute;
+using MMM::UI::BpmSpaceShortcutDisposition;
 using MMM::UI::isBpmMeasurementToolStableWindowId;
 using MMM::UI::resolveBpmPlaybackRoute;
+using MMM::UI::resolveBpmSpaceShortcutDisposition;
 using MMM::UI::shouldDispatchBpmPlaybackToEditor;
 using MMM::UI::shouldToggleBpmPlaybackFromSpace;
+using MMM::UI::WindowIdUtils::stableWindowId;
 
 /// @brief 检查播放路由是否符合预期。
 /// @param selectedKey BPM 工具选中音轨键。
@@ -45,10 +49,38 @@ int main()
     ok &= shouldToggleBpmPlaybackFromSpace(false, false);
     ok &= !shouldToggleBpmPlaybackFromSpace(true, false);
     ok &= !shouldToggleBpmPlaybackFromSpace(false, true);
+
+    constexpr std::string_view DOUBLE_MARKER_WINDOW =
+        "BPM测量工具###BpmMeasurementToolWindow###BpmMeasurementTool";
+    constexpr std::string_view DOUBLE_MARKER_CHILD =
+        "BPM测量工具###BpmMeasurementToolWindow###BpmMeasurementTool/"
+        "##BpmMeasureControlsChild_A1B2C3D4";
+    ok &= stableWindowId(DOUBLE_MARKER_WINDOW) == "BpmMeasurementTool";
+    ok &=
+        isBpmMeasurementToolStableWindowId(stableWindowId(DOUBLE_MARKER_CHILD));
+
     ok &= isBpmMeasurementToolStableWindowId("BpmMeasurementTool");
     ok &= isBpmMeasurementToolStableWindowId(
         "BpmMeasurementTool/##BpmMeasureControlsChild_A1B2C3D4");
     ok &= !isBpmMeasurementToolStableWindowId("Canvas_0");
     ok &= !isBpmMeasurementToolStableWindowId("BpmMeasurementToolUnexpected");
+
+    ok &= resolveBpmSpaceShortcutDisposition(true, false, false, true) ==
+          BpmSpaceShortcutDisposition::ToggleTool;
+    ok &= resolveBpmSpaceShortcutDisposition(true, true, false, true) ==
+          BpmSpaceShortcutDisposition::ConsumeOnly;
+    ok &= resolveBpmSpaceShortcutDisposition(true, false, true, true) ==
+          BpmSpaceShortcutDisposition::ConsumeOnly;
+    ok &= resolveBpmSpaceShortcutDisposition(true, false, false, false) ==
+          BpmSpaceShortcutDisposition::ConsumeOnly;
+    ok &= resolveBpmSpaceShortcutDisposition(false, false, false, true) ==
+          BpmSpaceShortcutDisposition::NotOwned;
+
+    const BpmPlaybackRoute focusedDifferentTrackRoute = resolveBpmPlaybackRoute(
+        "/project/audio/preview.ogg", "/project/audio/main.ogg");
+    ok &= focusedDifferentTrackRoute == BpmPlaybackRoute::Audition;
+    ok &= resolveBpmSpaceShortcutDisposition(true, false, false, true) ==
+          BpmSpaceShortcutDisposition::ToggleTool;
+    ok &= !shouldDispatchBpmPlaybackToEditor(focusedDifferentTrackRoute);
     return ok ? 0 : 1;
 }

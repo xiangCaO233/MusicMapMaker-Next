@@ -3,6 +3,7 @@
 #include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
 #include "imgui.h"
+#include "ui/imgui/WindowIdUtils.h"
 #include <imgui_internal.h>
 
 #include <array>
@@ -210,17 +211,7 @@ inline bool isShortcutRecordingActive()
     return shortcutRecordingActiveState();
 }
 
-/// @brief 从 ImGui 窗口标题中提取 ### 后的稳定 ID。
-/// @param windowName ImGui 窗口名称。
-/// @return 稳定 ID；没有 ### 时返回原始名称。
-inline std::string_view stableWindowId(std::string_view windowName)
-{
-    const std::size_t marker = windowName.find("###");
-    if ( marker == std::string_view::npos ) {
-        return windowName;
-    }
-    return windowName.substr(marker + 3U);
-}
+using WindowIdUtils::stableWindowId;
 
 /// @brief 判断稳定窗口 ID 是否为主谱面画布。
 /// @param stableId ImGui 窗口稳定 ID。
