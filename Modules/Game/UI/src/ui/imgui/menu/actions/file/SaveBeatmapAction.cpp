@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -159,9 +160,15 @@ private:
                 engine.getSessionMutex());
             auto session = engine.getActiveSession();
             if ( session && session->getContext().currentBeatmap ) {
-                path = Config::pathToUtf8(
-                    session->getContext()
-                        .currentBeatmap->m_baseMapMetadata.map_path);
+                auto savePath = session->getContext()
+                                    .currentBeatmap->m_baseMapMetadata.map_path;
+                if ( Config::AppConfig::instance()
+                         .getEditorSettings()
+                         .saveFormatPreference ==
+                     Config::SaveFormatPreference::ForceMMM ) {
+                    savePath.replace_extension(".mmm");
+                }
+                path = Config::pathToUtf8(savePath);
             }
         }
 
@@ -190,7 +197,8 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderCompatibilityWarningPopup(float dpiScale)
     {
-        constexpr const char* popupId = "谱面兼容性警告###ExportWarningModal";
+        constexpr const char* popupId =
+            "谱面兼容性警告###CurrentBeatmapSaveWarningModal";
         if ( m_showExportCompatibilityWarning ) {
             ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showExportCompatibilityWarning = false;
