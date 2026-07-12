@@ -277,7 +277,7 @@ return {
 	["ui.settings.beatmap.cover_type"] = "背景类型",
 	["ui.settings.beatmap.cover_type.image"] = "图片",
 	["ui.settings.beatmap.cover_type.video"] = "视频",
-	["ui.settings.beatmap.video_start"] = "视频开始时间",
+	["ui.settings.beatmap.video_start"] = "视频开始时间 (ms)",
 	["ui.settings.beatmap.bg_offset"] = "背景偏移 (X/Y)",
 	["ui.settings.beatmap.bpm"] = "BPM",
 	["ui.settings.beatmap.preference"] = "预设",
