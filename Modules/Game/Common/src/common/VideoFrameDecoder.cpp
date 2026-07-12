@@ -260,7 +260,7 @@ struct VideoFrameDecoder::Impl {
                convertedFrame && streamIndex >= 0;
     }
 
-    /// @brief 选取目标时间点最近且不晚于目标的帧。
+    /// @brief 选取目标时间点最近的帧，并优先选择不晚于目标的帧。
     /// @param seconds 相对视频起点时间。
     /// @return 解码器内部当前帧观察指针；失败时返回 nullptr。
     const VideoFrame* decodeFrameAt(double seconds)
@@ -313,6 +313,14 @@ struct VideoFrameDecoder::Impl {
             pendingFrame    = std::move(nextFrame);
             hasPendingFrame = true;
             break;
+        }
+
+        // 部分容器 Seek 后返回的首个可解码帧会略晚于目标时间。此时若没有
+        // 更早帧可用，采用该最早帧，避免暂停 Seek 永久停留在空画面。
+        if ( !hasCurrentFrame && hasPendingFrame ) {
+            currentFrame    = std::move(pendingFrame);
+            hasCurrentFrame = true;
+            hasPendingFrame = false;
         }
 
         return hasCurrentFrame ? &currentFrame : nullptr;

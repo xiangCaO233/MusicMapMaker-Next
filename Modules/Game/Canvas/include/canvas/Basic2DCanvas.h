@@ -237,6 +237,12 @@ private:
     /// @brief 最近一次提交给解码线程的视频时间。
     double m_lastRequestedVideoTime{ 0.0 };
 
+    /// @brief 最近一次提交视频帧请求的 steady_clock 时间（秒）。
+    double m_lastVideoFrameRequestSysTime{ 0.0 };
+
+    /// @brief 当前暂停 Seek 代际已经补发的有限重试次数。
+    std::uint32_t m_pendingVideoSeekRetryCount{ 0 };
+
     /// @brief 是否正在等待当前资源/Seek 代际的首帧。
     bool m_videoDiscontinuityPending{ false };
 

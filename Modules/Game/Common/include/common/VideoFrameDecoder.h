@@ -83,7 +83,7 @@ public:
     /// @return 已打开视频的信息；关闭状态返回全零信息。
     const VideoInfo& info() const;
 
-    /// @brief 选取目标时间点应显示的最近一帧。
+    /// @brief 选取目标时间点应显示的最近一帧，优先返回不晚于目标的帧。
     /// @param seconds 相对视频起点的目标时间，单位秒。
     /// @return 成功时返回解码器内部 RGBA8 帧的观察指针，失败时返回
     /// nullptr；指针在下次 open、close 或 decodeFrameAt 前有效。

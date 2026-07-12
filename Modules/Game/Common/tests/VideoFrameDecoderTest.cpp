@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -466,6 +467,26 @@ bool testExternalProbeFile()
         XERROR("VideoFrameDecoderTest: Failed to decode external video {}",
                videoPath.string());
         return false;
+    }
+
+    /// @brief 模拟暂停状态下连续拖动进度条产生的前后跳转序列。
+    constexpr std::array<double, 12> scrubFractions = {
+        0.83, 0.12, 0.68, 0.24, 0.91, 0.37, 0.55, 0.08, 0.76, 0.43, 0.97, 0.31,
+    };
+    if ( info->duration > 0.0 ) {
+        for ( const double fraction : scrubFractions ) {
+            const double scrubTime = info->duration * fraction;
+            frame                  = decoder.decodeFrameAt(scrubTime);
+            if ( !frame || frame->rgba.empty() || frame->width != info->width ||
+                 frame->height != info->height ) {
+                XERROR(
+                    "VideoFrameDecoderTest: Scrub decode failed for {} at "
+                    "{:.3f}s",
+                    videoPath.string(),
+                    scrubTime);
+                return false;
+            }
+        }
     }
 
     XINFO(

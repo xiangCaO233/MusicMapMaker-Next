@@ -1,4 +1,5 @@
 #include "canvas/Basic2DCanvas.h"
+
 #include "canvas/BackgroundVideoTiming.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -49,6 +50,8 @@ void Basic2DCanvas::updateBackgroundTexture()
         m_videoFrameVisible             = false;
         m_videoShouldBeVisibleThisFrame = false;
         m_hasRequestedVideoFrame        = false;
+        m_lastVideoFrameRequestSysTime  = 0.0;
+        m_pendingVideoSeekRetryCount    = 0;
         m_hasUploadedVideoTimestamp     = false;
         m_videoDiscontinuityPending     = false;
         m_videoReachedEnd               = false;
@@ -66,6 +69,7 @@ void Basic2DCanvas::updateBackgroundTexture()
                 m_lastRequestedVideoTime       = 0.0;
                 m_videoDiscontinuityPending    = true;
                 m_videoDiscontinuityTargetTime = 0.0;
+                m_lastVideoFrameRequestSysTime = currentSteadySeconds();
             }
         } else if ( m_physicalDevice && m_logicalDevice && m_cmdPool &&
                     m_queue && texturePathExists ) {
@@ -98,11 +102,12 @@ void Basic2DCanvas::commitUploadedVideoFrame(double        timestamp,
         return;
     }
 
-    m_hasUploadedVideoTimestamp = true;
-    m_uploadedVideoTimestamp    = timestamp;
-    m_videoFrameAvailable       = true;
-    m_videoDiscontinuityPending = false;
-    m_videoReachedEnd           = reachedEnd;
+    m_hasUploadedVideoTimestamp  = true;
+    m_uploadedVideoTimestamp     = timestamp;
+    m_videoFrameAvailable        = true;
+    m_videoDiscontinuityPending  = false;
+    m_videoReachedEnd            = reachedEnd;
+    m_pendingVideoSeekRetryCount = 0;
 }
 
 /// @brief 按谱面播放时钟更新背景视频帧。
@@ -117,13 +122,14 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
         return;
     }
 
-    const double targetTime = calculateBackgroundVideoTime(
+    const double currentSysTime = currentSteadySeconds();
+    const double targetTime     = calculateBackgroundVideoTime(
         m_currentSnapshot->playbackTime,
         m_currentSnapshot->backgroundVideoStartTime,
         m_currentSnapshot->isPlaying,
         m_currentSnapshot->snapshotSysTime,
         m_currentSnapshot->playbackSpeed,
-        currentSteadySeconds());
+        currentSysTime);
     if ( !std::isfinite(targetTime) ) {
         m_videoShouldBeVisibleThisFrame = false;
         m_videoFrameVisible             = false;
@@ -133,9 +139,11 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
     m_videoShouldBeVisibleThisFrame = !isBeforeVideoStart;
 
     if ( !isBeforeVideoStart ) {
-        constexpr double REQUEST_INTERVAL_SECONDS   = 1.0 / 120.0;
-        constexpr double SEEK_DISCONTINUITY_SECONDS = 0.25;
-        const bool       movedBackward =
+        constexpr double        REQUEST_INTERVAL_SECONDS   = 1.0 / 120.0;
+        constexpr double        SEEK_DISCONTINUITY_SECONDS = 0.25;
+        constexpr double        PAUSED_SEEK_RETRY_SECONDS  = 0.1;
+        constexpr std::uint32_t MAX_PAUSED_SEEK_RETRIES    = 3;
+        const bool              movedBackward =
             m_hasRequestedVideoFrame &&
             targetTime + REQUEST_INTERVAL_SECONDS < m_lastRequestedVideoTime;
         const bool requestJumped =
@@ -155,27 +163,38 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
              std::abs(targetTime - m_videoDiscontinuityTargetTime) >=
                  generationAdvanceThreshold);
         const bool resumesFromEnd = m_videoReachedEnd && movedBackward;
+        const bool retriesPendingPausedSeek =
+            !m_currentSnapshot->isPlaying && m_videoDiscontinuityPending &&
+            m_hasRequestedVideoFrame &&
+            m_pendingVideoSeekRetryCount < MAX_PAUSED_SEEK_RETRIES &&
+            currentSysTime - m_lastVideoFrameRequestSysTime >=
+                PAUSED_SEEK_RETRY_SECONDS;
         const bool shouldRequest =
             (!m_videoReachedEnd || resumesFromEnd) &&
             (!m_hasRequestedVideoFrame ||
              std::abs(targetTime - m_lastRequestedVideoTime) >=
-                 REQUEST_INTERVAL_SECONDS);
+                 REQUEST_INTERVAL_SECONDS ||
+             retriesPendingPausedSeek);
         if ( shouldRequest ) {
             const std::uint64_t requestGeneration =
                 m_backgroundVideoPlayer->requestFrame(targetTime,
                                                       startsNewGeneration);
             if ( startsNewGeneration ) {
                 m_requiredVideoRequestGeneration = requestGeneration;
-                m_videoFrameAvailable            = false;
                 m_videoReachedEnd                = false;
                 m_videoDiscontinuityPending      = true;
                 m_videoDiscontinuityTargetTime   = targetTime;
+                m_pendingVideoSeekRetryCount     = 0;
                 m_pendingVideoPixels.clear();
                 m_pendingVideoStateValid      = false;
                 m_recordedVideoUploadRevision = m_pendingVideoUploadRevision;
             }
-            m_hasRequestedVideoFrame = true;
-            m_lastRequestedVideoTime = targetTime;
+            m_hasRequestedVideoFrame       = true;
+            m_lastRequestedVideoTime       = targetTime;
+            m_lastVideoFrameRequestSysTime = currentSysTime;
+            if ( retriesPendingPausedSeek ) {
+                ++m_pendingVideoSeekRetryCount;
+            }
         }
     }
 
