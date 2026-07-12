@@ -66,3 +66,8 @@ mmm_add_test_executable(Logic TimelineBatchMetadataTest
                         tests/TimelineBatchMetadataTest.cpp)
 target_link_libraries(TimelineBatchMetadataTest PRIVATE Logic Log)
 add_test(NAME TimelineBatchMetadataTest COMMAND TimelineBatchMetadataTest)
+
+mmm_add_test_executable(Logic ProjectCompatibilityTest
+                        tests/ProjectCompatibilityTest.cpp)
+target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
+add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)

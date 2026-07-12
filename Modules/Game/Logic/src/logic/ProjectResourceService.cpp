@@ -194,6 +194,82 @@ void ProjectResourceService::applyExcludedResources(Project& project) const
         project.m_audioResources.end());
 }
 
+/// @brief 收集缺少当前 m_config 对象的旧版音频资源键。
+/// @param projectJson 项目描述 JSON。
+/// @return 优先使用资源路径、路径缺失时使用 ID 的旧版资源键集合。
+std::unordered_set<std::string>
+ProjectResourceService::collectLegacyAudioResourceKeys(
+    const nlohmann::json& projectJson)
+{
+    std::unordered_set<std::string> result;
+    const auto resourcesIterator = projectJson.find("m_audioResources");
+    if ( resourcesIterator == projectJson.end() ||
+         !resourcesIterator->is_array() ) {
+        return result;
+    }
+
+    for ( const auto& resourceJson : *resourcesIterator ) {
+        if ( !requiresLegacyAudioResourceMigration(resourceJson) ) continue;
+
+        const auto pathIterator = resourceJson.find("m_path");
+        if ( pathIterator != resourceJson.end() && pathIterator->is_string() ) {
+            const auto path = pathIterator->get<std::string>();
+            if ( !path.empty() ) {
+                result.insert(path);
+                continue;
+            }
+        }
+
+        const auto idIterator = resourceJson.find("m_id");
+        if ( idIterator != resourceJson.end() && idIterator->is_string() ) {
+            result.insert(idIterator->get<std::string>());
+        }
+    }
+    return result;
+}
+
+/// @brief 将持久化音频配置合并到本次目录扫描得到的资源列表。
+/// @param project 以目录扫描结果为基础的项目实例。
+/// @param persistedProject 从项目描述文件读取的持久化项目。
+/// @param legacyAudioResourceKeys 需要保留扫描音轨类型的旧版资源键。
+void ProjectResourceService::mergePersistedAudioResources(
+    Project& project, const Project& persistedProject,
+    const std::unordered_set<std::string>& legacyAudioResourceKeys) const
+{
+    for ( auto& resource : project.m_audioResources ) {
+        const AudioResource* matchedPersistedResource = nullptr;
+        for ( const auto& persistedResource :
+              persistedProject.m_audioResources ) {
+            if ( !resource.m_path.empty() &&
+                 !persistedResource.m_path.empty() &&
+                 resource.m_path == persistedResource.m_path ) {
+                matchedPersistedResource = &persistedResource;
+                break;
+            }
+        }
+        if ( !matchedPersistedResource ) {
+            for ( const auto& persistedResource :
+                  persistedProject.m_audioResources ) {
+                if ( resource.m_id == persistedResource.m_id ) {
+                    matchedPersistedResource = &persistedResource;
+                    break;
+                }
+            }
+        }
+        if ( !matchedPersistedResource ) continue;
+
+        const auto& persistedResource = *matchedPersistedResource;
+        const auto& persistedKey      = persistedResource.m_path.empty()
+                                            ? persistedResource.m_id
+                                            : persistedResource.m_path;
+
+        if ( !legacyAudioResourceKeys.contains(persistedKey) ) {
+            resource.m_type = persistedResource.m_type;
+        }
+        resource.m_config = persistedResource.m_config;
+    }
+}
+
 /// @brief 根据目录扫描结果同步已有项目的谱面和音频资源列表。
 /// @param project 需要同步资源列表的项目实例。
 /// @param scanResult 项目目录扫描结果。

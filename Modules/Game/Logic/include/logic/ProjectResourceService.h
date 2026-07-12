@@ -3,6 +3,8 @@
 #include "logic/ProjectDirectoryScanner.h"
 #include "mmm/project/Project.h"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -40,6 +42,20 @@ public:
     /// @brief 根据项目排除列表过滤已经扫描出的谱面和音频资源。
     /// @param project 需要过滤资源列表的项目实例。
     void applyExcludedResources(Project& project) const;
+
+    /// @brief 收集缺少当前 m_config 对象的旧版音频资源键。
+    /// @param projectJson 项目描述 JSON。
+    /// @return 优先使用资源路径、路径缺失时使用 ID 的旧版资源键集合。
+    static std::unordered_set<std::string> collectLegacyAudioResourceKeys(
+        const nlohmann::json& projectJson);
+
+    /// @brief 将持久化音频配置合并到本次目录扫描得到的资源列表。
+    /// @param project 以目录扫描结果为基础的项目实例。
+    /// @param persistedProject 从项目描述文件读取的持久化项目。
+    /// @param legacyAudioResourceKeys 需要保留扫描音轨类型的旧版资源键。
+    void mergePersistedAudioResources(
+        Project& project, const Project& persistedProject,
+        const std::unordered_set<std::string>& legacyAudioResourceKeys) const;
 
     /// @brief 根据目录扫描结果同步已有项目的谱面和音频资源列表。
     /// @param project 需要同步资源列表的项目实例。

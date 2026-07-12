@@ -1,0 +1,245 @@
+#include "logic/ProjectResourceService.h"
+
+#include "log/colorful-log.h"
+#include "mmm/project/Project.h"
+
+#include <cmath>
+#include <string>
+
+namespace
+{
+
+/// @brief 使用小容差比较音轨配置中的单精度数值。
+/// @param lhs 左值。
+/// @param rhs 右值。
+/// @return 两个数值足够接近时返回 true。
+bool near(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 1e-6F;
+}
+
+/// @brief 构造旧版顶层 m_volume 音频资源 JSON。
+/// @param id 资源 ID。
+/// @param type 旧版持久化音轨类型。
+/// @param volume 旧版音量。
+/// @return 旧版音频资源 JSON。
+nlohmann::json makeLegacyAudioResourceJson(const std::string& id,
+                                           const std::string& type,
+                                           float              volume)
+{
+    return nlohmann::json{ { "m_id", id },
+                           { "m_path", id },
+                           { "m_type", type },
+                           { "m_volume", volume } };
+}
+
+/// @brief 构造覆盖旧版音频字段和旧版缺失设置项的项目 JSON。
+/// @return 可复现旧项目打开失败的最小项目 JSON。
+nlohmann::json makeLegacyProjectJson()
+{
+    return nlohmann::json{
+        { "m_metadata",
+          { { "m_title", "Legacy Project" },
+            { "m_artist", "Unknown" },
+            { "m_mapper", "Unknown" },
+            { "m_version", "1.0.0" } } },
+        { "m_settings",
+          { { "m_visualOverride", nullptr },
+            { "m_editorOverride", nullptr },
+            { "m_lastOpenedBeatmap", "" } } },
+        { "m_audioResources",
+          nlohmann::json::array(
+              { makeLegacyAudioResourceJson("audio.mp3", "Main", 0.7F),
+                makeLegacyAudioResourceJson("hit.wav", "Main", 0.8F) }) },
+        { "m_beatmaps",
+          nlohmann::json::array({ { { "m_name", "Legacy.osu" },
+                                    { "m_filePath", "Legacy.osu" },
+                                    { "m_audioTrackId", "hit.wav" } } }) }
+    };
+}
+
+/// @brief 验证旧项目可以反序列化、迁移音量并写回当前格式。
+/// @return 兼容行为符合预期时返回 true。
+bool testLegacyProjectDeserialization()
+{
+    const auto  legacyJson = makeLegacyProjectJson();
+    const auto& audioJson  = legacyJson.at("m_audioResources");
+    if ( !MMM::requiresLegacyAudioResourceMigration(audioJson.at(0)) ||
+         !MMM::requiresLegacyAudioResourceMigration(audioJson.at(1)) ) {
+        XERROR("Legacy audio resource schema was not detected");
+        return false;
+    }
+
+    const auto project = legacyJson.get<MMM::Project>();
+    if ( project.m_audioResources.size() != 2 ) {
+        XERROR("Legacy project audio resources were not deserialized");
+        return false;
+    }
+
+    const auto& mainResource   = project.m_audioResources[0];
+    const auto& effectResource = project.m_audioResources[1];
+    if ( !near(mainResource.m_config.volume, 0.7F) ||
+         !near(effectResource.m_config.volume, 0.8F) ||
+         !near(effectResource.m_config.playbackSpeed, 1.0F) ||
+         !near(effectResource.m_config.playbackPitch, 0.0F) ||
+         effectResource.m_config.muted || effectResource.m_config.eqEnabled ||
+         effectResource.m_config.eqPreset != 0 ||
+         !effectResource.m_config.eqBandGains.empty() ||
+         !effectResource.m_config.eqBandQs.empty() ) {
+        XERROR("Legacy audio configuration defaults were not preserved");
+        return false;
+    }
+
+    const nlohmann::json migratedJson  = project;
+    const auto&          migratedAudio = migratedJson.at("m_audioResources");
+    for ( const auto& resourceJson : migratedAudio ) {
+        if ( resourceJson.contains("m_volume") ||
+             MMM::requiresLegacyAudioResourceMigration(resourceJson) ) {
+            XERROR("Migrated project still uses the legacy audio schema");
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证旧版全 Main 配置不会覆盖目录扫描出的 Main/Effect 类型。
+/// @return 合并行为符合预期时返回 true。
+bool testLegacyMergePreservesScannedTypes()
+{
+    MMM::Project scannedProject;
+    scannedProject.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "audio.mp3",
+                            .m_path = "audio.mp3",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "hit.wav",
+                            .m_path = "hit.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    const auto legacyProjectJson = makeLegacyProjectJson();
+    const auto persistedProject  = legacyProjectJson.get<MMM::Project>();
+    const auto legacyKeys =
+        MMM::Logic::ProjectResourceService::collectLegacyAudioResourceKeys(
+            legacyProjectJson);
+    MMM::Logic::ProjectResourceService{}.mergePersistedAudioResources(
+        scannedProject, persistedProject, legacyKeys);
+
+    const auto& mainResource   = scannedProject.m_audioResources[0];
+    const auto& effectResource = scannedProject.m_audioResources[1];
+    if ( mainResource.m_type != MMM::AudioTrackType::Main ||
+         effectResource.m_type != MMM::AudioTrackType::Effect ||
+         !near(mainResource.m_config.volume, 0.7F) ||
+         !near(effectResource.m_config.volume, 0.8F) ) {
+        XERROR("Legacy merge overwrote scanned audio resource types");
+        return false;
+    }
+
+    const nlohmann::json migratedProject = scannedProject;
+    const auto& migratedEffect = migratedProject.at("m_audioResources").at(1);
+    if ( migratedEffect.at("m_type") != "Effect" ||
+         migratedEffect.contains("m_volume") ||
+         MMM::requiresLegacyAudioResourceMigration(migratedEffect) ) {
+        XERROR("Legacy merge result was not persisted with the current schema");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证当前 m_config 优先于旧音量且仍可恢复用户保存的音轨类型。
+/// @return 当前格式行为保持不变时返回 true。
+bool testCurrentConfigAndTypeMerge()
+{
+    const nlohmann::json persistedJson{
+        { "m_id", "hit.wav" },
+        { "m_path", "hit.wav" },
+        { "m_type", "Main" },
+        { "m_config", { { "volume", 0.9F }, { "muted", true } } },
+    };
+    if ( MMM::requiresLegacyAudioResourceMigration(persistedJson) ) {
+        XERROR("Current audio resource schema was treated as legacy");
+        return false;
+    }
+    auto mixedPersistedJson        = persistedJson;
+    mixedPersistedJson["m_volume"] = 0.2F;
+    if ( !near(mixedPersistedJson.get<MMM::AudioResource>().m_config.volume,
+               0.9F) ) {
+        XERROR("Current m_config volume did not override legacy m_volume");
+        return false;
+    }
+
+    MMM::Project scannedProject;
+    scannedProject.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "hit.wav",
+                            .m_path = "hit.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+    MMM::Project persistedProject;
+    persistedProject.m_audioResources = {
+        persistedJson.get<MMM::AudioResource>(),
+    };
+
+    MMM::Logic::ProjectResourceService{}.mergePersistedAudioResources(
+        scannedProject, persistedProject, {});
+
+    const auto& resource = scannedProject.m_audioResources.front();
+    if ( resource.m_type != MMM::AudioTrackType::Main ||
+         !near(resource.m_config.volume, 0.9F) || !resource.m_config.muted ||
+         !near(resource.m_config.playbackSpeed, 1.0F) ||
+         resource.m_config.eqEnabled ) {
+        XERROR("Current audio configuration merge behavior changed");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证同一项目中的旧版和当前资源分别采用各自的类型合并规则。
+/// @return 混合格式合并行为符合预期时返回 true。
+bool testMixedSchemaMerge()
+{
+    nlohmann::json projectJson = makeLegacyProjectJson();
+    projectJson["m_audioResources"].push_back(
+        nlohmann::json{ { "m_id", "manual-main.wav" },
+                        { "m_path", "effects/manual-main.wav" },
+                        { "m_type", "Main" },
+                        { "m_config", { { "volume", 0.6F } } } });
+
+    MMM::Project scannedProject;
+    scannedProject.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "hit.wav",
+                            .m_path = "hit.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "manual-main.wav",
+                            .m_path = "effects/manual-main.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+    const auto persistedProject = projectJson.get<MMM::Project>();
+    const auto legacyKeys =
+        MMM::Logic::ProjectResourceService::collectLegacyAudioResourceKeys(
+            projectJson);
+    MMM::Logic::ProjectResourceService{}.mergePersistedAudioResources(
+        scannedProject, persistedProject, legacyKeys);
+
+    const auto& legacyResource  = scannedProject.m_audioResources[0];
+    const auto& currentResource = scannedProject.m_audioResources[1];
+    if ( legacyResource.m_type != MMM::AudioTrackType::Effect ||
+         currentResource.m_type != MMM::AudioTrackType::Main ||
+         !near(legacyResource.m_config.volume, 0.8F) ||
+         !near(currentResource.m_config.volume, 0.6F) ) {
+        XERROR("Mixed project audio schemas were not merged independently");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+/// @brief 运行旧版项目音频配置兼容测试。
+/// @return 全部测试通过时返回 0。
+int main()
+{
+    return testLegacyProjectDeserialization() &&
+                   testLegacyMergePreservesScannedTypes() &&
+                   testCurrentConfigAndTypeMerge() && testMixedSchemaMerge()
+               ? 0
+               : 1;
+}

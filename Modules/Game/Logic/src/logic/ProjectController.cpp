@@ -73,7 +73,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
 {
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
+        const bool ok = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -1126,7 +1126,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
                     "results.");
             } else {
                 /// @brief 从项目描述文件反序列化出的项目配置。
-                Project loadedProject  = jsonData.get<Project>();
+                Project loadedProject = jsonData.get<Project>();
+                /// @brief 需要从旧版 m_volume 迁移且不信任持久化类型的资源。
+                const auto legacyAudioResourceKeys =
+                    ProjectResourceService::collectLegacyAudioResourceKeys(
+                        jsonData);
                 newProject->m_metadata = loadedProject.m_metadata;
                 newProject->m_settings = loadedProject.m_settings;
                 newProject->m_excludedBeatmapPaths =
@@ -1134,15 +1138,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
                 newProject->m_excludedAudioPaths =
                     loadedProject.m_excludedAudioPaths;
 
-                for ( auto& resource : newProject->m_audioResources ) {
-                    for ( const auto& loadedResource :
-                          loadedProject.m_audioResources ) {
-                        if ( resource.m_id == loadedResource.m_id ) {
-                            resource.m_type   = loadedResource.m_type;
-                            resource.m_config = loadedResource.m_config;
-                            break;
-                        }
-                    }
+                m_projectResourceService.mergePersistedAudioResources(
+                    *newProject, loadedProject, legacyAudioResourceKeys);
+                if ( !legacyAudioResourceKeys.empty() ) {
+                    XINFO("Migrated {} legacy audio resource configurations.",
+                          legacyAudioResourceKeys.size());
                 }
 
                 XINFO("Project configuration loaded from mmm_project.json");
