@@ -522,6 +522,10 @@ struct CmdUpdateBeatmapMetadata {
     ::MMM::BaseMapMeta baseMeta;
 };
 
+/// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
+struct CmdMarkBeatmapMetadataDirty {
+};
+
 /**
  * @brief 导入音频指令
  */
@@ -576,7 +580,7 @@ using LogicCommand = std::variant<
     CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
     CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
     CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
-    CmdRemoveBeatmap, CmdSaveTemporaryProject>;
+    CmdMarkBeatmapMetadataDirty, CmdImportAudio, CmdUpdateAudioResource,
+    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

@@ -1,4 +1,5 @@
 #include "logic/BeatmapSession.h"
+
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -85,6 +86,67 @@ void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
         resolveCurrentProjectPath(meta.main_cover_path));
     meta.cover_path = makeCurrentProjectRelativePath(
         resolveCurrentProjectPath(meta.cover_path));
+}
+
+/// @brief 判断两份基础谱面元数据是否完全一致。
+/// @param lhs 左侧元数据。
+/// @param rhs 右侧元数据。
+/// @return 所有基础字段都一致时返回 true。
+bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
+                          const MMM::BaseMapMeta& rhs)
+{
+    return lhs.name == rhs.name && lhs.title == rhs.title &&
+           lhs.title_unicode == rhs.title_unicode && lhs.artist == rhs.artist &&
+           lhs.artist_unicode == rhs.artist_unicode &&
+           lhs.map_path == rhs.map_path &&
+           lhs.main_audio_path == rhs.main_audio_path &&
+           lhs.main_cover_path == rhs.main_cover_path &&
+           lhs.cover_path == rhs.cover_path &&
+           lhs.cover_type == rhs.cover_type &&
+           lhs.video_starttime == rhs.video_starttime &&
+           lhs.bgxoffset == rhs.bgxoffset && lhs.bgyoffset == rhs.bgyoffset &&
+           lhs.version == rhs.version && lhs.author == rhs.author &&
+           lhs.preference_bpm == rhs.preference_bpm &&
+           lhs.track_count == rhs.track_count &&
+           lhs.map_length == rhs.map_length;
+}
+
+/// @brief 将已成功保存的谱面基础信息同步到项目谱面入口。
+/// @param metadata 已成功写入谱面文件的基础元数据。
+/// @return 项目入口的名称或主音轨 ID 发生变化时返回 true。
+bool syncSavedMetadataToProjectEntry(const MMM::BaseMapMeta& metadata)
+{
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return false;
+
+    const auto savedMapPath = resolveCurrentProjectPath(metadata.map_path);
+    for ( auto& entry : project->m_beatmaps ) {
+        const auto entryPath =
+            project->m_projectRoot / MMM::Config::utf8ToPath(entry.m_filePath);
+        std::error_code pathError;
+        const bool      isSavedEntry =
+            std::filesystem::exists(entryPath, pathError) && !pathError &&
+            std::filesystem::equivalent(entryPath, savedMapPath, pathError) &&
+            !pathError;
+        if ( !isSavedEntry ) continue;
+
+        const std::string audioTrackId =
+            MMM::Config::pathToUtf8(metadata.main_audio_path.filename());
+        if ( entry.m_name == metadata.version &&
+             entry.m_audioTrackId == audioTrackId ) {
+            return false;
+        }
+
+        entry.m_name         = metadata.version;
+        entry.m_audioTrackId = audioTrackId;
+        XINFO(
+            "BeatmapSession: Synced saved name '{}' and audioTrackId '{}' "
+            "to project entry",
+            entry.m_name,
+            entry.m_audioTrackId);
+        return true;
+    }
+    return false;
 }
 
 /// @brief 计算谱面文件的 FNV-1a 64 位哈希。
@@ -948,7 +1010,9 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdSaveBeatmap> ||
                                std::is_same_v<T, CmdSaveBeatmapAs> ||
                                std::is_same_v<T, CmdPackBeatmap> ||
-                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ) {
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T,
+                                              CmdMarkBeatmapMetadataDirty> ) {
                     this->handleCommand(arg);
                 }
                 // --- Playback 处理的命令 ---
@@ -1032,6 +1096,14 @@ void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
 
 void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 {
+    if ( m_metadataAutoSavePending && !flushPendingMetadataAutoSave() ) {
+        XERROR(
+            "BeatmapSession: cannot replace beatmap because pending "
+            "metadata could not be saved");
+        return;
+    }
+    m_metadataAutoSavePending         = false;
+    m_metadataAutoSaveTimerNeedsReset = false;
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     m_savedBeatmapFileHashes.clear();
     if ( m_ctx->currentBeatmap ) {
@@ -1046,6 +1118,15 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
+        const bool hadPendingMetadataAutoSave = m_metadataAutoSavePending;
+        /// @brief 保存失败时恢复尾随任务，避免后续打包读取旧文件。
+        const auto restorePendingMetadataAutoSave = [&]() {
+            if ( !hadPendingMetadataAutoSave ) return;
+            m_metadataAutoSavePending         = true;
+            m_metadataAutoSaveTimerNeedsReset = true;
+        };
+        m_metadataAutoSavePending         = false;
+        m_metadataAutoSaveTimerNeedsReset = false;
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto savePath = resolveCurrentProjectPath(oldPath);
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
@@ -1059,6 +1140,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
                 .path = Config::pathToUtf8(savePath),
             });
+            restorePendingMetadataAutoSave();
             return;
         }
 
@@ -1076,6 +1158,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
                 .success  = false,
                 .isExport = false,
             });
+            restorePendingMetadataAutoSave();
             return;
         }
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
@@ -1092,6 +1175,10 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
                 oldPath, storedSavePath);
         } else {
             EditorEngine::instance().syncProjectWithFile(savePath);
+        }
+        if ( syncSavedMetadataToProjectEntry(
+                 m_ctx->currentBeatmap->m_baseMapMetadata) ) {
+            EditorEngine::instance().saveProject();
         }
     }
 }
@@ -1131,6 +1218,16 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 {
+    if ( !EditorEngine::instance().flushPendingMetadataAutoSaves() ) {
+        XERROR("PackBeatmap: pending metadata could not be saved");
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path     = cmd.exportPath,
+            .success  = false,
+            .isExport = true,
+        });
+        return;
+    }
+
     auto* project = EditorEngine::instance().getCurrentProject();
     if ( !project || project->m_projectRoot.empty() ) {
         XERROR("PackBeatmap: no project is opened");
@@ -1181,23 +1278,19 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
-        auto oldMap = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
-        auto oldAudio =
-            m_ctx->currentBeatmap->m_baseMapMetadata.main_audio_path;
-        auto oldCover =
-            m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
-        const auto oldCoverType =
-            m_ctx->currentBeatmap->m_baseMapMetadata.cover_type;
-        auto oldBPM   = m_ctx->currentBeatmap->m_baseMapMetadata.preference_bpm;
-        auto oldTrack = m_ctx->currentBeatmap->m_baseMapMetadata.track_count;
-        auto updatedMeta = cmd.baseMeta;
+        const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+        auto       updatedMeta = cmd.baseMeta;
         normalizeCurrentProjectMetadataPaths(updatedMeta);
+        if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) return;
 
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
+        m_ctx->actionStack.markDirty();
+        m_metadataAutoSavePending         = true;
+        m_metadataAutoSaveTimerNeedsReset = true;
         XINFO("BeatmapSession: Metadata updated for {}",
               m_ctx->currentBeatmap->m_baseMapMetadata.name);
-        if ( oldMap != updatedMeta.map_path ||
-             oldAudio != updatedMeta.main_audio_path ) {
+        if ( oldMetadata.map_path != updatedMeta.map_path ||
+             oldMetadata.main_audio_path != updatedMeta.main_audio_path ) {
             EditorEngine::instance().refreshMainAudioSyncKeys();
         }
 
@@ -1205,8 +1298,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         m_ctx->trackCount = updatedMeta.track_count;
 
         // 如果关键渲染参数发生变化，刷新 ScrollCache
-        if ( oldBPM != updatedMeta.preference_bpm ||
-             oldTrack != updatedMeta.track_count ) {
+        if ( oldMetadata.preference_bpm != updatedMeta.preference_bpm ||
+             oldMetadata.track_count != updatedMeta.track_count ) {
             XINFO(
                 "BeatmapSession: Critical metadata changed, dirtying "
                 "ScrollCache...");
@@ -1219,7 +1312,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         }
 
         // 如果音频路径发生变化，重新加载音频
-        if ( oldAudio != updatedMeta.main_audio_path ) {
+        if ( oldMetadata.main_audio_path != updatedMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
             m_ctx->loadedMainAudioPath.clear();
             m_ctx->mainAudioTotalTime = 0.0;
@@ -1266,45 +1359,25 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         }
 
         // 路径或资源类型改变时，按图片/视频分支重新探测尺寸。
-        if ( oldCover != updatedMeta.main_cover_path ||
-             oldCoverType != updatedMeta.cover_type ) {
+        if ( oldMetadata.main_cover_path != updatedMeta.main_cover_path ||
+             oldMetadata.cover_type != updatedMeta.cover_type ) {
             SessionUtils::updateBackgroundSize(
                 *m_ctx,
                 updatedMeta,
                 EditorEngine::instance().getCurrentProject());
         }
-
-        // 同步修改到项目入口列表中，确保侧边栏等 UI 实时更新
-        auto* project = EditorEngine::instance().getCurrentProject();
-        if ( project ) {
-            for ( auto& entry : project->m_beatmaps ) {
-                auto fullEntryPath = project->m_projectRoot /
-                                     Config::utf8ToPath(entry.m_filePath);
-
-                auto updatedMapPath =
-                    resolveCurrentProjectPath(updatedMeta.map_path);
-                std::error_code pathEc;
-                if ( std::filesystem::exists(fullEntryPath, pathEc) &&
-                     std::filesystem::equivalent(
-                         fullEntryPath, updatedMapPath, pathEc) ) {
-                    entry.m_name         = updatedMeta.version;
-                    entry.m_audioTrackId = Config::pathToUtf8(
-                        updatedMeta.main_audio_path.filename());
-                    XINFO(
-                        "BeatmapSession: Synced name '{}' and audioTrackId "
-                        "'{}' to project entry",
-                        entry.m_name,
-                        entry.m_audioTrackId);
-                    EditorEngine::instance().saveProject();
-                    break;
-                }
-            }
-        }
-
-        // 谱面设置和打包流程都读取磁盘谱面文件，基础元数据更新后立即落盘。
-        handleCommand(
-            CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
     }
+}
+
+/// @brief 标记 UI 直接修改的扩展元数据，并安排一次尾随自动保存。
+void BeatmapSession::handleCommand(const CmdMarkBeatmapMetadataDirty& cmd)
+{
+    (void)cmd;
+    if ( !m_ctx->currentBeatmap ) return;
+
+    m_ctx->actionStack.markDirty();
+    m_metadataAutoSavePending         = true;
+    m_metadataAutoSaveTimerNeedsReset = true;
 }
 
 }  // namespace MMM::Logic

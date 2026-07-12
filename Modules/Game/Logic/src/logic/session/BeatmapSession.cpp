@@ -28,6 +28,9 @@ namespace
 /// @brief Note 编辑后延迟同步 BeatMap 的空闲等待时间（秒）。
 constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
 
+/// @brief 元数据连续编辑停止后执行自动保存的空闲等待时间（秒）。
+constexpr double METADATA_AUTO_SAVE_IDLE_SECONDS = 0.75;
+
 /// @brief 非忙碌状态下 Session 逻辑轻量轮询的最小间隔。
 constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS = 0.0005;
 
@@ -163,6 +166,40 @@ void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
     SessionUtils::syncBeatmap(*m_ctx);
     m_hasDeferredBeatmapSyncTimer = m_ctx->m_needsNotesSync;
     m_lastDeferredBeatmapSyncTime = currentSysTime;
+}
+
+/// @brief 在元数据停止变化且会话空闲后执行一次尾随自动保存。
+/// @warning 逻辑热路径：普通帧只做常量级状态判断；仅空闲超时分支允许
+/// 调用同步文件保存流程。
+void BeatmapSession::flushDeferredMetadataAutoSave(double currentSysTime,
+                                                   bool   isEditingBusy)
+{
+    if ( !m_metadataAutoSavePending ) return;
+
+    if ( m_metadataAutoSaveTimerNeedsReset ) {
+        m_lastMetadataUpdateTime          = currentSysTime;
+        m_metadataAutoSaveTimerNeedsReset = false;
+        return;
+    }
+
+    if ( isEditingBusy || currentSysTime - m_lastMetadataUpdateTime <
+                              METADATA_AUTO_SAVE_IDLE_SECONDS ) {
+        return;
+    }
+
+    (void)flushPendingMetadataAutoSave();
+}
+
+/// @brief 立即落盘尚在等待空闲期的元数据自动保存。
+/// @warning 低频阻塞路径：仅允许逻辑线程在打包、项目关闭或尾随自动保存
+/// 超时时调用；可能同步谱面数据、访问文件系统并保存项目配置。
+bool BeatmapSession::flushPendingMetadataAutoSave()
+{
+    if ( !m_metadataAutoSavePending ) return true;
+    if ( !m_ctx->currentBeatmap ) return false;
+
+    handleCommand(CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+    return !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty();
 }
 
 /// @brief 判断本轮是否需要生成并发布渲染快照。
@@ -304,6 +341,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         }
     }
     flushDeferredBeatmapSync(currentSysTime, processed, isBusy);
+    const bool isMetadataEditingBusy = isInteracting || hasPendingCommands();
+    flushDeferredMetadataAutoSave(currentSysTime, isMetadataEditingBusy);
     m_ctx->lastSnapshotTime = currentSysTime;
 
     // --- 边缘自动滚动处理 ---

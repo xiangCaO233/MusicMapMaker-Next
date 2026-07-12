@@ -123,11 +123,44 @@ bool testBatchCreatePreservesMetadata()
     return true;
 }
 
+/// @brief 验证未进入撤销栈的元数据编辑仍会参与未保存状态判断。
+/// @return 标脏、保存和清空语义符合预期时返回 true。
+bool testNonUndoableDirtyState()
+{
+    MMM::Logic::SessionContext context;
+    if ( context.actionStack.isDirty() ) {
+        XERROR("A new action stack was unexpectedly dirty");
+        return false;
+    }
+
+    context.actionStack.markDirty();
+    if ( !context.actionStack.isDirty() ) {
+        XERROR("Non-undoable metadata changes were not marked dirty");
+        return false;
+    }
+
+    context.actionStack.markSaved();
+    if ( context.actionStack.isDirty() ) {
+        XERROR("Saving did not clear non-undoable metadata changes");
+        return false;
+    }
+
+    context.actionStack.markDirty();
+    context.actionStack.clear();
+    if ( context.actionStack.isDirty() ) {
+        XERROR("Clearing the action stack kept non-undoable changes dirty");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行批量 Timeline 创建元数据测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testBatchCreatePreservesMetadata() ? 0 : 1;
+    return testBatchCreatePreservesMetadata() && testNonUndoableDirtyState()
+               ? 0
+               : 1;
 }

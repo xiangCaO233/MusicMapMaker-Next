@@ -106,12 +106,12 @@ OsuMetadataTextEditorState& osuMetadataTextEditorState()
     return state;
 }
 
-/// @brief 请求逻辑线程保存当前谱面，确保打包读取到最新谱面元数据。
-/// @warning UI 交互路径：只入队保存指令，不在 UI 线程执行文件写入。
+/// @brief 标记扩展元数据已修改，并请求逻辑线程执行尾随自动保存。
+/// @warning UI 交互路径：只入队标脏指令，不在 UI 线程执行文件写入。
 void requestBeatmapMetadataAutoSave()
 {
     Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+        Logic::CmdMarkBeatmapMetadataDirty{});
 }
 
 /// @brief 将字符串安全复制进固定 ImGui 输入缓冲区。

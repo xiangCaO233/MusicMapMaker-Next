@@ -53,17 +53,24 @@ void EditorActionStack::clear()
 {
     m_undoStack.clear();
     m_redoStack.clear();
-    m_saveIndex = 0;
+    m_saveIndex             = 0;
+    m_hasNonUndoableChanges = false;
 }
 
 bool EditorActionStack::isDirty() const
 {
-    return m_undoStack.size() != m_saveIndex;
+    return m_undoStack.size() != m_saveIndex || m_hasNonUndoableChanges;
 }
 
 void EditorActionStack::markSaved()
 {
-    m_saveIndex = m_undoStack.size();
+    m_saveIndex             = m_undoStack.size();
+    m_hasNonUndoableChanges = false;
+}
+
+void EditorActionStack::markDirty()
+{
+    m_hasNonUndoableChanges = true;
 }
 
 }  // namespace MMM::Logic

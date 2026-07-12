@@ -575,6 +575,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdStartErase>(cmd) ||
          std::holds_alternative<CmdUpdateErase>(cmd) ||
          std::holds_alternative<CmdUpdateBeatmapMetadata>(cmd) ||
+         std::holds_alternative<CmdMarkBeatmapMetadataDirty>(cmd) ||
          std::holds_alternative<CmdImportAudio>(cmd) ||
          std::holds_alternative<CmdUpdateAudioResource>(cmd) ||
          std::holds_alternative<CmdRemoveAudioResource>(cmd) ||
@@ -961,7 +962,11 @@ void EditorEngine::openProject(
         return;
     }
 
-    closeProject();
+    if ( !closeProject() ) {
+        publishProjectOpenFailed(
+            projectPath, "当前项目的元数据保存失败，已取消项目切换", false);
+        return;
+    }
 
     /// @brief 项目控制器打开项目后的结果。
     auto openResult =
@@ -986,7 +991,14 @@ void EditorEngine::openTemporaryProjectPackage(
         return;
     }
 
-    closeProject();
+    if ( !closeProject() ) {
+        std::error_code filesystemError;
+        std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
+                                    filesystemError);
+        publishProjectOpenFailed(
+            packagePath, "当前项目的元数据保存失败，已取消项目切换", true);
+        return;
+    }
 
     auto openResult = ProjectController::instance().openProject(
         prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1052,14 +1064,26 @@ void EditorEngine::finishOpenProject(
     }
 }
 
-void EditorEngine::closeProject()
+bool EditorEngine::closeProject()
 {
-    ProjectController::instance().saveProject();
+    if ( !ProjectController::instance().currentProject() ) return true;
+    if ( !flushPendingMetadataAutoSaves() ) {
+        XERROR(
+            "EditorEngine: pending metadata save failed; project close "
+            "cancelled");
+        return false;
+    }
+    if ( !ProjectController::instance().saveProject() ) {
+        XERROR(
+            "EditorEngine: project configuration save failed; project "
+            "close cancelled");
+        return false;
+    }
 
     /// @brief 项目控制器关闭当前项目后的结果。
     auto closeResult = ProjectController::instance().closeProject();
     if ( !closeResult.m_closed || !closeResult.m_project ) {
-        return;
+        return false;
     }
 
     auto& audio = Audio::AudioManager::instance();
@@ -1074,6 +1098,7 @@ void EditorEngine::closeProject()
     }
 
     XINFO("Project '{}' closed.", closeResult.m_projectTitle);
+    return true;
 }
 
 void EditorEngine::start()
@@ -2320,6 +2345,23 @@ void EditorEngine::saveProject()
     ProjectController::instance().saveProject();
 }
 
+/// @brief 立即完成全部已打开会话中等待空闲期的元数据自动保存。
+/// @warning 低频阻塞路径：仅允许逻辑线程在打包或关闭项目前调用；会持有
+/// Session 注册表锁并可能同步写入多个谱面。
+bool EditorEngine::flushPendingMetadataAutoSaves()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 需要检查尾随元数据保存的当前会话列表。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    bool  success  = true;
+    for ( auto& entry : sessions ) {
+        if ( entry.session && !entry.session->flushPendingMetadataAutoSave() ) {
+            success = false;
+        }
+    }
+    return success;
+}
+
 /// @brief 逻辑线程的主循环。
 /// @warning 逻辑热路径：按配置 UPS 频率执行；禁止每 update 文件系统操作、完整
 /// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
@@ -2409,10 +2451,12 @@ void EditorEngine::loop()
             projectAction = projectController.consumePendingProjectAction(
                 needsCanvasCloseBeforeProjectOpen());
         }
+        bool projectCloseSucceeded = true;
         if ( projectAction.m_closeProject ) {
-            closeProject();
+            projectCloseSucceeded = closeProject();
         }
-        if ( !projectAction.m_projectPathToOpen.empty() ) {
+        if ( projectCloseSucceeded &&
+             !projectAction.m_projectPathToOpen.empty() ) {
             if ( projectAction.m_projectOpenMode ==
                  ProjectController::ProjectOpenMode::TemporaryPackage ) {
                 openTemporaryProjectPackage(projectAction.m_projectPathToOpen);
@@ -2452,6 +2496,8 @@ void EditorEngine::loop()
                     isActiveSession || entry.isCanvasVisible;
                 const bool hadPendingCommands =
                     entry.session->hasPendingCommands();
+                const bool hasPendingMetadataAutoSave =
+                    entry.session->hasPendingMetadataAutoSave();
                 bool shouldUpdateSession = isActiveSession;
                 if ( !shouldUpdateSession ) {
                     const bool needsRealtimeUpdate =
@@ -2460,7 +2506,8 @@ void EditorEngine::loop()
                         shouldUpdateSession = true;
                     } else if ( hadPendingCommands ) {
                         shouldUpdateSession = true;
-                    } else if ( !isVisibleSession ) {
+                    } else if ( !isVisibleSession &&
+                                !hasPendingMetadataAutoSave ) {
                         shouldUpdateSession = false;
                     } else {
                         auto& lastBackgroundUpdate =
