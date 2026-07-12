@@ -22,26 +22,6 @@
 
 namespace MMM::UI
 {
-namespace
-{
-/// @brief 判断项目背景资源是否使用已支持的视频扩展名。
-/// @param path 待判断资源路径。
-/// @return 扩展名属于当前 FFmpeg 背景容器集时返回 true。
-bool isVideoBackgroundPath(const std::filesystem::path& path)
-{
-    std::string extension = Config::pathToUtf8(path.extension());
-    std::transform(extension.begin(),
-                   extension.end(),
-                   extension.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-    return extension == ".mp4" || extension == ".avi" || extension == ".mkv" ||
-           extension == ".webm" || extension == ".mov" || extension == ".flv" ||
-           extension == ".m4v";
-}
-}  // namespace
-
 /// @brief 渲染谱面设置页。
 void SettingsView::drawBeatmapSettings()
 {
@@ -645,31 +625,33 @@ void SettingsView::drawBeatmapSettings()
                         bgPushed = false;
                     }
                     if ( project ) {
-                        std::vector<std::string> images =
-                            collectProjectResources({ ".png",
-                                                      ".jpg",
-                                                      ".jpeg",
-                                                      ".bmp",
-                                                      ".mp4",
-                                                      ".avi",
-                                                      ".mkv",
-                                                      ".webm",
-                                                      ".mov",
-                                                      ".flv",
-                                                      ".m4v" });
+                        // 背景类型是用户的显式选择，下拉项只展示同类型资源。
+                        std::vector<std::string> backgroundResources;
+                        if ( meta.cover_type == MMM::CoverType::VIDEO ) {
+                            backgroundResources =
+                                collectProjectResources({ ".mp4",
+                                                          ".avi",
+                                                          ".mkv",
+                                                          ".webm",
+                                                          ".mov",
+                                                          ".flv",
+                                                          ".m4v" });
+                        } else {
+                            backgroundResources = collectProjectResources(
+                                { ".png", ".jpg", ".jpeg", ".bmp" });
+                        }
 
-                        for ( const auto& imgPath : images ) {
-                            bool isSelected = (currentBgPath == imgPath);
+                        for ( const auto& backgroundPath :
+                              backgroundResources ) {
+                            bool isSelected = (currentBgPath == backgroundPath);
                             if ( ::MMM::UI::FeedbackSelectable(
-                                     (imgPath + "##" + imgPath).c_str(),
+                                     (backgroundPath + "##" + backgroundPath)
+                                         .c_str(),
                                      isSelected) ) {
-                                auto chosenPath = Config::utf8ToPath(imgPath);
+                                auto chosenPath =
+                                    Config::utf8ToPath(backgroundPath);
                                 meta.main_cover_path = chosenPath;
-                                meta.cover_type =
-                                    isVideoBackgroundPath(chosenPath)
-                                        ? MMM::CoverType::VIDEO
-                                        : MMM::CoverType::IMAGE;
-                                changed = true;
+                                changed              = true;
 
                                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
                                 auto ext =
