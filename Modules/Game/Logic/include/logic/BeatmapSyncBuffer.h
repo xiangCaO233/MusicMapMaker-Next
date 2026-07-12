@@ -233,15 +233,23 @@ struct RenderSnapshot {
     /// @brief 逻辑线程可见音符查询去重临时集合，UI 线程不读取。
     std::unordered_set<entt::entity> noteQuerySeenScratch;
 
-    // 背景纹理绝对路径
+    /// @brief 背景资源绝对 UTF-8 路径。
     std::string backgroundPath;
 
-    // 背景原始尺寸
+    /// @brief 背景原始尺寸。
     glm::vec2 bgSize{ 0.0f, 0.0f };
+
+    /// @brief 当前背景资源是否为视频。
+    bool backgroundIsVideo{ false };
+
+    /// @brief 视频事件在谱面时间轴上的开始时间，单位秒。
+    double backgroundVideoStartTime{ 0.0 };
 
     // 播放状态
     bool   isPlaying{ false };
     double currentTime{ 0.0 };
+    /// @brief 未包含视觉偏移的原始谱面播放时间，单位秒。
+    double playbackTime{ 0.0 };
     double totalTime{ 0.0 };
 
     /// @brief 逻辑线程写入该快照时的高精度系统时钟 (steady_clock, 秒)
@@ -401,8 +409,11 @@ struct RenderSnapshot {
         noteQuerySeenScratch.clear();
         backgroundPath.clear();
         bgSize                       = glm::vec2(0.0f, 0.0f);
+        backgroundIsVideo            = false;
+        backgroundVideoStartTime     = 0.0;
         isPlaying                    = false;
         currentTime                  = 0.0;
+        playbackTime                 = 0.0;
         totalTime                    = 0.0;
         snapshotSysTime              = 0.0;
         playbackSpeed                = 1.0;

@@ -6,6 +6,7 @@
 #include <stb_image.h>
 
 #include <cstring>
+#include <limits>
 #include <mutex>
 
 namespace MMM::Graphic
@@ -95,6 +96,9 @@ VKTexture::VKTexture(VKTexture&& other) noexcept
     , m_nativePool(other.m_nativePool)
     , m_width(other.m_width)
     , m_height(other.m_height)
+    , m_pixelFormat(other.m_pixelFormat)
+    , m_streamingUploadSlots(std::move(other.m_streamingUploadSlots))
+    , m_streamingUploadByteCount(other.m_streamingUploadByteCount)
     , m_valid(other.m_valid)
 {
     other.m_device        = nullptr;
@@ -104,24 +108,32 @@ VKTexture::VKTexture(VKTexture&& other) noexcept
     other.m_sampler       = nullptr;
     other.m_descriptorSet = nullptr;
     other.m_nativePool    = nullptr;
-    other.m_valid         = false;
+    other.m_width         = 0;
+    other.m_height        = 0;
+    other.m_pixelFormat   = VKTexturePixelFormat::Rgba8;
+    other.m_streamingUploadSlots.clear();
+    other.m_streamingUploadByteCount = 0;
+    other.m_valid                    = false;
 }
 
 VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
 {
     if ( this != &other ) {
         releaseResources();
-        m_device        = other.m_device;
-        m_image         = other.m_image;
-        m_memory        = other.m_memory;
-        m_imageView     = other.m_imageView;
-        m_sampler       = other.m_sampler;
-        m_descriptorSet = other.m_descriptorSet;
-        m_nativeSets    = std::move(other.m_nativeSets);
-        m_nativePool    = other.m_nativePool;
-        m_width         = other.m_width;
-        m_height        = other.m_height;
-        m_valid         = other.m_valid;
+        m_device                   = other.m_device;
+        m_image                    = other.m_image;
+        m_memory                   = other.m_memory;
+        m_imageView                = other.m_imageView;
+        m_sampler                  = other.m_sampler;
+        m_descriptorSet            = other.m_descriptorSet;
+        m_nativeSets               = std::move(other.m_nativeSets);
+        m_nativePool               = other.m_nativePool;
+        m_width                    = other.m_width;
+        m_height                   = other.m_height;
+        m_pixelFormat              = other.m_pixelFormat;
+        m_streamingUploadSlots     = std::move(other.m_streamingUploadSlots);
+        m_streamingUploadByteCount = other.m_streamingUploadByteCount;
+        m_valid                    = other.m_valid;
 
         other.m_device        = nullptr;
         other.m_image         = nullptr;
@@ -130,7 +142,12 @@ VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
         other.m_sampler       = nullptr;
         other.m_descriptorSet = nullptr;
         other.m_nativePool    = nullptr;
-        other.m_valid         = false;
+        other.m_width         = 0;
+        other.m_height        = 0;
+        other.m_pixelFormat   = VKTexturePixelFormat::Rgba8;
+        other.m_streamingUploadSlots.clear();
+        other.m_streamingUploadByteCount = 0;
+        other.m_valid                    = false;
     }
     return *this;
 }
@@ -142,7 +159,13 @@ VKTexture::~VKTexture()
 
 void VKTexture::releaseResources()
 {
-    if ( !m_device ) return;
+    if ( !m_device ) {
+        m_streamingUploadSlots.clear();
+        m_streamingUploadByteCount = 0;
+        return;
+    }
+
+    releaseStreamingUploadResources();
 
     {
         std::unique_lock descriptorLock(m_descriptorMutex);
@@ -167,14 +190,36 @@ void VKTexture::releaseResources()
     if ( m_imageView ) m_device.destroyImageView(m_imageView);
     if ( m_image ) m_device.destroyImage(m_image);
     if ( m_memory ) m_device.freeMemory(m_memory);
-    m_sampler   = nullptr;
-    m_imageView = nullptr;
-    m_image     = nullptr;
-    m_memory    = nullptr;
-    m_device    = nullptr;
-    m_width     = 0;
-    m_height    = 0;
-    m_valid     = false;
+    m_sampler     = nullptr;
+    m_imageView   = nullptr;
+    m_image       = nullptr;
+    m_memory      = nullptr;
+    m_device      = nullptr;
+    m_width       = 0;
+    m_height      = 0;
+    m_pixelFormat = VKTexturePixelFormat::Rgba8;
+    m_valid       = false;
+}
+
+/// @brief 解除映射并释放所有 streaming staging 槽位。
+void VKTexture::releaseStreamingUploadResources()
+{
+    if ( m_device ) {
+        for ( auto& slot : m_streamingUploadSlots ) {
+            if ( slot.m_mappedPixels && slot.m_memory ) {
+                m_device.unmapMemory(slot.m_memory);
+            }
+            if ( slot.m_buffer ) {
+                m_device.destroyBuffer(slot.m_buffer);
+            }
+            if ( slot.m_memory ) {
+                m_device.freeMemory(slot.m_memory);
+            }
+            slot = {};
+        }
+    }
+    m_streamingUploadSlots.clear();
+    m_streamingUploadByteCount = 0;
 }
 
 // 【共通核心逻辑实现】
@@ -188,8 +233,9 @@ bool VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
         return false;
     }
 
-    m_width  = width;
-    m_height = height;
+    m_width       = width;
+    m_height      = height;
+    m_pixelFormat = pixelFormat;
 
     const bool isSingleChannel = pixelFormat == VKTexturePixelFormat::R8 ||
                                  pixelFormat == VKTexturePixelFormat::R8Red;
@@ -320,8 +366,170 @@ bool VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
                                       VK_FALSE);
     m_sampler = m_device.createSampler(samplerInfo).value;
     m_valid   = static_cast<bool>(m_image) && static_cast<bool>(m_imageView) &&
-              static_cast<bool>(m_sampler);
+                static_cast<bool>(m_sampler);
     return m_valid;
+}
+
+/// @brief 为 RGBA8 动态帧创建持久映射的分帧上传缓冲。
+bool VKTexture::prepareStreamingUpload(vk::PhysicalDevice& physicalDevice,
+                                       uint32_t            frameSlots)
+{
+    if ( !isValid() || m_pixelFormat != VKTexturePixelFormat::Rgba8 ||
+         frameSlots == 0 || m_width == 0 || m_height == 0 ) {
+        return false;
+    }
+
+    constexpr std::size_t RGBA8_BYTES_PER_PIXEL = 4;
+    const std::size_t     width  = static_cast<std::size_t>(m_width);
+    const std::size_t     height = static_cast<std::size_t>(m_height);
+    if ( height >
+             std::numeric_limits<std::size_t>::max() / RGBA8_BYTES_PER_PIXEL ||
+         width > std::numeric_limits<std::size_t>::max() /
+                     (height * RGBA8_BYTES_PER_PIXEL) ) {
+        XERROR("VKTexture streaming upload size overflow: {}x{}",
+               m_width,
+               m_height);
+        return false;
+    }
+    const std::size_t byteCount = width * height * RGBA8_BYTES_PER_PIXEL;
+
+    if ( m_streamingUploadSlots.size() == frameSlots &&
+         m_streamingUploadByteCount == byteCount ) {
+        return true;
+    }
+
+    releaseStreamingUploadResources();
+    m_streamingUploadByteCount = byteCount;
+    m_streamingUploadSlots.reserve(frameSlots);
+
+    const vk::BufferCreateInfo bufferInfo(
+        {},
+        static_cast<vk::DeviceSize>(byteCount),
+        vk::BufferUsageFlagBits::eTransferSrc);
+    for ( uint32_t slotIndex = 0; slotIndex < frameSlots; ++slotIndex ) {
+        auto& slot = m_streamingUploadSlots.emplace_back();
+
+        const auto bufferResult = m_device.createBuffer(bufferInfo);
+        if ( bufferResult.result != vk::Result::eSuccess ) {
+            XERROR("VKTexture failed to create streaming staging buffer: {}",
+                   vk::to_string(bufferResult.result));
+            releaseStreamingUploadResources();
+            return false;
+        }
+        slot.m_buffer = bufferResult.value;
+
+        const vk::MemoryRequirements memoryRequirements =
+            m_device.getBufferMemoryRequirements(slot.m_buffer);
+        const auto memoryType =
+            findMemoryType(physicalDevice,
+                           memoryRequirements.memoryTypeBits,
+                           vk::MemoryPropertyFlagBits::eHostVisible |
+                               vk::MemoryPropertyFlagBits::eHostCoherent);
+        if ( !memoryType ) {
+            releaseStreamingUploadResources();
+            return false;
+        }
+
+        const vk::MemoryAllocateInfo allocationInfo(memoryRequirements.size,
+                                                    *memoryType);
+        const auto memoryResult = m_device.allocateMemory(allocationInfo);
+        if ( memoryResult.result != vk::Result::eSuccess ) {
+            XERROR("VKTexture failed to allocate streaming staging memory: {}",
+                   vk::to_string(memoryResult.result));
+            releaseStreamingUploadResources();
+            return false;
+        }
+        slot.m_memory = memoryResult.value;
+
+        const vk::Result bindResult =
+            m_device.bindBufferMemory(slot.m_buffer, slot.m_memory, 0);
+        if ( bindResult != vk::Result::eSuccess ) {
+            XERROR("VKTexture failed to bind streaming staging memory: {}",
+                   vk::to_string(bindResult));
+            releaseStreamingUploadResources();
+            return false;
+        }
+
+        const auto mappedResult = m_device.mapMemory(
+            slot.m_memory, 0, static_cast<vk::DeviceSize>(byteCount));
+        if ( mappedResult.result != vk::Result::eSuccess ||
+             !mappedResult.value ) {
+            XERROR("VKTexture failed to map streaming staging memory: {}",
+                   vk::to_string(mappedResult.result));
+            releaseStreamingUploadResources();
+            return false;
+        }
+        slot.m_mappedPixels = mappedResult.value;
+    }
+
+    return true;
+}
+
+/// @brief 将一帧 RGBA8 像素复制到持久 staging 槽位并记录图像上传命令。
+bool VKTexture::recordStreamingUpload(vk::CommandBuffer&   commandBuffer,
+                                      uint32_t             frameIndex,
+                                      const unsigned char* pixels,
+                                      std::size_t          byteCount)
+{
+    if ( !isValid() || m_pixelFormat != VKTexturePixelFormat::Rgba8 ||
+         !pixels || byteCount == 0 || byteCount != m_streamingUploadByteCount ||
+         frameIndex >= m_streamingUploadSlots.size() ) {
+        return false;
+    }
+
+    auto& slot = m_streamingUploadSlots[frameIndex];
+    if ( !slot.m_buffer || !slot.m_memory || !slot.m_mappedPixels ) {
+        return false;
+    }
+
+    std::memcpy(slot.m_mappedPixels, pixels, byteCount);
+
+    const vk::ImageSubresourceRange imageRange(
+        vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+    const vk::ImageMemoryBarrier toTransfer(
+        vk::AccessFlagBits::eShaderRead,
+        vk::AccessFlagBits::eTransferWrite,
+        vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::ImageLayout::eTransferDstOptimal,
+        VK_QUEUE_FAMILY_IGNORED,
+        VK_QUEUE_FAMILY_IGNORED,
+        m_image,
+        imageRange);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
+                                  vk::PipelineStageFlagBits::eTransfer,
+                                  {},
+                                  nullptr,
+                                  nullptr,
+                                  toTransfer);
+
+    const vk::BufferImageCopy copyRegion(
+        0,
+        0,
+        0,
+        { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+        { 0, 0, 0 },
+        { m_width, m_height, 1 });
+    commandBuffer.copyBufferToImage(slot.m_buffer,
+                                    m_image,
+                                    vk::ImageLayout::eTransferDstOptimal,
+                                    copyRegion);
+
+    const vk::ImageMemoryBarrier toShaderRead(
+        vk::AccessFlagBits::eTransferWrite,
+        vk::AccessFlagBits::eShaderRead,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal,
+        VK_QUEUE_FAMILY_IGNORED,
+        VK_QUEUE_FAMILY_IGNORED,
+        m_image,
+        imageRange);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                  vk::PipelineStageFlagBits::eFragmentShader,
+                                  {},
+                                  nullptr,
+                                  nullptr,
+                                  toShaderRead);
+    return true;
 }
 
 ImTextureID VKTexture::getImTextureID()

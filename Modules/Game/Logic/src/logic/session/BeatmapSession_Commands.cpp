@@ -1,3 +1,4 @@
+#include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -7,7 +8,6 @@
 #include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
-#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -17,8 +17,6 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
-#include <stb_image.h>
-
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1188,6 +1186,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             m_ctx->currentBeatmap->m_baseMapMetadata.main_audio_path;
         auto oldCover =
             m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
+        const auto oldCoverType =
+            m_ctx->currentBeatmap->m_baseMapMetadata.cover_type;
         auto oldBPM   = m_ctx->currentBeatmap->m_baseMapMetadata.preference_bpm;
         auto oldTrack = m_ctx->currentBeatmap->m_baseMapMetadata.track_count;
         auto updatedMeta = cmd.baseMeta;
@@ -1265,29 +1265,13 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             }
         }
 
-        // 如果封面路径发生变化，更新背景图尺寸
-        if ( oldCover != updatedMeta.main_cover_path ) {
-            std::filesystem::path bgPath;
-            auto* project = EditorEngine::instance().getCurrentProject();
-            if ( project ) {
-                bgPath = project->m_projectRoot / updatedMeta.main_cover_path;
-            } else {
-                bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                             .parent_path() /
-                         updatedMeta.main_cover_path;
-            }
-            std::error_code backgroundPathError;
-            if ( std::filesystem::exists(bgPath, backgroundPathError) &&
-                 !backgroundPathError ) {
-                int w = 0, h = 0, comp = 0;
-                if ( stbi_info(
-                         Config::pathToUtf8(bgPath).c_str(), &w, &h, &comp) ) {
-                    m_ctx->bgSize =
-                        glm::vec2(static_cast<float>(w), static_cast<float>(h));
-                }
-            } else {
-                m_ctx->bgSize = glm::vec2(0.0f);
-            }
+        // 路径或资源类型改变时，按图片/视频分支重新探测尺寸。
+        if ( oldCover != updatedMeta.main_cover_path ||
+             oldCoverType != updatedMeta.cover_type ) {
+            SessionUtils::updateBackgroundSize(
+                *m_ctx,
+                updatedMeta,
+                EditorEngine::instance().getCurrentProject());
         }
 
         // 同步修改到项目入口列表中，确保侧边栏等 UI 实时更新

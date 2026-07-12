@@ -159,6 +159,23 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 Config::utf8ToPath(readMMMString(base, "cover"));
             beatMap.m_baseMapMetadata.cover_path =
                 Config::utf8ToPath(readMMMString(base, "cover_img"));
+            const int coverType = readMMMInt(
+                base,
+                "cover_type",
+                static_cast<int>(beatMap.m_baseMapMetadata.cover_type));
+            if ( coverType == static_cast<int>(CoverType::IMAGE) ||
+                 coverType == static_cast<int>(CoverType::VIDEO) ) {
+                beatMap.m_baseMapMetadata.cover_type =
+                    static_cast<CoverType>(coverType);
+            }
+            beatMap.m_baseMapMetadata.video_starttime =
+                readMMMInt(base,
+                           "video_starttime",
+                           beatMap.m_baseMapMetadata.video_starttime);
+            beatMap.m_baseMapMetadata.bgxoffset = readMMMInt(
+                base, "bgxoffset", beatMap.m_baseMapMetadata.bgxoffset);
+            beatMap.m_baseMapMetadata.bgyoffset = readMMMInt(
+                base, "bgyoffset", beatMap.m_baseMapMetadata.bgyoffset);
             beatMap.m_baseMapMetadata.track_count =
                 readMMMU32(base, "track_count", 4);
             beatMap.m_baseMapMetadata.preference_bpm =

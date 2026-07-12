@@ -1,3 +1,4 @@
+#include "ui/imgui/manager/SettingsView.h"
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -9,7 +10,6 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
-#include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -22,6 +22,25 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 判断项目背景资源是否使用已支持的视频扩展名。
+/// @param path 待判断资源路径。
+/// @return 扩展名属于当前 FFmpeg 背景容器集时返回 true。
+bool isVideoBackgroundPath(const std::filesystem::path& path)
+{
+    std::string extension = Config::pathToUtf8(path.extension());
+    std::transform(extension.begin(),
+                   extension.end(),
+                   extension.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return extension == ".mp4" || extension == ".avi" || extension == ".mkv" ||
+           extension == ".webm" || extension == ".mov" || extension == ".flv" ||
+           extension == ".m4v";
+}
+}  // namespace
 
 /// @brief 渲染谱面设置页。
 void SettingsView::drawBeatmapSettings()
@@ -44,10 +63,16 @@ void SettingsView::drawBeatmapSettings()
     if ( m_lastBeatmapPath != currentPath ) {
         m_editingMeta     = beatmap.m_baseMapMetadata;
         m_lastBeatmapPath = currentPath;
-    } else if ( m_editingMeta.track_count !=
-                beatmap.m_baseMapMetadata.track_count ) {
-        // 右侧工具栏可直接修改 key 数，谱面设置页需要同步这份外部变更。
-        m_editingMeta.track_count = beatmap.m_baseMapMetadata.track_count;
+    } else {
+        const auto& currentMeta = beatmap.m_baseMapMetadata;
+        // 右侧工具栏和原始元数据编辑器可直接修改这些字段，设置页需要同步外部变更。
+        m_editingMeta.track_count     = currentMeta.track_count;
+        m_editingMeta.main_cover_path = currentMeta.main_cover_path;
+        m_editingMeta.cover_path      = currentMeta.cover_path;
+        m_editingMeta.cover_type      = currentMeta.cover_type;
+        m_editingMeta.video_starttime = currentMeta.video_starttime;
+        m_editingMeta.bgxoffset       = currentMeta.bgxoffset;
+        m_editingMeta.bgyoffset       = currentMeta.bgyoffset;
     }
     auto& meta    = m_editingMeta;
     bool  changed = false;
@@ -198,7 +223,7 @@ void SettingsView::drawBeatmapSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -599,11 +624,12 @@ void SettingsView::drawBeatmapSettings()
                 std::string bgPreview = currentBgPath;
 
                 std::error_code bgExistsError;
-                bool            bgExists = project &&
-                                std::filesystem::exists(
-                                    resolveProjectPath(meta.main_cover_path),
-                                    bgExistsError) &&
-                                !bgExistsError;
+                const bool      bgExists =
+                    project &&
+                    std::filesystem::exists(
+                        resolveProjectPath(meta.main_cover_path),
+                        bgExistsError) &&
+                    !bgExistsError;
                 bool bgPushed = false;
                 if ( !bgExists && !currentBgPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -625,7 +651,12 @@ void SettingsView::drawBeatmapSettings()
                                                       ".jpeg",
                                                       ".bmp",
                                                       ".mp4",
-                                                      ".avi" });
+                                                      ".avi",
+                                                      ".mkv",
+                                                      ".webm",
+                                                      ".mov",
+                                                      ".flv",
+                                                      ".m4v" });
 
                         for ( const auto& imgPath : images ) {
                             bool isSelected = (currentBgPath == imgPath);
@@ -634,7 +665,11 @@ void SettingsView::drawBeatmapSettings()
                                      isSelected) ) {
                                 auto chosenPath = Config::utf8ToPath(imgPath);
                                 meta.main_cover_path = chosenPath;
-                                changed              = true;
+                                meta.cover_type =
+                                    isVideoBackgroundPath(chosenPath)
+                                        ? MMM::CoverType::VIDEO
+                                        : MMM::CoverType::IMAGE;
+                                changed = true;
 
                                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
                                 auto ext =

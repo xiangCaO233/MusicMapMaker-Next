@@ -195,6 +195,18 @@ protected:
 
     virtual const std::vector<uint32_t>& getIndices() const = 0;
 
+    /// @brief 在开始离屏 RenderPass 前记录派生视图的资源上传命令。
+    /// @param cmdBuf 当前帧独占的离屏命令缓冲。
+    /// @param frameIndex 当前并发帧索引。
+    /// @warning 渲染命令录制热路径：每帧至多调用一次；仅允许记录已准备资源的
+    /// Vulkan 命令，禁止分配、submit、waitIdle、文件访问或锁等待。
+    virtual void onRecordResourceUploads(vk::CommandBuffer& cmdBuf,
+                                         uint32_t           frameIndex)
+    {
+        (void)cmdBuf;
+        (void)frameIndex;
+    }
+
     /**
      * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)
      */

@@ -1,6 +1,6 @@
+#include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"
-#include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/PreviewDensity.h"
@@ -487,6 +487,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
     const bool  hasBeatmap = (m_ctx->currentBeatmap != nullptr);
     std::string snapshotBackgroundPath;
+    bool        snapshotBackgroundIsVideo        = false;
+    double      snapshotBackgroundVideoStartTime = 0.0;
     std::string snapshotBeatmapPathKey;
     std::string snapshotBeatmapName;
     bool        snapshotIsDirty     = false;
@@ -499,14 +501,21 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshotFallbackBpm = metadata.preference_bpm;
         }
 
-        std::filesystem::path bgPath;
-        auto*                 project = engine.getCurrentProject();
-        if ( project ) {
-            bgPath = project->m_projectRoot / metadata.main_cover_path;
-        } else {
-            bgPath = metadata.map_path.parent_path() / metadata.main_cover_path;
+        if ( !metadata.main_cover_path.empty() ) {
+            std::filesystem::path bgPath;
+            auto*                 project = engine.getCurrentProject();
+            if ( project ) {
+                bgPath = project->m_projectRoot / metadata.main_cover_path;
+            } else {
+                bgPath =
+                    metadata.map_path.parent_path() / metadata.main_cover_path;
+            }
+            snapshotBackgroundPath = Config::pathToUtf8(bgPath);
         }
-        snapshotBackgroundPath = Config::pathToUtf8(bgPath);
+        snapshotBackgroundIsVideo =
+            metadata.cover_type == MMM::CoverType::VIDEO;
+        snapshotBackgroundVideoStartTime =
+            static_cast<double>(metadata.video_starttime) / 1000.0;
         snapshotBeatmapPathKey = Config::pathToUtf8(metadata.map_path);
         snapshotBeatmapName    = metadata.name;
         snapshotIsDirty        = m_ctx->actionStack.isDirty();
@@ -599,6 +608,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             cameraId, snapshot->uvMap, snapshot->atlasUvRevision);
         snapshot->isPlaying         = snapshotIsPlaying;
         snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->playbackTime      = m_ctx->currentTime;
         snapshot->totalTime         = snapshotTotalTime;
         snapshot->snapshotSysTime   = snapshotSysTime;
         snapshot->playbackSpeed     = snapshotPlaybackSpeed;
@@ -612,8 +622,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         }
 
         if ( hasBeatmap ) {
-            snapshot->backgroundPath  = snapshotBackgroundPath;
-            snapshot->bgSize          = m_ctx->bgSize;
+            snapshot->backgroundPath    = snapshotBackgroundPath;
+            snapshot->bgSize            = m_ctx->bgSize;
+            snapshot->backgroundIsVideo = snapshotBackgroundIsVideo;
+            snapshot->backgroundVideoStartTime =
+                snapshotBackgroundVideoStartTime;
             snapshot->beatmapPathKey  = snapshotBeatmapPathKey;
             snapshot->beatmapName     = snapshotBeatmapName;
             snapshot->isDirty         = snapshotIsDirty;

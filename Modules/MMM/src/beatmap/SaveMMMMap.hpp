@@ -43,9 +43,13 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
     base["cover_img"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path);
-    base["track_count"] = beatMap.m_baseMapMetadata.track_count;
-    base["bpm"]         = beatMap.m_baseMapMetadata.preference_bpm;
-    base["duration"]    = beatMap.m_baseMapMetadata.map_length;
+    base["cover_type"] = static_cast<int>(beatMap.m_baseMapMetadata.cover_type);
+    base["video_starttime"] = beatMap.m_baseMapMetadata.video_starttime;
+    base["bgxoffset"]       = beatMap.m_baseMapMetadata.bgxoffset;
+    base["bgyoffset"]       = beatMap.m_baseMapMetadata.bgyoffset;
+    base["track_count"]     = beatMap.m_baseMapMetadata.track_count;
+    base["bpm"]             = beatMap.m_baseMapMetadata.preference_bpm;
+    base["duration"]        = beatMap.m_baseMapMetadata.map_length;
 
     // 来源格式附加元数据。
     auto& extra = metadata["extra"];

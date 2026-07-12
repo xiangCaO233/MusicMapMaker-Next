@@ -32,6 +32,23 @@ namespace
 /// @brief BPM 测量工具窗口在 UIManager 中的稳定视图名。
 constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
 
+/// @brief 判断新谱面背景资源是否为已支持的视频容器。
+/// @param path 待判断资源路径。
+/// @return 视频扩展名返回 true。
+bool isVideoBackgroundPath(const std::filesystem::path& path)
+{
+    std::string extension = Config::pathToUtf8(path.extension());
+    std::transform(extension.begin(),
+                   extension.end(),
+                   extension.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return extension == ".mp4" || extension == ".avi" || extension == ".mkv" ||
+           extension == ".webm" || extension == ".mov" || extension == ".flv" ||
+           extension == ".m4v";
+}
+
 /// @brief 将字符串安全写入固定长度输入缓冲区。
 /// @param buffer 目标缓冲区。
 /// @param bufferSize 缓冲区长度。
@@ -261,6 +278,10 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
     if ( !meta.main_cover_path.empty() ) {
         m_selectedCoverPath = meta.main_cover_path;
     }
+    m_meta.cover_type      = meta.cover_type;
+    m_meta.video_starttime = meta.video_starttime;
+    m_meta.bgxoffset       = meta.bgxoffset;
+    m_meta.bgyoffset       = meta.bgyoffset;
     if ( !meta.cover_path.empty() ) {
         m_selectedCoverImgPath = meta.cover_path;
     }
@@ -346,6 +367,11 @@ void NewBeatmapWizard::syncMetaFromInputs()
     m_meta.main_audio_path = m_selectedAudioPath;
     m_meta.main_cover_path = m_selectedCoverPath;
     m_meta.cover_path      = m_selectedCoverImgPath;
+    if ( !m_selectedCoverPath.empty() ) {
+        m_meta.cover_type = isVideoBackgroundPath(m_selectedCoverPath)
+                                ? MMM::CoverType::VIDEO
+                                : MMM::CoverType::IMAGE;
+    }
 }
 
 /// @brief 接收 BPM 测量工具导出的 Timing，并写回新建谱面向导。
@@ -878,14 +904,28 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapBackgroundSelect",
                                        coverPreview.c_str()) ) {
         // 扫描项目中的图片/视频文件
-        std::vector<std::string> resources = collectProjectResources(
-            project->m_projectRoot,
-            { ".png", ".jpg", ".jpeg", ".bmp", ".mp4", ".avi" });
+        std::vector<std::string> resources =
+            collectProjectResources(project->m_projectRoot,
+                                    { ".png",
+                                      ".jpg",
+                                      ".jpeg",
+                                      ".bmp",
+                                      ".mp4",
+                                      ".avi",
+                                      ".mkv",
+                                      ".webm",
+                                      ".mov",
+                                      ".flv",
+                                      ".m4v" });
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverPath == resPath);
             if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
                 m_selectedCoverPath = resPath;
+                m_meta.cover_type =
+                    isVideoBackgroundPath(Config::utf8ToPath(resPath))
+                        ? MMM::CoverType::VIDEO
+                        : MMM::CoverType::IMAGE;
 
                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
                 auto ext =

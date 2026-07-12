@@ -1,24 +1,29 @@
 #include "canvas/Basic2DCanvas.h"
+#include "canvas/BackgroundVideoTiming.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include <cmath>
 #include <filesystem>
 #include <system_error>
+#include <utility>
 
 namespace MMM::Canvas
 {
 
-/// @brief 当快照背景路径变化时加载或清理背景纹理。
+/// @brief 当快照背景路径或类型变化时加载或清理背景资源。
 /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
 /// GPU；调用方必须保证不在每帧无条件执行。
 void Basic2DCanvas::updateBackgroundTexture()
 {
     if ( m_currentSnapshot &&
-         m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
-        m_loadedBgPath = m_currentSnapshot->backgroundPath;
+         (m_currentSnapshot->backgroundPath != m_loadedBgPath ||
+          m_currentSnapshot->backgroundIsVideo != m_loadedBackgroundIsVideo) ) {
+        m_loadedBgPath            = m_currentSnapshot->backgroundPath;
+        m_loadedBackgroundIsVideo = m_currentSnapshot->backgroundIsVideo;
 
         // 关键修复：替换背景纹理前，必须等待所有在途帧完成渲染。
         // 旧纹理的 DescriptorSet 可能仍被上一帧的 CommandBuffer 引用，
@@ -32,11 +37,39 @@ void Basic2DCanvas::updateBackgroundTexture()
         std::error_code textureExistsError;
         const bool      texturePathExists =
             !m_loadedBgPath.empty() &&
-            std::filesystem::exists(Config::utf8ToPath(m_loadedBgPath),
-                                    textureExistsError) &&
+            std::filesystem::is_regular_file(Config::utf8ToPath(m_loadedBgPath),
+                                             textureExistsError) &&
             !textureExistsError;
-        if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue &&
-             texturePathExists ) {
+        m_bgTexture.reset();
+        m_pendingVideoPixels.clear();
+        m_pendingVideoUploadRevision    = 0;
+        m_recordedVideoUploadRevision   = 0;
+        m_videoFrameAvailable           = false;
+        m_videoSourceAvailable          = false;
+        m_videoFrameVisible             = false;
+        m_videoShouldBeVisibleThisFrame = false;
+        m_hasRequestedVideoFrame        = false;
+        m_hasUploadedVideoTimestamp     = false;
+        m_videoDiscontinuityPending     = false;
+        m_videoReachedEnd               = false;
+        m_pendingVideoStateValid        = false;
+
+        if ( m_loadedBackgroundIsVideo ) {
+            const std::filesystem::path videoPath =
+                texturePathExists ? Config::utf8ToPath(m_loadedBgPath)
+                                  : std::filesystem::path{};
+            m_requiredVideoRequestGeneration =
+                m_backgroundVideoPlayer->setSource(videoPath);
+            if ( !videoPath.empty() ) {
+                m_videoSourceAvailable         = true;
+                m_hasRequestedVideoFrame       = true;
+                m_lastRequestedVideoTime       = 0.0;
+                m_videoDiscontinuityPending    = true;
+                m_videoDiscontinuityTargetTime = 0.0;
+            }
+        } else if ( m_physicalDevice && m_logicalDevice && m_cmdPool &&
+                    m_queue && texturePathExists ) {
+            (void)m_backgroundVideoPlayer->setSource({});
             m_bgTexture = std::make_unique<Graphic::VKTexture>(
                 Config::utf8ToPath(m_loadedBgPath),
                 m_physicalDevice,
@@ -50,8 +83,194 @@ void Basic2DCanvas::updateBackgroundTexture()
                 m_bgTexture.reset();
             }
         } else {
-            m_bgTexture.reset();
+            (void)m_backgroundVideoPlayer->setSource({});
         }
+    }
+}
+
+/// @brief 提交已完成 GPU 纹理更新的视频帧状态。
+/// @warning UI 阶段或离屏录制阶段调用；两阶段由渲染器串行。
+void Basic2DCanvas::commitUploadedVideoFrame(double        timestamp,
+                                             std::uint64_t requestGeneration,
+                                             bool          reachedEnd)
+{
+    if ( requestGeneration < m_requiredVideoRequestGeneration ) {
+        return;
+    }
+
+    m_hasUploadedVideoTimestamp = true;
+    m_uploadedVideoTimestamp    = timestamp;
+    m_videoFrameAvailable       = true;
+    m_videoDiscontinuityPending = false;
+    m_videoReachedEnd           = reachedEnd;
+}
+
+/// @brief 按谱面播放时钟更新背景视频帧。
+/// @warning UI 热路径：解码在专用线程执行；只有首帧或分辨率变更
+/// 时会在此低频分支等待 GPU 并重建纹理。
+void Basic2DCanvas::updateBackgroundVideoFrame()
+{
+    if ( !m_currentSnapshot || !m_currentSnapshot->backgroundIsVideo ||
+         m_loadedBgPath.empty() || !m_videoSourceAvailable ) {
+        m_videoShouldBeVisibleThisFrame = false;
+        m_videoFrameVisible             = false;
+        return;
+    }
+
+    const double targetTime = calculateBackgroundVideoTime(
+        m_currentSnapshot->playbackTime,
+        m_currentSnapshot->backgroundVideoStartTime,
+        m_currentSnapshot->isPlaying,
+        m_currentSnapshot->snapshotSysTime,
+        m_currentSnapshot->playbackSpeed,
+        currentSteadySeconds());
+    if ( !std::isfinite(targetTime) ) {
+        m_videoShouldBeVisibleThisFrame = false;
+        m_videoFrameVisible             = false;
+        return;
+    }
+    const bool isBeforeVideoStart   = targetTime < 0.0;
+    m_videoShouldBeVisibleThisFrame = !isBeforeVideoStart;
+
+    if ( !isBeforeVideoStart ) {
+        constexpr double REQUEST_INTERVAL_SECONDS   = 1.0 / 120.0;
+        constexpr double SEEK_DISCONTINUITY_SECONDS = 0.25;
+        const bool       movedBackward =
+            m_hasRequestedVideoFrame &&
+            targetTime + REQUEST_INTERVAL_SECONDS < m_lastRequestedVideoTime;
+        const bool requestJumped =
+            !m_hasRequestedVideoFrame || movedBackward ||
+            std::abs(targetTime - m_lastRequestedVideoTime) >
+                SEEK_DISCONTINUITY_SECONDS;
+        const bool isPausedSeek =
+            !m_currentSnapshot->isPlaying && m_hasRequestedVideoFrame &&
+            std::abs(targetTime - m_lastRequestedVideoTime) >=
+                REQUEST_INTERVAL_SECONDS;
+        const double generationAdvanceThreshold =
+            m_currentSnapshot->isPlaying ? SEEK_DISCONTINUITY_SECONDS
+                                         : REQUEST_INTERVAL_SECONDS;
+        const bool startsNewGeneration =
+            (requestJumped || isPausedSeek) &&
+            (!m_videoDiscontinuityPending ||
+             std::abs(targetTime - m_videoDiscontinuityTargetTime) >=
+                 generationAdvanceThreshold);
+        const bool resumesFromEnd = m_videoReachedEnd && movedBackward;
+        const bool shouldRequest =
+            (!m_videoReachedEnd || resumesFromEnd) &&
+            (!m_hasRequestedVideoFrame ||
+             std::abs(targetTime - m_lastRequestedVideoTime) >=
+                 REQUEST_INTERVAL_SECONDS);
+        if ( shouldRequest ) {
+            const std::uint64_t requestGeneration =
+                m_backgroundVideoPlayer->requestFrame(targetTime,
+                                                      startsNewGeneration);
+            if ( startsNewGeneration ) {
+                m_requiredVideoRequestGeneration = requestGeneration;
+                m_videoFrameAvailable            = false;
+                m_videoReachedEnd                = false;
+                m_videoDiscontinuityPending      = true;
+                m_videoDiscontinuityTargetTime   = targetTime;
+                m_pendingVideoPixels.clear();
+                m_pendingVideoStateValid      = false;
+                m_recordedVideoUploadRevision = m_pendingVideoUploadRevision;
+            }
+            m_hasRequestedVideoFrame = true;
+            m_lastRequestedVideoTime = targetTime;
+        }
+    }
+
+    BackgroundVideoFrame decodedFrame;
+    if ( m_backgroundVideoPlayer->tryTakeLatestFrame(decodedFrame) &&
+         decodedFrame.requestGeneration >= m_requiredVideoRequestGeneration &&
+         decodedFrame.frame.width > 0 && decodedFrame.frame.height > 0 &&
+         decodedFrame.frame.rgba.size() ==
+             static_cast<std::size_t>(decodedFrame.frame.width) *
+                 decodedFrame.frame.height * 4U ) {
+        const bool mustRecreateTexture =
+            !m_bgTexture || m_bgTexture->width() != decodedFrame.frame.width ||
+            m_bgTexture->height() != decodedFrame.frame.height;
+        const bool isAlreadyUploadedFrame =
+            !mustRecreateTexture && m_hasUploadedVideoTimestamp &&
+            std::abs(decodedFrame.frame.timestamp - m_uploadedVideoTimestamp) <=
+                1e-6;
+        if ( !isAlreadyUploadedFrame ) {
+            ++m_pendingVideoUploadRevision;
+        }
+        if ( mustRecreateTexture ) {
+            if ( m_logicalDevice && m_bgTexture ) {
+                (void)m_logicalDevice.waitIdle();
+            }
+            if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue ) {
+                m_bgTexture = std::make_unique<Graphic::VKTexture>(
+                    decodedFrame.frame.rgba.data(),
+                    decodedFrame.frame.width,
+                    decodedFrame.frame.height,
+                    m_physicalDevice,
+                    m_logicalDevice,
+                    m_cmdPool,
+                    m_queue);
+                if ( m_bgTexture->isValid() &&
+                     m_bgTexture->prepareStreamingUpload(m_physicalDevice,
+                                                         2U) ) {
+                    m_recordedVideoUploadRevision =
+                        m_pendingVideoUploadRevision;
+                    m_pendingVideoPixels.clear();
+                    m_pendingVideoStateValid = false;
+                    commitUploadedVideoFrame(decodedFrame.frame.timestamp,
+                                             decodedFrame.requestGeneration,
+                                             decodedFrame.reachedEnd);
+                } else {
+                    XERROR("Failed to create streaming video texture: {}",
+                           m_loadedBgPath);
+                    m_bgTexture.reset();
+                }
+            }
+        } else if ( !isAlreadyUploadedFrame ) {
+            m_pendingVideoPixels     = std::move(decodedFrame.frame.rgba);
+            m_pendingVideoStateValid = true;
+            m_pendingVideoTimestamp  = decodedFrame.frame.timestamp;
+            m_pendingVideoRequestGeneration = decodedFrame.requestGeneration;
+            m_pendingVideoReachedEnd        = decodedFrame.reachedEnd;
+        } else {
+            commitUploadedVideoFrame(decodedFrame.frame.timestamp,
+                                     decodedFrame.requestGeneration,
+                                     decodedFrame.reachedEnd);
+        }
+        if ( !m_bgTexture || !m_bgTexture->isValid() ) {
+            m_videoFrameAvailable       = false;
+            m_hasRequestedVideoFrame    = false;
+            m_videoDiscontinuityPending = false;
+        }
+    }
+
+    m_videoFrameVisible =
+        m_videoShouldBeVisibleThisFrame && m_videoFrameAvailable;
+}
+
+/// @brief 在离屏 RenderPass 开始前上传最新视频帧。
+/// @warning 渲染命令录制热路径：没有新帧时仅比较修订号；有新帧时只
+/// 复制到已映射 staging 槽并录制图像传输命令。
+void Basic2DCanvas::onRecordResourceUploads(vk::CommandBuffer& cmdBuf,
+                                            uint32_t           frameIndex)
+{
+    if ( !m_loadedBackgroundIsVideo || !m_bgTexture ||
+         m_pendingVideoPixels.empty() || !m_pendingVideoStateValid ||
+         m_recordedVideoUploadRevision == m_pendingVideoUploadRevision ) {
+        return;
+    }
+
+    if ( m_bgTexture->recordStreamingUpload(cmdBuf,
+                                            frameIndex,
+                                            m_pendingVideoPixels.data(),
+                                            m_pendingVideoPixels.size()) ) {
+        m_recordedVideoUploadRevision = m_pendingVideoUploadRevision;
+        commitUploadedVideoFrame(m_pendingVideoTimestamp,
+                                 m_pendingVideoRequestGeneration,
+                                 m_pendingVideoReachedEnd);
+        m_videoFrameVisible =
+            m_videoShouldBeVisibleThisFrame && m_videoFrameAvailable;
+        m_pendingVideoPixels.clear();
+        m_pendingVideoStateValid = false;
     }
 }
 
@@ -104,10 +323,18 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet actualTexture = cmd.texture;
 
+        const bool isBackground =
+            cmd.customTextureId ==
+            static_cast<uint32_t>(Logic::TextureID::Background);
+        if ( isBackground &&
+             (!m_bgTexture || (m_currentSnapshot->backgroundIsVideo &&
+                               !m_videoFrameVisible)) ) {
+            continue;
+        }
+
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
-        } else if ( cmd.customTextureId ==
-                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+        } else if ( isBackground ) {
             actualTexture = backgroundDescriptor;
         }
 

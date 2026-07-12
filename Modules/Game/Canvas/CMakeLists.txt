@@ -2,6 +2,7 @@
 
 add_library(
   Canvas STATIC
+  src/BackgroundVideoPlayer.cpp
   src/Basic2DCanvas.cpp
   src/Basic2DCanvas_Interaction.cpp
   src/Basic2DCanvas_Rendering.cpp
@@ -30,3 +31,10 @@ target_include_directories(PreviewDensityInteractionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PreviewDensityInteractionTest
          COMMAND PreviewDensityInteractionTest)
+
+# 背景视频时钟是无图形依赖的纯计算，单独覆盖暂停、倍速与开始偏移。
+mmm_add_test_executable(Canvas BackgroundVideoTimingTest
+                        tests/BackgroundVideoTimingTest.cpp)
+target_include_directories(BackgroundVideoTimingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME BackgroundVideoTimingTest COMMAND BackgroundVideoTimingTest)

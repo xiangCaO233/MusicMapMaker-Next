@@ -92,6 +92,15 @@ double getEffectiveTotalTimeSeconds(const SessionContext& ctx);
 std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
                                            const ::MMM::Project* project);
 
+/// @brief 根据当前背景类型探测并更新会话中的背景原始尺寸。
+/// @param ctx 目标会话上下文。
+/// @param metadata 待探测的谱面基础元数据。
+/// @param project 当前项目；为空时从谱面目录解析资源。
+/// @warning 低频资源加载路径：会访问文件系统并打开图片或视频，
+/// 仅允许在谱面加载和背景元数据变更时调用。
+void updateBackgroundSize(SessionContext& ctx, const MMM::BaseMapMeta& metadata,
+                          const ::MMM::Project* project);
+
 /// @brief 载入新的谱面数据到上下文中
 /// @param ctx 会话上下文引用
 /// @param beatmap 指向要载入的谱面指针
