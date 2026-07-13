@@ -45,6 +45,16 @@ public:
     /// @param height 输出 framebuffer 高度。
     void getFramebufferSize(int& width, int& height) const;
 
+    /// @brief 从当前资源目录重新加载主窗口图标。
+    /// @warning 启动低频路径：会读取并解码图标文件，禁止放入每帧渲染路径。
+    void reloadWindowIcon();
+
+    /// @brief 按逻辑尺寸调整窗口并在当前显示器工作区居中。
+    /// @param width 目标逻辑宽度。
+    /// @param height 目标逻辑高度。
+    /// @warning 启动低频路径：会修改原生窗口矩形并触发交换链重建请求。
+    void resizeAndCenter(int width, int height);
+
     /// @brief 获取窗口位置、尺寸和最大化状态。
     /// @param x 输出窗口左上角 X 坐标。
     /// @param y 输出窗口左上角 Y 坐标。

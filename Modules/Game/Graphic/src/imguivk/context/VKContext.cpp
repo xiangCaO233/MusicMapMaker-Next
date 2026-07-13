@@ -289,7 +289,9 @@ void VKContext::release()
         XDEBUG("VK Instance destroyed.");
     }
 
-    m_isReleased = true;
+    m_windowResourcesInitialized = false;
+    m_nativeWindow_ptr           = nullptr;
+    m_isReleased                 = true;
     XINFO("VKContext resources released.");
 }
 
@@ -401,11 +403,25 @@ void VKContext::imguiAutoSelect()
  * @param w 窗口宽度
  * @param h 窗口高度
  */
-bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
+bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
+                                 VKWindowResourceMode mode)
 {
     if ( hasInitializationError() ) {
         return false;
     }
+
+    if ( m_windowResourcesInitialized ) {
+        if ( native_window_ptr != m_nativeWindow_ptr ) {
+            XERROR("Vulkan window resources already belong to another window");
+            return false;
+        }
+        if ( mode == VKWindowResourceMode::Application &&
+             m_windowResourceMode == VKWindowResourceMode::Bootstrap ) {
+            promoteBootstrapResources();
+        }
+        return true;
+    }
+
     m_nativeWindow_ptr = native_window_ptr;
     addStartupDiagnostic(
         fmt::format("Initializing Vulkan window resources: {}x{}", w, h));
@@ -482,13 +498,31 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
                                                 m_LogicDeviceGraphicsQueue,
                                                 m_LogicDevicePresentQueue);
 
-    // 初始化渲染器中的光标管理器
-    m_vkRenderer->initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
+    if ( mode == VKWindowResourceMode::Application ) {
+        // 软件光标依赖皮肤贴图，启动期资源同步完成前不能创建。
+        m_vkRenderer->initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
+    }
 
     // 初始化 ImGui
-    imguiVulkanInit(native_window_ptr->getWindowHandle());
-    applyTheme();
+    imguiVulkanInit(native_window_ptr->getWindowHandle(), mode);
+    m_windowResourceMode         = mode;
+    m_windowResourcesInitialized = true;
     return true;
+}
+
+/// @brief 将启动期最小图形资源提升为完整应用资源。
+void VKContext::promoteBootstrapResources()
+{
+    if ( !m_windowResourcesInitialized ||
+         m_windowResourceMode != VKWindowResourceMode::Bootstrap ) {
+        return;
+    }
+
+    rebuildFonts();
+    applyTheme();
+    m_vkRenderer->reloadSkinTextures();
+    m_windowResourceMode = VKWindowResourceMode::Application;
+    XINFO("Bootstrap graphics promoted to full application resources");
 }
 
 /**
@@ -640,7 +674,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                               minPos.y + ImGui::GetWindowHeight());
+                                      minPos.y + ImGui::GetWindowHeight());
 
         // 绘制毛玻璃/半透明背板 (深色磨砂)
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(
