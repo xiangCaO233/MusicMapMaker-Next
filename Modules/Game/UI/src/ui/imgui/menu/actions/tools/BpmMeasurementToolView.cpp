@@ -531,13 +531,16 @@ void BpmMeasurementToolView::openWithAutoMeasurement(
 /// 计划。只有音轨路径身份变化的低频脏分支可以启动后台分析。
 void BpmMeasurementToolView::update(UIManager* sourceManager)
 {
-    (void)sourceManager;
-    refreshPlaybackRoute();
-    if ( m_selectedAudioIdentityNeedsAnalysis ) {
-        requestAnalyzeSelectedTrack();
+    const bool projectTransition =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
+    if ( !projectTransition ) {
+        refreshPlaybackRoute();
+        if ( m_selectedAudioIdentityNeedsAnalysis ) {
+            requestAnalyzeSelectedTrack();
+        }
+        consumePendingAnalysis();
+        updateMetronomePlayback();
     }
-    consumePendingAnalysis();
-    updateMetronomePlayback();
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float          dpiScale =
@@ -564,6 +567,11 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         true,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse,
         &m_isOpen);
+
+    if ( projectTransition ) {
+        Utils::renderProjectTransitionPlaceholder();
+        return;
+    }
 
     const float contentWidth = ImGui::GetContentRegionAvail().x;
     const float controlsWidth =

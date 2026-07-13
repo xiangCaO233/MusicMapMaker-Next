@@ -501,14 +501,9 @@ bool copyFilesystemEntry(const std::filesystem::path& source,
 void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                                               UIManager*     sourceManager)
 {
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();
 
-    if ( m_currentRoot != project->m_projectRoot ) {
-        m_currentRoot = project->m_projectRoot;
-        invalidateDirectoryCache();
-    }
+    const std::filesystem::path projectRoot = m_currentRoot;
 
     const float dpiScale =
         std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
@@ -525,20 +520,19 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     treeVBox.setSpacing(itemSpacing);
 
     // 1. Root 节点作为 CollapsingHeader
-    treeVBox.addElement("ProjectRootHeader",
-                        Sizing::Grow(),
-                        Sizing::Fixed(ImGui::GetFrameHeight()),
-                        [this, project](Clay_BoundingBox r, bool isHovered) {
-                            std::string rootName = Config::pathToUtf8(
-                                project->m_projectRoot.filename());
-                            Utils::renderScrollingCollapsingHeader(
-                                "ProjectRootHeader", rootName, &m_showRoot, r);
-                            if ( ImGui::IsItemHovered() ) {
-                                std::string fullPath =
-                                    Config::pathToUtf8(project->m_projectRoot);
-                                ImGui::SetTooltip("%s", fullPath.c_str());
-                            }
-                        });
+    treeVBox.addElement(
+        "ProjectRootHeader",
+        Sizing::Grow(),
+        Sizing::Fixed(ImGui::GetFrameHeight()),
+        [this, projectRoot](Clay_BoundingBox r, bool isHovered) {
+            std::string rootName = Config::pathToUtf8(projectRoot.filename());
+            Utils::renderScrollingCollapsingHeader(
+                "ProjectRootHeader", rootName, &m_showRoot, r);
+            if ( ImGui::IsItemHovered() ) {
+                std::string fullPath = Config::pathToUtf8(projectRoot);
+                ImGui::SetTooltip("%s", fullPath.c_str());
+            }
+        });
 
     if ( m_showRoot ) {
         treeVBox.addElement(

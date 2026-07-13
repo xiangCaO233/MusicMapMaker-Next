@@ -17,7 +17,7 @@ struct ProjectEvent : public BaseEvent {
 struct ProjectRequestEvent : public ProjectEvent {
 };
 
-/// @brief 项目生命周期事件，表示项目实例已经完成打开、关闭等状态变更。
+/// @brief 项目生命周期事件，表示项目打开、关闭或迁移过程中的状态变更。
 struct ProjectLifecycleEvent : public ProjectEvent {
 };
 
@@ -69,6 +69,15 @@ struct ProjectSwitchCompletedEvent : public ProjectSwitchEvent {
 
 /// @brief UI 取消旧谱面画布关闭确认的项目切换事件。
 struct ProjectSwitchCancelledEvent : public ProjectSwitchEvent {
+};
+
+/// @brief 项目开始切换事件，通知 UI 保留切换中的工作区状态。
+struct ProjectOpenStartedEvent : public ProjectLifecycleEvent {
+    /// @brief 正在打开的项目目录、谱面文件或谱面包路径。
+    std::string m_projectPath;
+
+    /// @brief 当前是否正在打开临时谱面包。
+    bool m_isPackage{ false };
 };
 
 /// @brief 项目关闭完成事件。
@@ -140,6 +149,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCompletedEvent,
                        MMM::Event::ProjectSwitchEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCancelledEvent,
                        MMM::Event::ProjectSwitchEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenStartedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectClosedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,

@@ -3,6 +3,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui_internal.h"
 #include "ui/layout/CLayDefs.h"
 
@@ -27,6 +28,18 @@ constexpr float TOOLTIP_SLIDE_Y = 4.0f;
 
 /// @brief 项目纵向滚动区域统一使用的最小滚动条宽度，单位为逻辑像素。
 constexpr float VERTICAL_SCROLLBAR_MIN_WIDTH = 18.0f;
+
+void renderProjectTransitionPlaceholder()
+{
+    const char*  text      = TR("ui.project.opening").data();
+    const ImVec2 textSize  = ImGui::CalcTextSize(text);
+    const ImVec2 startPos  = ImGui::GetCursorScreenPos();
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    ImGui::SetCursorScreenPos(
+        { startPos.x + std::max(0.0f, available.x - textSize.x) * 0.5f,
+          startPos.y + std::max(0.0f, available.y - textSize.y) * 0.5f });
+    ImGui::TextDisabled("%s", text);
+}
 
 /// @brief 计算带盐的 Tooltip 状态键。
 /// @param id 控件 ID。

@@ -5,7 +5,7 @@
 namespace MMM::Event
 {
 
-/// @brief 项目加载完成事件：UI 层可以监听此事件以刷新文件列表、标题等
+/// @brief 项目加载就绪事件：音频预加载和谱面会话或工作区恢复均已完成。
 struct ProjectLoadedEvent : public ProjectLifecycleEvent {
     /// @brief 项目标题
     std::string m_projectTitle;

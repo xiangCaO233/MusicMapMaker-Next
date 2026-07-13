@@ -35,6 +35,11 @@ public:
     void onUpdate(LayoutContext& layoutContext,
                   UIManager*     sourceManager) override;
 
+    /// @brief 同步项目活动状态和文件树根目录快照。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：只比较路径并在发生变化时使目录缓存失效。
+    void syncProjectUiState(UIManager* sourceManager) override;
+
     /// @brief 获取文件管理器中不可再换行控件所需的最小内容尺寸。
     /// @param dpiScale 当前窗口内容缩放。
     /// @return 文件管理器最小内容尺寸。
@@ -270,6 +275,10 @@ private:
 
     void openFolderPicker();
 
+    /// @brief UI 生命周期快照是否确认当前已有加载完成的项目。
+    bool m_hasActiveProjectUiState{ false };
+
+    /// @brief 当前项目文件树使用的根目录快照。
     std::filesystem::path m_currentRoot;
     bool                  m_showRoot = true;
     /// @brief 当前文件树排序字段。

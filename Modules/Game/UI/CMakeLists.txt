@@ -133,3 +133,9 @@ mmm_add_test_executable(UI PackageDefaultSelectionTest
 target_include_directories(PackageDefaultSelectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PackageDefaultSelectionTest COMMAND PackageDefaultSelectionTest)
+
+mmm_add_test_executable(UI ProjectUiLifecycleStateTest
+                        tests/ProjectUiLifecycleStateTest.cpp)
+target_include_directories(ProjectUiLifecycleStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)

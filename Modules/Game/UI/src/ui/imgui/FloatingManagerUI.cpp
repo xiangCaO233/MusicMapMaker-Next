@@ -2,6 +2,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -9,6 +10,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/ISubView.h"
 #include "ui/UIManager.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -27,6 +29,19 @@ struct DockResizeOverrun {
 
 /// @brief 浮动管理器隐藏阈值，低于该值时停止绘制关闭动画。
 constexpr float FLOATING_MANAGER_HIDDEN_EPSILON = 0.01f;
+
+/// @brief 计算项目切换占位内容的最小尺寸。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 可完整显示切换提示的内容尺寸。
+/// @warning UI 热路径：项目切换期间每帧只执行一次文本测量。
+ImVec2 getProjectTransitionMinContentSize(float dpiScale)
+{
+    const float  padding = 16.0f * std::max(1.0f, dpiScale);
+    const ImVec2 textSize =
+        ImGui::CalcTextSize(TR("ui.project.opening").data());
+    return { std::ceil(textSize.x + padding * 2.0f),
+             std::ceil(textSize.y + padding * 2.0f) };
+}
 
 /// @brief 一次 dock resize 手势实际命中的 split 节点和当前子树。
 struct DockResizeTarget {
@@ -92,8 +107,8 @@ float updateFloatingVisibilityAmount(float amount, bool visible)
 {
     const float target = visible ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                    getUiAnimationTransitionSpeed());
+                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                      getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         return std::min(target, amount + step);
@@ -715,7 +730,7 @@ void FloatingManagerUI::captureCanvasDockSizeProtection(
         }
 
         DockResizeTarget target = findDockNodeAxisTarget(dockNode, dockAxis);
-        ImGuiDockNode*   node = target.valid ? target.node : dockNode;
+        ImGuiDockNode*   node   = target.valid ? target.node : dockNode;
         if ( !node ) {
             return;
         }
@@ -909,8 +924,14 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
         return;
     }
 
-    const ImVec2 minWindowSize =
-        toWindowMinSize(it->second->getMinContentSize(dpiScale), dpiScale);
+    it->second->syncProjectUiState(sourceManager);
+
+    const bool projectTransition =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
+    const ImVec2 minWindowSize = toWindowMinSize(
+        projectTransition ? getProjectTransitionMinContentSize(dpiScale)
+                          : it->second->getMinContentSize(dpiScale),
+        dpiScale);
     const std::string windowName = m_currentSubViewId + "###" + m_name;
     ImGuiWindow*      window     = ImGui::FindWindowByName(windowName.c_str());
     if ( !window || !window->DockNode ) {
@@ -1096,10 +1117,16 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
         return false;
     }
 
+    it->second->syncProjectUiState(sourceManager);
+
     const float dpiScale =
         MMM::Config::AppConfig::instance().getWindowContentScale();
-    const ImVec2 minWindowSize =
-        toWindowMinSize(it->second->getMinContentSize(dpiScale), dpiScale);
+    const bool projectTransition =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
+    const ImVec2 minWindowSize = toWindowMinSize(
+        projectTransition ? getProjectTransitionMinContentSize(dpiScale)
+                          : it->second->getMinContentSize(dpiScale),
+        dpiScale);
     ImGuiWindow* hostWindow = ImGui::FindWindowByName("RightDockHost");
     if ( !hostWindow ) {
         m_collapsedResizeDragActive        = false;
@@ -1151,13 +1178,13 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
     bool  shouldShowSubView = false;
     float mouseAxis         = 0.0f;
     float dragDistance      = 0.0f;
-    float separatorAxis     = axis == ImGuiAxis_Y
-                                  ? (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.y
-                                         : hostWindow->Pos.y + hostWindow->Size.y)
-                                  : (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.x
-                                         : hostWindow->Pos.x + hostWindow->Size.x);
+    float separatorAxis = axis == ImGuiAxis_Y
+                              ? (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.y
+                                     : hostWindow->Pos.y + hostWindow->Size.y)
+                              : (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.x
+                                     : hostWindow->Pos.x + hostWindow->Size.x);
 
     if ( !overlayActive ) {
         m_collapsedResizeDragActive        = false;
@@ -1248,8 +1275,14 @@ void FloatingManagerUI::update(UIManager* sourceManager)
         return;
     }
 
-    const ImVec2 minWindowSize =
-        toWindowMinSize(it->second->getMinContentSize(dpiScale), dpiScale);
+    it->second->syncProjectUiState(sourceManager);
+
+    const bool projectTransition =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
+    const ImVec2 minWindowSize = toWindowMinSize(
+        projectTransition ? getProjectTransitionMinContentSize(dpiScale)
+                          : it->second->getMinContentSize(dpiScale),
+        dpiScale);
     const bool resumeCollapsedResize =
         m_collapsedResizeDragActive &&
         ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
@@ -1286,9 +1319,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                         ImGui::GetStyle().Alpha * visibilityAlpha);
     {
         LayoutContext  lctx{ m_layoutCtx,     windowName,
-                            false,           ImGuiWindowFlags_NoTitleBar,
-                            nullptr,         resumeDockId,
-                            ImGuiCond_Always };
+                             false,           ImGuiWindowFlags_NoTitleBar,
+                             nullptr,         resumeDockId,
+                             ImGuiCond_Always };
         ImVec2         currentWindowSize = ImGui::GetWindowSize();
         const bool     isDocked          = ImGui::IsWindowDocked();
         ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();
@@ -1337,9 +1370,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                 resizeTarget = directTarget;
             }
         }
-        const ImVec2 dockResizeMousePos           = m_restoreMouseAfterDockSpace
-                                                        ? m_mousePosBeforeDockClamp
-                                                        : ImGui::GetMousePos();
+        const ImVec2 dockResizeMousePos = m_restoreMouseAfterDockSpace
+                                              ? m_mousePosBeforeDockClamp
+                                              : ImGui::GetMousePos();
         const DockResizeOverrun dockResizeOverrun = getDockResizeOverrun(
             resizeTarget, minWindowSize, dockResizeMousePos);
         bool collapsedDuringUpdate = false;
@@ -1464,7 +1497,11 @@ void FloatingManagerUI::update(UIManager* sourceManager)
             if ( !m_isVisible ) {
                 ImGui::BeginDisabled();
             }
-            it->second->onUpdate(lctx, sourceManager);
+            if ( projectTransition ) {
+                MMM::UI::Utils::renderProjectTransitionPlaceholder();
+            } else {
+                it->second->onUpdate(lctx, sourceManager);
+            }
             if ( !m_isVisible ) {
                 ImGui::EndDisabled();
             }

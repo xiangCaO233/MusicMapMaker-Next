@@ -63,14 +63,19 @@ AudioWaveformView::~AudioWaveformView() = default;
 
 void AudioWaveformView::update(UIManager* sourceManager)
 {
-    auto& audioManager = Audio::AudioManager::instance();
-    auto  track        = audioManager.getBGMTrack();
-
     ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioWaveformViewGlobal";
     LayoutContext layoutContext(
         m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+
+    if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        Utils::renderProjectTransitionPlaceholder();
+        return;
+    }
+
+    auto& audioManager = Audio::AudioManager::instance();
+    auto  track        = audioManager.getBGMTrack();
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());

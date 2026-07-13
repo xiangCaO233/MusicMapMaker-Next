@@ -92,14 +92,19 @@ AudioSpectrumView::~AudioSpectrumView()
 
 void AudioSpectrumView::update(UIManager* sourceManager)
 {
-    auto& audioManager = Audio::AudioManager::instance();
-    auto  track        = audioManager.getBGMTrack();
-
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioSpectrumViewGlobal";
     LayoutContext layoutContext(
         m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+
+    if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        Utils::renderProjectTransitionPlaceholder();
+        return;
+    }
+
+    auto& audioManager = Audio::AudioManager::instance();
+    auto  track        = audioManager.getBGMTrack();
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());

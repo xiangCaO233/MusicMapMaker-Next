@@ -1,10 +1,16 @@
 #pragma once
 
 #include "IUIView.h"
+#include "event/core/EventBus.h"
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
+#include "mmm/project/Project.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/CLayWrapperCore.h"
+#include "ui/project/ProjectUiLifecycleState.h"
+#include <atomic>
+#include <concurrentqueue.h>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -15,12 +21,6 @@ namespace MMM::Graphic
 class IWindowFrameAdapter;
 class NativeWindow;
 }  // namespace MMM::Graphic
-
-namespace MMM
-{
-class Project;
-struct ProjectWorkspaceState;
-}  // namespace MMM
 
 namespace MMM::Event
 {
@@ -36,16 +36,15 @@ class IParallelUiPreparable;
 class UIManager : public MMM::Graphic::IGraphicUserHook
 {
 public:
-    UIManager()
-    {
-        // 初始化CLay
-        CLayWrapperCore::instance().setupClayTextMeasurement();
-    }
+    /// @brief 初始化 UI 管理器并订阅项目生命周期事件。
+    UIManager();
     UIManager(UIManager&&)                 = delete;
     UIManager(const UIManager&)            = delete;
     UIManager& operator=(UIManager&&)      = delete;
     UIManager& operator=(const UIManager&) = delete;
-    ~UIManager()                           = default;
+
+    /// @brief 取消项目生命周期订阅并销毁 UI 管理器。
+    ~UIManager();
 
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
@@ -69,6 +68,22 @@ public:
     /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
     [[nodiscard]] Graphic::IWindowFrameAdapter* getWindowFrameAdapter() const;
+
+    /// @brief 判断项目是否正在切换，新项目加载完成前保持为 true。
+    /// @return 项目切换流程正在执行时返回 true。
+    /// @warning UI 热路径：逻辑线程生命周期回调负责写入，UI 和渲染线程
+    /// 负责读取；为阻止同帧访问已关闭项目，必须执行一次 acquire 原子读取。
+    [[nodiscard]] bool isProjectTransitionInProgress() const;
+
+    /// @brief 判断 UI 是否持有已加载项目的生命周期快照。
+    /// @return 已加载项目仍有效时返回 true。
+    /// @warning UI 热路径：只读取 UI 线程维护的本地状态。
+    [[nodiscard]] bool hasActiveProjectUiState() const;
+
+    /// @brief 获取 UI 生命周期快照中的当前项目根目录。
+    /// @return 当前项目根目录；无项目时为空路径。
+    /// @warning UI 热路径：返回 UI 线程本地路径引用，不访问逻辑线程项目。
+    [[nodiscard]] const std::filesystem::path& getActiveProjectRoot() const;
 
     /// @brief 更新主窗口标题栏基础原生拖拽区域。
     /// @param areas 当前标题栏允许原生窗口拖拽的矩形区域。
@@ -152,8 +167,30 @@ public:
                                uint32_t taskIndex) override;
 
 private:
+    /// @brief 跨线程投递到 UI 的项目生命周期快照。
+    struct ProjectUiLifecycleUpdate {
+        /// @brief 本次更新类型。
+        ProjectUiLifecycleKind kind{ ProjectUiLifecycleKind::Closed };
+
+        /// @brief 事件对应的项目路径。
+        std::filesystem::path projectRoot;
+
+        /// @brief 加载完成时复制的项目工作区。
+        ProjectWorkspaceState workspace;
+
+        /// @brief 加载完成时复制的项目音频资源，用于恢复音轨控制器。
+        std::vector<AudioResource> audioResources;
+
+        /// @brief 是否包含可用于恢复的项目快照。
+        bool hasProjectSnapshot{ false };
+    };
+
     /// @brief 无项目时应用一次默认侧边栏工作区。
     void applyNoProjectDefaultWorkspace();
+
+    /// @brief 消费逻辑线程投递的项目生命周期更新。
+    /// @warning UI 热路径：每帧只清空低频生命周期队列并更新本地状态。
+    void consumePendingProjectLifecycleUpdates();
 
     /// @brief 同步当前项目的 ImGui 布局保存和恢复状态。
     /// @warning UI 热路径低频分支：每帧只比较当前项目路径；实际保存 ImGui
@@ -166,7 +203,9 @@ private:
 
     /// @brief 恢复项目工作区中保存的动态视图。
     /// @param workspace 项目工作区状态。
-    void restoreProjectWorkspaceViews(const ProjectWorkspaceState& workspace);
+    void restoreProjectWorkspaceViews(
+        const ProjectWorkspaceState&      workspace,
+        const std::vector<AudioResource>& audioResources);
 
     /// @brief 关闭上一个项目遗留的动态工作区视图。
     void clearProjectWorkspaceViews();
@@ -219,8 +258,44 @@ private:
     /// @brief 上一次已应用项目工作区的项目路径。
     std::string m_workspaceProjectPath;
 
-    /// @brief 上一次已应用项目工作区的项目实例地址。
-    const Project* m_workspaceProjectInstance{ nullptr };
+    /// @brief 当前 UI 已确认加载完成的项目根目录。
+    std::filesystem::path m_activeProjectRoot;
+
+    /// @brief 等待 UI 线程应用的新项目工作区快照。
+    ProjectWorkspaceState m_pendingProjectWorkspace;
+
+    /// @brief 与待应用工作区一起捕获的项目音频资源快照。
+    std::vector<AudioResource> m_pendingProjectAudioResources;
+
+    /// @brief UI 线程归约后的项目生命周期状态。
+    ProjectUiLifecycleState m_projectLifecycleState;
+
+    /// @brief 是否有加载完成后的项目工作区等待应用。
+    bool m_projectWorkspaceRestorePending{ false };
+
+    /// @brief 项目生命周期跨线程更新队列。
+    moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
+        m_pendingProjectLifecycleUpdates;
+
+    /// @brief 逻辑线程已经发起、但 UI 线程可能尚未消费的项目切换标志。
+    /// @warning 写入者为逻辑线程生命周期回调，读取者为 UI 线程；用于阻止
+    /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
+    std::atomic_bool m_projectTransitionSignal{ false };
+
+    /// @brief 项目开始打开事件订阅 ID。
+    Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
+
+    /// @brief 项目加载完成事件订阅 ID。
+    Event::SubscriptionID m_projectLoadedSubId{ 0 };
+
+    /// @brief 项目关闭完成事件订阅 ID。
+    Event::SubscriptionID m_projectClosedSubId{ 0 };
+
+    /// @brief 项目打开失败事件订阅 ID。
+    Event::SubscriptionID m_projectOpenFailedSubId{ 0 };
+
+    /// @brief 临时项目保存到正式目录事件订阅 ID。
+    Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };

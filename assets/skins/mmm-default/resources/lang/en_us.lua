@@ -70,6 +70,7 @@ return {
 	["ui.help.download"] = "Update Now",
 	["ui.help.download_and_install"] = "Download & Install",
 	["ui.help.downloading"] = "Downloading...",
+	["ui.project.opening"] = "Opening project...",
 	["ui.help.download_complete"] = "Download Complete!",
 	["ui.help.restart_to_update"] = "Restart to Update",
 	["ui.help.update_success"] = "Update Successful",

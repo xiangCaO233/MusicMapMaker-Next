@@ -371,6 +371,10 @@ bool renderScrollingTreeNode(const std::string& id, const std::string& text,
 
 enum class TooltipDir { Left, Right };
 
+/// @brief 在当前窗口可用内容区域中心绘制项目切换提示。
+/// @warning UI 热路径：项目切换期间每帧只执行一次文本测量和绘制。
+void renderProjectTransitionPlaceholder();
+
 /// @brief 将下一个弹出式窗口固定到主视口中心。
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。

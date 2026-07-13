@@ -7,6 +7,7 @@
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
+#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -71,6 +72,18 @@ void publishProjectOpenFailed(const std::filesystem::path& path,
     event.m_projectPath  = Config::pathToUtf8(path);
     event.m_errorMessage = message;
     event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
+}
+
+/// @brief 发布项目即将进入关闭旧项目并加载新项目阶段的事件。
+/// @param path 正在打开的项目目录、谱面文件或谱面包路径。
+/// @param isPackage 当前是否正在打开临时谱面包。
+void publishProjectOpenStarted(const std::filesystem::path& path,
+                               bool                         isPackage)
+{
+    Event::ProjectOpenStartedEvent event;
+    event.m_projectPath = Config::pathToUtf8(path);
+    event.m_isPackage   = isPackage;
     Event::EventBus::instance().publish(event);
 }
 
@@ -926,6 +939,9 @@ void EditorEngine::restoreProjectWorkspace(
     m_pendingWorkspaceActiveIndex = restoredActiveIndex;
 }
 
+/// @brief 校验项目路径并切换到指定普通项目。
+/// @param projectPath 要打开的项目目录或谱面文件路径。
+/// @param creationOptions 新建项目初始设置；普通打开时为空。
 void EditorEngine::openProject(
     const std::filesystem::path& projectPath,
     const std::optional<ProjectController::ProjectCreationOptions>&
@@ -962,6 +978,25 @@ void EditorEngine::openProject(
         return;
     }
 
+    /// 同一项目目录的重复打开请求不应关闭并重新加载当前项目；谱面文件输入仍
+    /// 保留原有自动打开行为，新建项目请求也必须继续应用 creationOptions。
+    openPathError.clear();
+    const bool requestedPathIsDirectory =
+        !creationOptions &&
+        std::filesystem::is_directory(projectPath, openPathError) &&
+        !openPathError;
+    const auto* currentProject = ProjectController::instance().currentProject();
+    openPathError.clear();
+    if ( requestedPathIsDirectory && currentProject &&
+         std::filesystem::equivalent(
+             actualProjectPath, currentProject->m_projectRoot, openPathError) &&
+         !openPathError ) {
+        XINFO("忽略当前项目目录的重复打开请求：{}",
+              Config::pathToUtf8(actualProjectPath));
+        return;
+    }
+
+    publishProjectOpenStarted(projectPath, false);
     if ( !closeProject() ) {
         publishProjectOpenFailed(
             projectPath, "当前项目的元数据保存失败，已取消项目切换", false);
@@ -991,6 +1026,7 @@ void EditorEngine::openTemporaryProjectPackage(
         return;
     }
 
+    publishProjectOpenStarted(packagePath, true);
     if ( !closeProject() ) {
         std::error_code filesystemError;
         std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1062,6 +1098,15 @@ void EditorEngine::finishOpenProject(
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
     }
+
+    /// 音频预加载和谱面会话或工作区恢复完成后，UI 才能安全读取
+    /// 已就绪的项目状态。
+    Event::ProjectLoadedEvent loadedEvent;
+    loadedEvent.m_projectTitle = openResult.m_projectTitle;
+    loadedEvent.m_projectPath =
+        Config::pathToUtf8(openResult.m_actualProjectPath);
+    loadedEvent.m_beatmapCount = openResult.m_beatmapCount;
+    Event::EventBus::instance().publish(loadedEvent);
 }
 
 bool EditorEngine::closeProject()

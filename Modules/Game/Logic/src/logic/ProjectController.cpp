@@ -3,7 +3,6 @@
 #include "config/Utf8Path.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
-#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 
 #include <algorithm>
@@ -1218,13 +1217,6 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     result.m_targetBeatmapPath = targetBeatmapPath;
     result.m_projectTitle      = m_currentProject->m_metadata.m_title;
     result.m_beatmapCount      = m_currentProject->m_beatmaps.size();
-
-    /// @brief 项目加载完成后向 UI 和其它监听者发布的生命周期事件。
-    Event::ProjectLoadedEvent loadedEvent;
-    loadedEvent.m_projectTitle = result.m_projectTitle;
-    loadedEvent.m_projectPath  = Config::pathToUtf8(result.m_actualProjectPath);
-    loadedEvent.m_beatmapCount = result.m_beatmapCount;
-    Event::EventBus::instance().publish(loadedEvent);
 
     return result;
 }

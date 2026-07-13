@@ -59,9 +59,6 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         return;
     }
 
-    auto& audio    = Audio::AudioManager::instance();
-    auto& engine   = Logic::EditorEngine::instance();
-    auto* project  = engine.getCurrentProject();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     const auto& layoutMetrics = getLayoutMetrics(dpiScale);
 
@@ -81,6 +78,16 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isOpen);
     FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_isOpen);
     if ( opened ) {
+        if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+            Utils::renderProjectTransitionPlaceholder();
+            ImGui::End();
+            return;
+        }
+
+        auto& audio   = Audio::AudioManager::instance();
+        auto& engine  = Logic::EditorEngine::instance();
+        auto* project = engine.getCurrentProject();
+
         if ( m_pendingDockId != 0 && ImGui::IsWindowDocked() ) {
             m_pendingDockId = 0;
         }

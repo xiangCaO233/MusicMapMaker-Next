@@ -69,6 +69,7 @@ return {
 	["ui.help.download"] = "立即更新",
 	["ui.help.download_and_install"] = "下载并安装",
 	["ui.help.downloading"] = "正在下载...",
+	["ui.project.opening"] = "正在打开项目...",
 	["ui.help.download_complete"] = "下载完成！",
 	["ui.help.restart_to_update"] = "重启更新",
 	["ui.help.update_success"] = "更新成功",
