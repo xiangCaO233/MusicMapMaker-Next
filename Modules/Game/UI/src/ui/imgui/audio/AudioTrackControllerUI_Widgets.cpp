@@ -361,7 +361,7 @@ AudioTrackControllerUI::getLayoutMetrics(float dpiScale) const
 
 /// @brief 判断当前帧音轨控制器是否需要准备布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
-/// @return 需要后台准备时返回 true。
+/// @return 需要刷新布局缓存时返回 true。
 bool AudioTrackControllerUI::needsParallelUiPrepare(
     const UiFrameSnapshot& snapshot) const
 {
@@ -369,7 +369,7 @@ bool AudioTrackControllerUI::needsParallelUiPrepare(
                            m_layoutMetricsCache, snapshot, m_type, m_trackName);
 }
 
-/// @brief 在线程池中准备音轨控制器布局测量数据。
+/// @brief 在 UI 主线程准备音轨控制器布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
 void AudioTrackControllerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -378,7 +378,7 @@ void AudioTrackControllerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     m_hasPreparedLayoutMetrics = true;
 }
 
-/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+/// @brief 将准备好的布局测量数据切换给主线程使用。
 void AudioTrackControllerUI::swapPreparedUiFrameData()
 {
     if ( !m_hasPreparedLayoutMetrics ) {

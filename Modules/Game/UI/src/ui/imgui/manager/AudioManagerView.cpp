@@ -593,7 +593,7 @@ const AudioManagerView::LayoutMetricsCache& AudioManagerView::getLayoutMetrics(
 
 /// @brief 判断当前帧是否需要准备音频管理器布局数据。
 /// @param snapshot 当前帧 UI 快照。
-/// @return 需要后台准备时返回 true。
+/// @return 需要刷新布局缓存时返回 true。
 bool AudioManagerView::needsParallelUiPrepare(
     const UiFrameSnapshot& snapshot) const
 {
@@ -602,7 +602,7 @@ bool AudioManagerView::needsParallelUiPrepare(
         m_layoutMetricsCache, snapshot, m_prepareLayoutInput);
 }
 
-/// @brief 在线程池中准备音频管理器布局测量数据。
+/// @brief 在 UI 主线程准备音频管理器布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
 void AudioManagerView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -611,7 +611,7 @@ void AudioManagerView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     m_hasPreparedLayoutMetrics = true;
 }
 
-/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+/// @brief 将准备好的布局测量数据切换给主线程使用。
 void AudioManagerView::swapPreparedUiFrameData()
 {
     if ( !m_hasPreparedLayoutMetrics ) {

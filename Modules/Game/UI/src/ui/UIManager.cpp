@@ -793,9 +793,11 @@ void UIManager::onUpdateUI()
     DispatchGlobalUIEvents();
     ClipboardBridge::publishPendingEditorClipboard();
 
-    // 并行准备视图数据；这里只允许准备纯数据，实际 ImGui 绘制仍在主线程。
+    // 预先准备视图数据；字体测量留在主线程，纯数据任务才允许进入线程池。
     m_uiPrepareCandidates.clear();
     m_uiPrepareViews.clear();
+    m_mainThreadUiPrepareViews.clear();
+    m_parallelUiPrepareViews.clear();
     m_uiPrepareCandidates.reserve(m_uiSequence.size());
     for ( const auto& name : m_uiSequence ) {
         auto it = m_uiviews.find(name);
@@ -812,19 +814,32 @@ void UIManager::onUpdateUI()
 
     if ( !m_uiPrepareCandidates.empty() ) {
         const UiFrameSnapshot snapshot = captureUiFrameSnapshot();
-        m_uiPrepareViews.clear();
         m_uiPrepareViews.reserve(m_uiPrepareCandidates.size());
+        m_mainThreadUiPrepareViews.reserve(m_uiPrepareCandidates.size());
+        m_parallelUiPrepareViews.reserve(m_uiPrepareCandidates.size());
         for ( IParallelUiPreparable* preparable : m_uiPrepareCandidates ) {
             if ( preparable->needsParallelUiPrepare(snapshot) ) {
                 m_uiPrepareViews.push_back(preparable);
+                if ( preparable->requiresMainThreadUiPrepare() ) {
+                    m_mainThreadUiPrepareViews.push_back(preparable);
+                } else {
+                    m_parallelUiPrepareViews.push_back(preparable);
+                }
             }
         }
 
+        // ImGui 1.92 的文本测量可能按需烘焙字形并写入共享 FontAtlas；
+        // 声明主线程约束的视图必须先串行准备，禁止与线程池任务并发访问字体状态。
+        for ( IParallelUiPreparable* preparable : m_mainThreadUiPrepareViews ) {
+            preparable->prepareUiFrameData(snapshot);
+        }
+
         auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-        if ( appThreadPool && m_uiPrepareViews.size() > 1 ) {
+        if ( appThreadPool && m_parallelUiPrepareViews.size() > 1 ) {
             std::latch prepareLatch(
-                static_cast<std::ptrdiff_t>(m_uiPrepareViews.size()));
-            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+                static_cast<std::ptrdiff_t>(m_parallelUiPrepareViews.size()));
+            for ( IParallelUiPreparable* preparable :
+                  m_parallelUiPrepareViews ) {
                 appThreadPool->enqueue_void(
                     [preparable, &snapshot, &prepareLatch]() {
                         preparable->prepareUiFrameData(snapshot);
@@ -833,7 +848,8 @@ void UIManager::onUpdateUI()
             }
             prepareLatch.wait();
         } else {
-            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+            for ( IParallelUiPreparable* preparable :
+                  m_parallelUiPrepareViews ) {
                 preparable->prepareUiFrameData(snapshot);
             }
         }

@@ -74,12 +74,17 @@ public:
     /// @warning UI 热路径：每帧只查找当前子视图并检查脏位。
     bool needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const override;
 
-    /// @brief 在线程池中准备当前可见子视图数据。
+    /// @brief 查询当前可见子视图是否必须在 UI 主线程准备。
+    /// @return 子视图准备逻辑会访问 ImGui 时返回 true。
+    /// @warning UI 热路径：每帧只委托当前子视图查询固定能力标记。
+    bool requiresMainThreadUiPrepare() const override;
+
+    /// @brief 按当前子视图的线程约束准备数据。
     /// @param snapshot 当前帧 UI 快照。
-    /// @warning 后台线程路径：仅委托子视图的纯数据准备逻辑。
+    /// @warning 仅委托当前子视图，实际执行线程由其能力标记决定。
     void prepareUiFrameData(const UiFrameSnapshot& snapshot) override;
 
-    /// @brief 将当前子视图后台准备结果切换到主线程可读状态。
+    /// @brief 将当前子视图准备结果切换到主线程可读状态。
     void swapPreparedUiFrameData() override;
 
     /// @brief 是否需要重载

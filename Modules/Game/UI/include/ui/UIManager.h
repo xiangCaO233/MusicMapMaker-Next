@@ -198,11 +198,17 @@ private:
     /// @brief 纹理加载器接口注册顺序
     std::vector<std::string> m_textureLoaderSequence;
 
-    /// @brief 每帧可并行准备 UI 数据的候选视图缓存。
+    /// @brief 每帧可预先准备 UI 数据的候选视图缓存。
     std::vector<IParallelUiPreparable*> m_uiPrepareCandidates;
 
     /// @brief 当前帧实际需要执行准备任务的视图缓存。
     std::vector<IParallelUiPreparable*> m_uiPrepareViews;
+
+    /// @brief 当前帧必须在 UI 主线程执行准备的视图缓存。
+    std::vector<IParallelUiPreparable*> m_mainThreadUiPrepareViews;
+
+    /// @brief 当前帧允许在线程池执行准备的纯数据视图缓存。
+    std::vector<IParallelUiPreparable*> m_parallelUiPrepareViews;
 
     /// @brief 主窗口标题栏允许原生拖拽的基础区域。
     std::vector<Event::DragArea> m_nativeWindowDragAreas;

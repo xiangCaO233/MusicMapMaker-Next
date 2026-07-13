@@ -83,6 +83,11 @@ public:
     bool needsParallelUiPrepare(
         const UI::UiFrameSnapshot& snapshot) const override;
 
+    /// @brief 声明画布快照准备可在线程池执行。
+    /// @return 始终返回 false。
+    /// @warning UI 热路径：每帧只返回固定能力标记。
+    bool requiresMainThreadUiPrepare() const override { return false; }
+
     /// @brief 在线程池中拉取并准备画布渲染快照。
     /// @param snapshot 当前帧 UI 快照。
     /// @warning 后台线程路径：只消费 BeatmapSyncBuffer 并处理动态顶点偏移。

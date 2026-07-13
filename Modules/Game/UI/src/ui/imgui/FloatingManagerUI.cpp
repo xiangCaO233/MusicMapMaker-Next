@@ -849,7 +849,20 @@ bool FloatingManagerUI::needsParallelUiPrepare(
     return preparable && preparable->needsParallelUiPrepare(snapshot);
 }
 
-/// @brief 在线程池中准备当前可见子视图数据。
+/// @brief 查询当前可见子视图是否必须在 UI 主线程准备。
+/// @return 子视图准备逻辑会访问 ImGui 时返回 true。
+bool FloatingManagerUI::requiresMainThreadUiPrepare() const
+{
+    auto it = m_subViews.find(m_currentSubViewId);
+    if ( it == m_subViews.end() ) {
+        return true;
+    }
+
+    IParallelUiPreparable* preparable = it->second->asParallelUiPreparable();
+    return !preparable || preparable->requiresMainThreadUiPrepare();
+}
+
+/// @brief 按当前子视图的线程约束准备数据。
 /// @param snapshot 当前帧 UI 快照。
 void FloatingManagerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -864,7 +877,7 @@ void FloatingManagerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     }
 }
 
-/// @brief 将当前子视图后台准备结果切换到主线程可读状态。
+/// @brief 将当前子视图准备结果切换到主线程可读状态。
 void FloatingManagerUI::swapPreparedUiFrameData()
 {
     auto it = m_subViews.find(m_currentSubViewId);
