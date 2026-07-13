@@ -61,8 +61,8 @@ if(MMM_PGO_USE)
       "PGO: MMM_PGO_USE is enabled. Disabling PGO instrumentation (MMM_PGO_INSTRUMENT=OFF)."
   )
 else()
-  # PGO 插桩默认只在 LLVM GNU-like 工具链启用；clang-cl 交叉 MSVC
-  # 链接阶段依赖的 compiler-rt profile 库不稳定，必须显式禁用。
+  # PGO 插桩默认只在 LLVM GNU-like 工具链启用；clang-cl 交叉 MSVC 链接阶段依赖的 compiler-rt profile
+  # 库不稳定，必须显式禁用。
   set(MMM_PGO_INSTRUMENT_DEFAULT ${MMM_PGO_IS_LLVM_COMPILER})
   if(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
     set(MMM_PGO_INSTRUMENT_DEFAULT OFF)
@@ -104,9 +104,17 @@ set(MMM_PGO_SOURCE_URL
     CACHE STRING
           "URL to download profiles from (autoindex dir or .profdata file)")
 
+set(MMM_PGO_DEFAULT_UPLOAD_URL
+    "https://mmm.xiang233.top/api/performance/upload")
 set(MMM_PGO_UPLOAD_URL
-    ""
+    "${MMM_PGO_DEFAULT_UPLOAD_URL}"
     CACHE STRING "URL for uploading collected .profraw profiles")
+if("${MMM_PGO_UPLOAD_URL}" STREQUAL "")
+  # 空值与未传入变量保持相同行为，统一回退到项目默认上传地址。
+  set(MMM_PGO_UPLOAD_URL
+      "${MMM_PGO_DEFAULT_UPLOAD_URL}"
+      CACHE STRING "URL for uploading collected .profraw profiles" FORCE)
+endif()
 
 # =============================================================================
 # 解析 profile 数据源 → 统一为 MMM_PGO_DATA (在需要时自动下载/合并)
@@ -254,13 +262,8 @@ if(MMM_PGO_INSTRUMENT)
   )
   add_compile_definitions(MMM_PGO_INSTRUMENT=1)
 
-  if(MMM_PGO_UPLOAD_URL)
-    message(STATUS "PGO: Upload URL = ${MMM_PGO_UPLOAD_URL}")
-    set(PGO_UPLOAD_URL "${MMM_PGO_UPLOAD_URL}")
-    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/pgo_upload_url.h.in"
-                   "${CMAKE_BINARY_DIR}/generated/pgo_upload_url.h" @ONLY)
-  else()
-    message(
-      WARNING "PGO: MMM_PGO_UPLOAD_URL not set. Profiles saved locally only.")
-  endif()
+  message(STATUS "PGO: Upload URL = ${MMM_PGO_UPLOAD_URL}")
+  set(PGO_UPLOAD_URL "${MMM_PGO_UPLOAD_URL}")
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/pgo_upload_url.h.in"
+                 "${CMAKE_BINARY_DIR}/generated/pgo_upload_url.h" @ONLY)
 endif()
