@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/EditorSettings.h"
+#include "event/core/EventBus.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/imguivk/VKRenderPass.h"
@@ -63,6 +64,13 @@ public:
     VKContext& operator=(const VKContext&) = delete;
     ~VKContext();
 
+    /// @brief 获取基础图形上下文初始化失败原因。
+    /// @return 初始化成功时为空字符串，否则返回可记录的失败原因。
+    [[nodiscard]] const std::string& getInitializationError() const
+    {
+        return m_initializationError;
+    }
+
     /**
      * @brief 初始化 Vulkan 窗体相关资源
      *
@@ -79,11 +87,6 @@ public:
     bool initVKWindowRess(
         NativeWindow* native_window_ptr, int width, int height,
         VKWindowResourceMode mode = VKWindowResourceMode::Application);
-
-    /// @brief 将启动期最小图形资源提升为完整应用资源。
-    /// @warning 启动低频同步点：会等待 GPU idle、重建字体 atlas 并加载皮肤
-    /// 光标纹理，只能在资源同步和皮肤加载完成后调用。
-    void promoteBootstrapResources();
 
     /**
      * @brief 获取渲染器实例
@@ -183,6 +186,12 @@ private:
     VKWindowResourceMode m_windowResourceMode{
         VKWindowResourceMode::Application
     };
+
+    /// @brief GLFW 键盘事件订阅 ID，随上下文资源释放而取消订阅。
+    Event::SubscriptionID m_glfwKeySubscription{ 0 };
+
+    /// @brief 逻辑配置命令订阅 ID，随上下文资源释放而取消订阅。
+    Event::SubscriptionID m_logicCommandSubscription{ 0 };
 
     /// @brief 初始化失败原因；为空表示基础上下文初始化成功。
     std::string m_initializationError;

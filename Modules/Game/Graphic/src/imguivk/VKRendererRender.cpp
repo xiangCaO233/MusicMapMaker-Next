@@ -655,7 +655,7 @@ void VKRenderer::render(NativeWindow&                window,
     }
 
     // 绘制中央临时通知
-    VKContext::get().value().get().drawCenterNotification();
+    m_vkContext.drawCenterNotification();
 
     const ImGuiMouseCursor currentMouseCursor = ImGui::GetMouseCursor();
     const bool             useNativeResizeCursor =

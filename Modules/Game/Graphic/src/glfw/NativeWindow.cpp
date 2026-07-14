@@ -374,7 +374,8 @@ void iconifyWin32WindowPreservingMaximize(GLFWwindow* window,
 #endif
 }  // namespace
 
-NativeWindow::NativeWindow(int w, int h, const char* wtitle)
+NativeWindow::NativeWindow(int w, int h, const char* wtitle,
+                           NativeWindowMode windowMode)
 {
     if ( !glfwVulkanSupported() ) {
         XERROR("GLFW: Vulkan Not Supported");
@@ -385,7 +386,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     // 隐藏系统标题栏
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(
+        GLFW_RESIZABLE,
+        windowMode == NativeWindowMode::Application ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
 #if defined(_WIN32) || defined(__linux__)
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
@@ -485,21 +488,29 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 #endif
     }
 
-    // 在 glfwCreateWindow 之后调用
+    // 启动资源窗口不安装主窗口 frame adapter，避免 Win32 WS_CAPTION 在首帧
+    // 前短暂显示原生标题栏。
+    if ( windowMode == NativeWindowMode::Application ) {
+        // 在 glfwCreateWindow 之后调用
 #if defined(_WIN32)
-    m_windowFrameAdapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
+        m_windowFrameAdapter =
+            std::make_unique<Win32WindowAdapter>(m_windowHandle);
 #endif
 #if defined(__APPLE__)
-    m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
+        m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
 #endif
 #if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
-    if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
-        m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
-    }
+        if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
+            m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
+        }
 #endif
+    }
 
-    // 隐藏系统原生光标
-    glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    glfwSetInputMode(m_windowHandle,
+                     GLFW_CURSOR,
+                     windowMode == NativeWindowMode::Application
+                         ? GLFW_CURSOR_HIDDEN
+                         : GLFW_CURSOR_NORMAL);
 #ifdef __linux__
     // 确保不禁止系统快捷键 (针对 Wayland)
     if ( glfwRawMouseMotionSupported() ) {  // 只是为了检查是否是现代 GLFW
@@ -687,38 +698,42 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             MMM::Event::EventBus::instance().publish(e);
         });
 
-    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
-        [&](Event::GLFWNativeEvent e) {
-            if ( e.hasStateChange ) return;  // 忽略仅用于状态通知的事件
+    if ( windowMode == NativeWindowMode::Application ) {
+        m_nativeEventSubscription =
+            Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
+                [this](const Event::GLFWNativeEvent& e) {
+                    if ( e.hasStateChange ) return;  // 忽略仅用于状态通知的事件
 
-            switch ( e.type ) {
-            case Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
-                toggleMaximized();
-                break;
-            }
-            case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
+                    switch ( e.type ) {
+                    case Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
+                        toggleMaximized();
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
 #ifdef _WIN32
-                iconifyWin32WindowPreservingMaximize(m_windowHandle,
-                                                     m_lastRequestedMaximized);
+                        iconifyWin32WindowPreservingMaximize(
+                            m_windowHandle, m_lastRequestedMaximized);
 #elif defined(__APPLE__)
-                if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
-                    glfwIconifyWindow(m_windowHandle);
-                }
+                        if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
+                            glfwIconifyWindow(m_windowHandle);
+                        }
 #else
-            glfwIconifyWindow(m_windowHandle);
+                    glfwIconifyWindow(m_windowHandle);
 #endif
-                XINFO("Window iconified.");
-                break;
-            }
-            case Event::NativeEventType::GLFW_CLOSE_WINDOW: {
-                glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
-                break;
-            }
-            case Event::NativeEventType::GLFW_WINDOW_RESIZED:
-            case Event::NativeEventType::GLFW_WINDOW_CONTENT_SCALE_CHANGED:
-                break;
-            }
-        });
+                        XINFO("Window iconified.");
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_CLOSE_WINDOW: {
+                        glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_WINDOW_RESIZED:
+                    case Event::NativeEventType::
+                        GLFW_WINDOW_CONTENT_SCALE_CHANGED:
+                        break;
+                    }
+                });
+    }
 
     refreshWindowFrameShape();
 }
@@ -847,6 +862,11 @@ void NativeWindow::resizeAndCenter(int width, int height)
 
 NativeWindow::~NativeWindow()
 {
+    if ( m_nativeEventSubscription != 0 ) {
+        Event::EventBus::instance().unsubscribe<Event::GLFWNativeEvent>(
+            m_nativeEventSubscription);
+        m_nativeEventSubscription = 0;
+    }
     m_windowFrameAdapter.reset();
     if ( m_windowHandle ) {
         glfwDestroyWindow(m_windowHandle);

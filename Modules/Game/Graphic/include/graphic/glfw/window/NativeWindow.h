@@ -1,14 +1,22 @@
 #pragma once
 
+#include "event/core/EventBus.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/glfw/window/adapters/IWindowFrameHost.h"
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 
 namespace MMM::Graphic
 {
 class IWindowFrameAdapter;
+
+/// @brief 原生窗口承担的应用阶段角色。
+enum class NativeWindowMode : std::uint8_t {
+    Application,  ///< 正式主窗口，启用平台 frame adapter 和软件光标接管。
+    Startup       ///< 资源准备窗口，保持固定无装饰窗口和系统光标。
+};
 
 /// @brief GLFW 主窗口封装，负责窗口生命周期和平台 frame adapter 转发。
 class NativeWindow : public IWindowFrameHost
@@ -18,7 +26,9 @@ public:
     /// @param w 初始窗口宽度。
     /// @param h 初始窗口高度。
     /// @param wtitle 初始窗口标题。
-    NativeWindow(int w, int h, const char* wtitle);
+    /// @param mode 窗口角色，默认创建正式主窗口。
+    NativeWindow(int w, int h, const char* wtitle,
+                 NativeWindowMode mode = NativeWindowMode::Application);
 
     /// @brief 析构主窗口并释放平台 frame adapter。
     ~NativeWindow();
@@ -240,6 +250,9 @@ private:
 
     /// @brief 无原生装饰窗口的平台行为适配器。
     std::unique_ptr<IWindowFrameAdapter> m_windowFrameAdapter;
+
+    /// @brief 原生窗口命令事件订阅 ID，随窗口生命周期取消订阅。
+    Event::SubscriptionID m_nativeEventSubscription{ 0 };
 };
 
 }  // namespace MMM::Graphic

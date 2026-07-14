@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fmt/core.h>
 #include <imgui.h>
@@ -205,6 +206,37 @@ constexpr int APPLICATION_WINDOW_WIDTH = 1400;
 /// @brief 正式主窗口的默认逻辑高度。
 constexpr int APPLICATION_WINDOW_HEIGHT = 900;
 
+/// @brief 启动资源准备流程的最终状态。
+enum class StartupPreparationResult : std::uint8_t {
+    Ready,      ///< 资源与皮肤已经准备完成，可以创建正式主窗口。
+    Cancelled,  ///< 用户关闭或退出资源准备窗口。
+    Failed      ///< 临时图形上下文或资源准备流程初始化失败。
+};
+
+/// @brief 确保临时图形上下文在关联窗口销毁前释放 Vulkan 与 ImGui 资源。
+class ScopedVKContextRelease final
+{
+public:
+    /// @brief 绑定需要按窗口生命周期提前释放的图形上下文。
+    /// @param context 临时图形上下文。
+    explicit ScopedVKContextRelease(Graphic::VKContext& context)
+        : m_context(context)
+    {
+    }
+
+    /// @brief 在原生窗口仍有效时释放图形资源。
+    ~ScopedVKContextRelease() { m_context.release(); }
+
+    ScopedVKContextRelease(ScopedVKContextRelease&&)                 = delete;
+    ScopedVKContextRelease(const ScopedVKContextRelease&)            = delete;
+    ScopedVKContextRelease& operator=(ScopedVKContextRelease&&)      = delete;
+    ScopedVKContextRelease& operator=(const ScopedVKContextRelease&) = delete;
+
+private:
+    /// @brief 生命周期由外层启动资源准备函数保证的临时上下文引用。
+    Graphic::VKContext& m_context;
+};
+
 /// @brief 将启动窗口基础尺寸换算为包含用户 UI 倍率的逻辑尺寸。
 /// @param value 未应用用户 UI 倍率的基础尺寸。
 /// @return 可传给 NativeWindow 的正整数逻辑尺寸。
@@ -231,7 +263,7 @@ struct AssetSyncTaskState final {
 
 /// @brief 在后台同步资源，并由主线程持续渲染启动界面。
 /// @param context 已初始化为 bootstrap 模式的图形上下文。
-/// @param window 最终主窗口。
+/// @param window 独立的启动资源准备窗口。
 /// @param progressDialog 启动进度界面。
 /// @param forcePreciseVerification 是否忽略版本标记并逐文件校验资源。
 /// @return 本次资源同步结果。
@@ -277,7 +309,7 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
 
 /// @brief 启动错误状态下等待用户选择重试或退出。
 /// @param context bootstrap 图形上下文。
-/// @param window 最终主窗口。
+/// @param window 独立的启动资源准备窗口。
 /// @param progressDialog 当前错误界面。
 /// @return 用户选择重试时返回 true，退出或关闭窗口时返回 false。
 /// @warning 启动低频循环：只渲染错误界面并读取按钮状态。
@@ -295,6 +327,124 @@ bool waitForStartupRetry(Graphic::VKContext&    context,
     }
     return false;
 }
+
+/// @brief 使用独立窗口和独立图形上下文完成启动资源校验与皮肤加载。
+/// @return 资源准备结果；只有 Ready 状态允许继续创建正式主窗口。
+/// @warning 启动低频路径：内部创建并完整释放一套 GLFW、Vulkan 与 ImGui
+/// 资源，禁止从主渲染循环调用。
+StartupPreparationResult prepareStartupAssets()
+{
+    Graphic::VKContext startupContext;
+    if ( !startupContext.getInitializationError().empty() ) {
+        XERROR("Failed to initialize startup graphic context: {}",
+               startupContext.getInitializationError());
+        return StartupPreparationResult::Failed;
+    }
+
+    Graphic::NativeWindow startupWindow(
+        scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
+        scaledStartupWindowDimension(STARTUP_PROGRESS_WINDOW_HEIGHT),
+        "MusicMapMaker - Resource Update",
+        Graphic::NativeWindowMode::Startup);
+    ScopedVKContextRelease contextRelease(startupContext);
+    if ( !startupWindow.getWindowHandle() ) {
+        XERROR("Failed to create startup resource window");
+        return StartupPreparationResult::Failed;
+    }
+
+    int framebufferWidth  = 0;
+    int framebufferHeight = 0;
+    startupWindow.getFramebufferSize(framebufferWidth, framebufferHeight);
+    if ( !startupContext.initVKWindowRess(
+             &startupWindow,
+             framebufferWidth,
+             framebufferHeight,
+             Graphic::VKWindowResourceMode::Bootstrap) ) {
+        XERROR("Failed to initialize startup Vulkan window resources");
+        return StartupPreparationResult::Failed;
+    }
+
+    StartupProgressDialog startupProgressDialog;
+    const auto defaultSkinPath = Config::AppPaths::defaultSkinFilePath();
+    bool       skinLoaded      = false;
+    bool       forcePreciseVerification = false;
+
+    while ( !skinLoaded ) {
+        const auto assetSyncResult =
+            runAssetSyncWithStartupUI(startupContext,
+                                      startupWindow,
+                                      startupProgressDialog,
+                                      forcePreciseVerification);
+
+        if ( assetSyncResult.status == Network::AssetSyncStatus::kCancelled ||
+             startupWindow.shouldClose() ||
+             startupProgressDialog.isExitRequested() ) {
+            return StartupPreparationResult::Cancelled;
+        }
+
+        std::string startupErrorTitle;
+        std::string startupErrorMessage;
+        if ( assetSyncResult.status == Network::AssetSyncStatus::kError ) {
+            const auto assetPath = Config::AppPaths::assetsRootPath();
+            startupErrorTitle    = "资源同步失败";
+            startupErrorMessage =
+                "无法自动下载或校验资源。请检查网络连接，或从网站下载 "
+                "assets.zip 并解压到：\n\n" +
+                Config::pathToUtf8(assetPath) + "\n\n错误详情：" +
+                assetSyncResult.errorMessage;
+        } else {
+            std::error_code defaultSkinExistsError;
+            if ( !std::filesystem::exists(defaultSkinPath,
+                                          defaultSkinExistsError) ) {
+                startupErrorTitle = "缺少应用资源";
+                startupErrorMessage =
+                    "资源同步完成后仍未找到默认皮肤。请从网站下载 "
+                    "assets.zip 并解压到：\n\n" +
+                    Config::pathToUtf8(Config::AppPaths::assetsRootPath());
+            } else {
+                const auto startupSkinPath =
+                    resolveStartupSkinPath(defaultSkinPath);
+                skinLoaded = Config::SkinManager::instance().loadSkin(
+                    Config::pathToUtf8(startupSkinPath));
+                if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
+                    XWARN("Fallback to default skin: {}",
+                          Config::pathToUtf8(defaultSkinPath));
+                    skinLoaded = Config::SkinManager::instance().loadSkin(
+                        Config::pathToUtf8(defaultSkinPath));
+                }
+                if ( !skinLoaded ) {
+                    startupErrorTitle = "皮肤资源加载失败";
+                    startupErrorMessage =
+                        "默认皮肤文件存在，但无法完成解析。可以重试资源同步，"
+                        "或重新下载 assets.zip 后解压到：\n\n" +
+                        Config::pathToUtf8(Config::AppPaths::assetsRootPath());
+                }
+            }
+        }
+
+        if ( skinLoaded ) break;
+
+        XERROR("Startup asset preparation failed: {}", startupErrorMessage);
+        startupProgressDialog.showError(std::move(startupErrorTitle),
+                                        std::move(startupErrorMessage));
+        startupWindow.resizeAndCenter(
+            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
+            scaledStartupWindowDimension(STARTUP_ERROR_WINDOW_HEIGHT));
+        if ( !waitForStartupRetry(
+                 startupContext, startupWindow, startupProgressDialog) ) {
+            return StartupPreparationResult::Cancelled;
+        }
+
+        // 用户主动重试时绕过版本快路径，确保缺失或损坏资源真正得到修复。
+        forcePreciseVerification = true;
+        startupWindow.resizeAndCenter(
+            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
+            scaledStartupWindowDimension(STARTUP_PROGRESS_WINDOW_HEIGHT));
+    }
+
+    return startupWindow.shouldClose() ? StartupPreparationResult::Cancelled
+                                       : StartupPreparationResult::Ready;
+}
 }  // namespace
 }  // namespace MMM::Main
 
@@ -306,136 +456,22 @@ int main(int argc, char* argv[])
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();
 
-    auto contextResult = Graphic::VKContext::get();
-    if ( !contextResult ) {
-        XERROR("Start Failed, graphic enc initialize failed with:\n {}",
-               contextResult.error());
-        return 1;
-    }
-    auto& context = contextResult->get();
-
-    Graphic::NativeWindow nativeWindow(
-        Main::scaledStartupWindowDimension(Main::STARTUP_WINDOW_WIDTH),
-        Main::scaledStartupWindowDimension(
-            Main::STARTUP_PROGRESS_WINDOW_HEIGHT),
-        "MusicMapMaker(Gamma)");
-    int framebufferWidth  = 0;
-    int framebufferHeight = 0;
-    nativeWindow.getFramebufferSize(framebufferWidth, framebufferHeight);
-
     UI::SetInteractionFeedbackEnabled(false);
-    if ( !context.initVKWindowRess(&nativeWindow,
-                                   framebufferWidth,
-                                   framebufferHeight,
-                                   Graphic::VKWindowResourceMode::Bootstrap) ) {
-        XERROR("Failed to initialize bootstrap Vulkan window resources");
-        context.release();
-        return 1;
-    }
-
-    Main::StartupProgressDialog startupProgressDialog;
-    const auto defaultSkinPath          = AppPaths::defaultSkinFilePath();
-    bool       skinLoaded               = false;
-    bool       forcePreciseVerification = false;
-
-    while ( !skinLoaded ) {
-        const auto assetSyncResult =
-            Main::runAssetSyncWithStartupUI(context,
-                                            nativeWindow,
-                                            startupProgressDialog,
-                                            forcePreciseVerification);
-
-        if ( assetSyncResult.status == Network::AssetSyncStatus::kCancelled ||
-             nativeWindow.shouldClose() ||
-             startupProgressDialog.isExitRequested() ) {
-            UI::SetInteractionFeedbackEnabled(true);
-            context.release();
-            return 0;
-        }
-
-        std::string startupErrorTitle;
-        std::string startupErrorMessage;
-        if ( assetSyncResult.status == Network::AssetSyncStatus::kError ) {
-            const auto assetPath = AppPaths::assetsRootPath();
-            startupErrorTitle    = "资源同步失败";
-            startupErrorMessage =
-                "无法自动下载或校验资源。请检查网络连接，或从网站下载 "
-                "assets.zip 并解压到：\n\n" +
-                pathToUtf8(assetPath) + "\n\n错误详情：" +
-                assetSyncResult.errorMessage;
-        } else {
-            std::error_code defaultSkinExistsError;
-            if ( !std::filesystem::exists(defaultSkinPath,
-                                          defaultSkinExistsError) ) {
-                startupErrorTitle = "缺少应用资源";
-                startupErrorMessage =
-                    "资源同步完成后仍未找到默认皮肤。请从网站下载 "
-                    "assets.zip 并解压到：\n\n" +
-                    pathToUtf8(AppPaths::assetsRootPath());
-            } else {
-                const auto startupSkinPath =
-                    Main::resolveStartupSkinPath(defaultSkinPath);
-                skinLoaded = SkinManager::instance().loadSkin(
-                    pathToUtf8(startupSkinPath));
-                if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
-                    XWARN("Fallback to default skin: {}",
-                          pathToUtf8(defaultSkinPath));
-                    skinLoaded = SkinManager::instance().loadSkin(
-                        pathToUtf8(defaultSkinPath));
-                }
-                if ( !skinLoaded ) {
-                    startupErrorTitle = "皮肤资源加载失败";
-                    startupErrorMessage =
-                        "默认皮肤文件存在，但无法完成解析。可以重试资源同步，"
-                        "或重新下载 assets.zip 后解压到：\n\n" +
-                        pathToUtf8(AppPaths::assetsRootPath());
-                }
-            }
-        }
-
-        if ( skinLoaded ) break;
-
-        XERROR("Startup asset preparation failed: {}", startupErrorMessage);
-        startupProgressDialog.showError(std::move(startupErrorTitle),
-                                        std::move(startupErrorMessage));
-        nativeWindow.resizeAndCenter(
-            Main::scaledStartupWindowDimension(Main::STARTUP_WINDOW_WIDTH),
-            Main::scaledStartupWindowDimension(
-                Main::STARTUP_ERROR_WINDOW_HEIGHT));
-        if ( !Main::waitForStartupRetry(
-                 context, nativeWindow, startupProgressDialog) ) {
-            UI::SetInteractionFeedbackEnabled(true);
-            context.release();
-            return -1;
-        }
-        // 用户主动重试时绕过版本快路径，确保缺失或损坏资源真正得到修复。
-        forcePreciseVerification = true;
-        nativeWindow.resizeAndCenter(
-            Main::scaledStartupWindowDimension(Main::STARTUP_WINDOW_WIDTH),
-            Main::scaledStartupWindowDimension(
-                Main::STARTUP_PROGRESS_WINDOW_HEIGHT));
-    }
-
-    if ( nativeWindow.shouldClose() ) {
-        UI::SetInteractionFeedbackEnabled(true);
-        context.release();
+    const auto startupResult = Main::prepareStartupAssets();
+    UI::SetInteractionFeedbackEnabled(true);
+    if ( startupResult == Main::StartupPreparationResult::Cancelled ) {
         return 0;
     }
+    if ( startupResult == Main::StartupPreparationResult::Failed ) return 1;
 
-    if ( skinLoaded && resetUnavailableFontPreferences(
-                           AppConfig::instance().getEditorSettings(),
-                           SkinManager::instance()) ) {
+    if ( resetUnavailableFontPreferences(
+             AppConfig::instance().getEditorSettings(),
+             SkinManager::instance()) ) {
         XWARN("Unavailable font preference reset to skin default");
         if ( !AppConfig::instance().save() ) {
             XERROR("Failed to save reset font preference");
         }
     }
-
-    nativeWindow.resizeAndCenter(Main::APPLICATION_WINDOW_WIDTH,
-                                 Main::APPLICATION_WINDOW_HEIGHT);
-    context.promoteBootstrapResources();
-    nativeWindow.reloadWindowIcon();
-    UI::SetInteractionFeedbackEnabled(true);
 
     XINFO(TR("tips.welcome"));
 
@@ -455,6 +491,10 @@ int main(int argc, char* argv[])
 
     // 正常运行
     XINFO("entering gameloop...");
+
+    Graphic::NativeWindow nativeWindow(Main::APPLICATION_WINDOW_WIDTH,
+                                       Main::APPLICATION_WINDOW_HEIGHT,
+                                       "MusicMapMaker(Gamma)");
 
     const auto ret = gameLoop.start(
         nativeWindow, argc, argv, Main::renderPgoShutdownUploadProgress);

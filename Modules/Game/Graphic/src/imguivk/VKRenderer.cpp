@@ -14,6 +14,7 @@ std::array<float, 4> VKRenderer::s_clear_color{ .23f, .23f, .23f, 1.f };
 /**
  * @brief 构造函数，初始化渲染所需的同步对象和命令资源
  *
+ * @param context 创建并拥有当前渲染器的 Vulkan 上下文
  * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
  * @param logicalDevice 逻辑设备引用
  * @param swapchain 交换链引用
@@ -22,12 +23,13 @@ std::array<float, 4> VKRenderer::s_clear_color{ .23f, .23f, .23f, 1.f };
  * @param logicDeviceGraphicsQueue 图形队列引用
  * @param logicDevicePresentQueue 呈现队列引用
  */
-VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
+VKRenderer::VKRenderer(VKContext& context, vk::PhysicalDevice& vkPhysicalDevice,
                        vk::Device& logicalDevice, VKSwapchain& swapchain,
                        VKRenderPass& renderPass,
                        vk::Queue&    logicDeviceGraphicsQueue,
                        vk::Queue&    logicDevicePresentQueue)
-    : m_vkPhysicalDevice(vkPhysicalDevice)
+    : m_vkContext(context)
+    , m_vkPhysicalDevice(vkPhysicalDevice)
     , m_vkLogicalDevice(logicalDevice)
     , m_vkRenderPass(renderPass)
     , m_vkSwapChain(swapchain)
@@ -52,14 +54,21 @@ VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
     createDescriptPool();
 
     // 订阅clearcolor更新事件
-    Event::EventBus::instance().subscribe<Event::ClearColorUpdateEvent>(
-        [&](Event::ClearColorUpdateEvent e) {
-            s_clear_color = e.clear_color_value;
-        });
+    m_clearColorSubscription =
+        Event::EventBus::instance().subscribe<Event::ClearColorUpdateEvent>(
+            [](const Event::ClearColorUpdateEvent& e) {
+                s_clear_color = e.clear_color_value;
+            });
 }
 
 VKRenderer::~VKRenderer()
 {
+    if ( m_clearColorSubscription != 0 ) {
+        Event::EventBus::instance().unsubscribe<Event::ClearColorUpdateEvent>(
+            m_clearColorSubscription);
+        m_clearColorSubscription = 0;
+    }
+
     // 等待设备空闲，确保不再使用任何资源
     (void)m_vkLogicalDevice.waitIdle();
 
@@ -96,9 +105,7 @@ void VKRenderer::triggerRecreate(NativeWindow& window)
 {
     int w, h;
     window.getFramebufferSize(w, h);
-    // 这里需要调用 context 的 recreateSwapchain
-    MMM::Graphic::VKContext::get().value().get().recreateSwapchain(
-        window.getWindowHandle(), w, h);
+    m_vkContext.recreateSwapchain(window.getWindowHandle(), w, h);
 }
 
 void VKRenderer::onSwapchainChanged()
