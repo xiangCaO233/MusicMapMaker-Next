@@ -137,7 +137,11 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
         m_smokePoints.push_front({ mousePos, 1.0f });  // 同时生成烟雾
     }
 
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    // ImGui 为每个 viewport 维护独立前景层，光标必须提交到鼠标所在视口。
+    ImGuiViewport* cursorViewport =
+        ImGui::FindViewportByID(io.MouseHoveredViewport);
+    if ( !cursorViewport ) cursorViewport = ImGui::GetMainViewport();
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(cursorViewport);
 
     while ( m_smokePoints.size() > 256 ) m_smokePoints.pop_back();
 
