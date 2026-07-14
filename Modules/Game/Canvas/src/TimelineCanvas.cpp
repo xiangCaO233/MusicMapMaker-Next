@@ -946,16 +946,6 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
         }
     }
 
-    const float currentY =
-        canvasPos.y +
-        static_cast<float>(canvasYAtTime(size, m_currentSnapshot->currentTime));
-    if ( currentY >= canvasPos.y && currentY <= clipMax.y ) {
-        drawList->AddLine(ImVec2(canvasPos.x, currentY),
-                          ImVec2(clipMax.x, currentY),
-                          IM_COL32(255, 255, 255, 190),
-                          1.5f);
-    }
-
     for ( int lane = 0; lane < laneCount; ++lane ) {
         const float laneX0 = canvasPos.x + laneWidth * lane;
         const float laneX1 =
