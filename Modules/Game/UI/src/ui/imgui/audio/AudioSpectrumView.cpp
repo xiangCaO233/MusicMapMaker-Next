@@ -155,7 +155,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double visualTime = audioTime + globalVisualOffset;
     double totalTime  = audioManager.getTotalTime();
 
-    // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    // 默认跟随逻辑层的平滑视觉时间，播放时继续使用快照做亚帧补偿。
     std::string activeCameraId =
         Logic::EditorEngine::instance().getActiveCameraId();
     auto snapshot = Logic::EditorEngine::instance()
@@ -179,6 +179,10 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                 audioTime += dt * snapshot->playbackSpeed;
             }
         }
+    }
+    // 拖动期间优先使用频谱本地中心，避免主画布预览已更新而频谱仍等待逻辑快照。
+    if ( m_seekDragOwnerChannel >= 0 ) {
+        visualTime = m_seekDragViewCenter;
     }
 
     ImGuiStyle& style           = ImGui::GetStyle();
@@ -376,6 +380,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImVec2 rightMax = ImVec2(surfacePos.x + avail.x, rightMin.y + plotH);
 
     renderChannelInteractionOverlay("##SeekL",
+                                    0,
                                     leftMin,
                                     leftMax,
                                     viewStart,
@@ -385,6 +390,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     visualTime,
                                     snapshot);
     renderChannelInteractionOverlay("##SeekR",
+                                    1,
                                     rightMin,
                                     rightMax,
                                     viewStart,
@@ -470,9 +476,9 @@ void AudioSpectrumView::buildChannelGeometry(
 }
 
 void AudioSpectrumView::renderChannelInteractionOverlay(
-    const char* seekId, ImVec2 groupMin, ImVec2 groupMax, double viewStart,
-    double viewEnd, float globalVisualOffset, double totalTime,
-    double visualTime, const Logic::RenderSnapshot* snapshot)
+    const char* seekId, int channelIndex, ImVec2 groupMin, ImVec2 groupMax,
+    double viewStart, double viewEnd, float globalVisualOffset,
+    double totalTime, double visualTime, const Logic::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
@@ -522,12 +528,61 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     ImGui::SetCursorScreenPos(groupMin);
     ImGui::InvisibleButton(seekId, ImVec2(width, height));
 
-    if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-        const ImVec2 mousePos = ImGui::GetMousePos();
-        const float  relX =
-            std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
-        const double hoverVisualTime = viewStart + relX * viewRange;
-        const double hoverAudioTime  = hoverVisualTime - globalVisualOffset;
+    const bool isInteractionActive  = ImGui::IsItemActive();
+    const bool isInteractionHovered = ImGui::IsItemHovered();
+    const bool isLeftMouseDown      = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if ( isInteractionActive && m_seekDragOwnerChannel != channelIndex ) {
+        m_seekDragOwnerChannel = channelIndex;
+        m_seekDragViewCenter   = visualTime;
+    }
+    const bool   ownsSeekDrag = m_seekDragOwnerChannel == channelIndex;
+    const ImVec2 mousePos     = ImGui::GetMousePos();
+
+    double interactionViewStart = viewStart;
+    double interactionViewEnd   = viewEnd;
+    if ( ownsSeekDrag && isLeftMouseDown ) {
+        // 本地先行推进频谱视野；逻辑层仍同步推进主画布，并在松开时由最终 seek
+        // 对齐。
+        constexpr float edgeScrollMargin = 20.0f;
+        float           edgeDistance     = 0.0f;
+        if ( mousePos.x < groupMin.x + edgeScrollMargin ) {
+            edgeDistance = mousePos.x - (groupMin.x + edgeScrollMargin);
+        } else if ( mousePos.x > groupMax.x - edgeScrollMargin ) {
+            edgeDistance = mousePos.x - (groupMax.x - edgeScrollMargin);
+        }
+
+        const float edgeScrollSensitivity =
+            std::max(0.0f,
+                     Config::AppConfig::instance()
+                         .getVisualConfig()
+                         .previewConfig.edgeScrollSensitivity);
+        if ( std::abs(edgeDistance) > 0.001f && edgeScrollSensitivity > 0.0f ) {
+            const double frameSeconds =
+                std::clamp<double>(ImGui::GetIO().DeltaTime, 0.0, 0.1);
+            const double scrollDelta = static_cast<double>(edgeDistance) *
+                                       edgeScrollSensitivity * frameSeconds;
+            const double minVisualTime =
+                static_cast<double>(globalVisualOffset);
+            const double maxVisualTime =
+                minVisualTime + std::max(0.0, totalTime);
+            m_seekDragViewCenter =
+                std::clamp(m_seekDragViewCenter + scrollDelta,
+                           minVisualTime,
+                           maxVisualTime);
+            interactionViewStart = m_seekDragViewCenter - m_zoom;
+            interactionViewEnd   = m_seekDragViewCenter + m_zoom;
+        }
+    }
+
+    const double interactionViewRange =
+        std::max(0.001, interactionViewEnd - interactionViewStart);
+    const float relX =
+        std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
+    const double hoverVisualTime =
+        interactionViewStart + relX * interactionViewRange;
+    const double hoverAudioTime = hoverVisualTime - globalVisualOffset;
+
+    if ( isInteractionActive || isInteractionHovered ) {
 
         const auto timeText =
             Canvas::formatCanvasTime(hoverVisualTime, snapshot);
@@ -539,7 +594,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                           IM_COL32(0, 255, 0, 150),
                           1.0f);
 
-        if ( ImGui::IsItemActive() ) {
+        if ( isInteractionActive ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetMousePosition{ "AudioSpectrum",
                                             mousePos.x - groupMin.x,
@@ -556,14 +611,16 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                 const double offsetEnd =
                     snapshot->visibleTimeEnd - snapshot->currentTime;
                 const float preX1 =
-                    groupMin.x + static_cast<float>((hoverVisualTime +
-                                                     offsetStart - viewStart) /
-                                                    viewRange) *
-                                     width;
+                    groupMin.x +
+                    static_cast<float>(
+                        (hoverVisualTime + offsetStart - interactionViewStart) /
+                        interactionViewRange) *
+                        width;
                 const float preX2 =
                     groupMin.x +
                     static_cast<float>(
-                        (hoverVisualTime + offsetEnd - viewStart) / viewRange) *
+                        (hoverVisualTime + offsetEnd - interactionViewStart) /
+                        interactionViewRange) *
                         width;
                 const float drawPreX1 =
                     std::clamp(preX1, groupMin.x, groupMax.x);
@@ -583,22 +640,23 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                 }
             }
         }
+    }
 
-        if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-            Audio::AudioManager::instance().seek(
-                std::clamp(hoverAudioTime, 0.0, totalTime));
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSetMousePosition{ "AudioSpectrum",
-                                            mousePos.x - groupMin.x,
-                                            mousePos.y - groupMin.y,
-                                            width,
-                                            height,
-                                            false,
-                                            false,
-                                            -1.0 }));
-        }
+    if ( ownsSeekDrag && !isLeftMouseDown ) {
+        Audio::AudioManager::instance().seek(
+            std::clamp(hoverAudioTime, 0.0, totalTime));
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetMousePosition{ "AudioSpectrum",
+                                        mousePos.x - groupMin.x,
+                                        mousePos.y - groupMin.y,
+                                        width,
+                                        height,
+                                        false,
+                                        false,
+                                        -1.0 }));
+        m_seekDragOwnerChannel = -1;
     }
 }
 

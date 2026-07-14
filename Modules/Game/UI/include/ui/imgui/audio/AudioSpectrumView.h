@@ -109,6 +109,7 @@ private:
 
     /// @brief 绘制指定通道的 ImGui 交互覆盖层。
     /// @param seekId ImGui 隐形交互区域 ID。
+    /// @param channelIndex 交互通道索引，用于绑定拖动生命周期。
     /// @param groupMin 交互区域左上角。
     /// @param groupMax 交互区域右下角。
     /// @param viewStart 当前全局视觉视野起点，单位为秒。
@@ -117,9 +118,9 @@ private:
     /// @param totalTime 音频总时长，单位为秒。
     /// @param visualTime 当前全局视觉时间，单位为秒。
     /// @param snapshot 当前活动画布同步快照，可以为空。
-    void renderChannelInteractionOverlay(const char* seekId, ImVec2 groupMin,
-                                         ImVec2 groupMax, double viewStart,
-                                         double viewEnd,
+    void renderChannelInteractionOverlay(const char* seekId, int channelIndex,
+                                         ImVec2 groupMin, ImVec2 groupMax,
+                                         double viewStart, double viewEnd,
                                          float  globalVisualOffset,
                                          double totalTime, double visualTime,
                                          const Logic::RenderSnapshot* snapshot);
@@ -280,6 +281,12 @@ private:
     float m_zoom{ 1.0f };
     float m_maxFreq{ 20000.0f };
     float m_logBias{ 6.91f };
+
+    /// @brief 当前拥有频谱拖动生命周期的通道索引，-1 表示没有拖动。
+    int m_seekDragOwnerChannel{ -1 };
+
+    /// @brief 频谱拖动期间独立推进的视觉视野中心，单位为秒。
+    double m_seekDragViewCenter{ 0.0 };
 };
 
 }  // namespace MMM::UI
