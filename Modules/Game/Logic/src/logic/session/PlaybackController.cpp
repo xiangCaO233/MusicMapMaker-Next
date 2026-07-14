@@ -187,9 +187,16 @@ void cancelActiveEditingState(SessionContext& ctx)
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
+    const bool shouldRestartFromBeginning =
+        cmd.isPlaying && m_ctx.restartPlaybackAfterFinishPending.exchange(
+                             false, std::memory_order_acquire);
+
     m_ctx.isMainAudioSyncFollower = false;
     m_ctx.isPlaying               = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
+        if ( shouldRestartFromBeginning ) {
+            m_ctx.currentTime = 0.0;
+        }
         cancelActiveEditingState(m_ctx);
         m_ctx.syncTimer             = 0.0;
         m_ctx.lastAudioPos          = 0.0;
@@ -207,6 +214,8 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
         SessionUtils::syncHitIndex(m_ctx);
         m_ctx.hitFXSystem.clearActiveEffects();
     } else {
+        m_ctx.restartPlaybackAfterFinishPending.store(
+            false, std::memory_order_relaxed);
         Audio::AudioManager::instance().pause();
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
     }
@@ -214,6 +223,8 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    m_ctx.restartPlaybackAfterFinishPending.store(false,
+                                                  std::memory_order_relaxed);
     m_ctx.isMainAudioSyncFollower = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
         m_ctx.isPlaying = false;
@@ -321,6 +332,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     if ( cmd.intent == ScrollCommandIntent::ModifierAdjustment ) {
         return;
     }
+
+    m_ctx.restartPlaybackAfterFinishPending.store(false,
+                                                  std::memory_order_relaxed);
 
     bool isShiftAccelerated = cmd.isShiftDown;
     if ( isShiftAccelerated && m_ctx.brushState.isActive &&

@@ -1,4 +1,5 @@
 #include "logic/session/SessionUtils.h"
+
 #include "audio/AudioManager.h"
 #include "common/VideoFrameDecoder.h"
 #include "config/Utf8Path.h"
@@ -93,7 +94,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
     ctx.isPlaying               = false;
     ctx.isMainAudioSyncFollower = false;
-    ctx.currentTime             = 0.0;
+    ctx.restartPlaybackAfterFinishPending.store(false,
+                                                std::memory_order_relaxed);
+    ctx.currentTime = 0.0;
     ctx.animateTime =
         ctx.currentTime + ctx.lastConfig.visual.getEffectiveVisualOffset();
     ctx.animateTimeTarget          = ctx.animateTime;

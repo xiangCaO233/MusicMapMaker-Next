@@ -75,7 +75,11 @@ BeatmapSession::BeatmapSession()
         MMM::Event::EventBus::instance()
             .subscribe<MMM::Event::AudioFinishedEvent>(
                 [this](const MMM::Event::AudioFinishedEvent& e) {
-                    if ( !e.isLooping ) {
+                    const bool wasPlaybackActive =
+                        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+                    if ( !e.isLooping && wasPlaybackActive ) {
+                        m_ctx->restartPlaybackAfterFinishPending.store(
+                            true, std::memory_order_release);
                         m_ctx->isPlaying               = false;
                         m_ctx->isMainAudioSyncFollower = false;
                         Audio::AudioManager::instance().pause();

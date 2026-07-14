@@ -71,3 +71,7 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
                         tests/ProjectCompatibilityTest.cpp)
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
+
+mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
+target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
+add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
