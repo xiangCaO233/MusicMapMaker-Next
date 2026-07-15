@@ -945,7 +945,7 @@ bool drawTimeEditor(const char* id, double& value,
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble(id, &value, 0.001, 0.01, "%.3f");
+        ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
         return ImGui::IsItemDeactivatedAfterEdit();
     }
 
@@ -961,7 +961,7 @@ bool drawTimeEditor(const char* id, double& value,
     bool changed = false;
     if ( ImGui::BeginPopup(id) ) {
         ImGui::SetNextItemWidth(180.0f);
-        ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.3f");
+        ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
         changed = ImGui::IsItemDeactivatedAfterEdit();
         ImGui::EndPopup();
     }
@@ -1096,10 +1096,10 @@ void TimelineCanvas::renderEventEditorPopup()
 
         if ( editEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
-            drawFullWidthInputDouble("##Value", m_editValue, 0.1, 1.0, "%.2f");
+            drawFullWidthInputDouble("##Value", m_editValue, 0.1, 1.0, "%.4f");
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
-            drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.3f");
+            drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.4f");
         } else if ( editEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
@@ -1259,7 +1259,7 @@ void TimelineCanvas::renderEventCreationPopup()
         if ( createEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             drawFullWidthInputDouble(
-                "##BPMValue", m_createValue, 0.1, 1.0, "%.2f");
+                "##BPMValue", m_createValue, 0.1, 1.0, "%.4f");
             ImGui::Spacing();
             ::MMM::UI::FeedbackCheckbox(
                 TR("ui.timeline.event_creator.keep_speed").data(),
@@ -1267,7 +1267,7 @@ void TimelineCanvas::renderEventCreationPopup()
         } else if ( createEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble(
-                "##JumpValue", m_createValue, 1.0, 10.0, "%.3f");
+                "##JumpValue", m_createValue, 1.0, 10.0, "%.4f");
         } else if ( createEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble(
@@ -1276,7 +1276,7 @@ void TimelineCanvas::renderEventCreationPopup()
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
             drawFullWidthInputDouble(
-                "##ScrollValue", m_createValue, 0.01, 0.1, "%.3f");
+                "##ScrollValue", m_createValue, 0.01, 0.1, "%.4f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -1564,7 +1564,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
             ImGui::InputDouble(
-                "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.3f");
+                "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.4f");
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
                  std::abs(bulkOffsetValue) > 1e-6 ) {
@@ -1585,7 +1585,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
             ImGui::InputDouble(
-                "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.2f");
+                "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.4f");
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
                  std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
@@ -1862,7 +1862,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         &vVal,
                         effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
                         effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
-                        effect == ::MMM::TimingEffect::BPM ? "%.2f" : "%.4f");
+                        "%.4f");
                     if ( isBoundScroll ) {
                         ImGui::EndDisabled();
                         if ( ImGui::IsItemHovered(

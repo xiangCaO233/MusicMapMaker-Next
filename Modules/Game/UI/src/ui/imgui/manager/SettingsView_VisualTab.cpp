@@ -36,7 +36,7 @@ void SettingsView::drawVisualSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -409,7 +409,7 @@ void SettingsView::drawVisualSettings()
                     &visual.previewConfig.edgeScrollSensitivity,
                     0.0f,
                     5.0f,
-                    "%.2f");
+                    "%.4f");
             });
         addSettingItem(
             *sec,
@@ -489,7 +489,7 @@ void SettingsView::drawVisualSettings()
                                                           &visual.timelineZoom,
                                                           0.1f,
                                                           5.0f,
-                                                          "%.2fx");
+                                                          "%.4fx");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.visual.timeline_zoom_tooltip").data(),
@@ -508,7 +508,7 @@ void SettingsView::drawVisualSettings()
                     &visual.scrollAnimationDuration,
                     0.0f,
                     0.5f,
-                    "%.3f s");
+                    "%.4f s");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.visual.scroll_animation_tooltip")
@@ -536,7 +536,7 @@ void SettingsView::drawVisualSettings()
                                &visual.snapThreshold,
                                0.0f,
                                48.0f,
-                               "%.1f px");
+                               "%.4f px");
                        });
     }
 

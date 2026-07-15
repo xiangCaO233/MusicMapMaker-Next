@@ -205,7 +205,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
                   ImGui::SameLine();
                   ImGui::SetNextItemWidth(100);
                   ::MMM::UI::FeedbackSliderFloat(
-                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.4fs");
               });
     pushGroup("ResetZoomBtn",
               calcButtonWidth(TR("ui.waveform.reset_zoom").data()),
@@ -340,9 +340,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
             // 2. 绘制悬停绿色竖线和预览框
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
-                ImVec2 plotMin = ImPlot::GetPlotPos();
-                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
-                                   plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin         = ImPlot::GetPlotPos();
+                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
+                                           plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -550,8 +550,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
     double viewEnd   = visualTime + m_zoom;
 
     for ( int i = 0; i < m_samplePoints; ++i ) {
-        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                     (viewEnd - viewStart);
+        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                   (viewEnd - viewStart);
         m_times[i] = t;
 
         double audioT = t - waveformVisualOffset;

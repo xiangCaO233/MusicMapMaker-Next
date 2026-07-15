@@ -31,7 +31,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -174,7 +174,7 @@ void SettingsView::drawEditorSettings()
                     &settings.scrollSpeedMultiplier,
                     1.0f,
                     10.0f,
-                    "%.1f");
+                    "%.4f");
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.editor.scroll_multiplier_tooltip")
@@ -259,7 +259,7 @@ void SettingsView::drawEditorSettings()
                                                    &settings.marqueeThickness,
                                                    1.0f,
                                                    10.0f,
-                                                   "%.1f px");
+                                                   "%.4f px");
             });
         addSettingItem(*sec,
                        rowIndex,
@@ -272,7 +272,7 @@ void SettingsView::drawEditorSettings()
                                &settings.marqueeRounding,
                                0.0f,
                                20.0f,
-                               "%.1f px");
+                               "%.4f px");
                        });
     }
 

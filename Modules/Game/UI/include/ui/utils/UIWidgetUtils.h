@@ -172,7 +172,7 @@ bool FeedbackCombo(const char* label, int* currentItem,
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSliderFloat(const char* label, float* value, float minValue,
-                         float maxValue, const char* format = "%.3f",
+                         float maxValue, const char* format = "%.4f",
                          ImGuiSliderFlags flags = 0);
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
@@ -187,7 +187,7 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
                           float minValue, float maxValue,
-                          const char*      format = "%.3f",
+                          const char*      format = "%.4f",
                           ImGuiSliderFlags flags  = 0);
 
 /// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。

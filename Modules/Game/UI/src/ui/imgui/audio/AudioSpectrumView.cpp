@@ -268,7 +268,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                   ImGui::SameLine();
                   ImGui::SetNextItemWidth(100);
                   ::MMM::UI::FeedbackSliderFloat(
-                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.4fs");
               });
     pushGroup(
         "MaxFreqSlider",
@@ -281,7 +281,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120);
             if ( ::MMM::UI::FeedbackSliderFloat(
-                     "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
+                     "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.4f Hz") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     startAsyncRecalculate();
                 }
@@ -297,7 +297,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                   ImGui::SameLine();
                   ImGui::SetNextItemWidth(120);
                   if ( ::MMM::UI::FeedbackSliderFloat(
-                           "##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
+                           "##log_bias", &m_logBias, 0.01f, 20.0f, "%.4f") ) {
                       if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                           startAsyncRecalculate();
                       }
@@ -473,9 +473,9 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
@@ -805,7 +805,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture = appThreadPool->enqueue([this,
+    m_calcFuture                    = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1091,9 +1091,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
-                                        size_t                      offset,
-                                        std::uint8_t                intensity) {
+    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
+                            size_t                      offset,
+                            std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);
