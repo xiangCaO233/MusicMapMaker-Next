@@ -8,6 +8,7 @@
 #include "mmm/project/Project.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -36,6 +37,51 @@ const CameraInfo* findMainCanvasCamera(
     }
 
     return nullptr;
+}
+
+int calculateBeatIndex(double                                       time,
+                       const std::vector<const TimelineComponent*>& bpmEvents,
+                       double                                       fallbackBpm)
+{
+    if ( bpmEvents.empty() || !std::isfinite(time) ) {
+        return 0;
+    }
+
+    int64_t totalBeats = 0;
+    for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+        const auto* currentBpm = bpmEvents[i];
+        if ( !currentBpm ) {
+            continue;
+        }
+
+        double bpm = currentBpm->m_value;
+        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
+            bpm = fallbackBpm;
+        }
+        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
+            bpm = 120.0;
+        }
+        bpm = std::min(bpm, 10000.0);
+
+        const double nextBpmTime =
+            i + 1 < bpmEvents.size() && bpmEvents[i + 1]
+                ? bpmEvents[i + 1]->m_timestamp
+                : std::numeric_limits<double>::infinity();
+        if ( time >= currentBpm->m_timestamp && time < nextBpmTime ) {
+            const double beatDuration = 60.0 / bpm;
+            const auto   beatsInBpm   = static_cast<int64_t>(std::floor(
+                (time - currentBpm->m_timestamp) / beatDuration + 1e-6));
+            return static_cast<int>(totalBeats + beatsInBpm + 1);
+        }
+        if ( time >= nextBpmTime ) {
+            const double beatDuration = 60.0 / bpm;
+            totalBeats += static_cast<int64_t>(std::round(
+                (nextBpmTime - currentBpm->m_timestamp) / beatDuration));
+            continue;
+        }
+        break;
+    }
+    return 0;
 }
 
 double getEffectiveTotalTimeSeconds(const SessionContext& ctx)

@@ -277,6 +277,9 @@ struct RenderSnapshot {
     /// @brief 当前判定线所在时间段生效的 BPM。
     double currentBpm{ 120.0 };
 
+    /// @brief 当前判定线从首个 BPM Timing 起算的拍号；0 表示尚未进入首拍。
+    int currentBeatIndex{ 0 };
+
     /// @brief 当前判定线所在时间段生效的 SV。
     double currentSv{ 1.0 };
 
@@ -422,6 +425,7 @@ struct RenderSnapshot {
         uiInterpolationYOffsetScale  = 1.0;
         fallbackBpm                  = 120.0;
         currentBpm                   = 120.0;
+        currentBeatIndex             = 0;
         currentSv                    = 1.0;
         currentTool                  = EditTool::Move;
         acceptsInteraction           = false;

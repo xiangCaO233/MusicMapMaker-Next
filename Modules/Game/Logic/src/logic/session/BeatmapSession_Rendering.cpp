@@ -543,8 +543,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         }
     }
 
-    double snapshotCurrentBpm = snapshotFallbackBpm;
-    double snapshotCurrentSv  = 1.0;
+    double    snapshotCurrentBpm       = snapshotFallbackBpm;
+    double    snapshotCurrentSv        = 1.0;
+    const int snapshotCurrentBeatIndex = SessionUtils::calculateBeatIndex(
+        m_ctx->animateTime, bpmEvents, snapshotFallbackBpm);
     if ( const auto* cache =
              m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() ) {
         const auto timingState = cache->getTimingStateAt(m_ctx->animateTime);
@@ -614,6 +616,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->playbackSpeed     = snapshotPlaybackSpeed;
         snapshot->fallbackBpm       = snapshotFallbackBpm;
         snapshot->currentBpm        = snapshotCurrentBpm;
+        snapshot->currentBeatIndex  = snapshotCurrentBeatIndex;
         snapshot->currentSv         = snapshotCurrentSv;
         snapshot->hasBeatmap        = hasBeatmap;
         snapshot->lastActionMessage = m_ctx->lastActionMessage;

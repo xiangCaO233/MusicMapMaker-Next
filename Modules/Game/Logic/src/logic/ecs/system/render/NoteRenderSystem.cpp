@@ -276,48 +276,11 @@ void NoteRenderSystem::generateSnapshot(
                                                      renderScaleY);
 
         if ( snapshot->isHoveringCanvas || snapshot->isPreviewDragging ) {
-            double hoveredTime = snapshot->isPreviewDragging
-                                     ? snapshot->previewHoverTime
-                                     : snapshot->hoveredTime;
-
-            if ( !bpmEvents.empty() ) {
-                int64_t totalBeats = 0;
-                bool    found      = false;
-                for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-                    const auto* currentBPM = bpmEvents[i];
-                    double      bpmTime    = currentBPM->m_timestamp;
-                    double      bpmVal     = currentBPM->m_value;
-                    if ( bpmVal <= 0.0 ) {
-                        bpmVal = snapshot->fallbackBpm;
-                    }
-                    if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
-                    if ( bpmVal <= 0.0 ) bpmVal = 120.0;
-
-                    double nextBpmTime =
-                        (i + 1 < bpmEvents.size())
-                            ? bpmEvents[i + 1]->m_timestamp
-                            : std::numeric_limits<double>::infinity();
-
-                    if ( hoveredTime >= bpmTime && hoveredTime < nextBpmTime ) {
-                        double  beatDuration = 60.0 / bpmVal;
-                        double  timeInBpm    = hoveredTime - bpmTime;
-                        int64_t beatsInBpm   = static_cast<int64_t>(
-                            std::floor(timeInBpm / beatDuration + 1e-6));
-                        snapshot->hoveredBeatIndex =
-                            static_cast<int>(totalBeats + beatsInBpm + 1);
-                        found = true;
-                        break;
-                    } else if ( hoveredTime >= nextBpmTime ) {
-                        double beatDuration = 60.0 / bpmVal;
-                        double bpmDuration  = nextBpmTime - bpmTime;
-                        totalBeats += static_cast<int64_t>(
-                            std::round(bpmDuration / beatDuration));
-                    } else {
-                        break;
-                    }
-                }
-                if ( !found ) snapshot->hoveredBeatIndex = 0;
-            }
+            double hoveredTime         = snapshot->isPreviewDragging
+                                             ? snapshot->previewHoverTime
+                                             : snapshot->hoveredTime;
+            snapshot->hoveredBeatIndex = SessionUtils::calculateBeatIndex(
+                hoveredTime, bpmEvents, snapshot->fallbackBpm);
         }
     }
 

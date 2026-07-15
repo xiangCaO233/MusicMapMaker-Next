@@ -28,6 +28,18 @@ struct SnapResult {
     int    denominator{ 1 };    ///< 分母
 };
 
+/// @brief 计算指定时间点从首个 BPM Timing 起算的拍号。
+/// @param time 待查询的谱面时间，单位秒。
+/// @param bpmEvents 已按时间排序的 BPM 事件列表。
+/// @param fallbackBpm 无效 BPM 事件使用的回退 BPM。
+/// @return 从 1 开始的拍号；时间早于首个 BPM Timing 或无 BPM 事件时返回 0。
+/// @warning
+/// 逻辑热路径：状态快照和画布悬浮信息会频繁调用；只允许线性扫描已缓存的 BPM
+/// 事件，禁止在此函数中遍历 ECS 或执行排序。
+int calculateBeatIndex(double                                       time,
+                       const std::vector<const TimelineComponent*>& bpmEvents,
+                       double fallbackBpm);
+
 /// @brief 获取给定坐标的磁吸时间结果
 /// @param rawTime 原始逻辑时间
 /// @param mouseY 鼠标的 Y 轴坐标
