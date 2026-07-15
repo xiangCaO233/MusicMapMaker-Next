@@ -1,6 +1,7 @@
 #include "logic/EditorEngine.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
@@ -152,23 +153,8 @@ FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
 /// @warning 逻辑热路径：自适应快照预算调用；只读取设备刷新率并做常量级计算。
 double frameLimitTargetUps(Config::FrameLimitPreference frameLimit)
 {
-    int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
-    if ( refreshRate <= 0 ) {
-        refreshRate = 60;
-    }
-
-    switch ( frameLimit ) {
-    case Config::FrameLimitPreference::VSync:
-        return static_cast<double>(refreshRate);
-    case Config::FrameLimitPreference::Refresh2x:
-        return static_cast<double>(refreshRate * 2);
-    case Config::FrameLimitPreference::Refresh4x:
-        return static_cast<double>(refreshRate * 4);
-    case Config::FrameLimitPreference::Refresh8x:
-        return static_cast<double>(refreshRate * 8);
-    case Config::FrameLimitPreference::Unlimited:
-    default: return 0.0;
-    }
+    return Config::frameLimitTargetRate(
+        frameLimit, Config::AppConfig::instance().getDeviceRefreshRate());
 }
 
 /// @brief 根据 UPS 健康度降低快照刷新率预算。
@@ -2422,29 +2408,13 @@ void EditorEngine::loop()
     auto& projectController = ProjectController::instance();
 
     while ( m_running.load(std::memory_order_acquire) ) {
-        // 动态获取当前的延迟目标
-        double targetDt = 0.0;
-        int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
-        if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
-
+        // 动态获取当前的延迟目标，并与渲染循环共用相同换算规则。
         Config::FrameLimitPreference frameLimit =
             m_frameLimitPreference.load(std::memory_order_relaxed);
-        switch ( frameLimit ) {
-        case Config::FrameLimitPreference::VSync:
-            targetDt = 1.0 / static_cast<double>(refreshRate);
-            break;
-        case Config::FrameLimitPreference::Refresh2x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 2);
-            break;
-        case Config::FrameLimitPreference::Refresh4x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 4);
-            break;
-        case Config::FrameLimitPreference::Refresh8x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 8);
-            break;
-        case Config::FrameLimitPreference::Unlimited:
-        default: targetDt = 0.0; break;
-        }
+        const int refreshRate =
+            Config::AppConfig::instance().getDeviceRefreshRate();
+        const double targetDt =
+            Config::frameLimitTargetInterval(frameLimit, refreshRate);
 
         auto currentTime = FrameLimitClock::now();
 

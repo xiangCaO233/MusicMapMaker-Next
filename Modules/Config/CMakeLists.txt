@@ -14,3 +14,9 @@ mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
 add_test(NAME FontPreferenceValidatorTest COMMAND FontPreferenceValidatorTest)
+
+# 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
+mmm_add_test_executable(Config FrameLimitUtilsTest
+                        tests/FrameLimitUtilsTest.cpp)
+target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
+add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
