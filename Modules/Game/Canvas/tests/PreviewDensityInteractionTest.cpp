@@ -1,4 +1,5 @@
 #include "canvas/PreviewDensityInteraction.h"
+#include "canvas/PreviewDensityColor.h"
 
 #include <cmath>
 #include <limits>
@@ -14,6 +15,29 @@ namespace
 bool near(const std::optional<double>& value, double expected)
 {
     return value && std::abs(*value - expected) < 1e-9;
+}
+
+/// @brief 使用小容差比较密度颜色分量。
+/// @param value 待检查颜色分量。
+/// @param expected 期望颜色分量。
+/// @return 两个分量足够接近时返回 true。
+bool nearColor(float value, float expected)
+{
+    return std::abs(value - expected) < 1e-6f;
+}
+
+/// @brief 验证密度颜色的绿色、橙色、红色锚点和输入限制。
+/// @return 所有颜色锚点符合预期时返回 true。
+bool testDensityColorGradient()
+{
+    const auto low     = MMM::Canvas::previewDensityColorAt(0.0f);
+    const auto medium  = MMM::Canvas::previewDensityColorAt(0.5f);
+    const auto high    = MMM::Canvas::previewDensityColorAt(1.0f);
+    const auto clamped = MMM::Canvas::previewDensityColorAt(2.0f);
+    return low.g > low.r && low.g > low.b && medium.r > medium.g &&
+           medium.g > medium.b && high.r > high.g && high.r > high.b &&
+           nearColor(high.r, clamped.r) && nearColor(high.g, clamped.g) &&
+           nearColor(high.b, clamped.b);
 }
 
 /// @brief 验证密度栏顶部、中央和底部的反向时间轴映射。
@@ -58,7 +82,7 @@ bool testInvalidInputs()
 int main()
 {
     return testVerticalAxisMapping() && testOutOfBoundsClamp() &&
-                   testInvalidInputs()
+                   testInvalidInputs() && testDensityColorGradient()
                ? 0
                : 1;
 }
