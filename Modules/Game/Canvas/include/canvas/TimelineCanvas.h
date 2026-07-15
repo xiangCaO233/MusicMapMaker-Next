@@ -98,6 +98,11 @@ public:
     /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
     bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
 
+    /// @brief 判断时间线是否正在拖动 Timing 框选区域。
+    /// @return 正在框选时返回 true。
+    /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
+    bool isTimingMarqueeSelecting() const { return m_isTimingMarqueeSelecting; }
+
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;

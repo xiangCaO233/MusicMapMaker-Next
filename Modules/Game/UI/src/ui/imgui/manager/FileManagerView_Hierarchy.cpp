@@ -18,6 +18,7 @@
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/DesktopPathUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -1073,8 +1074,11 @@ void FileManagerView::renderFileEntryContextMenu(
     }
 
     if ( ::MMM::UI::FeedbackMenuItem(
-             TR("ui.file_manager.context.copy_path").data()) ) {
-        ImGui::SetClipboardText(entry.fullPath.c_str());
+             TR("ui.file_manager.context.open_path").data()) ) {
+        if ( !DesktopPathUtils::openInFileManager(entry.path,
+                                                  !entry.isDirectory) ) {
+            XERROR("无法在系统文件管理器中打开路径：{}", entry.fullPath);
+        }
     }
 
     ImGui::EndPopup();

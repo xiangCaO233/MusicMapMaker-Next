@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/imgui/menu/actions/edit/PlaybackShortcutRouting.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <imgui.h>
@@ -93,10 +94,16 @@ public:
 
         auto& engine = Logic::EditorEngine::instance();
         if ( ImGui::IsAnyItemActive() ) {
+            const bool timelineMarqueeSelecting =
+                context.sourceManager &&
+                context.sourceManager->isTimelineTimingMarqueeSelecting();
             const bool allowPlaybackToggle =
-                (!io.KeyShift && (engine.isActiveSessionSelectingMarquee() ||
-                                  engine.isActiveSessionDraggingNote())) ||
-                (io.KeyShift && engine.isActiveSessionDrawingBrush());
+                shouldAllowPlaybackToggleWhileItemActive(
+                    io.KeyShift,
+                    engine.isActiveSessionSelectingMarquee(),
+                    engine.isActiveSessionDraggingNote(),
+                    engine.isActiveSessionDrawingBrush(),
+                    timelineMarqueeSelecting);
             if ( !allowPlaybackToggle ) return false;
         } else if ( io.KeyShift ) {
             return false;
