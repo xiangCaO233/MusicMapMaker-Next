@@ -104,6 +104,11 @@ public:
     /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
     bool isTimingMarqueeSelecting() const { return m_isTimingMarqueeSelecting; }
 
+    /// @brief 判断时间线是否正在通过抓取工具拖动 Timing。
+    /// @return 正在拖动 Timing 时返回 true。
+    /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
+    bool isTimingDragging() const { return m_isTimingDragging; }
+
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;

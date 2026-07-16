@@ -85,6 +85,11 @@ public:
     /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
     [[nodiscard]] bool isTimelineTimingMarqueeSelecting();
 
+    /// @brief 判断时间线窗口是否正在通过抓取工具拖动 Timing。
+    /// @return 时间线正在拖动 Timing 时返回 true。
+    /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
+    [[nodiscard]] bool isTimelineTimingDragging();
+
     /// @brief 获取 UI 生命周期快照中的当前项目根目录。
     /// @return 当前项目根目录；无项目时为空路径。
     /// @warning UI 热路径：返回 UI 线程本地路径引用，不访问逻辑线程项目。

@@ -399,6 +399,15 @@ bool UIManager::isTimelineTimingMarqueeSelecting()
     return timeline && timeline->isTimingMarqueeSelecting();
 }
 
+/// @brief 判断时间线窗口是否正在通过抓取工具拖动 Timing。
+/// @return 时间线正在拖动 Timing 时返回 true。
+/// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
+bool UIManager::isTimelineTimingDragging()
+{
+    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    return timeline && timeline->isTimingDragging();
+}
+
 const std::filesystem::path& UIManager::getActiveProjectRoot() const
 {
     return m_activeProjectRoot;

@@ -1116,6 +1116,12 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        const bool editingDisabled =
+            m_currentSnapshot && m_currentSnapshot->isPlaying;
+        if ( editingDisabled ) {
+            ImGui::BeginDisabled();
+        }
+
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
 
@@ -1171,6 +1177,10 @@ void TimelineCanvas::renderEventEditorPopup()
             m_isPopupOpen = false;
         }
 
+        if ( editingDisabled ) {
+            ImGui::EndDisabled();
+        }
+
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.timeline.event_editor.cancel").data(),
@@ -1203,6 +1213,12 @@ void TimelineCanvas::renderEventCreationPopup()
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::Separator();
         ImGui::Spacing();
+
+        const bool editingDisabled =
+            m_currentSnapshot && m_currentSnapshot->isPlaying;
+        if ( editingDisabled ) {
+            ImGui::BeginDisabled();
+        }
 
         // 自动计算下一项 RadioButton 宽度并在空间充足时在同行显示的辅助函数
         auto getRadioButtonWidth = [](const char* label) -> float {
@@ -1341,6 +1357,10 @@ void TimelineCanvas::renderEventCreationPopup()
             m_isCreatePopupOpen = false;
         }
 
+        if ( editingDisabled ) {
+            ImGui::EndDisabled();
+        }
+
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.timeline.event_editor.cancel").data(),
@@ -1437,6 +1457,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
                                                 &m_isTableWindowOpen);
     if ( opened ) {
+        const bool editingDisabled = m_currentSnapshot->isPlaying;
+        if ( editingDisabled ) {
+            m_isTableRowDragSelecting       = false;
+            m_tableRowDragAnchorEntity      = entt::null;
+            m_hasTableRowDragSelectionMoved = false;
+            m_tableRowDragBaseSelection.clear();
+            finishKeepSpeedBinding();
+            ImGui::BeginDisabled();
+        }
+
         auto       elements = collectTimelineElements();
         const auto beatTimeline =
             buildTimingTableBeatTimeline(*m_currentSnapshot);
@@ -2083,7 +2113,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImVec2(rowNumberCellMin.x, rowNumberItemMin.y),
                         ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
                                rowNumberItemMax.y));
-                    if ( rowNumberHovered &&
+                    if ( !editingDisabled && rowNumberHovered &&
                          ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
                         const ImGuiIO& io               = ImGui::GetIO();
                         m_isTableRowDragSelecting       = true;
@@ -2318,8 +2348,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         const bool tableShortcutFocused =
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         const ImGuiIO& io = ImGui::GetIO();
-        if ( tableShortcutFocused && !ImGui::IsAnyItemActive() &&
-             !io.WantTextInput ) {
+        if ( !editingDisabled && tableShortcutFocused &&
+             !ImGui::IsAnyItemActive() && !io.WantTextInput ) {
             const bool ctrlOnly =
                 io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
             const bool noModifier =
@@ -2350,6 +2380,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 m_selectedTimingEntities.clear();
                 m_tableSelectionAnchorEntity = entt::null;
             }
+        }
+
+        if ( editingDisabled ) {
+            ImGui::EndDisabled();
         }
     }
     ImGui::End();

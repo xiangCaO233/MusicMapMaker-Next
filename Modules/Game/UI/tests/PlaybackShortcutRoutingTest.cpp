@@ -11,19 +11,23 @@ int main()
 {
     bool ok = true;
     ok &= shouldAllowPlaybackToggleWhileItemActive(
-        false, true, false, false, false);
+        false, true, false, false, false, false);
     ok &= shouldAllowPlaybackToggleWhileItemActive(
-        false, false, true, false, false);
+        false, false, true, false, false, false);
     ok &= shouldAllowPlaybackToggleWhileItemActive(
-        false, false, false, false, true);
+        false, false, false, false, true, false);
     ok &= shouldAllowPlaybackToggleWhileItemActive(
-        true, false, false, true, false);
+        false, false, false, false, false, true);
+    ok &= shouldAllowPlaybackToggleWhileItemActive(
+        true, false, false, true, false, false);
 
     ok &= !shouldAllowPlaybackToggleWhileItemActive(
-        false, false, false, false, false);
+        false, false, false, false, false, false);
     ok &= !shouldAllowPlaybackToggleWhileItemActive(
-        true, false, false, false, true);
+        true, false, false, false, true, false);
     ok &= !shouldAllowPlaybackToggleWhileItemActive(
-        true, true, false, false, false);
+        true, false, false, false, false, true);
+    ok &= !shouldAllowPlaybackToggleWhileItemActive(
+        true, true, false, false, false, false);
     return ok ? 0 : 1;
 }

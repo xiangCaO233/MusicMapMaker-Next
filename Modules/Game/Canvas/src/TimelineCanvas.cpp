@@ -651,8 +651,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             };
 
             const bool inlineGearCanOpenEditor =
+                !m_currentSnapshot->isPlaying &&
                 Logic::EditorEngine::instance().getCurrentTool() ==
-                Logic::EditTool::Draw;
+                    Logic::EditTool::Draw;
             const bool showInlineTimingEditors =
                 inlineGearCanOpenEditor && isHovered && !overMenuButton &&
                 m_currentSnapshot->hasBeatmap && !m_isTimingDragging &&

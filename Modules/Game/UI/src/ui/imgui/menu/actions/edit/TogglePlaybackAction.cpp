@@ -97,12 +97,16 @@ public:
             const bool timelineMarqueeSelecting =
                 context.sourceManager &&
                 context.sourceManager->isTimelineTimingMarqueeSelecting();
+            const bool timelineTimingDragging =
+                context.sourceManager &&
+                context.sourceManager->isTimelineTimingDragging();
             const bool allowPlaybackToggle =
                 shouldAllowPlaybackToggleWhileItemActive(
                     io.KeyShift,
                     engine.isActiveSessionSelectingMarquee(),
                     engine.isActiveSessionDraggingNote(),
                     engine.isActiveSessionDrawingBrush(),
+                    timelineTimingDragging,
                     timelineMarqueeSelecting);
             if ( !allowPlaybackToggle ) return false;
         } else if ( io.KeyShift ) {
