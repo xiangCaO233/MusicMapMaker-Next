@@ -420,6 +420,14 @@ private:
     double m_tableScrollTargetTime{ 0.0 };
     /// @brief 时间点表格 Shift 连续选择使用的锚点实体。
     entt::entity m_tableSelectionAnchorEntity{ entt::null };
+    /// @brief 是否正在通过时间点表格序号列拖动选择连续行。
+    bool m_isTableRowDragSelecting{ false };
+    /// @brief 时间点表格序号列拖选的起始实体。
+    entt::entity m_tableRowDragAnchorEntity{ entt::null };
+    /// @brief 时间点表格序号列拖选开始前保留的追加选择。
+    std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
+    /// @brief 当前序号列拖选是否已经越过起始行。
+    bool         m_hasTableRowDragSelectionMoved{ false };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

@@ -1329,6 +1329,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     if ( !m_isTableWindowOpen ) {
         m_tableBeatmapKey.clear();
         m_tableSelectionAnchorEntity = entt::null;
+        m_isTableRowDragSelecting    = false;
+        m_tableRowDragAnchorEntity   = entt::null;
+        m_tableRowDragBaseSelection.clear();
+        m_hasTableRowDragSelectionMoved = false;
         finishKeepSpeedBinding();
         return;
     }
@@ -1338,6 +1342,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_tableBeatmapKey.clear();
         m_tableScrollToCurrentTimePending = false;
         m_tableSelectionAnchorEntity      = entt::null;
+        m_isTableRowDragSelecting         = false;
+        m_tableRowDragAnchorEntity        = entt::null;
+        m_tableRowDragBaseSelection.clear();
+        m_hasTableRowDragSelectionMoved = false;
         finishKeepSpeedBinding();
     };
 
@@ -1704,6 +1712,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // 第 0 列：序号
                     ImGui::TableSetColumnIndex(0);
+                    const ImVec2 rowNumberCellMin = ImGui::GetCursorScreenPos();
+                    const float  rowNumberCellWidth =
+                        ImGui::GetContentRegionAvail().x;
                     const bool rowSelected =
                         m_selectedTimingEntities.contains(ent);
                     const std::string rowLabel =
@@ -1716,28 +1727,87 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                              ImGuiSelectableFlags_SpanAllColumns |
                                  ImGuiSelectableFlags_AllowOverlap,
                              ImVec2(0.0f, ImGui::GetFrameHeight())) ) {
-                        const ImGuiIO& io     = ImGui::GetIO();
-                        const auto     anchor = std::find_if(
-                            elements.begin(),
-                            elements.end(),
-                            [&](const auto& element) {
-                                return getElementEntity(element) ==
-                                       m_tableSelectionAnchorEntity;
-                            });
-                        if ( io.KeyShift && anchor != elements.end() ) {
-                            if ( !io.KeyCtrl ) {
+                        if ( !m_hasTableRowDragSelectionMoved ) {
+                            const ImGuiIO& io     = ImGui::GetIO();
+                            const auto     anchor = std::find_if(
+                                elements.begin(),
+                                elements.end(),
+                                [&](const auto& element) {
+                                    return getElementEntity(element) ==
+                                           m_tableSelectionAnchorEntity;
+                                });
+                            if ( io.KeyShift && anchor != elements.end() ) {
+                                if ( !io.KeyCtrl ) {
+                                    m_selectedTimingEntities.clear();
+                                }
+                                const int anchorIndex = static_cast<int>(
+                                    std::distance(elements.begin(), anchor));
+                                const int first = std::clamp(
+                                    std::min(anchorIndex, idx),
+                                    0,
+                                    static_cast<int>(elements.size()) - 1);
+                                const int last = std::clamp(
+                                    std::max(anchorIndex, idx),
+                                    0,
+                                    static_cast<int>(elements.size()) - 1);
+                                for ( int selectedIndex = first;
+                                      selectedIndex <= last;
+                                      ++selectedIndex ) {
+                                    m_selectedTimingEntities.insert(
+                                        getElementEntity(
+                                            elements[static_cast<std::size_t>(
+                                                selectedIndex)]));
+                                }
+                            } else if ( io.KeyCtrl ) {
+                                if ( rowSelected ) {
+                                    m_selectedTimingEntities.erase(ent);
+                                } else {
+                                    m_selectedTimingEntities.insert(ent);
+                                }
+                                m_tableSelectionAnchorEntity = ent;
+                            } else {
                                 m_selectedTimingEntities.clear();
+                                m_selectedTimingEntities.insert(ent);
+                                m_tableSelectionAnchorEntity = ent;
                             }
+                        }
+                    }
+                    const ImVec2 rowNumberItemMin = ImGui::GetItemRectMin();
+                    const ImVec2 rowNumberItemMax = ImGui::GetItemRectMax();
+                    const bool   rowNumberHovered = ImGui::IsMouseHoveringRect(
+                        ImVec2(rowNumberCellMin.x, rowNumberItemMin.y),
+                        ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
+                               rowNumberItemMax.y));
+                    if ( rowNumberHovered &&
+                         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+                        const ImGuiIO& io               = ImGui::GetIO();
+                        m_isTableRowDragSelecting       = true;
+                        m_tableRowDragAnchorEntity      = ent;
+                        m_tableSelectionAnchorEntity    = ent;
+                        m_hasTableRowDragSelectionMoved = false;
+                        m_tableRowDragBaseSelection =
+                            io.KeyCtrl ? m_selectedTimingEntities
+                                       : std::unordered_set<entt::entity>{};
+                    }
+                    if ( m_isTableRowDragSelecting && rowNumberHovered &&
+                         ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) &&
+                         ent != m_tableRowDragAnchorEntity ) {
+                        const auto dragAnchor =
+                            std::find_if(elements.begin(),
+                                         elements.end(),
+                                         [&](const auto& element) {
+                                             return getElementEntity(element) ==
+                                                    m_tableRowDragAnchorEntity;
+                                         });
+                        if ( dragAnchor != elements.end() ) {
+                            m_hasTableRowDragSelectionMoved = true;
+                            m_selectedTimingEntities =
+                                m_tableRowDragBaseSelection;
                             const int anchorIndex = static_cast<int>(
-                                std::distance(elements.begin(), anchor));
-                            const int first = std::clamp(
-                                std::min(anchorIndex, idx),
-                                0,
-                                static_cast<int>(elements.size()) - 1);
-                            const int last = std::clamp(
-                                std::max(anchorIndex, idx),
-                                0,
-                                static_cast<int>(elements.size()) - 1);
+                                std::distance(elements.begin(), dragAnchor));
+                            const int first = std::min(anchorIndex, idx);
+                            const int last  = std::max(anchorIndex, idx);
                             for ( int selectedIndex = first;
                                   selectedIndex <= last;
                                   ++selectedIndex ) {
@@ -1746,17 +1816,6 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                         elements[static_cast<std::size_t>(
                                             selectedIndex)]));
                             }
-                        } else if ( io.KeyCtrl ) {
-                            if ( rowSelected ) {
-                                m_selectedTimingEntities.erase(ent);
-                            } else {
-                                m_selectedTimingEntities.insert(ent);
-                            }
-                            m_tableSelectionAnchorEntity = ent;
-                        } else {
-                            m_selectedTimingEntities.clear();
-                            m_selectedTimingEntities.insert(ent);
-                            m_tableSelectionAnchorEntity = ent;
                         }
                     }
 
@@ -1916,6 +1975,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         m_tableSelectionAnchorEntity = entt::null;
                     }
                 }
+            }
+            if ( m_isTableRowDragSelecting &&
+                 !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+                m_isTableRowDragSelecting       = false;
+                m_tableRowDragAnchorEntity      = entt::null;
+                m_hasTableRowDragSelectionMoved = false;
+                m_tableRowDragBaseSelection.clear();
             }
             ImGui::EndTable();
         }
