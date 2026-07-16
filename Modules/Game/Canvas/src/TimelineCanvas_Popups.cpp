@@ -2335,12 +2335,34 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::PopStyleVar(2);
 
         const ImVec2 mousePosition = ImGui::GetMousePos();
-        if ( hasTimingTableRect &&
-             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-             mousePosition.x >= timingTableMin.x &&
-             mousePosition.x < timingTableMax.x &&
-             mousePosition.y >= timingTableBlankStartY &&
-             mousePosition.y < timingTableMax.y ) {
+        const bool   mouseInsideTimingTable =
+            hasTimingTableRect && mousePosition.x >= timingTableMin.x &&
+            mousePosition.x < timingTableMax.x &&
+            mousePosition.y >= timingTableMin.y &&
+            mousePosition.y < timingTableMax.y;
+        const bool mouseInsideTimingTableBlank =
+            mouseInsideTimingTable && mousePosition.y >= timingTableBlankStartY;
+        const ImVec2 windowPosition        = ImGui::GetWindowPos();
+        const ImVec2 windowContentMinLocal = ImGui::GetWindowContentRegionMin();
+        const ImVec2 windowContentMaxLocal = ImGui::GetWindowContentRegionMax();
+        const ImVec2 windowContentMin(
+            windowPosition.x + windowContentMinLocal.x,
+            windowPosition.y + windowContentMinLocal.y);
+        const ImVec2 windowContentMax(
+            windowPosition.x + windowContentMaxLocal.x,
+            windowPosition.y + windowContentMaxLocal.y);
+        const bool mouseInsideWindowContent =
+            mousePosition.x >= windowContentMin.x &&
+            mousePosition.x < windowContentMax.x &&
+            mousePosition.y >= windowContentMin.y &&
+            mousePosition.y < windowContentMax.y;
+        const bool mouseInsideOutsideTableBlank =
+            !mouseInsideTimingTable && mouseInsideWindowContent &&
+            ImGui::IsWindowHovered(
+                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+            !ImGui::IsAnyItemHovered();
+        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             (mouseInsideTimingTableBlank || mouseInsideOutsideTableBlank) ) {
             m_selectedTimingEntities.clear();
             m_tableSelectionAnchorEntity = entt::null;
         }
