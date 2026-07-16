@@ -833,36 +833,37 @@ double getActiveSessionTimelineTime(double fallbackTime)
     return std::isfinite(timelineTime) ? timelineTime : fallbackTime;
 }
 
-/// @brief 查找最靠近目标时间的 Timing 行索引。
+/// @brief 查找可见行中最靠近目标时间的 Timing 行索引。
 /// @param elements 已按时间排序的 Timing 元素列表。
+/// @param visibleIndices 当前筛选后可见行对应的原始索引。
 /// @param targetTime 目标判定线时间，单位秒。
-/// @return 命中的行索引；无可用行时返回 -1。
+/// @return 命中的可见行索引；无可用行时返回 -1。
 int findNearestTimelineElementIndex(
     const std::vector<Logic::TimelineInteractiveElement>& elements,
-    double                                                targetTime)
+    const std::vector<std::size_t>& visibleIndices, double targetTime)
 {
-    if ( elements.empty() || !std::isfinite(targetTime) ) {
+    if ( visibleIndices.empty() || !std::isfinite(targetTime) ) {
         return -1;
     }
 
-    auto next =
-        std::lower_bound(elements.begin(),
-                         elements.end(),
-                         targetTime,
-                         [](const Logic::TimelineInteractiveElement& element,
-                            double time) { return element.time < time; });
-    if ( next == elements.begin() ) {
+    auto next = std::lower_bound(visibleIndices.begin(),
+                                 visibleIndices.end(),
+                                 targetTime,
+                                 [&](std::size_t elementIndex, double time) {
+                                     return elements[elementIndex].time < time;
+                                 });
+    if ( next == visibleIndices.begin() ) {
         return 0;
     }
-    if ( next == elements.end() ) {
-        return static_cast<int>(elements.size() - 1U);
+    if ( next == visibleIndices.end() ) {
+        return static_cast<int>(visibleIndices.size() - 1U);
     }
 
     const auto prev      = std::prev(next);
-    const auto prevDelta = std::abs(prev->time - targetTime);
-    const auto nextDelta = std::abs(next->time - targetTime);
+    const auto prevDelta = std::abs(elements[*prev].time - targetTime);
+    const auto nextDelta = std::abs(elements[*next].time - targetTime);
     return static_cast<int>((prevDelta <= nextDelta ? prev : next) -
-                            elements.begin());
+                            visibleIndices.begin());
 }
 
 /// @brief 将存储值转换成编辑器显示值
@@ -1525,6 +1526,18 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
         ImGui::Separator();
 
+        ::MMM::UI::FeedbackCheckbox("只看 BPM", &m_tableOnlyShowBpm);
+        std::vector<std::size_t> visibleElementIndices;
+        visibleElementIndices.reserve(elements.size());
+        for ( std::size_t elementIndex = 0; elementIndex < elements.size();
+              ++elementIndex ) {
+            if ( !m_tableOnlyShowBpm ||
+                 getElementEffect(elements[elementIndex]) ==
+                     ::MMM::TimingEffect::BPM ) {
+                visibleElementIndices.push_back(elementIndex);
+            }
+        }
+
         // 表格选择与基础 Excel 式剪贴板操作
         const bool hasTableSelection = !m_selectedTimingEntities.empty();
         ImGui::AlignTextToFramePadding();
@@ -1670,6 +1683,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             const int scrollTargetIndex =
                 m_tableScrollToCurrentTimePending
                     ? findNearestTimelineElementIndex(elements,
+                                                      visibleElementIndices,
                                                       m_tableScrollTargetTime)
                     : -1;
             if ( m_tableScrollToCurrentTimePending && scrollTargetIndex < 0 ) {
@@ -1677,13 +1691,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
 
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(elements.size()));
+            clipper.Begin(static_cast<int>(visibleElementIndices.size()));
             if ( scrollTargetIndex >= 0 ) {
                 clipper.IncludeItemByIndex(scrollTargetIndex);
             }
             while ( clipper.Step() ) {
-                for ( int idx = clipper.DisplayStart; idx < clipper.DisplayEnd;
-                      ++idx ) {
+                for ( int visibleIndex = clipper.DisplayStart;
+                      visibleIndex < clipper.DisplayEnd;
+                      ++visibleIndex ) {
+                    const int idx = static_cast<int>(
+                        visibleElementIndices[static_cast<std::size_t>(
+                            visibleIndex)]);
                     const auto&         el         = elements[idx];
                     int                 displayIdx = idx + 1;
                     ::MMM::TimingEffect effect     = getElementEffect(el);
@@ -1698,7 +1716,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     ImGui::TableNextRow();
                     if ( m_tableScrollToCurrentTimePending &&
-                         idx == scrollTargetIndex ) {
+                         visibleIndex == scrollTargetIndex ) {
                         ImGui::SetScrollHereY(0.5f);
                         m_tableScrollToCurrentTimePending = false;
                     }
@@ -1730,33 +1748,42 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         if ( !m_hasTableRowDragSelectionMoved ) {
                             const ImGuiIO& io     = ImGui::GetIO();
                             const auto     anchor = std::find_if(
-                                elements.begin(),
-                                elements.end(),
-                                [&](const auto& element) {
-                                    return getElementEntity(element) ==
+                                visibleElementIndices.begin(),
+                                visibleElementIndices.end(),
+                                [&](std::size_t elementIndex) {
+                                    return getElementEntity(
+                                               elements[elementIndex]) ==
                                            m_tableSelectionAnchorEntity;
                                 });
-                            if ( io.KeyShift && anchor != elements.end() ) {
+                            if ( io.KeyShift &&
+                                 anchor != visibleElementIndices.end() ) {
                                 if ( !io.KeyCtrl ) {
                                     m_selectedTimingEntities.clear();
                                 }
-                                const int anchorIndex = static_cast<int>(
-                                    std::distance(elements.begin(), anchor));
+                                const int anchorIndex =
+                                    static_cast<int>(std::distance(
+                                        visibleElementIndices.begin(), anchor));
                                 const int first = std::clamp(
-                                    std::min(anchorIndex, idx),
+                                    std::min(anchorIndex, visibleIndex),
                                     0,
-                                    static_cast<int>(elements.size()) - 1);
+                                    static_cast<int>(
+                                        visibleElementIndices.size()) -
+                                        1);
                                 const int last = std::clamp(
-                                    std::max(anchorIndex, idx),
+                                    std::max(anchorIndex, visibleIndex),
                                     0,
-                                    static_cast<int>(elements.size()) - 1);
+                                    static_cast<int>(
+                                        visibleElementIndices.size()) -
+                                        1);
                                 for ( int selectedIndex = first;
                                       selectedIndex <= last;
                                       ++selectedIndex ) {
                                     m_selectedTimingEntities.insert(
                                         getElementEntity(
-                                            elements[static_cast<std::size_t>(
-                                                selectedIndex)]));
+                                            elements
+                                                [visibleElementIndices
+                                                     [static_cast<std::size_t>(
+                                                         selectedIndex)]]));
                                 }
                             } else if ( io.KeyCtrl ) {
                                 if ( rowSelected ) {
@@ -1793,28 +1820,33 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                          ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                          ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) &&
                          ent != m_tableRowDragAnchorEntity ) {
-                        const auto dragAnchor =
-                            std::find_if(elements.begin(),
-                                         elements.end(),
-                                         [&](const auto& element) {
-                                             return getElementEntity(element) ==
-                                                    m_tableRowDragAnchorEntity;
-                                         });
-                        if ( dragAnchor != elements.end() ) {
+                        const auto dragAnchor = std::find_if(
+                            visibleElementIndices.begin(),
+                            visibleElementIndices.end(),
+                            [&](std::size_t elementIndex) {
+                                return getElementEntity(
+                                           elements[elementIndex]) ==
+                                       m_tableRowDragAnchorEntity;
+                            });
+                        if ( dragAnchor != visibleElementIndices.end() ) {
                             m_hasTableRowDragSelectionMoved = true;
                             m_selectedTimingEntities =
                                 m_tableRowDragBaseSelection;
-                            const int anchorIndex = static_cast<int>(
-                                std::distance(elements.begin(), dragAnchor));
-                            const int first = std::min(anchorIndex, idx);
-                            const int last  = std::max(anchorIndex, idx);
+                            const int anchorIndex =
+                                static_cast<int>(std::distance(
+                                    visibleElementIndices.begin(), dragAnchor));
+                            const int first =
+                                std::min(anchorIndex, visibleIndex);
+                            const int last =
+                                std::max(anchorIndex, visibleIndex);
                             for ( int selectedIndex = first;
                                   selectedIndex <= last;
                                   ++selectedIndex ) {
                                 m_selectedTimingEntities.insert(
                                     getElementEntity(
-                                        elements[static_cast<std::size_t>(
-                                            selectedIndex)]));
+                                        elements[visibleElementIndices
+                                                     [static_cast<std::size_t>(
+                                                         selectedIndex)]]));
                             }
                         }
                     }
@@ -1998,12 +2030,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
             if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
                 m_selectedTimingEntities.clear();
-                for ( const auto& element : elements ) {
-                    m_selectedTimingEntities.insert(getElementEntity(element));
+                for ( std::size_t elementIndex : visibleElementIndices ) {
+                    m_selectedTimingEntities.insert(
+                        getElementEntity(elements[elementIndex]));
                 }
                 m_tableSelectionAnchorEntity =
-                    elements.empty() ? entt::null
-                                     : getElementEntity(elements.front());
+                    visibleElementIndices.empty()
+                        ? entt::null
+                        : getElementEntity(
+                              elements[visibleElementIndices.front()]);
             } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
                 copyTableSelection(false);
             } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_X, false) ) {

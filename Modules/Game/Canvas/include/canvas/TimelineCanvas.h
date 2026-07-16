@@ -427,7 +427,9 @@ private:
     /// @brief 时间点表格序号列拖选开始前保留的追加选择。
     std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
     /// @brief 当前序号列拖选是否已经越过起始行。
-    bool         m_hasTableRowDragSelectionMoved{ false };
+    bool m_hasTableRowDragSelectionMoved{ false };
+    /// @brief 时间点表格是否只显示 BPM 行。
+    bool         m_tableOnlyShowBpm{ false };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
