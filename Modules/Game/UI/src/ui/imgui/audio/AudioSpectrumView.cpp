@@ -190,11 +190,15 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         visualTime = m_seekDragViewCenter;
     }
 
-    ImGuiStyle& style           = ImGui::GetStyle();
-    float       frameH          = ImGui::GetFrameHeight();
-    auto        calcSliderWidth = [&](float sliderW, const char* label) {
-        return sliderW + style.ItemInnerSpacing.x +
-               ImGui::CalcTextSize(label).x;
+    ImGuiStyle& style        = ImGui::GetStyle();
+    float       frameH       = ImGui::GetFrameHeight();
+    auto calcSliderItemWidth = [&](float minWidth, const char* widestValue) {
+        return std::max(
+            minWidth,
+            ImGui::CalcTextSize(widestValue).x + style.FramePadding.x * 2.0f);
+    };
+    auto calcSliderGroupWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemSpacing.x + ImGui::CalcTextSize(label).x;
     };
     auto calcButtonWidth = [&](const char* label) {
         return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
@@ -223,6 +227,10 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     CLayHBox*            currentRow = nullptr;
     float                currentW   = 0.0f;
     float                availW     = ImGui::GetContentRegionAvail().x;
+
+    const float zoomSliderW    = calcSliderItemWidth(100.0f, "10.0000s");
+    const float maxFreqSliderW = calcSliderItemWidth(120.0f, "24000.0000 Hz");
+    const float logBiasSliderW = calcSliderItemWidth(120.0f, "20.0000");
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
         bool  addSep = false;
@@ -259,27 +267,27 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     };
 
     pushGroup("ZoomSlider",
-              calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()),
+              calcSliderGroupWidth(zoomSliderW, TR("ui.waveform.zoom").data()),
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
                   ImGui::AlignTextToFramePadding();
                   ImGui::Text("%s", TR("ui.waveform.zoom").data());
                   ImGui::SameLine();
-                  ImGui::SetNextItemWidth(100);
+                  ImGui::SetNextItemWidth(zoomSliderW);
                   ::MMM::UI::FeedbackSliderFloat(
                       "##zoom", &m_zoom, 0.1f, 10.0f, "%.4fs");
               });
     pushGroup(
         "MaxFreqSlider",
-        calcSliderWidth(120.0f, TR("ui.spectrum.max_freq").data()),
+        calcSliderGroupWidth(maxFreqSliderW, TR("ui.spectrum.max_freq").data()),
         frameH,
         [&](Clay_BoundingBox r, bool) {
             ImGui::SetCursorScreenPos({ r.x, r.y });
             ImGui::AlignTextToFramePadding();
             ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(120);
+            ImGui::SetNextItemWidth(maxFreqSliderW);
             if ( ::MMM::UI::FeedbackSliderFloat(
                      "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.4f Hz") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
@@ -287,22 +295,23 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                 }
             }
         });
-    pushGroup("LogBiasSlider",
-              calcSliderWidth(120.0f, TR("ui.spectrum.log_bias").data()),
-              frameH,
-              [&](Clay_BoundingBox r, bool) {
-                  ImGui::SetCursorScreenPos({ r.x, r.y });
-                  ImGui::AlignTextToFramePadding();
-                  ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
-                  ImGui::SameLine();
-                  ImGui::SetNextItemWidth(120);
-                  if ( ::MMM::UI::FeedbackSliderFloat(
-                           "##log_bias", &m_logBias, 0.01f, 20.0f, "%.4f") ) {
-                      if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                          startAsyncRecalculate();
-                      }
-                  }
-              });
+    pushGroup(
+        "LogBiasSlider",
+        calcSliderGroupWidth(logBiasSliderW, TR("ui.spectrum.log_bias").data()),
+        frameH,
+        [&](Clay_BoundingBox r, bool) {
+            ImGui::SetCursorScreenPos({ r.x, r.y });
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(logBiasSliderW);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##log_bias", &m_logBias, 0.01f, 20.0f, "%.4f") ) {
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    startAsyncRecalculate();
+                }
+            }
+        });
     pushGroup("SyncEffectsBtn",
               calcButtonWidth(TR("ui.spectrum.sync_effects").data()),
               frameH,
