@@ -1420,6 +1420,53 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
     }
 }
 
+void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
+{
+    if ( cmd.events.empty() ) {
+        return;
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(cmd.events.size());
+    for ( const auto& update : cmd.events ) {
+        if ( !m_ctx.timelineRegistry.valid(update.entity) ||
+             !m_ctx.timelineRegistry.all_of<TimelineComponent>(
+                 update.entity) ) {
+            continue;
+        }
+
+        const auto oldTimeline =
+            m_ctx.timelineRegistry.get<TimelineComponent>(update.entity);
+        auto newTimeline        = oldTimeline;
+        newTimeline.m_timestamp = update.newTime;
+        newTimeline.m_value     = update.newValue;
+        if ( update.metadataOverride ) {
+            newTimeline.m_metadata = *update.metadataOverride;
+        } else if ( std::abs(newTimeline.m_timestamp -
+                             oldTimeline.m_timestamp) > 1e-6 ) {
+            clearMalodyTimingBeatMetadata(newTimeline.m_metadata);
+        }
+
+        const bool coreFieldsChanged =
+            std::abs(newTimeline.m_timestamp - oldTimeline.m_timestamp) >
+                1e-12 ||
+            std::abs(newTimeline.m_value - oldTimeline.m_value) > 1e-12;
+        if ( !coreFieldsChanged && !update.metadataOverride ) {
+            continue;
+        }
+        entries.push_back(
+            { update.entity, oldTimeline, std::move(newTimeline) });
+    }
+
+    if ( entries.empty() ) {
+        return;
+    }
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries), "Batch Timeline Update");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
 void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)
 {
     if ( m_ctx.timelineRegistry.valid(cmd.entity) ) {

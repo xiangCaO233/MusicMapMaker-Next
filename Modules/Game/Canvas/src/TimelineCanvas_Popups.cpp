@@ -58,6 +58,9 @@ constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
 /// @brief 时间线表格局部滚动条拖拽块最小尺寸。
 constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
 
+/// @brief 时间点表格可搜索的 Timing 属性数量。
+constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 4;
+
 /// @brief 时间线表格拍位换算使用的 BPM 锚点。
 struct TimingTableBeatPoint {
     /// @brief BPM 时间点，单位秒。
@@ -691,6 +694,33 @@ const char* getEffectLabel(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::HS: return "HS";
     }
     return "Timing";
+}
+
+/// @brief 获取 Timing 类型在表格搜索属性数组中的索引。
+/// @param effect Timing 类型。
+/// @return 对应搜索属性索引。
+std::size_t getTimingTableSearchEffectIndex(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 0;
+    case ::MMM::TimingEffect::SCROLL: return 1;
+    case ::MMM::TimingEffect::JUMP: return 2;
+    case ::MMM::TimingEffect::HS: return 3;
+    }
+    return 0;
+}
+
+/// @brief 判断表格行数值是否精确匹配搜索值。
+/// @param value 表格行显示值。
+/// @param expected 用户输入的搜索值。
+/// @return 在浮点比例容差内相等时返回 true。
+bool timingTableSearchValueEquals(double value, double expected)
+{
+    if ( !std::isfinite(value) || !std::isfinite(expected) ) {
+        return false;
+    }
+    const double scale = std::max({ 1.0, std::abs(value), std::abs(expected) });
+    return std::abs(value - expected) <= 1e-9 * scale;
 }
 
 /// @brief 获取 Timeline UI 中展示用的类型颜色
@@ -1526,122 +1556,334 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
         ImGui::Separator();
 
-        ::MMM::UI::FeedbackCheckbox("只看 BPM", &m_tableOnlyShowBpm);
-        ImGui::SameLine();
-        const bool hasTimingTableFilter = m_tableOnlyShowBpm;
-        if ( !hasTimingTableFilter ) {
-            ImGui::BeginDisabled();
-        }
-        if ( ::MMM::UI::FeedbackButton("清空筛选##TimingTableClearFilter") ) {
-            m_tableOnlyShowBpm = false;
-        }
-        if ( !hasTimingTableFilter ) {
-            ImGui::EndDisabled();
-        }
         std::vector<std::size_t> visibleElementIndices;
         visibleElementIndices.reserve(elements.size());
-        for ( std::size_t elementIndex = 0; elementIndex < elements.size();
-              ++elementIndex ) {
-            if ( !m_tableOnlyShowBpm ||
-                 getElementEffect(elements[elementIndex]) ==
-                     ::MMM::TimingEffect::BPM ) {
+        std::string_view      searchValueText;
+        bool                  hasSearchValueText = false;
+        std::optional<double> parsedSearchValue;
+        bool                  hasValidSearchValue          = false;
+        const auto            rebuildVisibleElementIndices = [&]() {
+            searchValueText =
+                trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
+            hasSearchValueText = !searchValueText.empty();
+            parsedSearchValue  = hasSearchValueText
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
+            hasValidSearchValue =
+                parsedSearchValue && std::isfinite(*parsedSearchValue);
+            const bool hasEffectSearchFilter =
+                std::any_of(m_tableSearchEffectFilters.begin(),
+                            m_tableSearchEffectFilters.end(),
+                            [](bool enabled) { return enabled; });
+
+            visibleElementIndices.clear();
+            for ( std::size_t elementIndex = 0; elementIndex < elements.size();
+                  ++elementIndex ) {
+                const auto effect = getElementEffect(elements[elementIndex]);
+                if ( m_tableOnlyShowBpm &&
+                     effect != ::MMM::TimingEffect::BPM ) {
+                    continue;
+                }
+                if ( hasEffectSearchFilter &&
+                     !m_tableSearchEffectFilters
+                         [getTimingTableSearchEffectIndex(effect)] ) {
+                    continue;
+                }
+                if ( hasSearchValueText &&
+                     (!hasValidSearchValue ||
+                      !timingTableSearchValueEquals(
+                          getDisplayValue(
+                              effect,
+                              getElementRawValue(elements[elementIndex]),
+                              getElementEntity(elements[elementIndex])),
+                          *parsedSearchValue)) ) {
+                    continue;
+                }
                 visibleElementIndices.push_back(elementIndex);
             }
-        }
-
-        // 表格选择与基础 Excel 式剪贴板操作
-        const bool hasTableSelection = !m_selectedTimingEntities.empty();
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("已选择: %zu", m_selectedTimingEntities.size());
-        ImGui::SameLine();
-        if ( !hasTableSelection ) {
-            ImGui::BeginDisabled();
-        }
-        if ( ::MMM::UI::FeedbackButton("复制##TimingTableCopy") ) {
-            copyTableSelection(false);
-        }
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("剪切##TimingTableCut") ) {
-            copyTableSelection(true);
-        }
-        if ( !hasTableSelection ) {
-            ImGui::EndDisabled();
-        }
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("粘贴##TimingTablePaste") ) {
-            pasteTableSelection();
-        }
-        ImGui::SameLine();
-        if ( !hasTableSelection ) {
-            ImGui::BeginDisabled();
-        }
-        if ( ::MMM::UI::FeedbackButton("删除##TimingTableDelete") ) {
-            deleteSelectedTimingEvents();
-            m_tableSelectionAnchorEntity = entt::null;
-        }
-        if ( !hasTableSelection ) {
-            ImGui::EndDisabled();
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("Ctrl+A / C / X / V");
-
-        ImGui::Separator();
+        };
 
         // 批量修改工具
-        if ( ImGui::TreeNode("批量修改工具##BulkTools") ) {
-            // 批量偏移
-            static double bulkOffsetValue = 0.0;
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("批量时间偏移 (秒):");
+        const std::string bulkToolsLabel =
+            fmt::format("{}###TimingTableBulkTools",
+                        TR("ui.timeline.timing_points_table.bulk_tools"));
+        if ( ::MMM::UI::FeedbackTreeNode(
+                 bulkToolsLabel.c_str(),
+                 ImGuiTreeNodeFlags_SpanAvailWidth |
+                     ImGuiTreeNodeFlags_FramePadding) ) {
+            const std::string onlyBpmLabel = fmt::format(
+                "{}###TimingTableOnlyBpm",
+                TR("ui.timeline.timing_points_table.filter.only_bpm"));
+            ::MMM::UI::FeedbackCheckbox(onlyBpmLabel.c_str(),
+                                        &m_tableOnlyShowBpm);
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::InputDouble(
-                "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.4f");
-            ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
-                 std::abs(bulkOffsetValue) > 1e-6 ) {
-                for ( const auto& el : elements ) {
-                    entt::entity ent    = getElementEntity(el);
-                    double       rawVal = getElementRawValue(el);
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                            ent, el.time + bulkOffsetValue, rawVal }));
-                }
-                bulkOffsetValue = 0.0;
+            const bool hadTimingTableFilter =
+                m_tableOnlyShowBpm ||
+                std::any_of(m_tableSearchEffectFilters.begin(),
+                            m_tableSearchEffectFilters.end(),
+                            [](bool enabled) { return enabled; }) ||
+                !trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data())
+                     .empty();
+            const std::string clearFilterLabel =
+                fmt::format("{}###TimingTableClearFilter",
+                            TR("ui.timeline.timing_points_table.filter.clear"));
+            if ( !hadTimingTableFilter ) {
+                ImGui::BeginDisabled();
+            }
+            if ( ::MMM::UI::FeedbackButton(clearFilterLabel.c_str()) ) {
+                m_tableOnlyShowBpm = false;
+                m_tableSearchEffectFilters.fill(false);
+                m_tableSearchValueBuffer.fill('\0');
+                m_tableSearchReplacementValue = 0.0;
+            }
+            if ( !hadTimingTableFilter ) {
+                ImGui::EndDisabled();
             }
 
-            // 批量缩放
-            static double bulkScaleValue = 1.0;
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("批量流速缩放倍率:");
+            ImGui::TextUnformatted(
+                TR("ui.timeline.timing_points_table.search.attributes").data());
+            const std::array<const char*, TIMING_TABLE_SEARCH_EFFECT_COUNT>
+                searchEffectTranslationKeys{
+                    "ui.timeline.timing_points_table.search.effect.bpm",
+                    "ui.timeline.timing_points_table.search.effect.sv",
+                    "ui.timeline.timing_points_table.search.effect.jump",
+                    "ui.timeline.timing_points_table.search.effect.hs"
+                };
+            const std::array<const char*, TIMING_TABLE_SEARCH_EFFECT_COUNT>
+                searchEffectIds{ "TimingTableSearchBpm",
+                                 "TimingTableSearchSv",
+                                 "TimingTableSearchJump",
+                                 "TimingTableSearchHs" };
+            for ( std::size_t filterIndex = 0;
+                  filterIndex < TIMING_TABLE_SEARCH_EFFECT_COUNT;
+                  ++filterIndex ) {
+                ImGui::SameLine();
+                const std::string filterLabel =
+                    fmt::format("{}###{}",
+                                TR(searchEffectTranslationKeys[filterIndex]),
+                                searchEffectIds[filterIndex]);
+                ::MMM::UI::FeedbackCheckbox(
+                    filterLabel.c_str(),
+                    &m_tableSearchEffectFilters[filterIndex]);
+            }
+
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(
+                TR("ui.timeline.timing_points_table.search.value").data());
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::InputDouble(
-                "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.4f");
+            ImGui::SetNextItemWidth(220.0f * dpiScale);
+            ImGui::InputTextWithHint(
+                "###TimingTableSearchValue",
+                TR("ui.timeline.timing_points_table.search.value_hint").data(),
+                m_tableSearchValueBuffer.data(),
+                m_tableSearchValueBuffer.size(),
+                ImGuiInputTextFlags_CharsScientific);
+
+            rebuildVisibleElementIndices();
+
             ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
-                 std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
-                for ( const auto& el : elements ) {
-                    if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
-                        double dispScroll =
-                            getDisplayValue(::MMM::TimingEffect::SCROLL,
-                                            el.scrollValue,
-                                            el.scrollEntity);
-                        double newDisp = dispScroll * bulkScaleValue;
-                        double newVal =
-                            getStoredValue(::MMM::TimingEffect::SCROLL,
-                                           newDisp,
-                                           el.scrollEntity);
+            if ( hasSearchValueText && !hasValidSearchValue ) {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                    "%s",
+                    TR("ui.timeline.timing_points_table.search.invalid_value")
+                        .data());
+            } else {
+                ImGui::TextUnformatted(
+                    TR_FMT(
+                        "ui.timeline.timing_points_table.search.result_count",
+                        visibleElementIndices.size(),
+                        elements.size())
+                        .c_str());
+            }
+
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(
+                TR("ui.timeline.timing_points_table.search.replacement_value")
+                    .data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140.0f * dpiScale);
+            ImGui::InputDouble("###TimingTableSearchReplacement",
+                               &m_tableSearchReplacementValue,
+                               0.01,
+                               0.1,
+                               "%.4f");
+            const bool replacementTouchesBpm = std::any_of(
+                visibleElementIndices.begin(),
+                visibleElementIndices.end(),
+                [&](std::size_t elementIndex) {
+                    return getElementEffect(elements[elementIndex]) ==
+                           ::MMM::TimingEffect::BPM;
+                });
+            const bool replacementValueValid =
+                std::isfinite(m_tableSearchReplacementValue) &&
+                (!replacementTouchesBpm || m_tableSearchReplacementValue > 0.0);
+            const bool canReplaceSearchResults =
+                hasValidSearchValue && !visibleElementIndices.empty() &&
+                replacementValueValid;
+            ImGui::SameLine();
+            if ( !canReplaceSearchResults ) {
+                ImGui::BeginDisabled();
+            }
+            const std::string replaceLabel =
+                TR_FMT("ui.timeline.timing_points_table.search.replace",
+                       visibleElementIndices.size()) +
+                "###TimingTableSearchReplace";
+            if ( ::MMM::UI::FeedbackButton(replaceLabel.c_str()) ) {
+                Logic::CmdUpdateTimelineEvents command;
+                command.events.reserve(visibleElementIndices.size());
+                for ( std::size_t elementIndex : visibleElementIndices ) {
+                    const auto& element = elements[elementIndex];
+                    const auto  effect  = getElementEffect(element);
+                    const auto  entity  = getElementEntity(element);
+                    command.events.push_back(
+                        { entity,
+                          element.time,
+                          getStoredValue(
+                              effect, m_tableSearchReplacementValue, entity) });
+                }
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(std::move(command)));
+            }
+            if ( !canReplaceSearchResults ) {
+                ImGui::EndDisabled();
+            }
+            if ( replacementTouchesBpm && !replacementValueValid ) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                                   "%s",
+                                   TR("ui.timeline.timing_points_table.search."
+                                      "invalid_bpm_value")
+                                       .data());
+            }
+
+            // 表格选择与基础 Excel 式剪贴板操作
+            const bool hasTableSelection = !m_selectedTimingEntities.empty();
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("已选择: %zu", m_selectedTimingEntities.size());
+            ImGui::SameLine();
+            if ( !hasTableSelection ) {
+                ImGui::BeginDisabled();
+            }
+            if ( ::MMM::UI::FeedbackButton("复制##TimingTableCopy") ) {
+                copyTableSelection(false);
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("剪切##TimingTableCut") ) {
+                copyTableSelection(true);
+            }
+            if ( !hasTableSelection ) {
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("粘贴##TimingTablePaste") ) {
+                pasteTableSelection();
+            }
+            ImGui::SameLine();
+            if ( !hasTableSelection ) {
+                ImGui::BeginDisabled();
+            }
+            if ( ::MMM::UI::FeedbackButton("删除##TimingTableDelete") ) {
+                deleteSelectedTimingEvents();
+                m_tableSelectionAnchorEntity = entt::null;
+            }
+            if ( !hasTableSelection ) {
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("Ctrl+A / C / X / V");
+
+            ImGui::Separator();
+
+            static double         bulkOffsetValue   = 0.0;
+            static double         bulkScaleValue    = 1.0;
+            constexpr const char* BULK_OFFSET_LABEL = "批量时间偏移 (秒):";
+            constexpr const char* BULK_SCALE_LABEL  = "批量流速缩放倍率:";
+            const float           bulkTransformLabelWidth =
+                std::max(ImGui::CalcTextSize(BULK_OFFSET_LABEL).x,
+                         ImGui::CalcTextSize(BULK_SCALE_LABEL).x);
+            const ImGuiStyle& style                   = ImGui::GetStyle();
+            const float       bulkTransformValueWidth = std::max(
+                160.0f * dpiScale,
+                ImGui::CalcTextSize("-000000.0000").x +
+                    style.FramePadding.x * 2.0f +
+                    (ImGui::GetFrameHeight() + style.ItemInnerSpacing.x) *
+                        2.0f);
+            if ( ImGui::BeginTable("###TimingTableBulkTransformLayout",
+                                   3,
+                                   ImGuiTableFlags_SizingFixedFit |
+                                       ImGuiTableFlags_NoSavedSettings |
+                                       ImGuiTableFlags_NoPadOuterX) ) {
+                ImGui::TableSetupColumn("###TimingTableBulkTransformLabel",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        bulkTransformLabelWidth);
+                ImGui::TableSetupColumn("###TimingTableBulkTransformValue",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        bulkTransformValueWidth);
+                ImGui::TableSetupColumn("###TimingTableBulkTransformAction",
+                                        ImGuiTableColumnFlags_WidthFixed);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(BULK_OFFSET_LABEL);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputDouble(
+                    "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.4f");
+                ImGui::TableSetColumnIndex(2);
+                if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
+                     std::abs(bulkOffsetValue) > 1e-6 ) {
+                    for ( const auto& el : elements ) {
+                        entt::entity ent    = getElementEntity(el);
+                        double       rawVal = getElementRawValue(el);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{
-                                    el.scrollEntity, el.time, newVal }));
+                                    ent, el.time + bulkOffsetValue, rawVal }));
                     }
+                    bulkOffsetValue = 0.0;
                 }
-                bulkScaleValue = 1.0;
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(BULK_SCALE_LABEL);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputDouble(
+                    "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.4f");
+                ImGui::TableSetColumnIndex(2);
+                if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
+                     std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
+                    for ( const auto& el : elements ) {
+                        if ( el.effects &
+                             Logic::System::SCROLL_EFFECT_SCROLL ) {
+                            double dispScroll =
+                                getDisplayValue(::MMM::TimingEffect::SCROLL,
+                                                el.scrollValue,
+                                                el.scrollEntity);
+                            double newDisp = dispScroll * bulkScaleValue;
+                            double newVal =
+                                getStoredValue(::MMM::TimingEffect::SCROLL,
+                                               newDisp,
+                                               el.scrollEntity);
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdUpdateTimelineEvent{
+                                        el.scrollEntity, el.time, newVal }));
+                        }
+                    }
+                    bulkScaleValue = 1.0;
+                }
+
+                ImGui::EndTable();
             }
 
             ImGui::TreePop();
+        } else {
+            rebuildVisibleElementIndices();
         }
 
         ImGui::Spacing();
@@ -1725,7 +1967,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     int                 displayIdx = idx + 1;
                     ::MMM::TimingEffect effect     = getElementEffect(el);
                     entt::entity        ent        = getElementEntity(el);
-                    const bool          isKeepSpeedBindingRow =
+                    const bool          rowSelected =
+                        m_selectedTimingEntities.contains(ent);
+                    const bool isKeepSpeedBindingRow =
                         isKeepSpeedBindingEntity(ent);
                     bool isRecentlyCreated =
                         (ImGui::GetTime() <=
@@ -1739,7 +1983,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImGui::SetScrollHereY(0.5f);
                         m_tableScrollToCurrentTimePending = false;
                     }
-                    if ( isKeepSpeedBindingRow ) {
+                    if ( rowSelected ) {
+                        ImVec4 selectedRowColor =
+                            ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+                        selectedRowColor.w =
+                            std::max(selectedRowColor.w, 0.72f);
+                        ImGui::TableSetBgColor(
+                            ImGuiTableBgTarget_RowBg0,
+                            ImGui::ColorConvertFloat4ToU32(selectedRowColor));
+                    } else if ( isKeepSpeedBindingRow ) {
                         ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                                                IM_COL32(180, 225, 255, 115));
                     } else if ( isRecentlyCreated ) {
@@ -1752,8 +2004,6 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     const ImVec2 rowNumberCellMin = ImGui::GetCursorScreenPos();
                     const float  rowNumberCellWidth =
                         ImGui::GetContentRegionAvail().x;
-                    const bool rowSelected =
-                        m_selectedTimingEntities.contains(ent);
                     const std::string rowLabel =
                         fmt::format("#{}###TimingTableRow_{}",
                                     displayIdx,
@@ -1820,7 +2070,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     }
                     const ImVec2 rowNumberItemMin = ImGui::GetItemRectMin();
                     const ImVec2 rowNumberItemMax = ImGui::GetItemRectMax();
-                    const bool   rowNumberHovered = ImGui::IsMouseHoveringRect(
+                    if ( rowSelected ) {
+                        const float accentWidth =
+                            std::max(3.0f, std::floor(3.0f * dpiScale));
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            rowNumberItemMin,
+                            ImVec2(rowNumberItemMin.x + accentWidth,
+                                   rowNumberItemMax.y),
+                            ImGui::GetColorU32(ImGuiCol_CheckMark));
+                    }
+                    const bool rowNumberHovered = ImGui::IsMouseHoveringRect(
                         ImVec2(rowNumberCellMin.x, rowNumberItemMin.y),
                         ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
                                rowNumberItemMax.y));

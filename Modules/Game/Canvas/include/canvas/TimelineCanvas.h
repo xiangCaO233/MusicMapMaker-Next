@@ -7,6 +7,7 @@
 #include "ui/IRenderableView.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -430,6 +431,12 @@ private:
     bool m_hasTableRowDragSelectionMoved{ false };
     /// @brief 时间点表格是否只显示 BPM 行。
     bool         m_tableOnlyShowBpm{ false };
+    /// @brief 时间点表格搜索启用的 BPM、SV、Jump 与 HS 属性。
+    std::array<bool, 4> m_tableSearchEffectFilters{};
+    /// @brief 时间点表格精确数值搜索文本。
+    std::array<char, 64> m_tableSearchValueBuffer{};
+    /// @brief 时间点表格搜索结果的批量替换值。
+    double       m_tableSearchReplacementValue{ 0.0 };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

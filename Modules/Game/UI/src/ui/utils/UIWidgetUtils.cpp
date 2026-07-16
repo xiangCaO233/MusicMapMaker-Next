@@ -1363,6 +1363,34 @@ bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags)
     return open;
 }
 
+/// @brief 绘制带统一反馈的 ImGui TreeNode。
+/// @param label TreeNode 显示文本和 ImGui ID。
+/// @param flags TreeNode 标志。
+/// @return TreeNode 本帧展开时返回 true，并由调用方配对 TreePop。
+/// @warning UI 热路径：每帧 TreeNode 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackTreeNode(const char* label, ImGuiTreeNodeFlags flags)
+{
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   open             = ImGui::TreeNodeEx(label, flags);
+    const bool   hovered          = ImGui::IsItemHovered();
+    const bool   active           = ImGui::IsItemActive();
+    const bool   clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, open, hovered, active));
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return open;
+}
+
 /// @brief 绘制带统一反馈的 ImGui Checkbox。
 /// @param label Checkbox 显示文本和 ImGui ID。
 /// @param value 当前布尔值指针。

@@ -91,6 +91,14 @@ bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags = 0);
 
+/// @brief 绘制带统一反馈的 ImGui TreeNode。
+/// @param label TreeNode 显示文本和 ImGui ID。
+/// @param flags TreeNode 标志。
+/// @return TreeNode 本帧展开时返回 true，并由调用方配对 TreePop。
+/// @warning UI 热路径：每帧 TreeNode 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackTreeNode(const char* label, ImGuiTreeNodeFlags flags = 0);
+
 /// @brief 绘制带统一反馈的 ImGui Checkbox。
 /// @param label Checkbox 显示文本和 ImGui ID。
 /// @param value 当前布尔值指针。

@@ -420,6 +420,14 @@ struct CmdUpdateTimelineEvent {
 };
 
 /**
+ * @brief 批量更新时间线事件指令。
+ */
+struct CmdUpdateTimelineEvents {
+    /// @brief 待合并为单个撤销步骤的 Timeline 更新列表。
+    std::vector<CmdUpdateTimelineEvent> events;
+};
+
+/**
  * @brief 删除时间线事件指令
  */
 struct CmdDeleteTimelineEvent {
@@ -575,12 +583,13 @@ using LogicCommand = std::variant<
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
-    CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
-    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
-    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
-    CmdMarkBeatmapMetadataDirty, CmdImportAudio, CmdUpdateAudioResource,
-    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
+    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdUpdateTimelineEvents,
+    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdCreateTimelineEvents,
+    CmdReplaceBeatmapTimings, CmdReplaceBeatmapData, CmdStartMarquee,
+    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
+    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap,
+    CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic
