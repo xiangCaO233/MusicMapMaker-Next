@@ -1527,6 +1527,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::Separator();
 
         ::MMM::UI::FeedbackCheckbox("只看 BPM", &m_tableOnlyShowBpm);
+        ImGui::SameLine();
+        const bool hasTimingTableFilter = m_tableOnlyShowBpm;
+        if ( !hasTimingTableFilter ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ::MMM::UI::FeedbackButton("清空筛选##TimingTableClearFilter") ) {
+            m_tableOnlyShowBpm = false;
+        }
+        if ( !hasTimingTableFilter ) {
+            ImGui::EndDisabled();
+        }
         std::vector<std::size_t> visibleElementIndices;
         visibleElementIndices.reserve(elements.size());
         for ( std::size_t elementIndex = 0; elementIndex < elements.size();
@@ -1648,6 +1659,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tableScrollbarSize);
         ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize,
                             tableScrollbarGrabMinSize);
+        ImVec2 timingTableMin;
+        ImVec2 timingTableMax;
+        float  timingTableBlankStartY = 0.0f;
+        bool   hasTimingTableRect     = false;
         if ( ImGui::BeginTable(
                  "TimingPointsTableMainV3",
                  7,
@@ -1676,9 +1691,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 "操作", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[6]);
             if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
                 table->DisableDefaultContextMenu = true;
+                timingTableMin                   = table->OuterRect.Min;
+                timingTableMax                   = table->OuterRect.Max;
+                hasTimingTableRect               = true;
             }
             ImGui::TableHeadersRow();
             renderTimingTableHeaderContextMenu();
+            timingTableBlankStartY = ImGui::GetCursorScreenPos().y;
 
             const int scrollTargetIndex =
                 m_tableScrollToCurrentTimePending
@@ -2006,6 +2025,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         m_selectedTimingEntities.erase(ent);
                         m_tableSelectionAnchorEntity = entt::null;
                     }
+                    if ( const ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                        timingTableBlankStartY =
+                            std::max(timingTableBlankStartY, table->RowPosY2);
+                    }
                 }
             }
             if ( m_isTableRowDragSelecting &&
@@ -2018,6 +2041,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::EndTable();
         }
         ImGui::PopStyleVar(2);
+
+        const ImVec2 mousePosition = ImGui::GetMousePos();
+        if ( hasTimingTableRect &&
+             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             mousePosition.x >= timingTableMin.x &&
+             mousePosition.x < timingTableMax.x &&
+             mousePosition.y >= timingTableBlankStartY &&
+             mousePosition.y < timingTableMax.y ) {
+            m_selectedTimingEntities.clear();
+            m_tableSelectionAnchorEntity = entt::null;
+        }
 
         const bool tableShortcutFocused =
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
