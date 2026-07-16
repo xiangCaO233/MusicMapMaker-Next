@@ -1147,24 +1147,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     };
 
     if ( m_currentSnapshot->isPlaying ) {
-        // 播放时禁止开始新编辑，但保留播放前已开始的抓取，使 Timing
-        // 在时间线滚动期间持续跟随鼠标，并允许抓取中再次切换播放状态。
+        // 播放时禁止开始新编辑，但保留播放前已开始的抓取或框选，使交互
+        // 在时间线滚动期间持续更新，并允许按住鼠标再次切换播放状态。
         m_isTimingDrawPreviewing = false;
         m_isTimingErasing        = false;
         m_timingEraseTargetEntities.clear();
-        if ( m_isTimingMarqueeSelecting ) {
-            m_selectedTimingEntities = m_timingMarqueeBaseSelection;
+        if ( !m_isTimingDragging && !m_isTimingMarqueeSelecting ) {
+            return;
         }
-        m_isTimingMarqueeSelecting = false;
-        m_timingMarqueeBaseSelection.clear();
-        if ( m_isTimingDragging ) {
-            if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-                updateTimingDragPreview();
-            } else {
-                finishTimingDrag();
-            }
-        }
-        return;
     }
 
     if ( !isFocused ) {
@@ -1192,14 +1182,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const bool  shift             = io.KeyShift;
     const bool  additiveSelection = ctrl || shift;
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    bool        handledKeyboardCommand = false;
-    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+    bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
+    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
             shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
                   : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
-    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
