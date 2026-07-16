@@ -311,6 +311,39 @@ static int testIsNewer()
     return fail;
 }
 
+/// @brief 测试 SHA256 文本归一化与发布清单前缀兼容性。
+static int testNormalizeSha256()
+{
+    int pass = 0, fail = 0;
+
+    const std::string lowerHash(64, 'a');
+    const std::string upperHash(64, 'A');
+    auto              check = [&](const std::string& input,
+                                  const std::string& expected,
+                                  const char*        description) {
+        const std::string actual = UpdateChecker::normalizeSha256(input);
+        if ( actual == expected ) {
+            pass++;
+        } else {
+            fail++;
+            XERROR("[normalizeSha256] {}: expected '{}', got '{}'",
+                   description,
+                   expected,
+                   actual);
+        }
+    };
+
+    check(lowerHash, lowerHash, "bare lowercase hash");
+    check(upperHash, lowerHash, "bare uppercase hash");
+    check("sha256:" + lowerHash, lowerHash, "lowercase prefix");
+    check("SHA256:" + upperHash, lowerHash, "uppercase prefix");
+    check("sha256:invalid", "", "invalid hash");
+    check("sha256:" + std::string(64, 'g'), "", "non-hex hash");
+
+    XINFO("normalizeSha256: {}/{} passed", pass, pass + fail);
+    return fail;
+}
+
 /// @brief 测试更新成功标记文件
 static int testUpdateSuccessMarker()
 {
@@ -375,6 +408,7 @@ int main()
     totalFail += testIsFinished();
     totalFail += testParseVersion();
     totalFail += testIsNewer();
+    totalFail += testNormalizeSha256();
     totalFail += testUpdateSuccessMarker();
 
     if ( totalFail == 0 ) {

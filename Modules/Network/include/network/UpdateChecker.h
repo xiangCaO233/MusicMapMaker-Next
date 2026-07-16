@@ -97,6 +97,11 @@ public:
     /// @brief 比较两个版本号（返回 true 表示 remote > local）
     static bool isNewer(const std::string& remote, const std::string& local);
 
+    /// @brief 归一化 SHA256 文本，兼容可选的 `sha256:` 前缀。
+    /// @param value 原始 SHA256 文本。
+    /// @return 合法时返回小写 64 位十六进制字符串，否则返回空。
+    static std::string normalizeSha256(std::string value);
+
 private:
     /// @brief 请求后台任务取消并等待线程退出。
     /// @warning 退出低频路径：析构或重新开始更新任务时调用，可能短暂等待
