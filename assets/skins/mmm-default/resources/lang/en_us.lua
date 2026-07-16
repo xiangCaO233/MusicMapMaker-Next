@@ -146,7 +146,7 @@ return {
 	["ui.settings.software.screen.fullscreen"] = "Fullscreen Mode",
 	["ui.settings.software.screen.windowed"] = "Windowed Mode",
 	["ui.settings.software.theme"] = "UI Theme",
-	["ui.settings.software.theme.auto"] = "Auto (Follow Skin)",
+	["ui.settings.software.theme.auto"] = "Auto (Follow System and Skin)",
 	["ui.settings.software.font.ascii"] = "ASCII Font",
 	["ui.settings.software.font.cjk"] = "CJK Font",
 	["ui.settings.software.font.default"] = "Default (Skin Provided)",

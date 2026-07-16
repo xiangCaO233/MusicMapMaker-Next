@@ -468,14 +468,38 @@ void VKContext::checkAndRebuildFonts()
     }
 }
 
+void VKContext::checkAndApplySystemTheme()
+{
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( settings.theme != Config::UITheme::Auto ) {
+        m_appliedSystemTheme = SystemTheme::Unknown;
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if ( now < m_nextSystemThemeCheck ) return;
+    m_nextSystemThemeCheck = now + std::chrono::seconds(1);
+
+    const SystemTheme systemTheme = refreshSystemTheme();
+    if ( systemTheme != m_appliedSystemTheme ) {
+        applyTheme();
+    }
+}
+
 void VKContext::applyTheme()
 {
     auto& settings    = Config::AppConfig::instance().getEditorSettings();
     ImGui::GetStyle() = ImGuiStyle();
     auto appliedTheme = settings.theme;
     if ( appliedTheme == Config::UITheme::Auto ) {
-        std::string skinTheme =
-            Config::SkinManager::instance().getDefaultTheme();
+        const SystemTheme systemTheme = getSystemTheme();
+        m_appliedSystemTheme          = systemTheme;
+        const Config::SkinThemeAppearance appearance =
+            systemTheme == SystemTheme::Dark
+                ? Config::SkinThemeAppearance::Dark
+                : Config::SkinThemeAppearance::Light;
+        const std::string& skinTheme =
+            Config::SkinManager::instance().getDefaultTheme(appearance);
         if ( skinTheme == "Dark" )
             appliedTheme = Config::UITheme::Dark;
         else if ( skinTheme == "Light" )
@@ -532,6 +556,8 @@ void VKContext::applyTheme()
             appliedTheme = Config::UITheme::ComfortableDarkCyan;
         else if ( skinTheme == "KazamCherry" )
             appliedTheme = Config::UITheme::KazamCherry;
+    } else {
+        m_appliedSystemTheme = SystemTheme::Unknown;
     }
 
     switch ( appliedTheme ) {

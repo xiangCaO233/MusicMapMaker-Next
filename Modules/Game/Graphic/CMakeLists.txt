@@ -30,6 +30,7 @@ add_library(
   src/imguivk/VKSwapchain.cpp
   src/imguivk/VKTexture.cpp
   src/imguivk/VKTextureAtlas.cpp
+  src/system/SystemTheme.cpp
   src/CursorManager.cpp)
 
 target_include_directories(Graphic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -52,16 +53,25 @@ target_link_libraries(
          Vulkan::Vulkan)
 
 if(WIN32)
-  target_link_libraries(Graphic PRIVATE dwmapi comctl32)
+  target_link_libraries(Graphic PRIVATE dwmapi comctl32 advapi32)
 endif()
 
 if(APPLE)
-  target_sources(Graphic PRIVATE src/glfw/adapters/MacOSWindowAdapter.mm
-                                 src/glfw/adapters/MacOSWindowUtils.mm)
+  target_sources(
+    Graphic
+    PRIVATE src/glfw/adapters/MacOSWindowAdapter.mm
+            src/glfw/adapters/MacOSWindowUtils.mm
+            src/system/SystemThemeMacOS.mm)
   target_link_libraries(Graphic PRIVATE "-framework AppKit")
 endif()
 
 if(UNIX AND NOT APPLE)
+  # XDG Settings Portal 通过 GIO 提供跨 GNOME、KDE 与 Wayland/X11 的统一亮暗主题通知。
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
+  target_compile_definitions(Graphic PRIVATE MMM_ENABLE_XDG_PORTAL_THEME)
+  target_link_libraries(Graphic PRIVATE PkgConfig::GIO)
+
   find_package(X11)
   if(X11_FOUND)
     target_compile_definitions(Graphic PRIVATE MMM_ENABLE_X11_FRAME_INTERACTION)

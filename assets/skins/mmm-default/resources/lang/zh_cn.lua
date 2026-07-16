@@ -145,7 +145,7 @@ return {
 	["ui.settings.software.screen.fullscreen"] = "全屏模式",
 	["ui.settings.software.screen.windowed"] = "窗口化模式",
 	["ui.settings.software.theme"] = "UI 主题",
-	["ui.settings.software.theme.auto"] = "自动 (跟随皮肤)",
+	["ui.settings.software.theme.auto"] = "自动 (跟随系统与皮肤)",
 	["ui.settings.software.font.ascii"] = "ASCII 字体",
 	["ui.settings.software.font.cjk"] = "CJK 字体",
 	["ui.settings.software.font.default"] = "默认 (皮肤提供)",

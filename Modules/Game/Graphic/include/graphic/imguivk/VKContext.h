@@ -9,8 +9,10 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/system/SystemTheme.h"
 #include "imgui_impl_vulkan.h"
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -162,6 +164,11 @@ public:
      */
     void checkAndRebuildFonts();
 
+    /// @brief 低频检查系统亮暗外观并在自动模式下更新皮肤主题。
+    /// @warning 渲染热路径每帧调用，但每帧只进行枚举和时间点比较；平台状态
+    /// 刷新被限制为每秒一次，禁止在未节流分支加入阻塞操作。
+    void checkAndApplySystemTheme();
+
     /**
      * @brief 应用当前主题配置
      */
@@ -217,6 +224,13 @@ private:
     /// @warning
     /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
     std::atomic<bool> m_fontRebuildRequested{ false };
+
+    /// @brief 最近一次自动模式实际应用的系统主题。
+    SystemTheme m_appliedSystemTheme{ SystemTheme::Unknown };
+
+    /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
+    /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
+    std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
 
     /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
     /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92

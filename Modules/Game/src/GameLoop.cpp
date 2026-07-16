@@ -277,6 +277,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
                 cursorSmokeLifeOverride);
 
             // 3.2 执行渲染
+            context.checkAndApplySystemTheme();
             context.checkAndRebuildFonts();
             /// @brief 本帧渲染用户钩子列表，使用栈上数组避免热路径内分配。
             std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{

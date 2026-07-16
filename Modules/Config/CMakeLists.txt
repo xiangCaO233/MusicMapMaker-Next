@@ -20,3 +20,11 @@ mmm_add_test_executable(Config FrameLimitUtilsTest
                         tests/FrameLimitUtilsTest.cpp)
 target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
 add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
+
+# 皮肤主题绑定测试覆盖旧字符串格式、亮暗双分支以及旧应用配置的 Auto 语义。
+mmm_add_test_executable(Config SkinThemeBindingTest
+                        tests/SkinThemeBindingTest.cpp)
+target_link_libraries(SkinThemeBindingTest PRIVATE Config)
+add_test(NAME SkinThemeBindingTest
+         COMMAND SkinThemeBindingTest
+                 "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")
