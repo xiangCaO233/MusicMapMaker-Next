@@ -164,6 +164,17 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::Text("BPM: %.3f", snapshot->currentBpm);
 
+                    if ( snapshot->currentBeatIndex > 0 ) {
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosY(offsetY);
+                        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosY(offsetY);
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.beat_index").data(),
+                                    snapshot->currentBeatIndex);
+                    }
+
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

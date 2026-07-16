@@ -7,7 +7,7 @@
 namespace MMM::UI
 {
 
-/// @brief UI 每帧并行准备阶段使用的只读快照。
+/// @brief UI 每帧准备阶段使用的只读快照。
 struct UiFrameSnapshot {
     /// @brief 当前窗口内容缩放，已经至少为 1。
     float dpiScale{ 1.0f };
@@ -21,16 +21,16 @@ struct UiFrameSnapshot {
     /// @brief 当前 ImGui 含间距的单帧控件高度。
     float frameHeightWithSpacing{ 0.0f };
 
-    /// @brief 当前内容字体观察指针，只允许并行阶段只读测量。
+    /// @brief 当前内容字体观察指针，仅允许 UI 主线程测量。
     ImFont* contentFont{ nullptr };
 
-    /// @brief 当前菜单字体观察指针，只允许并行阶段只读测量。
+    /// @brief 当前菜单字体观察指针，仅允许 UI 主线程测量。
     ImFont* menuFont{ nullptr };
 
-    /// @brief 当前文件管理器字体观察指针，只允许并行阶段只读测量。
+    /// @brief 当前文件管理器字体观察指针，仅允许 UI 主线程测量。
     ImFont* fileManagerFont{ nullptr };
 
-    /// @brief 当前 ImGui 默认字体观察指针，只允许并行阶段只读测量。
+    /// @brief 当前 ImGui 默认字体观察指针，仅允许 UI 主线程测量。
     ImFont* fallbackFont{ nullptr };
 
     /// @brief 当前 ImGui 字体尺寸。
@@ -71,20 +71,26 @@ public:
     /// @brief 默认析构。
     virtual ~IParallelUiPreparable() = default;
 
-    /// @brief 判断当前帧是否需要进入并行准备队列。
+    /// @brief 判断当前帧是否需要进入准备队列。
     /// @param snapshot 当前帧只读快照。
     /// @return 需要准备时返回 true。
     /// @warning UI 热路径：每帧主线程调用，只允许检查脏位和轻量状态。
     virtual bool needsParallelUiPrepare(
         const UiFrameSnapshot& snapshot) const = 0;
 
-    /// @brief 在线程池中准备本帧 UI 数据。
+    /// @brief 判断准备阶段是否必须在 UI 主线程执行。
+    /// @return 默认返回 true；仅纯数据准备实现可以显式返回 false。
+    /// @warning UI 热路径：每帧只返回固定能力标记，禁止执行实际准备工作。
+    virtual bool requiresMainThreadUiPrepare() const { return true; }
+
+    /// @brief 准备本帧 UI 数据。
     /// @param snapshot 当前帧只读快照。
-    /// @warning 后台线程路径：禁止调用 ImGui API，禁止修改全局 UI 状态。
+    /// @warning 只有显式返回 false 的纯数据实现会在线程池执行，且禁止调用
+    /// ImGui API 或修改全局 UI 状态。
     virtual void prepareUiFrameData(const UiFrameSnapshot& snapshot) = 0;
 
     /// @brief 将准备好的数据切换到主线程可读状态。
-    /// @warning UI 热路径：线程池任务全部结束后在主线程调用，禁止阻塞。
+    /// @warning UI 热路径：所有准备任务结束后在主线程调用，禁止阻塞。
     virtual void swapPreparedUiFrameData() = 0;
 };
 

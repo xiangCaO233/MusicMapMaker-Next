@@ -183,6 +183,8 @@ std::string BatchTimelineAction::getName() const
     const char* nameKey = "ui.status.action.batch_note";
     if ( m_name == "Paste" ) {
         nameKey = "ui.status.action.paste";
+    } else if ( m_name == "Batch Timeline Update" ) {
+        nameKey = "ui.status.action.batch_timing_update";
     }
 
     return fmt::format("{}: {} {}",

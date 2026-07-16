@@ -2,6 +2,7 @@ add_library(
   UI STATIC
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
+  src/ui/utils/DesktopPathUtils.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
@@ -30,6 +31,7 @@ add_library(
   src/ui/imgui/menu/actions/file/OpenNewBeatmapWizardAction.cpp
   src/ui/imgui/menu/actions/file/OpenNewProjectWizardAction.cpp
   src/ui/imgui/menu/actions/file/OpenProjectAction.cpp
+  src/ui/imgui/menu/actions/file/OpenProjectDirectoryAction.cpp
   src/ui/imgui/menu/actions/file/OpenRecentProjectAction.cpp
   src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp
   src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp
@@ -122,14 +124,32 @@ target_link_libraries(
          3rd_entt
          Network)
 
+# Windows 系统文件管理器调用 ShellExecuteW，需要显式链接 Shell32。
+if(WIN32)
+  target_link_libraries(UI PRIVATE shell32)
+endif()
+
 mmm_add_test_executable(UI BpmPlaybackRoutingTest
                         tests/BpmPlaybackRoutingTest.cpp)
 target_include_directories(BpmPlaybackRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
 
+# 空格播放路由测试覆盖主画布与时间线的活动拖拽交互。
+mmm_add_test_executable(UI PlaybackShortcutRoutingTest
+                        tests/PlaybackShortcutRoutingTest.cpp)
+target_include_directories(PlaybackShortcutRoutingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
+
 mmm_add_test_executable(UI PackageDefaultSelectionTest
                         tests/PackageDefaultSelectionTest.cpp)
 target_include_directories(PackageDefaultSelectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PackageDefaultSelectionTest COMMAND PackageDefaultSelectionTest)
+
+mmm_add_test_executable(UI ProjectUiLifecycleStateTest
+                        tests/ProjectUiLifecycleStateTest.cpp)
+target_include_directories(ProjectUiLifecycleStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)

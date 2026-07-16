@@ -55,8 +55,13 @@ struct AssetSyncOptions {
     std::string           baseUrl;         ///< 网站根 URL，用于补全相对 URL。
     std::string           manifestUrl;     ///< 资源清单 URL。
     std::string           packageUrl;      ///< 清单不可用时的完整资源包 URL。
+    bool                  forcePreciseVerification{
+        false
+    };  ///< 忽略匹配的本地版本号并逐文件校验资源。
     std::function<void(const AssetSyncProgress&)>
         progressCallback;  ///< 低频启动/更新进度回调。
+    std::function<bool()>
+        cancellationCallback;  ///< 返回 true 时尽快取消启动期同步。
 };
 
 /// @brief 资源同步结果状态。
@@ -64,6 +69,7 @@ enum class AssetSyncStatus : std::uint8_t {
     kReady,       ///< 本地资源已就绪，无需更新。
     kDownloaded,  ///< 已下载并解压完整资源包。
     kUpdated,     ///< 已按清单增量更新资源。
+    kCancelled,   ///< 用户关闭启动界面，资源同步已取消。
     kError        ///< 同步失败。
 };
 
@@ -115,10 +121,12 @@ public:
     /// @param zipPath zip 文件路径。
     /// @param destinationRoot 解压目标根目录。
     /// @param errorMessage 失败时写入原因。
+    /// @param cancellationCallback 返回 true 时在文件边界取消解压。
     /// @return 解压成功返回 true。
-    static bool extractZipArchive(const std::filesystem::path& zipPath,
-                                  const std::filesystem::path& destinationRoot,
-                                  std::string&                 errorMessage);
+    static bool extractZipArchive(
+        const std::filesystem::path& zipPath,
+        const std::filesystem::path& destinationRoot, std::string& errorMessage,
+        const std::function<bool()>& cancellationCallback = {});
 
     /// @brief 计算文件 SHA256。
     /// @param path 文件路径。

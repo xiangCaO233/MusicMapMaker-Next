@@ -131,6 +131,17 @@ bool queryPrimaryMonitorPlacementBounds(MonitorPlacementBounds& bounds)
     return queryMonitorWorkAreaBounds(glfwGetPrimaryMonitor(), bounds);
 }
 
+/// @brief 判断当前窗口系统是否允许应用主动读取和设置窗口位置。
+/// @return X11、Windows 和 macOS 返回 true；Wayland 返回 false。
+bool supportsProgrammaticWindowPosition()
+{
+#if defined(__linux__)
+    return glfwGetPlatform() != GLFW_PLATFORM_WAYLAND;
+#else
+    return true;
+#endif
+}
+
 /// @brief 计算两个一维区间重叠长度。
 /// @param firstMin 第一个区间起点。
 /// @param firstMax 第一个区间终点。
@@ -363,7 +374,8 @@ void iconifyWin32WindowPreservingMaximize(GLFWwindow* window,
 #endif
 }  // namespace
 
-NativeWindow::NativeWindow(int w, int h, const char* wtitle)
+NativeWindow::NativeWindow(int w, int h, const char* wtitle,
+                           NativeWindowMode windowMode)
 {
     if ( !glfwVulkanSupported() ) {
         XERROR("GLFW: Vulkan Not Supported");
@@ -374,7 +386,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     // 隐藏系统标题栏
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(
+        GLFW_RESIZABLE,
+        windowMode == NativeWindowMode::Application ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
 #if defined(_WIN32) || defined(__linux__)
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
@@ -387,52 +401,11 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 #endif
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
 
-    // 设置窗口图标
     if ( m_windowHandle ) {
 #if defined(__APPLE__)
         enableMacOSFirstMouse(m_windowHandle);
 #endif
-        /// @brief 用户 .config/mmm 资源包中的窗口图标路径。
-        const std::filesystem::path iconPath =
-            Config::AppPaths::windowIconFilePath();
-        /// @brief 以二进制方式读取窗口图标，避免 Windows 中文路径被 C fopen
-        /// 误解。
-        std::ifstream iconFile(iconPath, std::ios::binary);
-        if ( iconFile ) {
-            /// @brief 窗口图标原始文件字节。
-            std::vector<unsigned char> iconBytes{
-                std::istreambuf_iterator<char>(iconFile),
-                std::istreambuf_iterator<char>()
-            };
-            /// @brief 窗口图标宽度。
-            int width = 0;
-            /// @brief 窗口图标高度。
-            int height = 0;
-            /// @brief 窗口图标原始通道数量。
-            int channels = 0;
-            /// @brief 解码后的 RGBA 图标像素。
-            unsigned char* pixels =
-                stbi_load_from_memory(iconBytes.data(),
-                                      static_cast<int>(iconBytes.size()),
-                                      &width,
-                                      &height,
-                                      &channels,
-                                      4);
-            if ( pixels ) {
-                GLFWimage images[1];
-                images[0].width  = width;
-                images[0].height = height;
-                images[0].pixels = pixels;
-                glfwSetWindowIcon(m_windowHandle, 1, images);
-                stbi_image_free(pixels);
-            } else {
-                XWARN("Failed to decode window icon: {}",
-                      Config::pathToUtf8(iconPath));
-            }
-        } else {
-            XWARN("Failed to open window icon: {}",
-                  Config::pathToUtf8(iconPath));
-        }
+        reloadWindowIcon();
     }
 
     // 窗口启动时居中
@@ -487,9 +460,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 #if defined(__APPLE__)
         if ( centerMacOSWindowInVisibleFrame(m_windowHandle, w, h) ) {
             glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
-        } else if ( monitor && mode ) {
+        } else if ( supportsProgrammaticWindowPosition() && monitor && mode ) {
 #else
-        if ( monitor && mode ) {
+        if ( supportsProgrammaticWindowPosition() && monitor && mode ) {
 #endif
             int xPos = (mode->width - actualW) / 2;
             int yPos = (mode->height - actualH) / 2;
@@ -515,21 +488,29 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 #endif
     }
 
-    // 在 glfwCreateWindow 之后调用
+    // 启动资源窗口不安装主窗口 frame adapter，避免 Win32 WS_CAPTION 在首帧
+    // 前短暂显示原生标题栏。
+    if ( windowMode == NativeWindowMode::Application ) {
+        // 在 glfwCreateWindow 之后调用
 #if defined(_WIN32)
-    m_windowFrameAdapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
+        m_windowFrameAdapter =
+            std::make_unique<Win32WindowAdapter>(m_windowHandle);
 #endif
 #if defined(__APPLE__)
-    m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
+        m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
 #endif
 #if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
-    if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
-        m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
-    }
+        if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
+            m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
+        }
 #endif
+    }
 
-    // 隐藏系统原生光标
-    glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    glfwSetInputMode(m_windowHandle,
+                     GLFW_CURSOR,
+                     windowMode == NativeWindowMode::Application
+                         ? GLFW_CURSOR_HIDDEN
+                         : GLFW_CURSOR_NORMAL);
 #ifdef __linux__
     // 确保不禁止系统快捷键 (针对 Wayland)
     if ( glfwRawMouseMotionSupported() ) {  // 只是为了检查是否是现代 GLFW
@@ -717,44 +698,175 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             MMM::Event::EventBus::instance().publish(e);
         });
 
-    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
-        [&](Event::GLFWNativeEvent e) {
-            if ( e.hasStateChange ) return;  // 忽略仅用于状态通知的事件
+    if ( windowMode == NativeWindowMode::Application ) {
+        m_nativeEventSubscription =
+            Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
+                [this](const Event::GLFWNativeEvent& e) {
+                    if ( e.hasStateChange ) return;  // 忽略仅用于状态通知的事件
 
-            switch ( e.type ) {
-            case Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
-                toggleMaximized();
-                break;
-            }
-            case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
+                    switch ( e.type ) {
+                    case Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
+                        toggleMaximized();
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
 #ifdef _WIN32
-                iconifyWin32WindowPreservingMaximize(m_windowHandle,
-                                                     m_lastRequestedMaximized);
+                        iconifyWin32WindowPreservingMaximize(
+                            m_windowHandle, m_lastRequestedMaximized);
 #elif defined(__APPLE__)
-                if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
-                    glfwIconifyWindow(m_windowHandle);
-                }
+                        if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
+                            glfwIconifyWindow(m_windowHandle);
+                        }
 #else
-            glfwIconifyWindow(m_windowHandle);
+                    glfwIconifyWindow(m_windowHandle);
 #endif
-                XINFO("Window iconified.");
-                break;
-            }
-            case Event::NativeEventType::GLFW_CLOSE_WINDOW: {
-                glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
-                break;
-            }
-            case Event::NativeEventType::GLFW_WINDOW_RESIZED:
-            case Event::NativeEventType::GLFW_WINDOW_CONTENT_SCALE_CHANGED:
-                break;
-            }
-        });
+                        XINFO("Window iconified.");
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_CLOSE_WINDOW: {
+                        glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
+                        break;
+                    }
+                    case Event::NativeEventType::GLFW_WINDOW_RESIZED:
+                    case Event::NativeEventType::
+                        GLFW_WINDOW_CONTENT_SCALE_CHANGED:
+                        break;
+                    }
+                });
+    }
 
     refreshWindowFrameShape();
 }
 
+/// @brief 从当前资源目录重新加载主窗口图标。
+void NativeWindow::reloadWindowIcon()
+{
+    if ( !m_windowHandle ) return;
+#if defined(__linux__)
+    // Wayland 不支持由客户端设置顶层窗口图标，图标应由 desktop 文件提供。
+    if ( glfwGetPlatform() == GLFW_PLATFORM_WAYLAND ) return;
+#endif
+
+    const std::filesystem::path iconPath =
+        Config::AppPaths::windowIconFilePath();
+    std::ifstream iconFile(iconPath, std::ios::binary);
+    if ( !iconFile ) {
+        XDEBUG("Window icon is not available yet: {}",
+               Config::pathToUtf8(iconPath));
+        return;
+    }
+
+    std::vector<unsigned char> iconBytes{ std::istreambuf_iterator<char>(
+                                              iconFile),
+                                          std::istreambuf_iterator<char>() };
+    int                        width    = 0;
+    int                        height   = 0;
+    int                        channels = 0;
+    unsigned char*             pixels =
+        stbi_load_from_memory(iconBytes.data(),
+                              static_cast<int>(iconBytes.size()),
+                              &width,
+                              &height,
+                              &channels,
+                              4);
+    if ( !pixels ) {
+        XWARN("Failed to decode window icon: {}", Config::pathToUtf8(iconPath));
+        return;
+    }
+
+    GLFWimage image{ .width = width, .height = height, .pixels = pixels };
+    glfwSetWindowIcon(m_windowHandle, 1, &image);
+    stbi_image_free(pixels);
+}
+
+/// @brief 按逻辑尺寸调整窗口并在当前显示器工作区居中。
+void NativeWindow::resizeAndCenter(int width, int height)
+{
+    if ( !m_windowHandle || width <= 0 || height <= 0 ) return;
+
+    if ( !supportsProgrammaticWindowPosition() ) {
+        m_ignoreWindowPlacementCallbacks = true;
+        const bool wasVisible =
+            glfwGetWindowAttrib(m_windowHandle, GLFW_VISIBLE) == GLFW_TRUE;
+        // Wayland 不允许客户端设置顶层窗口坐标。重新映射窗口，让合成器按新
+        // 尺寸重新执行窗口放置策略，避免从启动小窗左上角向右下方扩张。
+        if ( wasVisible ) glfwHideWindow(m_windowHandle);
+        glfwSetWindowSize(m_windowHandle, width, height);
+        if ( wasVisible ) glfwShowWindow(m_windowHandle);
+        m_ignoreWindowPlacementCallbacks = false;
+        // 重新映射后的首帧必须先重建交换链，不能沿用交互缩放的消抖延迟。
+        m_lastResizeTime = std::chrono::steady_clock::time_point{};
+        m_resizePending.store(true, std::memory_order_relaxed);
+        refreshWindowFrameShape();
+        return;
+    }
+
+#if defined(__APPLE__)
+    if ( centerMacOSWindowInVisibleFrame(m_windowHandle, width, height) ) {
+        rememberCurrentWindowPlacement();
+        m_lastResizeTime = std::chrono::steady_clock::now();
+        m_resizePending.store(true, std::memory_order_relaxed);
+        refreshWindowFrameShape();
+        return;
+    }
+#endif
+
+    int targetWidth  = width;
+    int targetHeight = height;
+#if defined(_WIN32) || defined(__linux__)
+    float xScale = 1.0f;
+    float yScale = 1.0f;
+    glfwGetWindowContentScale(m_windowHandle, &xScale, &yScale);
+
+    int currentWidth      = 0;
+    int currentHeight     = 0;
+    int framebufferWidth  = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(m_windowHandle, &currentWidth, &currentHeight);
+    glfwGetFramebufferSize(
+        m_windowHandle, &framebufferWidth, &framebufferHeight);
+    const float framebufferScaleX = currentWidth > 0
+                                        ? static_cast<float>(framebufferWidth) /
+                                              static_cast<float>(currentWidth)
+                                        : 1.0f;
+    if ( xScale > framebufferScaleX ) {
+        targetWidth  = static_cast<int>(static_cast<float>(width) * xScale);
+        targetHeight = static_cast<int>(static_cast<float>(height) * yScale);
+    }
+#endif
+
+    MonitorPlacementBounds bounds;
+    if ( queryMonitorWorkAreaBounds(findBestMonitorForWindow(m_windowHandle),
+                                    bounds) ) {
+        targetWidth  = std::min(targetWidth, bounds.m_width);
+        targetHeight = std::min(targetHeight, bounds.m_height);
+        const int targetX =
+            bounds.m_x + std::max((bounds.m_width - targetWidth) / 2, 0);
+        const int targetY =
+            bounds.m_y + std::max((bounds.m_height - targetHeight) / 2, 0);
+        applyWindowPlacement(
+            targetX, targetY, targetWidth, targetHeight, false);
+        return;
+    }
+
+    int currentX = 0;
+    int currentY = 0;
+    glfwGetWindowPos(m_windowHandle, &currentX, &currentY);
+    glfwGetWindowSize(m_windowHandle, &width, &height);
+    applyWindowPlacement(currentX + (width - targetWidth) / 2,
+                         currentY + (height - targetHeight) / 2,
+                         targetWidth,
+                         targetHeight,
+                         false);
+}
+
 NativeWindow::~NativeWindow()
 {
+    if ( m_nativeEventSubscription != 0 ) {
+        Event::EventBus::instance().unsubscribe<Event::GLFWNativeEvent>(
+            m_nativeEventSubscription);
+        m_nativeEventSubscription = 0;
+    }
     m_windowFrameAdapter.reset();
     if ( m_windowHandle ) {
         glfwDestroyWindow(m_windowHandle);
@@ -1009,6 +1121,8 @@ void NativeWindow::windowSizeCallback(GLFWwindow* window, int width, int height)
 
 bool NativeWindow::canRememberCurrentWindowPlacement() const
 {
+    if ( !supportsProgrammaticWindowPosition() ) return false;
+
 #if defined(__APPLE__)
     return !m_ignoreWindowPlacementCallbacks && !m_emulatedMaximized &&
            m_windowHandle && glfwGetWindowMonitor(m_windowHandle) == nullptr &&

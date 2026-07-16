@@ -91,6 +91,14 @@ bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags = 0);
 
+/// @brief 绘制带统一反馈的 ImGui TreeNode。
+/// @param label TreeNode 显示文本和 ImGui ID。
+/// @param flags TreeNode 标志。
+/// @return TreeNode 本帧展开时返回 true，并由调用方配对 TreePop。
+/// @warning UI 热路径：每帧 TreeNode 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackTreeNode(const char* label, ImGuiTreeNodeFlags flags = 0);
+
 /// @brief 绘制带统一反馈的 ImGui Checkbox。
 /// @param label Checkbox 显示文本和 ImGui ID。
 /// @param value 当前布尔值指针。
@@ -172,7 +180,7 @@ bool FeedbackCombo(const char* label, int* currentItem,
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSliderFloat(const char* label, float* value, float minValue,
-                         float maxValue, const char* format = "%.3f",
+                         float maxValue, const char* format = "%.4f",
                          ImGuiSliderFlags flags = 0);
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
@@ -187,7 +195,7 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
                           float minValue, float maxValue,
-                          const char*      format = "%.3f",
+                          const char*      format = "%.4f",
                           ImGuiSliderFlags flags  = 0);
 
 /// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
@@ -370,6 +378,10 @@ bool renderScrollingTreeNode(const std::string& id, const std::string& text,
 }
 
 enum class TooltipDir { Left, Right };
+
+/// @brief 在当前窗口可用内容区域中心绘制项目切换提示。
+/// @warning UI 热路径：项目切换期间每帧只执行一次文本测量和绘制。
+void renderProjectTransitionPlaceholder();
 
 /// @brief 将下一个弹出式窗口固定到主视口中心。
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。

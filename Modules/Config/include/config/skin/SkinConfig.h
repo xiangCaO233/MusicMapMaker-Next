@@ -1,6 +1,7 @@
 #pragma once
 
 #include "translation/Translation.h"
+#include <cstdint>
 #include <filesystem>
 #include <sol/sol.hpp>
 #include <string>
@@ -13,6 +14,12 @@ namespace MMM
 {
 namespace Config
 {
+/// @brief 皮肤推荐 UI 主题对应的系统外观分支。
+enum class SkinThemeAppearance : std::uint8_t {
+    Light,  ///< 系统偏好亮色外观。
+    Dark    ///< 系统偏好暗色外观。
+};
+
 // 简单的颜色结构
 struct Color {
     float r, g, b, a;
@@ -35,8 +42,14 @@ struct SkinData {
     std::unordered_map<std::string, std::filesystem::path> langLuaPaths;
     std::string fallBackLang{ "zh_cn" };
 
-    /// @brief 皮肤推荐的默认主题
-    std::string defaultTheme{ "DeepDark" };
+    /// @brief 皮肤为系统亮暗外观分别推荐的 UI 主题。
+    struct ThemeBinding {
+        /// @brief 系统为亮色或无法识别系统偏好时使用的主题。
+        std::string light{ "DeepDark" };
+
+        /// @brief 系统为暗色时使用的主题。
+        std::string dark{ "DeepDark" };
+    } defaultThemes;
 
     // 字体表
     std::unordered_map<std::string, std::filesystem::path> fontPaths;
@@ -118,8 +131,22 @@ public:
     ///@brief 直接获取皮肤数据
     const SkinData& getData() const { return m_data; }
 
-    ///@brief 获取皮肤默认主题
-    std::string getDefaultTheme() const { return m_data.defaultTheme; }
+    /// @brief 获取皮肤兼容旧调用方的默认主题。
+    /// @return 亮色分支主题；无法识别系统外观时也使用该分支。
+    const std::string& getDefaultTheme() const
+    {
+        return m_data.defaultThemes.light;
+    }
+
+    /// @brief 获取皮肤为指定系统外观推荐的主题。
+    /// @param appearance 系统亮暗外观分支。
+    /// @return 对应分支的主题名称。
+    const std::string& getDefaultTheme(SkinThemeAppearance appearance) const
+    {
+        return appearance == SkinThemeAppearance::Dark
+                   ? m_data.defaultThemes.dark
+                   : m_data.defaultThemes.light;
+    }
 
     ///@brief 获取字体路径
     std::filesystem::path getFontPath(const std::string& key);

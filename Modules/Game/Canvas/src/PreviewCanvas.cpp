@@ -1,4 +1,5 @@
 #include "canvas/PreviewCanvas.h"
+#include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
@@ -165,11 +166,14 @@ void PreviewCanvas::drawDensityOverview(
         std::min(density.counts.size() - 1,
                  static_cast<std::size_t>(
                      progress * static_cast<double>(density.counts.size())));
-    const ImU32 normalColor = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
-    const ImU32 activeColor = ImGui::GetColorU32(ImGuiCol_PlotHistogramHovered);
-    ImVec4      activeBackground =
-        ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogramHovered);
-    activeBackground.w *= 0.24f;
+    const float currentNormalized =
+        static_cast<float>(density.counts[currentBin]) /
+        static_cast<float>(density.maxCount);
+    const auto  currentDensityColor = previewDensityColorAt(currentNormalized);
+    ImVec4      activeBackground{ currentDensityColor.r,
+                                  currentDensityColor.g,
+                                  currentDensityColor.b,
+                                  0.20f };
     const ImU32 activeBackgroundColor = ImGui::GetColorU32(activeBackground);
 
     for ( std::size_t row = 0; row < displayRowCount; ++row ) {
@@ -202,6 +206,12 @@ void PreviewCanvas::drawDensityOverview(
 
         const float normalized =
             static_cast<float>(rowCount) / static_cast<float>(density.maxCount);
+        const auto  densityColor = previewDensityColorAt(normalized);
+        const ImU32 barColor =
+            ImGui::GetColorU32(ImVec4(densityColor.r,
+                                      densityColor.g,
+                                      densityColor.b,
+                                      isCurrent ? 1.0f : 0.82f));
         const float barWidth      = std::max(1.0f, innerWidth * normalized);
         const float verticalInset = rowY1 - rowY0 >= 2.0f
                                         ? std::min(0.5f, (rowY1 - rowY0) * 0.2f)
@@ -209,15 +219,24 @@ void PreviewCanvas::drawDensityOverview(
         drawList->AddRectFilled(
             ImVec2(layout.innerMin.x, rowY0 + verticalInset),
             ImVec2(layout.innerMin.x + barWidth, rowY1 - verticalInset),
-            isCurrent ? activeColor : normalColor);
+            barColor);
     }
 
     const float currentY =
         layout.innerMax.y - static_cast<float>(progress) * innerHeight;
+    const ImU32 currentLineColor =
+        ImGui::GetColorU32(ImVec4(currentDensityColor.r,
+                                  currentDensityColor.g,
+                                  currentDensityColor.b,
+                                  1.0f));
     drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
                       ImVec2(layout.innerMax.x, currentY),
-                      activeColor,
-                      std::max(1.0f, std::floor(dpiScale)));
+                      ImGui::GetColorU32(ImGuiCol_Border),
+                      std::max(3.0f, std::floor(3.0f * dpiScale)));
+    drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
+                      ImVec2(layout.innerMax.x, currentY),
+                      currentLineColor,
+                      std::max(1.0f, std::floor(2.0f * dpiScale)));
 }
 
 /// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。

@@ -148,69 +148,87 @@ VKContext::VKContext()
     // 后续显卡设备初始化
     // 放在窗口相关资源初始化函数中
 
-    MMM::Event::EventBus::instance().subscribe<MMM::Event::GLFWKeyEvent>(
-        [&](MMM::Event::GLFWKeyEvent e) {
-            if ( e.key == MMM::Event::Input::Key::F7 &&
-                 e.action == MMM::Event::Input::Action::Press ) {
-                /// @brief F7 循环切换帧率限制模式
-                auto& config =
-                    MMM::Config::AppConfig::instance().getEditorConfig();
-                int currentLimit = static_cast<int>(config.settings.frameLimit);
-                currentLimit     = (currentLimit + 1) % 5;
-                config.settings.frameLimit =
-                    static_cast<MMM::Config::FrameLimitPreference>(
-                        currentLimit);
+    m_glfwKeySubscription =
+        MMM::Event::EventBus::instance().subscribe<MMM::Event::GLFWKeyEvent>(
+            [this](const MMM::Event::GLFWKeyEvent& e) {
+                if ( !m_windowResourcesInitialized ||
+                     m_windowResourceMode !=
+                         VKWindowResourceMode::Application ) {
+                    return;
+                }
+                if ( e.key == MMM::Event::Input::Key::F7 &&
+                     e.action == MMM::Event::Input::Action::Press ) {
+                    /// @brief F7 循环切换帧率限制模式
+                    auto& config =
+                        MMM::Config::AppConfig::instance().getEditorConfig();
+                    int currentLimit =
+                        static_cast<int>(config.settings.frameLimit);
+                    currentLimit = (currentLimit + 1) % 5;
+                    config.settings.frameLimit =
+                        static_cast<MMM::Config::FrameLimitPreference>(
+                            currentLimit);
 
-                // 发布配置更新事件，触发所有监听者（包括本类中的
-                // LogicCommandEvent 监听器）
-                MMM::Event::EventBus::instance().publish(
-                    MMM::Event::LogicCommandEvent(
-                        MMM::Logic::CmdUpdateEditorConfig{ config }));
+                    // 发布配置更新事件，触发所有监听者（包括本类中的
+                    // LogicCommandEvent 监听器）
+                    MMM::Event::EventBus::instance().publish(
+                        MMM::Event::LogicCommandEvent(
+                            MMM::Logic::CmdUpdateEditorConfig{ config }));
 
-                // 持久化配置
-                MMM::Config::AppConfig::instance().save();
+                    // 持久化配置
+                    MMM::Config::AppConfig::instance().save();
 
-                const char* displayNames[] = {
-                    TR("ui.settings.software.framelimit.vsync").data(),
-                    TR("ui.settings.software.framelimit.2x").data(),
-                    TR("ui.settings.software.framelimit.4x").data(),
-                    TR("ui.settings.software.framelimit.8x").data(),
-                    TR("ui.settings.software.framelimit.unlimited").data()
-                };
-                std::string title =
-                    TR("ui.settings.software.framelimit").data();
-                std::string notificationMsg =
-                    title + ": " + displayNames[currentLimit];
-                showCenterNotification(notificationMsg);
+                    const char* displayNames[] = {
+                        TR("ui.settings.software.framelimit.vsync").data(),
+                        TR("ui.settings.software.framelimit.2x").data(),
+                        TR("ui.settings.software.framelimit.4x").data(),
+                        TR("ui.settings.software.framelimit.8x").data(),
+                        TR("ui.settings.software.framelimit.unlimited").data()
+                    };
+                    std::string title =
+                        TR("ui.settings.software.framelimit").data();
+                    std::string notificationMsg =
+                        title + ": " + displayNames[currentLimit];
+                    showCenterNotification(notificationMsg);
 
-                XDEBUG("Frame Limit mode toggled by shortcut: {}",
-                       notificationMsg);
-            }
-            if ( e.key == MMM::Event::Input::Key::F11 &&
-                 e.action == MMM::Event::Input::Action::Press ) {
-                /// @brief F11 切换全屏
-                ToggleFullscreen();
+                    XDEBUG("Frame Limit mode toggled by shortcut: {}",
+                           notificationMsg);
+                }
+                if ( e.key == MMM::Event::Input::Key::F11 &&
+                     e.action == MMM::Event::Input::Action::Press ) {
+                    /// @brief F11 切换全屏
+                    ToggleFullscreen();
 
-                bool isFullscreen =
-                    (glfwGetWindowMonitor(
-                         m_nativeWindow_ptr->getWindowHandle()) != nullptr);
-                showCenterNotification(
-                    isFullscreen
-                        ? TR("ui.settings.software.screen.fullscreen").data()
-                        : TR("ui.settings.software.screen.windowed").data());
-            }
-        });
+                    bool isFullscreen =
+                        (glfwGetWindowMonitor(
+                             m_nativeWindow_ptr->getWindowHandle()) != nullptr);
+                    showCenterNotification(
+                        isFullscreen
+                            ? TR("ui.settings.software.screen.fullscreen")
+                                  .data()
+                            : TR("ui.settings.software.screen.windowed")
+                                  .data());
+                }
+            });
 
-    MMM::Event::EventBus::instance().subscribe<MMM::Event::LogicCommandEvent>(
-        [&](MMM::Event::LogicCommandEvent e) {
-            if ( std::holds_alternative<MMM::Logic::CmdUpdateEditorConfig>(
-                     e.command) ) {
-                auto& cmd =
-                    std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
-                setFrameLimitPresentMode(cmd.config.settings.frameLimit);
-                applyTheme();
-            }
-        });
+    m_logicCommandSubscription =
+        MMM::Event::EventBus::instance()
+            .subscribe<MMM::Event::LogicCommandEvent>(
+                [this](const MMM::Event::LogicCommandEvent& e) {
+                    if ( !m_windowResourcesInitialized ||
+                         m_windowResourceMode !=
+                             VKWindowResourceMode::Application ) {
+                        return;
+                    }
+                    if ( std::holds_alternative<
+                             MMM::Logic::CmdUpdateEditorConfig>(e.command) ) {
+                        const auto& cmd =
+                            std::get<MMM::Logic::CmdUpdateEditorConfig>(
+                                e.command);
+                        setFrameLimitPresentMode(
+                            cmd.config.settings.frameLimit);
+                        applyTheme();
+                    }
+                });
 }
 
 VKContext::~VKContext()
@@ -223,6 +241,18 @@ VKContext::~VKContext()
 
 void VKContext::release()
 {
+    if ( m_glfwKeySubscription != 0 ) {
+        MMM::Event::EventBus::instance().unsubscribe<MMM::Event::GLFWKeyEvent>(
+            m_glfwKeySubscription);
+        m_glfwKeySubscription = 0;
+    }
+    if ( m_logicCommandSubscription != 0 ) {
+        MMM::Event::EventBus::instance()
+            .unsubscribe<MMM::Event::LogicCommandEvent>(
+                m_logicCommandSubscription);
+        m_logicCommandSubscription = 0;
+    }
+
     if ( m_isReleased ) return;
 
     if ( m_vkLogicalDevice ) {
@@ -289,7 +319,9 @@ void VKContext::release()
         XDEBUG("VK Instance destroyed.");
     }
 
-    m_isReleased = true;
+    m_windowResourcesInitialized = false;
+    m_nativeWindow_ptr           = nullptr;
+    m_isReleased                 = true;
     XINFO("VKContext resources released.");
 }
 
@@ -401,11 +433,22 @@ void VKContext::imguiAutoSelect()
  * @param w 窗口宽度
  * @param h 窗口高度
  */
-bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
+bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
+                                 VKWindowResourceMode mode)
 {
     if ( hasInitializationError() ) {
         return false;
     }
+
+    if ( m_windowResourcesInitialized ) {
+        if ( native_window_ptr != m_nativeWindow_ptr ||
+             mode != m_windowResourceMode ) {
+            XERROR("Vulkan window resources cannot be rebound or promoted");
+            return false;
+        }
+        return true;
+    }
+
     m_nativeWindow_ptr = native_window_ptr;
     addStartupDiagnostic(
         fmt::format("Initializing Vulkan window resources: {}x{}", w, h));
@@ -475,19 +518,23 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
     m_swapchain->createFramebuffers(*m_vkRenderPass);
 
     // 创建渲染器
-    m_vkRenderer = std::make_unique<VKRenderer>(m_vkPhysicalDevice,
+    m_vkRenderer = std::make_unique<VKRenderer>(*this,
+                                                m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
                                                 *m_swapchain,
                                                 *m_vkRenderPass,
                                                 m_LogicDeviceGraphicsQueue,
                                                 m_LogicDevicePresentQueue);
 
-    // 初始化渲染器中的光标管理器
-    m_vkRenderer->initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
+    if ( mode == VKWindowResourceMode::Application ) {
+        // 软件光标依赖皮肤贴图，启动期资源同步完成前不能创建。
+        m_vkRenderer->initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
+    }
 
     // 初始化 ImGui
-    imguiVulkanInit(native_window_ptr->getWindowHandle());
-    applyTheme();
+    imguiVulkanInit(native_window_ptr->getWindowHandle(), mode);
+    m_windowResourceMode         = mode;
+    m_windowResourcesInitialized = true;
     return true;
 }
 
@@ -640,7 +687,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                               minPos.y + ImGui::GetWindowHeight());
+                                      minPos.y + ImGui::GetWindowHeight());
 
         // 绘制毛玻璃/半透明背板 (深色磨砂)
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(

@@ -10,6 +10,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <atomic>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -128,6 +129,11 @@ struct SessionContext {
     /// @warning 逻辑/UI 热路径缓存：由低频音频加载路径写入，播放、seek clamp
     /// 和快照生成只读取该值，禁止在读取点改为文件系统探测或解码。
     double mainAudioTotalTime{ 0.0 };
+    /// @brief 主音轨自然结束后，下一次播放是否需要从零秒重新开始。
+    /// @warning
+    /// 跨线程低频标志：音频完成回调写入，逻辑命令读取并清除；原子访问用于避免回调线程与逻辑线程的数据竞争，
+    /// 不得放入每帧读取路径。
+    std::atomic_bool restartPlaybackAfterFinishPending{ false };
 
     /// @brief 播放开始时的系统时钟 (steady_clock, 秒)
     double playStartSysTime{ 0.0 };

@@ -42,6 +42,12 @@ MainMenuFile::MainMenuFile()
     registerItem(std::make_unique<MainMenuRecentProjectsItem>(
         createOpenRecentProjectAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_FOLDER_OPEN,
+        "ui.file.open_project_directory",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenProjectDirectoryAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_CLOSE,
         "ui.file.close_pro",
         MainMenuItemTextKind::TranslationKey,

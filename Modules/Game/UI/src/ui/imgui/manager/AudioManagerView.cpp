@@ -495,10 +495,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font = snapshot.fileManagerFont
-                       ? snapshot.fileManagerFont
-                       : (snapshot.contentFont ? snapshot.contentFont
-                                               : snapshot.fallbackFont);
+    ImFont* font             = snapshot.fileManagerFont
+                                   ? snapshot.fileManagerFont
+                                   : (snapshot.contentFont ? snapshot.contentFont
+                                                           : snapshot.fallbackFont);
 
     const std::array<const char*, 5> controlLabels{
         TR("ui.audio_manager.output_device").data(),
@@ -543,7 +543,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float       minWidth =
+    float minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float        listHeight = 0.0f;
@@ -593,7 +593,7 @@ const AudioManagerView::LayoutMetricsCache& AudioManagerView::getLayoutMetrics(
 
 /// @brief 判断当前帧是否需要准备音频管理器布局数据。
 /// @param snapshot 当前帧 UI 快照。
-/// @return 需要后台准备时返回 true。
+/// @return 需要刷新布局缓存时返回 true。
 bool AudioManagerView::needsParallelUiPrepare(
     const UiFrameSnapshot& snapshot) const
 {
@@ -602,7 +602,7 @@ bool AudioManagerView::needsParallelUiPrepare(
         m_layoutMetricsCache, snapshot, m_prepareLayoutInput);
 }
 
-/// @brief 在线程池中准备音频管理器布局测量数据。
+/// @brief 在 UI 主线程准备音频管理器布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
 void AudioManagerView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -611,7 +611,7 @@ void AudioManagerView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     m_hasPreparedLayoutMetrics = true;
 }
 
-/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+/// @brief 将准备好的布局测量数据切换给主线程使用。
 void AudioManagerView::swapPreparedUiFrameData()
 {
     if ( !m_hasPreparedLayoutMetrics ) {
@@ -921,12 +921,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
         for ( const auto& [key, path] : skinData.audioPaths ) {
             AudioTableRow row;
-            row.m_id   = key;
-            row.m_path = Config::pathToUtf8(path);
-            row.m_type = AudioTrackType::Effect;
-            row.m_kind = isInteractionSfxKey(key)
-                             ? AudioTableRowKind::InteractionSfx
-                             : AudioTableRowKind::PermanentSfx;
+            row.m_id                    = key;
+            row.m_path                  = Config::pathToUtf8(path);
+            row.m_type                  = AudioTrackType::Effect;
+            row.m_kind                  = isInteractionSfxKey(key)
+                                              ? AudioTableRowKind::InteractionSfx
+                                              : AudioTableRowKind::PermanentSfx;
             const FileMetadata metadata = queryFileMetadata(path);
             row.m_size                  = metadata.size;
             row.m_hasSize               = metadata.hasSize;
@@ -1380,7 +1380,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             0.0f,
             1.0f,
             TR("ui.audio_manager.global_volume").data(),
-            "%.2f",
+            "%.4f",
             [&](float v) { audioManager.setGlobalVolume(v); },
             [&](bool m) { audioManager.setGlobalMute(m); });
 
@@ -1396,7 +1396,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             0.0f,
             1.0f,
             TR("ui.audio_manager.bgm_gain").data(),
-            "%.2f",
+            "%.4f",
             [&](float v) { audioManager.setBGMGain(v); },
             [&](bool m) { audioManager.setBGMGainMute(m); });
 
@@ -1412,7 +1412,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             0.0f,
             1.0f,
             TR("ui.audio_manager.sfx_gain").data(),
-            "%.2f",
+            "%.4f",
             [&](float v) { audioManager.setSFXGain(v); },
             [&](bool m) { audioManager.setSFXGainMute(m); });
 
@@ -1428,7 +1428,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             0.0f,
             1.0f,
             TR("ui.audio_manager.interaction_sfx_volume").data(),
-            "%.2f",
+            "%.4f",
             [&](float v) { audioManager.setInteractionSFXGain(v); },
             [&](bool m) { audioManager.setInteractionSFXGainMute(m); });
     }

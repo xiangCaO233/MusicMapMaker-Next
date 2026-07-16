@@ -628,8 +628,11 @@ void VKRenderer::render(NativeWindow&                window,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
-    if ( editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
+    auto&      editorCfg = Config::AppConfig::instance().getEditorConfig();
+    const bool softwareCursorAvailable =
+        m_cursorManager &&
+        editorCfg.settings.cursorStyle == Config::CursorStyle::Software;
+    if ( softwareCursorAvailable ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     }
     const auto newFrameEnd = profileTimePoint(renderProfileLoggingEnabled);
@@ -652,26 +655,22 @@ void VKRenderer::render(NativeWindow&                window,
     }
 
     // 绘制中央临时通知
-    VKContext::get().value().get().drawCenterNotification();
+    m_vkContext.drawCenterNotification();
 
     const ImGuiMouseCursor currentMouseCursor = ImGui::GetMouseCursor();
     const bool             useNativeResizeCursor =
-        editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
-        isNativeResizeCursor(currentMouseCursor);
+        softwareCursorAvailable && isNativeResizeCursor(currentMouseCursor);
 
     if ( useNativeResizeCursor ) {
         applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
-    } else if ( editorCfg.settings.cursorStyle ==
-                Config::CursorStyle::Software ) {
+    } else if ( softwareCursorAvailable ) {
         hideNativeCursor(window.getWindowHandle());
     } else {
         applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
     }
 
     // 更新光标管理器
-    if ( m_cursorManager &&
-         editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
-         !useNativeResizeCursor ) {
+    if ( softwareCursorAvailable && !useNativeResizeCursor ) {
         m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
     }
     const auto updateUiEnd = profileTimePoint(renderProfileLoggingEnabled);
@@ -736,7 +735,7 @@ void VKRenderer::render(NativeWindow&                window,
         for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
               ++taskSlot ) {
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {

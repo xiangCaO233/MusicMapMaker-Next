@@ -634,7 +634,7 @@ private:
         ImGui::TextUnformatted("倍速");
         ImGui::SetNextItemWidth(-1.0f);
         if ( ::MMM::UI::FeedbackSliderFloat(
-                 "##SpeedExportFactor", &m_factor, 0.25f, 4.0f, "%.3fx") ) {
+                 "##SpeedExportFactor", &m_factor, 0.25f, 4.0f, "%.4fx") ) {
             m_factor = std::clamp(m_factor, 0.25f, 4.0f);
             refreshAutoNameIfNeeded();
         }

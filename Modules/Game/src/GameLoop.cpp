@@ -3,6 +3,7 @@
 #include "canvas/PreviewCanvas.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -225,30 +226,12 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
         while ( !window.shouldClose() ) {
             auto& settings = Config::AppConfig::instance().getEditorSettings();
 
-            // 计算当前限制下的目标时间间隔
-            double targetDt = 0.0;
-            int    refreshRate =
+            // FIFO 继续负责无撕裂呈现；同时按刷新率做 CPU 侧兜底，避免部分
+            // 驱动或合成器未通过 acquire/present 对主循环形成有效背压。
+            const int refreshRate =
                 Config::AppConfig::instance().getDeviceRefreshRate();
-            if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
-
-            switch ( settings.frameLimit ) {
-            case Config::FrameLimitPreference::VSync:
-                // VSync 下由 Vulkan 交换链自然阻塞限制，不需要额外的 CPU sleep
-                // 限制
-                targetDt = 0.0;
-                break;
-            case Config::FrameLimitPreference::Refresh2x:
-                targetDt = 1.0 / static_cast<double>(refreshRate * 2);
-                break;
-            case Config::FrameLimitPreference::Refresh4x:
-                targetDt = 1.0 / static_cast<double>(refreshRate * 4);
-                break;
-            case Config::FrameLimitPreference::Refresh8x:
-                targetDt = 1.0 / static_cast<double>(refreshRate * 8);
-                break;
-            case Config::FrameLimitPreference::Unlimited:
-            default: targetDt = 0.0; break;
-            }
+            const double targetDt = Config::frameLimitTargetInterval(
+                settings.frameLimit, refreshRate);
 
             auto currentRenderTime = FrameLimitClock::now();
             if ( targetDt > 0.0 ) {
@@ -294,6 +277,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
                 cursorSmokeLifeOverride);
 
             // 3.2 执行渲染
+            context.checkAndApplySystemTheme();
             context.checkAndRebuildFonts();
             /// @brief 本帧渲染用户钩子列表，使用栈上数组避免热路径内分配。
             std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{

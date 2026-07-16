@@ -87,8 +87,11 @@ local Skin = {
 		},
 	},
 
-	-- UI 默认主题
-	theme = "Cecilia",
+	-- UI 推荐主题：自动模式下跟随系统亮暗外观切换
+	theme = {
+		light = "Cecilia",
+		dark = "Moonlight",
+	},
 
 	-- 音频配置
 	audios = {

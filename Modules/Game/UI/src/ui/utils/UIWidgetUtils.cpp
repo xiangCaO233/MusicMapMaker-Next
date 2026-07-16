@@ -3,6 +3,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui_internal.h"
 #include "ui/layout/CLayDefs.h"
 
@@ -27,6 +28,18 @@ constexpr float TOOLTIP_SLIDE_Y = 4.0f;
 
 /// @brief 项目纵向滚动区域统一使用的最小滚动条宽度，单位为逻辑像素。
 constexpr float VERTICAL_SCROLLBAR_MIN_WIDTH = 18.0f;
+
+void renderProjectTransitionPlaceholder()
+{
+    const char*  text      = TR("ui.project.opening").data();
+    const ImVec2 textSize  = ImGui::CalcTextSize(text);
+    const ImVec2 startPos  = ImGui::GetCursorScreenPos();
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    ImGui::SetCursorScreenPos(
+        { startPos.x + std::max(0.0f, available.x - textSize.x) * 0.5f,
+          startPos.y + std::max(0.0f, available.y - textSize.y) * 0.5f });
+    ImGui::TextDisabled("%s", text);
+}
 
 /// @brief 计算带盐的 Tooltip 状态键。
 /// @param id 控件 ID。
@@ -1337,6 +1350,34 @@ bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags)
     beginRoundedHighlightLayer(&highlightLayer);
     const int    pushedColorCount = pushTransparentHeaderColors();
     const bool   open             = ImGui::CollapsingHeader(label, flags);
+    const bool   hovered          = ImGui::IsItemHovered();
+    const bool   active           = ImGui::IsItemActive();
+    const bool   clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, open, hovered, active));
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return open;
+}
+
+/// @brief 绘制带统一反馈的 ImGui TreeNode。
+/// @param label TreeNode 显示文本和 ImGui ID。
+/// @param flags TreeNode 标志。
+/// @return TreeNode 本帧展开时返回 true，并由调用方配对 TreePop。
+/// @warning UI 热路径：每帧 TreeNode 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackTreeNode(const char* label, ImGuiTreeNodeFlags flags)
+{
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   open             = ImGui::TreeNodeEx(label, flags);
     const bool   hovered          = ImGui::IsItemHovered();
     const bool   active           = ImGui::IsItemActive();
     const bool   clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);

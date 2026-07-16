@@ -72,16 +72,21 @@ public:
 
     /// @brief 判断当前帧设置窗口是否需要准备布局数据。
     /// @param snapshot 当前帧 UI 快照。
-    /// @return 需要后台准备时返回 true。
+    /// @return 需要刷新布局缓存时返回 true。
     /// @warning UI 热路径：每帧主线程调用，只检查缓存状态。
     bool needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const override;
 
-    /// @brief 在线程池中准备设置窗口布局数据。
+    /// @brief 要求布局准备在 UI 主线程执行，避免动态字形烘焙并发写入字体图集。
+    /// @return 始终返回 true。
+    /// @warning UI 热路径：每帧只返回固定能力标记。
+    bool requiresMainThreadUiPrepare() const override { return true; }
+
+    /// @brief 在 UI 主线程准备设置窗口布局数据。
     /// @param snapshot 当前帧 UI 快照。
-    /// @warning 后台线程路径：只计算文本宽度和布局尺寸，禁止调用 ImGui API。
+    /// @warning 文本测量可能触发动态字形烘焙，禁止在线程池执行。
     void prepareUiFrameData(const UiFrameSnapshot& snapshot) override;
 
-    /// @brief 将后台准备好的布局数据切换给主线程使用。
+    /// @brief 将准备好的布局数据切换给主线程使用。
     void swapPreparedUiFrameData() override;
 
 private:
@@ -197,10 +202,10 @@ private:
     /// @brief 布局测量缓存，避免设置窗口每帧重复测量大量文本。
     mutable LayoutMetricsCache m_layoutMetricsCache;
 
-    /// @brief 后台线程准备出的布局测量缓存。
+    /// @brief 等待切换的布局测量缓存。
     LayoutMetricsCache m_preparedLayoutMetricsCache;
 
-    /// @brief 后台布局缓存是否等待主线程切换。
+    /// @brief 是否有布局缓存等待主线程切换。
     bool m_hasPreparedLayoutMetrics{ false };
 
     /// @brief 当前正在录制的快捷键目标。

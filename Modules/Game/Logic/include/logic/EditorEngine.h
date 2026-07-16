@@ -440,6 +440,12 @@ public:
      */
     void saveProject();
 
+    /// @brief 立即完成全部已打开会话中等待空闲期的元数据自动保存。
+    /// @return 所有待保存会话都成功落盘时返回 true。
+    /// @warning 低频阻塞路径：仅允许逻辑线程在打包或关闭项目前调用；会持有
+    /// Session 注册表锁并可能同步写入多个谱面。
+    bool flushPendingMetadataAutoSaves();
+
 private:
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
     void captureProjectWorkspaceState();
@@ -482,7 +488,8 @@ private:
     void scanProjectDirectory();
 
     /// @brief 清理当前已打开的项目并卸载项目音频状态。
-    void closeProject();
+    /// @return 没有当前项目或项目成功关闭时返回 true。
+    bool closeProject();
 
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
     /// @warning 逻辑热路径/原子：每次 Session update

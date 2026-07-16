@@ -1,3 +1,5 @@
+#include "logic/session/ActionController.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
@@ -8,7 +10,6 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
-#include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
@@ -703,7 +704,7 @@ BeatmapMetadataSnapshot makeMetadataSnapshot(const ::MMM::BeatMap& beatMap)
     };
 }
 
-/// @brief 构建元数据替换后的快照，保留当前谱面的文件和资源路径。
+/// @brief 构建元数据替换后的快照，保留当前谱面的文件、资源路径及背景语义。
 /// @param current 当前谱面。
 /// @param source 来源谱面。
 /// @return 替换后的元数据快照。
@@ -715,9 +716,31 @@ BeatmapMetadataSnapshot makeReplacementMetadataSnapshot(
     base.main_audio_path = current.m_baseMapMetadata.main_audio_path;
     base.main_cover_path = current.m_baseMapMetadata.main_cover_path;
     base.cover_path      = current.m_baseMapMetadata.cover_path;
+    base.cover_type      = current.m_baseMapMetadata.cover_type;
+    base.video_starttime = current.m_baseMapMetadata.video_starttime;
+    base.bgxoffset       = current.m_baseMapMetadata.bgxoffset;
+    base.bgyoffset       = current.m_baseMapMetadata.bgyoffset;
+
+    auto mapMetadata = source.m_metadata;
+    if ( auto osuIt =
+             mapMetadata.map_properties.find(::MMM::MapMetadataType::OSU);
+         osuIt != mapMetadata.map_properties.end() ) {
+        // 原始 OSU 属性也必须与保留的资源一致，避免元数据编辑器反向覆盖。
+        osuIt->second["General::AudioFilename"] =
+            Config::pathToUtf8(base.main_audio_path);
+        osuIt->second["Events::background"] =
+            base.cover_type == ::MMM::CoverType::VIDEO
+                ? fmt::format("Video,{},\"{}\"",
+                              base.video_starttime,
+                              Config::pathToUtf8(base.main_cover_path))
+                : fmt::format("0,0,\"{}\",{},{}",
+                              Config::pathToUtf8(base.main_cover_path),
+                              base.bgxoffset,
+                              base.bgyoffset);
+    }
     return BeatmapMetadataSnapshot{
         .baseMeta    = std::move(base),
-        .mapMetadata = source.m_metadata,
+        .mapMetadata = std::move(mapMetadata),
     };
 }
 
@@ -1395,6 +1418,53 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         m_ctx.isBpmEventsDirty = true;
     }
+}
+
+void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
+{
+    if ( cmd.events.empty() ) {
+        return;
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(cmd.events.size());
+    for ( const auto& update : cmd.events ) {
+        if ( !m_ctx.timelineRegistry.valid(update.entity) ||
+             !m_ctx.timelineRegistry.all_of<TimelineComponent>(
+                 update.entity) ) {
+            continue;
+        }
+
+        const auto oldTimeline =
+            m_ctx.timelineRegistry.get<TimelineComponent>(update.entity);
+        auto newTimeline        = oldTimeline;
+        newTimeline.m_timestamp = update.newTime;
+        newTimeline.m_value     = update.newValue;
+        if ( update.metadataOverride ) {
+            newTimeline.m_metadata = *update.metadataOverride;
+        } else if ( std::abs(newTimeline.m_timestamp -
+                             oldTimeline.m_timestamp) > 1e-6 ) {
+            clearMalodyTimingBeatMetadata(newTimeline.m_metadata);
+        }
+
+        const bool coreFieldsChanged =
+            std::abs(newTimeline.m_timestamp - oldTimeline.m_timestamp) >
+                1e-12 ||
+            std::abs(newTimeline.m_value - oldTimeline.m_value) > 1e-12;
+        if ( !coreFieldsChanged && !update.metadataOverride ) {
+            continue;
+        }
+        entries.push_back(
+            { update.entity, oldTimeline, std::move(newTimeline) });
+    }
+
+    if ( entries.empty() ) {
+        return;
+    }
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries), "Batch Timeline Update");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
 }
 
 void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)

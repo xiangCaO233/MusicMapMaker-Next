@@ -41,6 +41,7 @@ public:
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
     /// @warning 逻辑热路径：每个逻辑 update
     /// 执行；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+    /// 元数据尾随保存只允许在空闲超时分支触发，不得扩散到普通更新帧。
     /// @param dt 帧间隔时间 (秒)
     /// @param config 全局编辑器配置
     /// @param isActiveSession 当前会话是否是前台活跃会话。
@@ -63,6 +64,20 @@ public:
     /// 调度前调用；只读取会话热状态和队列近似长度。
     bool needsRealtimeUpdate() const;
 
+    /// @brief 判断会话是否仍需低频轮询元数据尾随保存。
+    /// @return 存在等待空闲期的元数据保存时返回 true。
+    /// @warning 逻辑线程调度路径：只读取逻辑线程维护的布尔状态。
+    bool hasPendingMetadataAutoSave() const
+    {
+        return m_metadataAutoSavePending;
+    }
+
+    /// @brief 立即落盘尚在等待空闲期的元数据自动保存。
+    /// @return 没有待保存内容或保存成功时返回 true。
+    /// @warning 低频阻塞路径：仅允许逻辑线程在打包、项目关闭或尾随自动保存
+    /// 超时时调用；可能同步谱面数据、访问文件系统并保存项目配置。
+    bool flushPendingMetadataAutoSave();
+
 private:
     /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
     /// @param currentSysTime 当前单调系统时间（秒）。
@@ -73,6 +88,14 @@ private:
     /// BeatMap。
     void flushDeferredBeatmapSync(double currentSysTime, bool processed,
                                   bool isBusy);
+
+    /// @brief 在元数据停止变化且会话空闲后执行一次尾随自动保存。
+    /// @param currentSysTime 当前单调系统时间（秒）。
+    /// @param isEditingBusy 当前会话是否仍处于编辑或命令堆积状态。
+    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅空闲超时分支允许
+    /// 调用同步文件保存流程。
+    void flushDeferredMetadataAutoSave(double currentSysTime,
+                                       bool   isEditingBusy);
 
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
@@ -119,6 +142,7 @@ private:
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
     void handleCommand(const CmdUpdateBeatmapMetadata& cmd);
+    void handleCommand(const CmdMarkBeatmapMetadataDirty& cmd);
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态
     std::unique_ptr<PlaybackController>    m_playback;     ///< 播放控制器
@@ -133,6 +157,15 @@ private:
     double m_lastDeferredBeatmapSyncTime{
         0.0
     };  ///< 最近一次刷新延迟同步的时间
+
+    /// @brief 是否有元数据编辑正在等待尾随自动保存。
+    bool m_metadataAutoSavePending{ false };
+
+    /// @brief 下一次更新是否需要重置元数据自动保存空闲计时点。
+    bool m_metadataAutoSaveTimerNeedsReset{ false };
+
+    /// @brief 最近一次元数据编辑后的自动保存计时点（秒）。
+    double m_lastMetadataUpdateTime{ 0.0 };
 
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
     /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给

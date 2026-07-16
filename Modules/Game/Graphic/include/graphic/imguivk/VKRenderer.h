@@ -1,5 +1,6 @@
 #pragma once
 
+#include "event/core/EventBus.h"
 #include "graphic/CursorManager.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKRenderPipeline.h"
@@ -15,6 +16,7 @@ namespace MMM::Graphic
 
 class NativeWindow;
 class IGraphicUserHook;
+class VKContext;
 
 /**
  * @brief Vulkan 渲染器类
@@ -31,6 +33,7 @@ public:
     /**
      * @brief 构造函数，初始化渲染所需的同步对象和命令资源
      *
+     * @param context 创建并拥有当前渲染器的 Vulkan 上下文
      * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
      * @param logicalDevice 逻辑设备引用
      * @param swapchain 交换链引用
@@ -38,9 +41,9 @@ public:
      * @param logicDeviceGraphicsQueue 图形队列引用
      * @param logicDevicePresentQueue 呈现队列引用
      */
-    VKRenderer(vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
-               VKSwapchain& swapchain, VKRenderPass& renderPass,
-               vk::Queue& logicDeviceGraphicsQueue,
+    VKRenderer(VKContext& context, vk::PhysicalDevice& vkPhysicalDevice,
+               vk::Device& logicalDevice, VKSwapchain& swapchain,
+               VKRenderPass& renderPass, vk::Queue& logicDeviceGraphicsQueue,
                vk::Queue& logicDevicePresentQueue);
 
     // 禁用拷贝和移动
@@ -98,6 +101,9 @@ public:
     void reloadSkinTextures();
 
 private:
+    /// @brief 创建并拥有当前渲染器的 Vulkan 上下文。
+    VKContext& m_vkContext;
+
     /// @brief 单个可并行录制的离屏任务。
     struct OffscreenRecordTask {
         /// @brief 拥有该任务的图形用户钩子，生命周期由渲染循环外部保证。
@@ -118,6 +124,9 @@ private:
 
     /// @brief 清屏颜色
     static std::array<float, 4> s_clear_color;
+
+    /// @brief 清屏颜色更新事件订阅 ID，随渲染器生命周期取消订阅。
+    Event::SubscriptionID m_clearColorSubscription{ 0 };
 
     /// @brief 物理设备引用
     vk::PhysicalDevice& m_vkPhysicalDevice;

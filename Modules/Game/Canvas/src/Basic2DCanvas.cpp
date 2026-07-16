@@ -87,6 +87,7 @@ Basic2DCanvas::Basic2DCanvas(
 
     m_interaction =
         std::make_unique<Basic2DCanvasInteraction>(m_canvasName, m_cameraId);
+    m_backgroundVideoPlayer = std::make_unique<BackgroundVideoPlayer>();
 }
 
 Basic2DCanvas::~Basic2DCanvas() {}
@@ -183,9 +184,15 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         if ( m_currentSnapshot ) {
             // 更新背景纹理
             /// @brief
-            /// 仅在快照路径变化时同步背景纹理，避免热路径每帧访问文件系统。
-            if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
+            /// 仅在快照路径或类型变化时同步背景资源，避免热路径
+            /// 每帧访问文件系统。
+            if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ||
+                 m_currentSnapshot->backgroundIsVideo !=
+                     m_loadedBackgroundIsVideo ) {
                 updateBackgroundTexture();
+            }
+            if ( m_currentSnapshot->backgroundIsVideo ) {
+                updateBackgroundVideoFrame();
             }
         }
 

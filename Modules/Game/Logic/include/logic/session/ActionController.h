@@ -66,6 +66,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdUpdateTimelineEvent& cmd);
 
+    /// @brief 处理批量更新时间轴事件的命令。
+    /// @param cmd 命令数据。
+    void handleCommand(const CmdUpdateTimelineEvents& cmd);
+
     /// @brief 处理删除时间轴事件的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteTimelineEvent& cmd);

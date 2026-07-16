@@ -7,6 +7,7 @@
 #include "ui/IRenderableView.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -52,6 +53,11 @@ public:
     bool needsParallelUiPrepare(
         const UI::UiFrameSnapshot& snapshot) const override;
 
+    /// @brief 声明时间线快照准备可在线程池执行。
+    /// @return 始终返回 false。
+    /// @warning UI 热路径：每帧只返回固定能力标记。
+    bool requiresMainThreadUiPrepare() const override { return false; }
+
     /// @brief 在线程池中拉取并准备时间线快照。
     /// @param snapshot 当前帧 UI 快照。
     /// @warning 后台线程路径：只消费 BeatmapSyncBuffer 并处理动态顶点偏移。
@@ -92,6 +98,16 @@ public:
     /// @brief 判断时间线上一帧是否拥有 Timing 编辑焦点。
     /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
     bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
+
+    /// @brief 判断时间线是否正在拖动 Timing 框选区域。
+    /// @return 正在框选时返回 true。
+    /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
+    bool isTimingMarqueeSelecting() const { return m_isTimingMarqueeSelecting; }
+
+    /// @brief 判断时间线是否正在通过抓取工具拖动 Timing。
+    /// @return 正在拖动 Timing 时返回 true。
+    /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
+    bool isTimingDragging() const { return m_isTimingDragging; }
 
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
@@ -410,6 +426,22 @@ private:
     double m_tableScrollTargetTime{ 0.0 };
     /// @brief 时间点表格 Shift 连续选择使用的锚点实体。
     entt::entity m_tableSelectionAnchorEntity{ entt::null };
+    /// @brief 是否正在通过时间点表格序号列拖动选择连续行。
+    bool m_isTableRowDragSelecting{ false };
+    /// @brief 时间点表格序号列拖选的起始实体。
+    entt::entity m_tableRowDragAnchorEntity{ entt::null };
+    /// @brief 时间点表格序号列拖选开始前保留的追加选择。
+    std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
+    /// @brief 当前序号列拖选是否已经越过起始行。
+    bool m_hasTableRowDragSelectionMoved{ false };
+    /// @brief 时间点表格是否只显示 BPM 行。
+    bool         m_tableOnlyShowBpm{ false };
+    /// @brief 时间点表格搜索启用的 BPM、SV、Jump 与 HS 属性。
+    std::array<bool, 4> m_tableSearchEffectFilters{};
+    /// @brief 时间点表格精确数值搜索文本。
+    std::array<char, 64> m_tableSearchValueBuffer{};
+    /// @brief 时间点表格搜索结果的批量替换值。
+    double       m_tableSearchReplacementValue{ 0.0 };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

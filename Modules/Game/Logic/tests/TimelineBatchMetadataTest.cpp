@@ -59,6 +59,24 @@ const MMM::Logic::TimelineComponent* findTimeline(
     return nullptr;
 }
 
+/// @brief 查找指定类型的 Timeline 实体。
+/// @param context 当前测试会话上下文。
+/// @param effect 要查找的 Timeline 类型。
+/// @return 找到时返回实体，否则返回 entt::null。
+entt::entity findTimelineEntity(const MMM::Logic::SessionContext& context,
+                                MMM::TimingEffect                 effect)
+{
+    const auto view =
+        context.timelineRegistry.view<const MMM::Logic::TimelineComponent>();
+    for ( const auto entity : view ) {
+        if ( view.get<const MMM::Logic::TimelineComponent>(entity).m_effect ==
+             effect ) {
+            return entity;
+        }
+    }
+    return entt::null;
+}
+
 /// @brief 验证批量创建、撤销和重做均保留 Timing metadata。
 /// @return 行为符合预期时返回 true。
 bool testBatchCreatePreservesMetadata()
@@ -123,11 +141,118 @@ bool testBatchCreatePreservesMetadata()
     return true;
 }
 
+/// @brief 验证批量更新合并为一次撤销并保留 Timing metadata。
+/// @return 批量更新、撤销和重做均符合预期时返回 true。
+bool testBatchUpdateIsAtomic()
+{
+    MMM::Logic::SessionContext   context;
+    MMM::Logic::ActionController controller(context);
+
+    MMM::TimingMetadata metadata;
+    metadata.timing_properties[MMM::TimingMetadataType::MALODY]["beat"] =
+        "[4,0,1]";
+    MMM::Logic::CmdCreateTimelineEvents createCommand;
+    createCommand.events.push_back(
+        { 5.0, MMM::TimingEffect::BPM, 120.0, metadata });
+    createCommand.events.push_back({ 6.0, MMM::TimingEffect::SCROLL, 10000.0 });
+    controller.handleCommand(createCommand);
+
+    const entt::entity bpmEntity =
+        findTimelineEntity(context, MMM::TimingEffect::BPM);
+    const entt::entity scrollEntity =
+        findTimelineEntity(context, MMM::TimingEffect::SCROLL);
+    if ( bpmEntity == entt::null || scrollEntity == entt::null ) {
+        XERROR("Timeline batch update setup did not create entities");
+        return false;
+    }
+
+    MMM::Logic::CmdUpdateTimelineEvents updateCommand;
+    updateCommand.events.push_back({ bpmEntity, 5.0, 180.0 });
+    updateCommand.events.push_back({ scrollEntity, 6.0, 10.0 });
+    controller.handleCommand(updateCommand);
+
+    const auto& updatedBpm =
+        context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+            bpmEntity);
+    const auto& updatedScroll =
+        context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+            scrollEntity);
+    const auto updatedBeat = timingMetadataValue(
+        updatedBpm.m_metadata, MMM::TimingMetadataType::MALODY, "beat");
+    if ( !near(updatedBpm.m_value, 180.0) ||
+         !near(updatedScroll.m_value, 10.0) || !updatedBeat ||
+         *updatedBeat != "[4,0,1]" ) {
+        XERROR("Timeline batch update changed unexpected fields");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                   .m_value,
+               120.0) ||
+         !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(scrollEntity)
+                   .m_value,
+               10000.0) ) {
+        XERROR("One undo did not restore all batch-updated Timeline events");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    if ( !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                   .m_value,
+               180.0) ||
+         !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(scrollEntity)
+                   .m_value,
+               10.0) ) {
+        XERROR("One redo did not restore all batch-updated Timeline events");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证未进入撤销栈的元数据编辑仍会参与未保存状态判断。
+/// @return 标脏、保存和清空语义符合预期时返回 true。
+bool testNonUndoableDirtyState()
+{
+    MMM::Logic::SessionContext context;
+    if ( context.actionStack.isDirty() ) {
+        XERROR("A new action stack was unexpectedly dirty");
+        return false;
+    }
+
+    context.actionStack.markDirty();
+    if ( !context.actionStack.isDirty() ) {
+        XERROR("Non-undoable metadata changes were not marked dirty");
+        return false;
+    }
+
+    context.actionStack.markSaved();
+    if ( context.actionStack.isDirty() ) {
+        XERROR("Saving did not clear non-undoable metadata changes");
+        return false;
+    }
+
+    context.actionStack.markDirty();
+    context.actionStack.clear();
+    if ( context.actionStack.isDirty() ) {
+        XERROR("Clearing the action stack kept non-undoable changes dirty");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行批量 Timeline 创建元数据测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testBatchCreatePreservesMetadata() ? 0 : 1;
+    return testBatchCreatePreservesMetadata() && testBatchUpdateIsAtomic() &&
+                   testNonUndoableDirtyState()
+               ? 0
+               : 1;
 }

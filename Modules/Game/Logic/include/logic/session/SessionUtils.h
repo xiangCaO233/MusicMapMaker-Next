@@ -28,6 +28,18 @@ struct SnapResult {
     int    denominator{ 1 };    ///< 分母
 };
 
+/// @brief 计算指定时间点从首个 BPM Timing 起算的拍号。
+/// @param time 待查询的谱面时间，单位秒。
+/// @param bpmEvents 已按时间排序的 BPM 事件列表。
+/// @param fallbackBpm 无效 BPM 事件使用的回退 BPM。
+/// @return 从 1 开始的拍号；时间早于首个 BPM Timing 或无 BPM 事件时返回 0。
+/// @warning
+/// 逻辑热路径：状态快照和画布悬浮信息会频繁调用；只允许线性扫描已缓存的 BPM
+/// 事件，禁止在此函数中遍历 ECS 或执行排序。
+int calculateBeatIndex(double                                       time,
+                       const std::vector<const TimelineComponent*>& bpmEvents,
+                       double fallbackBpm);
+
 /// @brief 获取给定坐标的磁吸时间结果
 /// @param rawTime 原始逻辑时间
 /// @param mouseY 鼠标的 Y 轴坐标
@@ -91,6 +103,15 @@ double getEffectiveTotalTimeSeconds(const SessionContext& ctx);
 /// 播放状态切换、切换画布或元数据变更时调用，禁止放入每帧 update。
 std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
                                            const ::MMM::Project* project);
+
+/// @brief 根据当前背景类型探测并更新会话中的背景原始尺寸。
+/// @param ctx 目标会话上下文。
+/// @param metadata 待探测的谱面基础元数据。
+/// @param project 当前项目；为空时从谱面目录解析资源。
+/// @warning 低频资源加载路径：会访问文件系统并打开图片或视频，
+/// 仅允许在谱面加载和背景元数据变更时调用。
+void updateBackgroundSize(SessionContext& ctx, const MMM::BaseMapMeta& metadata,
+                          const ::MMM::Project* project);
 
 /// @brief 载入新的谱面数据到上下文中
 /// @param ctx 会话上下文引用

@@ -78,7 +78,7 @@ public:
                 auto start_5_string = line.substr(0, 5);
                 auto start_1_char   = line.front();
                 // 并非一定五个参数
-                if ( start_5_string == "Video" ) {
+                if ( line.starts_with("Video,") || line.starts_with("1,") ) {
                     map_properties[current_chapter]["background video"] = line;
                 } else if ( start_5_string == "Break" ) {
                     map_properties[current_chapter]
@@ -316,8 +316,13 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     // Colour 段暂不写入项目元数据。
 
     // 读取 Events 段中的背景配置。
-    auto background_des = osureader.get_value(
-        "Events", "background", std::string("0,0,\"bg.png\",0,0"));
+    // osu! 同时存在图片和视频事件时以视频为准；数字 1 与 Video 均表示视频。
+    auto background_des =
+        osureader.get_value("Events", "background video", std::string{});
+    if ( background_des.empty() ) {
+        background_des = osureader.get_value(
+            "Events", "background", std::string("0,0,\"bg.png\",0,0"));
+    }
     osumeta_props["Events::background"] = background_des;
     std::string              token;
     std::istringstream       biss(background_des);
@@ -325,7 +330,9 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     while ( std::getline(biss, token, ',') ) {
         background_paras.emplace_back(token);
     }
-    if ( MMM::Internal::safeAt(background_paras, 0) == "0" ) {
+    auto backgroundType = MMM::Internal::safeAt(background_paras, 0);
+    trim(backgroundType);
+    if ( backgroundType != "Video" && backgroundType != "1" ) {
         // 是图片
         basemeta.cover_type = CoverType::IMAGE;
     } else {

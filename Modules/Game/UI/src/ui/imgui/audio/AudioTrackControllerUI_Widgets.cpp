@@ -315,7 +315,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     const float contentWidth =
         cache.labelWidth + widgetWidth + rowDecorations + contentPadding * 2.0f;
     const size_t rowCount = trackType == TrackType::Main ? 8U : 2U;
-    float contentH = 2.0f * scale + contentPadding * 2.0f +
+    float        contentH = 2.0f * scale + contentPadding * 2.0f +
                      rowCount * rowHeight +
                      (rowCount > 0 ? (rowCount - 1) * contentSpacing : 0.0f);
 
@@ -327,7 +327,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
         measureTrackControllerText(trackName.c_str(), font, snapshot.fontSize) +
         snapshot.frameHeight * 2.0f;
     const float minWidth  = std::ceil(std::max(contentWidth, titleWidth) +
-                                      snapshot.windowPadding * 2.0f);
+                                     snapshot.windowPadding * 2.0f);
     const float minHeight = std::ceil(contentH + snapshot.windowPadding * 2.0f +
                                       snapshot.frameHeightWithSpacing);
     cache.minWindowSize   = ImVec2(minWidth, minHeight);
@@ -361,7 +361,7 @@ AudioTrackControllerUI::getLayoutMetrics(float dpiScale) const
 
 /// @brief 判断当前帧音轨控制器是否需要准备布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
-/// @return 需要后台准备时返回 true。
+/// @return 需要刷新布局缓存时返回 true。
 bool AudioTrackControllerUI::needsParallelUiPrepare(
     const UiFrameSnapshot& snapshot) const
 {
@@ -369,7 +369,7 @@ bool AudioTrackControllerUI::needsParallelUiPrepare(
                            m_layoutMetricsCache, snapshot, m_type, m_trackName);
 }
 
-/// @brief 在线程池中准备音轨控制器布局测量数据。
+/// @brief 在 UI 主线程准备音轨控制器布局测量数据。
 /// @param snapshot 当前帧 UI 快照。
 void AudioTrackControllerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -378,7 +378,7 @@ void AudioTrackControllerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     m_hasPreparedLayoutMetrics = true;
 }
 
-/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+/// @brief 将准备好的布局测量数据切换给主线程使用。
 void AudioTrackControllerUI::swapPreparedUiFrameData()
 {
     if ( !m_hasPreparedLayoutMetrics ) {
@@ -544,7 +544,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             sliderWidth       = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
             if ( ::MMM::UI::FeedbackSliderFloat(
-                     "##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
+                     "##Volume", &volume, 0.0f, 1.0f, "%.4f") ) {
                 changed = true;
                 if ( muted && volume > 0.0f ) {
                     muted = false;
@@ -554,7 +554,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             if ( m_type == TrackType::Main ) {
                 auto         channelMode = audio.getMainMixerChannelMode();
                 const ImVec4 copyModeColor{ 0.45f, 1.0f, 0.48f, 1.0f };
-                auto drawChannelButton = [&](const char*             id,
+                auto         drawChannelButton = [&](const char*             id,
                                              Audio::MixerChannelMode mode,
                                              const char*             tooltip,
                                              const ImVec4& activeColor) {
@@ -878,7 +878,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         [&pitch, &changed](Clay_BoundingBox r, bool) {
             ImGui::SetNextItemWidth(r.width);
             if ( ::MMM::UI::FeedbackSliderFloat(
-                     "##PitchSlider", &pitch, -24.0f, 24.0f, "%.1f st") ) {
+                     "##PitchSlider", &pitch, -24.0f, 24.0f, "%.4f st") ) {
                 changed = true;
             }
         });

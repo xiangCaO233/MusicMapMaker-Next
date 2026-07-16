@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/ClearColorUpdateEvent.h"
+#include "font/SystemFontResolver.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
@@ -65,13 +66,10 @@ static void check_vk_result(VkResult err)
     XERROR("[vulkan] Error: VkResult = {}", static_cast<uint32_t>(err));
 }
 
-/**
- * @brief 初始化 imgui Vulkan
- */
-void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
+/// @brief 初始化 ImGui GLFW/Vulkan 后端。
+void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
+                                VKWindowResourceMode mode)
 {
-    float native_scale = Config::AppConfig::instance().getNativeContentScale();
-    float ui_scale     = Config::AppConfig::instance().getUIScale();
     // 设置 Dear ImGui 上下文。
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -96,9 +94,10 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     // 启用手柄导航。
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    // 启用 Docking。
+    // Dear ImGui 要求 Docking 和 Multi-Viewport 在首次 NewFrame 前确定；启动
+    // 界面只使用主视口，因此提前启用不会额外创建平台窗口。不支持视口的平台
+    // 后端会在首次 NewFrame 时自行清除此标志。
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // 启用 Multi-Viewport 平台窗口。
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     io.ConfigViewportsNoAutoMerge        = false;
     io.ConfigViewportsNoTaskBarIcon      = true;
@@ -113,7 +112,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // 启用 Viewport 时同步窗口圆角和背景，使平台窗口外观与普通窗口一致。
 
     // 设置平台和渲染后端。
-    ImGui_ImplGlfw_InitForVulkan(window_handle, true);
+    ImGui_ImplGlfw_InitForVulkan(windowHandle, true);
 
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.ApiVersion                = VK_API_VERSION_1_4;
@@ -139,14 +138,116 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // nullptr，调用方必须处理失败路径。路径字面量中的反斜杠需要写成 \\。
 
     // 重新设置关键窗口回调，确保在 ImGui 初始化后仍然有效
-    glfwSetWindowIconifyCallback(window_handle,
+    glfwSetWindowIconifyCallback(windowHandle,
                                  NativeWindow::GLFW_IconifyCallback);
-    glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
+    glfwSetDropCallback(windowHandle, NativeWindow::GLFW_DropCallback);
 
-    setupFonts();
-
-    applyTheme();
+    if ( mode == VKWindowResourceMode::Bootstrap ) {
+        setupBootstrapFonts();
+        applyBootstrapTheme();
+    } else {
+        setupFonts();
+        applyTheme();
+    }
     XDEBUG("ImGui Vulkan backend initialized.");
+}
+
+/// @brief 加载启动期系统首选字体。
+void VKContext::setupBootstrapFonts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+
+    float nativeScale = Config::AppConfig::instance().getNativeContentScale();
+    float uiScale     = Config::AppConfig::instance().getUIScale();
+    if ( !std::isfinite(nativeScale) || nativeScale <= 0.0f ) {
+        nativeScale = 1.0f;
+    }
+    if ( !std::isfinite(uiScale) || uiScale <= 0.0f ) {
+        uiScale = 1.0f;
+    }
+
+    m_fontAtlasBaseScale = uiScale / nativeScale;
+    if ( !std::isfinite(m_fontAtlasBaseScale) ||
+         m_fontAtlasBaseScale <= 0.0f ) {
+        m_fontAtlasBaseScale = 1.0f;
+    }
+    m_fontAtlasScaleMain              = 1.0f;
+    ImGui::GetStyle().FontScaleMain   = 1.0f;
+    constexpr float bootstrapFontSize = 17.0f;
+    const float     atlasSize = std::max(1.0f, bootstrapFontSize * nativeScale);
+
+    ImFont* bootstrapFont = nullptr;
+    for ( const auto& systemFont : Font::resolvePreferredSystemFonts() ) {
+        if ( systemFont.m_filePath.empty() ) continue;
+
+        ImFontConfig fontConfig;
+        fontConfig.FontNo      = std::max(systemFont.m_faceIndex, 0);
+        fontConfig.MergeMode   = bootstrapFont != nullptr;
+        fontConfig.OversampleH = 1;
+        fontConfig.OversampleV = 1;
+        fontConfig.PixelSnapH  = true;
+
+        ImFont* loadedFont = io.Fonts->AddFontFromFileTTF(
+            Config::pathToUtf8(systemFont.m_filePath).c_str(),
+            atlasSize,
+            &fontConfig);
+        if ( !loadedFont ) {
+            XWARN("Failed to load preferred system font: {}",
+                  Config::pathToUtf8(systemFont.m_filePath));
+            continue;
+        }
+
+        if ( !bootstrapFont ) {
+            bootstrapFont        = loadedFont;
+            io.FontDefault       = bootstrapFont;
+            bootstrapFont->Scale = m_fontAtlasBaseScale;
+        }
+        XINFO("Loaded startup system font: {} (face {})",
+              Config::pathToUtf8(systemFont.m_filePath),
+              systemFont.m_faceIndex);
+    }
+
+    if ( !bootstrapFont ) {
+        bootstrapFont = io.Fonts->AddFontDefault();
+        if ( bootstrapFont ) {
+            bootstrapFont->Scale = m_fontAtlasBaseScale;
+            io.FontDefault       = bootstrapFont;
+        }
+        XWARN("No preferred system font was resolved; using ImGui default");
+    }
+}
+
+/// @brief 应用不依赖皮肤资源的启动期最小样式。
+void VKContext::applyBootstrapTheme()
+{
+    ImGuiStyle& style = ImGui::GetStyle();
+    style             = ImGuiStyle();
+    ImGui::StyleColorsDark(&style);
+
+    const float uiScale =
+        std::max(Config::AppConfig::instance().getUIScale(), 1.0f);
+    style.ScaleAllSizes(uiScale);
+    style.FontScaleDpi     = 1.0f;
+    style.WindowRounding   = 12.0f * uiScale;
+    style.ChildRounding    = 12.0f * uiScale;
+    style.FrameRounding    = 7.0f * uiScale;
+    style.PopupRounding    = 10.0f * uiScale;
+    style.GrabRounding     = 7.0f * uiScale;
+    style.WindowBorderSize = 0.0f;
+    style.ChildBorderSize  = 1.0f;
+    style.FramePadding     = ImVec2(12.0f * uiScale, 8.0f * uiScale);
+    style.ItemSpacing      = ImVec2(10.0f * uiScale, 10.0f * uiScale);
+    style.WindowPadding    = ImVec2(24.0f * uiScale, 22.0f * uiScale);
+
+    style.Colors[ImGuiCol_WindowBg]      = ImVec4(0.035f, 0.043f, 0.065f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg]       = ImVec4(0.075f, 0.086f, 0.12f, 0.98f);
+    style.Colors[ImGuiCol_Border]        = ImVec4(0.20f, 0.24f, 0.34f, 0.8f);
+    style.Colors[ImGuiCol_FrameBg]       = ImVec4(0.12f, 0.14f, 0.20f, 1.0f);
+    style.Colors[ImGuiCol_PlotHistogram] = ImVec4(0.31f, 0.57f, 0.96f, 1.0f);
+    style.Colors[ImGuiCol_Button]        = ImVec4(0.18f, 0.36f, 0.68f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.46f, 0.84f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive]  = ImVec4(0.15f, 0.31f, 0.62f, 1.0f);
 }
 
 /**
@@ -328,6 +429,7 @@ void VKContext::rebuildFonts()
     Config::SkinManager::instance().clearRuntimeFonts();
 
     // 清除旧字体
+    io.FontDefault = nullptr;
     io.Fonts->Clear();
 
     // 重新运行字体加载
@@ -366,14 +468,38 @@ void VKContext::checkAndRebuildFonts()
     }
 }
 
+void VKContext::checkAndApplySystemTheme()
+{
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( settings.theme != Config::UITheme::Auto ) {
+        m_appliedSystemTheme = SystemTheme::Unknown;
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if ( now < m_nextSystemThemeCheck ) return;
+    m_nextSystemThemeCheck = now + std::chrono::seconds(1);
+
+    const SystemTheme systemTheme = refreshSystemTheme();
+    if ( systemTheme != m_appliedSystemTheme ) {
+        applyTheme();
+    }
+}
+
 void VKContext::applyTheme()
 {
     auto& settings    = Config::AppConfig::instance().getEditorSettings();
     ImGui::GetStyle() = ImGuiStyle();
     auto appliedTheme = settings.theme;
     if ( appliedTheme == Config::UITheme::Auto ) {
-        std::string skinTheme =
-            Config::SkinManager::instance().getDefaultTheme();
+        const SystemTheme systemTheme = getSystemTheme();
+        m_appliedSystemTheme          = systemTheme;
+        const Config::SkinThemeAppearance appearance =
+            systemTheme == SystemTheme::Dark
+                ? Config::SkinThemeAppearance::Dark
+                : Config::SkinThemeAppearance::Light;
+        const std::string& skinTheme =
+            Config::SkinManager::instance().getDefaultTheme(appearance);
         if ( skinTheme == "Dark" )
             appliedTheme = Config::UITheme::Dark;
         else if ( skinTheme == "Light" )
@@ -430,6 +556,8 @@ void VKContext::applyTheme()
             appliedTheme = Config::UITheme::ComfortableDarkCyan;
         else if ( skinTheme == "KazamCherry" )
             appliedTheme = Config::UITheme::KazamCherry;
+    } else {
+        m_appliedSystemTheme = SystemTheme::Unknown;
     }
 
     switch ( appliedTheme ) {

@@ -106,12 +106,12 @@ OsuMetadataTextEditorState& osuMetadataTextEditorState()
     return state;
 }
 
-/// @brief 请求逻辑线程保存当前谱面，确保打包读取到最新谱面元数据。
-/// @warning UI 交互路径：只入队保存指令，不在 UI 线程执行文件写入。
+/// @brief 标记扩展元数据已修改，并请求逻辑线程执行尾随自动保存。
+/// @warning UI 交互路径：只入队标脏指令，不在 UI 线程执行文件写入。
 void requestBeatmapMetadataAutoSave()
 {
     Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+        Logic::CmdMarkBeatmapMetadataDirty{});
 }
 
 /// @brief 将字符串安全复制进固定 ImGui 输入缓冲区。
@@ -347,8 +347,10 @@ void ensureCompleteOsuMetadata(MetadataPropertyMap&     props,
     }
 }
 
-/// @brief 将 OSU 元数据同步回基础元数据，保证导出使用编辑后的关键字段。
-void syncOsuMetadataToBase(const MetadataPropertyMap& props, BeatMap& beatmap)
+/// @brief 将 OSU 元数据同步到基础元数据副本，保证导出使用编辑后的关键字段。
+/// @param props OSU 原始元数据属性。
+/// @param base 接收同步结果的基础元数据副本。
+void syncOsuMetadataToBase(const MetadataPropertyMap& props, BaseMapMeta& base)
 {
     auto get = [&props](const std::string& key) -> const std::string* {
         auto it = props.find(key);
@@ -356,7 +358,6 @@ void syncOsuMetadataToBase(const MetadataPropertyMap& props, BeatMap& beatmap)
         return &it->second;
     };
 
-    auto& base = beatmap.m_baseMapMetadata;
     if ( const auto* value = get("General::AudioFilename") ) {
         base.main_audio_path = Config::utf8ToPath(*value);
     }
@@ -389,8 +390,9 @@ void syncOsuMetadataToBase(const MetadataPropertyMap& props, BeatMap& beatmap)
         }
 
         if ( parts.size() >= 3 ) {
-            base.cover_type =
-                parts[0] == "Video" ? CoverType::VIDEO : CoverType::IMAGE;
+            base.cover_type = parts[0] == "Video" || parts[0] == "1"
+                                  ? CoverType::VIDEO
+                                  : CoverType::IMAGE;
             if ( auto start = parseInt32Metadata(parts[1]) ) {
                 base.video_starttime = *start;
             }
@@ -556,9 +558,14 @@ bool parseOsuMetadataText(std::string_view text, MetadataPropertyMap& props,
         }
 
         if ( section == "Events" ) {
-            if ( startsWith(trimmed, "0,") || startsWith(trimmed, "Video,") ) {
+            const bool isVideoEvent =
+                startsWith(trimmed, "Video,") || startsWith(trimmed, "1,");
+            const bool isImageEvent = startsWith(trimmed, "0,");
+            // 同时存在图片与视频事件时，与谱面 Loader 保持视频优先。
+            if ( isVideoEvent ||
+                 (isImageEvent && !nextProps.contains("Events::background")) ) {
                 nextProps["Events::background"] = trimmed;
-            } else {
+            } else if ( !isImageEvent ) {
                 breakLines.push_back(trimmed);
             }
             continue;
@@ -1147,13 +1154,11 @@ void renderMetadataEditorWindow(bool& showWindow)
                             props = std::move(*result);
                             ensureCompleteOsuMetadata(
                                 props, *beatmap, OSU_FIELDS);
-                            syncOsuMetadataToBase(props, *beatmap);
                             osuPropsChanged = true;
                         }
                         if ( !props.empty() ) {
                             ensureCompleteOsuMetadata(
                                 props, *beatmap, OSU_FIELDS);
-                            syncOsuMetadataToBase(props, *beatmap);
                         }
 
                         if ( props.empty() ) {
@@ -1381,7 +1386,6 @@ void renderMetadataEditorWindow(bool& showWindow)
                                 props[nk] = newOsuVal;
                                 ensureCompleteOsuMetadata(
                                     props, *beatmap, OSU_FIELDS);
-                                syncOsuMetadataToBase(props, *beatmap);
                                 osuPropsChanged = true;
                                 newOsuKey[0]    = '\0';
                                 newOsuVal[0]    = '\0';
@@ -1392,9 +1396,13 @@ void renderMetadataEditorWindow(bool& showWindow)
                             if ( !props.empty() ) {
                                 ensureCompleteOsuMetadata(
                                     props, *beatmap, OSU_FIELDS);
-                                syncOsuMetadataToBase(props, *beatmap);
+                                BaseMapMeta updatedBase =
+                                    beatmap->m_baseMapMetadata;
+                                syncOsuMetadataToBase(props, updatedBase);
+                                engine.pushCommand(
+                                    Logic::CmdUpdateBeatmapMetadata{
+                                        std::move(updatedBase) });
                             }
-                            requestBeatmapMetadataAutoSave();
                         }
 
                         ImGui::EndTabItem();

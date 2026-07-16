@@ -502,14 +502,14 @@ const SettingsView::LayoutMetricsCache& SettingsView::getLayoutMetrics(
 
 /// @brief 判断当前帧设置窗口是否需要准备布局数据。
 /// @param snapshot 当前帧 UI 快照。
-/// @return 需要后台准备时返回 true。
+/// @return 需要刷新布局缓存时返回 true。
 bool SettingsView::needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const
 {
     return m_isOpen &&
            !layoutMetricsMatch(m_layoutMetricsCache, snapshot, m_currentTab);
 }
 
-/// @brief 在线程池中准备设置窗口布局数据。
+/// @brief 在 UI 主线程准备设置窗口布局数据。
 /// @param snapshot 当前帧 UI 快照。
 void SettingsView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
@@ -517,7 +517,7 @@ void SettingsView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
     m_hasPreparedLayoutMetrics   = true;
 }
 
-/// @brief 将后台准备好的布局数据切换给主线程使用。
+/// @brief 将准备好的布局数据切换给主线程使用。
 void SettingsView::swapPreparedUiFrameData()
 {
     if ( !m_hasPreparedLayoutMetrics ) {

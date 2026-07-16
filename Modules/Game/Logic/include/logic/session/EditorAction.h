@@ -58,6 +58,9 @@ public:
     /// @brief 标记当前状态为已保存
     void markSaved();
 
+    /// @brief 标记一次未进入撤销栈的编辑为未保存。
+    void markDirty();
+
     /// @brief 获取撤销栈深度
     size_t getUndoStackSize() const { return m_undoStack.size(); }
 
@@ -68,6 +71,9 @@ private:
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
     size_t m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
+
+    /// @brief 是否存在未进入撤销栈且尚未保存的编辑。
+    bool m_hasNonUndoableChanges{ false };
 };
 
 }  // namespace MMM::Logic

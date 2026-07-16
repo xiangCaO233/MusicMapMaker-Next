@@ -19,6 +19,15 @@ public:
     virtual void onUpdate(LayoutContext& layoutContext,
                           UIManager*     sourceManager) = 0;
 
+    /// @brief 在查询布局尺寸前同步 UIManager 中的项目生命周期快照。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：每帧可能调用多次；默认不执行任何操作，实现中禁止
+    /// 文件系统扫描或高开销所有权复制。
+    virtual void syncProjectUiState(UIManager* sourceManager)
+    {
+        (void)sourceManager;
+    }
+
     /// @brief 安全转换为可并行准备 UI 数据的接口。
     /// @return 默认子视图不提供并行准备接口。
     virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }

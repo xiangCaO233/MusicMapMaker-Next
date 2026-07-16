@@ -14,3 +14,17 @@ mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
 add_test(NAME FontPreferenceValidatorTest COMMAND FontPreferenceValidatorTest)
+
+# 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
+mmm_add_test_executable(Config FrameLimitUtilsTest
+                        tests/FrameLimitUtilsTest.cpp)
+target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
+add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
+
+# 皮肤主题绑定测试覆盖旧字符串格式、亮暗双分支以及旧应用配置的 Auto 语义。
+mmm_add_test_executable(Config SkinThemeBindingTest
+                        tests/SkinThemeBindingTest.cpp)
+target_link_libraries(SkinThemeBindingTest PRIVATE Config)
+add_test(NAME SkinThemeBindingTest
+         COMMAND SkinThemeBindingTest
+                 "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")

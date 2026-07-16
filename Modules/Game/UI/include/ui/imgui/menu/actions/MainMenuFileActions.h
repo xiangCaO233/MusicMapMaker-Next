@@ -16,6 +16,9 @@ std::unique_ptr<IMainMenuItemActionHandler> createOpenNewBeatmapWizardAction();
 /// @brief 创建打开项目选择器的菜单项业务处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenProjectAction();
 
+/// @brief 创建打开当前项目目录的菜单项业务处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenProjectDirectoryAction();
+
 /// @brief 创建打开音频导入选择器的菜单项业务处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenAudioImportAction();
 

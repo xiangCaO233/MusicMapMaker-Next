@@ -92,14 +92,19 @@ AudioSpectrumView::~AudioSpectrumView()
 
 void AudioSpectrumView::update(UIManager* sourceManager)
 {
-    auto& audioManager = Audio::AudioManager::instance();
-    auto  track        = audioManager.getBGMTrack();
-
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioSpectrumViewGlobal";
     LayoutContext layoutContext(
         m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+
+    if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        Utils::renderProjectTransitionPlaceholder();
+        return;
+    }
+
+    auto& audioManager = Audio::AudioManager::instance();
+    auto  track        = audioManager.getBGMTrack();
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
@@ -155,7 +160,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double visualTime = audioTime + globalVisualOffset;
     double totalTime  = audioManager.getTotalTime();
 
-    // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    // 默认跟随逻辑层的平滑视觉时间，播放时继续使用快照做亚帧补偿。
     std::string activeCameraId =
         Logic::EditorEngine::instance().getActiveCameraId();
     auto snapshot = Logic::EditorEngine::instance()
@@ -180,12 +185,20 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             }
         }
     }
+    // 拖动期间优先使用频谱本地中心，避免主画布预览已更新而频谱仍等待逻辑快照。
+    if ( m_seekDragOwnerChannel >= 0 ) {
+        visualTime = m_seekDragViewCenter;
+    }
 
-    ImGuiStyle& style           = ImGui::GetStyle();
-    float       frameH          = ImGui::GetFrameHeight();
-    auto        calcSliderWidth = [&](float sliderW, const char* label) {
-        return sliderW + style.ItemInnerSpacing.x +
-               ImGui::CalcTextSize(label).x;
+    ImGuiStyle& style        = ImGui::GetStyle();
+    float       frameH       = ImGui::GetFrameHeight();
+    auto calcSliderItemWidth = [&](float minWidth, const char* widestValue) {
+        return std::max(
+            minWidth,
+            ImGui::CalcTextSize(widestValue).x + style.FramePadding.x * 2.0f);
+    };
+    auto calcSliderGroupWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemSpacing.x + ImGui::CalcTextSize(label).x;
     };
     auto calcButtonWidth = [&](const char* label) {
         return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
@@ -214,6 +227,10 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     CLayHBox*            currentRow = nullptr;
     float                currentW   = 0.0f;
     float                availW     = ImGui::GetContentRegionAvail().x;
+
+    const float zoomSliderW    = calcSliderItemWidth(100.0f, "10.0000s");
+    const float maxFreqSliderW = calcSliderItemWidth(120.0f, "24000.0000 Hz");
+    const float logBiasSliderW = calcSliderItemWidth(120.0f, "20.0000");
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
         bool  addSep = false;
@@ -250,50 +267,51 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     };
 
     pushGroup("ZoomSlider",
-              calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()),
+              calcSliderGroupWidth(zoomSliderW, TR("ui.waveform.zoom").data()),
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
                   ImGui::AlignTextToFramePadding();
                   ImGui::Text("%s", TR("ui.waveform.zoom").data());
                   ImGui::SameLine();
-                  ImGui::SetNextItemWidth(100);
+                  ImGui::SetNextItemWidth(zoomSliderW);
                   ::MMM::UI::FeedbackSliderFloat(
-                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+                      "##zoom", &m_zoom, 0.1f, 10.0f, "%.4fs");
               });
     pushGroup(
         "MaxFreqSlider",
-        calcSliderWidth(120.0f, TR("ui.spectrum.max_freq").data()),
+        calcSliderGroupWidth(maxFreqSliderW, TR("ui.spectrum.max_freq").data()),
         frameH,
         [&](Clay_BoundingBox r, bool) {
             ImGui::SetCursorScreenPos({ r.x, r.y });
             ImGui::AlignTextToFramePadding();
             ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(120);
+            ImGui::SetNextItemWidth(maxFreqSliderW);
             if ( ::MMM::UI::FeedbackSliderFloat(
-                     "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
+                     "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.4f Hz") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     startAsyncRecalculate();
                 }
             }
         });
-    pushGroup("LogBiasSlider",
-              calcSliderWidth(120.0f, TR("ui.spectrum.log_bias").data()),
-              frameH,
-              [&](Clay_BoundingBox r, bool) {
-                  ImGui::SetCursorScreenPos({ r.x, r.y });
-                  ImGui::AlignTextToFramePadding();
-                  ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
-                  ImGui::SameLine();
-                  ImGui::SetNextItemWidth(120);
-                  if ( ::MMM::UI::FeedbackSliderFloat(
-                           "##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
-                      if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                          startAsyncRecalculate();
-                      }
-                  }
-              });
+    pushGroup(
+        "LogBiasSlider",
+        calcSliderGroupWidth(logBiasSliderW, TR("ui.spectrum.log_bias").data()),
+        frameH,
+        [&](Clay_BoundingBox r, bool) {
+            ImGui::SetCursorScreenPos({ r.x, r.y });
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(logBiasSliderW);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##log_bias", &m_logBias, 0.01f, 20.0f, "%.4f") ) {
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    startAsyncRecalculate();
+                }
+            }
+        });
     pushGroup("SyncEffectsBtn",
               calcButtonWidth(TR("ui.spectrum.sync_effects").data()),
               frameH,
@@ -376,6 +394,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImVec2 rightMax = ImVec2(surfacePos.x + avail.x, rightMin.y + plotH);
 
     renderChannelInteractionOverlay("##SeekL",
+                                    0,
                                     leftMin,
                                     leftMax,
                                     viewStart,
@@ -385,6 +404,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     visualTime,
                                     snapshot);
     renderChannelInteractionOverlay("##SeekR",
+                                    1,
                                     rightMin,
                                     rightMax,
                                     viewStart,
@@ -462,17 +482,17 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
 
 void AudioSpectrumView::renderChannelInteractionOverlay(
-    const char* seekId, ImVec2 groupMin, ImVec2 groupMax, double viewStart,
-    double viewEnd, float globalVisualOffset, double totalTime,
-    double visualTime, const Logic::RenderSnapshot* snapshot)
+    const char* seekId, int channelIndex, ImVec2 groupMin, ImVec2 groupMax,
+    double viewStart, double viewEnd, float globalVisualOffset,
+    double totalTime, double visualTime, const Logic::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
@@ -522,12 +542,61 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     ImGui::SetCursorScreenPos(groupMin);
     ImGui::InvisibleButton(seekId, ImVec2(width, height));
 
-    if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-        const ImVec2 mousePos = ImGui::GetMousePos();
-        const float  relX =
-            std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
-        const double hoverVisualTime = viewStart + relX * viewRange;
-        const double hoverAudioTime  = hoverVisualTime - globalVisualOffset;
+    const bool isInteractionActive  = ImGui::IsItemActive();
+    const bool isInteractionHovered = ImGui::IsItemHovered();
+    const bool isLeftMouseDown      = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if ( isInteractionActive && m_seekDragOwnerChannel != channelIndex ) {
+        m_seekDragOwnerChannel = channelIndex;
+        m_seekDragViewCenter   = visualTime;
+    }
+    const bool   ownsSeekDrag = m_seekDragOwnerChannel == channelIndex;
+    const ImVec2 mousePos     = ImGui::GetMousePos();
+
+    double interactionViewStart = viewStart;
+    double interactionViewEnd   = viewEnd;
+    if ( ownsSeekDrag && isLeftMouseDown ) {
+        // 本地先行推进频谱视野；逻辑层仍同步推进主画布，并在松开时由最终 seek
+        // 对齐。
+        constexpr float edgeScrollMargin = 20.0f;
+        float           edgeDistance     = 0.0f;
+        if ( mousePos.x < groupMin.x + edgeScrollMargin ) {
+            edgeDistance = mousePos.x - (groupMin.x + edgeScrollMargin);
+        } else if ( mousePos.x > groupMax.x - edgeScrollMargin ) {
+            edgeDistance = mousePos.x - (groupMax.x - edgeScrollMargin);
+        }
+
+        const float edgeScrollSensitivity =
+            std::max(0.0f,
+                     Config::AppConfig::instance()
+                         .getVisualConfig()
+                         .previewConfig.edgeScrollSensitivity);
+        if ( std::abs(edgeDistance) > 0.001f && edgeScrollSensitivity > 0.0f ) {
+            const double frameSeconds =
+                std::clamp<double>(ImGui::GetIO().DeltaTime, 0.0, 0.1);
+            const double scrollDelta = static_cast<double>(edgeDistance) *
+                                       edgeScrollSensitivity * frameSeconds;
+            const double minVisualTime =
+                static_cast<double>(globalVisualOffset);
+            const double maxVisualTime =
+                minVisualTime + std::max(0.0, totalTime);
+            m_seekDragViewCenter =
+                std::clamp(m_seekDragViewCenter + scrollDelta,
+                           minVisualTime,
+                           maxVisualTime);
+            interactionViewStart = m_seekDragViewCenter - m_zoom;
+            interactionViewEnd   = m_seekDragViewCenter + m_zoom;
+        }
+    }
+
+    const double interactionViewRange =
+        std::max(0.001, interactionViewEnd - interactionViewStart);
+    const float relX =
+        std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
+    const double hoverVisualTime =
+        interactionViewStart + relX * interactionViewRange;
+    const double hoverAudioTime = hoverVisualTime - globalVisualOffset;
+
+    if ( isInteractionActive || isInteractionHovered ) {
 
         const auto timeText =
             Canvas::formatCanvasTime(hoverVisualTime, snapshot);
@@ -539,7 +608,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                           IM_COL32(0, 255, 0, 150),
                           1.0f);
 
-        if ( ImGui::IsItemActive() ) {
+        if ( isInteractionActive ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetMousePosition{ "AudioSpectrum",
                                             mousePos.x - groupMin.x,
@@ -556,14 +625,16 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                 const double offsetEnd =
                     snapshot->visibleTimeEnd - snapshot->currentTime;
                 const float preX1 =
-                    groupMin.x + static_cast<float>((hoverVisualTime +
-                                                     offsetStart - viewStart) /
-                                                    viewRange) *
-                                     width;
+                    groupMin.x +
+                    static_cast<float>(
+                        (hoverVisualTime + offsetStart - interactionViewStart) /
+                        interactionViewRange) *
+                        width;
                 const float preX2 =
                     groupMin.x +
                     static_cast<float>(
-                        (hoverVisualTime + offsetEnd - viewStart) / viewRange) *
+                        (hoverVisualTime + offsetEnd - interactionViewStart) /
+                        interactionViewRange) *
                         width;
                 const float drawPreX1 =
                     std::clamp(preX1, groupMin.x, groupMax.x);
@@ -583,22 +654,23 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
                 }
             }
         }
+    }
 
-        if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-            Audio::AudioManager::instance().seek(
-                std::clamp(hoverAudioTime, 0.0, totalTime));
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSetMousePosition{ "AudioSpectrum",
-                                            mousePos.x - groupMin.x,
-                                            mousePos.y - groupMin.y,
-                                            width,
-                                            height,
-                                            false,
-                                            false,
-                                            -1.0 }));
-        }
+    if ( ownsSeekDrag && !isLeftMouseDown ) {
+        Audio::AudioManager::instance().seek(
+            std::clamp(hoverAudioTime, 0.0, totalTime));
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetMousePosition{ "AudioSpectrum",
+                                        mousePos.x - groupMin.x,
+                                        mousePos.y - groupMin.y,
+                                        width,
+                                        height,
+                                        false,
+                                        false,
+                                        -1.0 }));
+        m_seekDragOwnerChannel = -1;
     }
 }
 
@@ -742,7 +814,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture = appThreadPool->enqueue([this,
+    m_calcFuture                    = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1028,9 +1100,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
-                                        size_t                      offset,
-                                        std::uint8_t                intensity) {
+    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
+                            size_t                      offset,
+                            std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);

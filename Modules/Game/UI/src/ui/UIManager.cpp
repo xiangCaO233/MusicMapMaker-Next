@@ -7,13 +7,16 @@
 #include "event/core/EventBus.h"
 #include "event/input/translators/ImGuiTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
+#include "event/project/ProjectEvents.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
 #include "event/ui/iwindow/UIWindowMouseEvent.h"
+#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
@@ -163,12 +166,12 @@ bool isProjectWorkspaceDynamicView(const std::string& name)
 /// @param type 传入工作区保存类型，找到项目资源时会被实际类型覆盖。
 /// @param trackName 传入工作区保存名称，找到项目资源时会被实际名称覆盖。
 /// @return 音轨存在时返回 true。
-bool resolveWorkspaceAudioTrack(const Project&                     project,
-                                const std::string&                 trackId,
-                                AudioTrackControllerUI::TrackType& type,
-                                std::string&                       trackName)
+bool resolveWorkspaceAudioTrack(
+    const std::vector<AudioResource>& audioResources,
+    const std::string& trackId, AudioTrackControllerUI::TrackType& type,
+    std::string& trackName)
 {
-    for ( const auto& resource : project.m_audioResources ) {
+    for ( const auto& resource : audioResources ) {
         if ( resource.m_id == trackId ) {
             type      = resource.m_type == AudioTrackType::Main
                             ? AudioTrackControllerUI::TrackType::Main
@@ -279,6 +282,89 @@ UiFrameSnapshot captureUiFrameSnapshot()
 }
 }  // namespace
 
+UIManager::UIManager()
+{
+    CLayWrapperCore::instance().setupClayTextMeasurement();
+
+    auto& eventBus = Event::EventBus::instance();
+    m_projectOpenStartedSubId =
+        eventBus.subscribe<Event::ProjectOpenStartedEvent>(
+            [this](const Event::ProjectOpenStartedEvent& event) {
+                m_projectTransitionSignal.store(true,
+                                                std::memory_order_release);
+                ProjectUiLifecycleUpdate update;
+                update.kind        = ProjectUiLifecycleKind::OpenStarted;
+                update.projectRoot = Config::utf8ToPath(event.m_projectPath);
+                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+            });
+    m_projectLoadedSubId = eventBus.subscribe<Event::ProjectLoadedEvent>(
+        [this](const Event::ProjectLoadedEvent& event) {
+            ProjectUiLifecycleUpdate update;
+            update.kind        = ProjectUiLifecycleKind::Opened;
+            update.projectRoot = Config::utf8ToPath(event.m_projectPath);
+
+            const auto* project =
+                Logic::ProjectController::instance().currentProject();
+            if ( project && project->m_projectRoot.lexically_normal() ==
+                                update.projectRoot.lexically_normal() ) {
+                update.workspace          = project->m_settings.m_workspace;
+                update.audioResources     = project->m_audioResources;
+                update.hasProjectSnapshot = true;
+            }
+            m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+        });
+    m_projectClosedSubId = eventBus.subscribe<Event::ProjectClosedEvent>(
+        [this](const Event::ProjectClosedEvent& event) {
+            ProjectUiLifecycleUpdate update;
+            update.kind        = ProjectUiLifecycleKind::Closed;
+            update.projectRoot = event.m_projectPath;
+            m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+        });
+    m_projectOpenFailedSubId =
+        eventBus.subscribe<Event::ProjectOpenFailedEvent>(
+            [this](const Event::ProjectOpenFailedEvent& event) {
+                ProjectUiLifecycleUpdate update;
+                update.kind        = ProjectUiLifecycleKind::OpenFailed;
+                update.projectRoot = Config::utf8ToPath(event.m_projectPath);
+                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+            });
+    m_temporaryProjectSaveResultSubId =
+        eventBus.subscribe<Event::TemporaryProjectSaveResultEvent>(
+            [this](const Event::TemporaryProjectSaveResultEvent& event) {
+                if ( !event.m_success || event.m_savedProjectPath.empty() ) {
+                    return;
+                }
+                ProjectUiLifecycleUpdate update;
+                update.kind = ProjectUiLifecycleKind::RootChanged;
+                update.projectRoot =
+                    Config::utf8ToPath(event.m_savedProjectPath);
+                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+            });
+}
+
+UIManager::~UIManager()
+{
+    auto& eventBus = Event::EventBus::instance();
+    if ( m_projectOpenStartedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
+            m_projectOpenStartedSubId);
+    }
+    if ( m_projectLoadedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectLoadedEvent>(m_projectLoadedSubId);
+    }
+    if ( m_projectClosedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectClosedEvent>(m_projectClosedSubId);
+    }
+    if ( m_projectOpenFailedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectOpenFailedEvent>(
+            m_projectOpenFailedSubId);
+    }
+    if ( m_temporaryProjectSaveResultSubId != 0 ) {
+        eventBus.unsubscribe<Event::TemporaryProjectSaveResultEvent>(
+            m_temporaryProjectSaveResultSubId);
+    }
+}
+
 void UIManager::setNativeWindow(Graphic::NativeWindow* window)
 {
     m_nativeWindow = window;
@@ -292,6 +378,39 @@ Graphic::NativeWindow* UIManager::getNativeWindow() const
 Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
 {
     return m_nativeWindow ? m_nativeWindow->getWindowFrameAdapter() : nullptr;
+}
+
+bool UIManager::isProjectTransitionInProgress() const
+{
+    return m_projectTransitionSignal.load(std::memory_order_acquire);
+}
+
+bool UIManager::hasActiveProjectUiState() const
+{
+    return m_projectLifecycleState.hasActiveProject;
+}
+
+/// @brief 判断时间线窗口是否正在拖动 Timing 框选区域。
+/// @return 时间线正在框选时返回 true。
+/// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
+bool UIManager::isTimelineTimingMarqueeSelecting()
+{
+    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    return timeline && timeline->isTimingMarqueeSelecting();
+}
+
+/// @brief 判断时间线窗口是否正在通过抓取工具拖动 Timing。
+/// @return 时间线正在拖动 Timing 时返回 true。
+/// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
+bool UIManager::isTimelineTimingDragging()
+{
+    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    return timeline && timeline->isTimingDragging();
+}
+
+const std::filesystem::path& UIManager::getActiveProjectRoot() const
+{
+    return m_activeProjectRoot;
 }
 
 void UIManager::setNativeWindowDragAreas(std::vector<Event::DragArea> areas)
@@ -315,8 +434,14 @@ void UIManager::syncNativeWindowDragAreas()
 
 void UIManager::captureProjectWorkspaceState()
 {
+    if ( isProjectTransitionInProgress() ||
+         !m_projectLifecycleState.hasActiveProject ) {
+        return;
+    }
+
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
+    if ( !project || project->m_projectRoot.lexically_normal() !=
+                         m_activeProjectRoot.lexically_normal() ) {
         return;
     }
 
@@ -444,15 +569,63 @@ void UIManager::applyNoProjectDefaultWorkspace()
     }
 }
 
+void UIManager::consumePendingProjectLifecycleUpdates()
+{
+    ProjectUiLifecycleUpdate update;
+    while ( m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
+        m_projectLifecycleState =
+            reduceProjectUiLifecycleState(m_projectLifecycleState, update.kind);
+
+        switch ( update.kind ) {
+        case ProjectUiLifecycleKind::OpenStarted: break;
+        case ProjectUiLifecycleKind::Opened:
+            m_activeProjectRoot                = std::move(update.projectRoot);
+            m_noProjectWorkspaceDefaultApplied = false;
+            m_pendingProjectWorkspace          = ProjectWorkspaceState{};
+            m_pendingProjectAudioResources.clear();
+            if ( update.hasProjectSnapshot ) {
+                m_pendingProjectWorkspace = std::move(update.workspace);
+                m_pendingProjectAudioResources =
+                    std::move(update.audioResources);
+            }
+            m_projectWorkspaceRestorePending = true;
+            m_projectTransitionSignal.store(false, std::memory_order_release);
+            break;
+        case ProjectUiLifecycleKind::Closed:
+        case ProjectUiLifecycleKind::OpenFailed:
+            if ( !m_projectLifecycleState.hasActiveProject ) {
+                m_activeProjectRoot.clear();
+                m_projectWorkspaceRestorePending = false;
+                m_pendingProjectAudioResources.clear();
+            }
+            if ( update.kind == ProjectUiLifecycleKind::OpenFailed ) {
+                m_projectTransitionSignal.store(false,
+                                                std::memory_order_release);
+            }
+            break;
+        case ProjectUiLifecycleKind::RootChanged:
+            if ( m_projectLifecycleState.hasActiveProject &&
+                 !update.projectRoot.empty() ) {
+                m_activeProjectRoot = std::move(update.projectRoot);
+                m_workspaceProjectPath =
+                    Config::pathToUtf8(m_activeProjectRoot);
+            }
+            break;
+        }
+    }
+}
+
 void UIManager::syncProjectWorkspaceState()
 {
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
+    if ( isProjectTransitionInProgress() ) {
+        return;
+    }
+
+    if ( shouldApplyNoProjectWorkspace(m_projectLifecycleState) ) {
         if ( !m_workspaceProjectPath.empty() ) {
             clearProjectWorkspaceViews();
         }
         m_workspaceProjectPath.clear();
-        m_workspaceProjectInstance = nullptr;
         if ( !m_noProjectWorkspaceDefaultApplied ) {
             applyNoProjectDefaultWorkspace();
             m_noProjectWorkspaceDefaultApplied = true;
@@ -461,14 +634,11 @@ void UIManager::syncProjectWorkspaceState()
     }
 
     m_noProjectWorkspaceDefaultApplied = false;
-    std::string projectPath = Config::pathToUtf8(project->m_projectRoot);
-    if ( projectPath != m_workspaceProjectPath ||
-         project != m_workspaceProjectInstance ) {
-        m_workspaceProjectPath     = projectPath;
-        m_workspaceProjectInstance = project;
+    if ( m_projectWorkspaceRestorePending ) {
+        m_workspaceProjectPath = Config::pathToUtf8(m_activeProjectRoot);
         clearProjectWorkspaceViews();
 
-        const auto& workspace = project->m_settings.m_workspace;
+        const auto& workspace = m_pendingProjectWorkspace;
         if ( !workspace.m_imguiIniData.empty() ) {
             std::string sanitizedIni =
                 sanitizeProjectWorkspaceIni(workspace.m_imguiIniData);
@@ -488,9 +658,11 @@ void UIManager::syncProjectWorkspaceState()
                                                  windowState.m_maximized);
         }
 
-        restoreProjectWorkspaceViews(workspace);
+        restoreProjectWorkspaceViews(workspace, m_pendingProjectAudioResources);
 
-        m_nextWorkspaceCaptureTime = ImGui::GetTime() + 0.5;
+        m_nextWorkspaceCaptureTime       = ImGui::GetTime() + 0.5;
+        m_projectWorkspaceRestorePending = false;
+        m_pendingProjectAudioResources.clear();
     }
 
     double now = ImGui::GetTime();
@@ -563,13 +735,9 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
 }
 
 void UIManager::restoreProjectWorkspaceViews(
-    const ProjectWorkspaceState& workspace)
+    const ProjectWorkspaceState&      workspace,
+    const std::vector<AudioResource>& audioResources)
 {
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
-        return;
-    }
-
     SideBarTab sideBarTab =
         SideBarUI::workspaceNameToTab(workspace.m_sidebarActiveTab);
     if ( auto* sideBar = getView<SideBarUI>("SideBarUI") ) {
@@ -592,8 +760,10 @@ void UIManager::restoreProjectWorkspaceViews(
         std::string trackName = controllerState.m_trackName.empty()
                                     ? controllerState.m_trackId
                                     : controllerState.m_trackName;
-        if ( !resolveWorkspaceAudioTrack(
-                 *project, controllerState.m_trackId, trackType, trackName) ) {
+        if ( !resolveWorkspaceAudioTrack(audioResources,
+                                         controllerState.m_trackId,
+                                         trackType,
+                                         trackName) ) {
             continue;
         }
 
@@ -709,8 +879,14 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
                                    Graphic::VKSwapchain& swapchain,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
-    const bool forceSkinResourceReload =
+    bool forceSkinResourceReload =
         std::exchange(m_skinResourceReloadRequested, false);
+    if ( forceSkinResourceReload && isProjectTransitionInProgress() ) {
+        /// 项目动态视图在切换失败后可能继续存活，强制皮肤重载必须延迟到
+        /// 切换结束后统一执行，不能在占位期间丢弃这次请求。
+        m_skinResourceReloadRequested = true;
+        forceSkinResourceReload       = false;
+    }
 
     if ( forceSkinResourceReload ) {
         (void)logicalDevice.waitIdle();
@@ -719,6 +895,10 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
         }
 
         for ( const auto& name : m_renderableUiSequence ) {
+            if ( isProjectTransitionInProgress() &&
+                 isProjectWorkspaceDynamicView(name) ) {
+                continue;
+            }
             auto renderableView = m_uiviews[name]->asRenderableView();
             if ( renderableView ) {
                 renderableView->requestSkinResourceReload();
@@ -728,6 +908,10 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
         }
 
         for ( const auto& name : m_textureLoaderSequence ) {
+            if ( isProjectTransitionInProgress() &&
+                 isProjectWorkspaceDynamicView(name) ) {
+                continue;
+            }
             auto textureLoader = m_uiviews[name]->asTextureLoader();
             if ( textureLoader ) {
                 textureLoader->reloadTextures(
@@ -740,6 +924,10 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 
     // 检查并重建所有离屏帧缓冲
     for ( const auto& name : m_renderableUiSequence ) {
+        if ( isProjectTransitionInProgress() &&
+             isProjectWorkspaceDynamicView(name) ) {
+            continue;
+        }
         auto renderableView = m_uiviews[name]->asRenderableView();
         if ( renderableView && renderableView->needReCreateFrameBuffer() ) {
             renderableView->reCreateFrameBuffer(
@@ -749,6 +937,10 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 
     // 检查并重载所有纹理
     for ( const auto& name : m_textureLoaderSequence ) {
+        if ( isProjectTransitionInProgress() &&
+             isProjectWorkspaceDynamicView(name) ) {
+            continue;
+        }
         auto textureLoader = m_uiviews[name]->asTextureLoader();
         if ( textureLoader && textureLoader->needReload() ) {
             textureLoader->reloadTextures(
@@ -766,6 +958,7 @@ void UIManager::onUpdateUI()
     SetInteractionFeedbackEnabled(isInteractionFeedbackAllowed(m_nativeWindow));
     ProcessGlobalMouseFeedback();
 
+    consumePendingProjectLifecycleUpdates();
     syncProjectWorkspaceState();
 
     // 清理已关闭的 IUIView
@@ -793,11 +986,18 @@ void UIManager::onUpdateUI()
     DispatchGlobalUIEvents();
     ClipboardBridge::publishPendingEditorClipboard();
 
-    // 并行准备视图数据；这里只允许准备纯数据，实际 ImGui 绘制仍在主线程。
+    // 预先准备视图数据；字体测量留在主线程，纯数据任务才允许进入线程池。
     m_uiPrepareCandidates.clear();
     m_uiPrepareViews.clear();
+    m_mainThreadUiPrepareViews.clear();
+    m_parallelUiPrepareViews.clear();
     m_uiPrepareCandidates.reserve(m_uiSequence.size());
     for ( const auto& name : m_uiSequence ) {
+        if ( isProjectTransitionInProgress() &&
+             (name == "SideBarManager" ||
+              isProjectWorkspaceDynamicView(name)) ) {
+            continue;
+        }
         auto it = m_uiviews.find(name);
         if ( it == m_uiviews.end() ) {
             continue;
@@ -812,19 +1012,32 @@ void UIManager::onUpdateUI()
 
     if ( !m_uiPrepareCandidates.empty() ) {
         const UiFrameSnapshot snapshot = captureUiFrameSnapshot();
-        m_uiPrepareViews.clear();
         m_uiPrepareViews.reserve(m_uiPrepareCandidates.size());
+        m_mainThreadUiPrepareViews.reserve(m_uiPrepareCandidates.size());
+        m_parallelUiPrepareViews.reserve(m_uiPrepareCandidates.size());
         for ( IParallelUiPreparable* preparable : m_uiPrepareCandidates ) {
             if ( preparable->needsParallelUiPrepare(snapshot) ) {
                 m_uiPrepareViews.push_back(preparable);
+                if ( preparable->requiresMainThreadUiPrepare() ) {
+                    m_mainThreadUiPrepareViews.push_back(preparable);
+                } else {
+                    m_parallelUiPrepareViews.push_back(preparable);
+                }
             }
         }
 
+        // ImGui 1.92 的文本测量可能按需烘焙字形并写入共享 FontAtlas；
+        // 声明主线程约束的视图必须先串行准备，禁止与线程池任务并发访问字体状态。
+        for ( IParallelUiPreparable* preparable : m_mainThreadUiPrepareViews ) {
+            preparable->prepareUiFrameData(snapshot);
+        }
+
         auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-        if ( appThreadPool && m_uiPrepareViews.size() > 1 ) {
+        if ( appThreadPool && m_parallelUiPrepareViews.size() > 1 ) {
             std::latch prepareLatch(
-                static_cast<std::ptrdiff_t>(m_uiPrepareViews.size()));
-            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+                static_cast<std::ptrdiff_t>(m_parallelUiPrepareViews.size()));
+            for ( IParallelUiPreparable* preparable :
+                  m_parallelUiPrepareViews ) {
                 appThreadPool->enqueue_void(
                     [preparable, &snapshot, &prepareLatch]() {
                         preparable->prepareUiFrameData(snapshot);
@@ -833,7 +1046,8 @@ void UIManager::onUpdateUI()
             }
             prepareLatch.wait();
         } else {
-            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+            for ( IParallelUiPreparable* preparable :
+                  m_parallelUiPrepareViews ) {
                 preparable->prepareUiFrameData(snapshot);
             }
         }
@@ -895,7 +1109,11 @@ void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
         return;
     }
 
-    const auto& name  = m_renderableUiSequence[taskIndex];
+    const auto& name = m_renderableUiSequence[taskIndex];
+    if ( isProjectTransitionInProgress() &&
+         isProjectWorkspaceDynamicView(name) ) {
+        return;
+    }
     const auto& views = m_uiviews;
     auto        it    = views.find(name);
     if ( it == views.end() ) {

@@ -5,6 +5,10 @@
 #include "log/colorful-log.h"
 #include "mmmversion.h"
 
+#ifdef MMM_PGO_INSTRUMENT
+#    include "pgo_upload_url.h"
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -28,12 +32,7 @@ int  __llvm_profile_write_file(void);
 }
 #endif
 
-// 上传 URL — 由 CMake configure_file 生成，或运行时可被环境变量覆盖
 #ifdef MMM_PGO_INSTRUMENT
-#    if __has_include("pgo_upload_url.h")
-#        include "pgo_upload_url.h"
-#    endif
-
 // 早期静态初始化器：利用全局静态变量的构造函数，抢在任何 instrumented 代码或
 // DLL 加载运行前， 将环境变量 LLVM_PROFILE_FILE 设置为用户 TEMP
 // 目录下的自定义路径。 这彻底避免了编译器/链接器默认在当前工作目录 (CWD) 生成
@@ -79,10 +78,6 @@ std::future<void>                     s_shutdownFuture;
 std::mutex                            s_progressMutex;
 PGOProfilerShutdownProgress           s_shutdownProgress;
 
-/// @brief 默认 PGO profile 上传 URL。
-constexpr const char* kDefaultPGOUploadUrl =
-    "https://mmm.xiang233.top/api/performance/upload";
-
 /// @brief 默认最短上传运行时长，单位秒。
 constexpr long long kDefaultMinUploadRuntimeSeconds = 600;
 
@@ -100,16 +95,12 @@ std::string buildProfilePath()
         .string();
 }
 
-/// @brief 确定上传 URL: 环境变量 > 编译期 > 默认 API。
+/// @brief 确定上传 URL，运行时环境变量可覆盖 CMake 编译期配置。
 std::string resolveUploadUrl()
 {
     const char* envUrl = std::getenv("MMM_PGO_UPLOAD_URL");
     if ( envUrl && envUrl[0] != '\0' ) return envUrl;
-#    ifdef MMM_PGO_UPLOAD_URL
     return MMM_PGO_UPLOAD_URL;
-#    else
-    return kDefaultPGOUploadUrl;
-#    endif
 }
 
 /// @brief 读取最短上传运行时长。

@@ -1,4 +1,7 @@
+#include "logic/session/SessionUtils.h"
+
 #include "audio/AudioManager.h"
+#include "common/VideoFrameDecoder.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -7,7 +10,6 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
-#include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <stb_image.h>
 #include <system_error>
@@ -15,12 +17,57 @@
 namespace MMM::Logic
 {
 
+/// @brief 根据背景类型探测并缓存原始尺寸。
+/// @param ctx 目标会话上下文。
+/// @param metadata 待探测的谱面基础元数据。
+/// @param project 当前项目；为空时从谱面目录解析资源。
+/// @warning 低频资源加载路径：会访问文件系统并打开图片或视频。
+void SessionUtils::updateBackgroundSize(SessionContext&         ctx,
+                                        const MMM::BaseMapMeta& metadata,
+                                        const ::MMM::Project*   project)
+{
+    ctx.bgSize = glm::vec2(0.0f);
+    if ( metadata.main_cover_path.empty() ) {
+        return;
+    }
+
+    const std::filesystem::path backgroundPath =
+        project ? project->m_projectRoot / metadata.main_cover_path
+                : metadata.map_path.parent_path() / metadata.main_cover_path;
+    std::error_code backgroundPathError;
+    if ( !std::filesystem::is_regular_file(backgroundPath,
+                                           backgroundPathError) ||
+         backgroundPathError ) {
+        return;
+    }
+
+    if ( metadata.cover_type == MMM::CoverType::VIDEO ) {
+        const auto videoInfo = ::MMM::Utils::probeVideoInfo(backgroundPath);
+        if ( videoInfo && videoInfo->width > 0 && videoInfo->height > 0 ) {
+            ctx.bgSize = glm::vec2(static_cast<float>(videoInfo->width),
+                                   static_cast<float>(videoInfo->height));
+        }
+        return;
+    }
+
+    int width          = 0;
+    int height         = 0;
+    int componentCount = 0;
+    if ( stbi_info(Config::pathToUtf8(backgroundPath).c_str(),
+                   &width,
+                   &height,
+                   &componentCount) ) {
+        ctx.bgSize =
+            glm::vec2(static_cast<float>(width), static_cast<float>(height));
+    }
+}
+
 /// @brief 将谱面载入会话上下文并加载对应主音轨。
 /// @param ctx 目标会话上下文。
 /// @param beatmap 待载入谱面；为空时清空当前谱面状态。
 /// @warning
-/// 低频谱面加载路径：会访问文件系统、加载图片尺寸并重建 ECS，不允许放入每帧
-/// update。
+/// 低频谱面加载路径：会访问文件系统、探测背景资源并重建 ECS，
+/// 不允许放入每帧 update。
 void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                std::shared_ptr<MMM::BeatMap> beatmap)
 {
@@ -47,7 +94,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
     ctx.isPlaying               = false;
     ctx.isMainAudioSyncFollower = false;
-    ctx.currentTime             = 0.0;
+    ctx.restartPlaybackAfterFinishPending.store(false,
+                                                std::memory_order_relaxed);
+    ctx.currentTime = 0.0;
     ctx.animateTime =
         ctx.currentTime + ctx.lastConfig.visual.getEffectiveVisualOffset();
     ctx.animateTimeTarget          = ctx.animateTime;
@@ -65,28 +114,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         return;
     }
 
-    // 计算背景图片的绝对路径并获取尺寸
-    ctx.bgSize = glm::vec2(0.0f);
-    std::filesystem::path bgPath;
     auto* project = EditorEngine::instance().getCurrentProject();
-    if ( project ) {
-        bgPath =
-            project->m_projectRoot / beatmap->m_baseMapMetadata.main_cover_path;
-    } else {
-        bgPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
-                 beatmap->m_baseMapMetadata.main_cover_path;
-    }
-
-    std::error_code backgroundPathError;
-    if ( !beatmap->m_baseMapMetadata.main_cover_path.empty() &&
-         std::filesystem::exists(bgPath, backgroundPathError) &&
-         !backgroundPathError ) {
-        int w = 0, h = 0, comp = 0;
-        if ( stbi_info(Utf8::pathToUtf8(bgPath).c_str(), &w, &h, &comp) ) {
-            ctx.bgSize =
-                glm::vec2(static_cast<float>(w), static_cast<float>(h));
-        }
-    }
+    SessionUtils::updateBackgroundSize(
+        ctx, beatmap->m_baseMapMetadata, project);
 
     ctx.trackCount = beatmap->m_baseMapMetadata.track_count;
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值

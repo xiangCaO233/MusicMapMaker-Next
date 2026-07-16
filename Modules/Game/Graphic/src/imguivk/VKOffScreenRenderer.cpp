@@ -43,6 +43,9 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         return;
     }
 
+    // 派生视图可在首个 RenderPass 前记录纹理等动态资源上传命令。
+    onRecordResourceUploads(cmdBuf, frameIndex);
+
     // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
     vk::ClearValue clearValue;
     clearValue.setColor(
@@ -135,11 +138,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     {
         // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
         glm::mat4    ortho = glm::ortho(0.0f,
-                                     (float)m_logicalWidth,
-                                     0.0f - m_yOffset,
-                                     (float)m_logicalHeight - m_yOffset,
-                                     -1.0f,
-                                     1.0f);
+                                        (float)m_logicalWidth,
+                                        0.0f - m_yOffset,
+                                        (float)m_logicalHeight - m_yOffset,
+                                        -1.0f,
+                                        1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -206,11 +209,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             glm::mat4    ortho = glm::ortho(0.0f,
-                                         (float)m_logicalWidth,
-                                         0.0f - m_yOffset,
-                                         (float)m_logicalHeight - m_yOffset,
-                                         -1.0f,
-                                         1.0f);
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(0.0f,
                                   0.0f,
                                   (float)m_glowWidth,
@@ -393,11 +396,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             glm::mat4    ortho = glm::ortho(0.0f,
-                                         (float)m_logicalWidth,
-                                         0.0f - m_yOffset,
-                                         (float)m_logicalHeight - m_yOffset,
-                                         -1.0f,
-                                         1.0f);
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });

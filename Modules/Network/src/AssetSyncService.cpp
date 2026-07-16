@@ -79,6 +79,9 @@ std::size_t writeFileCallback(void* contents, std::size_t size,
 struct DownloadProgressState {
     std::function<void(std::int64_t, std::int64_t)>
         callback;  ///< 下载进度回调。
+
+    std::function<bool()>
+        cancellationCallback;  ///< 返回 true 时要求 libcurl 中断传输。
 };
 
 /// @brief libcurl 下载进度回调。
@@ -87,6 +90,10 @@ int downloadProgressCallback(void* clientp, curl_off_t dltotal,
                              curl_off_t /*ulnow*/)
 {
     auto* state = static_cast<DownloadProgressState*>(clientp);
+    if ( state && state->cancellationCallback &&
+         state->cancellationCallback() ) {
+        return 1;
+    }
     if ( state && state->callback ) {
         state->callback(static_cast<std::int64_t>(dlnow),
                         static_cast<std::int64_t>(dltotal));
@@ -149,6 +156,24 @@ void emitProgress(const AssetSyncOptions&  options,
                   const AssetSyncProgress& progress)
 {
     if ( options.progressCallback ) options.progressCallback(progress);
+}
+
+/// @brief 判断调用方是否已经请求取消资源同步。
+/// @param options 当前同步选项。
+/// @return 已请求取消时返回 true。
+bool isCancellationRequested(const AssetSyncOptions& options)
+{
+    return options.cancellationCallback && options.cancellationCallback();
+}
+
+/// @brief 构造统一的资源同步取消结果。
+/// @return 状态为 kCancelled 的结果。
+AssetSyncResult cancelledResult()
+{
+    AssetSyncResult result;
+    result.status       = AssetSyncStatus::kCancelled;
+    result.errorMessage = "Asset sync cancelled";
+    return result;
 }
 
 /// @brief 判断字符是否为十六进制数字。
@@ -329,7 +354,7 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t s1 = sha256RotateRight(words[i - 2U], 17U) ^
                                      sha256RotateRight(words[i - 2U], 19U) ^
                                      (words[i - 2U] >> 10U);
-            words[i] = words[i - 16U] + s0 + words[i - 7U] + s1;
+            words[i]               = words[i - 16U] + s0 + words[i - 7U] + s1;
         }
 
         std::uint32_t a = state[0];
@@ -348,9 +373,9 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t ch = (e & f) ^ ((~e) & g);
             const std::uint32_t tmp1 =
                 h + s1 + ch + kSha256RoundConstants[i] + words[i];
-            const std::uint32_t s0 = sha256RotateRight(a, 2U) ^
-                                     sha256RotateRight(a, 13U) ^
-                                     sha256RotateRight(a, 22U);
+            const std::uint32_t s0   = sha256RotateRight(a, 2U) ^
+                                       sha256RotateRight(a, 13U) ^
+                                       sha256RotateRight(a, 22U);
             const std::uint32_t maj  = (a & b) ^ (a & c) ^ (b & c);
             const std::uint32_t tmp2 = s0 + maj;
 
@@ -391,9 +416,15 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
 
 /// @brief 下载文本响应。
 bool downloadString(const std::string& url, std::string& response,
-                    std::string& errorMessage)
+                    std::string&                 errorMessage,
+                    const std::function<bool()>& cancellationCallback)
 {
     response.clear();
+
+    if ( cancellationCallback && cancellationCallback() ) {
+        errorMessage = "Asset sync cancelled";
+        return false;
+    }
 
     if ( startsWith(url, "file://") ) {
         std::vector<std::uint8_t> bytes;
@@ -424,11 +455,24 @@ bool downloadString(const std::string& url, std::string& response,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
+    DownloadProgressState progressState{ {}, cancellationCallback };
+    if ( cancellationCallback ) {
+        curl_easy_setopt(
+            curl, CURLOPT_XFERINFOFUNCTION, downloadProgressCallback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressState);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    }
+
     const CURLcode result   = curl_easy_perform(curl);
     long           httpCode = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
     curl_easy_cleanup(curl);
 
+    if ( result == CURLE_ABORTED_BY_CALLBACK && cancellationCallback &&
+         cancellationCallback() ) {
+        errorMessage = "Asset sync cancelled";
+        return false;
+    }
     if ( result != CURLE_OK ) {
         errorMessage =
             std::string("Network error: ") + curl_easy_strerror(result);
@@ -442,11 +486,17 @@ bool downloadString(const std::string& url, std::string& response,
 }
 
 /// @brief 以二进制形式下载文件。
-bool downloadFile(const std::string& url, const std::filesystem::path& path,
-                  std::string& errorMessage,
-                  const std::function<void(std::int64_t, std::int64_t)>&
-                      progressCallback = {})
+bool downloadFile(
+    const std::string& url, const std::filesystem::path& path,
+    std::string&                                           errorMessage,
+    const std::function<void(std::int64_t, std::int64_t)>& progressCallback,
+    const std::function<bool()>&                           cancellationCallback)
 {
+    if ( cancellationCallback && cancellationCallback() ) {
+        errorMessage = "Asset sync cancelled";
+        return false;
+    }
+
     if ( startsWith(url, "file://") ) {
         std::vector<std::uint8_t> bytes;
         if ( !readFileBytes(pathFromFileUrl(url), bytes) ) {
@@ -455,6 +505,10 @@ bool downloadFile(const std::string& url, const std::filesystem::path& path,
         }
         if ( progressCallback ) {
             progressCallback(0, static_cast<std::int64_t>(bytes.size()));
+        }
+        if ( cancellationCallback && cancellationCallback() ) {
+            errorMessage = "Asset sync cancelled";
+            return false;
         }
         if ( !writeBytesToFile(path, bytes.data(), bytes.size()) ) {
             errorMessage = "Failed to create output file";
@@ -503,8 +557,9 @@ bool downloadFile(const std::string& url, const std::filesystem::path& path,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 600L);
 
-    DownloadProgressState progressState{ progressCallback };
-    if ( progressCallback ) {
+    DownloadProgressState progressState{ progressCallback,
+                                         cancellationCallback };
+    if ( progressCallback || cancellationCallback ) {
         curl_easy_setopt(
             curl, CURLOPT_XFERINFOFUNCTION, downloadProgressCallback);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressState);
@@ -516,6 +571,13 @@ bool downloadFile(const std::string& url, const std::filesystem::path& path,
     std::fclose(file);
     curl_easy_cleanup(curl);
 
+    if ( result == CURLE_ABORTED_BY_CALLBACK && cancellationCallback &&
+         cancellationCallback() ) {
+        errorMessage = "Asset sync cancelled";
+        std::error_code removeError;
+        std::filesystem::remove(path, removeError);
+        return false;
+    }
     if ( result != CURLE_OK ) {
         errorMessage =
             std::string("Download error: ") + curl_easy_strerror(result);
@@ -635,6 +697,8 @@ std::vector<AssetFileEntry> collectOutdatedFilesWithProgress(
 {
     std::vector<AssetFileEntry> outdatedFiles;
     for ( std::size_t index = 0; index < manifest.files.size(); ++index ) {
+        if ( isCancellationRequested(options) ) break;
+
         const auto& file = manifest.files[index];
         emitProgress(options,
                      AssetSyncProgress{
@@ -687,24 +751,28 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
                      0,
                  });
 
-    if ( !downloadFile(packageUrl,
-                       tempZipPath,
-                       result.errorMessage,
-                       [&options](std::int64_t downloaded, std::int64_t total) {
-                           emitProgress(
-                               options,
-                               AssetSyncProgress{
-                                   AssetSyncProgressStage::kDownloadingPackage,
-                                   "Downloading asset package",
-                                   downloaded,
-                                   total,
-                                   0,
-                                   0,
-                               });
-                       }) ) {
+    if ( !downloadFile(
+             packageUrl,
+             tempZipPath,
+             result.errorMessage,
+             [&options](std::int64_t downloaded, std::int64_t total) {
+                 emitProgress(options,
+                              AssetSyncProgress{
+                                  AssetSyncProgressStage::kDownloadingPackage,
+                                  "Downloading asset package",
+                                  downloaded,
+                                  total,
+                                  0,
+                                  0,
+                              });
+             },
+             options.cancellationCallback) ) {
+        if ( isCancellationRequested(options) ) return cancelledResult();
         result.status = AssetSyncStatus::kError;
         return result;
     }
+
+    if ( isCancellationRequested(options) ) return cancelledResult();
 
     if ( !packageSha256.empty() ) {
         const auto actualSha256 = AssetSyncService::sha256File(tempZipPath);
@@ -726,8 +794,12 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
                      0,
                      0,
                  });
-    if ( !AssetSyncService::extractZipArchive(
-             tempZipPath, destinationRoot, result.errorMessage) ) {
+    if ( isCancellationRequested(options) ) return cancelledResult();
+    if ( !AssetSyncService::extractZipArchive(tempZipPath,
+                                              destinationRoot,
+                                              result.errorMessage,
+                                              options.cancellationCallback) ) {
+        if ( isCancellationRequested(options) ) return cancelledResult();
         result.status = AssetSyncStatus::kError;
         return result;
     }
@@ -769,6 +841,8 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     auto outdatedFiles = collectOutdatedFilesWithProgress(
         manifest, options.assetsRootPath, options);
 
+    if ( isCancellationRequested(options) ) return cancelledResult();
+
     if ( outdatedFiles.empty() ) {
         writeLocalVersionFile(options.assetsRootPath, manifest.version);
         emitProgress(options,
@@ -787,6 +861,8 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     XINFO("AssetSync: updating {} changed asset file(s)", outdatedFiles.size());
 
     for ( const auto& file : outdatedFiles ) {
+        if ( isCancellationRequested(options) ) return cancelledResult();
+
         const std::size_t currentFileIndex = result.updatedFileCount + 1;
         const auto        tempPath = temporaryDownloadPath("asset-file.tmp");
         const auto        fileUrl =
@@ -801,28 +877,32 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                          outdatedFiles.size(),
                      });
 
-        if ( !downloadFile(fileUrl,
-                           tempPath,
-                           result.errorMessage,
-                           [&options,
-                            currentFileIndex,
-                            totalFiles = outdatedFiles.size(),
-                            path       = file.path](std::int64_t downloaded,
-                                              std::int64_t total) {
-                               emitProgress(
-                                   options,
-                                   AssetSyncProgress{
-                                       AssetSyncProgressStage::kDownloadingFile,
-                                       "Downloading asset file: " + path,
-                                       downloaded,
-                                       total,
-                                       currentFileIndex,
-                                       totalFiles,
-                                   });
-                           }) ) {
+        if ( !downloadFile(
+                 fileUrl,
+                 tempPath,
+                 result.errorMessage,
+                 [&options,
+                  currentFileIndex,
+                  totalFiles = outdatedFiles.size(),
+                  path       = file.path](std::int64_t downloaded,
+                                    std::int64_t total) {
+                     emitProgress(options,
+                                  AssetSyncProgress{
+                                      AssetSyncProgressStage::kDownloadingFile,
+                                      "Downloading asset file: " + path,
+                                      downloaded,
+                                      total,
+                                      currentFileIndex,
+                                      totalFiles,
+                                  });
+                 },
+                 options.cancellationCallback) ) {
+            if ( isCancellationRequested(options) ) return cancelledResult();
             result.status = AssetSyncStatus::kError;
             return result;
         }
+
+        if ( isCancellationRequested(options) ) return cancelledResult();
 
         const auto actualSha256 = AssetSyncService::sha256File(tempPath);
         if ( actualSha256 != file.sha256 ) {
@@ -902,6 +982,8 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
+    if ( isCancellationRequested(options) ) return cancelledResult();
+
     std::error_code existsError;
     const bool      assetsExist =
         std::filesystem::exists(options.assetsRootPath, existsError);
@@ -928,8 +1010,13 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
                      0,
                      0,
                  });
-    const bool manifestDownloaded = downloadString(
-        options.manifestUrl, manifestText, manifestDownloadError);
+    const bool manifestDownloaded =
+        downloadString(options.manifestUrl,
+                       manifestText,
+                       manifestDownloadError,
+                       options.cancellationCallback);
+
+    if ( isCancellationRequested(options) ) return cancelledResult();
 
     std::optional<AssetManifest> manifest;
     std::string                  manifestParseError;
@@ -956,7 +1043,8 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
     }
 
     const auto localVersion = readLocalVersionFile(options.assetsRootPath);
-    if ( !manifest->version.empty() && localVersion == manifest->version ) {
+    if ( !options.forcePreciseVerification && !manifest->version.empty() &&
+         localVersion == manifest->version ) {
         XINFO(
             "AssetSync: local assets version {} is current; precise file "
             "verification skipped",
@@ -1054,9 +1142,15 @@ std::vector<AssetFileEntry> AssetSyncService::collectOutdatedFiles(
 
 bool AssetSyncService::extractZipArchive(
     const std::filesystem::path& zipPath,
-    const std::filesystem::path& destinationRoot, std::string& errorMessage)
+    const std::filesystem::path& destinationRoot, std::string& errorMessage,
+    const std::function<bool()>& cancellationCallback)
 {
     errorMessage.clear();
+
+    if ( cancellationCallback && cancellationCallback() ) {
+        errorMessage = "Asset sync cancelled";
+        return false;
+    }
 
     std::vector<std::uint8_t> zipBytes;
     if ( !readFileBytes(zipPath, zipBytes) ) {
@@ -1074,6 +1168,12 @@ bool AssetSyncService::extractZipArchive(
     bool          success   = true;
     const mz_uint fileCount = mz_zip_reader_get_num_files(&zipArchive);
     for ( mz_uint index = 0; index < fileCount; ++index ) {
+        if ( cancellationCallback && cancellationCallback() ) {
+            errorMessage = "Asset sync cancelled";
+            success      = false;
+            break;
+        }
+
         mz_zip_archive_file_stat fileStat{};
         if ( !mz_zip_reader_file_stat(&zipArchive, index, &fileStat) ) {
             errorMessage = "Failed to read asset package entry";

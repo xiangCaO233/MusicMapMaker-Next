@@ -682,7 +682,9 @@ struct EditorSettings {
     /// @brief 光标样式
     CursorStyle cursorStyle{ CursorStyle::Software };
 
-    /// @brief UI 主题样式
+    /// @brief UI 主题偏好；Auto 表示用户未手动指定，跟随系统与皮肤亮暗绑定。
+    /// @details 旧版配置中的 Auto 即“跟随皮肤”，加载后继续视为未手动修改；
+    /// 任何非 Auto 值均表示用户明确选择，不参与系统亮暗自动切换。
     UITheme theme{ UITheme::Auto };
 
     /// @brief 当前选择的皮肤目录名，位于 AppPaths::skinsRootPath() 下。

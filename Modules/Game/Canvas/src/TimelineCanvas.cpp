@@ -651,8 +651,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             };
 
             const bool inlineGearCanOpenEditor =
+                !m_currentSnapshot->isPlaying &&
                 Logic::EditorEngine::instance().getCurrentTool() ==
-                Logic::EditTool::Draw;
+                    Logic::EditTool::Draw;
             const bool showInlineTimingEditors =
                 inlineGearCanOpenEditor && isHovered && !overMenuButton &&
                 m_currentSnapshot->hasBeatmap && !m_isTimingDragging &&
@@ -944,16 +945,6 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
             drawList->AddText(textPos, IM_COL32(242, 255, 255, 220), label);
             drawList->PopClipRect();
         }
-    }
-
-    const float currentY =
-        canvasPos.y +
-        static_cast<float>(canvasYAtTime(size, m_currentSnapshot->currentTime));
-    if ( currentY >= canvasPos.y && currentY <= clipMax.y ) {
-        drawList->AddLine(ImVec2(canvasPos.x, currentY),
-                          ImVec2(clipMax.x, currentY),
-                          IM_COL32(255, 255, 255, 190),
-                          1.5f);
     }
 
     for ( int lane = 0; lane < laneCount; ++lane ) {

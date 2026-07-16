@@ -1,74 +1,113 @@
 #pragma once
 
+#include "graphic/imguivk/IGraphicUserHook.h"
 #include "network/AssetSyncService.h"
 
-#include <chrono>
+#include <atomic>
+#include <mutex>
 #include <string>
-
-#ifndef _WIN32
-#    include <cstdio>
-#endif
 
 namespace MMM::Main
 {
 
-/// @brief 启动期资源同步进度弹窗。
-class StartupProgressDialog
+/// @brief 使用最小 ImGui 环境绘制的启动期资源同步界面。
+class StartupProgressDialog final : public Graphic::IGraphicUserHook
 {
 public:
-    /// @brief 创建系统进度弹窗。
-    StartupProgressDialog();
-
-    /// @brief 关闭系统进度弹窗。
-    ~StartupProgressDialog();
+    /// @brief 创建初始处于资源检查状态的启动界面。
+    StartupProgressDialog() = default;
 
     StartupProgressDialog(const StartupProgressDialog&)            = delete;
     StartupProgressDialog& operator=(const StartupProgressDialog&) = delete;
 
-    /// @brief 判断进度阶段是否值得打开弹窗。
-    /// @param progress 资源同步进度。
-    /// @return 需要向用户展示等待状态时返回 true。
-    static bool shouldOpenFor(const Network::AssetSyncProgress& progress);
+    /// @brief 为一次新的资源同步尝试重置界面状态。
+    /// @warning 启动低频路径：只能在上一轮同步线程结束后由主线程调用。
+    void beginSync();
 
-    /// @brief 更新系统进度弹窗。
-    /// @param progress 资源同步进度。
+    /// @brief 发布后台资源同步进度。
+    /// @param progress 最新资源同步进度快照。
+    /// @warning 跨线程低频路径：后台线程写入互斥保护快照并发布原子脏位；
+    /// 不得从这里调用 ImGui。
     void update(const Network::AssetSyncProgress& progress);
 
-    /// @brief 主动关闭系统进度弹窗。
-    void close();
+    /// @brief 在启动界面中展示可重试错误。
+    /// @param title 错误标题。
+    /// @param message 错误详情。
+    /// @warning 启动低频路径：只能由渲染主线程调用。
+    void showError(std::string title, std::string message);
+
+    /// @brief 消耗用户本帧发出的重试请求。
+    /// @return 用户点击重试时返回 true，并清除请求。
+    bool consumeRetryRequest();
+
+    /// @brief 判断用户是否请求退出启动流程。
+    /// @return 用户点击退出时返回 true。
+    [[nodiscard]] bool isExitRequested() const;
+
+    /// @brief 启动界面不需要准备额外 Vulkan 资源。
+    /// @warning 启动渲染热路径：每帧调用，保持为空且不得加入阻塞操作。
+    void onPrepareResources(vk::PhysicalDevice&, vk::Device&,
+                            Graphic::VKSwapchain&, vk::CommandPool&,
+                            vk::Queue&) override;
+
+    /// @brief 绘制启动期资源检查、进度或错误界面。
+    /// @warning 启动渲染热路径：每帧执行，只消费已发布快照并绘制 ImGui。
+    void onUpdateUI() override;
+
+    /// @brief 启动界面不录制离屏绘制命令。
+    /// @warning 启动渲染热路径：保持为空。
+    void onRecordOffscreen(vk::CommandBuffer&, uint32_t) override;
+
+    /// @brief 获取启动界面的离屏任务数量。
+    /// @return 始终为 0。
+    /// @warning 启动渲染热路径：只返回稳定常量。
+    [[nodiscard]] uint32_t getOffscreenRecordTaskCount() const override;
 
 private:
-    /// @brief 计算进度百分比。
-    /// @param progress 资源同步进度。
-    /// @return 0 到 100 的进度值。
-    int progressPercent(const Network::AssetSyncProgress& progress) const;
+    /// @brief 消费后台线程发布的最新进度快照。
+    /// @warning 启动渲染热路径：仅当原子脏位为 true 时短暂获取互斥锁。
+    void consumePendingProgress();
 
-    /// @brief 生成弹窗文本。
-    /// @param progress 资源同步进度。
-    /// @return 面向用户的进度说明。
-    std::string progressText(const Network::AssetSyncProgress& progress) const;
+    /// @brief 计算进度条比例。
+    /// @param progress 资源同步进度快照。
+    /// @return 0 到 1 之间的进度比例。
+    static float progressFraction(const Network::AssetSyncProgress& progress);
 
-    /// @brief 当前平台进度弹窗是否已经打开。
-    /// @return 已打开时返回 true。
-    bool isOpen() const;
+    /// @brief 生成启动界面进度说明。
+    /// @param progress 资源同步进度快照。
+    /// @return 面向用户的进度文本。
+    static std::string progressText(const Network::AssetSyncProgress& progress);
 
-    /// @brief 写入当前平台进度弹窗。
-    /// @param percent 进度百分比。
-    /// @param text 进度文本。
-    void writeProgress(int percent, const std::string& text);
+    /// @brief 后台线程写入的最新进度快照。
+    Network::AssetSyncProgress m_pendingProgress;
 
-#ifdef _WIN32
-    void* m_windowHandle{ nullptr };    ///< Win32 原生进度窗口句柄。
-    void* m_textHandle{ nullptr };      ///< Win32 进度文本控件句柄。
-    void* m_progressHandle{ nullptr };  ///< Win32 进度条控件句柄。
-#else
-    FILE* m_pipe{ nullptr };  ///< POSIX zenity 进度管道。
-#endif
+    /// @brief 渲染线程当前使用的稳定进度快照。
+    Network::AssetSyncProgress m_visibleProgress;
 
-    int         m_lastPercent{ -1 };  ///< 上次写入的进度百分比。
-    std::string m_lastText;           ///< 上次写入的进度文本。
-    std::chrono::steady_clock::time_point
-        m_lastUpdateTime{};  ///< 上次写入时间。
+    /// @brief 保护后台进度快照的互斥锁。
+    /// @warning 仅资源同步回调写入和渲染线程消费脏快照时获取，不得持锁执行
+    /// 网络、文件系统或 ImGui 操作。
+    std::mutex m_progressMutex;
+
+    /// @brief 是否存在尚未被渲染线程消费的新进度。
+    /// @warning 跨线程原子脏位：后台同步线程 release 写入，渲染线程 acquire
+    /// 消费；只传递快照可见性，不承载业务状态。
+    std::atomic<bool> m_progressDirty{ false };
+
+    /// @brief 当前是否展示错误状态。
+    bool m_hasError{ false };
+
+    /// @brief 用户是否请求重新同步资源。
+    bool m_retryRequested{ false };
+
+    /// @brief 用户是否请求退出程序。
+    bool m_exitRequested{ false };
+
+    /// @brief 当前错误标题。
+    std::string m_errorTitle;
+
+    /// @brief 当前错误详情。
+    std::string m_errorMessage;
 };
 
 }  // namespace MMM::Main

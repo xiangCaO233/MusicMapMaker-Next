@@ -204,7 +204,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -345,10 +345,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -421,28 +421,28 @@ void SettingsView::drawSoftwareSettings()
                     &settings.openALSpatialConfig.directionX,
                     -1.0f,
                     1.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_direction_y").data(),
                     "##OpenALDirY",
                     &settings.openALSpatialConfig.directionY,
                     -1.0f,
                     1.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_direction_z").data(),
                     "##OpenALDirZ",
                     &settings.openALSpatialConfig.directionZ,
                     -1.0f,
                     1.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_distance").data(),
                     "##OpenALDistance",
                     &settings.openALSpatialConfig.distance,
                     0.0f,
                     100.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_reference_distance")
                         .data(),
@@ -450,21 +450,21 @@ void SettingsView::drawSoftwareSettings()
                     &settings.openALSpatialConfig.referenceDistance,
                     0.01f,
                     100.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_max_distance").data(),
                     "##OpenALMaxDistance",
                     &settings.openALSpatialConfig.maxDistance,
                     0.01f,
                     1000.0f,
-                    "%.2f");
+                    "%.4f");
                 addSpatialSlider(
                     TR_CACHE("ui.settings.software.openal_rolloff").data(),
                     "##OpenALRolloff",
                     &settings.openALSpatialConfig.rolloffFactor,
                     0.0f,
                     10.0f,
-                    "%.2f");
+                    "%.4f");
             }
         }
 
@@ -788,7 +788,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpUIScale = settings.uiScaleMultiplier;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##UIScale", &tmpUIScale, 0.5f, 2.0f, "%.2f");
+                    "##UIScale", &tmpUIScale, 0.5f, 2.0f, "%.4f");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.uiScaleMultiplier = tmpUIScale;
                     changed                    = true;
@@ -813,7 +813,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpFontScale = settings.fontSizeMultiplier;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##FontScale", &tmpFontScale, 0.5f, 2.0f, "%.2f");
+                    "##FontScale", &tmpFontScale, 0.5f, 2.0f, "%.4f");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.fontSizeMultiplier = tmpFontScale;
                     changed                     = true;
@@ -906,7 +906,7 @@ void SettingsView::drawSoftwareSettings()
                                    &settings.softwareCursorConfig.cursorSize,
                                    4.0f,
                                    512.0f,
-                                   "%.1f px");
+                                   "%.4f px");
                            });
             addSettingItem(*sec,
                            rowIndex,
@@ -919,7 +919,7 @@ void SettingsView::drawSoftwareSettings()
                                    &settings.softwareCursorConfig.trailSize,
                                    4.0f,
                                    512.0f,
-                                   "%.1f px");
+                                   "%.4f px");
                            });
             addSettingItem(*sec,
                            rowIndex,
@@ -932,7 +932,7 @@ void SettingsView::drawSoftwareSettings()
                                    &settings.softwareCursorConfig.trailLifeTime,
                                    0.05f,
                                    5.0f,
-                                   "%.2f s");
+                                   "%.4f s");
                            });
             addSettingItem(*sec,
                            rowIndex,
@@ -945,7 +945,7 @@ void SettingsView::drawSoftwareSettings()
                                    &settings.softwareCursorConfig.smokeSize,
                                    4.0f,
                                    512.0f,
-                                   "%.1f px");
+                                   "%.4f px");
                            });
             addSettingItem(
                 *sec,
@@ -971,7 +971,7 @@ void SettingsView::drawSoftwareSettings()
                         &settings.softwareCursorConfig.smokeLifeTime,
                         0.05f,
                         10.0f,
-                        "%.2f s");
+                        "%.4f s");
                     if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife )
                         ImGui::EndDisabled();
                 });
@@ -992,7 +992,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpRounding = settings.aesthetics.windowRounding;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##WinRounding", &tmpRounding, 0.0f, 32.0f, "%.1f px");
+                    "##WinRounding", &tmpRounding, 0.0f, 32.0f, "%.4f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowRounding = tmpRounding;
                     changed                            = true;
@@ -1011,7 +1011,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpFrame = settings.aesthetics.frameRounding;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##FrameRounding", &tmpFrame, 0.0f, 32.0f, "%.1f px");
+                    "##FrameRounding", &tmpFrame, 0.0f, 32.0f, "%.4f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.frameRounding = tmpFrame;
                     changed                           = true;
@@ -1032,7 +1032,7 @@ void SettingsView::drawSoftwareSettings()
                                                     ImVec2(r.width, -1));
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##WinGap", &tmpGap, 0.0f, 32.0f, "%.1f px");
+                    "##WinGap", &tmpGap, 0.0f, 32.0f, "%.4f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowGap = tmpGap;
                     changed                       = true;
@@ -1049,7 +1049,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpSpacing = settings.aesthetics.itemSpacing;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##ItemSpacing", &tmpSpacing, 0.0f, 32.0f, "%.1f px");
+                    "##ItemSpacing", &tmpSpacing, 0.0f, 32.0f, "%.4f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.itemSpacing = tmpSpacing;
                     changed                         = true;
@@ -1068,7 +1068,7 @@ void SettingsView::drawSoftwareSettings()
                 static float tmpPadding = settings.aesthetics.windowPadding;
                 ImGui::SetNextItemWidth(r.width);
                 ::MMM::UI::FeedbackSliderFloat(
-                    "##WinPadding", &tmpPadding, 0.0f, 32.0f, "%.1f px");
+                    "##WinPadding", &tmpPadding, 0.0f, 32.0f, "%.4f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowPadding = tmpPadding;
                     changed                           = true;

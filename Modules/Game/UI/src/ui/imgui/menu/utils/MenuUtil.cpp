@@ -587,6 +587,8 @@ void MenuUtil::drawWrappedBulletText(std::string_view text)
 {
     ImGui::Bullet();
     ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                         ImGui::GetStyle().ItemInnerSpacing.x);
     drawWrappedText(text);
 }
 

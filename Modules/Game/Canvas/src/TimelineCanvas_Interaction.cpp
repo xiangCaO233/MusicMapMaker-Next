@@ -1124,6 +1124,39 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         ImGui::SetTooltip("%.3fs", hoveredTarget->time);
     }
 
+    const auto updateTimingDragPreview = [&]() {
+        double currentTime = canvasTimeAtLocalY(size, localMouseY);
+        bool   snapped     = false;
+        currentTime = snapTimingTime(size, currentTime, localMouseY, snapped);
+        m_timingDragPreviewDelta = currentTime - m_timingDragStartTime;
+    };
+    const auto finishTimingDrag = [&]() {
+        if ( std::abs(m_timingDragPreviewDelta) > 1e-6 ) {
+            for ( const auto& entry : m_timingDragEntries ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                        entry.entity,
+                        std::max(0.0,
+                                 entry.originalTime + m_timingDragPreviewDelta),
+                        entry.value }));
+            }
+        }
+        m_isTimingDragging       = false;
+        m_timingDragPreviewDelta = 0.0;
+        m_timingDragEntries.clear();
+    };
+
+    if ( m_currentSnapshot->isPlaying ) {
+        // 播放时禁止开始新编辑，但保留播放前已开始的抓取或框选，使交互
+        // 在时间线滚动期间持续更新，并允许按住鼠标再次切换播放状态。
+        m_isTimingDrawPreviewing = false;
+        m_isTimingErasing        = false;
+        m_timingEraseTargetEntities.clear();
+        if ( !m_isTimingDragging && !m_isTimingMarqueeSelecting ) {
+            return;
+        }
+    }
+
     if ( !isFocused ) {
         if ( m_isTimingErasing &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
@@ -1149,14 +1182,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const bool  shift             = io.KeyShift;
     const bool  additiveSelection = ctrl || shift;
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    bool        handledKeyboardCommand = false;
-    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+    bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
+    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
             shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
                   : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
-    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
@@ -1336,28 +1369,11 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
 
         if ( m_isTimingDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            double currentTime = canvasTimeAtLocalY(size, localMouseY);
-            bool   snapped     = false;
-            currentTime =
-                snapTimingTime(size, currentTime, localMouseY, snapped);
-            m_timingDragPreviewDelta = currentTime - m_timingDragStartTime;
+            updateTimingDragPreview();
         }
         if ( m_isTimingDragging &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            if ( std::abs(m_timingDragPreviewDelta) > 1e-6 ) {
-                for ( const auto& entry : m_timingDragEntries ) {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                            entry.entity,
-                            std::max(
-                                0.0,
-                                entry.originalTime + m_timingDragPreviewDelta),
-                            entry.value }));
-                }
-            }
-            m_isTimingDragging       = false;
-            m_timingDragPreviewDelta = 0.0;
-            m_timingDragEntries.clear();
+            finishTimingDrag();
         }
         break;
     case Logic::EditTool::Marquee: {

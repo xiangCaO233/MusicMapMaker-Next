@@ -384,6 +384,59 @@ int testSyncSkipsPreciseCheckWhenVersionMatches()
     return fail;
 }
 
+/// @brief 测试强制精确校验可修复版本一致但本地文件缺失的资源。
+int testSyncForcePreciseCheckRepairsMissingFile()
+{
+    int fail = 0;
+
+    const auto root       = createTempRoot();
+    const auto assetsRoot = root / "assets";
+    const auto wantedPath = root / "wanted.txt";
+    fail += expectTrue(writeTextFile(wantedPath, "wanted"),
+                       "write forced verification fixture");
+    fail += expectTrue(
+        writeTextFile(assetsRoot / ".mmm-assets-version", "v-force\n"),
+        "write matching version for forced verification");
+
+    const auto manifestPath = root / "manifest.json";
+    const std::string manifestText = std::string(R"json({
+          "version": "v-force",
+          "files": [
+            {
+              "path": "theme.txt",
+              "url": ")json") + fileUrlFor(wantedPath) +
+                                     R"json(",
+              "sha256": ")json" + AssetSyncService::sha256File(wantedPath) +
+                                     R"json(",
+              "size": 6
+            }
+          ]
+        })json";
+    fail += expectTrue(writeTextFile(manifestPath, manifestText),
+                       "write forced verification manifest");
+
+    AssetSyncOptions options;
+    options.assetsRootPath           = assetsRoot;
+    options.baseUrl                  = "https://invalid.local";
+    options.manifestUrl              = fileUrlFor(manifestPath);
+    options.packageUrl               = {};
+    options.forcePreciseVerification = true;
+
+    const auto result = AssetSyncService::sync(options);
+    fail += expectTrue(result.status == AssetSyncStatus::kUpdated,
+                       "forced verification repairs missing asset");
+    fail += expectTrue(result.checkedFileCount == 1,
+                       "forced verification hashes manifest entries");
+    fail += expectTrue(result.updatedFileCount == 1,
+                       "forced verification downloads missing asset");
+    fail += expectTrue(readTextFile(assetsRoot / "theme.txt") == "wanted",
+                       "forced verification writes repaired asset");
+
+    std::error_code removeError;
+    std::filesystem::remove_all(root, removeError);
+    return fail;
+}
+
 /// @brief 测试版本不一致时逐文件校验会汇报进度。
 int testSyncReportsPreciseCheckProgress()
 {
@@ -453,6 +506,17 @@ int testSyncReportsPreciseCheckProgress()
     return fail;
 }
 
+/// @brief 测试同步开始前的取消请求会立即终止启动期资源流程。
+int testSyncHonorsCancellationRequest()
+{
+    AssetSyncOptions options;
+    options.cancellationCallback = []() { return true; };
+
+    const auto result = AssetSyncService::sync(options);
+    return expectTrue(result.status == AssetSyncStatus::kCancelled,
+                      "asset sync honors cancellation request");
+}
+
 }  // namespace
 
 int main()
@@ -464,7 +528,9 @@ int main()
     fail += testExtractZipArchive();
     fail += testSyncKeepsExistingAssetsWhenManifestUnavailable();
     fail += testSyncSkipsPreciseCheckWhenVersionMatches();
+    fail += testSyncForcePreciseCheckRepairsMissingFile();
     fail += testSyncReportsPreciseCheckProgress();
+    fail += testSyncHonorsCancellationRequest();
 
     if ( fail == 0 ) {
         XINFO("AssetSyncServiceTest passed.");

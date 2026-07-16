@@ -1,12 +1,14 @@
 #include "logic/EditorEngine.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
+#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -71,6 +73,18 @@ void publishProjectOpenFailed(const std::filesystem::path& path,
     event.m_projectPath  = Config::pathToUtf8(path);
     event.m_errorMessage = message;
     event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
+}
+
+/// @brief 发布项目即将进入关闭旧项目并加载新项目阶段的事件。
+/// @param path 正在打开的项目目录、谱面文件或谱面包路径。
+/// @param isPackage 当前是否正在打开临时谱面包。
+void publishProjectOpenStarted(const std::filesystem::path& path,
+                               bool                         isPackage)
+{
+    Event::ProjectOpenStartedEvent event;
+    event.m_projectPath = Config::pathToUtf8(path);
+    event.m_isPackage   = isPackage;
     Event::EventBus::instance().publish(event);
 }
 
@@ -139,23 +153,8 @@ FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
 /// @warning 逻辑热路径：自适应快照预算调用；只读取设备刷新率并做常量级计算。
 double frameLimitTargetUps(Config::FrameLimitPreference frameLimit)
 {
-    int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
-    if ( refreshRate <= 0 ) {
-        refreshRate = 60;
-    }
-
-    switch ( frameLimit ) {
-    case Config::FrameLimitPreference::VSync:
-        return static_cast<double>(refreshRate);
-    case Config::FrameLimitPreference::Refresh2x:
-        return static_cast<double>(refreshRate * 2);
-    case Config::FrameLimitPreference::Refresh4x:
-        return static_cast<double>(refreshRate * 4);
-    case Config::FrameLimitPreference::Refresh8x:
-        return static_cast<double>(refreshRate * 8);
-    case Config::FrameLimitPreference::Unlimited:
-    default: return 0.0;
-    }
+    return Config::frameLimitTargetRate(
+        frameLimit, Config::AppConfig::instance().getDeviceRefreshRate());
 }
 
 /// @brief 根据 UPS 健康度降低快照刷新率预算。
@@ -565,6 +564,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdSaveBeatmap>(cmd) ||
          std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdUpdateTimelineEvents>(cmd) ||
          std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
@@ -575,6 +575,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdStartErase>(cmd) ||
          std::holds_alternative<CmdUpdateErase>(cmd) ||
          std::holds_alternative<CmdUpdateBeatmapMetadata>(cmd) ||
+         std::holds_alternative<CmdMarkBeatmapMetadataDirty>(cmd) ||
          std::holds_alternative<CmdImportAudio>(cmd) ||
          std::holds_alternative<CmdUpdateAudioResource>(cmd) ||
          std::holds_alternative<CmdRemoveAudioResource>(cmd) ||
@@ -925,6 +926,9 @@ void EditorEngine::restoreProjectWorkspace(
     m_pendingWorkspaceActiveIndex = restoredActiveIndex;
 }
 
+/// @brief 校验项目路径并切换到指定普通项目。
+/// @param projectPath 要打开的项目目录或谱面文件路径。
+/// @param creationOptions 新建项目初始设置；普通打开时为空。
 void EditorEngine::openProject(
     const std::filesystem::path& projectPath,
     const std::optional<ProjectController::ProjectCreationOptions>&
@@ -961,7 +965,30 @@ void EditorEngine::openProject(
         return;
     }
 
-    closeProject();
+    /// 同一项目目录的重复打开请求不应关闭并重新加载当前项目；谱面文件输入仍
+    /// 保留原有自动打开行为，新建项目请求也必须继续应用 creationOptions。
+    openPathError.clear();
+    const bool requestedPathIsDirectory =
+        !creationOptions &&
+        std::filesystem::is_directory(projectPath, openPathError) &&
+        !openPathError;
+    const auto* currentProject = ProjectController::instance().currentProject();
+    openPathError.clear();
+    if ( requestedPathIsDirectory && currentProject &&
+         std::filesystem::equivalent(
+             actualProjectPath, currentProject->m_projectRoot, openPathError) &&
+         !openPathError ) {
+        XINFO("忽略当前项目目录的重复打开请求：{}",
+              Config::pathToUtf8(actualProjectPath));
+        return;
+    }
+
+    publishProjectOpenStarted(projectPath, false);
+    if ( !closeProject() ) {
+        publishProjectOpenFailed(
+            projectPath, "当前项目的元数据保存失败，已取消项目切换", false);
+        return;
+    }
 
     /// @brief 项目控制器打开项目后的结果。
     auto openResult =
@@ -986,7 +1013,15 @@ void EditorEngine::openTemporaryProjectPackage(
         return;
     }
 
-    closeProject();
+    publishProjectOpenStarted(packagePath, true);
+    if ( !closeProject() ) {
+        std::error_code filesystemError;
+        std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
+                                    filesystemError);
+        publishProjectOpenFailed(
+            packagePath, "当前项目的元数据保存失败，已取消项目切换", true);
+        return;
+    }
 
     auto openResult = ProjectController::instance().openProject(
         prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1050,16 +1085,37 @@ void EditorEngine::finishOpenProject(
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
     }
+
+    /// 音频预加载和谱面会话或工作区恢复完成后，UI 才能安全读取
+    /// 已就绪的项目状态。
+    Event::ProjectLoadedEvent loadedEvent;
+    loadedEvent.m_projectTitle = openResult.m_projectTitle;
+    loadedEvent.m_projectPath =
+        Config::pathToUtf8(openResult.m_actualProjectPath);
+    loadedEvent.m_beatmapCount = openResult.m_beatmapCount;
+    Event::EventBus::instance().publish(loadedEvent);
 }
 
-void EditorEngine::closeProject()
+bool EditorEngine::closeProject()
 {
-    ProjectController::instance().saveProject();
+    if ( !ProjectController::instance().currentProject() ) return true;
+    if ( !flushPendingMetadataAutoSaves() ) {
+        XERROR(
+            "EditorEngine: pending metadata save failed; project close "
+            "cancelled");
+        return false;
+    }
+    if ( !ProjectController::instance().saveProject() ) {
+        XERROR(
+            "EditorEngine: project configuration save failed; project "
+            "close cancelled");
+        return false;
+    }
 
     /// @brief 项目控制器关闭当前项目后的结果。
     auto closeResult = ProjectController::instance().closeProject();
     if ( !closeResult.m_closed || !closeResult.m_project ) {
-        return;
+        return false;
     }
 
     auto& audio = Audio::AudioManager::instance();
@@ -1074,6 +1130,7 @@ void EditorEngine::closeProject()
     }
 
     XINFO("Project '{}' closed.", closeResult.m_projectTitle);
+    return true;
 }
 
 void EditorEngine::start()
@@ -2320,6 +2377,23 @@ void EditorEngine::saveProject()
     ProjectController::instance().saveProject();
 }
 
+/// @brief 立即完成全部已打开会话中等待空闲期的元数据自动保存。
+/// @warning 低频阻塞路径：仅允许逻辑线程在打包或关闭项目前调用；会持有
+/// Session 注册表锁并可能同步写入多个谱面。
+bool EditorEngine::flushPendingMetadataAutoSaves()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 需要检查尾随元数据保存的当前会话列表。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    bool  success  = true;
+    for ( auto& entry : sessions ) {
+        if ( entry.session && !entry.session->flushPendingMetadataAutoSave() ) {
+            success = false;
+        }
+    }
+    return success;
+}
+
 /// @brief 逻辑线程的主循环。
 /// @warning 逻辑热路径：按配置 UPS 频率执行；禁止每 update 文件系统操作、完整
 /// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
@@ -2335,29 +2409,13 @@ void EditorEngine::loop()
     auto& projectController = ProjectController::instance();
 
     while ( m_running.load(std::memory_order_acquire) ) {
-        // 动态获取当前的延迟目标
-        double targetDt = 0.0;
-        int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
-        if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
-
+        // 动态获取当前的延迟目标，并与渲染循环共用相同换算规则。
         Config::FrameLimitPreference frameLimit =
             m_frameLimitPreference.load(std::memory_order_relaxed);
-        switch ( frameLimit ) {
-        case Config::FrameLimitPreference::VSync:
-            targetDt = 1.0 / static_cast<double>(refreshRate);
-            break;
-        case Config::FrameLimitPreference::Refresh2x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 2);
-            break;
-        case Config::FrameLimitPreference::Refresh4x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 4);
-            break;
-        case Config::FrameLimitPreference::Refresh8x:
-            targetDt = 1.0 / static_cast<double>(refreshRate * 8);
-            break;
-        case Config::FrameLimitPreference::Unlimited:
-        default: targetDt = 0.0; break;
-        }
+        const int refreshRate =
+            Config::AppConfig::instance().getDeviceRefreshRate();
+        const double targetDt =
+            Config::frameLimitTargetInterval(frameLimit, refreshRate);
 
         auto currentTime = FrameLimitClock::now();
 
@@ -2409,10 +2467,12 @@ void EditorEngine::loop()
             projectAction = projectController.consumePendingProjectAction(
                 needsCanvasCloseBeforeProjectOpen());
         }
+        bool projectCloseSucceeded = true;
         if ( projectAction.m_closeProject ) {
-            closeProject();
+            projectCloseSucceeded = closeProject();
         }
-        if ( !projectAction.m_projectPathToOpen.empty() ) {
+        if ( projectCloseSucceeded &&
+             !projectAction.m_projectPathToOpen.empty() ) {
             if ( projectAction.m_projectOpenMode ==
                  ProjectController::ProjectOpenMode::TemporaryPackage ) {
                 openTemporaryProjectPackage(projectAction.m_projectPathToOpen);
@@ -2452,6 +2512,8 @@ void EditorEngine::loop()
                     isActiveSession || entry.isCanvasVisible;
                 const bool hadPendingCommands =
                     entry.session->hasPendingCommands();
+                const bool hasPendingMetadataAutoSave =
+                    entry.session->hasPendingMetadataAutoSave();
                 bool shouldUpdateSession = isActiveSession;
                 if ( !shouldUpdateSession ) {
                     const bool needsRealtimeUpdate =
@@ -2460,7 +2522,8 @@ void EditorEngine::loop()
                         shouldUpdateSession = true;
                     } else if ( hadPendingCommands ) {
                         shouldUpdateSession = true;
-                    } else if ( !isVisibleSession ) {
+                    } else if ( !isVisibleSession &&
+                                !hasPendingMetadataAutoSave ) {
                         shouldUpdateSession = false;
                     } else {
                         auto& lastBackgroundUpdate =

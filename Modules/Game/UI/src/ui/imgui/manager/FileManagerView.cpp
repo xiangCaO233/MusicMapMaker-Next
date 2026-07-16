@@ -8,7 +8,7 @@
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "imgui.h"
-#include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -74,8 +74,6 @@ FileManagerView::getEmptyProjectViewMetrics(float dpiScale) const
 /// @warning UI 热路径：子视图可见时每帧查询；仅保留配置读取和轻量文本测量。
 ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
 {
-    auto&       engine   = Logic::EditorEngine::instance();
-    auto*       project  = engine.getCurrentProject();
     const float scale    = std::max(1.0f, dpiScale);
     const auto  metrics  = getEmptyProjectViewMetrics(dpiScale);
     const float padding  = metrics.padding;
@@ -83,7 +81,7 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
     float       minWidth = 0.0f;
     float       minHeight;
 
-    if ( project ) {
+    if ( m_hasActiveProjectUiState ) {
         minWidth = std::max(
             ImGui::GetFrameHeight() + style.ItemSpacing.x + 64.0f * scale,
             96.0f * scale);
@@ -122,13 +120,13 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
 void FileManagerView::onUpdate(LayoutContext& layoutContext,
                                UIManager*     sourceManager)
 {
+    syncProjectUiState(sourceManager);
+
     consumePendingDirectoryRefreshes();
 
     // 1. 处理拖拽
     handleDragDrop(sourceManager);
 
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();
 
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
@@ -136,7 +134,7 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
         ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
     }
 
-    if ( !project ) {
+    if ( !m_hasActiveProjectUiState ) {
         renderEmptyProjectView(layoutContext);
     } else {
         renderActiveProjectView(layoutContext, sourceManager);
@@ -144,6 +142,23 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
     }
 
     if ( fileManagerFont ) ImGui::PopFont();
+}
+
+void FileManagerView::syncProjectUiState(UIManager* sourceManager)
+{
+    const bool hasActiveProject =
+        sourceManager && sourceManager->hasActiveProjectUiState();
+    if ( hasActiveProject ) {
+        const auto& projectRoot = sourceManager->getActiveProjectRoot();
+        if ( projectRoot != m_currentRoot ) {
+            m_currentRoot = projectRoot;
+            invalidateDirectoryCache();
+        }
+    } else if ( !m_currentRoot.empty() ) {
+        m_currentRoot.clear();
+        invalidateDirectoryCache();
+    }
+    m_hasActiveProjectUiState = hasActiveProject;
 }
 
 }  // namespace MMM::UI

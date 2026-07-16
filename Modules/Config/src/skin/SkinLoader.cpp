@@ -175,10 +175,28 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         }
     }
 
-    // 解析 Theme 并保存为皮肤的默认推荐主题
-    sol::optional<std::string> themeOpt = skinTable["theme"];
-    if ( themeOpt ) {
-        m_data.defaultTheme = themeOpt.value();
+    // 解析皮肤推荐主题。旧皮肤的字符串格式同时绑定亮暗分支，保持原有行为。
+    sol::object themeObject = skinTable["theme"];
+    if ( themeObject.is<std::string>() ) {
+        const std::string legacyTheme = themeObject.as<std::string>();
+        m_data.defaultThemes.light    = legacyTheme;
+        m_data.defaultThemes.dark     = legacyTheme;
+    } else if ( themeObject.is<sol::table>() ) {
+        sol::table themeTable = themeObject.as<sol::table>();
+        const sol::optional<std::string> lightTheme = themeTable["light"];
+        const sol::optional<std::string> darkTheme  = themeTable["dark"];
+
+        if ( lightTheme ) {
+            m_data.defaultThemes.light = lightTheme.value();
+        }
+        if ( darkTheme ) {
+            m_data.defaultThemes.dark = darkTheme.value();
+        }
+        if ( lightTheme && !darkTheme ) {
+            m_data.defaultThemes.dark = lightTheme.value();
+        } else if ( darkTheme && !lightTheme ) {
+            m_data.defaultThemes.light = darkTheme.value();
+        }
     }
 
     // 在你的解析代码中

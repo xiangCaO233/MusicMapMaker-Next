@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/EditorSettings.h"
+#include "event/core/EventBus.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/imguivk/VKRenderPass.h"
@@ -8,8 +9,11 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/system/SystemTheme.h"
 #include "imgui_impl_vulkan.h"
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -23,6 +27,12 @@
 
 namespace MMM::Graphic
 {
+/// @brief 窗口图形资源的初始化模式。
+enum class VKWindowResourceMode : std::uint8_t {
+    Bootstrap,   ///< 资源同步前仅加载系统字体和最小 ImGui 样式。
+    Application  ///< 资源就绪后加载完整皮肤字体、主题和软件光标。
+};
+
 /**
  * @brief 检查当前是否为 Debug 模式
  * @return true 如果是 Debug 模式
@@ -56,17 +66,29 @@ public:
     VKContext& operator=(const VKContext&) = delete;
     ~VKContext();
 
+    /// @brief 获取基础图形上下文初始化失败原因。
+    /// @return 初始化成功时为空字符串，否则返回可记录的失败原因。
+    [[nodiscard]] const std::string& getInitializationError() const
+    {
+        return m_initializationError;
+    }
+
     /**
      * @brief 初始化 Vulkan 窗体相关资源
      *
      * 包括 Surface, Swapchain, RenderPass, Pipeline 等依赖窗口尺寸的资源。
      *
-     * @param window_ctx GLFW 窗口句柄
+     * @param native_window_ptr 原生窗口封装。
      * @param w 窗口宽度
      * @param h 窗口高度
+     * @param mode 窗口图形资源初始化模式。
+     * @return 初始化成功或同一窗口已经初始化时返回 true。
+     * @warning 启动低频路径：会创建 Vulkan surface、device、swapchain 和
+     * ImGui 后端，禁止放入渲染循环。
      */
-    bool initVKWindowRess(NativeWindow* native_window_ptr, int width,
-                          int height);
+    bool initVKWindowRess(
+        NativeWindow* native_window_ptr, int width, int height,
+        VKWindowResourceMode mode = VKWindowResourceMode::Application);
 
     /**
      * @brief 获取渲染器实例
@@ -142,6 +164,11 @@ public:
      */
     void checkAndRebuildFonts();
 
+    /// @brief 低频检查系统亮暗外观并在自动模式下更新皮肤主题。
+    /// @warning 渲染热路径每帧调用，但每帧只进行枚举和时间点比较；平台状态
+    /// 刷新被限制为每秒一次，禁止在未节流分支加入阻塞操作。
+    void checkAndApplySystemTheme();
+
     /**
      * @brief 应用当前主题配置
      */
@@ -158,6 +185,20 @@ public:
 private:
     /// @brief 资源是否已释放
     bool m_isReleased{ false };
+
+    /// @brief 窗口相关 Vulkan 与 ImGui 资源是否已经完成初始化。
+    bool m_windowResourcesInitialized{ false };
+
+    /// @brief 当前窗口图形资源所处的初始化模式。
+    VKWindowResourceMode m_windowResourceMode{
+        VKWindowResourceMode::Application
+    };
+
+    /// @brief GLFW 键盘事件订阅 ID，随上下文资源释放而取消订阅。
+    Event::SubscriptionID m_glfwKeySubscription{ 0 };
+
+    /// @brief 逻辑配置命令订阅 ID，随上下文资源释放而取消订阅。
+    Event::SubscriptionID m_logicCommandSubscription{ 0 };
 
     /// @brief 初始化失败原因；为空表示基础上下文初始化成功。
     std::string m_initializationError;
@@ -183,6 +224,13 @@ private:
     /// @warning
     /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
     std::atomic<bool> m_fontRebuildRequested{ false };
+
+    /// @brief 最近一次自动模式实际应用的系统主题。
+    SystemTheme m_appliedSystemTheme{ SystemTheme::Unknown };
+
+    /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
+    /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
+    std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
 
     /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
     /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
@@ -391,10 +439,20 @@ private:
     // imgui - 实现相关
     // =========================================================================
 
-    /**
-     * @brief 初始化 imgui Vulkan
-     */
-    void imguiVulkanInit(GLFWwindow* iwindow_handle);
+    /// @brief 初始化 ImGui GLFW/Vulkan 后端。
+    /// @param windowHandle GLFW 窗口句柄。
+    /// @param mode 字体、主题和功能开关的初始化模式。
+    /// @warning 启动低频路径：创建 ImGui 上下文并初始化后端，禁止重复调用。
+    void imguiVulkanInit(GLFWwindow* windowHandle, VKWindowResourceMode mode);
+
+    /// @brief 加载启动期系统首选字体。
+    /// @warning 启动低频路径：会查询系统字体并读取字体文件，禁止放入每帧
+    /// 渲染路径。
+    void setupBootstrapFonts();
+
+    /// @brief 应用不依赖皮肤资源的启动期最小样式。
+    /// @warning 启动低频路径：只修改 ImGui 样式状态。
+    void applyBootstrapTheme();
 
     /**
      * @brief 设置DeepDark样式
