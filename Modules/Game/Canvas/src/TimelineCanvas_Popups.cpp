@@ -2094,10 +2094,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                             io.KeyCtrl ? m_selectedTimingEntities
                                        : std::unordered_set<entt::entity>{};
                     }
-                    if ( m_isTableRowDragSelecting && rowNumberHovered &&
+                    const float mouseY = ImGui::GetIO().MousePos.y;
+                    const bool  rowDragTargetHovered =
+                        mouseY >= rowNumberItemMin.y &&
+                        mouseY < rowNumberItemMax.y;
+                    if ( m_isTableRowDragSelecting && rowDragTargetHovered &&
                          ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-                         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) &&
-                         ent != m_tableRowDragAnchorEntity ) {
+                         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) ) {
                         const auto dragAnchor = std::find_if(
                             visibleElementIndices.begin(),
                             visibleElementIndices.end(),
