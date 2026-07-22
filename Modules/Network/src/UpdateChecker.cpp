@@ -17,6 +17,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
+#include <string_view>
 #include <thread>
 
 #if defined(_WIN32)
@@ -171,11 +172,22 @@ int64_t jsonByteSize(const json& object, const char* key)
     return static_cast<int64_t>(value);
 }
 
-/// @brief 归一化 SHA256 文本。
-/// @param value 原始 SHA256 文本。
-/// @return 合法时返回小写 64 位十六进制字符串，否则返回空。
-std::string normalizeSha256(std::string value)
+}  // namespace
+
+std::string UpdateChecker::normalizeSha256(std::string value)
 {
+    constexpr std::string_view prefix = "sha256:";
+    if ( value.size() >= prefix.size() &&
+         std::equal(prefix.begin(),
+                    prefix.end(),
+                    value.begin(),
+                    [](char lhs, char rhs) {
+                        return std::tolower(static_cast<unsigned char>(lhs)) ==
+                               std::tolower(static_cast<unsigned char>(rhs));
+                    }) ) {
+        value.erase(0, prefix.size());
+    }
+
     if ( value.size() != 64 ) return {};
     std::transform(
         value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -186,8 +198,6 @@ std::string normalizeSha256(std::string value)
     });
     return valid ? value : std::string{};
 }
-
-}  // namespace
 
 UpdateChecker::~UpdateChecker()
 {
