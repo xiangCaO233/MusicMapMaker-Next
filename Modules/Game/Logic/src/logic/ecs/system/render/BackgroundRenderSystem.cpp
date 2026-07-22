@@ -9,24 +9,29 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
                                     const Config::EditorConfig& config,
                                     const RenderSnapshot*       snapshot)
 {
-    if ( snapshot->backgroundPath.empty() ) return;
+    if ( !snapshot->hasBeatmap ) return;
+
+    const float darkenRatio = config.visual.background.darken_ratio;
+    glm::vec4   color(1.0f - darkenRatio,
+                      1.0f - darkenRatio,
+                      1.0f - darkenRatio,
+                      config.visual.background.opaque_ratio);
+
+    if ( snapshot->backgroundPath.empty() ) {
+        // 无背景资源时使用白色图集纹理生成固定覆盖层，确保暗化与透明度仍参与混合。
+        batcher.setTexture(TextureID::None);
+        batcher.pushQuad(
+            0, viewportHeight, viewportWidth, viewportHeight, color);
+        return;
+    }
 
     batcher.setTexture(TextureID::Background);
 
-    glm::vec2 bgSize = snapshot->bgSize;
-
-    // 背景暗化与透明度
-    float     d = config.visual.background.darken_ratio;
-    glm::vec4 color(
-        1.0f - d, 1.0f - d, 1.0f - d, config.visual.background.opaque_ratio);
-
-    // 调用 Batcher 的统一填充管线
-    // y 使用 viewportHeight 因为 Batcher convention 是底边坐标向上画
     batcher.pushFilledQuad(0,
                            viewportHeight,
                            viewportWidth,
                            viewportHeight,
-                           bgSize,
+                           snapshot->bgSize,
                            config.visual.background.fillMode,
                            color);
 }

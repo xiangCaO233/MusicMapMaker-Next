@@ -15,6 +15,15 @@ struct Batcher;
 class BackgroundRenderSystem
 {
 public:
+    /// @brief
+    /// 为已加载谱面绘制背景，缺少背景资源时绘制支持暗化与透明混合的固定覆盖层。
+    /// @param batcher 当前渲染快照的批处理器。
+    /// @param viewportWidth 画布视口宽度。
+    /// @param viewportHeight 画布视口高度。
+    /// @param config 编辑器视觉配置。
+    /// @param snapshot 当前渲染快照。
+    /// @warning 主画布快照生成热路径：每次 update
+    /// 执行，禁止加入资源加载、文件系统访问或阻塞等待。
     static void render(Batcher& batcher, float viewportWidth,
                        float viewportHeight, const Config::EditorConfig& config,
                        const RenderSnapshot* snapshot);

@@ -75,3 +75,8 @@ add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
+
+mmm_add_test_executable(Logic BackgroundRenderSystemTest
+                        tests/BackgroundRenderSystemTest.cpp)
+target_link_libraries(BackgroundRenderSystemTest PRIVATE Logic Log)
+add_test(NAME BackgroundRenderSystemTest COMMAND BackgroundRenderSystemTest)
