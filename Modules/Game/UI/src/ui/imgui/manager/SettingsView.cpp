@@ -121,12 +121,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 30> labels{
-            TR_CACHE("ui.settings.visual.layout_left").data(),
-            TR_CACHE("ui.settings.visual.layout_top").data(),
-            TR_CACHE("ui.settings.visual.layout_right").data(),
-            TR_CACHE("ui.settings.visual.layout_bottom").data(),
-            TR_CACHE("ui.settings.visual.layout_box_width").data(),
+        const std::array<const char*, 25> labels{
             TR_CACHE("ui.settings.visual.judgeline_pos").data(),
             TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
             TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),

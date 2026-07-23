@@ -36,7 +36,7 @@ void SettingsView::drawVisualSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -100,88 +100,6 @@ void SettingsView::drawVisualSettings()
         }
         return nullptr;
     };
-
-    if ( auto* sec =
-             addHeader(TR_CACHE("ui.settings.visual.layout").data(), true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.layout_left").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutLeft",
-                                                    &visual.trackLayout.left,
-                                                    0.0f,
-                                                    1.0f) ) {
-                    visual.trackLayout.left =
-                        std::min(visual.trackLayout.left,
-                                 visual.trackLayout.right - 0.01f);
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.layout_top").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackSliderFloat(
-                         "##LayoutTop", &visual.trackLayout.top, 0.0f, 1.0f) ) {
-                    visual.trackLayout.top =
-                        std::min(visual.trackLayout.top,
-                                 visual.trackLayout.bottom - 0.01f);
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.layout_right").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutRight",
-                                                    &visual.trackLayout.right,
-                                                    0.0f,
-                                                    1.0f) ) {
-                    visual.trackLayout.right =
-                        std::max(visual.trackLayout.right,
-                                 visual.trackLayout.left + 0.01f);
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.layout_bottom").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBottom",
-                                                    &visual.trackLayout.bottom,
-                                                    0.0f,
-                                                    1.0f) ) {
-                    visual.trackLayout.bottom =
-                        std::max(visual.trackLayout.bottom,
-                                 visual.trackLayout.top + 0.01f);
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.layout_box_width").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##LayoutBoxWidth", &visual.trackBoxLineWidth, 1.0f, 10.0f);
-            });
-    }
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.judgeline").data(),
                                true) ) {

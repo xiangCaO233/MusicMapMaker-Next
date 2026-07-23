@@ -187,12 +187,6 @@ return {
 
 	["ui.settings.visual"] = "Visual Config",
 	["ui.settings.visual.short"] = "Visual",
-	["ui.settings.visual.layout"] = "Layout",
-	["ui.settings.visual.layout_left"] = "Left Margin",
-	["ui.settings.visual.layout_top"] = "Top Margin",
-	["ui.settings.visual.layout_right"] = "Right Margin",
-	["ui.settings.visual.layout_bottom"] = "Bottom Margin",
-	["ui.settings.visual.layout_box_width"] = "Track Box Line Width",
 	["ui.settings.visual.judgeline"] = "Judge Line",
 	["ui.settings.visual.judgeline_pos"] = "Judge Line Position",
 	["ui.settings.visual.judgeline_width"] = "Judge Line Width",

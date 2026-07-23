@@ -190,12 +190,6 @@ return {
 
 	["ui.settings.visual"] = "视觉配置",
 	["ui.settings.visual.short"] = "视觉",
-	["ui.settings.visual.layout"] = "布局比例",
-	["ui.settings.visual.layout_left"] = "左侧边界",
-	["ui.settings.visual.layout_top"] = "顶部边界",
-	["ui.settings.visual.layout_right"] = "右侧边界",
-	["ui.settings.visual.layout_bottom"] = "底部边界",
-	["ui.settings.visual.layout_box_width"] = "轨道框线宽",
 	["ui.settings.visual.judgeline"] = "判定线",
 	["ui.settings.visual.judgeline_pos"] = "判定线位置",
 	["ui.settings.visual.judgeline_width"] = "判定线线宽",
