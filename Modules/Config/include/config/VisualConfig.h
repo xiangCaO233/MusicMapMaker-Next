@@ -237,7 +237,7 @@ struct VisualConfig {
     /// @brief 鼠标吸附阈值
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度
-    float beatLineAlpha{ 1.0f };
+    float beatLineAlpha{ 0.75f };
     /// @brief 是否绘制第一个 BPM 红线前的分拍线
     bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
@@ -294,7 +294,7 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.scrollAnimationDuration   = j.value("scrollAnimationDuration", 0.12f);
     c.enableLinearScrollMapping = j.value("enableLinearScrollMapping", false);
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
-    c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
+    c.beatLineAlpha             = j.value("beatLineAlpha", 0.75f);
     c.drawBeatLines             = j.value("drawBeatLines", true);
     c.drawBeatLinesBeforeFirstTiming =
         j.value("drawBeatLinesBeforeFirstTiming", true);
