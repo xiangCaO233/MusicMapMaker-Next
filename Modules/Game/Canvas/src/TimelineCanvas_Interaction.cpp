@@ -1199,7 +1199,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
         Logic::EditTool::ColorEraser,
     };
-    if ( !handledKeyboardCommand ) {
+    const bool isTrackLayoutEditing =
+        Logic::EditorEngine::instance().getCurrentTool() ==
+        Logic::EditTool::TrackLayout;
+    if ( !handledKeyboardCommand && !isTrackLayoutEditing ) {
         for ( Logic::EditTool tool : editableTools ) {
             if ( UI::ShortcutUtils::isShortcutPressed(
                      UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
@@ -1512,7 +1515,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         break;
     }
     case Logic::EditTool::ColorBrush:
-    case Logic::EditTool::ColorEraser: break;
+    case Logic::EditTool::ColorEraser:
+    case Logic::EditTool::TrackLayout: break;
     }
 }
 

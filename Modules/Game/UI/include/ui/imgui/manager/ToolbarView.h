@@ -33,15 +33,17 @@ private:
         Custom                   ///< 使用用户保存的自定义色盘。
     };
 
-    Logic::EditTool m_currentTool      = Logic::EditTool::Move;
-    bool            m_showDivisorPopup = false;
-    float           m_lastBtnY         = 0.0f;
-    float           m_popupWidth       = 160.0f;
-    float           m_popupHeight      = 120.0f;
-    bool            m_showKeyPopup     = false;
-    float           m_lastKeyBtnY      = 0.0f;
-    float           m_keyPopupWidth    = 160.0f;
-    float           m_keyPopupHeight   = 120.0f;
+    Logic::EditTool m_currentTool = Logic::EditTool::Move;
+    /// @brief 进入轨道布局模式前使用的工具，用于再次点击按钮时恢复。
+    Logic::EditTool m_toolBeforeTrackLayout = Logic::EditTool::Move;
+    bool            m_showDivisorPopup      = false;
+    float           m_lastBtnY              = 0.0f;
+    float           m_popupWidth            = 160.0f;
+    float           m_popupHeight           = 120.0f;
+    bool            m_showKeyPopup          = false;
+    float           m_lastKeyBtnY           = 0.0f;
+    float           m_keyPopupWidth         = 160.0f;
+    float           m_keyPopupHeight        = 120.0f;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -102,6 +104,12 @@ private:
                         const char* tooltip, float width, float height,
                         const char* shortLabel, bool showLabel,
                         UIManager* sourceManager);
+
+    /// @brief 绘制可再次点击退出的轨道布局调整按钮。
+    /// @param width 按钮宽度。
+    /// @param height 按钮高度。
+    /// @param showLabel 是否显示短标签。
+    void drawTrackLayoutButton(float width, float height, bool showLabel);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。

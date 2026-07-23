@@ -228,6 +228,7 @@ enum class EditTool {
     Draw,         ///< 绘制工具
     ColorBrush,   ///< 配色笔刷工具
     ColorEraser,  ///< 配色橡皮工具
+    TrackLayout,  ///< 轨道布局调整工具
 };
 
 /**

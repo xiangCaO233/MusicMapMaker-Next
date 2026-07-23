@@ -919,6 +919,11 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
+    if ( Logic::EditorEngine::instance().getCurrentTool() ==
+         Logic::EditTool::TrackLayout ) {
+        return;
+    }
+
     // 如果键盘焦点不在主画布，跳过画布快捷键处理，避免穿透设置页或时间线窗口。
     if ( UI::ShortcutUtils::shouldBlockCanvasEditingShortcuts() ) return;
     if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
@@ -949,6 +954,202 @@ void Basic2DCanvasInteraction::handleHotkeys(
 
     // 注意：Ctrl+C/V/X/Z/Y 和 Space (播放/暂停) 已由全局 MainMenuView 处理，
     // 在此处移除以防止重复触发。
+}
+
+void Basic2DCanvasInteraction::finishTrackLayoutEditing()
+{
+    if ( m_trackLayoutChanged ) {
+        Config::AppConfig::instance().save();
+        ::MMM::UI::PlayInteractionMouseUpFeedback();
+    }
+    m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    m_trackLayoutChanged    = false;
+}
+
+void Basic2DCanvasInteraction::handleTrackLayoutEditing(
+    float pointerX, float pointerY, float canvasScreenX, float canvasScreenY,
+    float targetWidth, float targetHeight, bool isHovered)
+{
+    if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
+        if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            finishTrackLayoutEditing();
+        }
+        return;
+    }
+
+    auto& appConfig = Config::AppConfig::instance();
+    auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    const float dpiScale         = appConfig.getWindowContentScale();
+    const float edgeHitRadius    = std::max(6.0f, 7.0f * dpiScale);
+    const float moveHandleRadius = std::max(12.0f, 15.0f * dpiScale);
+
+    TrackLayoutDragHandle hoveredHandle = TrackLayoutDragHandle::None;
+    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ) {
+        hoveredHandle = m_trackLayoutDragHandle;
+    } else if ( isHovered ) {
+        hoveredHandle = hitTestTrackLayout(layout,
+                                           pointerX,
+                                           pointerY,
+                                           targetWidth,
+                                           targetHeight,
+                                           edgeHitRadius,
+                                           moveHandleRadius);
+    }
+
+    if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+         hoveredHandle == TrackLayoutDragHandle::Right ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Top ||
+                hoveredHandle == TrackLayoutDragHandle::Bottom ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Move ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
+
+    if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) &&
+         hoveredHandle != TrackLayoutDragHandle::None ) {
+        m_trackLayoutDragHandle   = hoveredHandle;
+        m_trackLayoutDragStart    = layout;
+        m_trackLayoutPointerStart = {
+            pointerX / targetWidth,
+            pointerY / targetHeight,
+        };
+    }
+
+    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        const float         normalizedX = pointerX / targetWidth;
+        const float         normalizedY = pointerY / targetHeight;
+        Config::TrackLayout candidate   = m_trackLayoutDragStart;
+        switch ( m_trackLayoutDragHandle ) {
+        case TrackLayoutDragHandle::Left:
+        case TrackLayoutDragHandle::Right:
+            candidate = resizeTrackLayout(
+                m_trackLayoutDragStart, m_trackLayoutDragHandle, normalizedX);
+            break;
+        case TrackLayoutDragHandle::Top:
+        case TrackLayoutDragHandle::Bottom:
+            candidate = resizeTrackLayout(
+                m_trackLayoutDragStart, m_trackLayoutDragHandle, normalizedY);
+            break;
+        case TrackLayoutDragHandle::Move:
+            candidate =
+                moveTrackLayout(m_trackLayoutDragStart,
+                                normalizedX - m_trackLayoutPointerStart.x,
+                                normalizedY - m_trackLayoutPointerStart.y);
+            break;
+        case TrackLayoutDragHandle::None: break;
+        }
+
+        constexpr float layoutEpsilon = 1e-6f;
+        const auto&     current       = appConfig.getVisualConfig().trackLayout;
+        const bool      changed =
+            std::abs(current.left - candidate.left) > layoutEpsilon ||
+            std::abs(current.top - candidate.top) > layoutEpsilon ||
+            std::abs(current.right - candidate.right) > layoutEpsilon ||
+            std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
+        if ( changed ) {
+            appConfig.getVisualConfig().trackLayout = candidate;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_trackLayoutChanged = true;
+            layout               = candidate;
+        }
+    }
+
+    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        finishTrackLayoutEditing();
+    }
+
+    layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
+    const ImVec2 canvasMax{ canvasScreenX + targetWidth,
+                            canvasScreenY + targetHeight };
+    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth,
+                            canvasScreenY + layout.top * targetHeight };
+    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth,
+                            canvasScreenY + layout.bottom * targetHeight };
+    const ImVec2 layoutCenter{ (layoutMin.x + layoutMax.x) * 0.5f,
+                               (layoutMin.y + layoutMax.y) * 0.5f };
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    drawList->PushClipRect(canvasMin, canvasMax, true);
+    drawList->AddRectFilled(
+        canvasMin, { canvasMax.x, layoutMin.y }, IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled(
+        { canvasMin.x, layoutMax.y }, canvasMax, IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled({ canvasMin.x, layoutMin.y },
+                            { layoutMin.x, layoutMax.y },
+                            IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled({ layoutMax.x, layoutMin.y },
+                            { canvasMax.x, layoutMax.y },
+                            IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled(layoutMin, layoutMax, IM_COL32(64, 180, 255, 24));
+
+    const ImU32 edgeColor        = IM_COL32(64, 190, 255, 230);
+    const ImU32 highlightedColor = IM_COL32(255, 218, 96, 255);
+    const float edgeThickness    = std::max(2.0f, 2.0f * dpiScale);
+    auto        handleColor      = [&](TrackLayoutDragHandle handle) {
+        return hoveredHandle == handle ? highlightedColor : edgeColor;
+    };
+    drawList->AddLine({ layoutMin.x, layoutMin.y },
+                      { layoutMin.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Left),
+                      edgeThickness);
+    drawList->AddLine({ layoutMin.x, layoutMin.y },
+                      { layoutMax.x, layoutMin.y },
+                      handleColor(TrackLayoutDragHandle::Top),
+                      edgeThickness);
+    drawList->AddLine({ layoutMax.x, layoutMin.y },
+                      { layoutMax.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Right),
+                      edgeThickness);
+    drawList->AddLine({ layoutMin.x, layoutMax.y },
+                      { layoutMax.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Bottom),
+                      edgeThickness);
+
+    const float gripHalfLong  = std::max(12.0f, 15.0f * dpiScale);
+    const float gripHalfShort = std::max(3.0f, 4.0f * dpiScale);
+    const float gripRounding  = gripHalfShort;
+    const float middleX       = layoutCenter.x;
+    const float middleY       = layoutCenter.y;
+    drawList->AddRectFilled(
+        { layoutMin.x - gripHalfShort, middleY - gripHalfLong },
+        { layoutMin.x + gripHalfShort, middleY + gripHalfLong },
+        handleColor(TrackLayoutDragHandle::Left),
+        gripRounding);
+    drawList->AddRectFilled(
+        { layoutMax.x - gripHalfShort, middleY - gripHalfLong },
+        { layoutMax.x + gripHalfShort, middleY + gripHalfLong },
+        handleColor(TrackLayoutDragHandle::Right),
+        gripRounding);
+    drawList->AddRectFilled(
+        { middleX - gripHalfLong, layoutMin.y - gripHalfShort },
+        { middleX + gripHalfLong, layoutMin.y + gripHalfShort },
+        handleColor(TrackLayoutDragHandle::Top),
+        gripRounding);
+    drawList->AddRectFilled(
+        { middleX - gripHalfLong, layoutMax.y - gripHalfShort },
+        { middleX + gripHalfLong, layoutMax.y + gripHalfShort },
+        handleColor(TrackLayoutDragHandle::Bottom),
+        gripRounding);
+
+    const ImU32 moveColor = handleColor(TrackLayoutDragHandle::Move);
+    drawList->AddCircleFilled(layoutCenter, moveHandleRadius, moveColor);
+    const float arrowLength    = moveHandleRadius * 0.55f;
+    const float arrowThickness = std::max(1.5f, 1.5f * dpiScale);
+    drawList->AddLine({ layoutCenter.x - arrowLength, layoutCenter.y },
+                      { layoutCenter.x + arrowLength, layoutCenter.y },
+                      IM_COL32(20, 30, 40, 255),
+                      arrowThickness);
+    drawList->AddLine({ layoutCenter.x, layoutCenter.y - arrowLength },
+                      { layoutCenter.x, layoutCenter.y + arrowLength },
+                      IM_COL32(20, 30, 40, 255),
+                      arrowThickness);
+    drawList->PopClipRect();
 }
 
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
@@ -989,6 +1190,15 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool isMouseInTrackLayout =
         isHovered && normX >= layout.left && normX <= layout.right &&
         normY >= layout.top && normY <= layout.bottom;
+    const bool isTrackLayoutEditing =
+        Logic::EditorEngine::instance().getCurrentTool() ==
+        Logic::EditTool::TrackLayout;
+
+    if ( !isTrackLayoutEditing &&
+         (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_trackLayoutChanged) ) {
+        finishTrackLayoutEditing();
+    }
 
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
@@ -1017,6 +1227,34 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.viewportHeight = targetHeight;
         m_lastMouseCommand.isHovering     = isHovered;
         m_lastMouseCommand.isDragging     = isDragging;
+    }
+
+    if ( isTrackLayoutEditing ) {
+        if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
+             m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
+            m_hasLastHovered      = true;
+            m_lastHoveredEntity   = entt::null;
+            m_lastHoveredPart     = 0;
+            m_lastHoveredSubIndex = -1;
+        }
+
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressDragged              = false;
+        m_isCanvasPanning               = false;
+        m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
+        handleTrackLayoutEditing(localMousePos.x,
+                                 localMousePos.y,
+                                 windowPos.x,
+                                 windowPos.y,
+                                 targetWidth,
+                                 targetHeight,
+                                 isHovered);
+        return;
     }
 
     // --- 交互：显示精确时间戳工具提示 ---

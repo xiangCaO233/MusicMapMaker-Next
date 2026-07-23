@@ -450,6 +450,7 @@ std::string editToolToWorkspaceName(EditTool tool)
     case EditTool::Draw: return "Draw";
     case EditTool::ColorBrush: return "ColorBrush";
     case EditTool::ColorEraser: return "ColorEraser";
+    case EditTool::TrackLayout:
     case EditTool::Move:
     default: return "Move";
     }

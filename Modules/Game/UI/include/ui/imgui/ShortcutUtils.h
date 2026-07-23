@@ -286,6 +286,7 @@ inline const Config::ShortcutBinding& getToolShortcut(
         return settings.shortcutConfig.toolColorBrush;
     case Logic::EditTool::ColorEraser:
         return settings.shortcutConfig.toolColorEraser;
+    case Logic::EditTool::TrackLayout: break;
     }
     return settings.shortcutConfig.toolMove;
 }
@@ -305,6 +306,7 @@ inline Config::ShortcutBinding& getToolShortcut(
         return settings.shortcutConfig.toolColorBrush;
     case Logic::EditTool::ColorEraser:
         return settings.shortcutConfig.toolColorEraser;
+    case Logic::EditTool::TrackLayout: break;
     }
     return settings.shortcutConfig.toolMove;
 }

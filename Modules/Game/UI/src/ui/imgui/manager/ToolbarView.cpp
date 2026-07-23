@@ -456,6 +456,9 @@ void ToolbarView::update(UIManager* sourceManager)
                 advanceItem();
             };
 
+        const bool isTrackLayoutEditing =
+            m_currentTool == Logic::EditTool::TrackLayout;
+        ImGui::BeginDisabled(isTrackLayoutEditing);
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
                        TR("ui.toolbar.move"),
@@ -501,6 +504,7 @@ void ToolbarView::update(UIManager* sourceManager)
                        showToolLabels,
                        sourceManager);
         advanceItem();
+        ImGui::EndDisabled();
 
         ImVec2 sepPos = ImGui::GetCursorScreenPos();
         float  sepH   = 2.0f * dpiScale;
@@ -510,6 +514,9 @@ void ToolbarView::update(UIManager* sourceManager)
             IM_COL32(100, 100, 100, 150),
             1.0f * dpiScale);
         ImGui::Dummy(ImVec2(btnSize, sepH));
+        advanceItem();
+
+        drawTrackLayoutButton(btnSize, btnHeight, showToolLabels);
         advanceItem();
 
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
@@ -535,7 +542,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -670,7 +677,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -959,7 +966,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1008,11 +1015,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1765,7 +1772,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1952,6 +1959,44 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
     }
     drawTooltip(tooltipText.c_str());
 
+    ImGui::PopStyleColor(3);
+}
+
+void ToolbarView::drawTrackLayoutButton(float width, float height,
+                                        bool showLabel)
+{
+    const bool isActive = m_currentTool == Logic::EditTool::TrackLayout;
+    if ( isActive ) {
+        const ImVec4 activeCol =
+            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+        ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, activeCol);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeCol);
+    } else {
+        Utils::UIThemeUtils::pushTransparentButtonStyles();
+    }
+
+    ImGui::PushID("TrackLayoutTool");
+    if ( drawIconButton(ICON_MMM_TRACK_LAYOUT,
+                        "##ToolbarTrackLayoutButton",
+                        TR("ui.toolbar.short.track_layout").data(),
+                        width,
+                        height,
+                        showLabel) ) {
+        Logic::EditTool nextTool = Logic::EditTool::TrackLayout;
+        if ( isActive ) {
+            nextTool = m_toolBeforeTrackLayout == Logic::EditTool::TrackLayout
+                           ? Logic::EditTool::Move
+                           : m_toolBeforeTrackLayout;
+        } else {
+            m_toolBeforeTrackLayout = m_currentTool;
+        }
+        m_currentTool = nextTool;
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::CmdChangeTool{ nextTool });
+    }
+    ImGui::PopID();
+    drawTooltip(TR("ui.toolbar.track_layout").data());
     ImGui::PopStyleColor(3);
 }
 
