@@ -3,9 +3,11 @@
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
+#include "config/NoteColorPaletteFile.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -15,15 +17,18 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <iterator>
 #include <limits>
+#include <nfd.h>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -231,6 +236,43 @@ bool isReservedPaletteSchemeName(const std::string& name)
            name == Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ||
            name == defaultPaletteSchemeName() ||
            name == inheritedPaletteSchemeName();
+}
+
+/// @brief 将方案名转换为可用作推荐导出文件名的文本。
+/// @param name 当前物件配色方案名。
+/// @return 已替换路径非法字符且移除结尾空格和点号的文件名主体。
+std::string sanitizePaletteExportFileName(std::string name)
+{
+    for ( char& character : name ) {
+        const auto byte = static_cast<unsigned char>(character);
+        if ( byte < 32 || character == '<' || character == '>' ||
+             character == ':' || character == '"' || character == '/' ||
+             character == '\\' || character == '|' || character == '?' ||
+             character == '*' ) {
+            character = '_';
+        }
+    }
+    while ( !name.empty() && (name.back() == ' ' || name.back() == '.') ) {
+        name.pop_back();
+    }
+    if ( name.empty() || name == "." || name == ".." ) {
+        name = "palette";
+    }
+    name += Config::NOTE_COLOR_PALETTE_FILE_EXTENSION;
+    return name;
+}
+
+/// @brief 规范化物件配色方案导出路径的扩展名。
+/// @param path 文件选择器返回的 UTF-8 路径。
+/// @return 使用 `.mmpalette` 扩展名的 UTF-8 路径。
+std::string normalizePaletteExportPath(const std::string& path)
+{
+    if ( path.empty() ) {
+        return {};
+    }
+    std::filesystem::path normalized = Config::utf8ToPath(path);
+    normalized.replace_extension(Config::NOTE_COLOR_PALETTE_FILE_EXTENSION);
+    return Config::pathToUtf8(normalized);
 }
 }  // namespace
 
@@ -880,6 +922,7 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PopStyleVar(4);
 
     renderColorPalettePopup(dpiScale);
+    renderPaletteExportFileDialog(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1431,6 +1474,114 @@ void ToolbarView::savePaletteScheme(bool createNew)
     app.save();
 }
 
+void ToolbarView::openPaletteExportFilePicker()
+{
+    auto&             app         = Config::AppConfig::instance();
+    auto&             settings    = app.getEditorSettings();
+    const std::string defaultPath = settings.lastFilePickerPath.empty()
+                                        ? std::string(".")
+                                        : settings.lastFilePickerPath;
+    const std::string defaultFileName =
+        sanitizePaletteExportFileName(currentPaletteSchemeName());
+    m_paletteExportStatusKey.clear();
+
+    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+        nfdu8char_t*      outPath    = nullptr;
+        nfdu8filteritem_t filters[1] = { { "MusicMapMaker Note Palette",
+                                           "mmpalette" } };
+        const nfdresult_t result     = NFD_SaveDialogU8(
+            &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
+        if ( result == NFD_OKAY && outPath != nullptr ) {
+            exportCurrentPaletteToPath(outPath);
+            NFD_FreePathU8(outPath);
+        } else if ( result == NFD_OKAY ) {
+            m_paletteExportSucceeded = false;
+            m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
+        } else if ( result == NFD_ERROR ) {
+            const char* error = NFD_GetError();
+            XERROR("Failed to open note palette export dialog: {}",
+                   error ? error : "Unknown NFD error");
+            m_paletteExportSucceeded = false;
+            m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig dialogConfig;
+    dialogConfig.path              = defaultPath;
+    dialogConfig.countSelectionMax = 1;
+    dialogConfig.fileName          = defaultFileName;
+    dialogConfig.flags =
+        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("NotePaletteExportPicker");
+    ImGuiFileDialog::Instance()->OpenDialog(
+        "NotePaletteExportPicker",
+        TR("ui.toolbar.note_palette.export_dialog_title"),
+        ".mmpalette",
+        dialogConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("NotePaletteExportPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
+void ToolbarView::renderPaletteExportFileDialog(float dpiScale)
+{
+    Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+    if ( ImGuiFileDialog::Instance()->IsOpened("NotePaletteExportPicker") ) {
+        Utils::prepareCenteredModalWindow({ 600, 400 });
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             "NotePaletteExportPicker",
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
+             { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            exportCurrentPaletteToPath(
+                ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
+void ToolbarView::exportCurrentPaletteToPath(const std::string& path)
+{
+    const std::string normalizedPath = normalizePaletteExportPath(path);
+    const bool        succeeded =
+        !normalizedPath.empty() &&
+        Config::exportNoteColorPaletteFile(Config::utf8ToPath(normalizedPath),
+                                           buildCurrentPaletteScheme());
+    m_paletteExportSucceeded = succeeded;
+    m_paletteExportStatusKey = succeeded
+                                   ? "ui.toolbar.note_palette.export_success"
+                                   : "ui.toolbar.note_palette.export_failed";
+    if ( !succeeded ) {
+        return;
+    }
+
+    auto&                       app      = Config::AppConfig::instance();
+    auto&                       settings = app.getEditorSettings();
+    const std::filesystem::path parent =
+        Config::utf8ToPath(normalizedPath).parent_path();
+    if ( !parent.empty() ) {
+        settings.lastFilePickerPath = Config::pathToUtf8(parent);
+        app.save();
+    }
+}
+
+Config::NoteColorPaletteScheme ToolbarView::buildCurrentPaletteScheme() const
+{
+    Config::NoteColorPaletteScheme scheme;
+    scheme.name = currentPaletteSchemeName();
+    scheme.colors.reserve(Logic::NOTE_COLOR_SLOT_COUNT);
+    for ( const auto& color : m_paletteColors ) {
+        scheme.colors.push_back(toStoredColor(color));
+    }
+    return scheme;
+}
+
 void ToolbarView::renamePaletteScheme()
 {
     auto& app           = Config::AppConfig::instance();
@@ -1689,6 +1840,11 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             ::MMM::UI::FeedbackOpenPopup("DeleteNoteColorPaletteConfirm");
         }
         ImGui::EndDisabled();
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.export_scheme").data(),
+                 ImVec2(schemeButtonW, schemeButtonH)) ) {
+            openPaletteExportFilePicker();
+        }
 
         if ( ImGui::BeginPopup("DeleteNoteColorPaletteConfirm") ) {
             ImGui::TextWrapped(
@@ -1719,6 +1875,17 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             ImGui::TextWrapped("%s",
                                TR(m_paletteSchemeErrorKey.c_str()).data());
             ImGui::PopStyleColor();
+        }
+        if ( !m_paletteExportStatusKey.empty() ) {
+            if ( !m_paletteExportSucceeded ) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      Utils::UIThemeUtils::getDangerColor());
+            }
+            ImGui::TextWrapped("%s",
+                               TR(m_paletteExportStatusKey.c_str()).data());
+            if ( !m_paletteExportSucceeded ) {
+                ImGui::PopStyleColor();
+            }
         }
 
         ImGui::Separator();

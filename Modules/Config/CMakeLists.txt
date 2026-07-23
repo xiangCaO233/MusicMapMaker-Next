@@ -3,7 +3,8 @@
 add_library(
   Config STATIC
   src/skin/SkinLoader.cpp src/skin/translation/Translation.cpp src/AppPaths.cpp
-  src/AppConfig.cpp src/FontPreferenceValidator.cpp)
+  src/AppConfig.cpp src/FontPreferenceValidator.cpp
+  src/NoteColorPaletteFile.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -28,3 +29,11 @@ target_link_libraries(SkinThemeBindingTest PRIVATE Config)
 add_test(NAME SkinThemeBindingTest
          COMMAND SkinThemeBindingTest
                  "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")
+
+# 物件配色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
+mmm_add_test_executable(Config NoteColorPaletteFileTest
+                        tests/NoteColorPaletteFileTest.cpp)
+target_link_libraries(NoteColorPaletteFileTest PRIVATE Config)
+add_test(NAME NoteColorPaletteFileTest
+         COMMAND NoteColorPaletteFileTest
+                 "${CMAKE_BINARY_DIR}/test_output/note_color_palette_file")

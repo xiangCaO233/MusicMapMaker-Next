@@ -7,6 +7,11 @@
 #include <optional>
 #include <string>
 
+namespace MMM::Config
+{
+struct NoteColorPaletteScheme;
+}
+
 namespace MMM::UI
 {
 
@@ -84,6 +89,10 @@ private:
     std::optional<std::size_t> m_pendingDeletePaletteSchemeIndex;
     /// @brief 当前方案名称校验错误的翻译键；为空表示无错误。
     std::string m_paletteSchemeErrorKey;
+    /// @brief 当前配色方案导出结果的翻译键；为空表示尚无结果。
+    std::string m_paletteExportStatusKey;
+    /// @brief 最近一次配色方案导出是否成功。
+    bool m_paletteExportSucceeded{ false };
     /// @brief 当前调色盘方案名称编辑缓冲区。
     std::array<char, 96> m_paletteSchemeNameBuffer{};
     /// @brief 上次已应用项目调色方案的项目与方案组合键。
@@ -171,6 +180,24 @@ private:
     /// @brief 保存当前调色盘方案。
     /// @param createNew 是否创建新方案。
     void savePaletteScheme(bool createNew);
+
+    /// @brief 打开当前物件配色方案的导出文件选择器。
+    /// @warning 用户触发的低频路径：原生文件选择器可能阻塞。
+    void openPaletteExportFilePicker();
+
+    /// @brief 绘制并消费统一风格的配色方案导出文件选择器。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
+    void renderPaletteExportFileDialog(float dpiScale);
+
+    /// @brief 将当前物件配色方案导出到指定 UTF-8 路径。
+    /// @param path 用户选择的目标路径。
+    /// @warning 用户触发的低频路径：允许执行文件系统写入。
+    void exportCurrentPaletteToPath(const std::string& path);
+
+    /// @brief 构造当前弹窗中实际显示的物件配色方案。
+    /// @return 包含当前名称和六个颜色槽的方案。
+    Config::NoteColorPaletteScheme buildCurrentPaletteScheme() const;
 
     /// @brief 重命名当前选中的调色盘方案。
     void renamePaletteScheme();
