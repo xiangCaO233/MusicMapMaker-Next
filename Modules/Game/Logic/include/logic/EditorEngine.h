@@ -8,6 +8,7 @@
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -447,6 +448,12 @@ public:
     bool flushPendingMetadataAutoSaves();
 
 private:
+    /// @brief 将编辑器级画笔配色恢复到指定会话。
+    /// @param session 接收当前画笔配色的会话。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
+    /// 重置或切换等低频路径。
+    void restoreBrushNoteColorsUnsafe(BeatmapSession& session) const;
+
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
     void captureProjectWorkspaceState();
 
@@ -533,6 +540,13 @@ private:
     /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
     /// 读取；只传递枚举状态，使用 relaxed。
     std::atomic<EditTool> m_currentTool{ EditTool::Move };
+
+    /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
+    std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>
+        m_brushNoteColors{};
+
+    /// @brief 编辑器是否已经收到过画笔配色命令。
+    bool m_brushNoteColorsInitialized{ false };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用

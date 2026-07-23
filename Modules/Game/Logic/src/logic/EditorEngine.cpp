@@ -1479,12 +1479,35 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    if ( const auto* palette = std::get_if<CmdSetBrushNotePalette>(&cmd) ) {
+        for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+            m_brushNoteColors[i] = palette->colors[i];
+        }
+        m_brushNoteColorsInitialized = true;
+    } else if ( const auto* color = std::get_if<CmdSetBrushNoteColor>(&cmd) ) {
+        const auto colorIndex = static_cast<std::size_t>(color->slot);
+        if ( colorIndex < m_brushNoteColors.size() ) {
+            m_brushNoteColors[colorIndex] = color->color;
+            m_brushNoteColorsInitialized  = true;
+        }
+    }
+
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     /// @brief 当前活跃 Session 索引快照。
     int32_t idx = m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
         sessions[idx].session->pushCommand(std::move(cmd));
+    }
+}
+
+void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
+{
+    if ( !m_brushNoteColorsInitialized ) return;
+
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        session.pushCommand(CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
+                                                  m_brushNoteColors[i] });
     }
 }
 
@@ -1964,6 +1987,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
                     m_currentTool.load(std::memory_order_relaxed) }));
+                restoreBrushNoteColorsUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
@@ -2011,6 +2035,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+    restoreBrushNoteColorsUnsafe(*newSession);
 
     // 如果有谱面，加载它
     if ( beatmap ) {
@@ -2107,6 +2132,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
         LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+    restoreBrushNoteColorsUnsafe(*newSession);
 
     entry.session     = std::move(newSession);
     entry.displayName = displayName.empty() ? "Welcome" : displayName;
@@ -2190,6 +2216,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         // 2. 加载新激活会话的音频资源并同步播放进度
         auto& activeSession = sessions[index].session;
         if ( activeSession ) {
+            restoreBrushNoteColorsUnsafe(*activeSession);
             auto& audio = Audio::AudioManager::instance();
             if ( !shouldKeepPlaybackOnTarget ) {
                 audio.stop();

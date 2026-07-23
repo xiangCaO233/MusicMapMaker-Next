@@ -80,3 +80,8 @@ mmm_add_test_executable(Logic BackgroundRenderSystemTest
                         tests/BackgroundRenderSystemTest.cpp)
 target_link_libraries(BackgroundRenderSystemTest PRIVATE Logic Log)
 add_test(NAME BackgroundRenderSystemTest COMMAND BackgroundRenderSystemTest)
+
+mmm_add_test_executable(Logic BrushPaletteSessionStateTest
+                        tests/BrushPaletteSessionStateTest.cpp)
+target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
+add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
