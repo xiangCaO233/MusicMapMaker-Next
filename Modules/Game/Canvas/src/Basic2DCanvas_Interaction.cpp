@@ -958,12 +958,12 @@ void Basic2DCanvasInteraction::handleHotkeys(
 
 void Basic2DCanvasInteraction::finishTrackLayoutEditing()
 {
-    if ( m_trackLayoutChanged ) {
+    if ( m_layoutConfigurationChanged ) {
         Config::AppConfig::instance().save();
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
-    m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
-    m_trackLayoutChanged    = false;
+    m_trackLayoutDragHandle      = TrackLayoutDragHandle::None;
+    m_layoutConfigurationChanged = false;
 }
 
 void Basic2DCanvasInteraction::handleTrackLayoutEditing(
@@ -980,6 +980,8 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
 
     auto& appConfig = Config::AppConfig::instance();
     auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    float judgmentLinePosition =
+        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
     const float dpiScale         = appConfig.getWindowContentScale();
     const float edgeHitRadius    = std::max(6.0f, 7.0f * dpiScale);
     const float moveHandleRadius = std::max(12.0f, 15.0f * dpiScale);
@@ -989,6 +991,7 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
         hoveredHandle = m_trackLayoutDragHandle;
     } else if ( isHovered ) {
         hoveredHandle = hitTestTrackLayout(layout,
+                                           judgmentLinePosition,
                                            pointerX,
                                            pointerY,
                                            targetWidth,
@@ -1001,7 +1004,8 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
          hoveredHandle == TrackLayoutDragHandle::Right ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Top ||
-                hoveredHandle == TrackLayoutDragHandle::Bottom ) {
+                hoveredHandle == TrackLayoutDragHandle::Bottom ||
+                hoveredHandle == TrackLayoutDragHandle::JudgmentLine ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Move ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
@@ -1022,39 +1026,61 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
         const float         normalizedX = pointerX / targetWidth;
         const float         normalizedY = pointerY / targetHeight;
         Config::TrackLayout candidate   = m_trackLayoutDragStart;
-        switch ( m_trackLayoutDragHandle ) {
-        case TrackLayoutDragHandle::Left:
-        case TrackLayoutDragHandle::Right:
-            candidate = resizeTrackLayout(
-                m_trackLayoutDragStart, m_trackLayoutDragHandle, normalizedX);
-            break;
-        case TrackLayoutDragHandle::Top:
-        case TrackLayoutDragHandle::Bottom:
-            candidate = resizeTrackLayout(
-                m_trackLayoutDragStart, m_trackLayoutDragHandle, normalizedY);
-            break;
-        case TrackLayoutDragHandle::Move:
-            candidate =
-                moveTrackLayout(m_trackLayoutDragStart,
-                                normalizedX - m_trackLayoutPointerStart.x,
-                                normalizedY - m_trackLayoutPointerStart.y);
-            break;
-        case TrackLayoutDragHandle::None: break;
-        }
+        if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::JudgmentLine ) {
+            constexpr float positionEpsilon = 1e-6f;
+            const float     candidatePosition =
+                sanitizeJudgmentLinePosition(normalizedY);
+            const float currentPosition =
+                appConfig.getVisualConfig().judgeline_pos;
+            if ( !std::isfinite(currentPosition) ||
+                 std::abs(currentPosition - candidatePosition) >
+                     positionEpsilon ) {
+                appConfig.getVisualConfig().judgeline_pos = candidatePosition;
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
+                        appConfig.getEditorConfig() }));
+                m_layoutConfigurationChanged = true;
+                judgmentLinePosition         = candidatePosition;
+            }
+        } else {
+            switch ( m_trackLayoutDragHandle ) {
+            case TrackLayoutDragHandle::Left:
+            case TrackLayoutDragHandle::Right:
+                candidate = resizeTrackLayout(m_trackLayoutDragStart,
+                                              m_trackLayoutDragHandle,
+                                              normalizedX);
+                break;
+            case TrackLayoutDragHandle::Top:
+            case TrackLayoutDragHandle::Bottom:
+                candidate = resizeTrackLayout(m_trackLayoutDragStart,
+                                              m_trackLayoutDragHandle,
+                                              normalizedY);
+                break;
+            case TrackLayoutDragHandle::Move:
+                candidate =
+                    moveTrackLayout(m_trackLayoutDragStart,
+                                    normalizedX - m_trackLayoutPointerStart.x,
+                                    normalizedY - m_trackLayoutPointerStart.y);
+                break;
+            case TrackLayoutDragHandle::JudgmentLine: break;
+            case TrackLayoutDragHandle::None: break;
+            }
 
-        constexpr float layoutEpsilon = 1e-6f;
-        const auto&     current       = appConfig.getVisualConfig().trackLayout;
-        const bool      changed =
-            std::abs(current.left - candidate.left) > layoutEpsilon ||
-            std::abs(current.top - candidate.top) > layoutEpsilon ||
-            std::abs(current.right - candidate.right) > layoutEpsilon ||
-            std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
-        if ( changed ) {
-            appConfig.getVisualConfig().trackLayout = candidate;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
-            m_trackLayoutChanged = true;
-            layout               = candidate;
+            constexpr float layoutEpsilon = 1e-6f;
+            const auto&     current = appConfig.getVisualConfig().trackLayout;
+            const bool      changed =
+                std::abs(current.left - candidate.left) > layoutEpsilon ||
+                std::abs(current.top - candidate.top) > layoutEpsilon ||
+                std::abs(current.right - candidate.right) > layoutEpsilon ||
+                std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
+            if ( changed ) {
+                appConfig.getVisualConfig().trackLayout = candidate;
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
+                        appConfig.getEditorConfig() }));
+                m_layoutConfigurationChanged = true;
+                layout                       = candidate;
+            }
         }
     }
 
@@ -1064,6 +1090,8 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
     }
 
     layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    judgmentLinePosition =
+        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
     const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2 canvasMax{ canvasScreenX + targetWidth,
                             canvasScreenY + targetHeight };
@@ -1073,6 +1101,8 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
                             canvasScreenY + layout.bottom * targetHeight };
     const ImVec2 layoutCenter{ (layoutMin.x + layoutMax.x) * 0.5f,
                                (layoutMin.y + layoutMax.y) * 0.5f };
+    const float  judgmentLineY =
+        canvasScreenY + judgmentLinePosition * targetHeight;
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     drawList->PushClipRect(canvasMin, canvasMax, true);
@@ -1111,6 +1141,15 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
                       handleColor(TrackLayoutDragHandle::Bottom),
                       edgeThickness);
 
+    const ImU32 judgmentLineColor =
+        hoveredHandle == TrackLayoutDragHandle::JudgmentLine
+            ? highlightedColor
+            : IM_COL32(255, 112, 190, 235);
+    drawList->AddLine({ layoutMin.x, judgmentLineY },
+                      { layoutMax.x, judgmentLineY },
+                      judgmentLineColor,
+                      edgeThickness);
+
     const float gripHalfLong  = std::max(12.0f, 15.0f * dpiScale);
     const float gripHalfShort = std::max(3.0f, 4.0f * dpiScale);
     const float gripRounding  = gripHalfShort;
@@ -1135,6 +1174,11 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
         { middleX - gripHalfLong, layoutMax.y - gripHalfShort },
         { middleX + gripHalfLong, layoutMax.y + gripHalfShort },
         handleColor(TrackLayoutDragHandle::Bottom),
+        gripRounding);
+    drawList->AddRectFilled(
+        { layoutMax.x - gripHalfLong, judgmentLineY - gripHalfShort },
+        { layoutMax.x + gripHalfLong, judgmentLineY + gripHalfShort },
+        judgmentLineColor,
         gripRounding);
 
     const ImU32 moveColor = handleColor(TrackLayoutDragHandle::Move);
@@ -1196,7 +1240,7 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     if ( !isTrackLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
-          m_trackLayoutChanged) ) {
+          m_layoutConfigurationChanged) ) {
         finishTrackLayoutEditing();
     }
 

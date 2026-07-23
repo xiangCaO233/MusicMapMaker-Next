@@ -190,8 +190,6 @@ return {
 
 	["ui.settings.visual"] = "视觉配置",
 	["ui.settings.visual.short"] = "视觉",
-	["ui.settings.visual.judgeline"] = "判定线",
-	["ui.settings.visual.judgeline_pos"] = "判定线位置",
 	["ui.settings.visual.judgeline_width"] = "判定线线宽",
 	["ui.settings.visual.beat_line"] = "分拍线",
 	["ui.settings.visual.beat_line_alpha"] = "分拍线透明度",

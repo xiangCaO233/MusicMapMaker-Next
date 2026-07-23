@@ -187,8 +187,6 @@ return {
 
 	["ui.settings.visual"] = "Visual Config",
 	["ui.settings.visual.short"] = "Visual",
-	["ui.settings.visual.judgeline"] = "Judge Line",
-	["ui.settings.visual.judgeline_pos"] = "Judge Line Position",
 	["ui.settings.visual.judgeline_width"] = "Judge Line Width",
 	["ui.settings.visual.beat_line"] = "Beat Line",
 	["ui.settings.visual.beat_line_alpha"] = "Beat Line Alpha",

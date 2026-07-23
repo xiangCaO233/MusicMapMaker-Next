@@ -99,7 +99,7 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
-    /// @brief 绘制并处理独占的轨道布局边界与整体移动把手。
+    /// @brief 绘制并处理独占的轨道布局、判定线与整体移动把手。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
     /// @param canvasScreenX 画布左上角屏幕横坐标。
@@ -186,8 +186,8 @@ private:
     Config::TrackLayout m_trackLayoutDragStart;
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
-    /// @brief 当前布局拖动手势是否实际修改过配置。
-    bool m_trackLayoutChanged{ false };
+    /// @brief 当前布局配置拖动手势是否实际修改过配置。
+    bool m_layoutConfigurationChanged{ false };
 };
 
 }  // namespace MMM::Canvas

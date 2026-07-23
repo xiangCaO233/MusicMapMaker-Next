@@ -14,13 +14,26 @@ inline constexpr float TRACK_LAYOUT_MIN_SPAN = 0.01f;
 
 /// @brief 轨道布局编辑器当前命中的拖拽部位。
 enum class TrackLayoutDragHandle {
-    None,    ///< 未命中任何可拖拽部位。
-    Left,    ///< 左边界。
-    Top,     ///< 上边界。
-    Right,   ///< 右边界。
-    Bottom,  ///< 下边界。
-    Move     ///< 整体移动把手。
+    None,          ///< 未命中任何可拖拽部位。
+    Left,          ///< 左边界。
+    Top,           ///< 上边界。
+    Right,         ///< 右边界。
+    Bottom,        ///< 下边界。
+    JudgmentLine,  ///< 判定线位置把手。
+    Move           ///< 整体移动把手。
 };
+
+/// @brief 将判定线位置规整到画布归一化范围。
+/// @param position 待规整的判定线位置。
+/// @return 位于 `[0,1]` 的判定线位置；非有限值恢复为默认位置。
+/// @warning UI 热路径纯计算：布局工具每帧调用；不得引入分配或阻塞操作。
+[[nodiscard]] inline float sanitizeJudgmentLinePosition(float position)
+{
+    if ( !std::isfinite(position) ) {
+        return 0.85f;
+    }
+    return std::clamp(position, 0.0f, 1.0f);
+}
 
 /// @brief 将轨道布局规整到可安全编辑的合法范围。
 /// @param layout 待规整布局。
@@ -77,6 +90,7 @@ enum class TrackLayoutDragHandle {
         layout.bottom = std::clamp(
             normalizedPointer, layout.top + TRACK_LAYOUT_MIN_SPAN, 1.0f);
         break;
+    case TrackLayoutDragHandle::JudgmentLine:
     case TrackLayoutDragHandle::Move:
     case TrackLayoutDragHandle::None: break;
     }
@@ -108,8 +122,9 @@ enum class TrackLayoutDragHandle {
     return layout;
 }
 
-/// @brief 在画布像素坐标中命中轨道布局边界或整体移动把手。
+/// @brief 在画布像素坐标中命中轨道边界、判定线或整体移动把手。
 /// @param layout 当前轨道布局。
+/// @param judgmentLinePosition 当前判定线归一化位置。
 /// @param pointerX 指针相对画布左侧的像素坐标。
 /// @param pointerY 指针相对画布顶部的像素坐标。
 /// @param viewportWidth 画布宽度。
@@ -119,9 +134,9 @@ enum class TrackLayoutDragHandle {
 /// @return 命中的拖拽部位；未命中时返回 None。
 /// @warning UI 热路径纯计算：布局工具每帧调用；只允许常量级数值比较。
 [[nodiscard]] inline TrackLayoutDragHandle hitTestTrackLayout(
-    Config::TrackLayout layout, float pointerX, float pointerY,
-    float viewportWidth, float viewportHeight, float edgeHitRadius,
-    float moveHandleRadius)
+    Config::TrackLayout layout, float judgmentLinePosition, float pointerX,
+    float pointerY, float viewportWidth, float viewportHeight,
+    float edgeHitRadius, float moveHandleRadius)
 {
     if ( !std::isfinite(pointerX) || !std::isfinite(pointerY) ||
          !std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) ||
@@ -138,10 +153,16 @@ enum class TrackLayoutDragHandle {
     const float bottom  = layout.bottom * viewportHeight;
     const float centerX = (left + right) * 0.5f;
     const float centerY = (top + bottom) * 0.5f;
+    const float judgmentLineY =
+        sanitizeJudgmentLinePosition(judgmentLinePosition) * viewportHeight;
 
     if ( std::abs(pointerX - centerX) <= moveHandleRadius &&
          std::abs(pointerY - centerY) <= moveHandleRadius ) {
         return TrackLayoutDragHandle::Move;
+    }
+    if ( std::abs(pointerX - right) <= moveHandleRadius &&
+         std::abs(pointerY - judgmentLineY) <= edgeHitRadius ) {
+        return TrackLayoutDragHandle::JudgmentLine;
     }
 
     TrackLayoutDragHandle closest = TrackLayoutDragHandle::None;

@@ -83,39 +83,56 @@ bool testMovePreservesSize()
            near(movedBottomRight.bottom - movedBottomRight.top, 0.7f);
 }
 
-/// @brief 验证中心把手优先于边界且四边均可命中。
+/// @brief 验证判定线位置会被限制在画布范围内。
+/// @return 有限值、越界值和非有限值均得到合法结果时返回 true。
+bool testJudgmentLineConstraints()
+{
+    return near(MMM::Canvas::sanitizeJudgmentLinePosition(0.42f), 0.42f) &&
+           near(MMM::Canvas::sanitizeJudgmentLinePosition(-2.0f), 0.0f) &&
+           near(MMM::Canvas::sanitizeJudgmentLinePosition(3.0f), 1.0f) &&
+           near(MMM::Canvas::sanitizeJudgmentLinePosition(
+                    std::numeric_limits<float>::quiet_NaN()),
+                0.85f);
+}
+
+/// @brief 验证中心把手优先于边界且四边和判定线把手均可命中。
 /// @return 命中结果符合预期时返回 true。
 bool testHandleHitTesting()
 {
     const MMM::Config::TrackLayout layout;
     using Handle = MMM::Canvas::TrackLayoutDragHandle;
     return MMM::Canvas::hitTestTrackLayout(
-               layout, 50.0f, 50.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               layout, 0.85f, 50.0f, 50.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
                Handle::Move &&
            MMM::Canvas::hitTestTrackLayout(
-               layout, 20.0f, 30.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               layout, 0.85f, 20.0f, 30.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
                Handle::Left &&
            MMM::Canvas::hitTestTrackLayout(
-               layout, 40.0f, 5.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               layout, 0.85f, 40.0f, 5.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
                Handle::Top &&
            MMM::Canvas::hitTestTrackLayout(
-               layout, 80.0f, 70.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               layout, 0.85f, 80.0f, 70.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
                Handle::Right &&
            MMM::Canvas::hitTestTrackLayout(
-               layout, 60.0f, 95.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               layout, 0.85f, 60.0f, 95.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
                Handle::Bottom &&
            MMM::Canvas::hitTestTrackLayout(
-               layout, 2.0f, 2.0f, 100.0f, 100.0f, 4.0f, 8.0f) == Handle::None;
+               layout, 0.85f, 80.0f, 85.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               Handle::JudgmentLine &&
+           MMM::Canvas::hitTestTrackLayout(
+               layout, 0.85f, 2.0f, 2.0f, 100.0f, 100.0f, 4.0f, 8.0f) ==
+               Handle::None;
 }
 
 }  // namespace
 
-/// @brief 覆盖轨道布局边界调整、整体平移和命中测试。
+/// @brief 覆盖轨道布局、判定线调整、整体平移和命中测试。
 /// @return 所有检查通过时返回 0。
 int main()
 {
     return testSanitizeInvalidLayout() && testBoundaryConstraints() &&
-                   testMovePreservesSize() && testHandleHitTesting()
+                   testMovePreservesSize() && testJudgmentLineConstraints() &&
+                   testHandleHitTesting()
                ? 0
                : 1;
 }

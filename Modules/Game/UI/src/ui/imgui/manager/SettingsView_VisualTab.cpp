@@ -101,21 +101,6 @@ void SettingsView::drawVisualSettings()
         return nullptr;
     };
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.judgeline").data(),
-                               true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.judgeline_pos").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##JudgeLinePos", &visual.judgeline_pos, 0.0f, 1.0f);
-            });
-    }
-
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(),
                                true) ) {
         // 采用全局统一最大标签宽度 maxLabelW
