@@ -87,6 +87,7 @@ bool testVisibleComponentRendersInOverlay()
     MMM::Logic::RenderSnapshot               snapshot;
     MMM::Config::CanvasComponentLayoutConfig config;
     configureAsciiFont(snapshot);
+    snapshot.hasBeatmap     = true;
     auto& placement         = config.judgmentLineTime;
     placement.visible       = true;
     placement.anchorX       = 0.25f;
@@ -141,6 +142,22 @@ bool testVisibleComponentRendersInOverlay()
         }
     }
     return true;
+}
+
+/// @brief 验证未加载谱面时不会绘制当前判定线时间。
+/// @return 时间组件已启用但快照保持无覆盖层几何时返回 true。
+bool testJudgmentLineTimeDoesNotRenderWithoutBeatmap()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    config.judgmentLineTime.visible = true;
+
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, makeRenderContext(-0.035), config);
+    return snapshot.vertices.empty() && snapshot.indices.empty() &&
+           snapshot.overlayCmds.empty() &&
+           snapshot.canvasComponentInstances.empty();
 }
 
 /// @brief 验证拍号会按整拍复制并保持在各自拍内布局区域。
@@ -368,6 +385,7 @@ int main()
 {
     return testHiddenComponentDoesNotRender() &&
                    testVisibleComponentRendersInOverlay() &&
+                   testJudgmentLineTimeDoesNotRenderWithoutBeatmap() &&
                    testBeatNumbersRenderInsideEachBeat() &&
                    testBeatNumberRendersUntilLayoutViewportExit() &&
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&

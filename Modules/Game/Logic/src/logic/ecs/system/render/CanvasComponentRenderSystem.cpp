@@ -350,6 +350,7 @@ void CanvasComponentRenderSystem::render(
 
         switch ( type ) {
         case Config::CanvasComponentType::JudgmentLineTime:
+            if ( !snapshot->hasBeatmap ) break;
             renderJudgmentLineTime(batcher,
                                    context.currentTime,
                                    context.viewportWidth,
