@@ -22,8 +22,8 @@ namespace
 
 constexpr std::int64_t MAX_DISPLAY_MILLIS =
     ((99LL * 60LL + 59LL) * 60LL + 59LL) * 1000LL + 999LL;
-/// @brief 单帧允许生成的拍号实例上限，防止异常 BPM 数据放大热路径负载。
-constexpr std::size_t MAX_VISIBLE_BEAT_NUMBER_INSTANCES = 4096U;
+/// @brief 单帧允许生成的重复文字实例上限，防止异常 BPM 数据放大热路径负载。
+constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
 
 /// @brief 绘制一行只包含 ASCII 字符的文本。
 /// @param batcher 目标覆盖层批处理器。
@@ -166,11 +166,11 @@ void renderJudgmentLineTime(Batcher& batcher, double currentTime,
     }
 }
 
-/// @brief 规整逐拍渲染使用的 BPM。
+/// @brief 规整节拍网格文字使用的 BPM。
 /// @param bpm 原始 BPM。
 /// @param fallbackBpm 无效值的快照回退 BPM。
 /// @return 处于安全范围内的 BPM。
-double normalizedBeatNumberBpm(double bpm, double fallbackBpm)
+double normalizedGridTextBpm(double bpm, double fallbackBpm)
 {
     if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
         bpm = fallbackBpm;
@@ -181,15 +181,22 @@ double normalizedBeatNumberBpm(double bpm, double fallbackBpm)
     return std::min(bpm, 10000.0);
 }
 
-/// @brief 绘制全部可见整拍的拍号组件。
+/// @brief 在每个可见节拍网格区间内绘制一个重复文字实例。
+/// @tparam TextFormatter 根据实例序号与区间起始时间生成 ASCII 文本的函数类型。
 /// @param batcher 目标覆盖层批处理器。
 /// @param context 当前主画布节拍坐标上下文。
-/// @param placement 拍号组件的拍内布局。
-/// @warning 热路径：拍号启用时每个主画布快照调用；只遍历缓存 BPM
-/// 事件、可见时间区间与可见整拍，不访问 ECS 或文件系统。
-void renderBeatNumbers(Batcher&                                batcher,
-                       const CanvasComponentRenderContext&     context,
-                       const Config::CanvasComponentPlacement& placement)
+/// @param placement 组件在单个网格区间内的布局。
+/// @param type 组件类型。
+/// @param divisor 每拍划分的网格区间数量。
+/// @param formatter 文字生成函数。
+/// @warning 热路径：重复组件启用时每个主画布快照调用；只遍历缓存 BPM
+/// 事件、可见时间区间与可见网格，不访问 ECS 或文件系统。
+template<typename TextFormatter>
+void renderBeatGridTexts(Batcher&                                batcher,
+                         const CanvasComponentRenderContext&     context,
+                         const Config::CanvasComponentPlacement& placement,
+                         Config::CanvasComponentType type, int divisor,
+                         TextFormatter&& formatter)
 {
     const auto* cache = context.scrollCache;
     if ( !cache || context.bpmEvents.empty() ||
@@ -225,18 +232,19 @@ void renderBeatNumbers(Batcher&                                batcher,
                        visibleRegion.width(),
                        visibleRegion.height());
 
-    std::int64_t completedBeatCount = 0;
+    divisor                         = std::clamp(divisor, 1, 64);
+    std::int64_t completedGridCount = 0;
     std::size_t  renderedCount      = 0U;
-    double lastProcessedBeatStart   = -std::numeric_limits<double>::infinity();
+    double lastProcessedGridStart   = -std::numeric_limits<double>::infinity();
 
     for ( std::size_t index = 0U; index < context.bpmEvents.size(); ++index ) {
         const auto* bpmEvent = context.bpmEvents[index];
         if ( !bpmEvent ) continue;
 
-        const double bpmTime = bpmEvent->m_timestamp;
-        const double bpm     = normalizedBeatNumberBpm(
-            bpmEvent->m_value, batcher.snapshot->fallbackBpm);
-        const double beatDuration = 60.0 / bpm;
+        const double bpmTime      = bpmEvent->m_timestamp;
+        const double bpm          = normalizedGridTextBpm(bpmEvent->m_value,
+                                                 batcher.snapshot->fallbackBpm);
+        const double gridDuration = 60.0 / bpm / static_cast<double>(divisor);
         const double nextBpmTime =
             index + 1U < context.bpmEvents.size() &&
                     context.bpmEvents[index + 1U]
@@ -248,36 +256,36 @@ void renderBeatNumbers(Batcher&                                batcher,
             const double segmentEnd   = std::min(rangeEnd, nextBpmTime);
             if ( segmentEnd < segmentStart || segmentEnd < bpmTime ) continue;
 
-            // 首个候选必须包含与布局视口相交但起点已越出视口的当前拍。
+            // 首个候选必须包含与布局视口相交但起点已越出视口的当前区间。
             // 实际文字是否可见继续由布局视口判定与 Vulkan scissor 决定。
-            std::int64_t beatOffset = static_cast<std::int64_t>(
-                std::floor((segmentStart - bpmTime) / beatDuration + 1e-6));
-            beatOffset = std::max<std::int64_t>(0, beatOffset);
-            double beatStart =
-                bpmTime + static_cast<double>(beatOffset) * beatDuration;
-            // 上沿还需检查下一拍：拍头线刚离开布局视口时，居中绘制的文字
-            // 仍可能有一半处于 scissor 内。
-            const double candidateEnd = segmentEnd + beatDuration;
-            while ( beatStart <= candidateEnd + 1e-6 &&
-                    beatStart < nextBpmTime ) {
-                if ( beatStart <= lastProcessedBeatStart + 1e-6 ) {
-                    ++beatOffset;
-                    beatStart = bpmTime +
-                                static_cast<double>(beatOffset) * beatDuration;
+            std::int64_t gridOffset = static_cast<std::int64_t>(
+                std::floor((segmentStart - bpmTime) / gridDuration + 1e-6));
+            gridOffset = std::max<std::int64_t>(0, gridOffset);
+            double gridStart =
+                bpmTime + static_cast<double>(gridOffset) * gridDuration;
+            // 上沿还需检查下一个区间：网格头线刚离开布局视口时，居中绘制的
+            // 文字仍可能有一半处于 scissor 内。
+            const double candidateEnd = segmentEnd + gridDuration;
+            while ( gridStart <= candidateEnd + 1e-6 &&
+                    gridStart < nextBpmTime ) {
+                if ( gridStart <= lastProcessedGridStart + 1e-6 ) {
+                    ++gridOffset;
+                    gridStart = bpmTime +
+                                static_cast<double>(gridOffset) * gridDuration;
                     continue;
                 }
-                lastProcessedBeatStart = beatStart;
-                const double beatEnd =
-                    std::min(beatStart + beatDuration, nextBpmTime);
-                if ( beatEnd <= beatStart + 1e-9 ) break;
+                lastProcessedGridStart = gridStart;
+                const double gridEnd =
+                    std::min(gridStart + gridDuration, nextBpmTime);
+                if ( gridEnd <= gridStart + 1e-9 ) break;
 
                 const float startY = context.judgmentLineY -
                                      static_cast<float>(cache->getDisplayDelta(
-                                         beatStart, currentAbsY, beatStart)) *
+                                         gridStart, currentAbsY, gridStart)) *
                                          context.renderScaleY;
                 const float endY = context.judgmentLineY -
                                    static_cast<float>(cache->getDisplayDelta(
-                                       beatEnd, currentAbsY, beatEnd)) *
+                                       gridEnd, currentAbsY, gridEnd)) *
                                        context.renderScaleY;
                 const CanvasComponentBounds layoutRegion{
                     0.0f,
@@ -287,9 +295,9 @@ void renderBeatNumbers(Batcher&                                batcher,
                 };
 
                 if ( layoutRegion.height() > 0.5f ) {
-                    const auto text =
-                        CanvasComponentRenderSystem::formatBeatNumber(
-                            completedBeatCount + beatOffset + 1);
+                    const std::int64_t instanceIndex =
+                        completedGridCount + gridOffset + 1;
+                    const auto text = formatter(instanceIndex, gridStart);
                     CanvasComponentBounds bounds;
                     CanvasComponentBounds effectiveLayoutRegion;
                     if ( renderAsciiText(batcher,
@@ -300,31 +308,71 @@ void renderBeatNumbers(Batcher&                                batcher,
                                          &visibleRegion,
                                          &effectiveLayoutRegion,
                                          true) ) {
-                        appendComponentInstance(
-                            *batcher.snapshot,
-                            Config::CanvasComponentType::BeatNumber,
-                            completedBeatCount + beatOffset + 1,
-                            bounds,
-                            effectiveLayoutRegion);
+                        appendComponentInstance(*batcher.snapshot,
+                                                type,
+                                                instanceIndex,
+                                                bounds,
+                                                effectiveLayoutRegion);
                         ++renderedCount;
                         if ( renderedCount >=
-                             MAX_VISIBLE_BEAT_NUMBER_INSTANCES ) {
+                             MAX_VISIBLE_REPEATED_TEXT_INSTANCES ) {
                             return;
                         }
                     }
                 }
 
-                ++beatOffset;
-                beatStart =
-                    bpmTime + static_cast<double>(beatOffset) * beatDuration;
+                ++gridOffset;
+                gridStart =
+                    bpmTime + static_cast<double>(gridOffset) * gridDuration;
             }
         }
 
         if ( std::isfinite(nextBpmTime) && nextBpmTime > bpmTime ) {
-            completedBeatCount += static_cast<std::int64_t>(
-                std::llround((nextBpmTime - bpmTime) / beatDuration));
+            completedGridCount += static_cast<std::int64_t>(
+                std::llround((nextBpmTime - bpmTime) / gridDuration));
         }
     }
+}
+
+/// @brief 绘制全部可见整拍的拍号组件。
+/// @param batcher 目标覆盖层批处理器。
+/// @param context 当前主画布节拍坐标上下文。
+/// @param placement 拍号组件的拍内布局。
+/// @warning 热路径：拍号启用时每个主画布快照调用；只转发到缓存网格遍历。
+void renderBeatNumbers(Batcher&                                batcher,
+                       const CanvasComponentRenderContext&     context,
+                       const Config::CanvasComponentPlacement& placement)
+{
+    renderBeatGridTexts(
+        batcher,
+        context,
+        placement,
+        Config::CanvasComponentType::BeatNumber,
+        1,
+        [](std::int64_t instanceIndex, double) {
+            return CanvasComponentRenderSystem::formatBeatNumber(instanceIndex);
+        });
+}
+
+/// @brief 在每条可见分拍线上绘制其谱面时间。
+/// @param batcher 目标覆盖层批处理器。
+/// @param context 当前主画布节拍坐标上下文。
+/// @param placement 分拍线时间组件的分拍内布局。
+/// @warning 热路径：组件启用时每个主画布快照调用；只转发到缓存网格遍历。
+void renderBeatLineTimes(Batcher&                                batcher,
+                         const CanvasComponentRenderContext&     context,
+                         const Config::CanvasComponentPlacement& placement)
+{
+    renderBeatGridTexts(
+        batcher,
+        context,
+        placement,
+        Config::CanvasComponentType::BeatLineTime,
+        context.beatDivisor,
+        [](std::int64_t, double gridStart) {
+            return CanvasComponentRenderSystem::formatJudgmentLineTime(
+                gridStart);
+        });
 }
 
 }  // namespace
@@ -357,6 +405,10 @@ void CanvasComponentRenderSystem::render(
             break;
         case Config::CanvasComponentType::BeatNumber:
             renderBeatNumbers(batcher, context, placement);
+            break;
+        case Config::CanvasComponentType::BeatLineTime:
+            if ( !snapshot->hasBeatmap ) break;
+            renderBeatLineTimes(batcher, context, placement);
             break;
         case Config::CanvasComponentType::Count: break;
         }

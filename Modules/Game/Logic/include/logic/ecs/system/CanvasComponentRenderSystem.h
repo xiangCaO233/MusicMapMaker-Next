@@ -32,6 +32,8 @@ struct CanvasComponentRenderContext {
     float visibleBottom{ 0.0f };
     /// @brief 当前主画布纵向渲染缩放。
     float renderScaleY{ 1.0f };
+    /// @brief 当前编辑器分拍数。
+    int beatDivisor{ 4 };
     /// @brief 已排序且已缓存的 BPM 事件。
     std::span<const TimelineComponent* const> bpmEvents;
     /// @brief 当前会话的滚动坐标缓存。
@@ -51,8 +53,8 @@ public:
     /// @param context 当前主画布的时间、视口与节拍坐标上下文。
     /// @param config 画布组件布局配置。
     /// @warning 热路径：每个主画布快照生成末尾执行；只允许遍历固定组件表、
-    /// 已缓存 BPM 事件和可见拍号，禁止字体加载、文件系统访问、完整 ECS
-    /// 遍历、阻塞操作或共享所有权复制。
+    /// 已缓存 BPM 事件和可见重复文字实例，禁止字体加载、文件系统访问、
+    /// 完整 ECS 遍历、阻塞操作或共享所有权复制。
     static void render(RenderSnapshot*                            snapshot,
                        const CanvasComponentRenderContext&        context,
                        const Config::CanvasComponentLayoutConfig& config);

@@ -235,24 +235,31 @@ bool testBeatRelativeComponentConstraints()
 bool testCanvasComponentConfigRoundTrip()
 {
     MMM::Config::CanvasComponentLayoutConfig source;
-    auto& placement          = source.judgmentLineTime;
-    placement.visible        = true;
-    placement.anchorX        = 0.23f;
-    placement.anchorY        = 0.76f;
-    placement.fontSizeRatio  = 0.08f;
-    placement.color          = { 0.1f, 0.3f, 0.7f, 0.8f };
-    auto& beatNumber         = source.beatNumber;
-    beatNumber.visible       = true;
-    beatNumber.anchorX       = 0.91f;
-    beatNumber.anchorY       = 0.34f;
-    beatNumber.fontSizeRatio = 0.16f;
-    beatNumber.color         = { 0.8f, 0.2f, 0.3f, 0.7f };
+    auto& placement            = source.judgmentLineTime;
+    placement.visible          = true;
+    placement.anchorX          = 0.23f;
+    placement.anchorY          = 0.76f;
+    placement.fontSizeRatio    = 0.08f;
+    placement.color            = { 0.1f, 0.3f, 0.7f, 0.8f };
+    auto& beatNumber           = source.beatNumber;
+    beatNumber.visible         = true;
+    beatNumber.anchorX         = 0.91f;
+    beatNumber.anchorY         = 0.34f;
+    beatNumber.fontSizeRatio   = 0.16f;
+    beatNumber.color           = { 0.8f, 0.2f, 0.3f, 0.7f };
+    auto& beatLineTime         = source.beatLineTime;
+    beatLineTime.visible       = true;
+    beatLineTime.anchorX       = 0.42f;
+    beatLineTime.anchorY       = 0.67f;
+    beatLineTime.fontSizeRatio = 0.19f;
+    beatLineTime.color         = { 0.2f, 0.9f, 0.6f, 0.75f };
 
     const nlohmann::json encoded = source;
     const auto           decoded =
         encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
-    const auto& restoredTime = decoded.judgmentLineTime;
-    const auto& restoredBeat = decoded.beatNumber;
+    const auto& restoredTime         = decoded.judgmentLineTime;
+    const auto& restoredBeat         = decoded.beatNumber;
+    const auto& restoredBeatLineTime = decoded.beatLineTime;
     return restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
            near(restoredTime.anchorY, 0.76f) &&
            near(restoredTime.fontSizeRatio, 0.08f) &&
@@ -266,7 +273,14 @@ bool testCanvasComponentConfigRoundTrip()
            near(restoredBeat.color[0], 0.8f) &&
            near(restoredBeat.color[1], 0.2f) &&
            near(restoredBeat.color[2], 0.3f) &&
-           near(restoredBeat.color[3], 0.7f);
+           near(restoredBeat.color[3], 0.7f) && restoredBeatLineTime.visible &&
+           near(restoredBeatLineTime.anchorX, 0.42f) &&
+           near(restoredBeatLineTime.anchorY, 0.67f) &&
+           near(restoredBeatLineTime.fontSizeRatio, 0.19f) &&
+           near(restoredBeatLineTime.color[0], 0.2f) &&
+           near(restoredBeatLineTime.color[1], 0.9f) &&
+           near(restoredBeatLineTime.color[2], 0.6f) &&
+           near(restoredBeatLineTime.color[3], 0.75f);
 }
 
 }  // namespace

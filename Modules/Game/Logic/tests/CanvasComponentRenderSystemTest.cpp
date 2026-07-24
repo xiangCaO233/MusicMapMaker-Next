@@ -360,6 +360,95 @@ bool testBeatNumberLayoutRegionCentersOnBeatHead()
     return true;
 }
 
+/// @brief 验证分拍线时间逐分拍绘制并限制在单个分拍扩展区域内。
+/// @return 时间、实例序号、独立颜色及向下半高扩展均正确时返回 true。
+bool testBeatLineTimesRenderInsideEachSubdivision()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    snapshot.hasBeatmap         = true;
+    config.beatLineTime.visible = true;
+    config.beatLineTime.anchorY = 1.0f;
+    config.beatLineTime.color   = { 0.2f, 0.7f, 0.9f, 0.8f };
+
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    auto&          bpm =
+        timelineRegistry.emplace<MMM::Logic::TimelineComponent>(bpmEntity);
+    bpm.m_timestamp = 0.0;
+    bpm.m_effect    = MMM::TimingEffect::BPM;
+    bpm.m_value     = 120.0;
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{ &bpm };
+
+    auto context        = makeRenderContext(1.0);
+    context.beatDivisor = 4;
+    context.bpmEvents   = bpmEvents;
+    context.scrollCache = &cache;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const auto instance = std::find_if(
+        snapshot.canvasComponentInstances.begin(),
+        snapshot.canvasComponentInstances.end(),
+        [](const auto& candidate) {
+            return candidate.type ==
+                       MMM::Config::CanvasComponentType::BeatLineTime &&
+                   candidate.instanceIndex == 9;
+        });
+    if ( instance == snapshot.canvasComponentInstances.end() ) {
+        XERROR("Beat line time at 1.000 seconds was not rendered");
+        return false;
+    }
+
+    constexpr float rawRegionTop    = 237.5f;
+    constexpr float rawRegionBottom = 300.0f;
+    const float     fontHeight =
+        config.beatLineTime.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+    const auto selection = MMM::Common::selectAsciiFont(
+        snapshot.asciiFontAtlasMetrics, fontHeight);
+    const auto text =
+        MMM::Logic::System::CanvasComponentRenderSystem::formatJudgmentLineTime(
+            1.0);
+    if ( !selection ) {
+        XERROR("Beat line time did not select an ASCII font");
+        return false;
+    }
+    const auto textSize = MMM::Common::measureAsciiText(
+        *selection.metrics, text.data(), fontHeight);
+    const float     expectedOffset = textSize.height * 0.5f;
+    const float     contentCenterY = (instance->top + instance->bottom) * 0.5f;
+    constexpr float epsilon        = 1e-4f;
+    if ( std::abs(instance->regionTop - rawRegionTop) > epsilon ||
+         std::abs(instance->regionBottom - (rawRegionBottom + expectedOffset)) >
+             epsilon ||
+         std::abs(contentCenterY - rawRegionBottom) > epsilon ||
+         std::abs((instance->right - instance->left) - textSize.width) >
+             epsilon ) {
+        XERROR("Beat line time escaped its subdivision layout region");
+        return false;
+    }
+
+    for ( const auto& vertex : snapshot.vertices ) {
+        if ( std::abs(vertex.color.r - config.beatLineTime.color[0]) >
+                 epsilon ||
+             std::abs(vertex.color.g - config.beatLineTime.color[1]) >
+                 epsilon ||
+             std::abs(vertex.color.b - config.beatLineTime.color[2]) >
+                 epsilon ||
+             std::abs(vertex.color.a - config.beatLineTime.color[3]) >
+                 epsilon ) {
+            XERROR("Beat line time did not use its independent color");
+            return false;
+        }
+    }
+    return !snapshot.vertices.empty() && !snapshot.overlayCmds.empty();
+}
+
 /// @brief 验证判定线时间的固定精度格式与负值处理。
 /// @return 常规、负值和非有限输入均符合约定时返回 true。
 bool testJudgmentLineTimeFormatting()
@@ -388,6 +477,7 @@ int main()
                    testBeatNumbersRenderInsideEachBeat() &&
                    testBeatNumberRendersUntilLayoutViewportExit() &&
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&
+                   testBeatLineTimesRenderInsideEachSubdivision() &&
                    testJudgmentLineTimeFormatting()
                ? 0
                : 1;

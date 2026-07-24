@@ -565,6 +565,7 @@ return {
 	["ui.toolbar.layout_components"] = "可选画布组件",
 	["ui.toolbar.layout_current_judgment_time"] = "当前判定线时间",
 	["ui.toolbar.layout_beat_number"] = "拍号",
+	["ui.toolbar.layout_beat_line_time"] = "分拍线时间",
 	["ui.toolbar.layout_component_color"] = "颜色",
 	["ui.toolbar.layout_component_drag_hint"] = "拖动文字可移动，拖动包围框四角可调整大小",
 	["ui.toolbar.short.move"] = "抓取",

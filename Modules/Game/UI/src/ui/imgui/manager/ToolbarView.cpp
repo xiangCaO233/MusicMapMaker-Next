@@ -2656,6 +2656,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              TR("ui.toolbar.layout_current_judgment_time"));
         drawComponentControl(Config::CanvasComponentType::BeatNumber,
                              TR("ui.toolbar.layout_beat_number"));
+        drawComponentControl(Config::CanvasComponentType::BeatLineTime,
+                             TR("ui.toolbar.layout_beat_line_time"));
 
         if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&
              m_layoutComponentColorDirty ) {

@@ -487,6 +487,7 @@ void NoteRenderSystem::generateSnapshot(
             .visibleTop     = topY,
             .visibleBottom  = bottomY,
             .renderScaleY   = renderScaleY,
+            .beatDivisor    = config.settings.beatDivisor,
             .bpmEvents      = bpmEvents,
             .scrollCache    = cache,
         };
