@@ -142,20 +142,41 @@ bool testCanvasComponentPlacement()
     MMM::Config::CanvasComponentPlacement placement;
     placement.visible = true;
     const auto moved  = MMM::Logic::moveCanvasComponent(
-        MMM::Config::CanvasComponentType::JudgmentLineTime,
-        placement,
-        -100.0f,
-        1000.0f,
-        800.0f,
-        600.0f);
-    const auto bounds = MMM::Logic::canvasComponentBounds(
-        MMM::Config::CanvasComponentType::JudgmentLineTime,
-        moved,
-        800.0f,
-        600.0f);
+        placement, -100.0f, 1000.0f, 800.0f, 600.0f, 140.0f, 27.0f);
+    const auto bounds =
+        MMM::Logic::canvasComponentBounds(moved, 800.0f, 600.0f, 140.0f, 27.0f);
     return near(bounds.left, 0.0f) && near(bounds.bottom, 600.0f) &&
            bounds.right <= 800.0f && bounds.top >= 0.0f &&
            bounds.contains(bounds.left, bounds.top);
+}
+
+/// @brief 验证四角包围框会等比调整字号并保持对角点。
+/// @return 命中、字号和移动后的中心均符合预期时返回 true。
+bool testCanvasComponentResize()
+{
+    MMM::Config::CanvasComponentPlacement placement;
+    placement.visible       = true;
+    placement.anchorX       = 0.5f;
+    placement.anchorY       = 0.5f;
+    placement.fontSizeRatio = 0.04f;
+    const auto bounds       = MMM::Logic::canvasComponentBounds(
+        placement, 800.0f, 600.0f, 200.0f, 24.0f);
+    if ( MMM::Logic::hitTestCanvasComponent(
+             bounds, bounds.right, bounds.bottom, 6.0f) !=
+         MMM::Logic::CanvasComponentDragHandle::BottomRight ) {
+        return false;
+    }
+
+    const auto resized = MMM::Logic::resizeCanvasComponent(
+        placement,
+        MMM::Logic::CanvasComponentDragHandle::BottomRight,
+        bounds,
+        bounds.left + bounds.width() * 2.0f,
+        bounds.top + bounds.height() * 2.0f,
+        800.0f,
+        600.0f);
+    return near(resized.fontSizeRatio, 0.08f) &&
+           near(resized.anchorX, 0.625f) && near(resized.anchorY, 0.52f);
 }
 
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
@@ -163,17 +184,18 @@ bool testCanvasComponentPlacement()
 bool testCanvasComponentConfigRoundTrip()
 {
     MMM::Config::CanvasComponentLayoutConfig source;
-    auto& placement   = source.judgmentLineTime;
-    placement.visible = true;
-    placement.anchorX = 0.23f;
-    placement.anchorY = 0.76f;
+    auto& placement         = source.judgmentLineTime;
+    placement.visible       = true;
+    placement.anchorX       = 0.23f;
+    placement.anchorY       = 0.76f;
+    placement.fontSizeRatio = 0.08f;
 
     const nlohmann::json encoded = source;
     const auto           decoded =
         encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
     const auto& restored = decoded.judgmentLineTime;
     return restored.visible && near(restored.anchorX, 0.23f) &&
-           near(restored.anchorY, 0.76f);
+           near(restored.anchorY, 0.76f) && near(restored.fontSizeRatio, 0.08f);
 }
 
 }  // namespace
@@ -200,8 +222,11 @@ int main()
     if ( !testCanvasComponentPlacement() ) {
         return 6;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testCanvasComponentResize() ) {
         return 7;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 8;
     }
     return 0;
 }

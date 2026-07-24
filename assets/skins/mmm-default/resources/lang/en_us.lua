@@ -560,7 +560,7 @@ return {
 	["ui.toolbar.layout"] = "Adjust Layout (click again to exit)",
 	["ui.toolbar.layout_components"] = "Optional Canvas Components",
 	["ui.toolbar.layout_current_judgment_time"] = "Current Judgment Time",
-	["ui.toolbar.layout_component_drag_hint"] = "Enable a component, then drag it on the main canvas",
+	["ui.toolbar.layout_component_drag_hint"] = "Drag text to move; drag bounding-box corners to resize",
 	["ui.toolbar.short.move"] = "Grab",
 	["ui.toolbar.short.marquee"] = "Pick",
 	["ui.toolbar.short.draw"] = "Draw",

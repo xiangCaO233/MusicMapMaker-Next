@@ -1,6 +1,7 @@
 #pragma once
 
 #include "canvas/TrackLayoutEditing.h"
+#include "common/CanvasComponentLayout.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "event/core/EventBus.h"
 #include <cstdint>
@@ -109,12 +110,14 @@ private:
     /// @param targetWidth 画布宽度。
     /// @param targetHeight 画布高度。
     /// @param isHovered 指针是否悬停在当前画布。
+    /// @param currentSnapshot 当前画布渲染快照。
     /// @warning UI 热路径：布局模式下每帧调用；仅允许常量级命中测试、
     /// ImGui 绘制和配置变更广播。
     void handleLayoutEditing(float pointerX, float pointerY,
                              float canvasScreenX, float canvasScreenY,
                              float targetWidth, float targetHeight,
-                             bool isHovered);
+                             bool                         isHovered,
+                             const Logic::RenderSnapshot& currentSnapshot);
     /// @brief 结束布局拖动，并在发生修改时持久化一次编辑器配置。
     /// @warning 低频路径：鼠标释放或退出布局模式时调用，允许写入配置文件。
     void finishLayoutEditing();
@@ -190,6 +193,14 @@ private:
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
     /// @brief 当前正在拖动的可选画布组件。
     std::optional<Config::CanvasComponentType> m_canvasComponentDragTarget;
+    /// @brief 当前可选画布组件的移动或缩放部位。
+    Logic::CanvasComponentDragHandle m_canvasComponentDragHandle{
+        Logic::CanvasComponentDragHandle::None
+    };
+    /// @brief 组件拖动开始时的完整布局。
+    Config::CanvasComponentPlacement m_canvasComponentDragStart;
+    /// @brief 组件缩放开始时的像素边界。
+    Logic::CanvasComponentBounds m_canvasComponentDragStartBounds;
     /// @brief 组件拖动开始时锚点相对指针的归一化偏移。
     glm::vec2 m_canvasComponentPointerOffset{ 0.0f, 0.0f };
     /// @brief 当前布局配置拖动手势是否实际修改过配置。
