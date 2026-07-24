@@ -3,6 +3,7 @@
 #include "config/visual/CanvasComponentConfig.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace MMM::Logic
 {
@@ -76,6 +77,12 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
     placement.fontSizeRatio = std::clamp(placement.fontSizeRatio,
                                          CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO,
                                          CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO);
+    for ( std::size_t index = 0U; index < placement.color.size(); ++index ) {
+        if ( !std::isfinite(placement.color[index]) ) {
+            placement.color[index] = fallback.color[index];
+        }
+        placement.color[index] = std::clamp(placement.color[index], 0.0f, 1.0f);
+    }
     return placement;
 }
 

@@ -72,7 +72,10 @@ void renderAsciiText(Batcher& batcher, const char* text,
                                    height,
                                    { uv.x, uv.y },
                                    { uv.x + uv.z, uv.y + uv.w },
-                                   { 1.0f, 1.0f, 1.0f, 1.0f });
+                                   { sanitized.color[0],
+                                     sanitized.color[1],
+                                     sanitized.color[2],
+                                     sanitized.color[3] });
             }
         }
         penX += glyph->advanceX * fontPixelHeight;

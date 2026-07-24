@@ -68,6 +68,7 @@ bool testVisibleComponentRendersInOverlay()
     placement.anchorX       = 0.25f;
     placement.anchorY       = 0.75f;
     placement.fontSizeRatio = 0.04f;
+    placement.color         = { 0.2f, 0.4f, 0.6f, 0.8f };
 
     MMM::Logic::System::CanvasComponentRenderSystem::render(
         &snapshot, 72.345, 800.0f, 600.0f, config);
@@ -105,6 +106,13 @@ bool testVisibleComponentRendersInOverlay()
              vertex.pos.y < bounds.top - epsilon ||
              vertex.pos.y > bounds.bottom + epsilon ) {
             XERROR("Canvas component vertex escaped its configured bounds");
+            return false;
+        }
+        if ( std::abs(vertex.color.r - placement.color[0]) > epsilon ||
+             std::abs(vertex.color.g - placement.color[1]) > epsilon ||
+             std::abs(vertex.color.b - placement.color[2]) > epsilon ||
+             std::abs(vertex.color.a - placement.color[3]) > epsilon ) {
+            XERROR("Canvas component vertex did not use configured color");
             return false;
         }
     }

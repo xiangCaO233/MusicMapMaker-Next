@@ -18,7 +18,7 @@ inline constexpr std::array<CanvasComponentType, 1> CANVAS_COMPONENT_TYPES{
     CanvasComponentType::JudgmentLineTime,
 };
 
-/// @brief 单个画布组件的显隐与归一化锚点配置。
+/// @brief 单个画布组件的显隐、归一化锚点、字号与颜色配置。
 struct CanvasComponentPlacement {
     /// @brief 是否在每个主画布上绘制该组件。
     bool visible{ false };
@@ -28,6 +28,8 @@ struct CanvasComponentPlacement {
     float anchorY{ 0.12f };
     /// @brief 字号相对画布高度的比例。
     float fontSizeRatio{ 0.035f };
+    /// @brief 组件内容 RGBA 颜色。
+    std::array<float, 4> color{ 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
 /// @brief 主画布可选组件的布局集合。

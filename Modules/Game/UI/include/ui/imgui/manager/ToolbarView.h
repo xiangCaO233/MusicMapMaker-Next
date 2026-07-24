@@ -53,6 +53,10 @@ private:
     float m_layoutPopupWidth{ 260.0f };
     /// @brief 布局组件弹层上一帧高度。
     float m_layoutPopupHeight{ 100.0f };
+    /// @brief 布局组件颜色是否有尚未写入配置文件的修改。
+    bool m_layoutComponentColorDirty{ false };
+    /// @brief 上一帧布局组件颜色选择器是否打开。
+    bool  m_layoutComponentColorPickerOpen{ false };
     bool  m_showDivisorPopup = false;
     float m_lastBtnY         = 0.0f;
     float m_popupWidth       = 160.0f;

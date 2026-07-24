@@ -133,9 +133,14 @@ bool testCanvasComponentPlacement()
     MMM::Config::CanvasComponentPlacement invalid;
     invalid.anchorX = std::numeric_limits<float>::quiet_NaN();
     invalid.anchorY = 4.0f;
+    invalid.color   = {
+        std::numeric_limits<float>::quiet_NaN(), -1.0f, 2.0f, 0.5f
+    };
     const auto sanitized =
         MMM::Logic::sanitizeCanvasComponentPlacement(invalid);
-    if ( !near(sanitized.anchorX, 0.5f) || !near(sanitized.anchorY, 1.0f) ) {
+    if ( !near(sanitized.anchorX, 0.5f) || !near(sanitized.anchorY, 1.0f) ||
+         !near(sanitized.color[0], 1.0f) || !near(sanitized.color[1], 0.0f) ||
+         !near(sanitized.color[2], 1.0f) || !near(sanitized.color[3], 0.5f) ) {
         return false;
     }
 
@@ -180,7 +185,7 @@ bool testCanvasComponentResize()
 }
 
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
-/// @return 显隐与锚点均保持时返回 true。
+/// @return 显隐、锚点、字号与颜色均保持时返回 true。
 bool testCanvasComponentConfigRoundTrip()
 {
     MMM::Config::CanvasComponentLayoutConfig source;
@@ -189,13 +194,17 @@ bool testCanvasComponentConfigRoundTrip()
     placement.anchorX       = 0.23f;
     placement.anchorY       = 0.76f;
     placement.fontSizeRatio = 0.08f;
+    placement.color         = { 0.1f, 0.3f, 0.7f, 0.8f };
 
     const nlohmann::json encoded = source;
     const auto           decoded =
         encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
     const auto& restored = decoded.judgmentLineTime;
     return restored.visible && near(restored.anchorX, 0.23f) &&
-           near(restored.anchorY, 0.76f) && near(restored.fontSizeRatio, 0.08f);
+           near(restored.anchorY, 0.76f) &&
+           near(restored.fontSizeRatio, 0.08f) &&
+           near(restored.color[0], 0.1f) && near(restored.color[1], 0.3f) &&
+           near(restored.color[2], 0.7f) && near(restored.color[3], 0.8f);
 }
 
 }  // namespace
