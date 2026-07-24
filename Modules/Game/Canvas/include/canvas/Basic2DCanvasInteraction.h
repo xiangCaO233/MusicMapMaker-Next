@@ -1,10 +1,12 @@
 #pragma once
 
 #include "canvas/TrackLayoutEditing.h"
+#include "config/visual/CanvasComponentConfig.h"
 #include "event/core/EventBus.h"
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -99,7 +101,7 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
-    /// @brief 绘制并处理独占的轨道布局、判定线与整体移动把手。
+    /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
     /// @param canvasScreenX 画布左上角屏幕横坐标。
@@ -109,13 +111,13 @@ private:
     /// @param isHovered 指针是否悬停在当前画布。
     /// @warning UI 热路径：布局模式下每帧调用；仅允许常量级命中测试、
     /// ImGui 绘制和配置变更广播。
-    void handleTrackLayoutEditing(float pointerX, float pointerY,
-                                  float canvasScreenX, float canvasScreenY,
-                                  float targetWidth, float targetHeight,
-                                  bool isHovered);
+    void handleLayoutEditing(float pointerX, float pointerY,
+                             float canvasScreenX, float canvasScreenY,
+                             float targetWidth, float targetHeight,
+                             bool isHovered);
     /// @brief 结束布局拖动，并在发生修改时持久化一次编辑器配置。
     /// @warning 低频路径：鼠标释放或退出布局模式时调用，允许写入配置文件。
-    void finishTrackLayoutEditing();
+    void finishLayoutEditing();
     /// @brief 判断连续拖动编辑命令是否需要发送，并在需要时更新缓存。
     /// @param last 上一次发送的拖动编辑命令状态。
     /// @param pos 当前本地鼠标坐标。
@@ -186,6 +188,10 @@ private:
     Config::TrackLayout m_trackLayoutDragStart;
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
+    /// @brief 当前正在拖动的可选画布组件。
+    std::optional<Config::CanvasComponentType> m_canvasComponentDragTarget;
+    /// @brief 组件拖动开始时锚点相对指针的归一化偏移。
+    glm::vec2 m_canvasComponentPointerOffset{ 0.0f, 0.0f };
     /// @brief 当前布局配置拖动手势是否实际修改过配置。
     bool m_layoutConfigurationChanged{ false };
 };

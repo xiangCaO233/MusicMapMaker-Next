@@ -1,7 +1,9 @@
 #include "canvas/TrackLayoutEditing.h"
+#include "common/CanvasComponentLayout.h"
 
 #include <cmath>
 #include <limits>
+#include <nlohmann/json.hpp>
 
 namespace
 {
@@ -124,15 +126,82 @@ bool testHandleHitTesting()
                Handle::None;
 }
 
+/// @brief 验证组件锚点规整与边缘拖动会保持组件完整可见。
+/// @return 锚点、边界和移动结果均合法时返回 true。
+bool testCanvasComponentPlacement()
+{
+    MMM::Config::CanvasComponentPlacement invalid;
+    invalid.anchorX = std::numeric_limits<float>::quiet_NaN();
+    invalid.anchorY = 4.0f;
+    const auto sanitized =
+        MMM::Logic::sanitizeCanvasComponentPlacement(invalid);
+    if ( !near(sanitized.anchorX, 0.5f) || !near(sanitized.anchorY, 1.0f) ) {
+        return false;
+    }
+
+    MMM::Config::CanvasComponentPlacement placement;
+    placement.visible = true;
+    const auto moved  = MMM::Logic::moveCanvasComponent(
+        MMM::Config::CanvasComponentType::JudgmentLineTime,
+        placement,
+        -100.0f,
+        1000.0f,
+        800.0f,
+        600.0f);
+    const auto bounds = MMM::Logic::canvasComponentBounds(
+        MMM::Config::CanvasComponentType::JudgmentLineTime,
+        moved,
+        800.0f,
+        600.0f);
+    return near(bounds.left, 0.0f) && near(bounds.bottom, 600.0f) &&
+           bounds.right <= 800.0f && bounds.top >= 0.0f &&
+           bounds.contains(bounds.left, bounds.top);
+}
+
+/// @brief 验证画布组件布局配置可独立完成 JSON 往返。
+/// @return 显隐与锚点均保持时返回 true。
+bool testCanvasComponentConfigRoundTrip()
+{
+    MMM::Config::CanvasComponentLayoutConfig source;
+    auto& placement   = source.judgmentLineTime;
+    placement.visible = true;
+    placement.anchorX = 0.23f;
+    placement.anchorY = 0.76f;
+
+    const nlohmann::json encoded = source;
+    const auto           decoded =
+        encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
+    const auto& restored = decoded.judgmentLineTime;
+    return restored.visible && near(restored.anchorX, 0.23f) &&
+           near(restored.anchorY, 0.76f);
+}
+
 }  // namespace
 
-/// @brief 覆盖轨道布局、判定线调整、整体平移和命中测试。
+/// @brief 覆盖轨道、判定线与可选画布组件的布局编辑。
 /// @return 所有检查通过时返回 0。
 int main()
 {
-    return testSanitizeInvalidLayout() && testBoundaryConstraints() &&
-                   testMovePreservesSize() && testJudgmentLineConstraints() &&
-                   testHandleHitTesting()
-               ? 0
-               : 1;
+    if ( !testSanitizeInvalidLayout() ) {
+        return 1;
+    }
+    if ( !testBoundaryConstraints() ) {
+        return 2;
+    }
+    if ( !testMovePreservesSize() ) {
+        return 3;
+    }
+    if ( !testJudgmentLineConstraints() ) {
+        return 4;
+    }
+    if ( !testHandleHitTesting() ) {
+        return 5;
+    }
+    if ( !testCanvasComponentPlacement() ) {
+        return 6;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 7;
+    }
+    return 0;
 }

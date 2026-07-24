@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "audio/AudioManager.h"
 #include "canvas/TimelineCanvas.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/ColorPaletteFile.h"
 #include "config/EditorConfig.h"
@@ -336,6 +337,9 @@ void ToolbarView::update(UIManager* sourceManager)
 
     // 从逻辑引擎同步当前工具状态
     m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
+    if ( m_currentTool != Logic::EditTool::Layout ) {
+        m_showLayoutPopup = false;
+    }
 
     // 样式锁定
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
@@ -549,9 +553,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 advanceItem();
             };
 
-        const bool isTrackLayoutEditing =
-            m_currentTool == Logic::EditTool::TrackLayout;
-        ImGui::BeginDisabled(isTrackLayoutEditing);
+        const bool isLayoutEditing = m_currentTool == Logic::EditTool::Layout;
+        ImGui::BeginDisabled(isLayoutEditing);
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
                        TR("ui.toolbar.move"),
@@ -609,7 +612,7 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::Dummy(ImVec2(btnSize, sepH));
         advanceItem();
 
-        drawTrackLayoutButton(btnSize, btnHeight, showToolLabels);
+        drawLayoutButton(btnSize, btnHeight, showToolLabels);
         advanceItem();
 
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
@@ -635,7 +638,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                           : (btnHeight - swatchSize) * 0.5f),
+                                            : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -770,7 +773,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -975,6 +978,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderColorPalettePopup(dpiScale);
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
+    renderLayoutPopup(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1061,7 +1065,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1110,11 +1114,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -2488,10 +2492,9 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
     ImGui::PopStyleColor(3);
 }
 
-void ToolbarView::drawTrackLayoutButton(float width, float height,
-                                        bool showLabel)
+void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
 {
-    const bool isActive = m_currentTool == Logic::EditTool::TrackLayout;
+    const bool isActive = m_currentTool == Logic::EditTool::Layout;
     if ( isActive ) {
         const ImVec4 activeCol =
             ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
@@ -2502,28 +2505,104 @@ void ToolbarView::drawTrackLayoutButton(float width, float height,
         Utils::UIThemeUtils::pushTransparentButtonStyles();
     }
 
-    ImGui::PushID("TrackLayoutTool");
+    ImGui::PushID("LayoutTool");
     if ( drawIconButton(ICON_MMM_TRACK_LAYOUT,
-                        "##ToolbarTrackLayoutButton",
-                        TR("ui.toolbar.short.track_layout").data(),
+                        "##ToolbarLayoutButton",
+                        TR("ui.toolbar.short.layout").data(),
                         width,
                         height,
                         showLabel) ) {
-        Logic::EditTool nextTool = Logic::EditTool::TrackLayout;
+        Logic::EditTool nextTool = Logic::EditTool::Layout;
         if ( isActive ) {
-            nextTool = m_toolBeforeTrackLayout == Logic::EditTool::TrackLayout
-                           ? Logic::EditTool::Move
-                           : m_toolBeforeTrackLayout;
+            nextTool          = m_toolBeforeLayout == Logic::EditTool::Layout
+                                    ? Logic::EditTool::Move
+                                    : m_toolBeforeLayout;
+            m_showLayoutPopup = false;
         } else {
-            m_toolBeforeTrackLayout = m_currentTool;
+            m_toolBeforeLayout = m_currentTool;
+            m_showLayoutPopup  = true;
         }
         m_currentTool = nextTool;
         Logic::EditorEngine::instance().pushCommand(
             Logic::CmdChangeTool{ nextTool });
     }
+    m_lastLayoutBtnY = ImGui::GetItemRectMin().y;
     ImGui::PopID();
-    drawTooltip(TR("ui.toolbar.track_layout").data());
+    drawTooltip(TR("ui.toolbar.layout").data());
     ImGui::PopStyleColor(3);
+}
+
+void ToolbarView::renderLayoutPopup(float dpiScale)
+{
+    if ( !m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout )
+        return;
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    padding        = std::floor(8.0f * dpiScale);
+    const float    popupW         = m_layoutPopupWidth > 0.0f
+                                        ? m_layoutPopupWidth
+                                        : std::floor(260.0f * dpiScale);
+    const float    popupH         = m_layoutPopupHeight > 0.0f
+                                        ? m_layoutPopupHeight
+                                        : std::floor(100.0f * dpiScale);
+    float          targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
+    float          targetY = m_lastLayoutBtnY;
+    targetX                = std::max(targetX, viewportLeft + popupW + padding);
+    const float minTargetY = viewportTop + padding;
+    const float maxTargetY =
+        std::max(minTargetY, viewportBottom - popupH - padding);
+    targetY = std::clamp(targetY, minTargetY, maxTargetY);
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                        std::floor(aesthetics.windowRounding * dpiScale));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(aesthetics.windowPadding * dpiScale),
+               std::floor(aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                        std::floor(aesthetics.frameRounding * dpiScale));
+
+    if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
+        ImGui::Separator();
+
+        auto& appConfig = Config::AppConfig::instance();
+        bool  visible   = appConfig.getVisualConfig()
+                           .canvasComponents.judgmentLineTime.visible;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.toolbar.layout_current_judgment_time").data(),
+                 &visible) ) {
+            auto updatedConfig = appConfig.getEditorConfig();
+            updatedConfig.visual.canvasComponents.judgmentLineTime.visible =
+                visible;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            appConfig.save();
+        }
+        ImGui::TextDisabled("%s",
+                            TR("ui.toolbar.layout_component_drag_hint").data());
+
+        const ImVec2 size   = ImGui::GetWindowSize();
+        m_layoutPopupWidth  = size.x;
+        m_layoutPopupHeight = size.y;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 void ToolbarView::drawTooltip(const char* text)

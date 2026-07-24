@@ -3,6 +3,7 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+#include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
@@ -476,6 +477,14 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     batcher.flush();
+
+    if ( isMainCanvas ) {
+        CanvasComponentRenderSystem::render(snapshot,
+                                            renderTime,
+                                            viewportWidth,
+                                            viewportHeight,
+                                            config.visual.canvasComponents);
+    }
 }
 
 void NoteRenderSystem::renderMarqueeBox(

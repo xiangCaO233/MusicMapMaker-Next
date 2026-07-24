@@ -325,11 +325,11 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
     }
 
     double targetAbsY = currentAbsY + (judgmentLineY - compensatedMouseY);
-    auto   itTime = std::lower_bound(segments.begin(),
-                                     segments.end(),
-                                     targetAbsY,
-                                     [](const Logic::System::ScrollSegment& seg,
-                                        double val) { return seg.absY < val; });
+    auto   itTime     = std::lower_bound(segments.begin(),
+                                   segments.end(),
+                                   targetAbsY,
+                                   [](const Logic::System::ScrollSegment& seg,
+                                      double val) { return seg.absY < val; });
 
     if ( itTime == segments.begin() ) {
         if ( std::abs(segments[0].speed) < 1e-6 ) {
@@ -485,10 +485,10 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
             continue;
         }
 
-        double relativeTime = rawTime - point.time;
-        double stepCount = editorConfig.settings.snapFloor
-                               ? std::floor(relativeTime / stepDuration + 1e-6)
-                               : std::round(relativeTime / stepDuration);
+        double relativeTime    = rawTime - point.time;
+        double stepCount       = editorConfig.settings.snapFloor
+                                     ? std::floor(relativeTime / stepDuration + 1e-6)
+                                     : std::round(relativeTime / stepDuration);
         double nearestStepTime = point.time + stepCount * stepDuration;
         if ( nearestStepTime > nextBpmTime ) {
             nearestStepTime = nextBpmTime;
@@ -600,10 +600,10 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
         }
 
         double relativeTime = rawTime - point.time;
-        double stepCount = editorConfig.settings.snapFloor
-                               ? std::floor(relativeTime / stepDuration + 1e-6)
-                               : std::round(relativeTime / stepDuration);
-        double candidate = point.time + stepCount * stepDuration;
+        double stepCount    = editorConfig.settings.snapFloor
+                                  ? std::floor(relativeTime / stepDuration + 1e-6)
+                                  : std::round(relativeTime / stepDuration);
+        double candidate    = point.time + stepCount * stepDuration;
         if ( candidate > nextBpmTime ) {
             candidate = nextBpmTime;
         }
@@ -1006,10 +1006,10 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
     sharedClipboard.reserve(selectedTargets.size());
     for ( const auto& target : selectedTargets ) {
         TimelineClipboardEntry entry;
-        entry.relativeTime    = target.time - anchorTime;
-        entry.relativeBeat    = timelineClipboardTimeToBeat(
-                                    beatTimeline, target.time, fallbackBpm) -
-                                anchorBeat;
+        entry.relativeTime = target.time - anchorTime;
+        entry.relativeBeat = timelineClipboardTimeToBeat(
+                                 beatTimeline, target.time, fallbackBpm) -
+                             anchorBeat;
         entry.effect          = target.effect;
         entry.value           = target.value;
         entry.hasBeatPosition = true;
@@ -1017,8 +1017,8 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
 
         Logic::TimelineClipboardItem sharedEntry;
         sharedEntry.timeline        = Logic::TimelineComponent{ target.time,
-                                                                target.effect,
-                                                                target.value };
+                                                         target.effect,
+                                                         target.value };
         sharedEntry.relativeTime    = entry.relativeTime;
         sharedEntry.relativeBeat    = entry.relativeBeat;
         sharedEntry.hasBeatPosition = entry.hasBeatPosition;
@@ -1199,10 +1199,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
         Logic::EditTool::ColorEraser,
     };
-    const bool isTrackLayoutEditing =
+    const bool isLayoutEditing =
         Logic::EditorEngine::instance().getCurrentTool() ==
-        Logic::EditTool::TrackLayout;
-    if ( !handledKeyboardCommand && !isTrackLayoutEditing ) {
+        Logic::EditTool::Layout;
+    if ( !handledKeyboardCommand && !isLayoutEditing ) {
         for ( Logic::EditTool tool : editableTools ) {
             if ( UI::ShortcutUtils::isShortcutPressed(
                      UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
@@ -1382,12 +1382,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     case Logic::EditTool::Marquee: {
         auto makeMarqueeRect = [&]() {
             TimingSelectionRect rect;
-            rect.left   = canvasPos.x +
-                          std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.right  = canvasPos.x +
-                          std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.top    = canvasPos.y +
-                          std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
+            rect.left = canvasPos.x +
+                        std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.right = canvasPos.x +
+                         std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.top = canvasPos.y +
+                       std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.bottom = canvasPos.y +
                           std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.valid =
@@ -1516,7 +1516,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     }
     case Logic::EditTool::ColorBrush:
     case Logic::EditTool::ColorEraser:
-    case Logic::EditTool::TrackLayout: break;
+    case Logic::EditTool::Layout: break;
     }
 }
 

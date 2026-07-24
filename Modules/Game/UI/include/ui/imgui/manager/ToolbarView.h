@@ -1,6 +1,7 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/EditTool.h"
+#include "common/NoteColor.h"
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
 #include <array>
@@ -42,16 +43,24 @@ private:
     };
 
     Logic::EditTool m_currentTool = Logic::EditTool::Move;
-    /// @brief 进入轨道布局模式前使用的工具，用于再次点击按钮时恢复。
-    Logic::EditTool m_toolBeforeTrackLayout = Logic::EditTool::Move;
-    bool            m_showDivisorPopup      = false;
-    float           m_lastBtnY              = 0.0f;
-    float           m_popupWidth            = 160.0f;
-    float           m_popupHeight           = 120.0f;
-    bool            m_showKeyPopup          = false;
-    float           m_lastKeyBtnY           = 0.0f;
-    float           m_keyPopupWidth         = 160.0f;
-    float           m_keyPopupHeight        = 120.0f;
+    /// @brief 进入布局模式前使用的工具，用于再次点击按钮时恢复。
+    Logic::EditTool m_toolBeforeLayout = Logic::EditTool::Move;
+    /// @brief 是否显示布局组件管理弹层。
+    bool m_showLayoutPopup{ false };
+    /// @brief 上一帧布局工具按钮的屏幕 Y 坐标，用于定位弹层。
+    float m_lastLayoutBtnY{ 0.0f };
+    /// @brief 布局组件弹层上一帧宽度。
+    float m_layoutPopupWidth{ 260.0f };
+    /// @brief 布局组件弹层上一帧高度。
+    float m_layoutPopupHeight{ 100.0f };
+    bool  m_showDivisorPopup = false;
+    float m_lastBtnY         = 0.0f;
+    float m_popupWidth       = 160.0f;
+    float m_popupHeight      = 120.0f;
+    bool  m_showKeyPopup     = false;
+    float m_lastKeyBtnY      = 0.0f;
+    float m_keyPopupWidth    = 160.0f;
+    float m_keyPopupHeight   = 120.0f;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -138,11 +147,16 @@ private:
                         const char* shortLabel, bool showLabel,
                         UIManager* sourceManager);
 
-    /// @brief 绘制可再次点击退出的轨道布局调整按钮。
+    /// @brief 绘制可再次点击退出的布局调整按钮。
     /// @param width 按钮宽度。
     /// @param height 按钮高度。
     /// @param showLabel 是否显示短标签。
-    void drawTrackLayoutButton(float width, float height, bool showLabel);
+    void drawLayoutButton(float width, float height, bool showLabel);
+
+    /// @brief 绘制布局组件显隐管理弹层。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：仅在布局工具激活时绘制固定数量控件。
+    void renderLayoutPopup(float dpiScale);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。

@@ -1,6 +1,7 @@
 #include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/TimeFormatUtils.h"
+#include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -448,7 +449,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -520,7 +521,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -920,7 +921,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
     if ( Logic::EditorEngine::instance().getCurrentTool() ==
-         Logic::EditTool::TrackLayout ) {
+         Logic::EditTool::Layout ) {
         return;
     }
 
@@ -956,24 +957,26 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 在此处移除以防止重复触发。
 }
 
-void Basic2DCanvasInteraction::finishTrackLayoutEditing()
+void Basic2DCanvasInteraction::finishLayoutEditing()
 {
     if ( m_layoutConfigurationChanged ) {
         Config::AppConfig::instance().save();
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
-    m_trackLayoutDragHandle      = TrackLayoutDragHandle::None;
+    m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    m_canvasComponentDragTarget.reset();
     m_layoutConfigurationChanged = false;
 }
 
-void Basic2DCanvasInteraction::handleTrackLayoutEditing(
+void Basic2DCanvasInteraction::handleLayoutEditing(
     float pointerX, float pointerY, float canvasScreenX, float canvasScreenY,
     float targetWidth, float targetHeight, bool isHovered)
 {
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
-        if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+        if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+              m_canvasComponentDragTarget.has_value()) &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            finishTrackLayoutEditing();
+            finishLayoutEditing();
         }
         return;
     }
@@ -986,10 +989,28 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
     const float edgeHitRadius    = std::max(6.0f, 7.0f * dpiScale);
     const float moveHandleRadius = std::max(12.0f, 15.0f * dpiScale);
 
+    std::optional<Config::CanvasComponentType> hoveredComponent;
+    if ( m_canvasComponentDragTarget.has_value() ) {
+        hoveredComponent = m_canvasComponentDragTarget;
+    } else if ( isHovered ) {
+        for ( Config::CanvasComponentType type :
+              Config::CANVAS_COMPONENT_TYPES ) {
+            const auto& placement =
+                appConfig.getVisualConfig().canvasComponents.placement(type);
+            if ( placement.visible &&
+                 Logic::canvasComponentBounds(
+                     type, placement, targetWidth, targetHeight)
+                     .contains(pointerX, pointerY) ) {
+                hoveredComponent = type;
+                break;
+            }
+        }
+    }
+
     TrackLayoutDragHandle hoveredHandle = TrackLayoutDragHandle::None;
     if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ) {
         hoveredHandle = m_trackLayoutDragHandle;
-    } else if ( isHovered ) {
+    } else if ( isHovered && !hoveredComponent.has_value() ) {
         hoveredHandle = hitTestTrackLayout(layout,
                                            judgmentLinePosition,
                                            pointerX,
@@ -1000,8 +1021,10 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
                                            moveHandleRadius);
     }
 
-    if ( hoveredHandle == TrackLayoutDragHandle::Left ||
-         hoveredHandle == TrackLayoutDragHandle::Right ) {
+    if ( hoveredComponent.has_value() ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+                hoveredHandle == TrackLayoutDragHandle::Right ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Top ||
                 hoveredHandle == TrackLayoutDragHandle::Bottom ||
@@ -1011,17 +1034,52 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     }
 
-    if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) &&
-         hoveredHandle != TrackLayoutDragHandle::None ) {
-        m_trackLayoutDragHandle   = hoveredHandle;
-        m_trackLayoutDragStart    = layout;
-        m_trackLayoutPointerStart = {
-            pointerX / targetWidth,
-            pointerY / targetHeight,
-        };
+    if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+        if ( hoveredComponent.has_value() ) {
+            m_canvasComponentDragTarget = hoveredComponent;
+            const auto& placement =
+                appConfig.getVisualConfig().canvasComponents.placement(
+                    *hoveredComponent);
+            m_canvasComponentPointerOffset = {
+                placement.anchorX - pointerX / targetWidth,
+                placement.anchorY - pointerY / targetHeight,
+            };
+        } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
+            m_trackLayoutDragHandle   = hoveredHandle;
+            m_trackLayoutDragStart    = layout;
+            m_trackLayoutPointerStart = {
+                pointerX / targetWidth,
+                pointerY / targetHeight,
+            };
+        }
     }
 
-    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+    if ( m_canvasComponentDragTarget.has_value() &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        constexpr float componentPositionEpsilon = 1e-6f;
+        auto&           component =
+            appConfig.getVisualConfig().canvasComponents.placement(
+                *m_canvasComponentDragTarget);
+        const auto candidate = Logic::moveCanvasComponent(
+            *m_canvasComponentDragTarget,
+            component,
+            pointerX + m_canvasComponentPointerOffset.x * targetWidth,
+            pointerY + m_canvasComponentPointerOffset.y * targetHeight,
+            targetWidth,
+            targetHeight);
+        if ( std::abs(component.anchorX - candidate.anchorX) >
+                 componentPositionEpsilon ||
+             std::abs(component.anchorY - candidate.anchorY) >
+                 componentPositionEpsilon ) {
+            component = candidate;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_layoutConfigurationChanged = true;
+        }
+    }
+
+    if ( !m_canvasComponentDragTarget.has_value() &&
+         m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         const float         normalizedX = pointerX / targetWidth;
         const float         normalizedY = pointerY / targetHeight;
@@ -1084,9 +1142,10 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
         }
     }
 
-    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+    if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_canvasComponentDragTarget.has_value()) &&
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-        finishTrackLayoutEditing();
+        finishLayoutEditing();
     }
 
     layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
@@ -1193,6 +1252,44 @@ void Basic2DCanvasInteraction::handleTrackLayoutEditing(
                       { layoutCenter.x, layoutCenter.y + arrowLength },
                       IM_COL32(20, 30, 40, 255),
                       arrowThickness);
+
+    for ( Config::CanvasComponentType type : Config::CANVAS_COMPONENT_TYPES ) {
+        const auto& placement =
+            appConfig.getVisualConfig().canvasComponents.placement(type);
+        if ( !placement.visible ) continue;
+
+        const auto bounds = Logic::canvasComponentBounds(
+            type, placement, targetWidth, targetHeight);
+        const bool highlighted =
+            hoveredComponent.has_value() && *hoveredComponent == type;
+        const ImU32 componentColor =
+            highlighted ? highlightedColor : IM_COL32(90, 220, 255, 240);
+        const ImVec2 componentMin{ canvasScreenX + bounds.left,
+                                   canvasScreenY + bounds.top };
+        const ImVec2 componentMax{ canvasScreenX + bounds.right,
+                                   canvasScreenY + bounds.bottom };
+        drawList->AddRect(componentMin,
+                          componentMax,
+                          componentColor,
+                          std::max(3.0f, 4.0f * dpiScale),
+                          0,
+                          edgeThickness);
+        const ImVec2 center{ (componentMin.x + componentMax.x) * 0.5f,
+                             (componentMin.y + componentMax.y) * 0.5f };
+        drawList->AddCircleFilled(
+            center, std::max(3.0f, 4.0f * dpiScale), componentColor);
+
+        const char* label =
+            TR("ui.toolbar.layout_current_judgment_time").data();
+        const ImVec2 labelSize = ImGui::CalcTextSize(label);
+        const ImVec2 labelPos{
+            std::clamp(center.x - labelSize.x * 0.5f,
+                       canvasMin.x,
+                       std::max(canvasMin.x, canvasMax.x - labelSize.x)),
+            std::max(canvasMin.y, componentMin.y - labelSize.y - 4.0f),
+        };
+        drawList->AddText(labelPos, componentColor, label);
+    }
     drawList->PopClipRect();
 }
 
@@ -1211,7 +1308,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -1234,14 +1331,15 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool isMouseInTrackLayout =
         isHovered && normX >= layout.left && normX <= layout.right &&
         normY >= layout.top && normY <= layout.bottom;
-    const bool isTrackLayoutEditing =
+    const bool isLayoutEditing =
         Logic::EditorEngine::instance().getCurrentTool() ==
-        Logic::EditTool::TrackLayout;
+        Logic::EditTool::Layout;
 
-    if ( !isTrackLayoutEditing &&
+    if ( !isLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_canvasComponentDragTarget.has_value() ||
           m_layoutConfigurationChanged) ) {
-        finishTrackLayoutEditing();
+        finishLayoutEditing();
     }
 
     constexpr float mouseEpsilon = 0.1f;
@@ -1273,7 +1371,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.isDragging     = isDragging;
     }
 
-    if ( isTrackLayoutEditing ) {
+    if ( isLayoutEditing ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -1291,13 +1389,13 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
-        handleTrackLayoutEditing(localMousePos.x,
-                                 localMousePos.y,
-                                 windowPos.x,
-                                 windowPos.y,
-                                 targetWidth,
-                                 targetHeight,
-                                 isHovered);
+        handleLayoutEditing(localMousePos.x,
+                            localMousePos.y,
+                            windowPos.x,
+                            windowPos.y,
+                            targetWidth,
+                            targetHeight,
+                            isHovered);
         return;
     }
 
@@ -1318,8 +1416,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto drawPoint = [currentSnapshot](
+                        const auto& inspect   = currentSnapshot->hoverInspect;
+                        auto        drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {

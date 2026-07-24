@@ -943,8 +943,8 @@ bool BeatmapSession::processCommands()
                     case EditTool::ColorEraser:
                         toolName = TR("ui.status.tool.color_eraser").pStr;
                         break;
-                    case EditTool::TrackLayout:
-                        toolName = TR("ui.status.tool.track_layout").pStr;
+                    case EditTool::Layout:
+                        toolName = TR("ui.status.tool.layout").pStr;
                         break;
                     }
                     m_ctx->lastActionMessage = fmt::format(
