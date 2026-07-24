@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config/VisualConfig.h"
+#include "config/visual/SpectrumConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"

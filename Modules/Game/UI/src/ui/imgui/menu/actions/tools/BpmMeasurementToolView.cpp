@@ -321,6 +321,15 @@ BeatLineStyle getBeatLineStyle(int denominator)
     }
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    if ( visual.overrideBeatLineColors ) {
+        const auto& overrideColor =
+            visual
+                .beatLineColors[Config::beatLineColorPaletteSlot(denominator)];
+        color = { overrideColor[0],
+                  overrideColor[1],
+                  overrideColor[2],
+                  overrideColor[3] };
+    }
     return { toImColor(color, visual.beatLineAlpha),
              skin.getValue(key,
                            skin.getValue("beat_lines_width.default", 2.0f)) };

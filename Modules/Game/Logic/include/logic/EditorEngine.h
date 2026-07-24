@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -8,6 +9,7 @@
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -310,10 +312,13 @@ public:
     /**
      * @brief 设置全局图集 UV 映射 (由 UI 线程在构建图集后调用)
      */
-    void setAtlasUVMap(const std::string&                             cameraId,
-                       const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+    void setAtlasUVMap(
+        const std::string&                             cameraId,
+        const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {})
     {
-        m_renderSyncRegistry.setAtlasUVMap(cameraId, uvMap);
+        m_renderSyncRegistry.setAtlasUVMap(
+            cameraId, uvMap, asciiFontAtlasMetrics);
     }
 
     /**
@@ -326,12 +331,14 @@ public:
     /// @param cameraId 目标画布 cameraId。
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
     /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
     /// 表，普通路径只做锁内查找和 revision 比较。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
-        std::uint64_t&                           targetRevision) const;
+        std::uint64_t&                           targetRevision,
+        Common::AsciiFontAtlasMetrics& targetAsciiFontAtlasMetrics) const;
 
     /**
      * @brief 获取当前编辑器配置
@@ -447,6 +454,12 @@ public:
     bool flushPendingMetadataAutoSaves();
 
 private:
+    /// @brief 将编辑器级画笔配色恢复到指定会话。
+    /// @param session 接收当前画笔配色的会话。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
+    /// 重置或切换等低频路径。
+    void restoreBrushNoteColorsUnsafe(BeatmapSession& session) const;
+
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
     void captureProjectWorkspaceState();
 
@@ -533,6 +546,13 @@ private:
     /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
     /// 读取；只传递枚举状态，使用 relaxed。
     std::atomic<EditTool> m_currentTool{ EditTool::Move };
+
+    /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
+    std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>
+        m_brushNoteColors{};
+
+    /// @brief 编辑器是否已经收到过画笔配色命令。
+    bool m_brushNoteColorsInitialized{ false };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用

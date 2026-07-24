@@ -1,6 +1,8 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/AsciiFontData.h"
+#include "common/EditTool.h"
+#include "common/NoteColor.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -16,6 +18,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace MMM::Config
+{
+enum class CanvasComponentType : std::uint8_t;
+}
 
 namespace MMM::Logic
 {
@@ -37,8 +44,29 @@ enum class TextureID : uint32_t {
 
     NoteSelectionBorder = 100,
 
-    EffectStart = 1000
+    EffectStart = 1000,
+
+    /// @brief ASCII 字形使用独立高位保留区，避免与皮肤动态特效 ID 冲突。
+    AsciiGlyphStart = 0x00100000U
 };
+
+/// @brief 将 ASCII 字号档位与字符转换为字体图集纹理 ID。
+/// @param tierIndex 字号档位索引。
+/// @param character ASCII 字符。
+/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
+[[nodiscard]] inline constexpr TextureID asciiGlyphTextureId(
+    std::size_t tierIndex, char character)
+{
+    const auto code = static_cast<unsigned char>(character);
+    if ( tierIndex >= Common::ASCII_FONT_RASTER_TIER_COUNT ||
+         code < Common::ASCII_GLYPH_FIRST || code > Common::ASCII_GLYPH_LAST ) {
+        return TextureID::None;
+    }
+    return static_cast<TextureID>(
+        static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) +
+        tierIndex * Common::ASCII_GLYPH_COUNT + code -
+        Common::ASCII_GLYPH_FIRST);
+}
 
 enum class HoverPart : uint8_t {
     None = 0,
@@ -116,7 +144,7 @@ struct Hitbox {
     entt::entity entity;
     HoverPart    part{ HoverPart::None };
     int          subIndex{
-                 -1
+        -1
     };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
     float x;
     float y;
@@ -182,6 +210,39 @@ struct TimelineAudioTrackSnapshot {
     double duration{ 0.0 };
 };
 
+/// @brief 单个可选画布组件实例的渲染与布局编辑边界。
+struct CanvasComponentInstanceSnapshot {
+    /// @brief 组件类型。
+    Config::CanvasComponentType type{};
+
+    /// @brief 重复组件实例序号；非重复组件为 0。
+    std::int64_t instanceIndex{ 0 };
+
+    /// @brief 实际文字内容左边界。
+    float left{ 0.0f };
+
+    /// @brief 实际文字内容上边界。
+    float top{ 0.0f };
+
+    /// @brief 实际文字内容右边界。
+    float right{ 0.0f };
+
+    /// @brief 实际文字内容下边界。
+    float bottom{ 0.0f };
+
+    /// @brief 当前实例允许布局的实际区域左边界。
+    float regionLeft{ 0.0f };
+
+    /// @brief 当前实例允许布局的实际区域上边界。
+    float regionTop{ 0.0f };
+
+    /// @brief 当前实例允许布局的实际区域右边界。
+    float regionRight{ 0.0f };
+
+    /// @brief 当前实例允许布局的实际区域下边界。
+    float regionBottom{ 0.0f };
+};
+
 /**
  * @brief 渲染快照数据，包含 UI 画布所需的所有几何与指令信息
  */
@@ -194,6 +255,8 @@ struct RenderSnapshot {
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
     std::vector<TimelineAudioTrackSnapshot>     mainAudioTracks;
+    /// @brief 可选画布组件的逐实例渲染与布局边界。
+    std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     std::vector<System::ScrollSegment>
         scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
 
@@ -226,6 +289,9 @@ struct RenderSnapshot {
 
     /// @brief 当前快照持有的图集 UV 修订号。
     std::uint64_t atlasUvRevision{ 0 };
+
+    /// @brief 当前主画布 ASCII 字体的多档归一化字形度量。
+    Common::AsciiFontAtlasMetrics asciiFontAtlasMetrics;
 
     /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
     std::vector<entt::entity> noteQueryScratch;
@@ -313,7 +379,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-            0
+        0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -406,6 +472,7 @@ struct RenderSnapshot {
         overlapMasks.clear();
         timelineElements.clear();
         mainAudioTracks.clear();
+        canvasComponentInstances.clear();
         scrollSegments.clear();
         previewDensity.clear();
         noteQueryScratch.clear();

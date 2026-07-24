@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/EditTool.h"
 #include "config/EditorSettings.h"
 #include "imgui.h"
 #include "ui/imgui/WindowIdUtils.h"
@@ -286,6 +286,7 @@ inline const Config::ShortcutBinding& getToolShortcut(
         return settings.shortcutConfig.toolColorBrush;
     case Logic::EditTool::ColorEraser:
         return settings.shortcutConfig.toolColorEraser;
+    case Logic::EditTool::Layout: break;
     }
     return settings.shortcutConfig.toolMove;
 }
@@ -305,6 +306,7 @@ inline Config::ShortcutBinding& getToolShortcut(
         return settings.shortcutConfig.toolColorBrush;
     case Logic::EditTool::ColorEraser:
         return settings.shortcutConfig.toolColorEraser;
+    case Logic::EditTool::Layout: break;
     }
     return settings.shortcutConfig.toolMove;
 }

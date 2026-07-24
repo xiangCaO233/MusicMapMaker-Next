@@ -943,6 +943,9 @@ bool BeatmapSession::processCommands()
                     case EditTool::ColorEraser:
                         toolName = TR("ui.status.tool.color_eraser").pStr;
                         break;
+                    case EditTool::Layout:
+                        toolName = TR("ui.status.tool.layout").pStr;
+                        break;
                     }
                     m_ctx->lastActionMessage = fmt::format(
                         "{} {}", TR("ui.status.category.tool"), toolName);

@@ -2,8 +2,13 @@
 
 add_library(
   Config STATIC
-  src/skin/SkinLoader.cpp src/skin/translation/Translation.cpp src/AppPaths.cpp
-  src/AppConfig.cpp src/FontPreferenceValidator.cpp)
+  src/skin/SkinLoader.cpp
+  src/skin/translation/Translation.cpp
+  src/AppPaths.cpp
+  src/AppConfig.cpp
+  src/FontPreferenceValidator.cpp
+  src/ColorPaletteFile.cpp
+  src/VisualConfig.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -28,3 +33,11 @@ target_link_libraries(SkinThemeBindingTest PRIVATE Config)
 add_test(NAME SkinThemeBindingTest
          COMMAND SkinThemeBindingTest
                  "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")
+
+# 调色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
+mmm_add_test_executable(Config ColorPaletteFileTest
+                        tests/ColorPaletteFileTest.cpp)
+target_link_libraries(ColorPaletteFileTest PRIVATE Config)
+add_test(NAME ColorPaletteFileTest
+         COMMAND ColorPaletteFileTest
+                 "${CMAKE_BINARY_DIR}/test_output/color_palette_file")

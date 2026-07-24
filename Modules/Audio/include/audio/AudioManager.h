@@ -56,7 +56,7 @@ enum class EQPreset {
     FifteenBand
 };
 
-/** @brief 主混音器双声道输出模式。 */
+/** @brief 双声道输出模式。 */
 enum class MixerChannelMode {
     Stereo,           ///< 保持原始立体声输出。
     MuteLeft,         ///< 静音左声道，仅保留右声道。
@@ -446,8 +446,10 @@ public:
     /// @param key 标识符
     /// @param targetTime 目标播放时间 (秒)
     /// @param volumeFactor 额外音量倍率
-    void playSoundEffectScheduled(const std::string& key, double targetTime,
-                                  float volumeFactor = 1.0f);
+    /// @param channelMode 本次播放的双声道输出模式
+    void playSoundEffectScheduled(
+        const std::string& key, double targetTime, float volumeFactor = 1.0f,
+        MixerChannelMode channelMode = MixerChannelMode::Stereo);
 
     /// @brief 清空并停止所有正在播放和预定的音效
     void clearAllScheduledSoundEffects();

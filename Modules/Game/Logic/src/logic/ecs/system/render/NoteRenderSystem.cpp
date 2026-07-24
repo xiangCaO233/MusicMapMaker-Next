@@ -3,6 +3,7 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+#include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
@@ -476,6 +477,23 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     batcher.flush();
+
+    if ( isMainCanvas ) {
+        const CanvasComponentRenderContext componentContext{
+            .currentTime    = renderTime,
+            .viewportWidth  = viewportWidth,
+            .viewportHeight = viewportHeight,
+            .judgmentLineY  = judgmentLineY,
+            .visibleTop     = topY,
+            .visibleBottom  = bottomY,
+            .renderScaleY   = renderScaleY,
+            .beatDivisor    = config.settings.beatDivisor,
+            .bpmEvents      = bpmEvents,
+            .scrollCache    = cache,
+        };
+        CanvasComponentRenderSystem::render(
+            snapshot, componentContext, config.visual.canvasComponents);
+    }
 }
 
 void NoteRenderSystem::renderMarqueeBox(
@@ -595,6 +613,15 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
         float width =
             skin.getValue(key, skin.getValue("beat_lines_width.default", 2.0f));
+        if ( config.visual.overrideBeatLineColors ) {
+            const auto& overrideColor =
+                config.visual.beatLineColors[Config::beatLineColorPaletteSlot(
+                    denominator)];
+            c = { overrideColor[0],
+                  overrideColor[1],
+                  overrideColor[2],
+                  overrideColor[3] };
+        }
         return std::pair{
             glm::vec4(c.r, c.g, c.b, c.a * config.visual.beatLineAlpha), width
         };

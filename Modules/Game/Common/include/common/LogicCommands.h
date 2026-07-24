@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -217,17 +218,6 @@ struct CmdSeek {
  */
 struct CmdSetPlaybackSpeed {
     double speed;
-};
-
-/**
- * @brief 编辑工具类型
- */
-enum class EditTool {
-    Move,         ///< 移动工具
-    Marquee,      ///< 矩形选取
-    Draw,         ///< 绘制工具
-    ColorBrush,   ///< 配色笔刷工具
-    ColorEraser,  ///< 配色橡皮工具
 };
 
 /**

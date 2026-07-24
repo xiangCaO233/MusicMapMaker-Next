@@ -36,8 +36,8 @@ void applyProjectCreationOptions(
         options.m_artist.empty() ? "Unknown" : options.m_artist;
     project.m_metadata.m_mapper =
         options.m_mapper.empty() ? "Unknown" : options.m_mapper;
-    project.m_settings.m_noteColorPaletteSchemeName =
-        options.m_noteColorPaletteSchemeName;
+    project.m_settings.m_colorPaletteSchemeName =
+        options.m_colorPaletteSchemeName;
     project.m_settings.m_workspace.m_sidebarActiveTab =
         options.m_sidebarActiveTab.empty() ? std::string{ "FileExplorer" }
                                            : options.m_sidebarActiveTab;
@@ -628,8 +628,8 @@ ProjectController::ProjectController()
                 options.m_title  = event.m_title;
                 options.m_artist = event.m_artist;
                 options.m_mapper = event.m_mapper;
-                options.m_noteColorPaletteSchemeName =
-                    event.m_noteColorPaletteSchemeName;
+                options.m_colorPaletteSchemeName =
+                    event.m_colorPaletteSchemeName;
                 options.m_sidebarActiveTab = event.m_sidebarActiveTab;
                 requestCreateProject(event.m_projectPath, options);
             });

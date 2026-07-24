@@ -303,46 +303,45 @@ void NewProjectWizard::renderPreferencesStep()
     ImGui::SeparatorText(TR("ui.wizard.new_project.preferences").data());
 
     auto& paletteConfig =
-        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+        Config::AppConfig::instance().getEditorSettings().colorPalettes;
 
     std::string previewName;
-    if ( m_noteColorPaletteSchemeName.empty() ) {
+    if ( m_colorPaletteSchemeName.empty() ) {
         previewName = TR("ui.settings.project.note_palette.inherit").data();
-    } else if ( m_noteColorPaletteSchemeName ==
-                Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+    } else if ( m_colorPaletteSchemeName ==
+                Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         previewName = TR("ui.toolbar.note_palette.skin_default_scheme").data();
     } else {
-        previewName = m_noteColorPaletteSchemeName;
+        previewName = m_colorPaletteSchemeName;
     }
 
     ImGui::TextUnformatted(TR("ui.settings.project.note_palette").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
     if ( ::MMM::UI::FeedbackBeginCombo("##NewProjectNotePalette",
                                        previewName.c_str()) ) {
-        const bool inheritSelected = m_noteColorPaletteSchemeName.empty();
+        const bool inheritSelected = m_colorPaletteSchemeName.empty();
         if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.settings.project.note_palette.inherit").data(),
                  inheritSelected) ) {
-            m_noteColorPaletteSchemeName.clear();
+            m_colorPaletteSchemeName.clear();
         }
         if ( inheritSelected ) ImGui::SetItemDefaultFocus();
 
-        const bool skinSelected =
-            m_noteColorPaletteSchemeName ==
-            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+        const bool skinSelected = m_colorPaletteSchemeName ==
+                                  Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
         if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.toolbar.note_palette.skin_default_scheme").data(),
                  skinSelected) ) {
-            m_noteColorPaletteSchemeName =
-                Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+            m_colorPaletteSchemeName =
+                Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
         }
         if ( skinSelected ) ImGui::SetItemDefaultFocus();
 
         for ( const auto& scheme : paletteConfig.schemes ) {
-            const bool selected = m_noteColorPaletteSchemeName == scheme.name;
+            const bool selected = m_colorPaletteSchemeName == scheme.name;
             if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
                                                selected) ) {
-                m_noteColorPaletteSchemeName = scheme.name;
+                m_colorPaletteSchemeName = scheme.name;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
@@ -601,11 +600,11 @@ void NewProjectWizard::submitCreateRequest()
     if ( !hasValidTargetPath() ) return;
 
     Event::ProjectCreateRequestedEvent event;
-    event.m_projectPath                = targetProjectPath();
-    event.m_title                      = m_titleBuf;
-    event.m_artist                     = m_artistBuf;
-    event.m_mapper                     = m_mapperBuf;
-    event.m_noteColorPaletteSchemeName = m_noteColorPaletteSchemeName;
+    event.m_projectPath            = targetProjectPath();
+    event.m_title                  = m_titleBuf;
+    event.m_artist                 = m_artistBuf;
+    event.m_mapper                 = m_mapperBuf;
+    event.m_colorPaletteSchemeName = m_colorPaletteSchemeName;
     event.m_sidebarActiveTab =
         SideBarUI::workspaceNameFromTab(m_initialSideBarTab);
     Event::EventBus::instance().publish(event);
@@ -636,8 +635,8 @@ void NewProjectWizard::update(UIManager* sourceManager)
 
     Utils::CenteredModalPopupScope modalScope(dpiScale);
     constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoCollapse |
-                                                  ImGuiWindowFlags_NoResize |
-                                                  ImGuiWindowFlags_NoDocking;
+                                              ImGuiWindowFlags_NoResize |
+                                              ImGuiWindowFlags_NoDocking;
     const bool                     windowVisible =
         modalScope.begin(windowTitle.c_str(),
                          &m_isOpen,
@@ -704,7 +703,7 @@ void NewProjectWizard::reset()
     m_suppressFooterActionFrames = 0;
     m_pendingParentFolderPicker  = false;
 
-    m_noteColorPaletteSchemeName.clear();
+    m_colorPaletteSchemeName.clear();
     m_initialSideBarTab = SideBarTab::FileExplorer;
 
     const auto& settings = Config::AppConfig::instance().getEditorSettings();

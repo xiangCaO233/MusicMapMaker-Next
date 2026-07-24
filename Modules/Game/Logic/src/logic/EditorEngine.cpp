@@ -196,7 +196,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -450,6 +450,7 @@ std::string editToolToWorkspaceName(EditTool tool)
     case EditTool::Draw: return "Draw";
     case EditTool::ColorBrush: return "ColorBrush";
     case EditTool::ColorEraser: return "ColorEraser";
+    case EditTool::Layout:
     case EditTool::Move:
     default: return "Move";
     }
@@ -894,10 +895,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1479,12 +1480,35 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    if ( const auto* palette = std::get_if<CmdSetBrushNotePalette>(&cmd) ) {
+        for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+            m_brushNoteColors[i] = palette->colors[i];
+        }
+        m_brushNoteColorsInitialized = true;
+    } else if ( const auto* color = std::get_if<CmdSetBrushNoteColor>(&cmd) ) {
+        const auto colorIndex = static_cast<std::size_t>(color->slot);
+        if ( colorIndex < m_brushNoteColors.size() ) {
+            m_brushNoteColors[colorIndex] = color->color;
+            m_brushNoteColorsInitialized  = true;
+        }
+    }
+
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     /// @brief 当前活跃 Session 索引快照。
     int32_t idx = m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
         sessions[idx].session->pushCommand(std::move(cmd));
+    }
+}
+
+void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
+{
+    if ( !m_brushNoteColorsInitialized ) return;
+
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        session.pushCommand(CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
+                                                  m_brushNoteColors[i] });
     }
 }
 
@@ -1523,10 +1547,11 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
 void EditorEngine::updateSnapshotAtlasUVMap(
     const std::string&                       cameraId,
     std::unordered_map<uint32_t, glm::vec4>& target,
-    std::uint64_t&                           targetRevision) const
+    std::uint64_t&                           targetRevision,
+    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics) const
 {
     m_renderSyncRegistry.updateSnapshotAtlasUVMap(
-        cameraId, target, targetRevision);
+        cameraId, target, targetRevision, targetAsciiFontAtlasMetrics);
 }
 
 /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
@@ -1952,10 +1977,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey   = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -1964,6 +1989,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
                     m_currentTool.load(std::memory_order_relaxed) }));
+                restoreBrushNoteColorsUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
@@ -2011,6 +2037,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+    restoreBrushNoteColorsUnsafe(*newSession);
 
     // 如果有谱面，加载它
     if ( beatmap ) {
@@ -2107,6 +2134,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
         LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+    restoreBrushNoteColorsUnsafe(*newSession);
 
     entry.session     = std::move(newSession);
     entry.displayName = displayName.empty() ? "Welcome" : displayName;
@@ -2190,6 +2218,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         // 2. 加载新激活会话的音频资源并同步播放进度
         auto& activeSession = sessions[index].session;
         if ( activeSession ) {
+            restoreBrushNoteColorsUnsafe(*activeSession);
             auto& audio = Audio::AudioManager::instance();
             if ( !shouldKeepPlaybackOnTarget ) {
                 audio.stop();
@@ -2321,16 +2350,15 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // UI/项目工作区恢复覆盖。
     const auto& globalConfig = Config::AppConfig::instance().getEditorConfig();
     const auto& globalRecent = globalConfig.recentProjects;
-    const auto  globalNoteColorPalettes =
-        globalConfig.settings.noteColorPalettes;
-    const auto globalDefaultNoteColorPalette =
-        globalConfig.settings.defaultNoteColorPaletteSchemeName;
+    const auto  globalColorPalettes = globalConfig.settings.colorPalettes;
+    const auto  globalDefaultColorPalette =
+        globalConfig.settings.defaultColorPaletteSchemeName;
 
-    m_editorConfig                            = config;
-    m_editorConfig.recentProjects             = globalRecent;
-    m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
-    m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
-        globalDefaultNoteColorPalette;
+    m_editorConfig                        = config;
+    m_editorConfig.recentProjects         = globalRecent;
+    m_editorConfig.settings.colorPalettes = globalColorPalettes;
+    m_editorConfig.settings.defaultColorPaletteSchemeName =
+        globalDefaultColorPalette;
     preserveGlobalAppManagedSettings(m_editorConfig, globalConfig);
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);

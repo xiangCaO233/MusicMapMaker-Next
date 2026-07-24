@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/AsciiFontData.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include <atomic>
 #include <cstdint>
@@ -50,8 +51,11 @@ public:
     /// @brief 设置指定画布的图集 UV 映射。
     /// @param cameraId 目标画布 cameraId。
     /// @param uvMap 图集纹理 ID 到 UV 矩形的映射表。
-    void setAtlasUVMap(const std::string&                             cameraId,
-                       const std::unordered_map<uint32_t, glm::vec4>& uvMap);
+    /// @param asciiFontAtlasMetrics 当前画布多档 ASCII 字体度量。
+    void setAtlasUVMap(
+        const std::string&                             cameraId,
+        const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {});
 
     /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
     /// @param cameraId 目标画布 cameraId。
@@ -63,13 +67,15 @@ public:
     /// @param cameraId 目标画布 cameraId。
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
     /// @warning
     /// 逻辑/渲染热路径：每个快照生成时调用；普通路径只做原子快照读取和
     /// 修订号比较，只有图集修订号变化时才复制 unordered_map。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
-        std::uint64_t&                           targetRevision) const;
+        std::uint64_t&                           targetRevision,
+        Common::AsciiFontAtlasMetrics& targetAsciiFontAtlasMetrics) const;
 
     /// @brief 缓存指定画布的最后已知视口尺寸。
     /// @param cameraId 目标画布 cameraId。
@@ -94,7 +100,9 @@ private:
     /// @brief 单个画布图集 UV 映射及其修订号。
     struct AtlasUVMapState {
         std::unordered_map<uint32_t, glm::vec4> uvMap;  ///< 图集 UV 映射。
-        std::uint64_t revision{ 0 };                    ///< 当前图集修订号。
+        /// @brief 当前图集包含的多档 ASCII 字体度量。
+        Common::AsciiFontAtlasMetrics asciiFontAtlasMetrics;
+        std::uint64_t                 revision{ 0 };  ///< 当前图集修订号。
     };
 
     /// @brief 发布给逻辑热路径的不可变图集 UV 快照。

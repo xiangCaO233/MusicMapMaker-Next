@@ -1,6 +1,7 @@
 #include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/TimeFormatUtils.h"
+#include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -38,6 +39,27 @@ constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 
 /// @brief 画布悬浮信息相对鼠标的屏幕偏移。
 constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
+
+/// @brief 从渲染快照实例取得实际文字内容边界。
+/// @param instance 组件实例快照。
+/// @return 与 Vulkan 字形几何一致的边界。
+Logic::CanvasComponentBounds canvasComponentContentBounds(
+    const Logic::CanvasComponentInstanceSnapshot& instance)
+{
+    return { instance.left, instance.top, instance.right, instance.bottom };
+}
+
+/// @brief 从渲染快照实例取得其允许布局的区域。
+/// @param instance 组件实例快照。
+/// @return 普通组件为整张画布，拍号组件为向下扩展文字半高的拍内区间。
+Logic::CanvasComponentBounds canvasComponentLayoutRegion(
+    const Logic::CanvasComponentInstanceSnapshot& instance)
+{
+    return { instance.regionLeft,
+             instance.regionTop,
+             instance.regionRight,
+             instance.regionBottom };
+}
 
 /// @brief 将 ASCII 扩展名转换为小写。
 /// @param value 输入扩展名。
@@ -448,7 +470,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -520,7 +542,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -919,6 +941,11 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
+    if ( Logic::EditorEngine::instance().getCurrentTool() ==
+         Logic::EditTool::Layout ) {
+        return;
+    }
+
     // 如果键盘焦点不在主画布，跳过画布快捷键处理，避免穿透设置页或时间线窗口。
     if ( UI::ShortcutUtils::shouldBlockCanvasEditingShortcuts() ) return;
     if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
@@ -951,6 +978,405 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 在此处移除以防止重复触发。
 }
 
+void Basic2DCanvasInteraction::finishLayoutEditing()
+{
+    if ( m_layoutConfigurationChanged ) {
+        Config::AppConfig::instance().save();
+        ::MMM::UI::PlayInteractionMouseUpFeedback();
+    }
+    m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    m_canvasComponentDragTarget.reset();
+    m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
+    m_canvasComponentDragInstanceIndex = 0;
+    m_layoutConfigurationChanged       = false;
+}
+
+void Basic2DCanvasInteraction::handleLayoutEditing(
+    float pointerX, float pointerY, float canvasScreenX, float canvasScreenY,
+    float targetWidth, float targetHeight, bool isHovered,
+    const Logic::RenderSnapshot& currentSnapshot)
+{
+    if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
+        if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+              m_canvasComponentDragTarget.has_value()) &&
+             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            finishLayoutEditing();
+        }
+        return;
+    }
+
+    auto& appConfig = Config::AppConfig::instance();
+    auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    float judgmentLinePosition =
+        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
+    const float dpiScale                 = appConfig.getWindowContentScale();
+    const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
+    const float moveHandleRadius         = std::max(12.0f, 15.0f * dpiScale);
+    const float componentCornerHitRadius = std::max(6.0f, 7.0f * dpiScale);
+
+    std::optional<Config::CanvasComponentType> hoveredComponent;
+    std::optional<Logic::CanvasComponentInstanceSnapshot>
+                                     hoveredComponentInstance;
+    Logic::CanvasComponentDragHandle hoveredComponentHandle =
+        Logic::CanvasComponentDragHandle::None;
+    if ( m_canvasComponentDragTarget.has_value() ) {
+        hoveredComponent       = m_canvasComponentDragTarget;
+        hoveredComponentHandle = m_canvasComponentDragHandle;
+    } else if ( isHovered ) {
+        for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
+              it != currentSnapshot.canvasComponentInstances.rend();
+              ++it ) {
+            const auto& placement =
+                appConfig.getVisualConfig().canvasComponents.placement(
+                    it->type);
+            if ( !placement.visible ) continue;
+
+            const auto bounds = canvasComponentContentBounds(*it);
+            if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) {
+                continue;
+            }
+            const auto hit = Logic::hitTestCanvasComponent(
+                bounds, pointerX, pointerY, componentCornerHitRadius);
+            if ( hit != Logic::CanvasComponentDragHandle::None ) {
+                hoveredComponent         = it->type;
+                hoveredComponentInstance = *it;
+                hoveredComponentHandle   = hit;
+                break;
+            }
+        }
+    }
+
+    TrackLayoutDragHandle hoveredHandle = TrackLayoutDragHandle::None;
+    if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ) {
+        hoveredHandle = m_trackLayoutDragHandle;
+    } else if ( isHovered && !hoveredComponent.has_value() ) {
+        hoveredHandle = hitTestTrackLayout(layout,
+                                           judgmentLinePosition,
+                                           pointerX,
+                                           pointerY,
+                                           targetWidth,
+                                           targetHeight,
+                                           edgeHitRadius,
+                                           moveHandleRadius);
+    }
+
+    if ( hoveredComponentHandle == Logic::CanvasComponentDragHandle::TopLeft ||
+         hoveredComponentHandle ==
+             Logic::CanvasComponentDragHandle::BottomRight ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+    } else if ( hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::TopRight ||
+                hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::BottomLeft ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW);
+    } else if ( hoveredComponentHandle ==
+                Logic::CanvasComponentDragHandle::Move ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+                hoveredHandle == TrackLayoutDragHandle::Right ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Top ||
+                hoveredHandle == TrackLayoutDragHandle::Bottom ||
+                hoveredHandle == TrackLayoutDragHandle::JudgmentLine ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    } else if ( hoveredHandle == TrackLayoutDragHandle::Move ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
+
+    if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+        if ( hoveredComponent.has_value() &&
+             hoveredComponentInstance.has_value() ) {
+            m_canvasComponentDragTarget = hoveredComponent;
+            m_canvasComponentDragHandle = hoveredComponentHandle;
+            const auto& placement =
+                appConfig.getVisualConfig().canvasComponents.placement(
+                    *hoveredComponent);
+            m_canvasComponentDragStart = placement;
+            m_canvasComponentDragStartBounds =
+                canvasComponentContentBounds(*hoveredComponentInstance);
+            m_canvasComponentDragRegion =
+                canvasComponentLayoutRegion(*hoveredComponentInstance);
+            m_canvasComponentDragInstanceIndex =
+                hoveredComponentInstance->instanceIndex;
+            const float centerX = (m_canvasComponentDragStartBounds.left +
+                                   m_canvasComponentDragStartBounds.right) *
+                                  0.5f;
+            const float centerY = (m_canvasComponentDragStartBounds.top +
+                                   m_canvasComponentDragStartBounds.bottom) *
+                                  0.5f;
+            m_canvasComponentPointerOffset = {
+                centerX - pointerX,
+                centerY - pointerY,
+            };
+        } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
+            m_trackLayoutDragHandle   = hoveredHandle;
+            m_trackLayoutDragStart    = layout;
+            m_trackLayoutPointerStart = {
+                pointerX / targetWidth,
+                pointerY / targetHeight,
+            };
+        }
+    }
+
+    if ( m_canvasComponentDragTarget.has_value() &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        constexpr float componentPositionEpsilon = 1e-6f;
+        auto&           component =
+            appConfig.getVisualConfig().canvasComponents.placement(
+                *m_canvasComponentDragTarget);
+        Config::CanvasComponentPlacement candidate = component;
+        if ( m_canvasComponentDragHandle ==
+             Logic::CanvasComponentDragHandle::Move ) {
+            candidate = Logic::moveCanvasComponentInRegion(
+                component,
+                pointerX + m_canvasComponentPointerOffset.x,
+                pointerY + m_canvasComponentPointerOffset.y,
+                m_canvasComponentDragRegion,
+                m_canvasComponentDragStartBounds.width(),
+                m_canvasComponentDragStartBounds.height());
+        } else {
+            candidate = Logic::resizeCanvasComponentInRegion(
+                m_canvasComponentDragStart,
+                m_canvasComponentDragHandle,
+                m_canvasComponentDragStartBounds,
+                pointerX,
+                pointerY,
+                m_canvasComponentDragRegion);
+        }
+        if ( std::abs(component.anchorX - candidate.anchorX) >
+                 componentPositionEpsilon ||
+             std::abs(component.anchorY - candidate.anchorY) >
+                 componentPositionEpsilon ||
+             std::abs(component.fontSizeRatio - candidate.fontSizeRatio) >
+                 componentPositionEpsilon ) {
+            component = candidate;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_layoutConfigurationChanged = true;
+        }
+    }
+
+    if ( !m_canvasComponentDragTarget.has_value() &&
+         m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        const float         normalizedX = pointerX / targetWidth;
+        const float         normalizedY = pointerY / targetHeight;
+        Config::TrackLayout candidate   = m_trackLayoutDragStart;
+        if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::JudgmentLine ) {
+            constexpr float positionEpsilon = 1e-6f;
+            const float     candidatePosition =
+                sanitizeJudgmentLinePosition(normalizedY);
+            const float currentPosition =
+                appConfig.getVisualConfig().judgeline_pos;
+            if ( !std::isfinite(currentPosition) ||
+                 std::abs(currentPosition - candidatePosition) >
+                     positionEpsilon ) {
+                appConfig.getVisualConfig().judgeline_pos = candidatePosition;
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
+                        appConfig.getEditorConfig() }));
+                m_layoutConfigurationChanged = true;
+                judgmentLinePosition         = candidatePosition;
+            }
+        } else {
+            switch ( m_trackLayoutDragHandle ) {
+            case TrackLayoutDragHandle::Left:
+            case TrackLayoutDragHandle::Right:
+                candidate = resizeTrackLayout(m_trackLayoutDragStart,
+                                              m_trackLayoutDragHandle,
+                                              normalizedX);
+                break;
+            case TrackLayoutDragHandle::Top:
+            case TrackLayoutDragHandle::Bottom:
+                candidate = resizeTrackLayout(m_trackLayoutDragStart,
+                                              m_trackLayoutDragHandle,
+                                              normalizedY);
+                break;
+            case TrackLayoutDragHandle::Move:
+                candidate =
+                    moveTrackLayout(m_trackLayoutDragStart,
+                                    normalizedX - m_trackLayoutPointerStart.x,
+                                    normalizedY - m_trackLayoutPointerStart.y);
+                break;
+            case TrackLayoutDragHandle::JudgmentLine: break;
+            case TrackLayoutDragHandle::None: break;
+            }
+
+            constexpr float layoutEpsilon = 1e-6f;
+            const auto&     current = appConfig.getVisualConfig().trackLayout;
+            const bool      changed =
+                std::abs(current.left - candidate.left) > layoutEpsilon ||
+                std::abs(current.top - candidate.top) > layoutEpsilon ||
+                std::abs(current.right - candidate.right) > layoutEpsilon ||
+                std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
+            if ( changed ) {
+                appConfig.getVisualConfig().trackLayout = candidate;
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
+                        appConfig.getEditorConfig() }));
+                m_layoutConfigurationChanged = true;
+                layout                       = candidate;
+            }
+        }
+    }
+
+    if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_canvasComponentDragTarget.has_value()) &&
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        finishLayoutEditing();
+    }
+
+    layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
+    judgmentLinePosition =
+        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
+    const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
+    const ImVec2 canvasMax{ canvasScreenX + targetWidth,
+                            canvasScreenY + targetHeight };
+    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth,
+                            canvasScreenY + layout.top * targetHeight };
+    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth,
+                            canvasScreenY + layout.bottom * targetHeight };
+    const ImVec2 layoutCenter{ (layoutMin.x + layoutMax.x) * 0.5f,
+                               (layoutMin.y + layoutMax.y) * 0.5f };
+    const float  judgmentLineY =
+        canvasScreenY + judgmentLinePosition * targetHeight;
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    drawList->PushClipRect(canvasMin, canvasMax, true);
+    drawList->AddRectFilled(
+        canvasMin, { canvasMax.x, layoutMin.y }, IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled(
+        { canvasMin.x, layoutMax.y }, canvasMax, IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled({ canvasMin.x, layoutMin.y },
+                            { layoutMin.x, layoutMax.y },
+                            IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled({ layoutMax.x, layoutMin.y },
+                            { canvasMax.x, layoutMax.y },
+                            IM_COL32(0, 0, 0, 72));
+    drawList->AddRectFilled(layoutMin, layoutMax, IM_COL32(64, 180, 255, 24));
+
+    const ImU32 edgeColor        = IM_COL32(64, 190, 255, 230);
+    const ImU32 highlightedColor = IM_COL32(255, 218, 96, 255);
+    const float edgeThickness    = std::max(2.0f, 2.0f * dpiScale);
+    auto        handleColor      = [&](TrackLayoutDragHandle handle) {
+        return hoveredHandle == handle ? highlightedColor : edgeColor;
+    };
+    drawList->AddLine({ layoutMin.x, layoutMin.y },
+                      { layoutMin.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Left),
+                      edgeThickness);
+    drawList->AddLine({ layoutMin.x, layoutMin.y },
+                      { layoutMax.x, layoutMin.y },
+                      handleColor(TrackLayoutDragHandle::Top),
+                      edgeThickness);
+    drawList->AddLine({ layoutMax.x, layoutMin.y },
+                      { layoutMax.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Right),
+                      edgeThickness);
+    drawList->AddLine({ layoutMin.x, layoutMax.y },
+                      { layoutMax.x, layoutMax.y },
+                      handleColor(TrackLayoutDragHandle::Bottom),
+                      edgeThickness);
+
+    const ImU32 judgmentLineColor =
+        hoveredHandle == TrackLayoutDragHandle::JudgmentLine
+            ? highlightedColor
+            : IM_COL32(255, 112, 190, 235);
+    drawList->AddLine({ layoutMin.x, judgmentLineY },
+                      { layoutMax.x, judgmentLineY },
+                      judgmentLineColor,
+                      edgeThickness);
+
+    const float gripHalfLong  = std::max(12.0f, 15.0f * dpiScale);
+    const float gripHalfShort = std::max(3.0f, 4.0f * dpiScale);
+    const float gripRounding  = gripHalfShort;
+    const float middleX       = layoutCenter.x;
+    const float middleY       = layoutCenter.y;
+    drawList->AddRectFilled(
+        { layoutMin.x - gripHalfShort, middleY - gripHalfLong },
+        { layoutMin.x + gripHalfShort, middleY + gripHalfLong },
+        handleColor(TrackLayoutDragHandle::Left),
+        gripRounding);
+    drawList->AddRectFilled(
+        { layoutMax.x - gripHalfShort, middleY - gripHalfLong },
+        { layoutMax.x + gripHalfShort, middleY + gripHalfLong },
+        handleColor(TrackLayoutDragHandle::Right),
+        gripRounding);
+    drawList->AddRectFilled(
+        { middleX - gripHalfLong, layoutMin.y - gripHalfShort },
+        { middleX + gripHalfLong, layoutMin.y + gripHalfShort },
+        handleColor(TrackLayoutDragHandle::Top),
+        gripRounding);
+    drawList->AddRectFilled(
+        { middleX - gripHalfLong, layoutMax.y - gripHalfShort },
+        { middleX + gripHalfLong, layoutMax.y + gripHalfShort },
+        handleColor(TrackLayoutDragHandle::Bottom),
+        gripRounding);
+    drawList->AddRectFilled(
+        { layoutMax.x - gripHalfLong, judgmentLineY - gripHalfShort },
+        { layoutMax.x + gripHalfLong, judgmentLineY + gripHalfShort },
+        judgmentLineColor,
+        gripRounding);
+
+    const ImU32 moveColor = handleColor(TrackLayoutDragHandle::Move);
+    drawList->AddCircleFilled(layoutCenter, moveHandleRadius, moveColor);
+    const float arrowLength    = moveHandleRadius * 0.55f;
+    const float arrowThickness = std::max(1.5f, 1.5f * dpiScale);
+    drawList->AddLine({ layoutCenter.x - arrowLength, layoutCenter.y },
+                      { layoutCenter.x + arrowLength, layoutCenter.y },
+                      IM_COL32(20, 30, 40, 255),
+                      arrowThickness);
+    drawList->AddLine({ layoutCenter.x, layoutCenter.y - arrowLength },
+                      { layoutCenter.x, layoutCenter.y + arrowLength },
+                      IM_COL32(20, 30, 40, 255),
+                      arrowThickness);
+
+    for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
+        const auto& placement =
+            appConfig.getVisualConfig().canvasComponents.placement(
+                instance.type);
+        if ( !placement.visible ) continue;
+
+        const auto bounds = canvasComponentContentBounds(instance);
+        if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
+        const bool highlighted =
+            hoveredComponent.has_value() &&
+            *hoveredComponent == instance.type &&
+            ((hoveredComponentInstance.has_value() &&
+              hoveredComponentInstance->instanceIndex ==
+                  instance.instanceIndex) ||
+             (m_canvasComponentDragTarget.has_value() &&
+              m_canvasComponentDragInstanceIndex == instance.instanceIndex));
+        const ImU32 componentColor =
+            highlighted ? highlightedColor : IM_COL32(90, 220, 255, 240);
+        const ImVec2 componentMin{ canvasScreenX + bounds.left,
+                                   canvasScreenY + bounds.top };
+        const ImVec2 componentMax{ canvasScreenX + bounds.right,
+                                   canvasScreenY + bounds.bottom };
+        drawList->AddRect(componentMin,
+                          componentMax,
+                          componentColor,
+                          0.0f,
+                          0,
+                          std::max(1.0f, 1.5f * dpiScale));
+
+        const float handleHalf = std::max(3.0f, 3.5f * dpiScale);
+        const std::array<ImVec2, 4> corners{
+            componentMin,
+            ImVec2{ componentMax.x, componentMin.y },
+            ImVec2{ componentMin.x, componentMax.y },
+            componentMax,
+        };
+        for ( const auto& corner : corners ) {
+            drawList->AddRectFilled(
+                { corner.x - handleHalf, corner.y - handleHalf },
+                { corner.x + handleHalf, corner.y + handleHalf },
+                componentColor);
+        }
+    }
+    drawList->PopClipRect();
+}
+
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
@@ -966,7 +1392,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -989,6 +1415,16 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool isMouseInTrackLayout =
         isHovered && normX >= layout.left && normX <= layout.right &&
         normY >= layout.top && normY <= layout.bottom;
+    const bool isLayoutEditing =
+        Logic::EditorEngine::instance().getCurrentTool() ==
+        Logic::EditTool::Layout;
+
+    if ( !isLayoutEditing &&
+         (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_canvasComponentDragTarget.has_value() ||
+          m_layoutConfigurationChanged) ) {
+        finishLayoutEditing();
+    }
 
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
@@ -1019,6 +1455,35 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.isDragging     = isDragging;
     }
 
+    if ( isLayoutEditing ) {
+        if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
+             m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
+            m_hasLastHovered      = true;
+            m_lastHoveredEntity   = entt::null;
+            m_lastHoveredPart     = 0;
+            m_lastHoveredSubIndex = -1;
+        }
+
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressDragged              = false;
+        m_isCanvasPanning               = false;
+        m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
+        handleLayoutEditing(localMousePos.x,
+                            localMousePos.y,
+                            windowPos.x,
+                            windowPos.y,
+                            targetWidth,
+                            targetHeight,
+                            isHovered,
+                            *currentSnapshot);
+        return;
+    }
+
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&
          !currentSnapshot->isPlaying ) {
@@ -1036,8 +1501,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto drawPoint = [currentSnapshot](
+                        const auto& inspect   = currentSnapshot->hoverInspect;
+                        auto        drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {

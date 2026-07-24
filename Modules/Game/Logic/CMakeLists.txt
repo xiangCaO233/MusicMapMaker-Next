@@ -32,6 +32,7 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Types.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
+  src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
   src/logic/ecs/system/NoteTransformSystem.cpp
   src/logic/ecs/system/ScrollCache.cpp
@@ -75,3 +76,19 @@ add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
+
+mmm_add_test_executable(Logic BackgroundRenderSystemTest
+                        tests/BackgroundRenderSystemTest.cpp)
+target_link_libraries(BackgroundRenderSystemTest PRIVATE Logic Log)
+add_test(NAME BackgroundRenderSystemTest COMMAND BackgroundRenderSystemTest)
+
+mmm_add_test_executable(Logic CanvasComponentRenderSystemTest
+                        tests/CanvasComponentRenderSystemTest.cpp)
+target_link_libraries(CanvasComponentRenderSystemTest PRIVATE Logic Log)
+add_test(NAME CanvasComponentRenderSystemTest
+         COMMAND CanvasComponentRenderSystemTest)
+
+mmm_add_test_executable(Logic BrushPaletteSessionStateTest
+                        tests/BrushPaletteSessionStateTest.cpp)
+target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
+add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)

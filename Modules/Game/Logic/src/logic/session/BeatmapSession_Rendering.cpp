@@ -606,8 +606,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->clear();
 
         // 注入该 Camera 特有的 UV 映射到快照
-        engine.updateSnapshotAtlasUVMap(
-            cameraId, snapshot->uvMap, snapshot->atlasUvRevision);
+        engine.updateSnapshotAtlasUVMap(cameraId,
+                                        snapshot->uvMap,
+                                        snapshot->atlasUvRevision,
+                                        snapshot->asciiFontAtlasMetrics);
         snapshot->isPlaying         = snapshotIsPlaying;
         snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
         snapshot->playbackTime      = m_ctx->currentTime;

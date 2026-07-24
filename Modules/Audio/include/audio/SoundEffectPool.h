@@ -18,6 +18,8 @@ class TimeStretcher;
 namespace MMM::Audio
 {
 
+enum class MixerChannelMode;
+
 /**
  * @brief 音效池，用于管理同一音效的多个并发播放实例
  */
@@ -50,8 +52,10 @@ public:
     /// @param volume 播放音量
     /// @param targetFrame 目标帧位置（基于 BGM）
     /// @param refProvider 参考源位置提供者
+    /// @param channelMode 本次播放的双声道输出模式
     void playScheduled(float volume, size_t targetFrame,
-                       std::function<size_t()> refProvider);
+                       std::function<size_t()> refProvider,
+                       MixerChannelMode        channelMode);
 
     /// @brief 停止所有正在播放或预定的音效，并重置状态
     void stopAll();
@@ -94,6 +98,9 @@ private:
 
         /// @brief 每个实例独立的变调拉伸器。
         std::shared_ptr<ice::TimeStretcher> pitchStretcher;
+
+        /// @brief 每个实例独立的声道控制总线。
+        std::shared_ptr<ice::MixBus> channelMixer;
     };
 
     /// @brief 创建一个接入本地混音器的播放实例。

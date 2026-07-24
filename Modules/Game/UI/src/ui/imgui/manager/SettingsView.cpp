@@ -121,13 +121,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 30> labels{
-            TR_CACHE("ui.settings.visual.layout_left").data(),
-            TR_CACHE("ui.settings.visual.layout_top").data(),
-            TR_CACHE("ui.settings.visual.layout_right").data(),
-            TR_CACHE("ui.settings.visual.layout_bottom").data(),
-            TR_CACHE("ui.settings.visual.layout_box_width").data(),
-            TR_CACHE("ui.settings.visual.judgeline_pos").data(),
+        const std::array<const char*, 24> labels{
             TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
             TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
             TR_CACHE("ui.settings.visual.note_scale_x").data(),
@@ -187,7 +181,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 16> labels{
+        const std::array<const char*, 17> labels{
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
@@ -206,6 +200,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.sfx_strategy").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
+            TR_CACHE("ui.settings.editor.sfx_flick_directional_channels")
+                .data(),
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);

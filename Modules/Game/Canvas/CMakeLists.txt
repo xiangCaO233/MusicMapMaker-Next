@@ -38,3 +38,10 @@ mmm_add_test_executable(Canvas BackgroundVideoTimingTest
 target_include_directories(BackgroundVideoTimingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BackgroundVideoTimingTest COMMAND BackgroundVideoTimingTest)
+
+# 布局编辑使用无图形依赖的纯计算，覆盖轨道、判定线和可选组件。
+mmm_add_test_executable(Canvas LayoutEditingTest tests/LayoutEditingTest.cpp)
+target_include_directories(LayoutEditingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(LayoutEditingTest PRIVATE Common Config)
+add_test(NAME LayoutEditingTest COMMAND LayoutEditingTest)

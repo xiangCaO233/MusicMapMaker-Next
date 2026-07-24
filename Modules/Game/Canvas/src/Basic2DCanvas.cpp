@@ -1,5 +1,6 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "config/AppConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -411,6 +412,11 @@ void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
 
 bool Basic2DCanvas::needReload()
 {
+    const auto& currentAsciiFont =
+        Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
+    if ( currentAsciiFont != m_loadedAsciiFontPreference ) {
+        m_needReload = true;
+    }
     return std::exchange(m_needReload, false);
 }
 

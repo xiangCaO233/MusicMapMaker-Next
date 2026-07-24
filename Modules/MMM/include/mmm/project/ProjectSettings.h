@@ -285,8 +285,8 @@ struct ProjectSettings {
     /// @brief 项目中最后一次打开的谱面名称 (BeatmapEntry::m_name)
     std::string m_lastOpenedBeatmap;
 
-    /// @brief 项目打开时应用的音符调色盘；空字符串表示继承软件默认。
-    std::string m_noteColorPaletteSchemeName;
+    /// @brief 项目打开时应用的调色方案；空字符串表示继承软件默认。
+    std::string m_colorPaletteSchemeName;
 
     /// @brief 项目级工作区状态。
     ProjectWorkspaceState m_workspace;
@@ -296,21 +296,21 @@ struct ProjectSettings {
     {
         nlohmann::json editorOverrideJson = nullptr;
         if ( settings.m_editorOverride ) {
-            auto editorOverride              = *settings.m_editorOverride;
-            editorOverride.noteColorPalettes = Config::NoteColorPaletteConfig();
-            editorOverride.defaultNoteColorPaletteSchemeName =
-                Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+            auto editorOverride          = *settings.m_editorOverride;
+            editorOverride.colorPalettes = Config::ColorPaletteConfig();
+            editorOverride.defaultColorPaletteSchemeName =
+                Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
             editorOverrideJson = editorOverride;
             editorOverrideJson.erase("autoUploadPgoProfiles");
             editorOverrideJson.erase("pgoProfileUploadConsentAsked");
         }
-        j = nlohmann::json{ { "m_visualOverride", settings.m_visualOverride },
-                            { "m_editorOverride", editorOverrideJson },
-                            { "m_lastOpenedBeatmap",
-                              settings.m_lastOpenedBeatmap },
-                            { "m_noteColorPaletteSchemeName",
-                              settings.m_noteColorPaletteSchemeName },
-                            { "m_workspace", settings.m_workspace } };
+        j = nlohmann::json{
+            { "m_visualOverride", settings.m_visualOverride },
+            { "m_editorOverride", editorOverrideJson },
+            { "m_lastOpenedBeatmap", settings.m_lastOpenedBeatmap },
+            { "m_colorPaletteSchemeName", settings.m_colorPaletteSchemeName },
+            { "m_workspace", settings.m_workspace }
+        };
     }
 
     /// @brief 反序列化项目设置，并兼容缺少工作区字段的旧项目。
@@ -334,8 +334,8 @@ struct ProjectSettings {
 
         settings.m_lastOpenedBeatmap =
             j.value("m_lastOpenedBeatmap", std::string{});
-        settings.m_noteColorPaletteSchemeName =
-            j.value("m_noteColorPaletteSchemeName", std::string{});
+        settings.m_colorPaletteSchemeName =
+            j.value("m_colorPaletteSchemeName", std::string{});
         settings.m_workspace = j.value("m_workspace", ProjectWorkspaceState{});
     }
 };

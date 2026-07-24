@@ -3,11 +3,12 @@
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "mmm/timing/Timing.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
+#include <array>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -76,9 +77,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void reloadTextures(vk::PhysicalDevice& physicalDevice,
-                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                        vk::Queue& queue) override;
+    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                               vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -435,7 +436,7 @@ private:
     /// @brief 当前序号列拖选是否已经越过起始行。
     bool m_hasTableRowDragSelectionMoved{ false };
     /// @brief 时间点表格是否只显示 BPM 行。
-    bool         m_tableOnlyShowBpm{ false };
+    bool m_tableOnlyShowBpm{ false };
     /// @brief 时间点表格搜索启用的 BPM、SV、Jump 与 HS 属性。
     std::array<bool, 4> m_tableSearchEffectFilters{};
     /// @brief 时间点表格精确数值搜索文本。
