@@ -51,7 +51,7 @@ Logic::CanvasComponentBounds canvasComponentContentBounds(
 
 /// @brief 从渲染快照实例取得其允许布局的区域。
 /// @param instance 组件实例快照。
-/// @return 普通组件为整张画布，拍号组件为按文字半高对齐拍头线后的拍内区间。
+/// @return 普通组件为整张画布，拍号组件为向下扩展文字半高的拍内区间。
 Logic::CanvasComponentBounds canvasComponentLayoutRegion(
     const Logic::CanvasComponentInstanceSnapshot& instance)
 {

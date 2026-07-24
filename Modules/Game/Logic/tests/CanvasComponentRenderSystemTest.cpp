@@ -289,8 +289,8 @@ bool testBeatNumberRendersUntilLayoutViewportExit()
     return !snapshot.overlayCmds.empty();
 }
 
-/// @brief 验证拍内可移动区域按当前文字半高下移并允许居中于拍头线。
-/// @return 区域偏移量和底端位置的文字中心均正确时返回 true。
+/// @brief 验证拍内可移动区域保留上边界并按当前文字半高向下扩展。
+/// @return 上方空间、下方扩展量和拍头线文字中心均正确时返回 true。
 bool testBeatNumberLayoutRegionCentersOnBeatHead()
 {
     MMM::Logic::RenderSnapshot               snapshot;
@@ -348,8 +348,7 @@ bool testBeatNumberLayoutRegionCentersOnBeatHead()
     const float     expectedOffset = textSize.height * 0.5f;
     const float     contentCenterY = (instance->top + instance->bottom) * 0.5f;
     constexpr float epsilon        = 1e-4f;
-    if ( std::abs(instance->regionTop - (rawRegionTop + expectedOffset)) >
-             epsilon ||
+    if ( std::abs(instance->regionTop - rawRegionTop) > epsilon ||
          std::abs(instance->regionBottom - (rawRegionBottom + expectedOffset)) >
              epsilon ||
          std::abs(contentCenterY - rawRegionBottom) > epsilon ||

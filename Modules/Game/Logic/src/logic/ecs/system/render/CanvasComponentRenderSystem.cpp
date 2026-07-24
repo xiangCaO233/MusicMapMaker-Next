@@ -33,8 +33,8 @@ constexpr std::size_t MAX_VISIBLE_BEAT_NUMBER_INSTANCES = 4096U;
 /// @param outBounds 输出实际文字内容边界。
 /// @param visibleRegion 可选的实例可见性判定区域。
 /// @param outEffectiveLayoutRegion 输出应用文字尺寸偏移后的实际布局区域。
-/// @param centerAtBeatHead 为 true 时将布局区域下移半个文字包围框高度，使其
-/// 底端位置可令文字中心对齐拍头线。
+/// @param extendForBeatHeadCenter 为 true 时将布局区域向下扩展半个文字包围框
+/// 高度，使其保留原上边界且底端位置可令文字中心对齐拍头线。
 /// @return 至少生成一个可见字形时返回 true。
 /// @warning
 /// 热路径：组件启用时每次主画布快照生成调用；只扫描短文本并生成字形四边形。
@@ -44,7 +44,7 @@ bool renderAsciiText(Batcher& batcher, const char* text,
                      CanvasComponentBounds&                  outBounds,
                      const CanvasComponentBounds* visibleRegion      = nullptr,
                      CanvasComponentBounds* outEffectiveLayoutRegion = nullptr,
-                     bool                   centerAtBeatHead         = false)
+                     bool                   extendForBeatHeadCenter  = false)
 {
     const auto  sanitized = sanitizeCanvasComponentPlacement(placement);
     const float fontPixelHeight =
@@ -57,10 +57,8 @@ bool renderAsciiText(Batcher& batcher, const char* text,
     const auto textSize = Common::measureAsciiText(font, text, fontPixelHeight);
     if ( textSize.width <= 0.0f || textSize.height <= 0.0f ) return false;
 
-    if ( centerAtBeatHead ) {
-        const float offsetY = textSize.height * 0.5f;
-        layoutRegion.top += offsetY;
-        layoutRegion.bottom += offsetY;
+    if ( extendForBeatHeadCenter ) {
+        layoutRegion.bottom += textSize.height * 0.5f;
     }
     if ( outEffectiveLayoutRegion ) {
         *outEffectiveLayoutRegion = layoutRegion;
