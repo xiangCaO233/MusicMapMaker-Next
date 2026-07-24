@@ -2,8 +2,8 @@
 #include "audio/AudioManager.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/ColorPaletteFile.h"
 #include "config/EditorConfig.h"
-#include "config/NoteColorPaletteFile.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -60,6 +60,22 @@ const char* colorSlotLabelKey(Logic::NoteColorSlot slot)
     return "ui.toolbar.note_palette.note";
 }
 
+/// @brief 获取分拍线颜色槽位对应的翻译键。
+const char* beatLineColorSlotLabelKey(std::size_t slotIndex)
+{
+    switch ( slotIndex ) {
+    case 0: return "ui.toolbar.note_palette.beat_line_1";
+    case 1: return "ui.toolbar.note_palette.beat_line_2";
+    case 2: return "ui.toolbar.note_palette.beat_line_3";
+    case 3: return "ui.toolbar.note_palette.beat_line_4";
+    case 4: return "ui.toolbar.note_palette.beat_line_6";
+    case 5: return "ui.toolbar.note_palette.beat_line_8";
+    case 6: return "ui.toolbar.note_palette.beat_line_12";
+    case 7: return "ui.toolbar.note_palette.beat_line_16";
+    default: return "ui.toolbar.note_palette.beat_line_default";
+    }
+}
+
 /// @brief 获取颜色槽位对应的皮肤颜色键。
 const char* colorSlotSkinKey(Logic::NoteColorSlot slot)
 {
@@ -113,6 +129,29 @@ glm::vec4 fromStoredColor(const std::array<float, 4>& color)
     return { color[0], color[1], color[2], color[3] };
 }
 
+/// @brief 判断皮肤颜色查询结果是否为缺失键占位色。
+bool isMissingSkinColor(const Config::Color& color)
+{
+    return color.r == 1.0f && color.g == 0.0f && color.b == 1.0f &&
+           color.a == 1.0f;
+}
+
+/// @brief 获取分拍线槽位对应的皮肤颜色。
+Config::Color skinBeatLineColor(std::size_t slotIndex)
+{
+    auto& skin = Config::SkinManager::instance();
+    if ( slotIndex >= Config::BEAT_LINE_COLOR_PALETTE_DENOMINATORS.size() ) {
+        return skin.getColor("beat_lines.default");
+    }
+
+    const int denominator =
+        Config::BEAT_LINE_COLOR_PALETTE_DENOMINATORS[slotIndex];
+    Config::Color color =
+        skin.getColor("beat_lines.beat_" + std::to_string(denominator));
+    return isMissingSkinColor(color) ? skin.getColor("beat_lines.default")
+                                     : color;
+}
+
 /// @brief 用皮肤默认颜色填充调色盘缓存。
 void fillPaletteWithSkinDefaults(
     std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT>& colors)
@@ -123,15 +162,27 @@ void fillPaletteWithSkinDefaults(
     }
 }
 
+/// @brief 用皮肤默认颜色填充分拍线调色盘缓存。
+void fillBeatLinePaletteWithSkinDefaults(
+    std::array<glm::vec4, Config::BEAT_LINE_COLOR_PALETTE_SLOT_COUNT>& colors)
+{
+    for ( std::size_t i = 0; i < colors.size(); ++i ) {
+        colors[i] = toVec4(skinBeatLineColor(i));
+    }
+}
+
 /// @brief 在皮肤默认颜色基础上应用一个自定义调色盘方案。
 void applyStoredPaletteScheme(
     std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT>& colors,
-    const Config::NoteColorPaletteScheme&                scheme)
+    std::array<glm::vec4, Config::BEAT_LINE_COLOR_PALETTE_SLOT_COUNT>&
+                                      beatLineColors,
+    const Config::ColorPaletteScheme& scheme)
 {
-    fillPaletteWithSkinDefaults(colors);
-    std::size_t count = std::min(scheme.colors.size(), colors.size());
-    for ( std::size_t i = 0; i < count; ++i ) {
-        colors[i] = fromStoredColor(scheme.colors[i]);
+    for ( std::size_t i = 0; i < colors.size(); ++i ) {
+        colors[i] = fromStoredColor(scheme.noteColors[i]);
+    }
+    for ( std::size_t i = 0; i < beatLineColors.size(); ++i ) {
+        beatLineColors[i] = fromStoredColor(scheme.beatLineColors[i]);
     }
 }
 
@@ -233,13 +284,13 @@ std::string inheritedPaletteSchemeName()
 bool isReservedPaletteSchemeName(const std::string& name)
 {
     return name.empty() ||
-           name == Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ||
+           name == Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ||
            name == defaultPaletteSchemeName() ||
            name == inheritedPaletteSchemeName();
 }
 
 /// @brief 将方案名转换为可用作推荐导出文件名的文本。
-/// @param name 当前物件配色方案名。
+/// @param name 当前调色方案名。
 /// @return 已替换路径非法字符且移除结尾空格和点号的文件名主体。
 std::string sanitizePaletteExportFileName(std::string name)
 {
@@ -258,11 +309,11 @@ std::string sanitizePaletteExportFileName(std::string name)
     if ( name.empty() || name == "." || name == ".." ) {
         name = "palette";
     }
-    name += Config::NOTE_COLOR_PALETTE_FILE_EXTENSION;
+    name += Config::COLOR_PALETTE_FILE_EXTENSION;
     return name;
 }
 
-/// @brief 规范化物件配色方案导出路径的扩展名。
+/// @brief 规范化调色方案导出路径的扩展名。
 /// @param path 文件选择器返回的 UTF-8 路径。
 /// @return 使用 `.mmpalette` 扩展名的 UTF-8 路径。
 std::string normalizePaletteExportPath(const std::string& path)
@@ -271,7 +322,7 @@ std::string normalizePaletteExportPath(const std::string& path)
         return {};
     }
     std::filesystem::path normalized = Config::utf8ToPath(path);
-    normalized.replace_extension(Config::NOTE_COLOR_PALETTE_FILE_EXTENSION);
+    normalized.replace_extension(Config::COLOR_PALETTE_FILE_EXTENSION);
     return Config::pathToUtf8(normalized);
 }
 }  // namespace
@@ -923,6 +974,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
     renderColorPalettePopup(dpiScale);
     renderPaletteExportFileDialog(dpiScale);
+    renderPaletteImportFileDialog(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1269,57 +1321,64 @@ void ToolbarView::initializeColorPalette()
 void ToolbarView::loadSkinDefaultPalette()
 {
     fillPaletteWithSkinDefaults(m_paletteColors);
+    fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
+    m_overrideBeatLinePalette  = false;
     m_activePaletteSchemeIndex = -1;
-    m_activePaletteSelection   = NotePaletteSelectionKind::SkinDefault;
+    m_activePaletteSelection   = PaletteSelectionKind::SkinDefault;
     m_paletteSchemeErrorKey.clear();
     setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
     pushPaletteToBrush();
+    pushBeatLinePaletteToRenderer();
 }
 
 void ToolbarView::loadSoftwareDefaultPalette()
 {
     const auto& settings   = Config::AppConfig::instance().getEditorSettings();
-    const auto& schemeName = settings.defaultNoteColorPaletteSchemeName;
+    const auto& schemeName = settings.defaultColorPaletteSchemeName;
     bool        loaded     = false;
 
     if ( !schemeName.empty() &&
-         schemeName != Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
-        const auto& paletteConfig = settings.noteColorPalettes;
-        auto        it =
-            std::find_if(paletteConfig.schemes.begin(),
-                         paletteConfig.schemes.end(),
-                         [&](const Config::NoteColorPaletteScheme& scheme) {
-                             return scheme.name == schemeName;
-                         });
+         schemeName != Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+        const auto& paletteConfig = settings.colorPalettes;
+        auto        it            = std::find_if(paletteConfig.schemes.begin(),
+                               paletteConfig.schemes.end(),
+                               [&](const Config::ColorPaletteScheme& scheme) {
+                                   return scheme.name == schemeName;
+                               });
         if ( it != paletteConfig.schemes.end() ) {
-            applyStoredPaletteScheme(m_paletteColors, *it);
-            loaded = true;
+            applyStoredPaletteScheme(
+                m_paletteColors, m_beatLinePaletteColors, *it);
+            m_overrideBeatLinePalette = true;
+            loaded                    = true;
         }
     }
 
     if ( !loaded ) {
         fillPaletteWithSkinDefaults(m_paletteColors);
+        fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
+        m_overrideBeatLinePalette = false;
     }
     m_activePaletteSchemeIndex = -1;
-    m_activePaletteSelection = NotePaletteSelectionKind::InheritSoftwareDefault;
+    m_activePaletteSelection   = PaletteSelectionKind::InheritSoftwareDefault;
     m_paletteSchemeErrorKey.clear();
     setPaletteSchemeNameBuffer(inheritedPaletteSchemeName());
     pushPaletteToBrush();
+    pushBeatLinePaletteToRenderer();
 }
 
 bool ToolbarView::loadPaletteSchemeByName(const std::string& schemeName)
 {
     if ( schemeName.empty() ||
-         schemeName == Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+         schemeName == Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         loadSkinDefaultPalette();
         return true;
     }
 
     auto& paletteConfig =
-        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+        Config::AppConfig::instance().getEditorSettings().colorPalettes;
     auto it = std::find_if(paletteConfig.schemes.begin(),
                            paletteConfig.schemes.end(),
-                           [&](const Config::NoteColorPaletteScheme& scheme) {
+                           [&](const Config::ColorPaletteScheme& scheme) {
                                return scheme.name == schemeName;
                            });
     if ( it == paletteConfig.schemes.end() ) return false;
@@ -1337,16 +1396,16 @@ void ToolbarView::applyProjectPalettePreference()
 
     std::string projectKey;
     std::string preferenceSource = "inherit";
-    std::string schemeName       = settings.defaultNoteColorPaletteSchemeName;
+    std::string schemeName       = settings.defaultColorPaletteSchemeName;
     if ( project ) {
         projectKey = Config::pathToUtf8(project->m_projectRoot);
-        if ( !project->m_settings.m_noteColorPaletteSchemeName.empty() ) {
+        if ( !project->m_settings.m_colorPaletteSchemeName.empty() ) {
             preferenceSource = "project";
-            schemeName       = project->m_settings.m_noteColorPaletteSchemeName;
+            schemeName       = project->m_settings.m_colorPaletteSchemeName;
         }
     }
     if ( schemeName.empty() ) {
-        schemeName = Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+        schemeName = Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
     }
 
     std::string applyKey = projectKey;
@@ -1378,28 +1437,42 @@ void ToolbarView::pushPaletteToSelection()
         Logic::CmdApplyNotePaletteToSelection{ m_paletteColors });
 }
 
+void ToolbarView::pushBeatLinePaletteToRenderer()
+{
+    auto& engine                         = Logic::EditorEngine::instance();
+    auto  config                         = engine.getEditorConfig();
+    config.visual.overrideBeatLineColors = m_overrideBeatLinePalette;
+    for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+        config.visual.beatLineColors[i] =
+            toStoredColor(m_beatLinePaletteColors[i]);
+    }
+    engine.setEditorConfig(config);
+}
+
 void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
 {
     auto& app           = Config::AppConfig::instance();
-    auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
+    auto& paletteConfig = app.getEditorSettings().colorPalettes;
     if ( schemeIndex >= paletteConfig.schemes.size() ) return;
 
     const auto& scheme = paletteConfig.schemes[schemeIndex];
-    applyStoredPaletteScheme(m_paletteColors, scheme);
+    applyStoredPaletteScheme(m_paletteColors, m_beatLinePaletteColors, scheme);
+    m_overrideBeatLinePalette = true;
 
     m_activePaletteSchemeIndex      = static_cast<int>(schemeIndex);
-    m_activePaletteSelection        = NotePaletteSelectionKind::Custom;
+    m_activePaletteSelection        = PaletteSelectionKind::Custom;
     paletteConfig.activeSchemeIndex = schemeIndex;
     m_paletteSchemeErrorKey.clear();
     setPaletteSchemeNameBuffer(scheme.name);
     pushPaletteToBrush();
+    pushBeatLinePaletteToRenderer();
 }
 
 bool ToolbarView::canManageActivePaletteScheme() const
 {
     const auto& paletteConfig =
-        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
-    return m_activePaletteSelection == NotePaletteSelectionKind::Custom &&
+        Config::AppConfig::instance().getEditorSettings().colorPalettes;
+    return m_activePaletteSelection == PaletteSelectionKind::Custom &&
            m_activePaletteSchemeIndex >= 0 &&
            static_cast<std::size_t>(m_activePaletteSchemeIndex) <
                paletteConfig.schemes.size();
@@ -1409,7 +1482,7 @@ bool ToolbarView::hasPaletteSchemeNameConflict(
     const std::string& name, std::optional<std::size_t> ignoredIndex) const
 {
     const auto& paletteConfig =
-        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+        Config::AppConfig::instance().getEditorSettings().colorPalettes;
     for ( std::size_t i = 0; i < paletteConfig.schemes.size(); ++i ) {
         if ( ignoredIndex && *ignoredIndex == i ) continue;
         if ( paletteConfig.schemes[i].name == name ) return true;
@@ -1436,11 +1509,10 @@ bool ToolbarView::validatePaletteSchemeNameForSave(
 void ToolbarView::savePaletteScheme(bool createNew)
 {
     auto& app           = Config::AppConfig::instance();
-    auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
+    auto& paletteConfig = app.getEditorSettings().colorPalettes;
 
-    Config::NoteColorPaletteScheme scheme;
-    scheme.name          = currentPaletteSchemeName();
-    bool hasActiveScheme = canManageActivePaletteScheme();
+    Config::ColorPaletteScheme scheme          = buildCurrentPaletteScheme();
+    bool                       hasActiveScheme = canManageActivePaletteScheme();
     if ( !createNew && !hasActiveScheme ) return;
 
     std::optional<std::size_t> ignoredIndex;
@@ -1449,11 +1521,6 @@ void ToolbarView::savePaletteScheme(bool createNew)
     }
     if ( !validatePaletteSchemeNameForSave(scheme.name, ignoredIndex) ) {
         return;
-    }
-
-    scheme.colors.reserve(Logic::NOTE_COLOR_SLOT_COUNT);
-    for ( const auto& color : m_paletteColors ) {
-        scheme.colors.push_back(toStoredColor(color));
     }
 
     if ( createNew || !hasActiveScheme ) {
@@ -1468,9 +1535,11 @@ void ToolbarView::savePaletteScheme(bool createNew)
 
     paletteConfig.activeSchemeIndex =
         static_cast<std::size_t>(m_activePaletteSchemeIndex);
-    m_activePaletteSelection = NotePaletteSelectionKind::Custom;
+    m_activePaletteSelection  = PaletteSelectionKind::Custom;
+    m_overrideBeatLinePalette = true;
     setPaletteSchemeNameBuffer(
         paletteConfig.schemes[paletteConfig.activeSchemeIndex].name);
+    pushBeatLinePaletteToRenderer();
     app.save();
 }
 
@@ -1488,7 +1557,7 @@ void ToolbarView::openPaletteExportFilePicker()
     if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath    = nullptr;
-        nfdu8filteritem_t filters[1] = { { "MusicMapMaker Note Palette",
+        nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
                                            "mmpalette" } };
         const nfdresult_t result     = NFD_SaveDialogU8(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
@@ -1500,7 +1569,7 @@ void ToolbarView::openPaletteExportFilePicker()
             m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
         } else if ( result == NFD_ERROR ) {
             const char* error = NFD_GetError();
-            XERROR("Failed to open note palette export dialog: {}",
+            XERROR("Failed to open color palette export dialog: {}",
                    error ? error : "Unknown NFD error");
             m_paletteExportSucceeded = false;
             m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
@@ -1527,6 +1596,57 @@ void ToolbarView::openPaletteExportFilePicker()
     }
 }
 
+void ToolbarView::openPaletteImportFilePicker()
+{
+    auto&             app         = Config::AppConfig::instance();
+    auto&             settings    = app.getEditorSettings();
+    const std::string defaultPath = settings.lastFilePickerPath.empty()
+                                        ? std::string(".")
+                                        : settings.lastFilePickerPath;
+    m_paletteImportErrorKey.clear();
+    m_paletteImportStatusKey.clear();
+
+    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+        nfdu8char_t*      outPath    = nullptr;
+        nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
+                                           "mmpalette" } };
+        const nfdresult_t result =
+            NFD_OpenDialogU8(&outPath, filters, 1, defaultPath.c_str());
+        if ( result == NFD_OKAY && outPath != nullptr ) {
+            preparePaletteImportFromPath(outPath);
+            NFD_FreePathU8(outPath);
+        } else if ( result == NFD_OKAY ) {
+            m_paletteImportSucceeded = false;
+            m_paletteImportStatusKey = "ui.toolbar.note_palette.import_failed";
+        } else if ( result == NFD_ERROR ) {
+            const char* error = NFD_GetError();
+            XERROR("Failed to open color palette import dialog: {}",
+                   error ? error : "Unknown NFD error");
+            m_paletteImportSucceeded = false;
+            m_paletteImportStatusKey = "ui.toolbar.note_palette.import_failed";
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig dialogConfig;
+    dialogConfig.path              = defaultPath;
+    dialogConfig.countSelectionMax = 1;
+    dialogConfig.flags =
+        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("ColorPaletteImportPicker");
+    ImGuiFileDialog::Instance()->OpenDialog(
+        "ColorPaletteImportPicker",
+        TR("ui.toolbar.note_palette.import_dialog_title"),
+        ".mmpalette",
+        dialogConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("ColorPaletteImportPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
 void ToolbarView::renderPaletteExportFileDialog(float dpiScale)
 {
     Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
@@ -1546,13 +1666,32 @@ void ToolbarView::renderPaletteExportFileDialog(float dpiScale)
     }
 }
 
+void ToolbarView::renderPaletteImportFileDialog(float dpiScale)
+{
+    Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+    if ( ImGuiFileDialog::Instance()->IsOpened("ColorPaletteImportPicker") ) {
+        Utils::prepareCenteredModalWindow({ 600, 400 });
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             "ColorPaletteImportPicker",
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
+             { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            preparePaletteImportFromPath(
+                ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
 void ToolbarView::exportCurrentPaletteToPath(const std::string& path)
 {
     const std::string normalizedPath = normalizePaletteExportPath(path);
     const bool        succeeded =
         !normalizedPath.empty() &&
-        Config::exportNoteColorPaletteFile(Config::utf8ToPath(normalizedPath),
-                                           buildCurrentPaletteScheme());
+        Config::exportColorPaletteFile(Config::utf8ToPath(normalizedPath),
+                                       buildCurrentPaletteScheme());
     m_paletteExportSucceeded = succeeded;
     m_paletteExportStatusKey = succeeded
                                    ? "ui.toolbar.note_palette.export_success"
@@ -1571,13 +1710,74 @@ void ToolbarView::exportCurrentPaletteToPath(const std::string& path)
     }
 }
 
-Config::NoteColorPaletteScheme ToolbarView::buildCurrentPaletteScheme() const
+void ToolbarView::preparePaletteImportFromPath(const std::string& path)
 {
-    Config::NoteColorPaletteScheme scheme;
+    Config::ColorPaletteScheme importedScheme;
+    const bool                 succeeded =
+        !path.empty() && Config::importColorPaletteFile(
+                             Config::utf8ToPath(path), importedScheme);
+    m_paletteImportSucceeded = succeeded;
+    m_paletteImportStatusKey =
+        succeeded ? std::string{} : "ui.toolbar.note_palette.import_failed";
+    if ( !succeeded ) {
+        return;
+    }
+
+    m_pendingImportedPaletteScheme = std::move(importedScheme);
+    m_importPaletteSchemeNameBuffer.fill('\0');
+    const std::string& importedName = m_pendingImportedPaletteScheme->name;
+    const std::size_t  copyCount    = std::min(
+        importedName.size(), m_importPaletteSchemeNameBuffer.size() - 1);
+    std::copy_n(importedName.begin(),
+                copyCount,
+                m_importPaletteSchemeNameBuffer.begin());
+    m_paletteImportErrorKey.clear();
+
+    auto&                       app      = Config::AppConfig::instance();
+    auto&                       settings = app.getEditorSettings();
+    const std::filesystem::path parent = Config::utf8ToPath(path).parent_path();
+    if ( !parent.empty() ) {
+        settings.lastFilePickerPath = Config::pathToUtf8(parent);
+        app.save();
+    }
+}
+
+void ToolbarView::confirmPaletteImport()
+{
+    if ( !m_pendingImportedPaletteScheme ) return;
+
+    const std::string name(m_importPaletteSchemeNameBuffer.data());
+    if ( isReservedPaletteSchemeName(name) ) {
+        m_paletteImportErrorKey = "ui.toolbar.note_palette.name_reserved_error";
+        return;
+    }
+    if ( hasPaletteSchemeNameConflict(name, std::nullopt) ) {
+        m_paletteImportErrorKey = "ui.toolbar.note_palette.name_conflict_error";
+        return;
+    }
+
+    auto& app           = Config::AppConfig::instance();
+    auto& paletteConfig = app.getEditorSettings().colorPalettes;
+    m_pendingImportedPaletteScheme->name = name;
+    paletteConfig.schemes.push_back(std::move(*m_pendingImportedPaletteScheme));
+    const std::size_t importedIndex = paletteConfig.schemes.size() - 1;
+    m_pendingImportedPaletteScheme.reset();
+    m_paletteImportErrorKey.clear();
+    m_paletteImportSucceeded = true;
+    m_paletteImportStatusKey = "ui.toolbar.note_palette.import_success";
+    loadPaletteScheme(importedIndex);
+    app.save();
+}
+
+Config::ColorPaletteScheme ToolbarView::buildCurrentPaletteScheme() const
+{
+    Config::ColorPaletteScheme scheme;
     scheme.name = currentPaletteSchemeName();
-    scheme.colors.reserve(Logic::NOTE_COLOR_SLOT_COUNT);
-    for ( const auto& color : m_paletteColors ) {
-        scheme.colors.push_back(toStoredColor(color));
+    for ( std::size_t i = 0; i < m_paletteColors.size(); ++i ) {
+        scheme.noteColors[i] = toStoredColor(m_paletteColors[i]);
+    }
+    for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+        scheme.beatLineColors[i] = toStoredColor(m_beatLinePaletteColors[i]);
     }
     return scheme;
 }
@@ -1585,7 +1785,7 @@ Config::NoteColorPaletteScheme ToolbarView::buildCurrentPaletteScheme() const
 void ToolbarView::renamePaletteScheme()
 {
     auto& app           = Config::AppConfig::instance();
-    auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
+    auto& paletteConfig = app.getEditorSettings().colorPalettes;
     if ( !canManageActivePaletteScheme() ) return;
 
     std::size_t index = static_cast<std::size_t>(m_activePaletteSchemeIndex);
@@ -1604,7 +1804,7 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
 {
     auto& app           = Config::AppConfig::instance();
     auto& settings      = app.getEditorSettings();
-    auto& paletteConfig = settings.noteColorPalettes;
+    auto& paletteConfig = settings.colorPalettes;
     if ( schemeIndex >= paletteConfig.schemes.size() ) return;
 
     const std::string deletedName = paletteConfig.schemes[schemeIndex].name;
@@ -1614,21 +1814,21 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
     const bool deletedNameStillExists =
         std::any_of(paletteConfig.schemes.begin(),
                     paletteConfig.schemes.end(),
-                    [&](const Config::NoteColorPaletteScheme& scheme) {
+                    [&](const Config::ColorPaletteScheme& scheme) {
                         return scheme.name == deletedName;
                     });
     if ( !deletedNameStillExists &&
-         settings.defaultNoteColorPaletteSchemeName == deletedName ) {
-        settings.defaultNoteColorPaletteSchemeName =
-            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+         settings.defaultColorPaletteSchemeName == deletedName ) {
+        settings.defaultColorPaletteSchemeName =
+            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
     }
 
     auto& engine         = Logic::EditorEngine::instance();
     auto* project        = engine.getCurrentProject();
     bool  projectChanged = false;
     if ( !deletedNameStillExists && project &&
-         project->m_settings.m_noteColorPaletteSchemeName == deletedName ) {
-        project->m_settings.m_noteColorPaletteSchemeName.clear();
+         project->m_settings.m_colorPaletteSchemeName == deletedName ) {
+        project->m_settings.m_colorPaletteSchemeName.clear();
         projectChanged = true;
     }
 
@@ -1657,13 +1857,15 @@ void ToolbarView::setPaletteSchemeNameBuffer(const std::string& name)
     std::copy_n(name.begin(), count, m_paletteSchemeNameBuffer.begin());
 }
 
-void ToolbarView::setColorHexBuffer(Logic::NoteColorSlot slot, glm::vec4 color)
+void ToolbarView::setColorHexBuffer(PaletteTab tab, std::size_t slotIndex,
+                                    glm::vec4 color)
 {
     m_colorHexBuffer.fill('\0');
     std::string text  = colorToHexString(color);
     std::size_t count = std::min(text.size(), m_colorHexBuffer.size() - 1);
     std::copy_n(text.begin(), count, m_colorHexBuffer.begin());
-    m_colorHexBufferSlot = slot;
+    m_colorHexBufferTab  = tab;
+    m_colorHexBufferSlot = slotIndex;
 }
 
 std::string ToolbarView::currentPaletteSchemeName() const
@@ -1734,18 +1936,18 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                         ImVec2(itemSpacing, itemSpacing));
 
-    if ( ImGui::Begin("##NoteColorPalettePopup", nullptr, popupFlags) ) {
+    if ( ImGui::Begin("##ColorPalettePopup", nullptr, popupFlags) ) {
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.title").data());
         ImGui::Separator();
 
         auto& paletteConfig =
-            Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+            Config::AppConfig::instance().getEditorSettings().colorPalettes;
         std::string previewName;
         if ( m_activePaletteSelection ==
-             NotePaletteSelectionKind::InheritSoftwareDefault ) {
+             PaletteSelectionKind::InheritSoftwareDefault ) {
             previewName = inheritedPaletteSchemeName();
         } else if ( m_activePaletteSelection ==
-                    NotePaletteSelectionKind::SkinDefault ) {
+                    PaletteSelectionKind::SkinDefault ) {
             previewName = defaultPaletteSchemeName();
         } else {
             std::size_t activeIndex =
@@ -1760,19 +1962,19 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.scheme").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        if ( ::MMM::UI::FeedbackBeginCombo("##NoteColorPaletteScheme",
+        if ( ::MMM::UI::FeedbackBeginCombo("##ColorPaletteScheme",
                                            previewName.c_str()) ) {
             const bool inheritSelected =
                 m_activePaletteSelection ==
-                NotePaletteSelectionKind::InheritSoftwareDefault;
+                PaletteSelectionKind::InheritSoftwareDefault;
             if ( ::MMM::UI::FeedbackSelectable(
                      inheritedPaletteSchemeName().c_str(), inheritSelected) ) {
                 loadSoftwareDefaultPalette();
             }
             if ( inheritSelected ) ImGui::SetItemDefaultFocus();
 
-            const bool skinSelected = m_activePaletteSelection ==
-                                      NotePaletteSelectionKind::SkinDefault;
+            const bool skinSelected =
+                m_activePaletteSelection == PaletteSelectionKind::SkinDefault;
             if ( ::MMM::UI::FeedbackSelectable(
                      defaultPaletteSchemeName().c_str(), skinSelected) ) {
                 loadSkinDefaultPalette();
@@ -1784,8 +1986,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             }
             for ( std::size_t i = 0; i < paletteConfig.schemes.size(); ++i ) {
                 bool selected =
-                    m_activePaletteSelection ==
-                        NotePaletteSelectionKind::Custom &&
+                    m_activePaletteSelection == PaletteSelectionKind::Custom &&
                     m_activePaletteSchemeIndex == static_cast<int>(i);
                 if ( ::MMM::UI::FeedbackSelectable(
                          paletteConfig.schemes[i].name.c_str(), selected) ) {
@@ -1801,7 +2002,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             TR("ui.toolbar.note_palette.scheme_name").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        if ( ImGui::InputText("##NoteColorPaletteSchemeName",
+        if ( ImGui::InputText("##ColorPaletteSchemeName",
                               m_paletteSchemeNameBuffer.data(),
                               m_paletteSchemeNameBuffer.size()) ) {
             m_paletteSchemeErrorKey.clear();
@@ -1837,16 +2038,22 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                                        ImVec2(schemeButtonW, schemeButtonH)) ) {
             m_pendingDeletePaletteSchemeIndex =
                 static_cast<std::size_t>(m_activePaletteSchemeIndex);
-            ::MMM::UI::FeedbackOpenPopup("DeleteNoteColorPaletteConfirm");
+            ::MMM::UI::FeedbackOpenPopup("DeleteColorPaletteConfirm");
         }
         ImGui::EndDisabled();
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.import_scheme").data(),
+                 ImVec2(schemeButtonW, schemeButtonH)) ) {
+            openPaletteImportFilePicker();
+        }
+        ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.toolbar.note_palette.export_scheme").data(),
                  ImVec2(schemeButtonW, schemeButtonH)) ) {
             openPaletteExportFilePicker();
         }
 
-        if ( ImGui::BeginPopup("DeleteNoteColorPaletteConfirm") ) {
+        if ( ImGui::BeginPopup("DeleteColorPaletteConfirm") ) {
             ImGui::TextWrapped(
                 "%s",
                 TR("ui.toolbar.note_palette.delete_scheme_confirm").data());
@@ -1869,6 +2076,50 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             }
             ImGui::EndPopup();
         }
+        if ( m_pendingImportedPaletteScheme &&
+             !ImGui::IsPopupOpen("ImportColorPaletteRename") ) {
+            ::MMM::UI::FeedbackOpenPopup("ImportColorPaletteRename");
+        }
+        if ( ImGui::BeginPopupModal("ImportColorPaletteRename",
+                                    nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize |
+                                        ImGuiWindowFlags_NoTitleBar |
+                                        ImGuiWindowFlags_NoSavedSettings) ) {
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.note_palette.import_rename_prompt").data());
+            ImGui::SetNextItemWidth(std::floor(240.0f * dpiScale));
+            if ( ImGui::InputText("##ImportedColorPaletteName",
+                                  m_importPaletteSchemeNameBuffer.data(),
+                                  m_importPaletteSchemeNameBuffer.size()) ) {
+                m_paletteImportErrorKey.clear();
+            }
+            if ( !m_paletteImportErrorKey.empty() ) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      Utils::UIThemeUtils::getDangerColor());
+                ImGui::TextWrapped("%s",
+                                   TR(m_paletteImportErrorKey.c_str()).data());
+                ImGui::PopStyleColor();
+            }
+
+            const float importButtonW = std::floor(92.0f * dpiScale);
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.toolbar.note_palette.import_scheme").data(),
+                     ImVec2(importButtonW, schemeButtonH)) ) {
+                confirmPaletteImport();
+                if ( !m_pendingImportedPaletteScheme ) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.common.cancel").data(),
+                     ImVec2(importButtonW, schemeButtonH)) ) {
+                m_pendingImportedPaletteScheme.reset();
+                m_paletteImportErrorKey.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         if ( !m_paletteSchemeErrorKey.empty() ) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   Utils::UIThemeUtils::getDangerColor());
@@ -1887,51 +2138,107 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 ImGui::PopStyleColor();
             }
         }
-
-        ImGui::Separator();
-
-        const float swatchSize = std::floor(24.0f * dpiScale);
-        for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-            auto slot   = static_cast<Logic::NoteColorSlot>(i);
-            bool active = slot == m_activeColorSlot;
-            ImGui::PushID(static_cast<int>(i));
-            if ( ::MMM::UI::FeedbackColorButton(
-                     "##SlotColor",
-                     toImVec4(m_paletteColors[i]),
-                     ImGuiColorEditFlags_NoTooltip |
-                         ImGuiColorEditFlags_NoPicker |
-                         ImGuiColorEditFlags_AlphaPreviewHalf,
-                     ImVec2(swatchSize, swatchSize)) ) {
-                m_activeColorSlot = slot;
+        if ( !m_paletteImportStatusKey.empty() ) {
+            if ( !m_paletteImportSucceeded ) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      Utils::UIThemeUtils::getDangerColor());
             }
-            ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackSelectable(
-                     TR(colorSlotLabelKey(slot)).data(),
-                     active,
-                     0,
-                     ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
-                m_activeColorSlot = slot;
+            ImGui::TextWrapped("%s",
+                               TR(m_paletteImportStatusKey.c_str()).data());
+            if ( !m_paletteImportSucceeded ) {
+                ImGui::PopStyleColor();
             }
-            ImGui::PopID();
         }
 
         ImGui::Separator();
 
-        glm::vec4& activeColor =
-            m_paletteColors[colorSlotIndex(m_activeColorSlot)];
-        if ( m_colorHexBufferSlot != m_activeColorSlot ||
+        if ( ImGui::BeginTabBar("##ColorPaletteTabs") ) {
+            if ( ImGui::BeginTabItem(
+                     TR("ui.toolbar.note_palette.note_tab").data()) ) {
+                m_activePaletteTab = PaletteTab::Note;
+                ImGui::EndTabItem();
+            }
+            if ( ImGui::BeginTabItem(
+                     TR("ui.toolbar.note_palette.beat_line_tab").data()) ) {
+                m_activePaletteTab = PaletteTab::BeatLine;
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+        const float swatchSize = std::floor(24.0f * dpiScale);
+        if ( m_activePaletteTab == PaletteTab::Note ) {
+            for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
+                auto slot   = static_cast<Logic::NoteColorSlot>(i);
+                bool active = slot == m_activeColorSlot;
+                ImGui::PushID(static_cast<int>(i));
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##SlotColor",
+                         toImVec4(m_paletteColors[i]),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(swatchSize, swatchSize)) ) {
+                    m_activeColorSlot = slot;
+                }
+                ImGui::SameLine();
+                if ( ::MMM::UI::FeedbackSelectable(
+                         TR(colorSlotLabelKey(slot)).data(),
+                         active,
+                         0,
+                         ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
+                    m_activeColorSlot = slot;
+                }
+                ImGui::PopID();
+            }
+        } else {
+            for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+                const bool active = i == m_activeBeatLineColorSlot;
+                ImGui::PushID(static_cast<int>(i));
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##BeatLineSlotColor",
+                         toImVec4(m_beatLinePaletteColors[i]),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(swatchSize, swatchSize)) ) {
+                    m_activeBeatLineColorSlot = i;
+                }
+                ImGui::SameLine();
+                if ( ::MMM::UI::FeedbackSelectable(
+                         TR(beatLineColorSlotLabelKey(i)).data(),
+                         active,
+                         0,
+                         ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
+                    m_activeBeatLineColorSlot = i;
+                }
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Separator();
+
+        const bool        editingNote = m_activePaletteTab == PaletteTab::Note;
+        const std::size_t activeSlotIndex =
+            editingNote ? colorSlotIndex(m_activeColorSlot)
+                        : m_activeBeatLineColorSlot;
+        glm::vec4& activeColor = editingNote
+                                     ? m_paletteColors[activeSlotIndex]
+                                     : m_beatLinePaletteColors[activeSlotIndex];
+        if ( m_colorHexBufferTab != m_activePaletteTab ||
+             m_colorHexBufferSlot != activeSlotIndex ||
              !m_colorHexInputActive ) {
-            setColorHexBuffer(m_activeColorSlot, activeColor);
+            setColorHexBuffer(m_activePaletteTab, activeSlotIndex, activeColor);
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.color_mode").data());
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackRadioButton("RGB##NotePaletteMode",
+        if ( ::MMM::UI::FeedbackRadioButton("RGB##ColorPaletteMode",
                                             !m_colorPickerUseHsv) ) {
             m_colorPickerUseHsv = false;
         }
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackRadioButton("HSV##NotePaletteMode",
+        if ( ::MMM::UI::FeedbackRadioButton("HSV##ColorPaletteMode",
                                             m_colorPickerUseHsv) ) {
             m_colorPickerUseHsv = true;
         }
@@ -1939,7 +2246,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
+        bool hexChanged       = ImGui::InputText("##PaletteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1948,17 +2255,29 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             glm::vec4 parsedColor;
             if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
                 activeColor = parsedColor;
-                pushPaletteToBrush();
+                if ( editingNote ) {
+                    pushPaletteToBrush();
+                } else {
+                    m_overrideBeatLinePalette = true;
+                    pushBeatLinePaletteToRenderer();
+                }
             }
         }
         if ( ImGui::IsItemDeactivatedAfterEdit() ) {
             glm::vec4 parsedColor;
             if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
                 activeColor = parsedColor;
-                setColorHexBuffer(m_activeColorSlot, activeColor);
-                pushPaletteToSelection();
+                setColorHexBuffer(
+                    m_activePaletteTab, activeSlotIndex, activeColor);
+                if ( editingNote ) {
+                    pushPaletteToSelection();
+                } else {
+                    m_overrideBeatLinePalette = true;
+                    pushBeatLinePaletteToRenderer();
+                }
             } else {
-                setColorHexBuffer(m_activeColorSlot, activeColor);
+                setColorHexBuffer(
+                    m_activePaletteTab, activeSlotIndex, activeColor);
             }
             m_colorHexInputActive = false;
         }
@@ -1970,53 +2289,93 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                                  : ImGuiColorEditFlags_DisplayRGB);
 
         if ( ImGui::ColorPicker4(
-                 "##NoteColorPicker", &activeColor.r, pickerFlags) ) {
-            pushPaletteToBrush();
+                 "##PaletteColorPicker", &activeColor.r, pickerFlags) ) {
+            if ( editingNote ) {
+                pushPaletteToBrush();
+            } else {
+                m_overrideBeatLinePalette = true;
+                pushBeatLinePaletteToRenderer();
+            }
         }
-        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+        if ( editingNote && ImGui::IsItemDeactivatedAfterEdit() ) {
             pushPaletteToSelection();
         }
 
         ImGui::Separator();
-        ImGui::TextUnformatted(
-            TR("ui.toolbar.note_palette.skin_defaults").data());
-
-        for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-            if ( i > 0 ) ImGui::SameLine();
-            auto slot         = static_cast<Logic::NoteColorSlot>(i);
-            auto defaultColor = toVec4(skinColorForSlot(slot));
-            ImGui::PushID(static_cast<int>(i + 100));
-            if ( ::MMM::UI::FeedbackColorButton(
-                     "##SkinDefaultColor",
-                     toImVec4(defaultColor),
-                     ImGuiColorEditFlags_NoTooltip |
-                         ImGuiColorEditFlags_NoPicker |
-                         ImGuiColorEditFlags_AlphaPreviewHalf,
-                     ImVec2(swatchSize, swatchSize)) ) {
-                m_activeColorSlot  = slot;
-                m_paletteColors[i] = defaultColor;
-                pushPaletteToBrush();
-                pushPaletteToSelection();
-            }
-            if ( ImGui::IsItemHovered() ) {
-                drawTooltip(TR(colorSlotLabelKey(slot)).data());
-            }
-            ImGui::PopID();
-        }
 
         const float buttonH = std::floor(26.0f * dpiScale);
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.toolbar.note_palette.apply_selected").data(),
-                 ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
-            pushPaletteToSelection();
-        }
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.toolbar.note_palette.clear_custom").data(),
-                 ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
-            auto slot   = m_activeColorSlot;
-            activeColor = toVec4(skinColorForSlot(slot));
-            pushColorCommands(slot, std::nullopt, true);
+        if ( editingNote ) {
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.note_palette.skin_defaults").data());
+
+            for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
+                if ( i > 0 ) ImGui::SameLine();
+                auto slot         = static_cast<Logic::NoteColorSlot>(i);
+                auto defaultColor = toVec4(skinColorForSlot(slot));
+                ImGui::PushID(static_cast<int>(i + 100));
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##SkinDefaultColor",
+                         toImVec4(defaultColor),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(swatchSize, swatchSize)) ) {
+                    m_activeColorSlot  = slot;
+                    m_paletteColors[i] = defaultColor;
+                    pushPaletteToBrush();
+                    pushPaletteToSelection();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    drawTooltip(TR(colorSlotLabelKey(slot)).data());
+                }
+                ImGui::PopID();
+            }
+
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.toolbar.note_palette.apply_selected").data(),
+                     ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
+                pushPaletteToSelection();
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.toolbar.note_palette.clear_custom").data(),
+                     ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
+                auto slot   = m_activeColorSlot;
+                activeColor = toVec4(skinColorForSlot(slot));
+                pushColorCommands(slot, std::nullopt, true);
+            }
+        } else {
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.note_palette.beat_line_skin_defaults").data());
+            for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+                if ( i > 0 ) ImGui::SameLine();
+                const glm::vec4 defaultColor = toVec4(skinBeatLineColor(i));
+                ImGui::PushID(static_cast<int>(i + 200));
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##SkinDefaultBeatLineColor",
+                         toImVec4(defaultColor),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(swatchSize, swatchSize)) ) {
+                    m_activeBeatLineColorSlot  = i;
+                    m_beatLinePaletteColors[i] = defaultColor;
+                    m_overrideBeatLinePalette  = true;
+                    pushBeatLinePaletteToRenderer();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    drawTooltip(TR(beatLineColorSlotLabelKey(i)).data());
+                }
+                ImGui::PopID();
+            }
+
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.toolbar.note_palette.use_skin_beat_lines").data(),
+                     ImVec2(std::floor(180.0f * dpiScale), buttonH)) ) {
+                fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
+                m_overrideBeatLinePalette = true;
+                pushBeatLinePaletteToRenderer();
+            }
         }
 
         ImVec2 sz          = ImGui::GetWindowSize();

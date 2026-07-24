@@ -1,4 +1,4 @@
-#include "config/NoteColorPaletteFile.h"
+#include "config/ColorPaletteFile.h"
 
 #include <array>
 #include <filesystem>
@@ -32,11 +32,11 @@ bool validateExportedFile(const nlohmann::json& document,
     if ( document.is_discarded() || !document.is_object() ||
          !document.contains("format") || !document["format"].is_string() ||
          document["format"].get<std::string>() !=
-             MMM::Config::NOTE_COLOR_PALETTE_FILE_FORMAT ||
+             MMM::Config::COLOR_PALETTE_FILE_FORMAT ||
          !document.contains("version") ||
          !document["version"].is_number_unsigned() ||
          document["version"].get<std::uint32_t>() !=
-             MMM::Config::NOTE_COLOR_PALETTE_FILE_VERSION ||
+             MMM::Config::COLOR_PALETTE_FILE_VERSION ||
          !document.contains("scheme") || !document["scheme"].is_object() ) {
         return false;
     }
@@ -44,19 +44,25 @@ bool validateExportedFile(const nlohmann::json& document,
     const auto& scheme = document["scheme"];
     if ( !scheme.contains("name") || !scheme["name"].is_string() ||
          scheme["name"].get<std::string>() != expectedName ||
-         !scheme.contains("colors") || !scheme["colors"].is_array() ||
-         scheme["colors"].size() !=
-             MMM::Config::NOTE_COLOR_PALETTE_SLOT_COUNT ) {
+         !scheme.contains("noteColors") || !scheme["noteColors"].is_array() ||
+         scheme["noteColors"].size() !=
+             MMM::Config::NOTE_COLOR_PALETTE_SLOT_COUNT ||
+         !scheme.contains("beatLineColors") ||
+         !scheme["beatLineColors"].is_array() ||
+         scheme["beatLineColors"].size() !=
+             MMM::Config::BEAT_LINE_COLOR_PALETTE_SLOT_COUNT ) {
         return false;
     }
 
-    for ( const auto& color : scheme["colors"] ) {
-        if ( !color.is_array() || color.size() != 4 ) {
-            return false;
-        }
-        for ( const auto& channel : color ) {
-            if ( !channel.is_number() ) {
+    for ( const char* field : { "noteColors", "beatLineColors" } ) {
+        for ( const auto& color : scheme[field] ) {
+            if ( !color.is_array() || color.size() != 4 ) {
                 return false;
+            }
+            for ( const auto& channel : color ) {
+                if ( !channel.is_number() ) {
+                    return false;
+                }
             }
         }
     }
@@ -76,9 +82,9 @@ bool testExportAndOverwrite(const std::filesystem::path& outputDirectory)
 
     const std::filesystem::path outputPath =
         outputDirectory / "test_palette.mmpalette";
-    MMM::Config::NoteColorPaletteScheme scheme;
-    scheme.name   = "Ocean";
-    scheme.colors = {
+    MMM::Config::ColorPaletteScheme scheme;
+    scheme.name       = "Ocean";
+    scheme.noteColors = {
         std::array<float, 4>{ 0.1f, 0.2f, 0.3f, 1.0f },
         std::array<float, 4>{ 0.2f, 0.3f, 0.4f, 1.0f },
         std::array<float, 4>{ 0.3f, 0.4f, 0.5f, 0.9f },
@@ -86,20 +92,38 @@ bool testExportAndOverwrite(const std::filesystem::path& outputDirectory)
         std::array<float, 4>{ 0.5f, 0.6f, 0.7f, 0.7f },
         std::array<float, 4>{ 0.6f, 0.7f, 0.8f, 0.6f },
     };
+    scheme.beatLineColors = {
+        std::array<float, 4>{ 0.9f, 0.1f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.8f, 0.2f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.7f, 0.3f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.6f, 0.4f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.5f, 0.5f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.4f, 0.6f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.3f, 0.7f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.2f, 0.8f, 0.1f, 1.0f },
+        std::array<float, 4>{ 0.1f, 0.9f, 0.1f, 1.0f },
+    };
 
-    if ( !MMM::Config::exportNoteColorPaletteFile(outputPath, scheme) ||
-         !validateExportedFile(readExportedFile(outputPath), "Ocean") ) {
+    MMM::Config::ColorPaletteScheme importedScheme;
+    if ( !MMM::Config::exportColorPaletteFile(outputPath, scheme) ||
+         !validateExportedFile(readExportedFile(outputPath), "Ocean") ||
+         !MMM::Config::importColorPaletteFile(outputPath, importedScheme) ||
+         importedScheme.name != scheme.name ||
+         importedScheme.noteColors != scheme.noteColors ||
+         importedScheme.beatLineColors != scheme.beatLineColors ) {
         return false;
     }
 
     scheme.name = "Sunset";
-    return MMM::Config::exportNoteColorPaletteFile(outputPath, scheme) &&
-           validateExportedFile(readExportedFile(outputPath), "Sunset");
+    return MMM::Config::exportColorPaletteFile(outputPath, scheme) &&
+           validateExportedFile(readExportedFile(outputPath), "Sunset") &&
+           MMM::Config::importColorPaletteFile(outputPath, importedScheme) &&
+           importedScheme.name == "Sunset";
 }
 
 }  // namespace
 
-/// @brief 覆盖物件配色方案文件的序列化、写入和覆盖流程。
+/// @brief 覆盖完整调色方案文件的序列化、写入和覆盖流程。
 /// @param argc 参数数量。
 /// @param argv 参数数组；第一项测试参数为输出目录。
 /// @return 所有检查通过时返回 0。

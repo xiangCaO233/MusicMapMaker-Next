@@ -216,7 +216,8 @@ void NoteRenderSystem::drawBeatLines(
     auto& skin        = Config::SkinManager::instance();
     float globalAlpha = config.visual.beatLineAlpha;
     auto  getBeatLineConfig =
-        [&skin, globalAlpha](int denominator) -> std::pair<glm::vec4, float> {
+        [&skin, &config, globalAlpha](
+            int denominator) -> std::pair<glm::vec4, float> {
         std::string   key = "beat_lines.beat_" + std::to_string(denominator);
         Config::Color c   = skin.getColor(key);
         if ( c.r == 1.0f && c.g == 0.0f && c.b == 1.0f && c.a == 1.0f ) {
@@ -227,6 +228,15 @@ void NoteRenderSystem::drawBeatLines(
         }
         float width =
             skin.getValue(key, skin.getValue("beat_lines_width.default", 2.0f));
+        if ( config.visual.overrideBeatLineColors ) {
+            const auto& overrideColor =
+                config.visual.beatLineColors[Config::beatLineColorPaletteSlot(
+                    denominator)];
+            c = { overrideColor[0],
+                  overrideColor[1],
+                  overrideColor[2],
+                  overrideColor[3] };
+        }
         return { glm::vec4(c.r, c.g, c.b, c.a * globalAlpha), width };
     };
 

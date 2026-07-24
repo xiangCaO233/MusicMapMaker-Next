@@ -1,4 +1,5 @@
 #pragma once
+#include "config/BeatLinePalette.h"
 #include <cstdint>
 #include <nlohmann/json.hpp>
 
@@ -238,6 +239,10 @@ struct VisualConfig {
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度
     float beatLineAlpha{ 0.75f };
+    /// @brief 是否以当前调色方案覆盖皮肤分拍线颜色；仅保留在运行时。
+    bool overrideBeatLineColors{ false };
+    /// @brief 当前调色方案的分拍线覆盖颜色；仅保留在运行时。
+    BeatLineColorPalette beatLineColors{};
     /// @brief 是否绘制第一个 BPM 红线前的分拍线
     bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
@@ -295,6 +300,8 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.enableLinearScrollMapping = j.value("enableLinearScrollMapping", false);
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
     c.beatLineAlpha             = j.value("beatLineAlpha", 0.75f);
+    c.overrideBeatLineColors    = false;
+    c.beatLineColors            = {};
     c.drawBeatLines             = j.value("drawBeatLines", true);
     c.drawBeatLinesBeforeFirstTiming =
         j.value("drawBeatLinesBeforeFirstTiming", true);

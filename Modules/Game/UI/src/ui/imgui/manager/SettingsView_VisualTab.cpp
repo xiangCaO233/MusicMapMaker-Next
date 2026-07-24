@@ -177,12 +177,11 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.note_palette_default").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                auto& paletteConfig = settings.noteColorPalettes;
-                auto& defaultScheme =
-                    settings.defaultNoteColorPaletteSchemeName;
+                auto& paletteConfig = settings.colorPalettes;
+                auto& defaultScheme = settings.defaultColorPaletteSchemeName;
                 std::string previewName =
                     defaultScheme ==
-                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
                         ? std::string(
                               TR_CACHE(
                                   "ui.toolbar.note_palette.skin_default_scheme")
@@ -193,14 +192,14 @@ void SettingsView::drawVisualSettings()
                                                    previewName.c_str()) ) {
                     const bool skinSelected =
                         defaultScheme ==
-                        Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
                     if ( ::MMM::UI::FeedbackSelectable(
                              TR_CACHE(
                                  "ui.toolbar.note_palette.skin_default_scheme")
                                  .data(),
                              skinSelected) ) {
                         defaultScheme =
-                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
                         changed = true;
                     }
                     if ( skinSelected ) ImGui::SetItemDefaultFocus();

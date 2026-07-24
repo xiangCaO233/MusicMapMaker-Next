@@ -1,4 +1,5 @@
 #pragma once
+#include "config/BeatLinePalette.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -222,52 +223,56 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
 /// @brief 音符调色盘方案中的颜色槽位数量。
 inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
 
-/// @brief 使用当前皮肤默认音符配色的调色盘方案标识。
-inline constexpr const char* NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
+/// @brief 使用当前皮肤完整默认配色的调色盘方案标识。
+inline constexpr const char* COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
     "__skin_default__";
 
-/// @brief 用户保存的音符调色盘方案。
-struct NoteColorPaletteScheme {
+/// @brief 用户保存的调色盘方案。
+struct ColorPaletteScheme {
     /// @brief 方案显示名称。
     std::string name{ "Palette" };
 
-    /// @brief 方案颜色，顺序与工具栏音符颜色槽位一致。
-    std::vector<std::array<float, 4>> colors;
+    /// @brief 完整物件颜色，顺序与工具栏物件颜色槽位一致。
+    std::array<std::array<float, 4>, NOTE_COLOR_PALETTE_SLOT_COUNT>
+        noteColors{};
+
+    /// @brief 完整分拍线颜色。
+    BeatLineColorPalette beatLineColors{};
 };
 
-inline void to_json(nlohmann::json& j, const NoteColorPaletteScheme& c)
+inline void to_json(nlohmann::json& j, const ColorPaletteScheme& c)
 {
-    j = nlohmann::json{ { "name", c.name }, { "colors", c.colors } };
+    j = nlohmann::json{ { "name", c.name },
+                        { "noteColors", c.noteColors },
+                        { "beatLineColors", c.beatLineColors } };
 }
 
-inline void from_json(const nlohmann::json& j, NoteColorPaletteScheme& c)
+inline void from_json(const nlohmann::json& j, ColorPaletteScheme& c)
 {
-    c.name   = j.value("name", std::string("Palette"));
-    c.colors = j.value("colors", std::vector<std::array<float, 4>>());
-    if ( c.colors.size() > NOTE_COLOR_PALETTE_SLOT_COUNT ) {
-        c.colors.resize(NOTE_COLOR_PALETTE_SLOT_COUNT);
-    }
+    c.name           = j.value("name", std::string("Palette"));
+    c.noteColors     = j.value("noteColors", decltype(c.noteColors){});
+    c.beatLineColors = j.value("beatLineColors", BeatLineColorPalette{});
 }
 
-/// @brief 音符调色盘持久化配置。
-struct NoteColorPaletteConfig {
+/// @brief 调色盘持久化配置。
+struct ColorPaletteConfig {
     /// @brief 当前选中的方案索引。
     std::size_t activeSchemeIndex{ 0 };
 
     /// @brief 用户保存的调色盘方案列表。
-    std::vector<NoteColorPaletteScheme> schemes;
+    std::vector<ColorPaletteScheme> schemes;
 };
 
-inline void to_json(nlohmann::json& j, const NoteColorPaletteConfig& c)
+inline void to_json(nlohmann::json& j, const ColorPaletteConfig& c)
 {
     j = nlohmann::json{ { "activeSchemeIndex", c.activeSchemeIndex },
                         { "schemes", c.schemes } };
 }
 
-inline void from_json(const nlohmann::json& j, NoteColorPaletteConfig& c)
+inline void from_json(const nlohmann::json& j, ColorPaletteConfig& c)
 {
     c.activeSchemeIndex = j.value("activeSchemeIndex", std::size_t{ 0 });
-    c.schemes = j.value("schemes", std::vector<NoteColorPaletteScheme>());
+    c.schemes           = j.value("schemes", std::vector<ColorPaletteScheme>());
     if ( c.schemes.empty() ) {
         c.activeSchemeIndex = 0;
     } else if ( c.activeSchemeIndex >= c.schemes.size() ) {
@@ -840,12 +845,12 @@ struct EditorSettings {
     /// @brief UI 审美/视觉表现配置
     UIAestheticsConfig aesthetics;
 
-    /// @brief 音符调色盘方案配置。
-    NoteColorPaletteConfig noteColorPalettes;
+    /// @brief 调色盘方案配置。
+    ColorPaletteConfig colorPalettes;
 
-    /// @brief 打开项目时默认应用的音符调色盘方案名称。
-    std::string defaultNoteColorPaletteSchemeName{
-        NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+    /// @brief 打开项目时默认应用的调色盘方案名称。
+    std::string defaultColorPaletteSchemeName{
+        COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
     };
 
     /// @brief 编辑器自定义快捷键配置。
@@ -913,9 +918,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "fixedToolWindow", c.fixedToolWindow },
         { "showManagerLabels", c.showManagerLabels },
         { "aesthetics", c.aesthetics },
-        { "noteColorPalettes", c.noteColorPalettes },
-        { "defaultNoteColorPaletteSchemeName",
-          c.defaultNoteColorPaletteSchemeName },
+        { "colorPalettes", c.colorPalettes },
+        { "defaultColorPaletteSchemeName", c.defaultColorPaletteSchemeName },
         { "shortcutConfig", c.shortcutConfig }
     };
 }
@@ -1001,11 +1005,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.fixedToolWindow          = j.value("fixedToolWindow", true);
     c.showManagerLabels        = j.value("showManagerLabels", true);
     c.aesthetics               = j.value("aesthetics", UIAestheticsConfig());
-    c.noteColorPalettes =
-        j.value("noteColorPalettes", NoteColorPaletteConfig());
-    c.defaultNoteColorPaletteSchemeName =
-        j.value("defaultNoteColorPaletteSchemeName",
-                std::string(NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
+    c.colorPalettes            = j.value("colorPalettes", ColorPaletteConfig());
+    c.defaultColorPaletteSchemeName =
+        j.value("defaultColorPaletteSchemeName",
+                std::string(COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
     c.shortcutConfig = j.value("shortcutConfig", ShortcutConfig());
 }
 

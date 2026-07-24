@@ -156,9 +156,9 @@ void SettingsView::drawProjectSettings()
             [&](Clay_BoundingBox r, bool) {
                 auto& paletteConfig = Config::AppConfig::instance()
                                           .getEditorSettings()
-                                          .noteColorPalettes;
+                                          .colorPalettes;
                 auto& projectScheme =
-                    project->m_settings.m_noteColorPaletteSchemeName;
+                    project->m_settings.m_colorPaletteSchemeName;
 
                 std::string previewName;
                 if ( projectScheme.empty() ) {
@@ -166,8 +166,7 @@ void SettingsView::drawProjectSettings()
                         TR_CACHE("ui.settings.project.note_palette.inherit")
                             .data();
                 } else if ( projectScheme ==
-                            Config::
-                                NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
                     previewName =
                         TR_CACHE("ui.toolbar.note_palette.skin_default_scheme")
                             .data();
@@ -191,14 +190,14 @@ void SettingsView::drawProjectSettings()
 
                     const bool skinSelected =
                         projectScheme ==
-                        Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
                     if ( ::MMM::UI::FeedbackSelectable(
                              TR_CACHE(
                                  "ui.toolbar.note_palette.skin_default_scheme")
                                  .data(),
                              skinSelected) ) {
                         projectScheme =
-                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
                         changed = true;
                     }
                     if ( skinSelected ) ImGui::SetItemDefaultFocus();

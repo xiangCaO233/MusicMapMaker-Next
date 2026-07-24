@@ -2349,16 +2349,15 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // UI/项目工作区恢复覆盖。
     const auto& globalConfig = Config::AppConfig::instance().getEditorConfig();
     const auto& globalRecent = globalConfig.recentProjects;
-    const auto  globalNoteColorPalettes =
-        globalConfig.settings.noteColorPalettes;
-    const auto globalDefaultNoteColorPalette =
-        globalConfig.settings.defaultNoteColorPaletteSchemeName;
+    const auto  globalColorPalettes = globalConfig.settings.colorPalettes;
+    const auto  globalDefaultColorPalette =
+        globalConfig.settings.defaultColorPaletteSchemeName;
 
-    m_editorConfig                            = config;
-    m_editorConfig.recentProjects             = globalRecent;
-    m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
-    m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
-        globalDefaultNoteColorPalette;
+    m_editorConfig                        = config;
+    m_editorConfig.recentProjects         = globalRecent;
+    m_editorConfig.settings.colorPalettes = globalColorPalettes;
+    m_editorConfig.settings.defaultColorPaletteSchemeName =
+        globalDefaultColorPalette;
     preserveGlobalAppManagedSettings(m_editorConfig, globalConfig);
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);

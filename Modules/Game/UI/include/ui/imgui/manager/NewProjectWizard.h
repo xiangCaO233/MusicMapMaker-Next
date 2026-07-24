@@ -132,8 +132,8 @@ private:
     /// @brief 项目文件夹名输入缓冲区。
     char m_folderNameBuf[256]{ 0 };
 
-    /// @brief 项目默认物件调色方案；空字符串表示继承软件默认。
-    std::string m_noteColorPaletteSchemeName;
+    /// @brief 项目默认调色方案；空字符串表示继承软件默认。
+    std::string m_colorPaletteSchemeName;
 
     /// @brief 新项目首次打开时的侧边栏页签。
     SideBarTab m_initialSideBarTab{ SideBarTab::FileExplorer };

@@ -595,6 +595,15 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
         float width =
             skin.getValue(key, skin.getValue("beat_lines_width.default", 2.0f));
+        if ( config.visual.overrideBeatLineColors ) {
+            const auto& overrideColor =
+                config.visual.beatLineColors[Config::beatLineColorPaletteSlot(
+                    denominator)];
+            c = { overrideColor[0],
+                  overrideColor[1],
+                  overrideColor[2],
+                  overrideColor[3] };
+        }
         return std::pair{
             glm::vec4(c.r, c.g, c.b, c.a * config.visual.beatLineAlpha), width
         };
