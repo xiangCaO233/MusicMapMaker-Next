@@ -57,7 +57,18 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
                              ? "hiteffect.flick"
                              : "hiteffect.note";
 
-    audioManager.playSoundEffectScheduled(sfxKey, ev.timestamp, volumeFactor);
+    Audio::MixerChannelMode channelMode = Audio::MixerChannelMode::Stereo;
+    if ( effectiveType == ::MMM::NoteType::FLICK &&
+         config.settings.sfxConfig.enableDirectionalFlickChannels ) {
+        if ( ev.trackOffset < 0 ) {
+            channelMode = Audio::MixerChannelMode::MuteRight;
+        } else if ( ev.trackOffset > 0 ) {
+            channelMode = Audio::MixerChannelMode::MuteLeft;
+        }
+    }
+
+    audioManager.playSoundEffectScheduled(
+        sfxKey, ev.timestamp, volumeFactor, channelMode);
 }
 
 void HitFXSystem::triggerVisual(const HitEvent&             ev,

@@ -31,7 +31,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -332,6 +332,17 @@ void SettingsView::drawEditorSettings()
                         10.0f);
                 });
         }
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.sfx_flick_directional_channels")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##FlickDirectionalChannels",
+                    &settings.sfxConfig.enableDirectionalFlickChannels);
+            });
         addSettingItem(
             *sec,
             rowIndex,

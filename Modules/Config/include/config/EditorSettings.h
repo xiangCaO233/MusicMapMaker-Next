@@ -72,6 +72,9 @@ struct SfxConfig {
     /// @brief 每增加一个轨道的增益倍率
     float flickWidthVolumeMultiplier{ 0.1f };
 
+    /// @brief 是否按 Flick 滑动方向仅保留同侧声道
+    bool enableDirectionalFlickChannels{ true };
+
     /// @brief 皮肤常驻音效的独立音量映射 (Key: 音效ID, Value: 0.0~1.0)
     std::map<std::string, float> permanentSfxVolumes;
 
@@ -91,6 +94,7 @@ inline void to_json(nlohmann::json& j, const SfxConfig& c)
         { "polylineStrategy", c.polylineStrategy },
         { "enableFlickWidthVolumeScaling", c.enableFlickWidthVolumeScaling },
         { "flickWidthVolumeMultiplier", c.flickWidthVolumeMultiplier },
+        { "enableDirectionalFlickChannels", c.enableDirectionalFlickChannels },
         { "permanentSfxVolumes", c.permanentSfxVolumes },
         { "permanentSfxMutes", c.permanentSfxMutes },
         { "hitSfxSyncSpeed", c.hitSfxSyncSpeed },
@@ -105,6 +109,8 @@ inline void from_json(const nlohmann::json& j, SfxConfig& c)
     c.enableFlickWidthVolumeScaling =
         j.value("enableFlickWidthVolumeScaling", false);
     c.flickWidthVolumeMultiplier = j.value("flickWidthVolumeMultiplier", 0.1f);
+    c.enableDirectionalFlickChannels =
+        j.value("enableDirectionalFlickChannels", true);
     c.permanentSfxVolumes =
         j.value("permanentSfxVolumes", std::map<std::string, float>());
     c.permanentSfxMutes =

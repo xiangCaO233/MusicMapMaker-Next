@@ -1,4 +1,5 @@
 #include "audio/SoundEffectPool.h"
+#include "audio/AudioManager.h"
 
 #include <algorithm>
 #include <ice/core/MixBus.hpp>
@@ -9,6 +10,25 @@
 
 namespace MMM::Audio
 {
+namespace
+{
+/// @brief 将项目声道模式转换为 IonCachyEngine 声道模式。
+/// @param mode 项目声道模式。
+/// @return 引擎声道模式。
+ice::MixBusChannelMode toIceChannelMode(MixerChannelMode mode)
+{
+    switch ( mode ) {
+    case MixerChannelMode::MuteLeft: return ice::MixBusChannelMode::MuteLeft;
+    case MixerChannelMode::MuteRight: return ice::MixBusChannelMode::MuteRight;
+    case MixerChannelMode::CopyLeftToRight:
+        return ice::MixBusChannelMode::CopyLeftToRight;
+    case MixerChannelMode::CopyRightToLeft:
+        return ice::MixBusChannelMode::CopyRightToLeft;
+    case MixerChannelMode::Stereo: return ice::MixBusChannelMode::Stereo;
+    }
+    return ice::MixBusChannelMode::Stereo;
+}
+}  // namespace
 
 class SoundEffectPool::SFXPlayCallback : public ice::PlayCallBack
 {
@@ -51,7 +71,10 @@ SoundEffectPool::~SoundEffectPool()
     std::lock_guard<std::mutex> lock(m_mtx);
     for ( auto& instance : m_allInstances ) {
         if ( m_localMixer ) {
-            m_localMixer->remove_source(instance->pitchStretcher);
+            m_localMixer->remove_source(instance->channelMixer);
+        }
+        if ( instance->channelMixer ) {
+            instance->channelMixer->remove_source(instance->pitchStretcher);
         }
     }
 }
@@ -67,13 +90,15 @@ SoundEffectPool::createInstance()
     auto instance            = std::make_shared<SFXPlayInstance>();
     instance->source         = std::make_shared<ice::SourceNode>(m_track);
     instance->pitchStretcher = std::make_shared<ice::TimeStretcher>();
+    instance->channelMixer   = std::make_shared<ice::MixBus>();
     auto callback =
         std::make_shared<SFXPlayCallback>(shared_from_this(), instance->source);
     instance->source->add_playcallback(callback);
     instance->pitchStretcher->set_inputnode(instance->source);
+    instance->channelMixer->add_source(instance->pitchStretcher);
 
     if ( m_localMixer ) {
-        m_localMixer->add_source(instance->pitchStretcher);
+        m_localMixer->add_source(instance->channelMixer);
     }
     return instance;
 }
@@ -117,6 +142,10 @@ void SoundEffectPool::play(float volume, double pitchSemitones)
         if ( instance->pitchStretcher ) {
             instance->pitchStretcher->set_pitch_semitones(pitchSemitones);
         }
+        if ( instance->channelMixer ) {
+            instance->channelMixer->set_channel_mode(
+                ice::MixBusChannelMode::Stereo);
+        }
         node->set_scheduled_start_frame(0);  // 确保没有残留的预定
         node->set_reference_pos_provider(std::function<size_t()>());
         node->set_playpos(static_cast<size_t>(0));
@@ -130,7 +159,8 @@ void SoundEffectPool::play(float volume, double pitchSemitones)
 }
 
 void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
-                                    std::function<size_t()> refProvider)
+                                    std::function<size_t()> refProvider,
+                                    MixerChannelMode        channelMode)
 {
     auto instance = acquireInstance();
     auto node     = instance ? instance->source : nullptr;
@@ -138,6 +168,10 @@ void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
     if ( node ) {
         if ( instance->pitchStretcher ) {
             instance->pitchStretcher->set_pitch_semitones(0.0);
+        }
+        if ( instance->channelMixer ) {
+            instance->channelMixer->set_channel_mode(
+                toIceChannelMode(channelMode));
         }
         node->set_scheduled_start_frame(targetFrame);
         node->set_reference_pos_provider(std::move(refProvider));
@@ -159,6 +193,10 @@ void SoundEffectPool::stopAll()
         instance->source->set_reference_pos_provider(std::function<size_t()>());
         if ( instance->pitchStretcher ) {
             instance->pitchStretcher->set_pitch_semitones(0.0);
+        }
+        if ( instance->channelMixer ) {
+            instance->channelMixer->set_channel_mode(
+                ice::MixBusChannelMode::Stereo);
         }
         m_readyQueue.push_back(instance);
     }

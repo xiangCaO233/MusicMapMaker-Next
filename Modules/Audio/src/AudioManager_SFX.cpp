@@ -320,9 +320,11 @@ void AudioManager::resumeSoundEffect(const std::string& key)
 /// @param key 音效池标识。
 /// @param targetTime 目标有效出声时间，单位为秒。
 /// @param volumeFactor 本次播放额外音量倍率。
+/// @param channelMode 本次播放的双声道输出模式。
 void AudioManager::playSoundEffectScheduled(const std::string& key,
                                             double             targetTime,
-                                            float              volumeFactor)
+                                            float              volumeFactor,
+                                            MixerChannelMode   channelMode)
 {
     if ( getSFXPoolMute(key) ) return;
 
@@ -347,7 +349,8 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
     it->second->playScheduled(
         getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
         targetFrame,
-        bgmRef);
+        bgmRef,
+        channelMode);
 }
 
 /// @brief 清空并停止所有正在播放和预定的音效

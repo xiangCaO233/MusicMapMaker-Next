@@ -311,6 +311,7 @@ return {
 	["ui.settings.editor.sfx_strategy.all_as_normal"] = "全部普通音效 (AllNormal)",
 	["ui.settings.editor.sfx_flick_scale"] = "Flick音量随宽度增益",
 	["ui.settings.editor.sfx_flick_mul"] = "每轨道增益倍率",
+	["ui.settings.editor.sfx_flick_directional_channels"] = "Flick音效按滑动方向仅保留同侧声道",
 	["ui.settings.editor.sfx_sync_speed"] = "皮肤音效速率跟随主音轨",
 
 	["ui.settings.shortcut"] = "快捷键配置",
