@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config/VisualConfig.h"
+#include "config/visual/TrackLayoutConfig.h"
 
 #include <algorithm>
 #include <cmath>

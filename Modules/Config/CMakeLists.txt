@@ -2,8 +2,13 @@
 
 add_library(
   Config STATIC
-  src/skin/SkinLoader.cpp src/skin/translation/Translation.cpp src/AppPaths.cpp
-  src/AppConfig.cpp src/FontPreferenceValidator.cpp src/ColorPaletteFile.cpp)
+  src/skin/SkinLoader.cpp
+  src/skin/translation/Translation.cpp
+  src/AppPaths.cpp
+  src/AppConfig.cpp
+  src/FontPreferenceValidator.cpp
+  src/ColorPaletteFile.cpp
+  src/VisualConfig.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 

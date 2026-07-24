@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config/VisualConfig.h"
+#include "config/visual/SpectrumConfig.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "ui/IRenderableView.h"
 #include <atomic>

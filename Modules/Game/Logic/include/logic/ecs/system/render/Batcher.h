@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config/EditorConfig.h"
+#include "config/visual/BackgroundConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include <glm/glm.hpp>
 
