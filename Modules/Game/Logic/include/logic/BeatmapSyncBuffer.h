@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/AsciiFontData.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
@@ -38,8 +39,29 @@ enum class TextureID : uint32_t {
 
     NoteSelectionBorder = 100,
 
-    EffectStart = 1000
+    EffectStart = 1000,
+
+    /// @brief ASCII 字形使用独立高位保留区，避免与皮肤动态特效 ID 冲突。
+    AsciiGlyphStart = 0x00100000U
 };
+
+/// @brief 将 ASCII 字号档位与字符转换为字体图集纹理 ID。
+/// @param tierIndex 字号档位索引。
+/// @param character ASCII 字符。
+/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
+[[nodiscard]] inline constexpr TextureID asciiGlyphTextureId(
+    std::size_t tierIndex, char character)
+{
+    const auto code = static_cast<unsigned char>(character);
+    if ( tierIndex >= Common::ASCII_FONT_RASTER_TIER_COUNT ||
+         code < Common::ASCII_GLYPH_FIRST || code > Common::ASCII_GLYPH_LAST ) {
+        return TextureID::None;
+    }
+    return static_cast<TextureID>(
+        static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) +
+        tierIndex * Common::ASCII_GLYPH_COUNT + code -
+        Common::ASCII_GLYPH_FIRST);
+}
 
 enum class HoverPart : uint8_t {
     None = 0,
@@ -227,6 +249,9 @@ struct RenderSnapshot {
 
     /// @brief 当前快照持有的图集 UV 修订号。
     std::uint64_t atlasUvRevision{ 0 };
+
+    /// @brief 当前主画布 ASCII 字体的多档归一化字形度量。
+    Common::AsciiFontAtlasMetrics asciiFontAtlasMetrics;
 
     /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
     std::vector<entt::entity> noteQueryScratch;

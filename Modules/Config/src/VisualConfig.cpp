@@ -49,14 +49,16 @@ void to_json(nlohmann::json& j, const CanvasComponentPlacement& placement)
 {
     j = nlohmann::json{ { "visible", placement.visible },
                         { "anchorX", placement.anchorX },
-                        { "anchorY", placement.anchorY } };
+                        { "anchorY", placement.anchorY },
+                        { "fontSizeRatio", placement.fontSizeRatio } };
 }
 
 void from_json(const nlohmann::json& j, CanvasComponentPlacement& placement)
 {
-    placement.visible = j.value("visible", false);
-    placement.anchorX = j.value("anchorX", 0.5f);
-    placement.anchorY = j.value("anchorY", 0.12f);
+    placement.visible       = j.value("visible", false);
+    placement.anchorX       = j.value("anchorX", 0.5f);
+    placement.anchorY       = j.value("anchorY", 0.12f);
+    placement.fontSizeRatio = j.value("fontSizeRatio", 0.035f);
 }
 
 void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)

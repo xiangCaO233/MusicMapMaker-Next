@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -311,10 +312,13 @@ public:
     /**
      * @brief 设置全局图集 UV 映射 (由 UI 线程在构建图集后调用)
      */
-    void setAtlasUVMap(const std::string&                             cameraId,
-                       const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+    void setAtlasUVMap(
+        const std::string&                             cameraId,
+        const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {})
     {
-        m_renderSyncRegistry.setAtlasUVMap(cameraId, uvMap);
+        m_renderSyncRegistry.setAtlasUVMap(
+            cameraId, uvMap, asciiFontAtlasMetrics);
     }
 
     /**
@@ -327,12 +331,14 @@ public:
     /// @param cameraId 目标画布 cameraId。
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
     /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
     /// 表，普通路径只做锁内查找和 revision 比较。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
-        std::uint64_t&                           targetRevision) const;
+        std::uint64_t&                           targetRevision,
+        Common::AsciiFontAtlasMetrics& targetAsciiFontAtlasMetrics) const;
 
     /**
      * @brief 获取当前编辑器配置

@@ -33,6 +33,49 @@ bool atlasUVMapsEqual(const std::unordered_map<uint32_t, glm::vec4>& lhs,
 
     return true;
 }
+
+/// @brief 判断两套 ASCII 字体度量是否完全一致。
+/// @param lhs 左侧字体度量。
+/// @param rhs 右侧字体度量。
+/// @return 全部标量与字形度量一致时返回 true。
+bool asciiFontMetricsEqual(const Common::AsciiFontMetrics& lhs,
+                           const Common::AsciiFontMetrics& rhs)
+{
+    if ( lhs.valid != rhs.valid || lhs.ascender != rhs.ascender ||
+         lhs.lineHeight != rhs.lineHeight ) {
+        return false;
+    }
+    for ( std::size_t i = 0; i < lhs.glyphs.size(); ++i ) {
+        const auto& left  = lhs.glyphs[i];
+        const auto& right = rhs.glyphs[i];
+        if ( left.available != right.available ||
+             left.hasBitmap != right.hasBitmap || left.width != right.width ||
+             left.height != right.height || left.bearingX != right.bearingX ||
+             left.bearingY != right.bearingY ||
+             left.advanceX != right.advanceX ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 判断两套多档 ASCII 字体度量是否完全一致。
+/// @param lhs 左侧多档字体度量。
+/// @param rhs 右侧多档字体度量。
+/// @return 全部字号档位均一致时返回 true。
+bool asciiFontAtlasMetricsEqual(const Common::AsciiFontAtlasMetrics& lhs,
+                                const Common::AsciiFontAtlasMetrics& rhs)
+{
+    if ( lhs.valid != rhs.valid ) return false;
+    for ( std::size_t tierIndex = 0U; tierIndex < lhs.tiers.size();
+          ++tierIndex ) {
+        if ( !asciiFontMetricsEqual(lhs.tiers[tierIndex],
+                                    rhs.tiers[tierIndex]) ) {
+            return false;
+        }
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 构造空渲染同步注册表并发布初始空图集快照。
@@ -71,17 +114,21 @@ std::shared_ptr<BeatmapSyncBuffer> RenderSyncRegistry::getSyncBuffer(
 /// @brief 设置指定画布的图集 UV 映射。
 void RenderSyncRegistry::setAtlasUVMap(
     const std::string&                             cameraId,
-    const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics)
 {
     /// @brief 保护本次图集 UV 映射写入的临界区。
     std::unique_lock<std::shared_mutex> lock(m_mutex);
     auto&                               state = m_cameraUVMaps[cameraId];
-    if ( atlasUVMapsEqual(state.uvMap, uvMap) ) {
+    if ( atlasUVMapsEqual(state.uvMap, uvMap) &&
+         asciiFontAtlasMetricsEqual(state.asciiFontAtlasMetrics,
+                                    asciiFontAtlasMetrics) ) {
         return;
     }
 
-    state.uvMap    = uvMap;
-    state.revision = m_nextAtlasUvRevision++;
+    state.uvMap                 = uvMap;
+    state.asciiFontAtlasMetrics = asciiFontAtlasMetrics;
+    state.revision              = m_nextAtlasUvRevision++;
     if ( state.revision == 0 ) {
         state.revision = m_nextAtlasUvRevision++;
     }
@@ -114,16 +161,19 @@ RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
 void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     const std::string&                       cameraId,
     std::unordered_map<uint32_t, glm::vec4>& target,
-    std::uint64_t&                           targetRevision) const
+    std::uint64_t&                           targetRevision,
+    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics) const
 {
     const auto* snapshot =
         m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
     const auto* state =
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
     if ( !state ) {
-        if ( targetRevision != 0 || !target.empty() ) {
+        if ( targetRevision != 0 || !target.empty() ||
+             targetAsciiFontAtlasMetrics.valid ) {
             target.clear();
-            targetRevision = 0;
+            targetRevision              = 0;
+            targetAsciiFontAtlasMetrics = {};
         }
         return;
     }
@@ -132,8 +182,9 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
         return;
     }
 
-    target         = state->uvMap;
-    targetRevision = state->revision;
+    target                      = state->uvMap;
+    targetRevision              = state->revision;
+    targetAsciiFontAtlasMetrics = state->asciiFontAtlasMetrics;
 }
 
 /// @brief 缓存指定画布的最后已知视口尺寸。

@@ -1547,10 +1547,11 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
 void EditorEngine::updateSnapshotAtlasUVMap(
     const std::string&                       cameraId,
     std::unordered_map<uint32_t, glm::vec4>& target,
-    std::uint64_t&                           targetRevision) const
+    std::uint64_t&                           targetRevision,
+    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics) const
 {
     m_renderSyncRegistry.updateSnapshotAtlasUVMap(
-        cameraId, target, targetRevision);
+        cameraId, target, targetRevision, targetAsciiFontAtlasMetrics);
 }
 
 /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。

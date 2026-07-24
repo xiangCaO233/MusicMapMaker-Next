@@ -5,11 +5,43 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include <cmath>
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <limits>
 #include <string>
 
 namespace
 {
+
+/// @brief 为测试快照注入固定宽度 ASCII 字体度量和字形 UV。
+/// @param snapshot 待初始化快照。
+void configureAsciiFont(MMM::Logic::RenderSnapshot& snapshot)
+{
+    constexpr std::size_t tierIndex = 5U;
+    auto&                 atlas     = snapshot.asciiFontAtlasMetrics;
+    atlas.valid                     = true;
+    auto& font                      = atlas.tiers[tierIndex];
+    font.valid                      = true;
+    font.ascender                   = 0.8f;
+    font.lineHeight                 = 1.0f;
+    for ( std::uint32_t code = MMM::Common::ASCII_GLYPH_FIRST;
+          code <= MMM::Common::ASCII_GLYPH_LAST;
+          ++code ) {
+        auto& glyph     = font.glyphs[code - MMM::Common::ASCII_GLYPH_FIRST];
+        glyph.available = true;
+        glyph.hasBitmap = code != static_cast<std::uint32_t>(' ');
+        glyph.width     = 0.5f;
+        glyph.height    = 0.75f;
+        glyph.bearingX  = 0.0f;
+        glyph.bearingY  = 0.75f;
+        glyph.advanceX  = 0.6f;
+        if ( glyph.hasBitmap ) {
+            const auto textureId = MMM::Logic::asciiGlyphTextureId(
+                tierIndex, static_cast<char>(code));
+            snapshot.uvMap.emplace(static_cast<std::uint32_t>(textureId),
+                                   glm::vec4(0.0f, 0.0f, 0.01f, 0.01f));
+        }
+    }
+}
 
 /// @brief 验证关闭组件时不会生成覆盖层几何。
 /// @return 快照保持为空时返回 true。
@@ -17,6 +49,7 @@ bool testHiddenComponentDoesNotRender()
 {
     MMM::Logic::RenderSnapshot               snapshot;
     MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
     MMM::Logic::System::CanvasComponentRenderSystem::render(
         &snapshot, 12.345, 800.0f, 600.0f, config);
     return snapshot.vertices.empty() && snapshot.indices.empty() &&
@@ -29,10 +62,12 @@ bool testVisibleComponentRendersInOverlay()
 {
     MMM::Logic::RenderSnapshot               snapshot;
     MMM::Config::CanvasComponentLayoutConfig config;
-    auto& placement   = config.judgmentLineTime;
-    placement.visible = true;
-    placement.anchorX = 0.25f;
-    placement.anchorY = 0.75f;
+    configureAsciiFont(snapshot);
+    auto& placement         = config.judgmentLineTime;
+    placement.visible       = true;
+    placement.anchorX       = 0.25f;
+    placement.anchorY       = 0.75f;
+    placement.fontSizeRatio = 0.04f;
 
     MMM::Logic::System::CanvasComponentRenderSystem::render(
         &snapshot, 72.345, 800.0f, 600.0f, config);
@@ -42,18 +77,27 @@ bool testVisibleComponentRendersInOverlay()
         return false;
     }
     for ( const auto& command : snapshot.overlayCmds ) {
-        if ( command.customTextureId !=
+        if ( command.customTextureId ==
              static_cast<std::uint32_t>(MMM::Logic::TextureID::None) ) {
-            XERROR("Canvas component did not use the solid atlas texture");
+            XERROR("Canvas component did not use an ASCII glyph texture");
             return false;
         }
     }
 
+    const auto text =
+        MMM::Logic::System::CanvasComponentRenderSystem::formatJudgmentLineTime(
+            72.345);
+    const float fontHeight    = placement.fontSizeRatio * 600.0f;
+    const auto  fontSelection = MMM::Common::selectAsciiFont(
+        snapshot.asciiFontAtlasMetrics, fontHeight);
+    if ( !fontSelection ) {
+        XERROR("Canvas component did not select an ASCII font tier");
+        return false;
+    }
+    const auto textSize = MMM::Common::measureAsciiText(
+        *fontSelection.metrics, text.data(), fontHeight);
     const auto bounds = MMM::Logic::canvasComponentBounds(
-        MMM::Config::CanvasComponentType::JudgmentLineTime,
-        placement,
-        800.0f,
-        600.0f);
+        placement, 800.0f, 600.0f, textSize.width, textSize.height);
     constexpr float epsilon = 1e-4f;
     for ( const auto& vertex : snapshot.vertices ) {
         if ( vertex.pos.x < bounds.left - epsilon ||

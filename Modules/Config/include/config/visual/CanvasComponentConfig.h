@@ -26,6 +26,8 @@ struct CanvasComponentPlacement {
     float anchorX{ 0.5f };
     /// @brief 组件中心相对画布高度的纵向比例。
     float anchorY{ 0.12f };
+    /// @brief 字号相对画布高度的比例。
+    float fontSizeRatio{ 0.035f };
 };
 
 /// @brief 主画布可选组件的布局集合。

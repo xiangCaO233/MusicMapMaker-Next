@@ -1,19 +1,55 @@
 #include "canvas/Basic2DCanvas.h"
 
 #include "canvas/BackgroundVideoTiming.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "font/AsciiFontRasterizer.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <system_error>
 #include <utility>
 
 namespace MMM::Canvas
 {
+namespace
+{
+
+/// @brief 解析软件设置当前选中的 ASCII 字体路径。
+/// @param skin 当前皮肤管理器。
+/// @return 首选字体、外部字体或皮肤默认字体路径。
+std::filesystem::path resolveCanvasAsciiFontPath(Config::SkinManager& skin)
+{
+    const auto& preference =
+        Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
+    if ( !preference.empty() && preference != "Default" ) {
+        const auto& fonts = skin.getAsciiFonts();
+        auto        it =
+            std::find_if(fonts.begin(), fonts.end(), [&](const auto& entry) {
+                return entry.first == preference;
+            });
+        if ( it != fonts.end() ) {
+            return it->second;
+        }
+
+        const auto      externalPath = Config::utf8ToPath(preference);
+        std::error_code pathError;
+        if ( std::filesystem::is_regular_file(externalPath, pathError) &&
+             !pathError ) {
+            return externalPath;
+        }
+    }
+    return skin.getFontPath("ascii");
+}
+
+}  // namespace
 
 /// @brief 当快照背景路径或类型变化时加载或清理背景资源。
 /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
@@ -638,6 +674,58 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
                                skin.getAssetPath("logo"));
 
+    m_asciiFontAtlasMetrics      = {};
+    const auto preferredFontPath = resolveCanvasAsciiFontPath(skin);
+    std::array<std::optional<Graphic::RasterizedAsciiFont>,
+               Common::ASCII_FONT_RASTER_TIER_COUNT>
+         rasterizedFonts;
+    auto rasterizeFontTiers = [&](const std::filesystem::path& fontPath) {
+        bool loadedAnyTier = false;
+        for ( std::size_t tierIndex = 0U;
+              tierIndex < Common::ASCII_FONT_RASTER_TIER_COUNT;
+              ++tierIndex ) {
+            rasterizedFonts[tierIndex] =
+                Graphic::AsciiFontRasterizer::rasterize(
+                    fontPath, Common::ASCII_FONT_RASTER_HEIGHTS[tierIndex]);
+            loadedAnyTier =
+                rasterizedFonts[tierIndex].has_value() || loadedAnyTier;
+        }
+        return loadedAnyTier;
+    };
+    bool       loadedFont      = rasterizeFontTiers(preferredFontPath);
+    const auto defaultFontPath = skin.getFontPath("ascii");
+    if ( !loadedFont && preferredFontPath != defaultFontPath ) {
+        XWARN("Failed to rasterize preferred ASCII font, using skin default");
+        loadedFont = rasterizeFontTiers(defaultFontPath);
+    }
+    if ( loadedFont ) {
+        for ( std::size_t tierIndex = 0U;
+              tierIndex < Common::ASCII_FONT_RASTER_TIER_COUNT;
+              ++tierIndex ) {
+            const auto& rasterizedFont = rasterizedFonts[tierIndex];
+            if ( !rasterizedFont ) continue;
+
+            m_asciiFontAtlasMetrics.tiers[tierIndex] = rasterizedFont->metrics;
+            m_asciiFontAtlasMetrics.valid            = true;
+            for ( std::uint32_t code = Common::ASCII_GLYPH_FIRST;
+                  code <= Common::ASCII_GLYPH_LAST;
+                  ++code ) {
+                const std::size_t index = code - Common::ASCII_GLYPH_FIRST;
+                const auto& metrics     = rasterizedFont->metrics.glyphs[index];
+                const auto& glyph       = rasterizedFont->glyphs[index];
+                if ( !metrics.hasBitmap || glyph.pixels.empty() ) continue;
+
+                const auto textureId = Logic::asciiGlyphTextureId(
+                    tierIndex, static_cast<char>(code));
+                m_textureAtlas->addTexture(
+                    static_cast<std::uint32_t>(textureId),
+                    glyph.pixels.data(),
+                    glyph.width,
+                    glyph.height);
+            }
+        }
+    }
+
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         uint32_t currentId = seq.startId;
         for ( const auto& frame : seq.frames ) {
@@ -664,7 +752,31 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         }
     }
 
-    Logic::EditorEngine::instance().setAtlasUVMap(m_cameraId, m_atlasUVs);
+    if ( m_asciiFontAtlasMetrics.valid ) {
+        for ( std::size_t tierIndex = 0U;
+              tierIndex < Common::ASCII_FONT_RASTER_TIER_COUNT;
+              ++tierIndex ) {
+            const auto& metrics = m_asciiFontAtlasMetrics.tiers[tierIndex];
+            if ( !metrics.valid ) continue;
+
+            for ( std::uint32_t code = Common::ASCII_GLYPH_FIRST;
+                  code <= Common::ASCII_GLYPH_LAST;
+                  ++code ) {
+                const std::size_t index = code - Common::ASCII_GLYPH_FIRST;
+                if ( !metrics.glyphs[index].hasBitmap ) continue;
+                const auto textureId = Logic::asciiGlyphTextureId(
+                    tierIndex, static_cast<char>(code));
+                m_atlasUVs[static_cast<std::uint32_t>(textureId)] =
+                    m_textureAtlas->getUV(
+                        static_cast<std::uint32_t>(textureId));
+            }
+        }
+    }
+
+    Logic::EditorEngine::instance().setAtlasUVMap(
+        m_cameraId, m_atlasUVs, m_asciiFontAtlasMetrics);
+    m_loadedAsciiFontPreference =
+        Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
     XINFO("Basic2DCanvas textures reloaded into atlas for camera: " +
           m_cameraId);
 }

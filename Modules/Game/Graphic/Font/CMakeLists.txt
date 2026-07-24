@@ -1,10 +1,25 @@
 # Modules/Game/Graphic/Font/CMakeLists.txt
 
-add_library(Font STATIC src/FontPool.cpp src/SystemFontResolver.cpp)
+add_library(Font STATIC src/FontPool.cpp src/SystemFontResolver.cpp
+                        src/AsciiFontRasterizer.cpp)
 
 target_include_directories(Font PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_link_libraries(Font PRIVATE Log freetype::freetype)
+target_link_libraries(
+  Font
+  PUBLIC Common
+  PRIVATE Log freetype::freetype)
+
+# 独立验证软件 ASCII 字体能被栅格化为画布图集数据。
+mmm_add_test_executable(Graphic AsciiFontRasterizerTest
+                        tests/AsciiFontRasterizerTest.cpp)
+target_link_libraries(AsciiFontRasterizerTest PRIVATE Font Config)
+add_test(
+  NAME AsciiFontRasterizerTest
+  COMMAND
+    AsciiFontRasterizerTest
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/0xProtoNerdFontPropo-Regular.ttf"
+)
 
 # 启动期系统字体解析仅链接当前平台的原生字体查询依赖。
 if(WIN32)
