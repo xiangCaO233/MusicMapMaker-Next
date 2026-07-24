@@ -19,6 +19,11 @@
 #include <unordered_set>
 #include <vector>
 
+namespace MMM::Config
+{
+enum class CanvasComponentType : std::uint8_t;
+}
+
 namespace MMM::Logic
 {
 
@@ -205,6 +210,39 @@ struct TimelineAudioTrackSnapshot {
     double duration{ 0.0 };
 };
 
+/// @brief 单个可选画布组件实例的渲染与布局编辑边界。
+struct CanvasComponentInstanceSnapshot {
+    /// @brief 组件类型。
+    Config::CanvasComponentType type{};
+
+    /// @brief 逐拍组件对应的一基拍号；非逐拍组件为 0。
+    std::int64_t beatIndex{ 0 };
+
+    /// @brief 实际文字内容左边界。
+    float left{ 0.0f };
+
+    /// @brief 实际文字内容上边界。
+    float top{ 0.0f };
+
+    /// @brief 实际文字内容右边界。
+    float right{ 0.0f };
+
+    /// @brief 实际文字内容下边界。
+    float bottom{ 0.0f };
+
+    /// @brief 当前实例允许布局的区域左边界。
+    float regionLeft{ 0.0f };
+
+    /// @brief 当前实例允许布局的区域上边界。
+    float regionTop{ 0.0f };
+
+    /// @brief 当前实例允许布局的区域右边界。
+    float regionRight{ 0.0f };
+
+    /// @brief 当前实例允许布局的区域下边界。
+    float regionBottom{ 0.0f };
+};
+
 /**
  * @brief 渲染快照数据，包含 UI 画布所需的所有几何与指令信息
  */
@@ -217,6 +255,8 @@ struct RenderSnapshot {
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
     std::vector<TimelineAudioTrackSnapshot>     mainAudioTracks;
+    /// @brief 可选画布组件的逐实例渲染与布局边界。
+    std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     std::vector<System::ScrollSegment>
         scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
 
@@ -432,6 +472,7 @@ struct RenderSnapshot {
         overlapMasks.clear();
         timelineElements.clear();
         mainAudioTracks.clear();
+        canvasComponentInstances.clear();
         scrollSegments.clear();
         previewDensity.clear();
         noteQueryScratch.clear();

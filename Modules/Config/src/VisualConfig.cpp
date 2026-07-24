@@ -66,13 +66,15 @@ void from_json(const nlohmann::json& j, CanvasComponentPlacement& placement)
 
 void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
 {
-    j = nlohmann::json{ { "judgmentLineTime", config.judgmentLineTime } };
+    j = nlohmann::json{ { "judgmentLineTime", config.judgmentLineTime },
+                        { "beatNumber", config.beatNumber } };
 }
 
 void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
 {
     config.judgmentLineTime =
         j.value("judgmentLineTime", CanvasComponentPlacement());
+    config.beatNumber = j.value("beatNumber", DEFAULT_BEAT_NUMBER_PLACEMENT);
 }
 
 void to_json(nlohmann::json& j, const PreviewAreaConfig::AreaMargin& margin)

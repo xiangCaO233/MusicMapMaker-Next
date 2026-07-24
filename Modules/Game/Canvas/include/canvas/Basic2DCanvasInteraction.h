@@ -201,8 +201,12 @@ private:
     Config::CanvasComponentPlacement m_canvasComponentDragStart;
     /// @brief 组件缩放开始时的像素边界。
     Logic::CanvasComponentBounds m_canvasComponentDragStartBounds;
-    /// @brief 组件拖动开始时锚点相对指针的归一化偏移。
+    /// @brief 组件拖动开始时实例允许占用的像素区域。
+    Logic::CanvasComponentBounds m_canvasComponentDragRegion;
+    /// @brief 组件拖动开始时实例中心相对指针的像素偏移。
     glm::vec2 m_canvasComponentPointerOffset{ 0.0f, 0.0f };
+    /// @brief 当前拖动实例的一基拍号；非逐拍组件为 0。
+    std::int64_t m_canvasComponentDragBeatIndex{ 0 };
     /// @brief 当前布局配置拖动手势是否实际修改过配置。
     bool m_layoutConfigurationChanged{ false };
 };

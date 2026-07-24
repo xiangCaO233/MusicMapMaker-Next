@@ -560,6 +560,7 @@ return {
 	["ui.toolbar.layout"] = "Adjust Layout (click again to exit)",
 	["ui.toolbar.layout_components"] = "Optional Canvas Components",
 	["ui.toolbar.layout_current_judgment_time"] = "Current Judgment Time",
+	["ui.toolbar.layout_beat_number"] = "Beat Number",
 	["ui.toolbar.layout_component_color"] = "Color",
 	["ui.toolbar.layout_component_drag_hint"] = "Drag text to move; drag bounding-box corners to resize",
 	["ui.toolbar.short.move"] = "Grab",

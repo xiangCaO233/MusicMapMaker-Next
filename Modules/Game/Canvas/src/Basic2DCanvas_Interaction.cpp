@@ -15,7 +15,6 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
-#include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
@@ -41,43 +40,25 @@ constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 /// @brief 画布悬浮信息相对鼠标的屏幕偏移。
 constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
 
-/// @brief 依据离屏字体度量计算组件当前像素边界。
-/// @param type 组件类型。
-/// @param placement 组件布局。
-/// @param snapshot 当前画布快照。
-/// @param viewportWidth 画布宽度。
-/// @param viewportHeight 画布高度。
-/// @return 与离屏 Vulkan 字形几何一致的边界。
-/// @warning UI 热路径：布局编辑时调用；只扫描固定长度 ASCII 文本。
-Logic::CanvasComponentBounds canvasComponentEditingBounds(
-    Config::CanvasComponentType             type,
-    const Config::CanvasComponentPlacement& placement,
-    const Logic::RenderSnapshot& snapshot, float viewportWidth,
-    float viewportHeight)
+/// @brief 从渲染快照实例取得实际文字内容边界。
+/// @param instance 组件实例快照。
+/// @return 与 Vulkan 字形几何一致的边界。
+Logic::CanvasComponentBounds canvasComponentContentBounds(
+    const Logic::CanvasComponentInstanceSnapshot& instance)
 {
-    std::array<char, 16> text{};
-    switch ( type ) {
-    case Config::CanvasComponentType::JudgmentLineTime:
-        text =
-            Logic::System::CanvasComponentRenderSystem::formatJudgmentLineTime(
-                snapshot.currentTime);
-        break;
-    case Config::CanvasComponentType::Count: return {};
-    }
+    return { instance.left, instance.top, instance.right, instance.bottom };
+}
 
-    const auto  sanitized = Logic::sanitizeCanvasComponentPlacement(placement);
-    const float fontPixelHeight = sanitized.fontSizeRatio * viewportHeight;
-    const auto  fontSelection   = Common::selectAsciiFont(
-        snapshot.asciiFontAtlasMetrics, fontPixelHeight);
-    if ( !fontSelection ) return {};
-
-    const auto textSize = Common::measureAsciiText(
-        *fontSelection.metrics, text.data(), fontPixelHeight);
-    return Logic::canvasComponentBounds(sanitized,
-                                        viewportWidth,
-                                        viewportHeight,
-                                        textSize.width,
-                                        textSize.height);
+/// @brief 从渲染快照实例取得其允许布局的区域。
+/// @param instance 组件实例快照。
+/// @return 普通组件为整张画布，拍号组件为所属整拍的纵向区间。
+Logic::CanvasComponentBounds canvasComponentLayoutRegion(
+    const Logic::CanvasComponentInstanceSnapshot& instance)
+{
+    return { instance.regionLeft,
+             instance.regionTop,
+             instance.regionRight,
+             instance.regionBottom };
 }
 
 /// @brief 将 ASCII 扩展名转换为小写。
@@ -1005,8 +986,9 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
     m_canvasComponentDragTarget.reset();
-    m_canvasComponentDragHandle  = Logic::CanvasComponentDragHandle::None;
-    m_layoutConfigurationChanged = false;
+    m_canvasComponentDragHandle    = Logic::CanvasComponentDragHandle::None;
+    m_canvasComponentDragBeatIndex = 0;
+    m_layoutConfigurationChanged   = false;
 }
 
 void Basic2DCanvasInteraction::handleLayoutEditing(
@@ -1033,28 +1015,32 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const float componentCornerHitRadius = std::max(6.0f, 7.0f * dpiScale);
 
     std::optional<Config::CanvasComponentType> hoveredComponent;
-    Logic::CanvasComponentDragHandle           hoveredComponentHandle =
+    std::optional<Logic::CanvasComponentInstanceSnapshot>
+                                     hoveredComponentInstance;
+    Logic::CanvasComponentDragHandle hoveredComponentHandle =
         Logic::CanvasComponentDragHandle::None;
     if ( m_canvasComponentDragTarget.has_value() ) {
         hoveredComponent       = m_canvasComponentDragTarget;
         hoveredComponentHandle = m_canvasComponentDragHandle;
     } else if ( isHovered ) {
-        for ( Config::CanvasComponentType type :
-              Config::CANVAS_COMPONENT_TYPES ) {
+        for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
+              it != currentSnapshot.canvasComponentInstances.rend();
+              ++it ) {
             const auto& placement =
-                appConfig.getVisualConfig().canvasComponents.placement(type);
+                appConfig.getVisualConfig().canvasComponents.placement(
+                    it->type);
             if ( !placement.visible ) continue;
 
-            const auto bounds = canvasComponentEditingBounds(
-                type, placement, currentSnapshot, targetWidth, targetHeight);
+            const auto bounds = canvasComponentContentBounds(*it);
             if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) {
                 continue;
             }
             const auto hit = Logic::hitTestCanvasComponent(
                 bounds, pointerX, pointerY, componentCornerHitRadius);
             if ( hit != Logic::CanvasComponentDragHandle::None ) {
-                hoveredComponent       = type;
-                hoveredComponentHandle = hit;
+                hoveredComponent         = it->type;
+                hoveredComponentInstance = *it;
+                hoveredComponentHandle   = hit;
                 break;
             }
         }
@@ -1098,7 +1084,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
-        if ( hoveredComponent.has_value() ) {
+        if ( hoveredComponent.has_value() &&
+             hoveredComponentInstance.has_value() ) {
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
             const auto& placement =
@@ -1106,14 +1093,20 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     *hoveredComponent);
             m_canvasComponentDragStart = placement;
             m_canvasComponentDragStartBounds =
-                canvasComponentEditingBounds(*hoveredComponent,
-                                             placement,
-                                             currentSnapshot,
-                                             targetWidth,
-                                             targetHeight);
+                canvasComponentContentBounds(*hoveredComponentInstance);
+            m_canvasComponentDragRegion =
+                canvasComponentLayoutRegion(*hoveredComponentInstance);
+            m_canvasComponentDragBeatIndex =
+                hoveredComponentInstance->beatIndex;
+            const float centerX = (m_canvasComponentDragStartBounds.left +
+                                   m_canvasComponentDragStartBounds.right) *
+                                  0.5f;
+            const float centerY = (m_canvasComponentDragStartBounds.top +
+                                   m_canvasComponentDragStartBounds.bottom) *
+                                  0.5f;
             m_canvasComponentPointerOffset = {
-                placement.anchorX - pointerX / targetWidth,
-                placement.anchorY - pointerY / targetHeight,
+                centerX - pointerX,
+                centerY - pointerY,
             };
         } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
             m_trackLayoutDragHandle   = hoveredHandle;
@@ -1134,29 +1127,21 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         Config::CanvasComponentPlacement candidate = component;
         if ( m_canvasComponentDragHandle ==
              Logic::CanvasComponentDragHandle::Move ) {
-            const auto bounds =
-                canvasComponentEditingBounds(*m_canvasComponentDragTarget,
-                                             component,
-                                             currentSnapshot,
-                                             targetWidth,
-                                             targetHeight);
-            candidate = Logic::moveCanvasComponent(
+            candidate = Logic::moveCanvasComponentInRegion(
                 component,
-                pointerX + m_canvasComponentPointerOffset.x * targetWidth,
-                pointerY + m_canvasComponentPointerOffset.y * targetHeight,
-                targetWidth,
-                targetHeight,
-                bounds.width(),
-                bounds.height());
+                pointerX + m_canvasComponentPointerOffset.x,
+                pointerY + m_canvasComponentPointerOffset.y,
+                m_canvasComponentDragRegion,
+                m_canvasComponentDragStartBounds.width(),
+                m_canvasComponentDragStartBounds.height());
         } else {
-            candidate =
-                Logic::resizeCanvasComponent(m_canvasComponentDragStart,
-                                             m_canvasComponentDragHandle,
-                                             m_canvasComponentDragStartBounds,
-                                             pointerX,
-                                             pointerY,
-                                             targetWidth,
-                                             targetHeight);
+            candidate = Logic::resizeCanvasComponentInRegion(
+                m_canvasComponentDragStart,
+                m_canvasComponentDragHandle,
+                m_canvasComponentDragStartBounds,
+                pointerX,
+                pointerY,
+                m_canvasComponentDragRegion);
         }
         if ( std::abs(component.anchorX - candidate.anchorX) >
                  componentPositionEpsilon ||
@@ -1346,16 +1331,21 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                       IM_COL32(20, 30, 40, 255),
                       arrowThickness);
 
-    for ( Config::CanvasComponentType type : Config::CANVAS_COMPONENT_TYPES ) {
+    for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
         const auto& placement =
-            appConfig.getVisualConfig().canvasComponents.placement(type);
+            appConfig.getVisualConfig().canvasComponents.placement(
+                instance.type);
         if ( !placement.visible ) continue;
 
-        const auto bounds = canvasComponentEditingBounds(
-            type, placement, currentSnapshot, targetWidth, targetHeight);
+        const auto bounds = canvasComponentContentBounds(instance);
         if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
         const bool highlighted =
-            hoveredComponent.has_value() && *hoveredComponent == type;
+            hoveredComponent.has_value() &&
+            *hoveredComponent == instance.type &&
+            ((hoveredComponentInstance.has_value() &&
+              hoveredComponentInstance->beatIndex == instance.beatIndex) ||
+             (m_canvasComponentDragTarget.has_value() &&
+              m_canvasComponentDragBeatIndex == instance.beatIndex));
         const ImU32 componentColor =
             highlighted ? highlightedColor : IM_COL32(90, 220, 255, 240);
         const ImVec2 componentMin{ canvasScreenX + bounds.left,

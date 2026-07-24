@@ -2588,69 +2588,81 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
         ImGui::Separator();
 
-        auto& appConfig = Config::AppConfig::instance();
-        bool  visible   = appConfig.getVisualConfig()
-                           .canvasComponents.judgmentLineTime.visible;
-        if ( ::MMM::UI::FeedbackCheckbox(
-                 TR("ui.toolbar.layout_current_judgment_time").data(),
-                 &visible) ) {
-            auto updatedConfig = appConfig.getEditorConfig();
-            updatedConfig.visual.canvasComponents.judgmentLineTime.visible =
-                visible;
-            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
-            appConfig.save();
-        }
-
-        ImGui::Indent();
-        ImGui::TextUnformatted(TR("ui.toolbar.layout_component_color").data());
-        ImGui::SameLine();
-        const auto componentColor =
-            fromStoredColor(appConfig.getVisualConfig()
-                                .canvasComponents.judgmentLineTime.color);
-        const float colorButtonSize = std::floor(22.0f * dpiScale);
-        if ( ::MMM::UI::FeedbackColorButton(
-                 "##JudgmentLineTimeColor",
-                 toImVec4(componentColor),
-                 ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker |
-                     ImGuiColorEditFlags_AlphaPreviewHalf,
-                 ImVec2(colorButtonSize, colorButtonSize)) ) {
-            ::MMM::UI::FeedbackOpenPopup("JudgmentLineTimeColorPicker");
-        }
-        if ( ImGui::IsItemHovered() ) {
-            drawTooltip(TR("ui.toolbar.layout_component_color").data());
-        }
-        ImGui::Unindent();
-
-        bool colorPickerOpen = false;
-        if ( ImGui::BeginPopup("JudgmentLineTimeColorPicker") ) {
-            colorPickerOpen = true;
-            auto editableColor =
-                fromStoredColor(appConfig.getVisualConfig()
-                                    .canvasComponents.judgmentLineTime.color);
-            if ( ImGui::ColorPicker4("##JudgmentLineTimeColorPickerValue",
-                                     &editableColor.r,
-                                     ImGuiColorEditFlags_AlphaBar |
-                                         ImGuiColorEditFlags_AlphaPreviewHalf |
-                                         ImGuiColorEditFlags_DisplayRGB) ) {
+        auto&       appConfig            = Config::AppConfig::instance();
+        const float colorButtonSize      = std::floor(22.0f * dpiScale);
+        bool        anyColorPickerOpen   = false;
+        const auto  drawComponentControl = [&](Config::CanvasComponentType type,
+                                              std::string_view label) {
+            ImGui::PushID(static_cast<int>(type));
+            bool visible = appConfig.getVisualConfig()
+                               .canvasComponents.placement(type)
+                               .visible;
+            if ( ::MMM::UI::FeedbackCheckbox(label.data(), &visible) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents.judgmentLineTime.color =
-                    toStoredColor(editableColor);
+                updatedConfig.visual.canvasComponents.placement(type).visible =
+                    visible;
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
-                m_layoutComponentColorDirty = true;
-            }
-            if ( ImGui::IsItemDeactivatedAfterEdit() &&
-                 m_layoutComponentColorDirty ) {
                 appConfig.save();
-                m_layoutComponentColorDirty = false;
             }
-            ImGui::EndPopup();
-        }
-        if ( m_layoutComponentColorPickerOpen && !colorPickerOpen &&
+
+            ImGui::SameLine();
+            const auto componentColor =
+                fromStoredColor(appConfig.getVisualConfig()
+                                    .canvasComponents.placement(type)
+                                    .color);
+            if ( ::MMM::UI::FeedbackColorButton(
+                     "##Color",
+                     toImVec4(componentColor),
+                     ImGuiColorEditFlags_NoTooltip |
+                         ImGuiColorEditFlags_NoPicker |
+                         ImGuiColorEditFlags_AlphaPreviewHalf,
+                     ImVec2(colorButtonSize, colorButtonSize)) ) {
+                ::MMM::UI::FeedbackOpenPopup("ColorPicker");
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(TR("ui.toolbar.layout_component_color").data());
+            }
+
+            if ( ImGui::BeginPopup("ColorPicker") ) {
+                anyColorPickerOpen = true;
+                auto editableColor =
+                    fromStoredColor(appConfig.getVisualConfig()
+                                        .canvasComponents.placement(type)
+                                        .color);
+                if ( ImGui::ColorPicker4(
+                         "##Value",
+                         &editableColor.r,
+                         ImGuiColorEditFlags_AlphaBar |
+                             ImGuiColorEditFlags_AlphaPreviewHalf |
+                             ImGuiColorEditFlags_DisplayRGB) ) {
+                    auto updatedConfig = appConfig.getEditorConfig();
+                    updatedConfig.visual.canvasComponents.placement(type)
+                        .color = toStoredColor(editableColor);
+                    Logic::EditorEngine::instance().setEditorConfig(
+                        updatedConfig);
+                    m_layoutComponentColorDirty = true;
+                }
+                if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                     m_layoutComponentColorDirty ) {
+                    appConfig.save();
+                    m_layoutComponentColorDirty = false;
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        };
+
+        drawComponentControl(Config::CanvasComponentType::JudgmentLineTime,
+                             TR("ui.toolbar.layout_current_judgment_time"));
+        drawComponentControl(Config::CanvasComponentType::BeatNumber,
+                             TR("ui.toolbar.layout_beat_number"));
+
+        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&
              m_layoutComponentColorDirty ) {
             appConfig.save();
             m_layoutComponentColorDirty = false;
         }
-        m_layoutComponentColorPickerOpen = colorPickerOpen;
+        m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 
         ImGui::TextDisabled("%s",
                             TR("ui.toolbar.layout_component_drag_hint").data());

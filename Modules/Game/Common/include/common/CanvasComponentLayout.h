@@ -86,6 +86,57 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
     return placement;
 }
 
+/// @brief 计算画布组件在指定布局区域中的像素边界。
+/// @param placement 组件布局。
+/// @param region 组件允许占用的像素区域。
+/// @param contentWidth 组件内容宽度。
+/// @param contentHeight 组件内容高度。
+/// @return 完整限制在布局区域内的组件边界。
+/// @warning 热路径：布局编辑和快照生成时调用；只允许常量级数值计算。
+[[nodiscard]] inline CanvasComponentBounds canvasComponentBoundsInRegion(
+    const Config::CanvasComponentPlacement& placement,
+    const CanvasComponentBounds& region, float contentWidth,
+    float contentHeight)
+{
+    const float regionLeft   = std::min(region.left, region.right);
+    const float regionTop    = std::min(region.top, region.bottom);
+    const float regionRight  = std::max(region.left, region.right);
+    const float regionBottom = std::max(region.top, region.bottom);
+    const float regionWidth  = regionRight - regionLeft;
+    const float regionHeight = regionBottom - regionTop;
+    if ( !std::isfinite(regionWidth) || !std::isfinite(regionHeight) ||
+         regionWidth <= 0.0f || regionHeight <= 0.0f ) {
+        return {};
+    }
+
+    const float width = std::clamp(
+        std::isfinite(contentWidth) ? contentWidth : 0.0f, 0.0f, regionWidth);
+    const float height =
+        std::clamp(std::isfinite(contentHeight) ? contentHeight : 0.0f,
+                   0.0f,
+                   regionHeight);
+
+    const auto  sanitized  = sanitizeCanvasComponentPlacement(placement);
+    const float halfWidth  = width * 0.5f;
+    const float halfHeight = height * 0.5f;
+    const float centerX =
+        width >= regionWidth
+            ? regionLeft + regionWidth * 0.5f
+            : std::clamp(regionLeft + sanitized.anchorX * regionWidth,
+                         regionLeft + halfWidth,
+                         regionRight - halfWidth);
+    const float centerY =
+        height >= regionHeight
+            ? regionTop + regionHeight * 0.5f
+            : std::clamp(regionTop + sanitized.anchorY * regionHeight,
+                         regionTop + halfHeight,
+                         regionBottom - halfHeight);
+    return { centerX - halfWidth,
+             centerY - halfHeight,
+             centerX + halfWidth,
+             centerY + halfHeight };
+}
+
 /// @brief 计算画布组件的像素边界。
 /// @param placement 组件布局。
 /// @param viewportWidth 画布宽度。
@@ -98,35 +149,49 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
     const Config::CanvasComponentPlacement& placement, float viewportWidth,
     float viewportHeight, float contentWidth, float contentHeight)
 {
-    if ( !std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) ||
-         viewportWidth <= 0.0f || viewportHeight <= 0.0f ) {
-        return {};
+    return canvasComponentBoundsInRegion(
+        placement,
+        { 0.0f, 0.0f, viewportWidth, viewportHeight },
+        contentWidth,
+        contentHeight);
+}
+
+/// @brief 将画布组件移动到指定区域内的像素中心并保持完整可见。
+/// @param placement 原布局。
+/// @param centerX 目标像素中心横坐标。
+/// @param centerY 目标像素中心纵坐标。
+/// @param region 组件允许占用的像素区域。
+/// @param contentWidth 组件内容宽度。
+/// @param contentHeight 组件内容高度。
+/// @return 更新后的归一化布局。
+/// @warning 热路径：组件拖动期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement
+moveCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
+                            float centerX, float centerY,
+                            const CanvasComponentBounds& region,
+                            float contentWidth, float contentHeight)
+{
+    const float regionLeft   = std::min(region.left, region.right);
+    const float regionTop    = std::min(region.top, region.bottom);
+    const float regionRight  = std::max(region.left, region.right);
+    const float regionBottom = std::max(region.top, region.bottom);
+    const float regionWidth  = regionRight - regionLeft;
+    const float regionHeight = regionBottom - regionTop;
+    if ( regionWidth <= 0.0f || regionHeight <= 0.0f ||
+         !std::isfinite(centerX) || !std::isfinite(centerY) ) {
+        return sanitizeCanvasComponentPlacement(placement);
     }
 
-    const float width = std::clamp(
-        std::isfinite(contentWidth) ? contentWidth : 0.0f, 0.0f, viewportWidth);
-    const float height =
-        std::clamp(std::isfinite(contentHeight) ? contentHeight : 0.0f,
-                   0.0f,
-                   viewportHeight);
-
-    const auto  sanitized  = sanitizeCanvasComponentPlacement(placement);
-    const float halfWidth  = width * 0.5f;
-    const float halfHeight = height * 0.5f;
-    const float centerX    = width >= viewportWidth
-                                 ? viewportWidth * 0.5f
-                                 : std::clamp(sanitized.anchorX * viewportWidth,
-                                           halfWidth,
-                                           viewportWidth - halfWidth);
-    const float centerY    = height >= viewportHeight
-                                 ? viewportHeight * 0.5f
-                                 : std::clamp(sanitized.anchorY * viewportHeight,
-                                           halfHeight,
-                                           viewportHeight - halfHeight);
-    return { centerX - halfWidth,
-             centerY - halfHeight,
-             centerX + halfWidth,
-             centerY + halfHeight };
+    placement.anchorX = (centerX - regionLeft) / regionWidth;
+    placement.anchorY = (centerY - regionTop) / regionHeight;
+    placement         = sanitizeCanvasComponentPlacement(placement);
+    const auto bounds = canvasComponentBoundsInRegion(
+        placement, region, contentWidth, contentHeight);
+    placement.anchorX =
+        ((bounds.left + bounds.right) * 0.5f - regionLeft) / regionWidth;
+    placement.anchorY =
+        ((bounds.top + bounds.bottom) * 0.5f - regionTop) / regionHeight;
+    return sanitizeCanvasComponentPlacement(placement);
 }
 
 /// @brief 将画布组件移动到指定像素中心并保持完整可见。
@@ -144,19 +209,13 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
     float viewportWidth, float viewportHeight, float contentWidth,
     float contentHeight)
 {
-    if ( viewportWidth <= 0.0f || viewportHeight <= 0.0f ||
-         !std::isfinite(centerX) || !std::isfinite(centerY) ) {
-        return sanitizeCanvasComponentPlacement(placement);
-    }
-
-    placement.anchorX = centerX / viewportWidth;
-    placement.anchorY = centerY / viewportHeight;
-    placement         = sanitizeCanvasComponentPlacement(placement);
-    const auto bounds = canvasComponentBounds(
-        placement, viewportWidth, viewportHeight, contentWidth, contentHeight);
-    placement.anchorX = ((bounds.left + bounds.right) * 0.5f) / viewportWidth;
-    placement.anchorY = ((bounds.top + bounds.bottom) * 0.5f) / viewportHeight;
-    return sanitizeCanvasComponentPlacement(placement);
+    return moveCanvasComponentInRegion(
+        placement,
+        centerX,
+        centerY,
+        { 0.0f, 0.0f, viewportWidth, viewportHeight },
+        contentWidth,
+        contentHeight);
 }
 
 /// @brief 命中组件移动区域或四角缩放把手。
@@ -213,26 +272,29 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
              (bounds.top + bounds.bottom) * 0.5f };
 }
 
-/// @brief 按四角拖动结果等比调整组件字号和中心位置。
+/// @brief 按四角拖动结果在指定区域内等比调整组件字号和中心位置。
 /// @param placement 拖动开始时的布局。
 /// @param handle 当前缩放把手。
 /// @param startBounds 拖动开始时的组件边界。
 /// @param pointerX 当前指针横坐标。
 /// @param pointerY 当前指针纵坐标。
-/// @param viewportWidth 画布宽度。
-/// @param viewportHeight 画布高度。
+/// @param region 组件允许占用的像素区域。
 /// @return 更新后的布局。
 /// @warning 热路径：组件缩放期间每帧调用；只允许常量级数值计算。
-[[nodiscard]] inline Config::CanvasComponentPlacement resizeCanvasComponent(
-    Config::CanvasComponentPlacement placement,
-    CanvasComponentDragHandle handle, const CanvasComponentBounds& startBounds,
-    float pointerX, float pointerY, float viewportWidth, float viewportHeight)
+[[nodiscard]] inline Config::CanvasComponentPlacement
+resizeCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
+                              CanvasComponentDragHandle        handle,
+                              const CanvasComponentBounds&     startBounds,
+                              float pointerX, float pointerY,
+                              const CanvasComponentBounds& region)
 {
-    placement = sanitizeCanvasComponentPlacement(placement);
+    placement                = sanitizeCanvasComponentPlacement(placement);
+    const float regionWidth  = region.width();
+    const float regionHeight = region.height();
     if ( handle == CanvasComponentDragHandle::None ||
          handle == CanvasComponentDragHandle::Move ||
          startBounds.width() <= 0.0f || startBounds.height() <= 0.0f ||
-         viewportWidth <= 0.0f || viewportHeight <= 0.0f ) {
+         regionWidth <= 0.0f || regionHeight <= 0.0f ) {
         return placement;
     }
 
@@ -284,13 +346,32 @@ sanitizeCanvasComponentPlacement(Config::CanvasComponentPlacement placement)
         opposite.x + (growsLeft ? -width * 0.5f : width * 0.5f);
     const float centerY =
         opposite.y + (growsUp ? -height * 0.5f : height * 0.5f);
-    return moveCanvasComponent(placement,
-                               centerX,
-                               centerY,
-                               viewportWidth,
-                               viewportHeight,
-                               width,
-                               height);
+    return moveCanvasComponentInRegion(
+        placement, centerX, centerY, region, width, height);
+}
+
+/// @brief 按四角拖动结果等比调整组件字号和中心位置。
+/// @param placement 拖动开始时的布局。
+/// @param handle 当前缩放把手。
+/// @param startBounds 拖动开始时的组件边界。
+/// @param pointerX 当前指针横坐标。
+/// @param pointerY 当前指针纵坐标。
+/// @param viewportWidth 画布宽度。
+/// @param viewportHeight 画布高度。
+/// @return 更新后的布局。
+/// @warning 热路径：组件缩放期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement resizeCanvasComponent(
+    Config::CanvasComponentPlacement placement,
+    CanvasComponentDragHandle handle, const CanvasComponentBounds& startBounds,
+    float pointerX, float pointerY, float viewportWidth, float viewportHeight)
+{
+    return resizeCanvasComponentInRegion(
+        placement,
+        handle,
+        startBounds,
+        pointerX,
+        pointerY,
+        { 0.0f, 0.0f, viewportWidth, viewportHeight });
 }
 
 }  // namespace MMM::Logic

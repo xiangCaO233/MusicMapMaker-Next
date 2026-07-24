@@ -184,27 +184,89 @@ bool testCanvasComponentResize()
            near(resized.anchorX, 0.625f) && near(resized.anchorY, 0.52f);
 }
 
+/// @brief 验证拍内组件移动和缩放不会越过所属整拍的垂直边界。
+/// @return 垂直范围受整拍限制且横向仍可使用完整画布时返回 true。
+bool testBeatRelativeComponentConstraints()
+{
+    const MMM::Logic::CanvasComponentBounds beatRegion{
+        0.0f, 100.0f, 800.0f, 300.0f
+    };
+    MMM::Config::CanvasComponentPlacement placement =
+        MMM::Config::DEFAULT_BEAT_NUMBER_PLACEMENT;
+    placement.visible       = true;
+    placement.anchorX       = 0.5f;
+    placement.anchorY       = 0.5f;
+    placement.fontSizeRatio = 0.1f;
+
+    const auto moved = MMM::Logic::moveCanvasComponentInRegion(
+        placement, 900.0f, 500.0f, beatRegion, 120.0f, 40.0f);
+    const auto movedBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        moved, beatRegion, 120.0f, 40.0f);
+    if ( !near(movedBounds.right, 800.0f) ||
+         !near(movedBounds.bottom, 300.0f) ||
+         movedBounds.left < beatRegion.left ||
+         movedBounds.top < beatRegion.top ) {
+        return false;
+    }
+
+    const auto startBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        placement, beatRegion, 200.0f, 20.0f);
+    const auto resized = MMM::Logic::resizeCanvasComponentInRegion(
+        placement,
+        MMM::Logic::CanvasComponentDragHandle::BottomRight,
+        startBounds,
+        1200.0f,
+        900.0f,
+        beatRegion);
+    const auto resizedBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        resized,
+        beatRegion,
+        startBounds.width() * (resized.fontSizeRatio / placement.fontSizeRatio),
+        startBounds.height() *
+            (resized.fontSizeRatio / placement.fontSizeRatio));
+    return resizedBounds.left >= beatRegion.left &&
+           resizedBounds.right <= beatRegion.right &&
+           resizedBounds.top >= beatRegion.top &&
+           resizedBounds.bottom <= beatRegion.bottom;
+}
+
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
 /// @return 显隐、锚点、字号与颜色均保持时返回 true。
 bool testCanvasComponentConfigRoundTrip()
 {
     MMM::Config::CanvasComponentLayoutConfig source;
-    auto& placement         = source.judgmentLineTime;
-    placement.visible       = true;
-    placement.anchorX       = 0.23f;
-    placement.anchorY       = 0.76f;
-    placement.fontSizeRatio = 0.08f;
-    placement.color         = { 0.1f, 0.3f, 0.7f, 0.8f };
+    auto& placement          = source.judgmentLineTime;
+    placement.visible        = true;
+    placement.anchorX        = 0.23f;
+    placement.anchorY        = 0.76f;
+    placement.fontSizeRatio  = 0.08f;
+    placement.color          = { 0.1f, 0.3f, 0.7f, 0.8f };
+    auto& beatNumber         = source.beatNumber;
+    beatNumber.visible       = true;
+    beatNumber.anchorX       = 0.91f;
+    beatNumber.anchorY       = 0.34f;
+    beatNumber.fontSizeRatio = 0.16f;
+    beatNumber.color         = { 0.8f, 0.2f, 0.3f, 0.7f };
 
     const nlohmann::json encoded = source;
     const auto           decoded =
         encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
-    const auto& restored = decoded.judgmentLineTime;
-    return restored.visible && near(restored.anchorX, 0.23f) &&
-           near(restored.anchorY, 0.76f) &&
-           near(restored.fontSizeRatio, 0.08f) &&
-           near(restored.color[0], 0.1f) && near(restored.color[1], 0.3f) &&
-           near(restored.color[2], 0.7f) && near(restored.color[3], 0.8f);
+    const auto& restoredTime = decoded.judgmentLineTime;
+    const auto& restoredBeat = decoded.beatNumber;
+    return restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
+           near(restoredTime.anchorY, 0.76f) &&
+           near(restoredTime.fontSizeRatio, 0.08f) &&
+           near(restoredTime.color[0], 0.1f) &&
+           near(restoredTime.color[1], 0.3f) &&
+           near(restoredTime.color[2], 0.7f) &&
+           near(restoredTime.color[3], 0.8f) && restoredBeat.visible &&
+           near(restoredBeat.anchorX, 0.91f) &&
+           near(restoredBeat.anchorY, 0.34f) &&
+           near(restoredBeat.fontSizeRatio, 0.16f) &&
+           near(restoredBeat.color[0], 0.8f) &&
+           near(restoredBeat.color[1], 0.2f) &&
+           near(restoredBeat.color[2], 0.3f) &&
+           near(restoredBeat.color[3], 0.7f);
 }
 
 }  // namespace
@@ -234,8 +296,11 @@ int main()
     if ( !testCanvasComponentResize() ) {
         return 7;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testBeatRelativeComponentConstraints() ) {
         return 8;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 9;
     }
     return 0;
 }

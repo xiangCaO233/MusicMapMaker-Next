@@ -479,11 +479,19 @@ void NoteRenderSystem::generateSnapshot(
     batcher.flush();
 
     if ( isMainCanvas ) {
-        CanvasComponentRenderSystem::render(snapshot,
-                                            renderTime,
-                                            viewportWidth,
-                                            viewportHeight,
-                                            config.visual.canvasComponents);
+        const CanvasComponentRenderContext componentContext{
+            .currentTime    = renderTime,
+            .viewportWidth  = viewportWidth,
+            .viewportHeight = viewportHeight,
+            .judgmentLineY  = judgmentLineY,
+            .visibleTop     = topY,
+            .visibleBottom  = bottomY,
+            .renderScaleY   = renderScaleY,
+            .bpmEvents      = bpmEvents,
+            .scrollCache    = cache,
+        };
+        CanvasComponentRenderSystem::render(
+            snapshot, componentContext, config.visual.canvasComponents);
     }
 }
 

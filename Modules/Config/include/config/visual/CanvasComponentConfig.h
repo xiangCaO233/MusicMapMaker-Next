@@ -10,12 +10,14 @@ namespace MMM::Config
 /// @brief 可绘制到主画布最终覆盖层的组件类型。
 enum class CanvasComponentType : std::uint8_t {
     JudgmentLineTime,
+    BeatNumber,
     Count,
 };
 
 /// @brief 全部画布组件类型的稳定遍历顺序。
-inline constexpr std::array<CanvasComponentType, 1> CANVAS_COMPONENT_TYPES{
+inline constexpr std::array<CanvasComponentType, 2> CANVAS_COMPONENT_TYPES{
     CanvasComponentType::JudgmentLineTime,
+    CanvasComponentType::BeatNumber,
 };
 
 /// @brief 单个画布组件的显隐、归一化锚点、字号与颜色配置。
@@ -32,10 +34,21 @@ struct CanvasComponentPlacement {
     std::array<float, 4> color{ 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
+/// @brief 拍号组件的默认拍内布局。
+inline constexpr CanvasComponentPlacement DEFAULT_BEAT_NUMBER_PLACEMENT{
+    false,
+    0.08f,
+    0.5f,
+    0.18f,
+    { 222.0f / 255.0f, 49.0f / 255.0f, 99.0f / 255.0f, 1.0f },
+};
+
 /// @brief 主画布可选组件的布局集合。
 struct CanvasComponentLayoutConfig {
     /// @brief 当前判定线时间组件布局。
     CanvasComponentPlacement judgmentLineTime;
+    /// @brief 逐拍绘制的拍号组件拍内布局。
+    CanvasComponentPlacement beatNumber{ DEFAULT_BEAT_NUMBER_PLACEMENT };
 
     /// @brief 按组件类型取得可写布局。
     /// @param type 组件类型。
@@ -44,6 +57,7 @@ struct CanvasComponentLayoutConfig {
     {
         switch ( type ) {
         case CanvasComponentType::JudgmentLineTime: return judgmentLineTime;
+        case CanvasComponentType::BeatNumber: return beatNumber;
         case CanvasComponentType::Count: break;
         }
         return judgmentLineTime;
@@ -56,6 +70,7 @@ struct CanvasComponentLayoutConfig {
     {
         switch ( type ) {
         case CanvasComponentType::JudgmentLineTime: return judgmentLineTime;
+        case CanvasComponentType::BeatNumber: return beatNumber;
         case CanvasComponentType::Count: break;
         }
         return judgmentLineTime;
