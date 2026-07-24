@@ -66,7 +66,7 @@ public:
 
     /// @brief 将一基拍号格式化为 ASCII 文本。
     /// @param beatIndex 从首个 BPM Timing 起算的一基拍号。
-    /// @return 十进制拍号文本；非正值返回 `0`。
+    /// @return 带 `#` 前缀的十进制拍号文本；非正值返回 `#0`。
     /// @warning 热路径：每个可见拍号实例调用；不得引入堆分配。
     [[nodiscard]] static std::array<char, 24> formatBeatNumber(
         std::int64_t beatIndex);

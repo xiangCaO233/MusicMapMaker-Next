@@ -32,14 +32,19 @@ constexpr std::size_t MAX_VISIBLE_BEAT_NUMBER_INSTANCES = 4096U;
 /// @param layoutRegion 当前实例允许布局的像素区域。
 /// @param outBounds 输出实际文字内容边界。
 /// @param visibleRegion 可选的实例可见性判定区域。
+/// @param outEffectiveLayoutRegion 输出应用文字尺寸偏移后的实际布局区域。
+/// @param centerAtBeatHead 为 true 时将布局区域下移半个文字包围框高度，使其
+/// 底端位置可令文字中心对齐拍头线。
 /// @return 至少生成一个可见字形时返回 true。
 /// @warning
 /// 热路径：组件启用时每次主画布快照生成调用；只扫描短文本并生成字形四边形。
 bool renderAsciiText(Batcher& batcher, const char* text,
                      const Config::CanvasComponentPlacement& placement,
-                     const CanvasComponentBounds&            layoutRegion,
+                     CanvasComponentBounds                   layoutRegion,
                      CanvasComponentBounds&                  outBounds,
-                     const CanvasComponentBounds* visibleRegion = nullptr)
+                     const CanvasComponentBounds* visibleRegion      = nullptr,
+                     CanvasComponentBounds* outEffectiveLayoutRegion = nullptr,
+                     bool                   centerAtBeatHead         = false)
 {
     const auto  sanitized = sanitizeCanvasComponentPlacement(placement);
     const float fontPixelHeight =
@@ -51,6 +56,15 @@ bool renderAsciiText(Batcher& batcher, const char* text,
     const auto& font    = *selection.metrics;
     const auto textSize = Common::measureAsciiText(font, text, fontPixelHeight);
     if ( textSize.width <= 0.0f || textSize.height <= 0.0f ) return false;
+
+    if ( centerAtBeatHead ) {
+        const float offsetY = textSize.height * 0.5f;
+        layoutRegion.top += offsetY;
+        layoutRegion.bottom += offsetY;
+    }
+    if ( outEffectiveLayoutRegion ) {
+        *outEffectiveLayoutRegion = layoutRegion;
+    }
 
     const auto bounds = canvasComponentBoundsInRegion(
         sanitized, layoutRegion, textSize.width, textSize.height);
@@ -279,18 +293,21 @@ void renderBeatNumbers(Batcher&                                batcher,
                         CanvasComponentRenderSystem::formatBeatNumber(
                             completedBeatCount + beatOffset + 1);
                     CanvasComponentBounds bounds;
+                    CanvasComponentBounds effectiveLayoutRegion;
                     if ( renderAsciiText(batcher,
                                          text.data(),
                                          placement,
                                          layoutRegion,
                                          bounds,
-                                         &visibleRegion) ) {
+                                         &visibleRegion,
+                                         &effectiveLayoutRegion,
+                                         true) ) {
                         appendComponentInstance(
                             *batcher.snapshot,
                             Config::CanvasComponentType::BeatNumber,
                             completedBeatCount + beatOffset + 1,
                             bounds,
-                            layoutRegion);
+                            effectiveLayoutRegion);
                         ++renderedCount;
                         if ( renderedCount >=
                              MAX_VISIBLE_BEAT_NUMBER_INSTANCES ) {
@@ -380,12 +397,13 @@ std::array<char, 24> CanvasComponentRenderSystem::formatBeatNumber(
     std::int64_t beatIndex)
 {
     std::array<char, 24> result{};
+    result[0]             = '#';
     beatIndex             = std::max<std::int64_t>(0, beatIndex);
     const auto conversion = std::to_chars(
-        result.data(), result.data() + result.size() - 1, beatIndex);
+        result.data() + 1, result.data() + result.size() - 1, beatIndex);
     if ( conversion.ec != std::errc{} ) {
-        result[0] = '0';
-        result[1] = '\0';
+        result[1] = '0';
+        result[2] = '\0';
     } else {
         *conversion.ptr = '\0';
     }

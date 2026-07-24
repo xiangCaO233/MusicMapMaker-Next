@@ -230,16 +230,16 @@ struct CanvasComponentInstanceSnapshot {
     /// @brief 实际文字内容下边界。
     float bottom{ 0.0f };
 
-    /// @brief 当前实例允许布局的区域左边界。
+    /// @brief 当前实例允许布局的实际区域左边界。
     float regionLeft{ 0.0f };
 
-    /// @brief 当前实例允许布局的区域上边界。
+    /// @brief 当前实例允许布局的实际区域上边界。
     float regionTop{ 0.0f };
 
-    /// @brief 当前实例允许布局的区域右边界。
+    /// @brief 当前实例允许布局的实际区域右边界。
     float regionRight{ 0.0f };
 
-    /// @brief 当前实例允许布局的区域下边界。
+    /// @brief 当前实例允许布局的实际区域下边界。
     float regionBottom{ 0.0f };
 };
 

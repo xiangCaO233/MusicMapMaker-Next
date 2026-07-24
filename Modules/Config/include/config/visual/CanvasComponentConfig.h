@@ -36,11 +36,7 @@ struct CanvasComponentPlacement {
 
 /// @brief 拍号组件的默认拍内布局。
 inline constexpr CanvasComponentPlacement DEFAULT_BEAT_NUMBER_PLACEMENT{
-    false,
-    0.08f,
-    0.5f,
-    0.18f,
-    { 222.0f / 255.0f, 49.0f / 255.0f, 99.0f / 255.0f, 1.0f },
+    false, 0.08f, 0.5f, 0.18f, { 1.0f, 140.0f / 255.0f, 0.0f, 1.0f },
 };
 
 /// @brief 主画布可选组件的布局集合。

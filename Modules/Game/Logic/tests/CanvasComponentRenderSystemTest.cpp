@@ -6,6 +6,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -143,7 +144,7 @@ bool testVisibleComponentRendersInOverlay()
 }
 
 /// @brief 验证拍号会按整拍复制并保持在各自拍内布局区域。
-/// @return 实例编号、区域边界、默认樱桃红色和字形几何均正确时返回 true。
+/// @return 实例编号、区域边界、默认暗橙色和字形几何均正确时返回 true。
 bool testBeatNumbersRenderInsideEachBeat()
 {
     MMM::Logic::RenderSnapshot               snapshot;
@@ -195,15 +196,150 @@ bool testBeatNumbersRenderInsideEachBeat()
         }
     }
 
-    const auto& cherry = MMM::Config::DEFAULT_BEAT_NUMBER_PLACEMENT.color;
+    const auto& darkOrange = MMM::Config::DEFAULT_BEAT_NUMBER_PLACEMENT.color;
+    if ( std::abs(darkOrange[0] - 1.0f) > epsilon ||
+         std::abs(darkOrange[1] - 140.0f / 255.0f) > epsilon ||
+         std::abs(darkOrange[2]) > epsilon ||
+         std::abs(darkOrange[3] - 1.0f) > epsilon ) {
+        XERROR("Beat number default color is not #FF8C00");
+        return false;
+    }
     for ( const auto& vertex : snapshot.vertices ) {
-        if ( std::abs(vertex.color.r - cherry[0]) > epsilon ||
-             std::abs(vertex.color.g - cherry[1]) > epsilon ||
-             std::abs(vertex.color.b - cherry[2]) > epsilon ||
-             std::abs(vertex.color.a - cherry[3]) > epsilon ) {
-            XERROR("Beat number did not use the default cherry color");
+        if ( std::abs(vertex.color.r - darkOrange[0]) > epsilon ||
+             std::abs(vertex.color.g - darkOrange[1]) > epsilon ||
+             std::abs(vertex.color.b - darkOrange[2]) > epsilon ||
+             std::abs(vertex.color.a - darkOrange[3]) > epsilon ) {
+            XERROR("Beat number did not use the default dark orange color");
             return false;
         }
+    }
+    return true;
+}
+
+/// @brief 验证拍起点越过判定线后，拍号会保留到文字离开轨道布局视口。
+/// @return 当前拍文字仍被生成且绘制命令使用布局视口 scissor 时返回 true。
+bool testBeatNumberRendersUntilLayoutViewportExit()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    config.beatNumber.visible = true;
+
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    auto&          bpm =
+        timelineRegistry.emplace<MMM::Logic::TimelineComponent>(bpmEntity);
+    bpm.m_timestamp = 0.0;
+    bpm.m_effect    = MMM::TimingEffect::BPM;
+    bpm.m_value     = 120.0;
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{ &bpm };
+
+    auto context           = makeRenderContext(1.4);
+    context.viewportHeight = 650.0f;
+    context.judgmentLineY  = 500.0f;
+    context.visibleTop     = 25.0f;
+    context.visibleBottom  = 600.0f;
+    context.bpmEvents      = bpmEvents;
+    context.scrollCache    = &cache;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const auto instance = std::find_if(
+        snapshot.canvasComponentInstances.begin(),
+        snapshot.canvasComponentInstances.end(),
+        [](const auto& candidate) { return candidate.beatIndex == 3; });
+    if ( instance == snapshot.canvasComponentInstances.end() ||
+         instance->regionBottom <= context.visibleBottom ||
+         instance->top <= context.judgmentLineY ||
+         instance->top >= context.visibleBottom ||
+         instance->bottom <= context.visibleBottom ) {
+        XERROR("Beat number disappeared before leaving the layout viewport");
+        return false;
+    }
+
+    for ( const auto& command : snapshot.overlayCmds ) {
+        if ( command.scissor.offset.x != 0 || command.scissor.offset.y != 25 ||
+             command.scissor.extent.width != 800U ||
+             command.scissor.extent.height != 575U ) {
+            XERROR("Beat number did not use the layout viewport scissor");
+            return false;
+        }
+    }
+    return !snapshot.overlayCmds.empty();
+}
+
+/// @brief 验证拍内可移动区域按当前文字半高下移并允许居中于拍头线。
+/// @return 区域偏移量和底端位置的文字中心均正确时返回 true。
+bool testBeatNumberLayoutRegionCentersOnBeatHead()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    config.beatNumber.visible = true;
+    config.beatNumber.anchorY = 1.0f;
+
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    auto&          bpm =
+        timelineRegistry.emplace<MMM::Logic::TimelineComponent>(bpmEntity);
+    bpm.m_timestamp = 0.0;
+    bpm.m_effect    = MMM::TimingEffect::BPM;
+    bpm.m_value     = 120.0;
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{ &bpm };
+
+    auto context           = makeRenderContext(1.08);
+    context.viewportHeight = 750.0f;
+    context.judgmentLineY  = 300.0f;
+    context.visibleTop     = 100.0f;
+    context.visibleBottom  = 700.0f;
+    context.bpmEvents      = bpmEvents;
+    context.scrollCache    = &cache;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const auto instance = std::find_if(
+        snapshot.canvasComponentInstances.begin(),
+        snapshot.canvasComponentInstances.end(),
+        [](const auto& candidate) { return candidate.beatIndex == 4; });
+    if ( instance == snapshot.canvasComponentInstances.end() ) {
+        XERROR("Beat number for beat-head alignment was not rendered");
+        return false;
+    }
+
+    constexpr float rawRegionTop    = -160.0f;
+    constexpr float rawRegionBottom = 90.0f;
+    const float     fontHeight =
+        config.beatNumber.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+    const auto selection = MMM::Common::selectAsciiFont(
+        snapshot.asciiFontAtlasMetrics, fontHeight);
+    const auto text =
+        MMM::Logic::System::CanvasComponentRenderSystem::formatBeatNumber(4);
+    if ( !selection ) {
+        XERROR("Beat number did not select a font for layout alignment");
+        return false;
+    }
+    const auto textSize = MMM::Common::measureAsciiText(
+        *selection.metrics, text.data(), fontHeight);
+    const float     expectedOffset = textSize.height * 0.5f;
+    const float     contentCenterY = (instance->top + instance->bottom) * 0.5f;
+    constexpr float epsilon        = 1e-4f;
+    if ( std::abs(instance->regionTop - (rawRegionTop + expectedOffset)) >
+             epsilon ||
+         std::abs(instance->regionBottom - (rawRegionBottom + expectedOffset)) >
+             epsilon ||
+         std::abs(contentCenterY - rawRegionBottom) > epsilon ||
+         instance->top >= context.visibleTop ||
+         instance->bottom <= context.visibleTop ) {
+        XERROR("Beat number layout range did not center on the beat-head line");
+        return false;
     }
     return true;
 }
@@ -220,8 +356,8 @@ bool testJudgmentLineTimeFormatting()
            std::string(System::formatJudgmentLineTime(
                            std::numeric_limits<double>::quiet_NaN())
                            .data()) == "00:00:00.000" &&
-           std::string(System::formatBeatNumber(12345).data()) == "12345" &&
-           std::string(System::formatBeatNumber(-5).data()) == "0";
+           std::string(System::formatBeatNumber(12345).data()) == "#12345" &&
+           std::string(System::formatBeatNumber(-5).data()) == "#0";
 }
 
 }  // namespace
@@ -233,6 +369,8 @@ int main()
     return testHiddenComponentDoesNotRender() &&
                    testVisibleComponentRendersInOverlay() &&
                    testBeatNumbersRenderInsideEachBeat() &&
+                   testBeatNumberRendersUntilLayoutViewportExit() &&
+                   testBeatNumberLayoutRegionCentersOnBeatHead() &&
                    testJudgmentLineTimeFormatting()
                ? 0
                : 1;
