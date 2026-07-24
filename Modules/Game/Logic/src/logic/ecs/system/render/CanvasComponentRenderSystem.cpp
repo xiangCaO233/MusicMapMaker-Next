@@ -207,6 +207,12 @@ void renderBeatNumbers(Batcher&                                batcher,
     const CanvasComponentBounds visibleRegion{
         0.0f, visibleTop, context.viewportWidth, visibleBottom
     };
+    if ( visibleRegion.height() <= 0.0f ) return;
+    batcher.setScissor(visibleRegion.left,
+                       visibleRegion.top,
+                       visibleRegion.width(),
+                       visibleRegion.height());
+
     std::int64_t completedBeatCount = 0;
     std::size_t  renderedCount      = 0U;
     double lastProcessedBeatStart   = -std::numeric_limits<double>::infinity();
@@ -230,12 +236,17 @@ void renderBeatNumbers(Batcher&                                batcher,
             const double segmentEnd   = std::min(rangeEnd, nextBpmTime);
             if ( segmentEnd < segmentStart || segmentEnd < bpmTime ) continue;
 
+            // 首个候选必须包含与布局视口相交但起点已越出视口的当前拍。
+            // 实际文字是否可见继续由布局视口判定与 Vulkan scissor 决定。
             std::int64_t beatOffset = static_cast<std::int64_t>(
-                std::ceil((segmentStart - bpmTime) / beatDuration - 1e-6));
+                std::floor((segmentStart - bpmTime) / beatDuration + 1e-6));
             beatOffset = std::max<std::int64_t>(0, beatOffset);
             double beatStart =
                 bpmTime + static_cast<double>(beatOffset) * beatDuration;
-            while ( beatStart <= segmentEnd + 1e-6 &&
+            // 上沿还需检查下一拍：拍头线刚离开布局视口时，居中绘制的文字
+            // 仍可能有一半处于 scissor 内。
+            const double candidateEnd = segmentEnd + beatDuration;
+            while ( beatStart <= candidateEnd + 1e-6 &&
                     beatStart < nextBpmTime ) {
                 if ( beatStart <= lastProcessedBeatStart + 1e-6 ) {
                     ++beatOffset;
