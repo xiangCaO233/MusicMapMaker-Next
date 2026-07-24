@@ -986,9 +986,9 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
     m_canvasComponentDragTarget.reset();
-    m_canvasComponentDragHandle    = Logic::CanvasComponentDragHandle::None;
-    m_canvasComponentDragBeatIndex = 0;
-    m_layoutConfigurationChanged   = false;
+    m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
+    m_canvasComponentDragInstanceIndex = 0;
+    m_layoutConfigurationChanged       = false;
 }
 
 void Basic2DCanvasInteraction::handleLayoutEditing(
@@ -1096,8 +1096,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 canvasComponentContentBounds(*hoveredComponentInstance);
             m_canvasComponentDragRegion =
                 canvasComponentLayoutRegion(*hoveredComponentInstance);
-            m_canvasComponentDragBeatIndex =
-                hoveredComponentInstance->beatIndex;
+            m_canvasComponentDragInstanceIndex =
+                hoveredComponentInstance->instanceIndex;
             const float centerX = (m_canvasComponentDragStartBounds.left +
                                    m_canvasComponentDragStartBounds.right) *
                                   0.5f;
@@ -1343,9 +1343,10 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             hoveredComponent.has_value() &&
             *hoveredComponent == instance.type &&
             ((hoveredComponentInstance.has_value() &&
-              hoveredComponentInstance->beatIndex == instance.beatIndex) ||
+              hoveredComponentInstance->instanceIndex ==
+                  instance.instanceIndex) ||
              (m_canvasComponentDragTarget.has_value() &&
-              m_canvasComponentDragBeatIndex == instance.beatIndex));
+              m_canvasComponentDragInstanceIndex == instance.instanceIndex));
         const ImU32 componentColor =
             highlighted ? highlightedColor : IM_COL32(90, 220, 255, 240);
         const ImVec2 componentMin{ canvasScreenX + bounds.left,

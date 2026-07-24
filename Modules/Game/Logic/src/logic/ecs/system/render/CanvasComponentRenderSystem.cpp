@@ -116,18 +116,18 @@ bool renderAsciiText(Batcher& batcher, const char* text,
 /// @brief 记录一个与实际 Vulkan 文字几何一致的布局编辑实例。
 /// @param snapshot 目标渲染快照。
 /// @param type 组件类型。
-/// @param beatIndex 逐拍组件的一基拍号；非逐拍组件为 0。
+/// @param instanceIndex 重复组件实例序号；非重复组件为 0。
 /// @param bounds 实际文字内容边界。
 /// @param layoutRegion 当前实例允许布局的区域。
 /// @warning 热路径：每个已绘制组件实例调用一次，只追加到复用向量。
 void appendComponentInstance(RenderSnapshot&              snapshot,
                              Config::CanvasComponentType  type,
-                             std::int64_t                 beatIndex,
+                             std::int64_t                 instanceIndex,
                              const CanvasComponentBounds& bounds,
                              const CanvasComponentBounds& layoutRegion)
 {
     snapshot.canvasComponentInstances.push_back({ type,
-                                                  beatIndex,
+                                                  instanceIndex,
                                                   bounds.left,
                                                   bounds.top,
                                                   bounds.right,

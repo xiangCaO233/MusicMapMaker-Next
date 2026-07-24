@@ -193,8 +193,8 @@ bool testBeatNumbersRenderInsideEachBeat()
         XERROR("Beat number component did not render visible whole beats");
         return false;
     }
-    if ( snapshot.canvasComponentInstances[0].beatIndex != 2 ||
-         snapshot.canvasComponentInstances[1].beatIndex != 3 ) {
+    if ( snapshot.canvasComponentInstances[0].instanceIndex != 2 ||
+         snapshot.canvasComponentInstances[1].instanceIndex != 3 ) {
         XERROR("Beat number component did not preserve one-based beat order");
         return false;
     }
@@ -202,7 +202,7 @@ bool testBeatNumbersRenderInsideEachBeat()
     constexpr float epsilon = 1e-4f;
     for ( const auto& instance : snapshot.canvasComponentInstances ) {
         if ( instance.type != MMM::Config::CanvasComponentType::BeatNumber ||
-             instance.beatIndex <= 0 || instance.regionLeft != 0.0f ||
+             instance.instanceIndex <= 0 || instance.regionLeft != 0.0f ||
              instance.regionRight != 800.0f ||
              instance.left < instance.regionLeft - epsilon ||
              instance.right > instance.regionRight + epsilon ||
@@ -268,7 +268,7 @@ bool testBeatNumberRendersUntilLayoutViewportExit()
     const auto instance = std::find_if(
         snapshot.canvasComponentInstances.begin(),
         snapshot.canvasComponentInstances.end(),
-        [](const auto& candidate) { return candidate.beatIndex == 3; });
+        [](const auto& candidate) { return candidate.instanceIndex == 3; });
     if ( instance == snapshot.canvasComponentInstances.end() ||
          instance->regionBottom <= context.visibleBottom ||
          instance->top <= context.judgmentLineY ||
@@ -325,7 +325,7 @@ bool testBeatNumberLayoutRegionCentersOnBeatHead()
     const auto instance = std::find_if(
         snapshot.canvasComponentInstances.begin(),
         snapshot.canvasComponentInstances.end(),
-        [](const auto& candidate) { return candidate.beatIndex == 4; });
+        [](const auto& candidate) { return candidate.instanceIndex == 4; });
     if ( instance == snapshot.canvasComponentInstances.end() ) {
         XERROR("Beat number for beat-head alignment was not rendered");
         return false;

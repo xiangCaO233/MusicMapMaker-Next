@@ -215,8 +215,8 @@ struct CanvasComponentInstanceSnapshot {
     /// @brief 组件类型。
     Config::CanvasComponentType type{};
 
-    /// @brief 逐拍组件对应的一基拍号；非逐拍组件为 0。
-    std::int64_t beatIndex{ 0 };
+    /// @brief 重复组件实例序号；非重复组件为 0。
+    std::int64_t instanceIndex{ 0 };
 
     /// @brief 实际文字内容左边界。
     float left{ 0.0f };
