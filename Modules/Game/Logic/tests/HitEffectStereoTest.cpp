@@ -33,15 +33,15 @@ MMM::Logic::System::HitFXSystem::HitEvent makeEvent(MMM::NoteType type,
 }
 
 /// @brief 验证普通物件按物件中心获得固定双声道音量。
-/// @return 四轨第二轨物件得到左 0.375、右 0.625 时返回 true。
+/// @return 四轨第二轨物件得到左 0.625、右 0.375 时返回 true。
 bool testStaticTrackPosition()
 {
     const auto envelope =
         MMM::Logic::System::HitFXSystem::stereoGainEnvelopeForEvent(
             makeEvent(MMM::NoteType::NOTE, 1), 4, true);
-    if ( !near(envelope.startLeft, 0.375F) ||
-         !near(envelope.startRight, 0.625F) ||
-         !near(envelope.endLeft, 0.375F) || !near(envelope.endRight, 0.625F) ||
+    if ( !near(envelope.startLeft, 0.625F) ||
+         !near(envelope.startRight, 0.375F) ||
+         !near(envelope.endLeft, 0.625F) || !near(envelope.endRight, 0.375F) ||
          !near(envelope.startLeft + envelope.startRight, 1.0F) ) {
         XERROR("Static hit effect stereo position did not match track center");
         return false;
@@ -57,12 +57,30 @@ bool testFlickMovesAcrossChannels()
         MMM::Logic::System::HitFXSystem::stereoGainEnvelopeForEvent(
             makeEvent(MMM::NoteType::FLICK, 1, 1), 4, true);
     const auto middle = MMM::Audio::stereoGainAtProgress(envelope, 0.5F);
-    if ( !near(envelope.startLeft, 0.375F) ||
-         !near(envelope.startRight, 0.625F) ||
-         !near(envelope.endLeft, 0.625F) || !near(envelope.endRight, 0.375F) ||
+    if ( !near(envelope.startLeft, 0.625F) ||
+         !near(envelope.startRight, 0.375F) ||
+         !near(envelope.endLeft, 0.375F) || !near(envelope.endRight, 0.625F) ||
          !near(middle.left, 0.5F) || !near(middle.right, 0.5F) ||
          !near(envelope.endLeft + envelope.endRight, 1.0F) ) {
         XERROR("Flick hit effect did not move linearly between track centers");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证画面两侧轨道与实际左右声道方向一致。
+/// @return 最左轨左声道更响且最右轨右声道更响时返回 true。
+bool testTrackSidesMatchChannels()
+{
+    const auto leftTrack =
+        MMM::Logic::System::HitFXSystem::stereoGainEnvelopeForEvent(
+            makeEvent(MMM::NoteType::NOTE, 0), 4, true);
+    const auto rightTrack =
+        MMM::Logic::System::HitFXSystem::stereoGainEnvelopeForEvent(
+            makeEvent(MMM::NoteType::NOTE, 3), 4, true);
+    if ( leftTrack.startLeft <= leftTrack.startRight ||
+         rightTrack.startRight <= rightTrack.startLeft ) {
+        XERROR("Hit effect stereo channels were mirrored across the canvas");
         return false;
     }
     return true;
@@ -90,6 +108,7 @@ bool testDisabledKeepsOriginalStereo()
 int main()
 {
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
+                   testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo()
                ? 0
                : 1;
