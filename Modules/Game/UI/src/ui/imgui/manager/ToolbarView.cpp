@@ -40,6 +40,22 @@ namespace MMM::UI
 
 namespace
 {
+/// @brief 获取快捷键切换后的下一种分拍线显示模式。
+/// @param mode 当前显示模式。
+/// @return 按始终显示、光标附近、隐藏顺序循环后的模式。
+Config::BeatLineDisplayMode nextBeatLineDisplayMode(
+    Config::BeatLineDisplayMode mode)
+{
+    switch ( mode ) {
+    case Config::BeatLineDisplayMode::Always:
+        return Config::BeatLineDisplayMode::NearCursor;
+    case Config::BeatLineDisplayMode::NearCursor:
+        return Config::BeatLineDisplayMode::Hidden;
+    case Config::BeatLineDisplayMode::Hidden:
+    default: return Config::BeatLineDisplayMode::Always;
+    }
+}
+
 /// @brief 将颜色槽位转换为数组索引。
 std::size_t colorSlotIndex(Logic::NoteColorSlot slot)
 {
@@ -472,8 +488,9 @@ void ToolbarView::update(UIManager* sourceManager)
                               });
             tryToggleShortcut(shortcutConfig.toggleBeatLines,
                               [](Config::EditorConfig& config) {
-                                  config.visual.drawBeatLines =
-                                      !config.visual.drawBeatLines;
+                                  config.visual.beatLineDisplayMode =
+                                      nextBeatLineDisplayMode(
+                                          config.visual.beatLineDisplayMode);
                               });
             tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
                               [](Config::EditorConfig& config) {
@@ -623,9 +640,10 @@ void ToolbarView::update(UIManager* sourceManager)
                                        ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
-                m_showDivisorPopup = false;
-                m_showKeyPopup     = false;
-                m_showSpeedPopup   = false;
+                m_showDivisorPopup  = false;
+                m_showKeyPopup      = false;
+                m_showSpeedPopup    = false;
+                m_showBeatLinePopup = false;
             }
         }
         {
@@ -638,7 +656,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -722,15 +740,32 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.visual.enableLinearScrollMapping;
                          });
 
-        drawToggleButton(ICON_MMM_BARS,
-                         editorCfg.visual.drawBeatLines,
-                         TR("ui.toolbar.draw_beat_lines").data(),
-                         TR("ui.toolbar.short.draw_beat_lines").data(),
-                         shortcutConfig.toggleBeatLines,
-                         [](Config::EditorConfig& config) {
-                             config.visual.drawBeatLines =
-                                 !config.visual.drawBeatLines;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("BeatLineDisplayMode");
+        if ( drawIconButton(ICON_MMM_BARS,
+                            "##ToolbarBeatLineDisplayMode",
+                            TR("ui.toolbar.short.draw_beat_lines").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showBeatLinePopup = !m_showBeatLinePopup;
+            if ( m_showBeatLinePopup ) {
+                m_showColorPopup   = false;
+                m_showDivisorPopup = false;
+                m_showKeyPopup     = false;
+                m_showSpeedPopup   = false;
+            }
+        }
+        m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        {
+            const std::string tooltipText =
+                tooltipWithShortcut(TR("ui.toolbar.draw_beat_lines").data(),
+                                    shortcutConfig.toggleBeatLines);
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_STOP,
                          editorCfg.settings.stopPlaybackOnScroll,
@@ -773,7 +808,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -826,8 +861,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                                ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
-                        m_showKeyPopup     = false;
-                        m_showDivisorPopup = false;
+                        m_showKeyPopup      = false;
+                        m_showDivisorPopup  = false;
+                        m_showBeatLinePopup = false;
                     }
                 }
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
@@ -889,8 +925,9 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
-                    m_showDivisorPopup = false;
-                    m_showSpeedPopup   = false;
+                    m_showDivisorPopup  = false;
+                    m_showSpeedPopup    = false;
+                    m_showBeatLinePopup = false;
                 }
             }
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
@@ -939,8 +976,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
-                    m_showKeyPopup   = false;
-                    m_showSpeedPopup = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showBeatLinePopup = false;
                 }
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
@@ -979,6 +1017,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
     renderLayoutPopup(dpiScale);
+    renderBeatLinePopup(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1065,7 +1104,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1114,11 +1153,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1344,7 +1383,7 @@ void ToolbarView::loadSoftwareDefaultPalette()
     if ( !schemeName.empty() &&
          schemeName != Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         const auto& paletteConfig = settings.colorPalettes;
-        auto        it            = std::find_if(paletteConfig.schemes.begin(),
+        auto it = std::find_if(paletteConfig.schemes.begin(),
                                paletteConfig.schemes.end(),
                                [&](const Config::ColorPaletteScheme& scheme) {
                                    return scheme.name == schemeName;
@@ -2250,7 +2289,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##PaletteColorHex",
+        bool hexChanged = ImGui::InputText("##PaletteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -2532,6 +2571,145 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
     ImGui::PopStyleColor(3);
 }
 
+void ToolbarView::renderBeatLinePopup(float dpiScale)
+{
+    if ( !m_showBeatLinePopup ) {
+        if ( m_beatLinePopupConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_beatLinePopupConfigDirty = false;
+        }
+        return;
+    }
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    padding        = std::floor(8.0f * dpiScale);
+    const float    popupW         = m_beatLinePopupWidth > 0.0f
+                                        ? m_beatLinePopupWidth
+                                        : std::floor(260.0f * dpiScale);
+    const float    popupH         = m_beatLinePopupHeight > 0.0f
+                                        ? m_beatLinePopupHeight
+                                        : std::floor(220.0f * dpiScale);
+    float          targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
+    float          targetY = m_lastBeatLineBtnY;
+    targetX                = std::max(targetX, viewportLeft + popupW + padding);
+    const float minTargetY = viewportTop + padding;
+    const float maxTargetY =
+        std::max(minTargetY, viewportBottom - popupH - padding);
+    targetY = std::clamp(targetY, minTargetY, maxTargetY);
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                        std::floor(aesthetics.windowRounding * dpiScale));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(aesthetics.windowPadding * dpiScale),
+               std::floor(aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                        std::floor(aesthetics.frameRounding * dpiScale));
+
+    if ( ImGui::Begin("##BeatLineDisplayModePopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.toolbar.beat_lines.title").data());
+        ImGui::Separator();
+
+        auto& appConfig  = Config::AppConfig::instance();
+        auto  mode       = appConfig.getVisualConfig().beatLineDisplayMode;
+        auto  selectMode = [&](Config::BeatLineDisplayMode candidate,
+                               const char*                 labelKey) {
+            if ( !::MMM::UI::FeedbackRadioButton(TR(labelKey).data(),
+                                                 mode == candidate) ) {
+                return;
+            }
+            auto updatedConfig = appConfig.getEditorConfig();
+            updatedConfig.visual.beatLineDisplayMode = candidate;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            appConfig.save();
+            m_beatLinePopupConfigDirty = false;
+            mode                       = candidate;
+        };
+
+        selectMode(Config::BeatLineDisplayMode::Always,
+                   "ui.toolbar.beat_lines.always");
+        selectMode(Config::BeatLineDisplayMode::NearCursor,
+                   "ui.toolbar.beat_lines.near_cursor");
+        selectMode(Config::BeatLineDisplayMode::Hidden,
+                   "ui.toolbar.beat_lines.hidden");
+
+        if ( mode == Config::BeatLineDisplayMode::NearCursor ) {
+            ImGui::Separator();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                                   std::floor(230.0f * dpiScale));
+            ImGui::TextDisabled("%s",
+                                TR("ui.toolbar.beat_lines.auto_hint").data());
+            ImGui::PopTextWrapPos();
+
+            float visiblePercent =
+                appConfig.getVisualConfig().beatLineCursorVisibleRatio * 100.0f;
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.beat_lines.visible_range").data());
+            ImGui::SetNextItemWidth(std::floor(230.0f * dpiScale));
+            if ( ::MMM::UI::FeedbackSliderFloat("##BeatLineVisibleRange",
+                                                &visiblePercent,
+                                                5.0f,
+                                                50.0f,
+                                                "%.0f%%") ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.beatLineCursorVisibleRatio =
+                    visiblePercent * 0.01f;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                m_beatLinePopupConfigDirty = true;
+            }
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_beatLinePopupConfigDirty ) {
+                appConfig.save();
+                m_beatLinePopupConfigDirty = false;
+            }
+
+            float fadePercent =
+                appConfig.getVisualConfig().beatLineCursorFadeRatio * 100.0f;
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.beat_lines.fade_range").data());
+            ImGui::SetNextItemWidth(std::floor(230.0f * dpiScale));
+            if ( ::MMM::UI::FeedbackSliderFloat("##BeatLineFadeRange",
+                                                &fadePercent,
+                                                2.0f,
+                                                40.0f,
+                                                "%.0f%%") ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.beatLineCursorFadeRatio =
+                    fadePercent * 0.01f;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                m_beatLinePopupConfigDirty = true;
+            }
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_beatLinePopupConfigDirty ) {
+                appConfig.save();
+                m_beatLinePopupConfigDirty = false;
+            }
+        }
+
+        const ImVec2 size     = ImGui::GetWindowSize();
+        m_beatLinePopupWidth  = size.x;
+        m_beatLinePopupHeight = size.y;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
 void ToolbarView::renderLayoutPopup(float dpiScale)
 {
     if ( !m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout ) {
@@ -2592,7 +2770,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         const float colorButtonSize      = std::floor(22.0f * dpiScale);
         bool        anyColorPickerOpen   = false;
         const auto  drawComponentControl = [&](Config::CanvasComponentType type,
-                                              std::string_view label) {
+                                               std::string_view label) {
             ImGui::PushID(static_cast<int>(type));
             bool visible = appConfig.getVisualConfig()
                                .canvasComponents.placement(type)

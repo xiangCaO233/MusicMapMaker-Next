@@ -1,10 +1,33 @@
 #include "config/VisualConfig.h"
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <string>
 
 namespace MMM::Config
 {
+
+void to_json(nlohmann::json& j, const BeatLineDisplayMode& mode)
+{
+    switch ( mode ) {
+    case BeatLineDisplayMode::Always: j = "Always"; break;
+    case BeatLineDisplayMode::NearCursor: j = "NearCursor"; break;
+    case BeatLineDisplayMode::Hidden: j = "Hidden"; break;
+    }
+}
+
+void from_json(const nlohmann::json& j, BeatLineDisplayMode& mode)
+{
+    mode = BeatLineDisplayMode::Always;
+    if ( !j.is_string() ) return;
+
+    const auto& value = j.get_ref<const std::string&>();
+    if ( value == "NearCursor" ) {
+        mode = BeatLineDisplayMode::NearCursor;
+    } else if ( value == "Hidden" ) {
+        mode = BeatLineDisplayMode::Hidden;
+    }
+}
 
 void to_json(nlohmann::json& j, const BackgroundFillMode& mode)
 {
@@ -182,9 +205,13 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "enableLinearScrollMapping", config.enableLinearScrollMapping },
         { "snapThreshold", config.snapThreshold },
         { "beatLineAlpha", config.beatLineAlpha },
+        { "beatLineDisplayMode", config.beatLineDisplayMode },
+        { "beatLineCursorVisibleRatio", config.beatLineCursorVisibleRatio },
+        { "beatLineCursorFadeRatio", config.beatLineCursorFadeRatio },
         { "drawBeatLinesBeforeFirstTiming",
           config.drawBeatLinesBeforeFirstTiming },
-        { "drawBeatLines", config.drawBeatLines },
+        { "drawBeatLines",
+          config.beatLineDisplayMode != BeatLineDisplayMode::Hidden },
         { "spectrumDetailLevel", config.spectrumDetailLevel },
         { "enableHitEffects", config.enableHitEffects },
         { "debugDrawHitboxes", config.debugDrawHitboxes }
@@ -210,11 +237,22 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.scrollAnimationDuration = j.value("scrollAnimationDuration", 0.12f);
     config.enableLinearScrollMapping =
         j.value("enableLinearScrollMapping", false);
-    config.snapThreshold          = j.value("snapThreshold", 16.0f);
-    config.beatLineAlpha          = j.value("beatLineAlpha", 0.75f);
+    config.snapThreshold = j.value("snapThreshold", 16.0f);
+    config.beatLineAlpha = j.value("beatLineAlpha", 0.75f);
+    if ( j.contains("beatLineDisplayMode") ) {
+        config.beatLineDisplayMode =
+            j.value("beatLineDisplayMode", BeatLineDisplayMode::Always);
+    } else {
+        config.beatLineDisplayMode = j.value("drawBeatLines", true)
+                                         ? BeatLineDisplayMode::Always
+                                         : BeatLineDisplayMode::Hidden;
+    }
+    config.beatLineCursorVisibleRatio =
+        std::clamp(j.value("beatLineCursorVisibleRatio", 0.16f), 0.05f, 0.50f);
+    config.beatLineCursorFadeRatio =
+        std::clamp(j.value("beatLineCursorFadeRatio", 0.20f), 0.02f, 0.40f);
     config.overrideBeatLineColors = false;
     config.beatLineColors         = {};
-    config.drawBeatLines          = j.value("drawBeatLines", true);
     config.drawBeatLinesBeforeFirstTiming =
         j.value("drawBeatLinesBeforeFirstTiming", true);
     config.spectrumDetailLevel =

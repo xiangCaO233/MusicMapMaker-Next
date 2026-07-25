@@ -11,6 +11,18 @@
 namespace MMM::Config
 {
 
+/// @brief 主画布分拍线显示模式。
+enum class BeatLineDisplayMode {
+    Always,      ///< 始终显示分拍线。
+    NearCursor,  ///< 仅在光标附近显示并向外渐隐。
+    Hidden       ///< 隐藏分拍线。
+};
+
+/// @brief 将分拍线显示模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const BeatLineDisplayMode& mode);
+/// @brief 从稳定文本读取分拍线显示模式。
+void from_json(const nlohmann::json& json, BeatLineDisplayMode& mode);
+
 /// @brief 视觉与渲染相关的整体配置。
 struct VisualConfig {
     TrackLayout                 trackLayout;
@@ -68,14 +80,18 @@ struct VisualConfig {
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度。
     float beatLineAlpha{ 0.75f };
+    /// @brief 主画布分拍线显示模式。
+    BeatLineDisplayMode beatLineDisplayMode{ BeatLineDisplayMode::Always };
+    /// @brief 自动模式下完全显示区域占画布垂直范围的比例。
+    float beatLineCursorVisibleRatio{ 0.16f };
+    /// @brief 自动模式下两侧渐隐扩散区域合计占画布垂直范围的比例。
+    float beatLineCursorFadeRatio{ 0.20f };
     /// @brief 是否以当前调色方案覆盖皮肤分拍线颜色；仅保留在运行时。
     bool overrideBeatLineColors{ false };
     /// @brief 当前调色方案的分拍线覆盖颜色；仅保留在运行时。
     BeatLineColorPalette beatLineColors{};
     /// @brief 是否绘制第一个 BPM 红线前的分拍线。
     bool drawBeatLinesBeforeFirstTiming{ true };
-    /// @brief 是否全局绘制分拍线。
-    bool drawBeatLines{ true };
     /// @brief 全局频谱图生成精细度。
     SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画。

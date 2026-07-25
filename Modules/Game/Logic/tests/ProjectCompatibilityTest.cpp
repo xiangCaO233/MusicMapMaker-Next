@@ -231,6 +231,37 @@ bool testMixedSchemaMerge()
     return true;
 }
 
+/// @brief 验证项目工作区从旧分拍线布尔开关迁移到三态模式。
+/// @return 旧关闭状态和新自动状态均能稳定往返时返回 true。
+bool testBeatLineToolbarStateMigration()
+{
+    const nlohmann::json legacyJson{
+        { "m_valid", true },
+        { "m_drawBeatLines", false },
+    };
+    const auto legacyState =
+        legacyJson.get<MMM::ProjectWorkspaceToolbarState>();
+    if ( legacyState.m_beatLineDisplayMode != "Hidden" ||
+         legacyState.m_drawBeatLines ) {
+        XERROR("Legacy beat line toolbar state was not migrated");
+        return false;
+    }
+
+    MMM::ProjectWorkspaceToolbarState currentState;
+    currentState.m_valid               = true;
+    currentState.m_beatLineDisplayMode = "NearCursor";
+    const nlohmann::json currentJson   = currentState;
+    const auto           restoredState =
+        currentJson.get<MMM::ProjectWorkspaceToolbarState>();
+    if ( restoredState.m_beatLineDisplayMode != "NearCursor" ||
+         !restoredState.m_drawBeatLines ||
+         !currentJson.value("m_drawBeatLines", false) ) {
+        XERROR("Current beat line toolbar state did not survive round trip");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行旧版项目音频配置兼容测试。
@@ -239,7 +270,8 @@ int main()
 {
     return testLegacyProjectDeserialization() &&
                    testLegacyMergePreservesScannedTypes() &&
-                   testCurrentConfigAndTypeMerge() && testMixedSchemaMerge()
+                   testCurrentConfigAndTypeMerge() && testMixedSchemaMerge() &&
+                   testBeatLineToolbarStateMigration()
                ? 0
                : 1;
 }
