@@ -41,3 +41,13 @@ target_link_libraries(ColorPaletteFileTest PRIVATE Config)
 add_test(NAME ColorPaletteFileTest
          COMMAND ColorPaletteFileTest
                  "${CMAKE_BINARY_DIR}/test_output/color_palette_file")
+
+# 视觉配置测试覆盖分拍线三态模式、旧布尔开关迁移和自动范围约束。
+mmm_add_test_executable(Config VisualConfigTest tests/VisualConfigTest.cpp)
+target_link_libraries(VisualConfigTest PRIVATE Config Log)
+add_test(NAME VisualConfigTest COMMAND VisualConfigTest)
+
+# 音效配置测试覆盖立体打击音效字段往返和旧版 Flick 开关迁移。
+mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
+target_link_libraries(SfxConfigTest PRIVATE Config Log)
+add_test(NAME SfxConfigTest COMMAND SfxConfigTest)

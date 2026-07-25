@@ -1,0 +1,252 @@
+#include "config/EditorConfig.h"
+
+#include "log/colorful-log.h"
+
+#include <cmath>
+#include <nlohmann/json.hpp>
+
+namespace
+{
+
+/// @brief 使用小容差比较视觉配置中的单精度数值。
+/// @param lhs 左值。
+/// @param rhs 右值。
+/// @return 两个数值足够接近时返回 true。
+bool near(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 1e-6F;
+}
+
+/// @brief 验证当前分拍线显示模式与自动范围能够完整往返。
+/// @return 当前格式往返无损时返回 true。
+bool testBeatLineDisplayModeRoundTrip()
+{
+    MMM::Config::VisualConfig source;
+    source.beatLineDisplayMode = MMM::Config::BeatLineDisplayMode::NearCursor;
+    source.beatLineCursorVisibleRatio = 0.27F;
+    source.beatLineCursorFadeRatio    = 0.31F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    if ( restored.beatLineDisplayMode !=
+             MMM::Config::BeatLineDisplayMode::NearCursor ||
+         !near(restored.beatLineCursorVisibleRatio, 0.27F) ||
+         !near(restored.beatLineCursorFadeRatio, 0.31F) ||
+         !encoded.value("drawBeatLines", false) ) {
+        XERROR("Beat line display mode did not survive JSON round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧版 drawBeatLines 布尔值能够迁移为三态显示模式。
+/// @return 旧版开关的开启与关闭语义均保持时返回 true。
+bool testLegacyDrawBeatLinesMigration()
+{
+    const nlohmann::json hiddenJson{ { "drawBeatLines", false } };
+    const nlohmann::json visibleJson{ { "drawBeatLines", true } };
+    const auto           hidden  = hiddenJson.get<MMM::Config::VisualConfig>();
+    const auto           visible = visibleJson.get<MMM::Config::VisualConfig>();
+    if ( hidden.beatLineDisplayMode !=
+             MMM::Config::BeatLineDisplayMode::Hidden ||
+         visible.beatLineDisplayMode !=
+             MMM::Config::BeatLineDisplayMode::Always ) {
+        XERROR("Legacy drawBeatLines value was not migrated");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证自动显示比例在读取配置时被限制到工具栏允许范围。
+/// @return 过小和过大的比例均被正确限制时返回 true。
+bool testBeatLineAutoRatioClamping()
+{
+    const nlohmann::json json{
+        { "beatLineDisplayMode", "NearCursor" },
+        { "beatLineCursorVisibleRatio", 0.0F },
+        { "beatLineCursorFadeRatio", 1.0F },
+    };
+    const auto config = json.get<MMM::Config::VisualConfig>();
+    if ( !near(config.beatLineCursorVisibleRatio, 0.05F) ||
+         !near(config.beatLineCursorFadeRatio, 0.40F) ) {
+        XERROR("Beat line auto display ratios escaped supported bounds");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证预览区默认隐藏分拍线并继续显示 Timing 线。
+/// @return 默认构造和缺省 JSON 均使用相同的安全显示状态时返回 true。
+bool testPreviewAreaLineDefaults()
+{
+    const MMM::Config::PreviewAreaConfig defaults;
+    const auto                           restored =
+        nlohmann::json::object().get<MMM::Config::PreviewAreaConfig>();
+    if ( defaults.drawBeatLines || restored.drawBeatLines ||
+         !defaults.drawTimingLines || !restored.drawTimingLines ) {
+        XERROR("Preview area line defaults were not preserved");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
+/// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
+bool testRenderingDefaultsReset()
+{
+    MMM::Config::EditorConfig config;
+    config.visual.noteScaleX   = 2.4F;
+    config.visual.noteScaleY   = 0.7F;
+    config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
+    config.settings.defaultColorPaletteSchemeName = "Custom";
+    config.visual.background.fillMode =
+        MMM::Config::BackgroundFillMode::Stretch;
+    config.visual.background.opaque_ratio       = 0.2F;
+    config.visual.background.darken_ratio       = 0.1F;
+    config.visual.background.spectrum.bandCount = 64;
+    config.visual.background.spectrum.opacity   = 0.8F;
+
+    config.resetNoteRenderingToDefaults();
+    const MMM::Config::EditorConfig defaults;
+    if ( !near(config.visual.noteScaleX, defaults.visual.noteScaleX) ||
+         !near(config.visual.noteScaleY, defaults.visual.noteScaleY) ||
+         config.visual.noteFillMode != defaults.visual.noteFillMode ||
+         config.settings.defaultColorPaletteSchemeName !=
+             defaults.settings.defaultColorPaletteSchemeName ||
+         config.visual.background.fillMode !=
+             MMM::Config::BackgroundFillMode::Stretch ) {
+        XERROR("Note rendering reset escaped its configuration boundary");
+        return false;
+    }
+
+    config.resetBackgroundRenderingToDefaults();
+    if ( config.visual.background.fillMode !=
+             defaults.visual.background.fillMode ||
+         !near(config.visual.background.opaque_ratio,
+               defaults.visual.background.opaque_ratio) ||
+         !near(config.visual.background.darken_ratio,
+               defaults.visual.background.darken_ratio) ||
+         config.visual.background.spectrum.bandCount != 64 ||
+         !near(config.visual.background.spectrum.opacity, 0.8F) ) {
+        XERROR("Background rendering reset escaped its configuration boundary");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证背景频谱配置能够完整往返。
+/// @return 当前格式往返无损时返回 true。
+bool testBackgroundSpectrumRoundTrip()
+{
+    MMM::Config::VisualConfig source;
+    auto&                     spectrum = source.background.spectrum;
+    auto& placement            = source.canvasComponents.backgroundSpectrum;
+    placement.visible          = true;
+    placement.anchorX          = 0.37F;
+    placement.anchorY          = 0.42F;
+    placement.fontSizeRatio    = 0.08F;
+    spectrum.bandCount         = 48;
+    spectrum.widthRatio        = 0.72F;
+    spectrum.heightRatio       = 0.44F;
+    spectrum.baselineRatio     = 0.83F;
+    spectrum.opacity           = 0.27F;
+    spectrum.leftBarColor      = { 0.12F, 0.24F, 0.36F, 0.48F };
+    spectrum.rightBarColor     = { 0.51F, 0.62F, 0.73F, 0.84F };
+    spectrum.includeHitEffects = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto&          result   = restored.background.spectrum;
+    const auto& resultPlacement = restored.canvasComponents.backgroundSpectrum;
+    if ( !result.enabled || result.bandCount != 48 ||
+         !near(result.widthRatio, 0.72F) || !near(result.heightRatio, 0.44F) ||
+         !near(result.baselineRatio, 0.83F) || !near(result.opacity, 0.27F) ||
+         !near(result.leftBarColor[0], 0.12F) ||
+         !near(result.leftBarColor[3], 0.48F) ||
+         !near(result.rightBarColor[0], 0.51F) ||
+         !near(result.rightBarColor[3], 0.84F) || !result.includeHitEffects ||
+         !resultPlacement.visible || !near(resultPlacement.anchorX, 0.37F) ||
+         !near(resultPlacement.anchorY, 0.42F) ||
+         !near(resultPlacement.fontSizeRatio, 0.08F) ) {
+        XERROR("Background spectrum config did not survive JSON round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧版背景频谱显隐和底边位置迁移到画布组件布局。
+/// @return 旧字段生成可见组件且保持原始垂直位置时返回 true。
+bool testLegacyBackgroundSpectrumMigration()
+{
+    const nlohmann::json json{
+        { "background",
+          { { "spectrum",
+              { { "enabled", true },
+                { "heightRatio", 0.4F },
+                { "baselineRatio", 0.9F } } } } },
+    };
+    const auto  config    = json.get<MMM::Config::VisualConfig>();
+    const auto& placement = config.canvasComponents.backgroundSpectrum;
+    if ( !placement.visible || !config.background.spectrum.enabled ||
+         config.background.spectrum.includeHitEffects ||
+         !near(placement.anchorY, 0.7F) ) {
+        XERROR(
+            "Legacy background spectrum migration did not use safe defaults");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证背景频谱配置在读取时被限制到设置菜单允许范围。
+/// @return 所有越界字段均被正确限制时返回 true。
+bool testBackgroundSpectrumClamping()
+{
+    const nlohmann::json json{
+        { "background",
+          { { "spectrum",
+              { { "bandCount", 2 },
+                { "widthRatio", 0.0F },
+                { "heightRatio", 2.0F },
+                { "baselineRatio", -1.0F },
+                { "opacity", 3.0F },
+                { "leftBarColor", { -1.0F, 0.25F, 2.0F, 0.75F } },
+                { "rightBarColor", { 1.5F, -0.5F, 0.5F, 2.0F } } } } } }
+    };
+    const auto  config   = json.get<MMM::Config::VisualConfig>();
+    const auto& spectrum = config.background.spectrum;
+    if ( spectrum.bandCount != MMM::Config::BACKGROUND_SPECTRUM_MIN_BANDS ||
+         !near(spectrum.widthRatio, 0.10F) ||
+         !near(spectrum.heightRatio, 1.0F) ||
+         !near(spectrum.baselineRatio, 0.05F) ||
+         !near(spectrum.opacity, 1.0F) ||
+         !near(spectrum.leftBarColor[0], 0.0F) ||
+         !near(spectrum.leftBarColor[1], 0.25F) ||
+         !near(spectrum.leftBarColor[2], 1.0F) ||
+         !near(spectrum.leftBarColor[3], 0.75F) ||
+         !near(spectrum.rightBarColor[0], 1.0F) ||
+         !near(spectrum.rightBarColor[1], 0.0F) ||
+         !near(spectrum.rightBarColor[2], 0.5F) ||
+         !near(spectrum.rightBarColor[3], 1.0F) ) {
+        XERROR("Background spectrum config escaped supported bounds");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+/// @brief 运行视觉配置兼容性与默认值测试。
+/// @return 全部测试通过时返回 0。
+int main()
+{
+    return testBeatLineDisplayModeRoundTrip() &&
+                   testLegacyDrawBeatLinesMigration() &&
+                   testBeatLineAutoRatioClamping() &&
+                   testPreviewAreaLineDefaults() &&
+                   testRenderingDefaultsReset() &&
+                   testBackgroundSpectrumRoundTrip() &&
+                   testLegacyBackgroundSpectrumMigration() &&
+                   testBackgroundSpectrumClamping()
+               ? 0
+               : 1;
+}

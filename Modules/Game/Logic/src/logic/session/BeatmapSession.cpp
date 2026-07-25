@@ -455,7 +455,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                         m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
                     // 只要物件在当前播放点之后，都触发
                     if ( ev.timestamp >= m_ctx->animateTime ) {
-                        m_ctx->hitFXSystem.triggerAudio(ev, config);
+                        m_ctx->hitFXSystem.triggerAudio(
+                            ev, m_ctx->trackCount, config);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -471,7 +472,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                         m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
                     if ( ev.timestamp >
                          (previousAnimateTime + predictWindow) ) {
-                        m_ctx->hitFXSystem.triggerAudio(ev, config);
+                        m_ctx->hitFXSystem.triggerAudio(
+                            ev, m_ctx->trackCount, config);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -487,7 +489,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 m_ctx->nextHitIndex++;
             }
         }
-        m_ctx->hitFXSystem.update(m_ctx->animateTime, triggeredEvents, config);
+        m_ctx->hitFXSystem.update(
+            m_ctx->animateTime, triggeredEvents, m_ctx->trackCount, config);
     } else {
         updateAnimateTime(dt, config, false);
         m_ctx->syncTimer = 0.0;

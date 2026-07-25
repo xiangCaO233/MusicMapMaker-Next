@@ -1,4 +1,7 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+
+#include "audio/AudioManager.h"
+#include "logic/ecs/system/BackgroundSpectrumRenderSystem.h"
 #include "logic/ecs/system/render/Batcher.h"
 
 namespace MMM::Logic::System
@@ -22,18 +25,33 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(
             0, viewportHeight, viewportWidth, viewportHeight, color);
-        return;
+    } else {
+        batcher.setTexture(TextureID::Background);
+
+        batcher.pushFilledQuad(0,
+                               viewportHeight,
+                               viewportWidth,
+                               viewportHeight,
+                               snapshot->bgSize,
+                               config.visual.background.fillMode,
+                               color);
     }
 
-    batcher.setTexture(TextureID::Background);
-
-    batcher.pushFilledQuad(0,
-                           viewportHeight,
-                           viewportWidth,
-                           viewportHeight,
-                           snapshot->bgSize,
-                           config.visual.background.fillMode,
-                           color);
+    const auto& spectrumConfig = config.visual.background.spectrum;
+    const auto& spectrumPlacement =
+        config.visual.canvasComponents.backgroundSpectrum;
+    if ( spectrumPlacement.visible ) {
+        const auto& levels =
+            Audio::AudioManager::instance().updateBackgroundSpectrum(
+                static_cast<std::size_t>(spectrumConfig.bandCount),
+                spectrumConfig.includeHitEffects);
+        BackgroundSpectrumRenderSystem::render(batcher,
+                                               viewportWidth,
+                                               viewportHeight,
+                                               spectrumConfig,
+                                               spectrumPlacement,
+                                               levels);
+    }
 }
 
 }  // namespace MMM::Logic::System

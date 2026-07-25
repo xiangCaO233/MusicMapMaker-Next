@@ -1,3 +1,4 @@
+#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "log/colorful-log.h"
 
@@ -34,11 +35,19 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
 
     // 如果当前正在播放 BGM，需要热插拔
     if ( m_bgmSource && m_preStretcherMixer ) {
-        m_preStretcherMixer->remove_source(
-            m_mainEQ ? std::static_pointer_cast<ice::IAudioNode>(m_mainEQ)
-                     : std::static_pointer_cast<ice::IAudioNode>(m_bgmSource));
+        if ( m_mainEQ ) {
+            m_preStretcherMixer->remove_source(m_mainEQ);
+        } else if ( m_bgmSpectrumCapture ) {
+            m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
+        } else {
+            m_preStretcherMixer->remove_source(m_bgmSource);
+        }
 
-        newEQ->set_inputnode(m_bgmSource);
+        newEQ->set_inputnode(
+            m_bgmSpectrumCapture
+                ? std::static_pointer_cast<ice::IAudioNode>(
+                      m_bgmSpectrumCapture)
+                : std::static_pointer_cast<ice::IAudioNode>(m_bgmSource));
         m_preStretcherMixer->add_source(newEQ);
     }
 
@@ -54,7 +63,11 @@ void AudioManager::destroyMainTrackEQ()
 
     if ( m_bgmSource && m_preStretcherMixer ) {
         m_preStretcherMixer->remove_source(m_mainEQ);
-        m_preStretcherMixer->add_source(m_bgmSource);
+        if ( m_bgmSpectrumCapture ) {
+            m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
+        } else {
+            m_preStretcherMixer->add_source(m_bgmSource);
+        }
     }
 
     m_mainEQ.reset();

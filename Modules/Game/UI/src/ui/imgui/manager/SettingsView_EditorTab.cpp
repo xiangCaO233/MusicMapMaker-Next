@@ -335,13 +335,12 @@ void SettingsView::drawEditorSettings()
         addSettingItem(
             *sec,
             rowIndex,
-            TR_CACHE("ui.settings.editor.sfx_flick_directional_channels")
-                .data(),
+            TR_CACHE("ui.settings.editor.sfx_stereo_hit_effects").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 changed |= ::MMM::UI::FeedbackCheckbox(
-                    "##FlickDirectionalChannels",
-                    &settings.sfxConfig.enableDirectionalFlickChannels);
+                    "##StereoHitEffects",
+                    &settings.sfxConfig.enableStereoHitEffects);
             });
         addSettingItem(
             *sec,

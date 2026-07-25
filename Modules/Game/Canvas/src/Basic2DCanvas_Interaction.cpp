@@ -40,6 +40,9 @@ constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 /// @brief 画布悬浮信息相对鼠标的屏幕偏移。
 constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
 
+/// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
+constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
+
 /// @brief 从渲染快照实例取得实际文字内容边界。
 /// @param instance 组件实例快照。
 /// @return 与 Vulkan 字形几何一致的边界。
@@ -59,6 +62,227 @@ Logic::CanvasComponentBounds canvasComponentLayoutRegion(
              instance.regionTop,
              instance.regionRight,
              instance.regionBottom };
+}
+
+/// @brief 将矩形两侧、中心和上下边界追加为二维组件吸附目标。
+/// @param bounds 目标对象的像素边界。
+/// @param targetsX 可写纵向目标线缓存。
+/// @param targetsY 可写横向目标线缓存。
+/// @warning UI 布局热路径：每个显示组件或轨道调用一次，只追加固定六个值。
+void appendCanvasComponentSnapTargets(
+    const Logic::CanvasComponentBounds& bounds, std::vector<float>& targetsX,
+    std::vector<float>& targetsY)
+{
+    if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) return;
+    targetsX.push_back(bounds.left);
+    targetsX.push_back((bounds.left + bounds.right) * 0.5f);
+    targetsX.push_back(bounds.right);
+    targetsY.push_back(bounds.top);
+    targetsY.push_back((bounds.top + bounds.bottom) * 0.5f);
+    targetsY.push_back(bounds.bottom);
+}
+
+/// @brief 将组件边界按指定像素偏移平移。
+/// @param bounds 原始组件边界。
+/// @param offsetX 横向偏移。
+/// @param offsetY 纵向偏移。
+/// @return 平移后的组件边界。
+[[nodiscard]] Logic::CanvasComponentBounds offsetCanvasComponentBounds(
+    const Logic::CanvasComponentBounds& bounds, float offsetX, float offsetY)
+{
+    return {
+        bounds.left + offsetX,
+        bounds.top + offsetY,
+        bounds.right + offsetX,
+        bounds.bottom + offsetY,
+    };
+}
+
+/// @brief 将有效组件边界并入外层包围框。
+/// @param bounds 待并入的组件边界。
+/// @param aggregate 可写外层包围框。
+/// @param hasAggregate 是否已经写入首个有效边界。
+/// @warning UI 布局热路径：只进行常量级边界比较。
+void mergeCanvasComponentBounds(const Logic::CanvasComponentBounds& bounds,
+                                Logic::CanvasComponentBounds&       aggregate,
+                                bool& hasAggregate)
+{
+    if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) return;
+    if ( !hasAggregate ) {
+        aggregate    = bounds;
+        hasAggregate = true;
+        return;
+    }
+    aggregate.left   = std::min(aggregate.left, bounds.left);
+    aggregate.top    = std::min(aggregate.top, bounds.top);
+    aggregate.right  = std::max(aggregate.right, bounds.right);
+    aggregate.bottom = std::max(aggregate.bottom, bounds.bottom);
+}
+
+/// @brief 将全部已显示自定义组件追加为吸附目标，同步 KPS 按组外框处理。
+/// @param snapshot 当前画布渲染快照。
+/// @param config 自定义组件布局配置。
+/// @param targetsX 可写纵向目标线缓存。
+/// @param targetsY 可写横向目标线缓存。
+/// @warning UI 布局热路径：整体轨道移动时每帧遍历已缓存的组件快照一次。
+void appendDisplayedCanvasComponentSnapTargets(
+    const Logic::RenderSnapshot&               snapshot,
+    const Config::CanvasComponentLayoutConfig& config,
+    std::vector<float>& targetsX, std::vector<float>& targetsY)
+{
+    const bool groupAllKpsPositions =
+        config.kps.visible && config.syncAllKpsComponentPositions;
+    const bool groupKpsTrackPositions = config.kps.visible &&
+                                        !groupAllKpsPositions &&
+                                        config.syncKpsTrackRelativePositions;
+    Logic::CanvasComponentBounds synchronizedKpsBounds;
+    bool                         hasSynchronizedKpsBounds = false;
+
+    for ( const auto& instance : snapshot.canvasComponentInstances ) {
+        if ( !config.placement(instance.type).visible ) continue;
+
+        const bool synchronizedKpsGroupMember =
+            instance.type == Config::CanvasComponentType::Kps &&
+            (groupAllKpsPositions ||
+             (groupKpsTrackPositions && instance.instanceIndex >= 0));
+        if ( synchronizedKpsGroupMember ) {
+            mergeCanvasComponentBounds(canvasComponentContentBounds(instance),
+                                       synchronizedKpsBounds,
+                                       hasSynchronizedKpsBounds);
+            continue;
+        }
+        appendCanvasComponentSnapTargets(
+            canvasComponentContentBounds(instance), targetsX, targetsY);
+    }
+
+    if ( hasSynchronizedKpsBounds ) {
+        appendCanvasComponentSnapTargets(
+            synchronizedKpsBounds, targetsX, targetsY);
+    }
+}
+
+/// @brief 判断组件任一横向基准是否与指定纵向目标线对齐。
+/// @param bounds 组件最终像素边界。
+/// @param targetX 纵向目标线横坐标。
+/// @return 左边缘、中心或右边缘与目标线重合时返回 true。
+bool canvasComponentAlignsWithX(const Logic::CanvasComponentBounds& bounds,
+                                float                               targetX)
+{
+    constexpr float epsilon = 0.25f;
+    return std::abs(bounds.left - targetX) <= epsilon ||
+           std::abs((bounds.left + bounds.right) * 0.5f - targetX) <= epsilon ||
+           std::abs(bounds.right - targetX) <= epsilon;
+}
+
+/// @brief 判断组件任一纵向基准是否与指定横向目标线对齐。
+/// @param bounds 组件最终像素边界。
+/// @param targetY 横向目标线纵坐标。
+/// @return 上边缘、中心或下边缘与目标线重合时返回 true。
+bool canvasComponentAlignsWithY(const Logic::CanvasComponentBounds& bounds,
+                                float                               targetY)
+{
+    constexpr float epsilon = 0.25f;
+    return std::abs(bounds.top - targetY) <= epsilon ||
+           std::abs((bounds.top + bounds.bottom) * 0.5f - targetY) <= epsilon ||
+           std::abs(bounds.bottom - targetY) <= epsilon;
+}
+
+/// @brief 绘制一条半透明虚线吸附参考线。
+/// @param drawList 目标 ImGui 前景绘制列表。
+/// @param start 参考线起点。
+/// @param end 参考线终点。
+/// @param color 半透明线条颜色。
+/// @param thickness 线宽。
+/// @param dashLength 单段虚线长度。
+/// @param gapLength 相邻虚线间距。
+/// @warning UI 布局热路径：仅吸附生效时调用，按画布单轴长度生成短线段。
+void drawCanvasComponentSnapGuide(ImDrawList& drawList, const ImVec2& start,
+                                  const ImVec2& end, ImU32 color,
+                                  float thickness, float dashLength,
+                                  float gapLength)
+{
+    const float deltaX = end.x - start.x;
+    const float deltaY = end.y - start.y;
+    const float length = std::sqrt(deltaX * deltaX + deltaY * deltaY);
+    if ( length <= 0.0f ) return;
+
+    dashLength       = std::max(1.0f, dashLength);
+    gapLength        = std::max(1.0f, gapLength);
+    const float dx   = deltaX / length;
+    const float dy   = deltaY / length;
+    const float step = dashLength + gapLength;
+    for ( float distance = 0.0f; distance < length; distance += step ) {
+        const float segmentEnd = std::min(distance + dashLength, length);
+        drawList.AddLine(
+            { start.x + dx * distance, start.y + dy * distance },
+            { start.x + dx * segmentEnd, start.y + dy * segmentEnd },
+            color,
+            thickness);
+    }
+}
+
+/// @brief 暗化组件实际可调区域以外的画布并标出区域边界。
+/// @param drawList 目标 ImGui 前景绘制列表。
+/// @param region 组件实例在画布局部坐标中的实际可调区域。
+/// @param canvasScreenX 画布左上角屏幕横坐标。
+/// @param canvasScreenY 画布左上角屏幕纵坐标。
+/// @param canvasWidth 画布宽度。
+/// @param canvasHeight 画布高度。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 布局热路径：悬停或拖动受限组件时每帧调用，只生成固定四块遮罩
+/// 和一个边框。
+void drawCanvasComponentEditableRegionMask(
+    ImDrawList& drawList, const Logic::CanvasComponentBounds& region,
+    float canvasScreenX, float canvasScreenY, float canvasWidth,
+    float canvasHeight, float dpiScale)
+{
+    const float left =
+        std::clamp(std::min(region.left, region.right), 0.0f, canvasWidth);
+    const float top =
+        std::clamp(std::min(region.top, region.bottom), 0.0f, canvasHeight);
+    const float right =
+        std::clamp(std::max(region.left, region.right), 0.0f, canvasWidth);
+    const float bottom =
+        std::clamp(std::max(region.top, region.bottom), 0.0f, canvasHeight);
+    if ( right <= left || bottom <= top ) return;
+
+    constexpr float edgeEpsilon  = 0.5f;
+    const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
+    if ( coversCanvas ) return;
+
+    const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
+    const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
+                               canvasScreenY + canvasHeight };
+    const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
+    const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
+    constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
+    if ( allowedMin.y > canvasMin.y ) {
+        drawList.AddRectFilled(
+            canvasMin, { canvasMax.x, allowedMin.y }, maskColor);
+    }
+    if ( allowedMax.y < canvasMax.y ) {
+        drawList.AddRectFilled(
+            { canvasMin.x, allowedMax.y }, canvasMax, maskColor);
+    }
+    if ( allowedMin.x > canvasMin.x ) {
+        drawList.AddRectFilled({ canvasMin.x, allowedMin.y },
+                               { allowedMin.x, allowedMax.y },
+                               maskColor);
+    }
+    if ( allowedMax.x < canvasMax.x ) {
+        drawList.AddRectFilled({ allowedMax.x, allowedMin.y },
+                               { canvasMax.x, allowedMax.y },
+                               maskColor);
+    }
+
+    drawList.AddRect(allowedMin,
+                     allowedMax,
+                     IM_COL32(255, 218, 96, 210),
+                     0.0f,
+                     0,
+                     std::max(1.5f, 2.0f * dpiScale));
 }
 
 /// @brief 将 ASCII 扩展名转换为小写。
@@ -470,7 +694,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -542,7 +766,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -978,6 +1202,38 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 在此处移除以防止重复触发。
 }
 
+void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
+    const Logic::RenderSnapshot& currentSnapshot)
+{
+    m_noteLayoutInstances.clear();
+    m_noteLayoutIndexScratch.clear();
+    m_noteLayoutInstances.reserve(currentSnapshot.hitboxes.size());
+    m_noteLayoutIndexScratch.reserve(currentSnapshot.hitboxes.size());
+
+    for ( const auto& hitbox : currentSnapshot.hitboxes ) {
+        if ( hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
+             !std::isfinite(hitbox.y) || !std::isfinite(hitbox.w) ||
+             !std::isfinite(hitbox.h) || hitbox.w <= 0.0f ||
+             hitbox.h <= 0.0f ) {
+            continue;
+        }
+
+        const Logic::CanvasComponentBounds bounds{
+            hitbox.x, hitbox.y, hitbox.x + hitbox.w, hitbox.y + hitbox.h
+        };
+        const auto [it, inserted] = m_noteLayoutIndexScratch.try_emplace(
+            hitbox.entity, m_noteLayoutInstances.size());
+        if ( inserted ) {
+            m_noteLayoutInstances.push_back({ hitbox.entity, bounds });
+            continue;
+        }
+
+        bool hasBounds = true;
+        mergeCanvasComponentBounds(
+            bounds, m_noteLayoutInstances[it->second].bounds, hasBounds);
+    }
+}
+
 void Basic2DCanvasInteraction::finishLayoutEditing()
 {
     if ( m_layoutConfigurationChanged ) {
@@ -985,10 +1241,17 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    m_noteScaleDragTarget.reset();
+    m_noteScaleDragHandle = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragTarget.reset();
     m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragInstanceIndex = 0;
-    m_layoutConfigurationChanged       = false;
+    m_canvasComponentSnapGuideX.reset();
+    m_canvasComponentSnapGuideY.reset();
+    m_canvasComponentSnapTargetsX.clear();
+    m_canvasComponentSnapTargetsY.clear();
+    m_layoutConfigurationChanged = false;
+    m_synchronizedKpsTransformStarts.clear();
 }
 
 void Basic2DCanvasInteraction::handleLayoutEditing(
@@ -998,12 +1261,15 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 {
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
         if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+              m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
             finishLayoutEditing();
         }
         return;
     }
+
+    rebuildNoteLayoutInstances(currentSnapshot);
 
     auto& appConfig = Config::AppConfig::instance();
     auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
@@ -1013,6 +1279,45 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
     const float moveHandleRadius         = std::max(12.0f, 15.0f * dpiScale);
     const float componentCornerHitRadius = std::max(6.0f, 7.0f * dpiScale);
+    const float componentSnapDistance =
+        std::max(CANVAS_COMPONENT_SNAP_DISTANCE,
+                 CANVAS_COMPONENT_SNAP_DISTANCE * dpiScale);
+    const bool movingCanvasComponent =
+        m_canvasComponentDragTarget.has_value() &&
+        m_canvasComponentDragHandle == Logic::CanvasComponentDragHandle::Move;
+    const bool movingTrackLayout =
+        !m_noteScaleDragTarget.has_value() &&
+        !m_canvasComponentDragTarget.has_value() &&
+        m_trackLayoutDragHandle == TrackLayoutDragHandle::Move;
+    if ( (!movingCanvasComponent && !movingTrackLayout) ||
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        m_canvasComponentSnapGuideX.reset();
+        m_canvasComponentSnapGuideY.reset();
+    }
+
+    std::optional<entt::entity>                 hoveredNote;
+    std::optional<Logic::CanvasComponentBounds> hoveredNoteBounds;
+    Logic::CanvasComponentDragHandle            hoveredNoteHandle =
+        Logic::CanvasComponentDragHandle::None;
+    if ( m_noteScaleDragTarget.has_value() ) {
+        hoveredNote       = m_noteScaleDragTarget;
+        hoveredNoteHandle = m_noteScaleDragHandle;
+    } else if ( !m_canvasComponentDragTarget.has_value() && isHovered ) {
+        for ( auto it = m_noteLayoutInstances.rbegin();
+              it != m_noteLayoutInstances.rend();
+              ++it ) {
+            const auto hit = Logic::hitTestCanvasComponent(
+                it->bounds, pointerX, pointerY, componentCornerHitRadius);
+            if ( hit == Logic::CanvasComponentDragHandle::None ||
+                 hit == Logic::CanvasComponentDragHandle::Move ) {
+                continue;
+            }
+            hoveredNote       = it->entity;
+            hoveredNoteBounds = it->bounds;
+            hoveredNoteHandle = hit;
+            break;
+        }
+    }
 
     std::optional<Config::CanvasComponentType> hoveredComponent;
     std::optional<Logic::CanvasComponentInstanceSnapshot>
@@ -1022,7 +1327,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( m_canvasComponentDragTarget.has_value() ) {
         hoveredComponent       = m_canvasComponentDragTarget;
         hoveredComponentHandle = m_canvasComponentDragHandle;
-    } else if ( isHovered ) {
+    } else if ( !hoveredNote.has_value() && isHovered ) {
         for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
               it != currentSnapshot.canvasComponentInstances.rend();
               ++it ) {
@@ -1049,7 +1354,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     TrackLayoutDragHandle hoveredHandle = TrackLayoutDragHandle::None;
     if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ) {
         hoveredHandle = m_trackLayoutDragHandle;
-    } else if ( isHovered && !hoveredComponent.has_value() ) {
+    } else if ( isHovered && !hoveredNote.has_value() &&
+                !hoveredComponent.has_value() ) {
         hoveredHandle = hitTestTrackLayout(layout,
                                            judgmentLinePosition,
                                            pointerX,
@@ -1060,16 +1366,20 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                            moveHandleRadius);
     }
 
-    if ( hoveredComponentHandle == Logic::CanvasComponentDragHandle::TopLeft ||
-         hoveredComponentHandle ==
+    const Logic::CanvasComponentDragHandle hoveredResizeHandle =
+        hoveredNoteHandle != Logic::CanvasComponentDragHandle::None
+            ? hoveredNoteHandle
+            : hoveredComponentHandle;
+    if ( hoveredResizeHandle == Logic::CanvasComponentDragHandle::TopLeft ||
+         hoveredResizeHandle ==
              Logic::CanvasComponentDragHandle::BottomRight ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
-    } else if ( hoveredComponentHandle ==
+    } else if ( hoveredResizeHandle ==
                     Logic::CanvasComponentDragHandle::TopRight ||
-                hoveredComponentHandle ==
+                hoveredResizeHandle ==
                     Logic::CanvasComponentDragHandle::BottomLeft ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW);
-    } else if ( hoveredComponentHandle ==
+    } else if ( hoveredResizeHandle ==
                 Logic::CanvasComponentDragHandle::Move ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Left ||
@@ -1084,13 +1394,23 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
-        if ( hoveredComponent.has_value() &&
-             hoveredComponentInstance.has_value() ) {
+        if ( hoveredNote.has_value() && hoveredNoteBounds.has_value() ) {
+            m_noteScaleDragTarget      = hoveredNote;
+            m_noteScaleDragHandle      = hoveredNoteHandle;
+            m_noteScaleDragStartBounds = *hoveredNoteBounds;
+            const auto& visual         = appConfig.getVisualConfig();
+            m_noteScaleDragStart = { visual.noteScaleX, visual.noteScaleY };
+        } else if ( hoveredComponent.has_value() &&
+                    hoveredComponentInstance.has_value() ) {
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
-            const auto& placement =
-                appConfig.getVisualConfig().canvasComponents.placement(
-                    *hoveredComponent);
+            const auto placement =
+                appConfig.getVisualConfig().canvasComponents.resolvedPlacement(
+                    *hoveredComponent,
+                    hoveredComponentInstance->instanceIndex,
+                    currentSnapshot.trackCount,
+                    layout.left,
+                    layout.right);
             m_canvasComponentDragStart = placement;
             m_canvasComponentDragStartBounds =
                 canvasComponentContentBounds(*hoveredComponentInstance);
@@ -1098,6 +1418,48 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 canvasComponentLayoutRegion(*hoveredComponentInstance);
             m_canvasComponentDragInstanceIndex =
                 hoveredComponentInstance->instanceIndex;
+            m_synchronizedKpsTransformStarts.clear();
+            const auto& canvasComponents =
+                appConfig.getVisualConfig().canvasComponents;
+            const bool draggedKpsTrack =
+                hoveredComponentInstance->instanceIndex >= 0;
+            const bool captureAllKpsMove =
+                hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncAllKpsComponentPositions;
+            const bool captureKpsTrackMove =
+                hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                draggedKpsTrack &&
+                canvasComponents.syncKpsTrackRelativePositions &&
+                !captureAllKpsMove;
+            const bool captureSynchronizedKpsResize =
+                hoveredComponentHandle !=
+                    Logic::CanvasComponentDragHandle::Move &&
+                draggedKpsTrack && canvasComponents.syncKpsTrackSizes;
+            if ( *hoveredComponent == Config::CanvasComponentType::Kps &&
+                 (captureAllKpsMove || captureKpsTrackMove ||
+                  captureSynchronizedKpsResize) ) {
+                m_synchronizedKpsTransformStarts.reserve(
+                    currentSnapshot.canvasComponentInstances.size());
+                for ( const auto& instance :
+                      currentSnapshot.canvasComponentInstances ) {
+                    if ( instance.type != Config::CanvasComponentType::Kps ||
+                         (!captureAllKpsMove && instance.instanceIndex < 0) ) {
+                        continue;
+                    }
+                    m_synchronizedKpsTransformStarts.push_back(
+                        { instance.instanceIndex,
+                          canvasComponents.resolvedPlacement(
+                              Config::CanvasComponentType::Kps,
+                              instance.instanceIndex,
+                              currentSnapshot.trackCount,
+                              layout.left,
+                              layout.right),
+                          canvasComponentContentBounds(instance),
+                          canvasComponentLayoutRegion(instance) });
+                }
+            }
             const float centerX = (m_canvasComponentDragStartBounds.left +
                                    m_canvasComponentDragStartBounds.right) *
                                   0.5f;
@@ -1118,12 +1480,36 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
+    if ( m_noteScaleDragTarget.has_value() &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        constexpr float scaleEpsilon = 1e-6f;
+        const auto      candidate =
+            Logic::resizeNoteRenderScale(m_noteScaleDragStart,
+                                         m_noteScaleDragHandle,
+                                         m_noteScaleDragStartBounds,
+                                         pointerX,
+                                         pointerY);
+        const auto& visual = appConfig.getVisualConfig();
+        if ( std::abs(visual.noteScaleX - candidate.x) > scaleEpsilon ||
+             std::abs(visual.noteScaleY - candidate.y) > scaleEpsilon ) {
+            appConfig.getVisualConfig().noteScaleX = candidate.x;
+            appConfig.getVisualConfig().noteScaleY = candidate.y;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_layoutConfigurationChanged = true;
+        }
+    }
+
     if ( m_canvasComponentDragTarget.has_value() &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         constexpr float componentPositionEpsilon = 1e-6f;
-        auto&           component =
-            appConfig.getVisualConfig().canvasComponents.placement(
-                *m_canvasComponentDragTarget);
+        auto& canvasComponents = appConfig.getVisualConfig().canvasComponents;
+        auto& component        = canvasComponents.editablePlacement(
+            *m_canvasComponentDragTarget,
+            m_canvasComponentDragInstanceIndex,
+            currentSnapshot.trackCount,
+            layout.left,
+            layout.right);
         Config::CanvasComponentPlacement candidate = component;
         if ( m_canvasComponentDragHandle ==
              Logic::CanvasComponentDragHandle::Move ) {
@@ -1134,6 +1520,199 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 m_canvasComponentDragRegion,
                 m_canvasComponentDragStartBounds.width(),
                 m_canvasComponentDragStartBounds.height());
+
+            m_canvasComponentSnapGuideX.reset();
+            m_canvasComponentSnapGuideY.reset();
+            m_canvasComponentSnapTargetsX.clear();
+            m_canvasComponentSnapTargetsY.clear();
+            const auto safeTrackCount =
+                std::max<std::int32_t>(currentSnapshot.trackCount, 0);
+            const std::size_t targetObjectCount =
+                currentSnapshot.canvasComponentInstances.size() +
+                static_cast<std::size_t>(safeTrackCount) + 2U;
+            m_canvasComponentSnapTargetsX.reserve(targetObjectCount * 3U + 1U);
+            m_canvasComponentSnapTargetsY.reserve(targetObjectCount * 3U + 1U);
+
+            const bool draggedKps = *m_canvasComponentDragTarget ==
+                                    Config::CanvasComponentType::Kps;
+            const bool synchronizeAllKpsComponentPositions =
+                draggedKps && canvasComponents.syncAllKpsComponentPositions;
+            const bool synchronizeKpsTrackRelativePositions =
+                draggedKps && m_canvasComponentDragInstanceIndex >= 0 &&
+                !synchronizeAllKpsComponentPositions &&
+                canvasComponents.syncKpsTrackRelativePositions;
+            const bool groupAllKpsPositions =
+                canvasComponents.kps.visible &&
+                canvasComponents.syncAllKpsComponentPositions;
+            const bool groupKpsTrackPositions =
+                canvasComponents.kps.visible && !groupAllKpsPositions &&
+                canvasComponents.syncKpsTrackRelativePositions;
+            const bool movingSynchronizedKpsGroup =
+                synchronizeAllKpsComponentPositions ||
+                synchronizeKpsTrackRelativePositions;
+            Logic::CanvasComponentBounds synchronizedKpsTargetBounds;
+            bool                         hasSynchronizedKpsTargetBounds = false;
+            for ( const auto& instance :
+                  currentSnapshot.canvasComponentInstances ) {
+                if ( !canvasComponents.placement(instance.type).visible ) {
+                    continue;
+                }
+
+                const bool synchronizedKpsGroupMember =
+                    instance.type == Config::CanvasComponentType::Kps &&
+                    (groupAllKpsPositions ||
+                     (groupKpsTrackPositions && instance.instanceIndex >= 0));
+                if ( synchronizedKpsGroupMember &&
+                     !movingSynchronizedKpsGroup ) {
+                    mergeCanvasComponentBounds(
+                        canvasComponentContentBounds(instance),
+                        synchronizedKpsTargetBounds,
+                        hasSynchronizedKpsTargetBounds);
+                    continue;
+                }
+
+                bool movesWithDraggedComponent = false;
+                if ( instance.type == *m_canvasComponentDragTarget ) {
+                    if ( instance.type != Config::CanvasComponentType::Kps ) {
+                        movesWithDraggedComponent = true;
+                    } else if ( synchronizeAllKpsComponentPositions ) {
+                        movesWithDraggedComponent = true;
+                    } else if ( synchronizeKpsTrackRelativePositions &&
+                                instance.instanceIndex >= 0 ) {
+                        movesWithDraggedComponent = true;
+                    } else {
+                        movesWithDraggedComponent =
+                            instance.instanceIndex ==
+                            m_canvasComponentDragInstanceIndex;
+                    }
+                }
+                if ( movesWithDraggedComponent ) continue;
+
+                appendCanvasComponentSnapTargets(
+                    canvasComponentContentBounds(instance),
+                    m_canvasComponentSnapTargetsX,
+                    m_canvasComponentSnapTargetsY);
+            }
+            if ( hasSynchronizedKpsTargetBounds ) {
+                appendCanvasComponentSnapTargets(synchronizedKpsTargetBounds,
+                                                 m_canvasComponentSnapTargetsX,
+                                                 m_canvasComponentSnapTargetsY);
+            }
+
+            const Logic::CanvasComponentBounds trackLayoutBounds{
+                layout.left * targetWidth,
+                layout.top * targetHeight,
+                layout.right * targetWidth,
+                layout.bottom * targetHeight,
+            };
+            appendCanvasComponentSnapTargets(trackLayoutBounds,
+                                             m_canvasComponentSnapTargetsX,
+                                             m_canvasComponentSnapTargetsY);
+            if ( safeTrackCount > 0 ) {
+                const float singleTrackWidth =
+                    trackLayoutBounds.width() /
+                    static_cast<float>(safeTrackCount);
+                for ( std::int32_t trackIndex = 0; trackIndex < safeTrackCount;
+                      ++trackIndex ) {
+                    const float trackLeft =
+                        trackLayoutBounds.left +
+                        static_cast<float>(trackIndex) * singleTrackWidth;
+                    appendCanvasComponentSnapTargets(
+                        { trackLeft,
+                          trackLayoutBounds.top,
+                          trackLeft + singleTrackWidth,
+                          trackLayoutBounds.bottom },
+                        m_canvasComponentSnapTargetsX,
+                        m_canvasComponentSnapTargetsY);
+                }
+            }
+            m_canvasComponentSnapTargetsX.push_back(targetWidth * 0.5f);
+            m_canvasComponentSnapTargetsY.push_back(targetHeight * 0.5f);
+
+            const auto candidateBounds = Logic::canvasComponentBoundsInRegion(
+                candidate,
+                m_canvasComponentDragRegion,
+                m_canvasComponentDragStartBounds.width(),
+                m_canvasComponentDragStartBounds.height());
+            Logic::CanvasComponentBounds synchronizedKpsGroupStartBounds;
+            bool                         hasSynchronizedKpsGroupBounds = false;
+            if ( synchronizeAllKpsComponentPositions ||
+                 synchronizeKpsTrackRelativePositions ) {
+                for ( const auto& transformStart :
+                      m_synchronizedKpsTransformStarts ) {
+                    mergeCanvasComponentBounds(transformStart.bounds,
+                                               synchronizedKpsGroupStartBounds,
+                                               hasSynchronizedKpsGroupBounds);
+                }
+            }
+
+            Logic::CanvasComponentBounds snapSourceBounds = candidateBounds;
+            if ( hasSynchronizedKpsGroupBounds ) {
+                const float candidateOffsetX =
+                    (candidateBounds.left + candidateBounds.right -
+                     m_canvasComponentDragStartBounds.left -
+                     m_canvasComponentDragStartBounds.right) *
+                    0.5f;
+                const float candidateOffsetY =
+                    (candidateBounds.top + candidateBounds.bottom -
+                     m_canvasComponentDragStartBounds.top -
+                     m_canvasComponentDragStartBounds.bottom) *
+                    0.5f;
+                snapSourceBounds =
+                    offsetCanvasComponentBounds(synchronizedKpsGroupStartBounds,
+                                                candidateOffsetX,
+                                                candidateOffsetY);
+            }
+            const auto snap =
+                Logic::snapCanvasComponentBounds(snapSourceBounds,
+                                                 m_canvasComponentSnapTargetsX,
+                                                 m_canvasComponentSnapTargetsY,
+                                                 componentSnapDistance);
+            const float snapOffsetX =
+                snap.center.x -
+                (snapSourceBounds.left + snapSourceBounds.right) * 0.5f;
+            const float snapOffsetY =
+                snap.center.y -
+                (snapSourceBounds.top + snapSourceBounds.bottom) * 0.5f;
+            candidate = Logic::moveCanvasComponentInRegion(
+                candidate,
+                (candidateBounds.left + candidateBounds.right) * 0.5f +
+                    snapOffsetX,
+                (candidateBounds.top + candidateBounds.bottom) * 0.5f +
+                    snapOffsetY,
+                m_canvasComponentDragRegion,
+                m_canvasComponentDragStartBounds.width(),
+                m_canvasComponentDragStartBounds.height());
+            const auto snappedBounds = Logic::canvasComponentBoundsInRegion(
+                candidate,
+                m_canvasComponentDragRegion,
+                m_canvasComponentDragStartBounds.width(),
+                m_canvasComponentDragStartBounds.height());
+            Logic::CanvasComponentBounds finalSnapSourceBounds = snappedBounds;
+            if ( hasSynchronizedKpsGroupBounds ) {
+                const float appliedOffsetX =
+                    (snappedBounds.left + snappedBounds.right -
+                     m_canvasComponentDragStartBounds.left -
+                     m_canvasComponentDragStartBounds.right) *
+                    0.5f;
+                const float appliedOffsetY =
+                    (snappedBounds.top + snappedBounds.bottom -
+                     m_canvasComponentDragStartBounds.top -
+                     m_canvasComponentDragStartBounds.bottom) *
+                    0.5f;
+                finalSnapSourceBounds =
+                    offsetCanvasComponentBounds(synchronizedKpsGroupStartBounds,
+                                                appliedOffsetX,
+                                                appliedOffsetY);
+            }
+            if ( snap.snappedX && canvasComponentAlignsWithX(
+                                      finalSnapSourceBounds, snap.targetX) ) {
+                m_canvasComponentSnapGuideX = snap.targetX;
+            }
+            if ( snap.snappedY && canvasComponentAlignsWithY(
+                                      finalSnapSourceBounds, snap.targetY) ) {
+                m_canvasComponentSnapGuideY = snap.targetY;
+            }
         } else {
             candidate = Logic::resizeCanvasComponentInRegion(
                 m_canvasComponentDragStart,
@@ -1150,13 +1729,102 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              std::abs(component.fontSizeRatio - candidate.fontSizeRatio) >
                  componentPositionEpsilon ) {
             component = candidate;
+            const bool synchronizeAllKpsComponentPositions =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncAllKpsComponentPositions;
+            const bool synchronizeKpsTrackRelativePositions =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragInstanceIndex >= 0 &&
+                m_canvasComponentDragHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                !synchronizeAllKpsComponentPositions &&
+                canvasComponents.syncKpsTrackRelativePositions;
+            if ( synchronizeAllKpsComponentPositions ||
+                 synchronizeKpsTrackRelativePositions ) {
+                const float candidateCenterX =
+                    m_canvasComponentDragRegion.left +
+                    candidate.anchorX * m_canvasComponentDragRegion.width();
+                const float candidateCenterY =
+                    m_canvasComponentDragRegion.top +
+                    candidate.anchorY * m_canvasComponentDragRegion.height();
+                const float startCenterX =
+                    (m_canvasComponentDragStartBounds.left +
+                     m_canvasComponentDragStartBounds.right) *
+                    0.5f;
+                const float startCenterY =
+                    (m_canvasComponentDragStartBounds.top +
+                     m_canvasComponentDragStartBounds.bottom) *
+                    0.5f;
+                const float offsetX = candidateCenterX - startCenterX;
+                const float offsetY = candidateCenterY - startCenterY;
+                for ( const auto& transformStart :
+                      m_synchronizedKpsTransformStarts ) {
+                    if ( transformStart.instanceIndex ==
+                         m_canvasComponentDragInstanceIndex ) {
+                        continue;
+                    }
+                    auto synchronizedPlacement =
+                        Logic::moveCanvasComponentByOffsetInRegion(
+                            transformStart.placement,
+                            transformStart.bounds,
+                            offsetX,
+                            offsetY,
+                            transformStart.region);
+                    auto& synchronizedComponent =
+                        canvasComponents.editablePlacement(
+                            Config::CanvasComponentType::Kps,
+                            transformStart.instanceIndex,
+                            currentSnapshot.trackCount,
+                            layout.left,
+                            layout.right);
+                    synchronizedComponent = synchronizedPlacement;
+                }
+            }
+            const bool synchronizeKpsTrackSize =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragInstanceIndex >= 0 &&
+                m_canvasComponentDragHandle !=
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncKpsTrackSizes;
+            if ( synchronizeKpsTrackSize ) {
+                for ( const auto& transformStart :
+                      m_synchronizedKpsTransformStarts ) {
+                    if ( transformStart.instanceIndex ==
+                         m_canvasComponentDragInstanceIndex ) {
+                        continue;
+                    }
+                    auto synchronizedPlacement =
+                        Logic::resizeCanvasComponentToFontSizeInRegion(
+                            transformStart.placement,
+                            m_canvasComponentDragHandle,
+                            transformStart.bounds,
+                            candidate.fontSizeRatio,
+                            transformStart.region);
+                    auto& synchronizedComponent =
+                        canvasComponents.editablePlacement(
+                            Config::CanvasComponentType::Kps,
+                            transformStart.instanceIndex,
+                            currentSnapshot.trackCount,
+                            layout.left,
+                            layout.right);
+                    synchronizedComponent = synchronizedPlacement;
+                }
+                canvasComponents.synchronizeKpsTrackFontSize(
+                    candidate.fontSizeRatio);
+            }
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;
         }
     }
 
-    if ( !m_canvasComponentDragTarget.has_value() &&
+    if ( !m_noteScaleDragTarget.has_value() &&
+         !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         const float         normalizedX = pointerX / targetWidth;
@@ -1192,12 +1860,63 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                               m_trackLayoutDragHandle,
                                               normalizedY);
                 break;
-            case TrackLayoutDragHandle::Move:
+            case TrackLayoutDragHandle::Move: {
                 candidate =
                     moveTrackLayout(m_trackLayoutDragStart,
                                     normalizedX - m_trackLayoutPointerStart.x,
                                     normalizedY - m_trackLayoutPointerStart.y);
+                m_canvasComponentSnapGuideX.reset();
+                m_canvasComponentSnapGuideY.reset();
+                m_canvasComponentSnapTargetsX.clear();
+                m_canvasComponentSnapTargetsY.clear();
+                const auto& canvasComponents =
+                    appConfig.getVisualConfig().canvasComponents;
+                const std::size_t targetObjectCount =
+                    currentSnapshot.canvasComponentInstances.size();
+                m_canvasComponentSnapTargetsX.reserve(targetObjectCount * 3U +
+                                                      1U);
+                m_canvasComponentSnapTargetsY.reserve(targetObjectCount * 3U +
+                                                      1U);
+                appendDisplayedCanvasComponentSnapTargets(
+                    currentSnapshot,
+                    canvasComponents,
+                    m_canvasComponentSnapTargetsX,
+                    m_canvasComponentSnapTargetsY);
+                m_canvasComponentSnapTargetsX.push_back(targetWidth * 0.5f);
+                m_canvasComponentSnapTargetsY.push_back(targetHeight * 0.5f);
+
+                const Logic::CanvasComponentBounds candidateBounds{
+                    candidate.left * targetWidth,
+                    candidate.top * targetHeight,
+                    candidate.right * targetWidth,
+                    candidate.bottom * targetHeight,
+                };
+                const auto snap = Logic::snapCanvasComponentBounds(
+                    candidateBounds,
+                    m_canvasComponentSnapTargetsX,
+                    m_canvasComponentSnapTargetsY,
+                    componentSnapDistance);
+                candidate = moveTrackLayoutToPixelCenter(candidate,
+                                                         snap.center.x,
+                                                         snap.center.y,
+                                                         targetWidth,
+                                                         targetHeight);
+                const Logic::CanvasComponentBounds snappedBounds{
+                    candidate.left * targetWidth,
+                    candidate.top * targetHeight,
+                    candidate.right * targetWidth,
+                    candidate.bottom * targetHeight,
+                };
+                if ( snap.snappedX &&
+                     canvasComponentAlignsWithX(snappedBounds, snap.targetX) ) {
+                    m_canvasComponentSnapGuideX = snap.targetX;
+                }
+                if ( snap.snappedY &&
+                     canvasComponentAlignsWithY(snappedBounds, snap.targetY) ) {
+                    m_canvasComponentSnapGuideY = snap.targetY;
+                }
                 break;
+            }
             case TrackLayoutDragHandle::JudgmentLine: break;
             case TrackLayoutDragHandle::None: break;
             }
@@ -1221,6 +1940,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         finishLayoutEditing();
@@ -1254,6 +1974,25 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                             { canvasMax.x, layoutMax.y },
                             IM_COL32(0, 0, 0, 72));
     drawList->AddRectFilled(layoutMin, layoutMax, IM_COL32(64, 180, 255, 24));
+
+    std::optional<Logic::CanvasComponentBounds> editableComponentRegion;
+    if ( m_canvasComponentDragTarget.has_value() ) {
+        editableComponentRegion = m_canvasComponentDragRegion;
+    } else if ( hoveredComponentInstance.has_value() &&
+                hoveredComponentHandle !=
+                    Logic::CanvasComponentDragHandle::None ) {
+        editableComponentRegion =
+            canvasComponentLayoutRegion(*hoveredComponentInstance);
+    }
+    if ( editableComponentRegion.has_value() ) {
+        drawCanvasComponentEditableRegionMask(*drawList,
+                                              *editableComponentRegion,
+                                              canvasScreenX,
+                                              canvasScreenY,
+                                              targetWidth,
+                                              targetHeight,
+                                              dpiScale);
+    }
 
     const ImU32 edgeColor        = IM_COL32(64, 190, 255, 230);
     const ImU32 highlightedColor = IM_COL32(255, 218, 96, 255);
@@ -1331,6 +2070,124 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                       IM_COL32(20, 30, 40, 255),
                       arrowThickness);
 
+    const auto& canvasComponents = appConfig.getVisualConfig().canvasComponents;
+    const bool  groupAllKpsPositions =
+        canvasComponents.kps.visible &&
+        canvasComponents.syncAllKpsComponentPositions;
+    const bool groupKpsTrackPositions =
+        canvasComponents.kps.visible && !groupAllKpsPositions &&
+        canvasComponents.syncKpsTrackRelativePositions;
+    Logic::CanvasComponentBounds synchronizedKpsGroupBounds;
+    bool                         hasSynchronizedKpsGroupBounds   = false;
+    std::size_t                  synchronizedKpsGroupMemberCount = 0U;
+    if ( groupAllKpsPositions || groupKpsTrackPositions ) {
+        for ( const auto& instance :
+              currentSnapshot.canvasComponentInstances ) {
+            if ( instance.type != Config::CanvasComponentType::Kps ||
+                 (groupKpsTrackPositions && instance.instanceIndex < 0) ) {
+                continue;
+            }
+            const auto placement = canvasComponents.resolvedPlacement(
+                Config::CanvasComponentType::Kps,
+                instance.instanceIndex,
+                currentSnapshot.trackCount,
+                layout.left,
+                layout.right);
+            const auto contentBounds = canvasComponentContentBounds(instance);
+            const auto bounds        = Logic::canvasComponentBoundsInRegion(
+                placement,
+                canvasComponentLayoutRegion(instance),
+                contentBounds.width(),
+                contentBounds.height());
+            if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
+            mergeCanvasComponentBounds(bounds,
+                                       synchronizedKpsGroupBounds,
+                                       hasSynchronizedKpsGroupBounds);
+            ++synchronizedKpsGroupMemberCount;
+        }
+    }
+    if ( hasSynchronizedKpsGroupBounds &&
+         synchronizedKpsGroupMemberCount > 1U ) {
+        const bool movingSynchronizedKps =
+            m_canvasComponentDragTarget == Config::CanvasComponentType::Kps &&
+            m_canvasComponentDragHandle ==
+                Logic::CanvasComponentDragHandle::Move &&
+            (groupAllKpsPositions || (groupKpsTrackPositions &&
+                                      m_canvasComponentDragInstanceIndex >= 0));
+        const ImU32 groupColor = movingSynchronizedKps
+                                     ? highlightedColor
+                                     : IM_COL32(90, 220, 255, 180);
+        drawList->AddRect({ canvasScreenX + synchronizedKpsGroupBounds.left,
+                            canvasScreenY + synchronizedKpsGroupBounds.top },
+                          { canvasScreenX + synchronizedKpsGroupBounds.right,
+                            canvasScreenY + synchronizedKpsGroupBounds.bottom },
+                          groupColor,
+                          0.0f,
+                          0,
+                          std::max(1.5f, 2.0f * dpiScale));
+    }
+
+    const ImU32 snapGuideColor     = IM_COL32(255, 218, 96, 150);
+    const float snapGuideThickness = std::max(1.0f, 1.25f * dpiScale);
+    const float snapGuideDash      = std::max(4.0f, 6.0f * dpiScale);
+    const float snapGuideGap       = std::max(3.0f, 4.0f * dpiScale);
+    if ( m_canvasComponentSnapGuideX.has_value() ) {
+        const float guideX = canvasScreenX + *m_canvasComponentSnapGuideX;
+        drawCanvasComponentSnapGuide(*drawList,
+                                     { guideX, canvasMin.y },
+                                     { guideX, canvasMax.y },
+                                     snapGuideColor,
+                                     snapGuideThickness,
+                                     snapGuideDash,
+                                     snapGuideGap);
+    }
+    if ( m_canvasComponentSnapGuideY.has_value() ) {
+        const float guideY = canvasScreenY + *m_canvasComponentSnapGuideY;
+        drawCanvasComponentSnapGuide(*drawList,
+                                     { canvasMin.x, guideY },
+                                     { canvasMax.x, guideY },
+                                     snapGuideColor,
+                                     snapGuideThickness,
+                                     snapGuideDash,
+                                     snapGuideGap);
+    }
+
+    const ImU32 noteBoundsColor = IM_COL32(255, 150, 96, 220);
+    for ( const auto& instance : m_noteLayoutInstances ) {
+        const auto& bounds = instance.bounds;
+        if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
+        const bool highlighted =
+            (hoveredNote.has_value() && *hoveredNote == instance.entity) ||
+            (m_noteScaleDragTarget.has_value() &&
+             *m_noteScaleDragTarget == instance.entity);
+        const ImU32 componentColor =
+            highlighted ? highlightedColor : noteBoundsColor;
+        const ImVec2 componentMin{ canvasScreenX + bounds.left,
+                                   canvasScreenY + bounds.top };
+        const ImVec2 componentMax{ canvasScreenX + bounds.right,
+                                   canvasScreenY + bounds.bottom };
+        drawList->AddRect(componentMin,
+                          componentMax,
+                          componentColor,
+                          0.0f,
+                          0,
+                          std::max(1.0f, 1.25f * dpiScale));
+
+        const float handleHalf = std::max(2.5f, 3.0f * dpiScale);
+        const std::array<ImVec2, 4> corners{
+            componentMin,
+            ImVec2{ componentMax.x, componentMin.y },
+            ImVec2{ componentMin.x, componentMax.y },
+            componentMax,
+        };
+        for ( const auto& corner : corners ) {
+            drawList->AddRectFilled(
+                { corner.x - handleHalf, corner.y - handleHalf },
+                { corner.x + handleHalf, corner.y + handleHalf },
+                componentColor);
+        }
+    }
+
     for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
         const auto& placement =
             appConfig.getVisualConfig().canvasComponents.placement(
@@ -1392,7 +2249,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -1421,6 +2278,7 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     if ( !isLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value() ||
           m_layoutConfigurationChanged) ) {
         finishLayoutEditing();
@@ -1501,8 +2359,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {

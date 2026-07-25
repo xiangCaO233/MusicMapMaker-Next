@@ -112,7 +112,8 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
         ctx.nextHitIndex++;
     }
 
-    ctx.hitFXSystem.update(ctx.animateTime, triggeredEvents, config);
+    ctx.hitFXSystem.update(
+        ctx.animateTime, triggeredEvents, ctx.trackCount, config);
 }
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
@@ -196,7 +197,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -474,6 +475,34 @@ EditTool workspaceNameToEditTool(const std::string& name)
     return EditTool::Move;
 }
 
+/// @brief 将分拍线显示模式转换为项目工作区稳定文本。
+/// @param mode 当前分拍线显示模式。
+/// @return 可持久化的稳定模式文本。
+const char* beatLineDisplayModeToWorkspaceName(Config::BeatLineDisplayMode mode)
+{
+    switch ( mode ) {
+    case Config::BeatLineDisplayMode::NearCursor: return "NearCursor";
+    case Config::BeatLineDisplayMode::Hidden: return "Hidden";
+    case Config::BeatLineDisplayMode::Always:
+    default: return "Always";
+    }
+}
+
+/// @brief 将项目工作区稳定文本转换为分拍线显示模式。
+/// @param name 工作区中保存的模式文本。
+/// @return 对应的分拍线显示模式。
+Config::BeatLineDisplayMode workspaceNameToBeatLineDisplayMode(
+    const std::string& name)
+{
+    if ( name == "NearCursor" ) {
+        return Config::BeatLineDisplayMode::NearCursor;
+    }
+    if ( name == "Hidden" ) {
+        return Config::BeatLineDisplayMode::Hidden;
+    }
+    return Config::BeatLineDisplayMode::Always;
+}
+
 /// @brief 捕获工具栏开关到项目工作区状态。
 /// @param workspace 需要写入的项目工作区状态。
 /// @param editorConfig 当前编辑器配置。
@@ -489,7 +518,10 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
     toolbarState.m_snapFloor     = editorConfig.settings.snapFloor;
     toolbarState.m_enableLinearScrollMapping =
         editorConfig.visual.enableLinearScrollMapping;
-    toolbarState.m_drawBeatLines = editorConfig.visual.drawBeatLines;
+    toolbarState.m_beatLineDisplayMode = beatLineDisplayModeToWorkspaceName(
+        editorConfig.visual.beatLineDisplayMode);
+    toolbarState.m_drawBeatLines = editorConfig.visual.beatLineDisplayMode !=
+                                   Config::BeatLineDisplayMode::Hidden;
     toolbarState.m_stopPlaybackOnScroll =
         editorConfig.settings.stopPlaybackOnScroll;
     toolbarState.m_enableHitEffects = editorConfig.visual.enableHitEffects;
@@ -510,7 +542,8 @@ void applyToolbarWorkspaceState(
     editorConfig.settings.snapFloor     = toolbarState.m_snapFloor;
     editorConfig.visual.enableLinearScrollMapping =
         toolbarState.m_enableLinearScrollMapping;
-    editorConfig.visual.drawBeatLines = toolbarState.m_drawBeatLines;
+    editorConfig.visual.beatLineDisplayMode =
+        workspaceNameToBeatLineDisplayMode(toolbarState.m_beatLineDisplayMode);
     editorConfig.settings.stopPlaybackOnScroll =
         toolbarState.m_stopPlaybackOnScroll;
     editorConfig.visual.enableHitEffects = toolbarState.m_enableHitEffects;
@@ -895,10 +928,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1977,10 +2010,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);

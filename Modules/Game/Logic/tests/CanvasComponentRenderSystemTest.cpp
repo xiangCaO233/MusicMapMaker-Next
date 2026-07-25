@@ -5,8 +5,10 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/HitFXSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -334,7 +336,7 @@ bool testBeatNumberLayoutRegionCentersOnBeatHead()
     constexpr float rawRegionTop    = -160.0f;
     constexpr float rawRegionBottom = 90.0f;
     const float     fontHeight =
-        config.beatNumber.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+        config.beatNumber.fontSizeRatio * context.viewportHeight;
     const auto selection = MMM::Common::selectAsciiFont(
         snapshot.asciiFontAtlasMetrics, fontHeight);
     const auto text =
@@ -408,7 +410,7 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
     constexpr float rawRegionTop    = 237.5f;
     constexpr float rawRegionBottom = 300.0f;
     const float     fontHeight =
-        config.beatLineTime.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+        config.beatLineTime.fontSizeRatio * context.viewportHeight;
     const auto selection = MMM::Common::selectAsciiFont(
         snapshot.asciiFontAtlasMetrics, fontHeight);
     const auto text =
@@ -433,6 +435,31 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
         return false;
     }
 
+    MMM::Logic::RenderSnapshot stretchedSnapshot;
+    configureAsciiFont(stretchedSnapshot);
+    stretchedSnapshot.hasBeatmap  = true;
+    auto stretchedContext         = context;
+    stretchedContext.renderScaleY = 5.0f;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &stretchedSnapshot, stretchedContext, config);
+    const auto stretchedInstance = std::find_if(
+        stretchedSnapshot.canvasComponentInstances.begin(),
+        stretchedSnapshot.canvasComponentInstances.end(),
+        [](const auto& candidate) {
+            return candidate.type ==
+                       MMM::Config::CanvasComponentType::BeatLineTime &&
+                   candidate.instanceIndex == 9;
+        });
+    if ( stretchedInstance ==
+             stretchedSnapshot.canvasComponentInstances.end() ||
+         std::abs((stretchedInstance->right - stretchedInstance->left) -
+                  (instance->right - instance->left)) > epsilon ||
+         std::abs((stretchedInstance->bottom - stretchedInstance->top) -
+                  (instance->bottom - instance->top)) > epsilon ) {
+        XERROR("Beat line time size changed with the visual grid height");
+        return false;
+    }
+
     for ( const auto& vertex : snapshot.vertices ) {
         if ( std::abs(vertex.color.r - config.beatLineTime.color[0]) >
                  epsilon ||
@@ -447,6 +474,250 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
         }
     }
     return !snapshot.vertices.empty() && !snapshot.overlayCmds.empty();
+}
+
+/// @brief 验证逐轨及总 KPS 实例，并覆盖单轨 KPS 位于轨道外的场景。
+/// @return 实例数量、索引、全画布布局与裁剪以及颜色均正确时返回 true。
+bool testKpsRendersPerTrackAndTotal()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    snapshot.hasBeatmap       = true;
+    snapshot.isPlaying        = true;
+    config.beatNumber.visible = true;
+    config.kps.visible        = true;
+    config.kps.anchorY        = 0.05f;
+    config.kps.color          = { 0.3f, 0.8f, 0.9f, 0.75f };
+    auto& secondTrack         = config.editablePlacement(
+        MMM::Config::CanvasComponentType::Kps, 1, 3, 0.2f, 0.8f);
+    secondTrack.anchorX       = 0.1f;
+    secondTrack.anchorY       = 0.05f;
+    secondTrack.fontSizeRatio = 0.04f;
+
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    auto&          bpm =
+        timelineRegistry.emplace<MMM::Logic::TimelineComponent>(bpmEntity);
+    bpm.m_timestamp = 0.0;
+    bpm.m_effect    = MMM::TimingEffect::BPM;
+    bpm.m_value     = 120.0;
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{ &bpm };
+
+    const std::array<std::uint32_t, 3> kps{ 2U, 4U, 6U };
+    auto                               context = makeRenderContext(1.0);
+    context.trackCount                         = 3;
+    context.trackLeft                          = 0.2f;
+    context.trackRight                         = 0.8f;
+    context.trackKps                           = kps;
+    context.bpmEvents                          = bpmEvents;
+    context.scrollCache                        = &cache;
+    context.visibleTop                         = 100.0f;
+    context.visibleBottom                      = 500.0f;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const auto kpsInstanceCount = std::count_if(
+        snapshot.canvasComponentInstances.begin(),
+        snapshot.canvasComponentInstances.end(),
+        [](const auto& instance) {
+            return instance.type == MMM::Config::CanvasComponentType::Kps;
+        });
+    if ( kpsInstanceCount != 4 ) {
+        XERROR("KPS component did not produce three tracks and one total");
+        return false;
+    }
+    const auto findInstance = [&snapshot](std::int64_t instanceIndex) {
+        return std::find_if(
+            snapshot.canvasComponentInstances.begin(),
+            snapshot.canvasComponentInstances.end(),
+            [instanceIndex](const auto& instance) {
+                return instance.type == MMM::Config::CanvasComponentType::Kps &&
+                       instance.instanceIndex == instanceIndex;
+            });
+    };
+    const auto total  = findInstance(MMM::Config::KPS_TOTAL_INSTANCE_INDEX);
+    const auto first  = findInstance(0);
+    const auto second = findInstance(1);
+    const auto third  = findInstance(2);
+    if ( total == snapshot.canvasComponentInstances.end() ||
+         first == snapshot.canvasComponentInstances.end() ||
+         second == snapshot.canvasComponentInstances.end() ||
+         third == snapshot.canvasComponentInstances.end() ) {
+        XERROR("KPS component instance indices were not stable");
+        return false;
+    }
+
+    constexpr float epsilon       = 1e-4f;
+    const float     secondCenterX = (second->left + second->right) * 0.5f;
+    const float     secondCenterY = (second->top + second->bottom) * 0.5f;
+    if ( std::abs(secondCenterX - 80.0f) > epsilon ||
+         std::abs(secondCenterY - 30.0f) > epsilon ||
+         second->right >= context.trackLeft * context.viewportWidth ||
+         second->bottom >= context.visibleTop ||
+         total->bottom >= context.visibleTop || second->regionLeft != 0.0f ||
+         second->regionTop != 0.0f || second->regionRight != 800.0f ||
+         second->regionBottom != 600.0f ) {
+        XERROR("Per-track KPS override was constrained to the track region");
+        return false;
+    }
+    if ( snapshot.overlayCmds.empty() ) {
+        XERROR("KPS component did not produce an overlay command");
+        return false;
+    }
+    const auto& kpsCommand = snapshot.overlayCmds.back();
+    if ( kpsCommand.scissor.offset.x != 0 || kpsCommand.scissor.offset.y != 0 ||
+         kpsCommand.scissor.extent.width != 800U ||
+         kpsCommand.scissor.extent.height != 600U ) {
+        XERROR("KPS inherited the preceding beat component scissor");
+        return false;
+    }
+    const auto commandIndexEnd = kpsCommand.indexOffset + kpsCommand.indexCount;
+    for ( std::uint32_t index = kpsCommand.indexOffset; index < commandIndexEnd;
+          ++index ) {
+        const auto& vertex = snapshot.vertices[snapshot.indices[index]];
+        if ( std::abs(vertex.color.r - config.kps.color[0]) > epsilon ||
+             std::abs(vertex.color.g - config.kps.color[1]) > epsilon ||
+             std::abs(vertex.color.b - config.kps.color[2]) > epsilon ||
+             std::abs(vertex.color.a - config.kps.color[3]) > epsilon ) {
+            XERROR("KPS instances did not share the configured group color");
+            return false;
+        }
+    }
+    using System = MMM::Logic::System::CanvasComponentRenderSystem;
+    return std::string(System::formatTrackKps(1, 4U).data()) == "K2 4 KPS" &&
+           std::string(System::formatTotalKps(12U).data()) == "TOTAL 12 KPS";
+}
+
+/// @brief 验证轨道宽度不足时依次隐藏轨道编号与 KPS 后缀。
+/// @return 三条轨道分别使用完整、无编号和纯数值文本时返回 true。
+bool testKpsTextAdaptsToTrackWidth()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    snapshot.hasBeatmap = true;
+    snapshot.isPlaying  = true;
+    config.kps.visible  = true;
+
+    constexpr std::int32_t              trackCount = 3;
+    constexpr float                     trackLeft  = 0.2f;
+    constexpr float                     trackRight = 0.8f;
+    const std::array<float, trackCount> fontSizeRatios{ 0.035f, 0.06f, 0.1f };
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        auto& placement =
+            config.editablePlacement(MMM::Config::CanvasComponentType::Kps,
+                                     trackIndex,
+                                     trackCount,
+                                     trackLeft,
+                                     trackRight);
+        placement.fontSizeRatio =
+            fontSizeRatios[static_cast<std::size_t>(trackIndex)];
+    }
+
+    const std::array<std::uint32_t, trackCount> kps{ 1U, 2U, 3U };
+    auto context       = makeRenderContext(1.0);
+    context.trackCount = trackCount;
+    context.trackLeft  = trackLeft;
+    context.trackRight = trackRight;
+    context.trackKps   = kps;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const std::array<const char*, trackCount> expectedTexts{ "K1 1 KPS",
+                                                             "2 KPS",
+                                                             "3" };
+    constexpr float                           epsilon = 1e-4f;
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        const auto instance =
+            std::find_if(snapshot.canvasComponentInstances.begin(),
+                         snapshot.canvasComponentInstances.end(),
+                         [trackIndex](const auto& candidate) {
+                             return candidate.type ==
+                                        MMM::Config::CanvasComponentType::Kps &&
+                                    candidate.instanceIndex == trackIndex;
+                         });
+        if ( instance == snapshot.canvasComponentInstances.end() ) {
+            XERROR("Adaptive KPS text did not render track {}", trackIndex);
+            return false;
+        }
+
+        const float fontPixelHeight =
+            fontSizeRatios[static_cast<std::size_t>(trackIndex)] *
+            context.viewportHeight;
+        const auto selection = MMM::Common::selectAsciiFont(
+            snapshot.asciiFontAtlasMetrics, fontPixelHeight);
+        if ( !selection ) {
+            XERROR("Adaptive KPS text did not select an ASCII font");
+            return false;
+        }
+        const float expectedWidth =
+            MMM::Common::measureAsciiText(
+                *selection.metrics,
+                expectedTexts[static_cast<std::size_t>(trackIndex)],
+                fontPixelHeight)
+                .width;
+        if ( std::abs((instance->right - instance->left) - expectedWidth) >
+             epsilon ) {
+            XERROR("Adaptive KPS text selected the wrong compact level");
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证 HitEffect 消费事件形成逐轨一秒滚动 KPS。
+/// @return 新事件、过期事件和清空路径的计数均正确时返回 true。
+bool testHitEffectKpsRollingWindow()
+{
+    using HitSystem      = MMM::Logic::System::HitFXSystem;
+    const auto makeEvent = [](double timestamp, int trackIndex) {
+        return HitSystem::HitEvent{ timestamp,
+                                    MMM::NoteType::NOTE,
+                                    HitSystem::HitEvent::Role::None,
+                                    1,
+                                    trackIndex,
+                                    0,
+                                    0.0,
+                                    false };
+    };
+
+    HitSystem                 system;
+    MMM::Config::EditorConfig config;
+    config.visual.enableHitEffects             = false;
+    config.visual.canvasComponents.kps.visible = true;
+    auto offsetEvent                           = makeEvent(0.8, 0);
+    offsetEvent.type                           = MMM::NoteType::FLICK;
+    offsetEvent.trackOffset                    = 2;
+    system.update(
+        1.0, { makeEvent(0.4, 0), makeEvent(1.0, 0), offsetEvent }, 3, config);
+    auto kps = system.trackKps();
+    if ( kps.size() != 3U || kps[0] != 2U || kps[1] != 0U || kps[2] != 1U ) {
+        XERROR("Initial per-track KPS counts were incorrect");
+        return false;
+    }
+
+    system.update(1.5, { makeEvent(1.5, 1) }, 3, config);
+    kps = system.trackKps();
+    if ( kps[0] != 1U || kps[1] != 1U || kps[2] != 1U ) {
+        XERROR("KPS rolling window did not expire the oldest event");
+        return false;
+    }
+
+    system.update(2.01, {}, 3, config);
+    kps = system.trackKps();
+    if ( kps[0] != 0U || kps[1] != 1U || kps[2] != 0U ) {
+        XERROR("KPS rolling window did not retain only the last second");
+        return false;
+    }
+
+    system.clearActiveEffects();
+    kps = system.trackKps();
+    return kps.size() == 3U && kps[0] == 0U && kps[1] == 0U && kps[2] == 0U;
 }
 
 /// @brief 验证判定线时间的固定精度格式与负值处理。
@@ -478,6 +749,9 @@ int main()
                    testBeatNumberRendersUntilLayoutViewportExit() &&
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&
                    testBeatLineTimesRenderInsideEachSubdivision() &&
+                   testKpsRendersPerTrackAndTotal() &&
+                   testKpsTextAdaptsToTrackWidth() &&
+                   testHitEffectKpsRollingWindow() &&
                    testJudgmentLineTimeFormatting()
                ? 0
                : 1;

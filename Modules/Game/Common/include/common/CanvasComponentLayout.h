@@ -2,8 +2,11 @@
 
 #include "config/visual/CanvasComponentConfig.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <span>
 
 namespace MMM::Logic
 {
@@ -22,6 +25,10 @@ enum class CanvasComponentDragHandle {
 inline constexpr float CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO = 0.0125f;
 /// @brief 允许保存的最大字号高度比例。
 inline constexpr float CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO = 0.25f;
+/// @brief 允许通过布局包围框设置的最小物件横纵缩放。
+inline constexpr float NOTE_RENDER_MIN_SCALE = 0.5f;
+/// @brief 允许通过布局包围框设置的最大物件横纵缩放。
+inline constexpr float NOTE_RENDER_MAX_SCALE = 3.0f;
 
 /// @brief 画布组件在当前视口中的像素边界。
 struct CanvasComponentBounds {
@@ -55,6 +62,127 @@ struct CanvasComponentPoint {
     /// @brief 纵坐标。
     float y{ 0.0f };
 };
+
+/// @brief 物件渲染的独立横纵缩放。
+struct NoteRenderScale {
+    /// @brief 横向缩放。
+    float x{ 1.0f };
+    /// @brief 纵向缩放。
+    float y{ 1.0f };
+};
+
+/// @brief 依据以物件中心为固定点的四角拖动计算独立横纵缩放。
+/// @param startScale 拖动开始时的横纵缩放。
+/// @param handle 当前拖动的包围框角点。
+/// @param startBounds 拖动开始时的物件像素边界。
+/// @param pointerX 当前指针横坐标。
+/// @param pointerY 当前指针纵坐标。
+/// @return 限制在视觉配置合法范围内的横纵缩放。
+/// @warning UI 布局热路径：物件缩放期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline NoteRenderScale resizeNoteRenderScale(
+    NoteRenderScale startScale, CanvasComponentDragHandle handle,
+    const CanvasComponentBounds& startBounds, float pointerX, float pointerY)
+{
+    const auto sanitizeScale = [](float value) {
+        if ( !std::isfinite(value) ) return 1.0f;
+        return std::clamp(value, NOTE_RENDER_MIN_SCALE, NOTE_RENDER_MAX_SCALE);
+    };
+    startScale.x = sanitizeScale(startScale.x);
+    startScale.y = sanitizeScale(startScale.y);
+    if ( handle == CanvasComponentDragHandle::None ||
+         handle == CanvasComponentDragHandle::Move ||
+         startBounds.width() <= 0.0f || startBounds.height() <= 0.0f ||
+         !std::isfinite(pointerX) || !std::isfinite(pointerY) ) {
+        return startScale;
+    }
+
+    const float centerX   = (startBounds.left + startBounds.right) * 0.5f;
+    const float centerY   = (startBounds.top + startBounds.bottom) * 0.5f;
+    const bool  dragsLeft = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::BottomLeft;
+    const bool  dragsTop  = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::TopRight;
+    const float targetHalfWidth =
+        dragsLeft ? centerX - pointerX : pointerX - centerX;
+    const float targetHalfHeight =
+        dragsTop ? centerY - pointerY : pointerY - centerY;
+    startScale.x = sanitizeScale(startScale.x * targetHalfWidth /
+                                 (startBounds.width() * 0.5f));
+    startScale.y = sanitizeScale(startScale.y * targetHalfHeight /
+                                 (startBounds.height() * 0.5f));
+    return startScale;
+}
+
+/// @brief 组件移动对齐到目标线后的二维吸附结果。
+struct CanvasComponentSnapResult {
+    /// @brief 应用于组件的新中心位置。
+    CanvasComponentPoint center;
+    /// @brief 横向是否已吸附。
+    bool snappedX{ false };
+    /// @brief 纵向是否已吸附。
+    bool snappedY{ false };
+    /// @brief 横向吸附目标线的像素坐标。
+    float targetX{ 0.0f };
+    /// @brief 纵向吸附目标线的像素坐标。
+    float targetY{ 0.0f };
+};
+
+/// @brief 将组件左、中、右与上、中、下对齐到各轴最近的目标线。
+/// @param bounds 尚未吸附的组件像素边界。
+/// @param xTargets 可吸附的纵向目标线横坐标。
+/// @param yTargets 可吸附的横向目标线纵坐标。
+/// @param threshold 最大吸附距离，单位像素。
+/// @return 横纵轴独立选择最近目标后的组件中心与目标线。
+/// @warning UI 拖动热路径：每帧扫描已缓存的目标坐标，禁止加入文件访问、
+/// 阻塞操作或共享所有权复制。
+[[nodiscard]] inline CanvasComponentSnapResult snapCanvasComponentBounds(
+    const CanvasComponentBounds& bounds, std::span<const float> xTargets,
+    std::span<const float> yTargets, float threshold)
+{
+    CanvasComponentSnapResult result;
+    result.center = { (bounds.left + bounds.right) * 0.5f,
+                      (bounds.top + bounds.bottom) * 0.5f };
+    if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) {
+        return result;
+    }
+
+    threshold = std::isfinite(threshold) ? std::max(0.0f, threshold) : 0.0f;
+    const auto snapAxis = [threshold](const std::array<float, 3>& sourceLines,
+                                      std::span<const float>
+                                             targets,
+                                      float& center,
+                                      bool&  snapped,
+                                      float& targetLine) {
+        float bestDistance = std::numeric_limits<float>::max();
+        float bestOffset   = 0.0f;
+        for ( float target : targets ) {
+            if ( !std::isfinite(target) ) continue;
+            for ( float source : sourceLines ) {
+                const float offset   = target - source;
+                const float distance = std::abs(offset);
+                if ( distance <= threshold && distance < bestDistance ) {
+                    bestDistance = distance;
+                    bestOffset   = offset;
+                    targetLine   = target;
+                    snapped      = true;
+                }
+            }
+        }
+        if ( snapped ) center += bestOffset;
+    };
+
+    const std::array<float, 3> sourceX{ bounds.left,
+                                        result.center.x,
+                                        bounds.right };
+    const std::array<float, 3> sourceY{ bounds.top,
+                                        result.center.y,
+                                        bounds.bottom };
+    snapAxis(
+        sourceX, xTargets, result.center.x, result.snappedX, result.targetX);
+    snapAxis(
+        sourceY, yTargets, result.center.y, result.snappedY, result.targetY);
+    return result;
+}
 
 /// @brief 规整画布组件的归一化锚点。
 /// @param placement 待规整布局。
@@ -218,6 +346,33 @@ moveCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
         contentHeight);
 }
 
+/// @brief 按相同像素位移移动组件并保持其内容尺寸。
+/// @param placement 移动开始时的布局。
+/// @param startBounds 移动开始时的组件边界。
+/// @param offsetX 横向同步位移，单位像素。
+/// @param offsetY 纵向同步位移，单位像素。
+/// @param region 组件允许占用的像素区域。
+/// @return 应用位移并限制在布局区域内的布局。
+/// @warning 热路径：同步组件移动期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement
+moveCanvasComponentByOffsetInRegion(Config::CanvasComponentPlacement placement,
+                                    const CanvasComponentBounds& startBounds,
+                                    float offsetX, float offsetY,
+                                    const CanvasComponentBounds& region)
+{
+    if ( !std::isfinite(offsetX) || !std::isfinite(offsetY) ) {
+        return sanitizeCanvasComponentPlacement(placement);
+    }
+    const float startCenterX = (startBounds.left + startBounds.right) * 0.5f;
+    const float startCenterY = (startBounds.top + startBounds.bottom) * 0.5f;
+    return moveCanvasComponentInRegion(placement,
+                                       startCenterX + offsetX,
+                                       startCenterY + offsetY,
+                                       region,
+                                       startBounds.width(),
+                                       startBounds.height());
+}
+
 /// @brief 命中组件移动区域或四角缩放把手。
 /// @param bounds 组件像素边界。
 /// @param pointerX 指针横坐标。
@@ -270,6 +425,53 @@ moveCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
     }
     return { (bounds.left + bounds.right) * 0.5f,
              (bounds.top + bounds.bottom) * 0.5f };
+}
+
+/// @brief 按四角拖动结果在指定区域内等比调整组件字号和中心位置。
+/// @param placement 缩放开始时的布局。
+/// @param handle 当前缩放把手。
+/// @param startBounds 缩放开始时的组件边界。
+/// @param targetFontSizeRatio 目标字号相对画布高度的比例。
+/// @param region 组件允许占用的像素区域。
+/// @return 以当前把手对角点为固定点更新后的布局。
+/// @warning 热路径：同步组件缩放期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement
+resizeCanvasComponentToFontSizeInRegion(
+    Config::CanvasComponentPlacement placement,
+    CanvasComponentDragHandle handle, const CanvasComponentBounds& startBounds,
+    float targetFontSizeRatio, const CanvasComponentBounds& region)
+{
+    placement                = sanitizeCanvasComponentPlacement(placement);
+    const float regionWidth  = region.width();
+    const float regionHeight = region.height();
+    if ( handle == CanvasComponentDragHandle::None ||
+         handle == CanvasComponentDragHandle::Move ||
+         startBounds.width() <= 0.0f || startBounds.height() <= 0.0f ||
+         regionWidth <= 0.0f || regionHeight <= 0.0f ||
+         !std::isfinite(targetFontSizeRatio) ) {
+        return placement;
+    }
+
+    const float startRatio   = placement.fontSizeRatio;
+    placement.fontSizeRatio  = std::clamp(targetFontSizeRatio,
+                                          CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO,
+                                          CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO);
+    const float appliedScale = placement.fontSizeRatio / startRatio;
+    const float width        = startBounds.width() * appliedScale;
+    const float height       = startBounds.height() * appliedScale;
+
+    const CanvasComponentPoint opposite =
+        canvasComponentOppositeCorner(startBounds, handle);
+    const bool  growsLeft = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::BottomLeft;
+    const bool  growsUp   = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::TopRight;
+    const float centerX =
+        opposite.x + (growsLeft ? -width * 0.5f : width * 0.5f);
+    const float centerY =
+        opposite.y + (growsUp ? -height * 0.5f : height * 0.5f);
+    return moveCanvasComponentInRegion(
+        placement, centerX, centerY, region, width, height);
 }
 
 /// @brief 按四角拖动结果在指定区域内等比调整组件字号和中心位置。
@@ -330,24 +532,12 @@ resizeCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
         0.01f,
         (pointerVector.x * startVector.x + pointerVector.y * startVector.y) /
             denominator);
-    const float startRatio   = placement.fontSizeRatio;
-    placement.fontSizeRatio  = std::clamp(startRatio * scale,
-                                         CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO,
-                                         CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO);
-    const float appliedScale = placement.fontSizeRatio / startRatio;
-    const float width        = startBounds.width() * appliedScale;
-    const float height       = startBounds.height() * appliedScale;
-
-    const bool growsLeft = handle == CanvasComponentDragHandle::TopLeft ||
-                           handle == CanvasComponentDragHandle::BottomLeft;
-    const bool growsUp = handle == CanvasComponentDragHandle::TopLeft ||
-                         handle == CanvasComponentDragHandle::TopRight;
-    const float centerX =
-        opposite.x + (growsLeft ? -width * 0.5f : width * 0.5f);
-    const float centerY =
-        opposite.y + (growsUp ? -height * 0.5f : height * 0.5f);
-    return moveCanvasComponentInRegion(
-        placement, centerX, centerY, region, width, height);
+    return resizeCanvasComponentToFontSizeInRegion(
+        placement,
+        handle,
+        startBounds,
+        placement.fontSizeRatio * scale,
+        region);
 }
 
 /// @brief 按四角拖动结果等比调整组件字号和中心位置。

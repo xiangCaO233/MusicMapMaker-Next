@@ -2,6 +2,7 @@
 
 add_library(
   Audio STATIC
+  src/BackgroundSpectrumAnalyzer.cpp
   src/AudioManager.cpp
   src/AudioManager_BGM.cpp
   src/AudioManager_EQ.cpp
@@ -55,3 +56,11 @@ target_link_libraries(AudioSpeedExportServiceTest PRIVATE Audio Log Config)
 add_test(NAME AudioSpeedExportServiceTest
          COMMAND AudioSpeedExportServiceTest "${MMM_TEST_RESOURCE_DIR}/ma"
                  "${CMAKE_BINARY_DIR}/test_output/audio_speed_export_coverage")
+
+mmm_add_test_executable(Audio BackgroundSpectrumAnalyzerTest
+                        tests/BackgroundSpectrumAnalyzerTest.cpp)
+target_include_directories(BackgroundSpectrumAnalyzerTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(BackgroundSpectrumAnalyzerTest PRIVATE Audio Log Config)
+add_test(NAME BackgroundSpectrumAnalyzerTest
+         COMMAND BackgroundSpectrumAnalyzerTest)

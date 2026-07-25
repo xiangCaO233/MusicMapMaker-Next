@@ -15,6 +15,33 @@
 namespace MMM::Logic::System
 {
 
+namespace
+{
+
+/// @brief 计算自动显示模式下指定分拍线的附加不透明度。
+/// @param distanceToCursor 分拍线到光标中心的垂直像素距离。
+/// @param viewportHeight 当前画布垂直范围。
+/// @param visibleRatio 完全显示区域占画布垂直范围的比例。
+/// @param fadeRatio 两侧渐隐区域合计占画布垂直范围的比例。
+/// @return 范围在 0 到 1 之间的平滑不透明度倍率。
+/// @warning 分拍线热路径逐线调用；仅允许常数次浮点运算。
+float calculateCursorRevealAlpha(float distanceToCursor, float viewportHeight,
+                                 float visibleRatio, float fadeRatio)
+{
+    const float visibleHalfSpan =
+        viewportHeight * std::clamp(visibleRatio, 0.05f, 0.50f) * 0.5f;
+    const float fadeHalfSpan =
+        viewportHeight * std::clamp(fadeRatio, 0.02f, 0.40f) * 0.5f;
+    if ( distanceToCursor <= visibleHalfSpan ) return 1.0f;
+    if ( distanceToCursor >= visibleHalfSpan + fadeHalfSpan ) return 0.0f;
+
+    const float progress = (distanceToCursor - visibleHalfSpan) / fadeHalfSpan;
+    const float smoothProgress = progress * progress * (3.0f - 2.0f * progress);
+    return 1.0f - smoothProgress;
+}
+
+}  // namespace
+
 void NoteRenderSystem::renderTrackLayout(
     Batcher& batcher, float viewportWidth, float viewportHeight,
     float judgmentLineY, int32_t trackCount, const Config::EditorConfig& config,
@@ -177,9 +204,10 @@ void NoteRenderSystem::drawBeatLines(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
-    float trackAreaW, float renderScaleY)
+    float trackAreaW, float renderScaleY, bool revealNearCursor)
 {
     if ( !cache ) return;
+    if ( revealNearCursor && !batcher.snapshot->isHoveringCanvas ) return;
 
     int beatDivisor = config.settings.beatDivisor;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
@@ -188,6 +216,14 @@ void NoteRenderSystem::drawBeatLines(
 
     double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
     if ( std::abs(renderScaleY) < 1e-6f ) return;
+    const float cursorY =
+        revealNearCursor
+            ? judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                  batcher.snapshot->hoveredTime,
+                                  currentAbsY,
+                                  batcher.snapshot->hoveredTime)) *
+                                  renderScaleY
+            : judgmentLineY;
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
@@ -291,13 +327,28 @@ void NoteRenderSystem::drawBeatLines(
                     denominator = beatDivisor / gcd;
                 }
 
-                auto [color, width] = getBeatLineConfig(denominator);
                 float y =
                     judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                                         t, currentAbsY, t)) *
                                         renderScaleY;
 
+                float cursorRevealAlpha = 1.0f;
+                if ( revealNearCursor ) {
+                    cursorRevealAlpha = calculateCursorRevealAlpha(
+                        std::abs(y - cursorY),
+                        viewportHeight,
+                        config.visual.beatLineCursorVisibleRatio,
+                        config.visual.beatLineCursorFadeRatio);
+                    if ( cursorRevealAlpha <= 0.0f ) {
+                        stepOffset++;
+                        t = bpmTime + stepOffset * stepDuration;
+                        continue;
+                    }
+                }
+
                 if ( y >= visibleTop && y <= visibleBottom && occupyRow(y) ) {
+                    auto [color, width] = getBeatLineConfig(denominator);
+                    color.a *= cursorRevealAlpha;
                     if ( batcher.snapshot->isSnapped &&
                          std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
                         glm::vec4 glowCol = color;

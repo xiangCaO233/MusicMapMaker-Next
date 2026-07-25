@@ -100,8 +100,11 @@ struct ProjectWorkspaceToolbarState {
     /// @brief 是否启用线性滚动映射。
     bool m_enableLinearScrollMapping{ false };
 
-    /// @brief 是否绘制分拍线。
+    /// @brief 是否绘制分拍线；仅用于兼容旧版项目工作区。
     bool m_drawBeatLines{ true };
+
+    /// @brief 分拍线显示模式，使用 Always、NearCursor 或 Hidden 的稳定文本。
+    std::string m_beatLineDisplayMode{ "Always" };
 
     /// @brief 是否在滚动时停止播放。
     bool m_stopPlaybackOnScroll{ false };
@@ -129,7 +132,8 @@ struct ProjectWorkspaceToolbarState {
             { "m_snapFloor", state.m_snapFloor },
             { "m_enableLinearScrollMapping",
               state.m_enableLinearScrollMapping },
-            { "m_drawBeatLines", state.m_drawBeatLines },
+            { "m_drawBeatLines", state.m_beatLineDisplayMode != "Hidden" },
+            { "m_beatLineDisplayMode", state.m_beatLineDisplayMode },
             { "m_stopPlaybackOnScroll", state.m_stopPlaybackOnScroll },
             { "m_enableHitEffects", state.m_enableHitEffects },
             { "m_beatDivisor", state.m_beatDivisor },
@@ -148,7 +152,21 @@ struct ProjectWorkspaceToolbarState {
         state.m_snapFloor     = j.value("m_snapFloor", false);
         state.m_enableLinearScrollMapping =
             j.value("m_enableLinearScrollMapping", false);
-        state.m_drawBeatLines        = j.value("m_drawBeatLines", true);
+        state.m_drawBeatLines = j.value("m_drawBeatLines", true);
+        if ( j.contains("m_beatLineDisplayMode") ) {
+            state.m_beatLineDisplayMode =
+                j.value("m_beatLineDisplayMode", std::string{ "Always" });
+            if ( state.m_beatLineDisplayMode != "Always" &&
+                 state.m_beatLineDisplayMode != "NearCursor" &&
+                 state.m_beatLineDisplayMode != "Hidden" ) {
+                state.m_beatLineDisplayMode =
+                    state.m_drawBeatLines ? "Always" : "Hidden";
+            }
+        } else {
+            state.m_beatLineDisplayMode =
+                state.m_drawBeatLines ? "Always" : "Hidden";
+        }
+        state.m_drawBeatLines        = state.m_beatLineDisplayMode != "Hidden";
         state.m_stopPlaybackOnScroll = j.value("m_stopPlaybackOnScroll", false);
         state.m_enableHitEffects     = j.value("m_enableHitEffects", true);
         state.m_beatDivisor          = j.value("m_beatDivisor", 4);

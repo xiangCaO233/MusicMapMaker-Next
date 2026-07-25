@@ -1,6 +1,7 @@
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -85,6 +86,36 @@ bool testMovePreservesSize()
            near(movedBottomRight.bottom - movedBottomRight.top, 0.7f);
 }
 
+/// @brief 验证整个轨道布局可按其边缘和中心吸附到像素目标线。
+/// @return 横向边缘与纵向中心吸附后仍保持轨道宽高时返回 true。
+bool testTrackLayoutSnapping()
+{
+    MMM::Config::TrackLayout candidate;
+    candidate.left                                         = 0.2f;
+    candidate.top                                          = 0.2f;
+    candidate.right                                        = 0.6f;
+    candidate.bottom                                       = 0.8f;
+    constexpr float                         viewportWidth  = 1000.0f;
+    constexpr float                         viewportHeight = 500.0f;
+    const MMM::Logic::CanvasComponentBounds candidateBounds{
+        candidate.left * viewportWidth,
+        candidate.top * viewportHeight,
+        candidate.right * viewportWidth,
+        candidate.bottom * viewportHeight,
+    };
+    const std::array<float, 1> targetX{ 606.0f };
+    const std::array<float, 1> targetY{ 247.0f };
+    const auto                 snap = MMM::Logic::snapCanvasComponentBounds(
+        candidateBounds, targetX, targetY, 8.0f);
+    const auto snapped = MMM::Canvas::moveTrackLayoutToPixelCenter(
+        candidate, snap.center.x, snap.center.y, viewportWidth, viewportHeight);
+
+    return snap.snappedX && snap.snappedY && near(snapped.right, 0.606f) &&
+           near((snapped.top + snapped.bottom) * 0.5f, 0.494f) &&
+           near(snapped.right - snapped.left, 0.4f) &&
+           near(snapped.bottom - snapped.top, 0.6f);
+}
+
 /// @brief 验证判定线位置会被限制在画布范围内。
 /// @return 有限值、越界值和非有限值均得到合法结果时返回 true。
 bool testJudgmentLineConstraints()
@@ -155,6 +186,58 @@ bool testCanvasComponentPlacement()
            bounds.contains(bounds.left, bounds.top);
 }
 
+/// @brief 验证组件边缘与中心会在阈值内独立吸附到最近横纵目标线。
+/// @return 边缘、中心、阈值外和非有限目标均按预期处理时返回 true。
+bool testCanvasComponentSnapping()
+{
+    const MMM::Logic::CanvasComponentBounds bounds{
+        100.0f, 80.0f, 180.0f, 120.0f
+    };
+    const std::array<float, 3> edgeTargetsX{
+        94.0f, 184.0f, std::numeric_limits<float>::quiet_NaN()
+    };
+    const std::array<float, 2> edgeTargetsY{ 74.0f, 125.0f };
+    const auto                 edgeSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, edgeTargetsX, edgeTargetsY, 8.0f);
+    if ( !edgeSnap.snappedX || !edgeSnap.snappedY ||
+         !near(edgeSnap.center.x, 144.0f) || !near(edgeSnap.center.y, 105.0f) ||
+         !near(edgeSnap.targetX, 184.0f) || !near(edgeSnap.targetY, 125.0f) ) {
+        return false;
+    }
+
+    const std::array<float, 1> centerTargetX{ 146.0f };
+    const std::array<float, 1> centerTargetY{ 93.0f };
+    const auto centerSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, centerTargetX, centerTargetY, 8.0f);
+    if ( !centerSnap.snappedX || !centerSnap.snappedY ||
+         !near(centerSnap.center.x, 146.0f) ||
+         !near(centerSnap.center.y, 93.0f) ) {
+        return false;
+    }
+
+    const MMM::Logic::CanvasComponentBounds synchronizedGroupBounds{
+        20.0f, 30.0f, 220.0f, 130.0f
+    };
+    const std::array<float, 1> groupTargetX{ 225.0f };
+    const std::array<float, 0> noTargets;
+    const auto groupSnap = MMM::Logic::snapCanvasComponentBounds(
+        synchronizedGroupBounds, groupTargetX, noTargets, 8.0f);
+    if ( !groupSnap.snappedX || groupSnap.snappedY ||
+         !near(groupSnap.center.x, 125.0f) ||
+         !near(groupSnap.center.y, 80.0f) ||
+         !near(groupSnap.targetX, 225.0f) ) {
+        return false;
+    }
+
+    const std::array<float, 1> distantTargetX{ 189.0f };
+    const std::array<float, 1> distantTargetY{ 129.0f };
+    const auto distantSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, distantTargetX, distantTargetY, 8.0f);
+    return !distantSnap.snappedX && !distantSnap.snappedY &&
+           near(distantSnap.center.x, 140.0f) &&
+           near(distantSnap.center.y, 100.0f);
+}
+
 /// @brief 验证四角包围框会等比调整字号并保持对角点。
 /// @return 命中、字号和移动后的中心均符合预期时返回 true。
 bool testCanvasComponentResize()
@@ -182,6 +265,109 @@ bool testCanvasComponentResize()
         600.0f);
     return near(resized.fontSizeRatio, 0.08f) &&
            near(resized.anchorX, 0.625f) && near(resized.anchorY, 0.52f);
+}
+
+/// @brief 验证物件包围框四角会以中心为固定点独立调整横纵缩放。
+/// @return 横纵缩放、反向角点与上下限均符合预期时返回 true。
+bool testNoteRenderScaleResize()
+{
+    using Handle = MMM::Logic::CanvasComponentDragHandle;
+    const MMM::Logic::CanvasComponentBounds bounds{
+        100.0f, 80.0f, 200.0f, 120.0f
+    };
+    const MMM::Logic::NoteRenderScale start{ 1.2f, 1.2f };
+    const auto resized = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::BottomRight, bounds, 225.0f, 130.0f);
+    if ( !near(resized.x, 1.8f) || !near(resized.y, 1.8f) ) {
+        return false;
+    }
+
+    const auto independent = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::TopLeft, bounds, 75.0f, 90.0f);
+    if ( !near(independent.x, 1.8f) || !near(independent.y, 0.6f) ) {
+        return false;
+    }
+
+    const auto clampedMaximum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::BottomRight, bounds, 1000.0f, 1000.0f);
+    const auto clampedMinimum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::TopLeft, bounds, 149.0f, 99.0f);
+    return near(clampedMaximum.x, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
+           near(clampedMaximum.y, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
+           near(clampedMinimum.x, MMM::Logic::NOTE_RENDER_MIN_SCALE) &&
+           near(clampedMinimum.y, MMM::Logic::NOTE_RENDER_MIN_SCALE);
+}
+
+/// @brief 验证同步字号缩放会让其他组件沿用当前把手的固定对角点。
+/// @return 其他组件字号变化后左上角保持不动且中心随尺寸移动时返回 true。
+bool testSynchronizedCanvasComponentResize()
+{
+    const MMM::Logic::CanvasComponentBounds region{
+        0.0f, 0.0f, 1024.0f, 512.0f
+    };
+    MMM::Config::CanvasComponentPlacement placement;
+    placement.visible       = true;
+    placement.anchorX       = 0.375f;
+    placement.anchorY       = 0.5f;
+    placement.fontSizeRatio = 0.03125f;
+    const auto startBounds  = MMM::Logic::canvasComponentBoundsInRegion(
+        placement, region, 160.0f, 32.0f);
+    const auto resized = MMM::Logic::resizeCanvasComponentToFontSizeInRegion(
+        placement,
+        MMM::Logic::CanvasComponentDragHandle::BottomRight,
+        startBounds,
+        0.0625f,
+        region);
+    const auto resizedBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        resized, region, 320.0f, 64.0f);
+    const float startCenterX = (startBounds.left + startBounds.right) * 0.5f;
+    const float resizedCenterX =
+        (resizedBounds.left + resizedBounds.right) * 0.5f;
+    return near(resized.fontSizeRatio, 0.0625f) &&
+           near(resizedBounds.left, startBounds.left) &&
+           near(resizedBounds.top, startBounds.top) &&
+           !near(resizedCenterX, startCenterX);
+}
+
+/// @brief 验证同步移动会给其他组件应用相同位移并保留相对间距。
+/// @return 两个组件移动后的中心差与移动前一致时返回 true。
+bool testSynchronizedCanvasComponentMove()
+{
+    const MMM::Logic::CanvasComponentBounds region{
+        0.0f, 0.0f, 1024.0f, 512.0f
+    };
+    MMM::Config::CanvasComponentPlacement first;
+    first.visible                                = true;
+    first.anchorX                                = 0.25f;
+    first.anchorY                                = 0.5f;
+    MMM::Config::CanvasComponentPlacement second = first;
+    second.anchorX                               = 0.625f;
+    const auto firstBounds =
+        MMM::Logic::canvasComponentBoundsInRegion(first, region, 160.0f, 32.0f);
+    const auto secondBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        second, region, 240.0f, 32.0f);
+
+    constexpr float offsetX = 64.0f;
+    constexpr float offsetY = 32.0f;
+    const auto movedFirst   = MMM::Logic::moveCanvasComponentByOffsetInRegion(
+        first, firstBounds, offsetX, offsetY, region);
+    const auto movedSecond = MMM::Logic::moveCanvasComponentByOffsetInRegion(
+        second, secondBounds, offsetX, offsetY, region);
+    const auto movedFirstBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        movedFirst, region, 160.0f, 32.0f);
+    const auto movedSecondBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        movedSecond, region, 240.0f, 32.0f);
+    const float startCenterDistance =
+        (secondBounds.left + secondBounds.right) * 0.5f -
+        (firstBounds.left + firstBounds.right) * 0.5f;
+    const float movedCenterDistance =
+        (movedSecondBounds.left + movedSecondBounds.right) * 0.5f -
+        (movedFirstBounds.left + movedFirstBounds.right) * 0.5f;
+    return near(movedFirst.anchorX, 0.3125f) &&
+           near(movedFirst.anchorY, 0.5625f) &&
+           near(movedSecond.anchorX, 0.6875f) &&
+           near(movedSecond.anchorY, 0.5625f) &&
+           near(movedCenterDistance, startCenterDistance);
 }
 
 /// @brief 验证拍内组件移动和缩放不会越过所属整拍的垂直边界。
@@ -230,6 +416,81 @@ bool testBeatRelativeComponentConstraints()
            resizedBounds.bottom <= beatRegion.bottom;
 }
 
+/// @brief 验证所有画布组件均可仅复位位置和尺寸。
+/// @return 默认几何恢复、显示属性保留且 KPS 逐轨覆盖被清除时返回 true。
+bool testCanvasComponentPlacementReset()
+{
+    MMM::Config::CanvasComponentLayoutConfig config;
+    const auto                               verifyReset =
+        [&](MMM::Config::CanvasComponentType             type,
+            const MMM::Config::CanvasComponentPlacement& expected) {
+            auto& placement         = config.placement(type);
+            placement.visible       = true;
+            placement.anchorX       = 0.91f;
+            placement.anchorY       = 0.83f;
+            placement.fontSizeRatio = 0.21f;
+            placement.color         = { 0.2f, 0.3f, 0.4f, 0.5f };
+
+            if ( type == MMM::Config::CanvasComponentType::Kps ) {
+                auto& trackPlacement =
+                    config.editablePlacement(type, 2, 4, 0.2f, 0.8f);
+                trackPlacement.anchorX   = 0.72f;
+                config.syncKpsTrackSizes = true;
+                config.setSyncKpsTrackRelativePositions(true);
+                config.synchronizeKpsTrackFontSize(0.08f);
+            }
+
+            config.resetPlacementToDefault(type);
+            const auto& reset = config.placement(type);
+            return reset.visible && near(reset.anchorX, expected.anchorX) &&
+                   near(reset.anchorY, expected.anchorY) &&
+                   near(reset.fontSizeRatio, expected.fontSizeRatio) &&
+                   near(reset.color[0], 0.2f) && near(reset.color[3], 0.5f);
+        };
+
+    const bool allPlacementsReset =
+        verifyReset(MMM::Config::CanvasComponentType::JudgmentLineTime,
+                    MMM::Config::DEFAULT_JUDGMENT_LINE_TIME_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BeatNumber,
+                    MMM::Config::DEFAULT_BEAT_NUMBER_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BeatLineTime,
+                    MMM::Config::DEFAULT_BEAT_LINE_TIME_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::Kps,
+                    MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BackgroundSpectrum,
+                    MMM::Config::DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
+    return allPlacementsReset && config.kpsTracks.empty() &&
+           near(config.kpsTrackFontSizeRatio, 0.0f) &&
+           config.syncKpsTrackSizes && config.syncKpsTrackRelativePositions &&
+           !config.syncAllKpsComponentPositions;
+}
+
+/// @brief 验证两种 KPS 位置同步模式始终互斥。
+/// @return 设置接口与冲突配置读取后均只保留一个模式时返回 true。
+bool testKpsPositionSyncModeMutualExclusion()
+{
+    MMM::Config::CanvasComponentLayoutConfig config;
+    config.setSyncKpsTrackRelativePositions(true);
+    if ( !config.syncKpsTrackRelativePositions ||
+         config.syncAllKpsComponentPositions ) {
+        return false;
+    }
+
+    config.setSyncAllKpsComponentPositions(true);
+    if ( config.syncKpsTrackRelativePositions ||
+         !config.syncAllKpsComponentPositions ) {
+        return false;
+    }
+
+    nlohmann::json encoded                   = config;
+    encoded["syncKpsTrackRelativePositions"] = true;
+    encoded["syncAllKpsComponentPositions"]  = true;
+    const auto decoded =
+        encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
+    return !decoded.syncKpsTrackRelativePositions &&
+           decoded.syncAllKpsComponentPositions;
+}
+
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
 /// @return 显隐、锚点、字号与颜色均保持时返回 true。
 bool testCanvasComponentConfigRoundTrip()
@@ -253,6 +514,19 @@ bool testCanvasComponentConfigRoundTrip()
     beatLineTime.anchorY       = 0.67f;
     beatLineTime.fontSizeRatio = 0.19f;
     beatLineTime.color         = { 0.2f, 0.9f, 0.6f, 0.75f };
+    source.kps.visible         = true;
+    source.kps.anchorX         = 0.61f;
+    source.kps.anchorY         = 0.09f;
+    source.kps.fontSizeRatio   = 0.06f;
+    source.kps.color           = { 0.9f, 0.8f, 0.2f, 0.85f };
+    auto& kpsTrack             = source.editablePlacement(
+        MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    kpsTrack.anchorX         = 0.73f;
+    kpsTrack.anchorY         = 0.24f;
+    kpsTrack.fontSizeRatio   = 0.045f;
+    source.syncKpsTrackSizes = true;
+    source.setSyncKpsTrackRelativePositions(true);
+    source.synchronizeKpsTrackFontSize(0.064f);
 
     const nlohmann::json encoded = source;
     const auto           decoded =
@@ -260,7 +534,20 @@ bool testCanvasComponentConfigRoundTrip()
     const auto& restoredTime         = decoded.judgmentLineTime;
     const auto& restoredBeat         = decoded.beatNumber;
     const auto& restoredBeatLineTime = decoded.beatLineTime;
-    return restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
+    const auto  restoredKpsTrack     = decoded.resolvedPlacement(
+        MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    const auto defaultKpsTrack = decoded.resolvedPlacement(
+        MMM::Config::CanvasComponentType::Kps, 1, 4, 0.2f, 0.8f);
+    auto independentlyEditable              = decoded;
+    independentlyEditable.syncKpsTrackSizes = false;
+    const auto independentStoredKpsTrack =
+        independentlyEditable.resolvedPlacement(
+            MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    const auto independentDefaultKpsTrack =
+        independentlyEditable.resolvedPlacement(
+            MMM::Config::CanvasComponentType::Kps, 1, 4, 0.2f, 0.8f);
+    return encoded.value("fontSizeUsesCanvasHeight", false) &&
+           restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
            near(restoredTime.anchorY, 0.76f) &&
            near(restoredTime.fontSizeRatio, 0.08f) &&
            near(restoredTime.color[0], 0.1f) &&
@@ -280,7 +567,46 @@ bool testCanvasComponentConfigRoundTrip()
            near(restoredBeatLineTime.color[0], 0.2f) &&
            near(restoredBeatLineTime.color[1], 0.9f) &&
            near(restoredBeatLineTime.color[2], 0.6f) &&
-           near(restoredBeatLineTime.color[3], 0.75f);
+           near(restoredBeatLineTime.color[3], 0.75f) && decoded.kps.visible &&
+           near(decoded.kps.anchorX, 0.61f) &&
+           near(decoded.kps.anchorY, 0.09f) &&
+           near(decoded.kps.fontSizeRatio, 0.06f) &&
+           near(decoded.kps.color[0], 0.9f) &&
+           near(decoded.kps.color[3], 0.85f) &&
+           decoded.kpsTracks.size() == 1U &&
+           near(restoredKpsTrack.anchorX, 0.73f) &&
+           near(restoredKpsTrack.anchorY, 0.24f) &&
+           near(restoredKpsTrack.fontSizeRatio, 0.064f) &&
+           near(defaultKpsTrack.anchorX, 0.425f) &&
+           near(defaultKpsTrack.fontSizeRatio, 0.064f) &&
+           decoded.syncKpsTrackSizes && decoded.syncKpsTrackRelativePositions &&
+           !decoded.syncAllKpsComponentPositions &&
+           near(decoded.kpsTrackFontSizeRatio, 0.064f) &&
+           near(independentStoredKpsTrack.fontSizeRatio, 0.064f) &&
+           near(independentDefaultKpsTrack.fontSizeRatio, 0.064f);
+}
+
+/// @brief 验证旧版拍内字号比例迁移为固定画布参考比例。
+/// @return 默认旧字号得到新默认尺寸且位置比例保持不变时返回 true。
+bool testLegacyRepeatedTextSizeMigration()
+{
+    const nlohmann::json legacy{
+        { "beatNumber",
+          { { "anchorX", 0.31f },
+            { "anchorY", 0.44f },
+            { "fontSizeRatio", 0.18f } } },
+        { "beatLineTime",
+          { { "anchorX", 0.27f },
+            { "anchorY", 0.63f },
+            { "fontSizeRatio", 0.18f } } },
+    };
+    const auto decoded = legacy.get<MMM::Config::CanvasComponentLayoutConfig>();
+    return near(decoded.beatNumber.anchorX, 0.31f) &&
+           near(decoded.beatNumber.anchorY, 0.44f) &&
+           near(decoded.beatNumber.fontSizeRatio, 0.075f) &&
+           near(decoded.beatLineTime.anchorX, 0.27f) &&
+           near(decoded.beatLineTime.anchorY, 0.63f) &&
+           near(decoded.beatLineTime.fontSizeRatio, 0.025f);
 }
 
 }  // namespace
@@ -310,11 +636,35 @@ int main()
     if ( !testCanvasComponentResize() ) {
         return 7;
     }
-    if ( !testBeatRelativeComponentConstraints() ) {
+    if ( !testSynchronizedCanvasComponentResize() ) {
         return 8;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testSynchronizedCanvasComponentMove() ) {
         return 9;
+    }
+    if ( !testBeatRelativeComponentConstraints() ) {
+        return 10;
+    }
+    if ( !testCanvasComponentPlacementReset() ) {
+        return 11;
+    }
+    if ( !testKpsPositionSyncModeMutualExclusion() ) {
+        return 12;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 13;
+    }
+    if ( !testLegacyRepeatedTextSizeMigration() ) {
+        return 14;
+    }
+    if ( !testCanvasComponentSnapping() ) {
+        return 15;
+    }
+    if ( !testTrackLayoutSnapping() ) {
+        return 16;
+    }
+    if ( !testNoteRenderScaleResize() ) {
+        return 17;
     }
     return 0;
 }

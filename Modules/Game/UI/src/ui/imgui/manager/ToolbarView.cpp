@@ -40,6 +40,22 @@ namespace MMM::UI
 
 namespace
 {
+/// @brief 获取快捷键切换后的下一种分拍线显示模式。
+/// @param mode 当前显示模式。
+/// @return 按始终显示、光标附近、隐藏顺序循环后的模式。
+Config::BeatLineDisplayMode nextBeatLineDisplayMode(
+    Config::BeatLineDisplayMode mode)
+{
+    switch ( mode ) {
+    case Config::BeatLineDisplayMode::Always:
+        return Config::BeatLineDisplayMode::NearCursor;
+    case Config::BeatLineDisplayMode::NearCursor:
+        return Config::BeatLineDisplayMode::Hidden;
+    case Config::BeatLineDisplayMode::Hidden:
+    default: return Config::BeatLineDisplayMode::Always;
+    }
+}
+
 /// @brief 将颜色槽位转换为数组索引。
 std::size_t colorSlotIndex(Logic::NoteColorSlot slot)
 {
@@ -472,8 +488,9 @@ void ToolbarView::update(UIManager* sourceManager)
                               });
             tryToggleShortcut(shortcutConfig.toggleBeatLines,
                               [](Config::EditorConfig& config) {
-                                  config.visual.drawBeatLines =
-                                      !config.visual.drawBeatLines;
+                                  config.visual.beatLineDisplayMode =
+                                      nextBeatLineDisplayMode(
+                                          config.visual.beatLineDisplayMode);
                               });
             tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
                               [](Config::EditorConfig& config) {
@@ -623,9 +640,10 @@ void ToolbarView::update(UIManager* sourceManager)
                                        ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
-                m_showDivisorPopup = false;
-                m_showKeyPopup     = false;
-                m_showSpeedPopup   = false;
+                m_showDivisorPopup  = false;
+                m_showKeyPopup      = false;
+                m_showSpeedPopup    = false;
+                m_showBeatLinePopup = false;
             }
         }
         {
@@ -638,7 +656,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -722,15 +740,32 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.visual.enableLinearScrollMapping;
                          });
 
-        drawToggleButton(ICON_MMM_BARS,
-                         editorCfg.visual.drawBeatLines,
-                         TR("ui.toolbar.draw_beat_lines").data(),
-                         TR("ui.toolbar.short.draw_beat_lines").data(),
-                         shortcutConfig.toggleBeatLines,
-                         [](Config::EditorConfig& config) {
-                             config.visual.drawBeatLines =
-                                 !config.visual.drawBeatLines;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("BeatLineDisplayMode");
+        if ( drawIconButton(ICON_MMM_BARS,
+                            "##ToolbarBeatLineDisplayMode",
+                            TR("ui.toolbar.short.draw_beat_lines").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showBeatLinePopup = !m_showBeatLinePopup;
+            if ( m_showBeatLinePopup ) {
+                m_showColorPopup   = false;
+                m_showDivisorPopup = false;
+                m_showKeyPopup     = false;
+                m_showSpeedPopup   = false;
+            }
+        }
+        m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        {
+            const std::string tooltipText =
+                tooltipWithShortcut(TR("ui.toolbar.draw_beat_lines").data(),
+                                    shortcutConfig.toggleBeatLines);
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_STOP,
                          editorCfg.settings.stopPlaybackOnScroll,
@@ -773,7 +808,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -826,8 +861,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                                ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
-                        m_showKeyPopup     = false;
-                        m_showDivisorPopup = false;
+                        m_showKeyPopup      = false;
+                        m_showDivisorPopup  = false;
+                        m_showBeatLinePopup = false;
                     }
                 }
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
@@ -889,8 +925,9 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
-                    m_showDivisorPopup = false;
-                    m_showSpeedPopup   = false;
+                    m_showDivisorPopup  = false;
+                    m_showSpeedPopup    = false;
+                    m_showBeatLinePopup = false;
                 }
             }
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
@@ -939,8 +976,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
-                    m_showKeyPopup   = false;
-                    m_showSpeedPopup = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showBeatLinePopup = false;
                 }
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
@@ -979,6 +1017,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
     renderLayoutPopup(dpiScale);
+    renderBeatLinePopup(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1065,7 +1104,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1114,11 +1153,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1285,6 +1324,9 @@ void ToolbarView::update(UIManager* sourceManager)
 
                 // 常用 Key 数快速设置按钮
                 const std::vector<int> commonKeys = { 4, 5, 6, 7, 8 };
+                // 固定尺寸快捷按钮不继承主题内容内边距，避免 K
+                // 标签被挤压或裁切。
+                Utils::pushFixedButtonStyleVars();
                 for ( size_t i = 0; i < commonKeys.size(); ++i ) {
                     if ( i > 0 ) ImGui::SameLine();
                     char buf[64];
@@ -1302,6 +1344,7 @@ void ToolbarView::update(UIManager* sourceManager)
                             Logic::CmdUpdateBeatmapMetadata{ meta });
                     }
                 }
+                Utils::popFixedButtonStyleVars();
             } else {
                 m_showKeyPopup = false;
             }
@@ -1344,7 +1387,7 @@ void ToolbarView::loadSoftwareDefaultPalette()
     if ( !schemeName.empty() &&
          schemeName != Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         const auto& paletteConfig = settings.colorPalettes;
-        auto        it            = std::find_if(paletteConfig.schemes.begin(),
+        auto it = std::find_if(paletteConfig.schemes.begin(),
                                paletteConfig.schemes.end(),
                                [&](const Config::ColorPaletteScheme& scheme) {
                                    return scheme.name == schemeName;
@@ -2250,7 +2293,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##PaletteColorHex",
+        bool hexChanged = ImGui::InputText("##PaletteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -2532,12 +2575,159 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
     ImGui::PopStyleColor(3);
 }
 
+void ToolbarView::renderBeatLinePopup(float dpiScale)
+{
+    if ( !m_showBeatLinePopup ) {
+        if ( m_beatLinePopupConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_beatLinePopupConfigDirty = false;
+        }
+        return;
+    }
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    padding        = std::floor(8.0f * dpiScale);
+    const float    popupW         = m_beatLinePopupWidth > 0.0f
+                                        ? m_beatLinePopupWidth
+                                        : std::floor(260.0f * dpiScale);
+    const float    popupH         = m_beatLinePopupHeight > 0.0f
+                                        ? m_beatLinePopupHeight
+                                        : std::floor(220.0f * dpiScale);
+    float          targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
+    float          targetY = m_lastBeatLineBtnY;
+    targetX                = std::max(targetX, viewportLeft + popupW + padding);
+    const float minTargetY = viewportTop + padding;
+    const float maxTargetY =
+        std::max(minTargetY, viewportBottom - popupH - padding);
+    targetY = std::clamp(targetY, minTargetY, maxTargetY);
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                        std::floor(aesthetics.windowRounding * dpiScale));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(aesthetics.windowPadding * dpiScale),
+               std::floor(aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                        std::floor(aesthetics.frameRounding * dpiScale));
+
+    if ( ImGui::Begin("##BeatLineDisplayModePopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.toolbar.beat_lines.title").data());
+        ImGui::Separator();
+
+        auto& appConfig  = Config::AppConfig::instance();
+        auto  mode       = appConfig.getVisualConfig().beatLineDisplayMode;
+        auto  selectMode = [&](Config::BeatLineDisplayMode candidate,
+                               const char*                 labelKey) {
+            if ( !::MMM::UI::FeedbackRadioButton(TR(labelKey).data(),
+                                                 mode == candidate) ) {
+                return;
+            }
+            auto updatedConfig = appConfig.getEditorConfig();
+            updatedConfig.visual.beatLineDisplayMode = candidate;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            appConfig.save();
+            m_beatLinePopupConfigDirty = false;
+            mode                       = candidate;
+        };
+
+        selectMode(Config::BeatLineDisplayMode::Always,
+                   "ui.toolbar.beat_lines.always");
+        selectMode(Config::BeatLineDisplayMode::NearCursor,
+                   "ui.toolbar.beat_lines.near_cursor");
+        selectMode(Config::BeatLineDisplayMode::Hidden,
+                   "ui.toolbar.beat_lines.hidden");
+
+        if ( mode == Config::BeatLineDisplayMode::NearCursor ) {
+            ImGui::Separator();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                                   std::floor(230.0f * dpiScale));
+            ImGui::TextDisabled("%s",
+                                TR("ui.toolbar.beat_lines.auto_hint").data());
+            ImGui::PopTextWrapPos();
+
+            float visiblePercent =
+                appConfig.getVisualConfig().beatLineCursorVisibleRatio * 100.0f;
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.beat_lines.visible_range").data());
+            ImGui::SetNextItemWidth(std::floor(230.0f * dpiScale));
+            if ( ::MMM::UI::FeedbackSliderFloat("##BeatLineVisibleRange",
+                                                &visiblePercent,
+                                                5.0f,
+                                                50.0f,
+                                                "%.0f%%") ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.beatLineCursorVisibleRatio =
+                    visiblePercent * 0.01f;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                m_beatLinePopupConfigDirty = true;
+            }
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_beatLinePopupConfigDirty ) {
+                appConfig.save();
+                m_beatLinePopupConfigDirty = false;
+            }
+
+            float fadePercent =
+                appConfig.getVisualConfig().beatLineCursorFadeRatio * 100.0f;
+            ImGui::TextUnformatted(
+                TR("ui.toolbar.beat_lines.fade_range").data());
+            ImGui::SetNextItemWidth(std::floor(230.0f * dpiScale));
+            if ( ::MMM::UI::FeedbackSliderFloat("##BeatLineFadeRange",
+                                                &fadePercent,
+                                                2.0f,
+                                                40.0f,
+                                                "%.0f%%") ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.beatLineCursorFadeRatio =
+                    fadePercent * 0.01f;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                m_beatLinePopupConfigDirty = true;
+            }
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_beatLinePopupConfigDirty ) {
+                appConfig.save();
+                m_beatLinePopupConfigDirty = false;
+            }
+        }
+
+        const ImVec2 size     = ImGui::GetWindowSize();
+        m_beatLinePopupWidth  = size.x;
+        m_beatLinePopupHeight = size.y;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
 void ToolbarView::renderLayoutPopup(float dpiScale)
 {
     if ( !m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout ) {
         if ( m_layoutComponentColorDirty ) {
             Config::AppConfig::instance().save();
             m_layoutComponentColorDirty = false;
+        }
+        if ( m_layoutSpectrumConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_layoutSpectrumConfigDirty = false;
+        }
+        if ( m_layoutVisualConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_layoutVisualConfigDirty = false;
         }
         m_layoutComponentColorPickerOpen = false;
         return;
@@ -2585,14 +2775,209 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         std::floor(aesthetics.frameRounding * dpiScale));
 
     if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
+        ImGui::Separator();
+
+        auto&       appConfig          = Config::AppConfig::instance();
+        const float colorButtonSize    = std::floor(22.0f * dpiScale);
+        const float visualControlWidth = std::floor(230.0f * dpiScale);
+        const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
+        const float resetButtonWidth =
+            ImGui::CalcTextSize(resetButtonLabel.data()).x +
+            ImGui::GetStyle().FramePadding.x * 2.0f;
+        bool       anyColorPickerOpen = false;
+        const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
+            auto updatedConfig   = appConfig.getEditorConfig();
+            updatedConfig.visual = visual;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+        };
+        const auto saveVisualAfterEdit = [&]() {
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_layoutVisualConfigDirty ) {
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+        };
+        const auto drawRenderingResetButton = [&](const char* id,
+                                                  auto&&      resetConfig) {
+            ImGui::PushID(id);
+            const float remainingWidth = ImGui::GetContentRegionAvail().x;
+            if ( remainingWidth > resetButtonWidth ) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + remainingWidth -
+                                     resetButtonWidth);
+            }
+            if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                resetConfig(updatedConfig);
+                appConfig.getEditorConfig() = updatedConfig;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(TR("ui.toolbar.layout_render_reset_hint").data());
+            }
+            ImGui::PopID();
+        };
+
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.settings.visual.note").data()) ) {
+            drawRenderingResetButton("NoteRenderingReset",
+                                     [](Config::EditorConfig& config) {
+                                         config.resetNoteRenderingToDefaults();
+                                     });
+            auto visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_scale_x").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleX",
+                                                &visual.noteScaleX,
+                                                0.5f,
+                                                3.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_scale_y").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleY",
+                                                &visual.noteScaleY,
+                                                0.5f,
+                                                3.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual                   = appConfig.getVisualConfig();
+            int         noteFillMode = static_cast<int>(visual.noteFillMode);
+            const char* fillModes[]  = {
+                TR("ui.settings.visual.fill_mode.stretch").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fit").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fill").data(),
+                TR("ui.settings.visual.fill_mode.center").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_fill_mode").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutNoteFillMode",
+                                          &noteFillMode,
+                                          fillModes,
+                                          IM_ARRAYSIZE(fillModes)) ) {
+                visual.noteFillMode =
+                    static_cast<Config::BackgroundFillMode>(noteFillMode);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+
+            auto&       settings      = appConfig.getEditorSettings();
+            auto&       defaultScheme = settings.defaultColorPaletteSchemeName;
+            const auto& paletteConfig = settings.colorPalettes;
+            const std::string previewName =
+                defaultScheme == Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+                    ? std::string(
+                          TR("ui.toolbar.note_palette.skin_default_scheme")
+                              .data())
+                    : defaultScheme;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_palette_default").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackBeginCombo("##LayoutDefaultNotePalette",
+                                               previewName.c_str()) ) {
+                const bool skinSelected =
+                    defaultScheme ==
+                    Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                if ( ::MMM::UI::FeedbackSelectable(
+                         TR("ui.toolbar.note_palette.skin_default_scheme")
+                             .data(),
+                         skinSelected) ) {
+                    defaultScheme =
+                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                    appConfig.save();
+                }
+                if ( skinSelected ) ImGui::SetItemDefaultFocus();
+                for ( const auto& scheme : paletteConfig.schemes ) {
+                    const bool selected = defaultScheme == scheme.name;
+                    if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                                       selected) ) {
+                        defaultScheme = scheme.name;
+                        appConfig.save();
+                    }
+                    if ( selected ) ImGui::SetItemDefaultFocus();
+                }
+                ::MMM::UI::FeedbackEndCombo();
+            }
+            ImGui::TextDisabled(
+                "%s", TR("ui.toolbar.layout_note_resize_hint").data());
+        }
+
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.settings.visual.background").data()) ) {
+            drawRenderingResetButton(
+                "BackgroundRenderingReset", [](Config::EditorConfig& config) {
+                    config.resetBackgroundRenderingToDefaults();
+                });
+            auto visual     = appConfig.getVisualConfig();
+            int  bgFillMode = static_cast<int>(visual.background.fillMode);
+            const char* fillModes[] = {
+                TR("ui.settings.visual.fill_mode.stretch").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fit").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fill").data(),
+                TR("ui.settings.visual.fill_mode.center").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.bg_fill_mode").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutBackgroundFillMode",
+                                          &bgFillMode,
+                                          fillModes,
+                                          IM_ARRAYSIZE(fillModes)) ) {
+                visual.background.fillMode =
+                    static_cast<Config::BackgroundFillMode>(bgFillMode);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(TR("ui.settings.visual.bg_opaque").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundOpaque",
+                                                &visual.background.opaque_ratio,
+                                                0.0f,
+                                                1.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(TR("ui.settings.visual.bg_darken").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundDarken",
+                                                &visual.background.darken_ratio,
+                                                0.0f,
+                                                1.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+        }
+
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
         ImGui::Separator();
 
-        auto&       appConfig            = Config::AppConfig::instance();
-        const float colorButtonSize      = std::floor(22.0f * dpiScale);
-        bool        anyColorPickerOpen   = false;
-        const auto  drawComponentControl = [&](Config::CanvasComponentType type,
-                                              std::string_view label) {
+        const auto drawComponentControl = [&](Config::CanvasComponentType type,
+                                              std::string_view            label,
+                                              bool showColor = true) {
             ImGui::PushID(static_cast<int>(type));
             bool visible = appConfig.getVisualConfig()
                                .canvasComponents.placement(type)
@@ -2601,29 +2986,71 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.canvasComponents.placement(type).visible =
                     visible;
+                if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
+                    updatedConfig.visual.background.spectrum.enabled = visible;
+                }
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
 
-            ImGui::SameLine();
-            const auto componentColor =
-                fromStoredColor(appConfig.getVisualConfig()
-                                    .canvasComponents.placement(type)
-                                    .color);
-            if ( ::MMM::UI::FeedbackColorButton(
-                     "##Color",
-                     toImVec4(componentColor),
-                     ImGuiColorEditFlags_NoTooltip |
-                         ImGuiColorEditFlags_NoPicker |
-                         ImGuiColorEditFlags_AlphaPreviewHalf,
-                     ImVec2(colorButtonSize, colorButtonSize)) ) {
-                ::MMM::UI::FeedbackOpenPopup("ColorPicker");
-            }
-            if ( ImGui::IsItemHovered() ) {
-                drawTooltip(TR("ui.toolbar.layout_component_color").data());
+            if ( showColor ) {
+                ImGui::SameLine();
+                // 颜色按钮固定在复位列左侧，避免组件名称长度改变颜色列位置。
+                const float contentRight =
+                    ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+                const float colorColumnX = contentRight - resetButtonWidth -
+                                           ImGui::GetStyle().ItemSpacing.x -
+                                           colorButtonSize;
+                if ( ImGui::GetCursorPosX() < colorColumnX ) {
+                    ImGui::SetCursorPosX(colorColumnX);
+                }
+                const auto componentColor =
+                    fromStoredColor(appConfig.getVisualConfig()
+                                        .canvasComponents.placement(type)
+                                        .color);
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##Color",
+                         toImVec4(componentColor),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(colorButtonSize, colorButtonSize)) ) {
+                    ::MMM::UI::FeedbackOpenPopup("ColorPicker");
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    drawTooltip(TR("ui.toolbar.layout_component_color").data());
+                }
             }
 
-            if ( ImGui::BeginPopup("ColorPicker") ) {
+            ImGui::SameLine();
+            // 将所有复位按钮锚定到弹窗内容区右侧，避免标签长度造成错位。
+            const float remainingWidth = ImGui::GetContentRegionAvail().x;
+            if ( remainingWidth > resetButtonWidth ) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + remainingWidth -
+                                     resetButtonWidth);
+            }
+            if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents.resetPlacementToDefault(
+                    type);
+                if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
+                    const Config::BackgroundSpectrumConfig defaults;
+                    updatedConfig.visual.background.spectrum.widthRatio =
+                        defaults.widthRatio;
+                    updatedConfig.visual.background.spectrum.heightRatio =
+                        defaults.heightRatio;
+                    updatedConfig.visual.background.spectrum.baselineRatio =
+                        defaults.baselineRatio;
+                }
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_component_reset_hint").data());
+            }
+
+            if ( showColor && ImGui::BeginPopup("ColorPicker") ) {
                 anyColorPickerOpen = true;
                 auto editableColor =
                     fromStoredColor(appConfig.getVisualConfig()
@@ -2658,11 +3085,243 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              TR("ui.toolbar.layout_beat_number"));
         drawComponentControl(Config::CanvasComponentType::BeatLineTime,
                              TR("ui.toolbar.layout_beat_line_time"));
+        drawComponentControl(Config::CanvasComponentType::BackgroundSpectrum,
+                             TR("ui.toolbar.layout_background_spectrum"),
+                             false);
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.toolbar.layout_background_spectrum_settings")
+                     .data()) ) {
+            const float spectrumControlWidth = std::floor(230.0F * dpiScale);
+            const auto  applySpectrumConfig =
+                [&](const Config::BackgroundSpectrumConfig& spectrum) {
+                    auto updatedConfig = appConfig.getEditorConfig();
+                    updatedConfig.visual.background.spectrum = spectrum;
+                    updatedConfig.visual.background.spectrum.enabled =
+                        updatedConfig.visual.canvasComponents.backgroundSpectrum
+                            .visible;
+                    Logic::EditorEngine::instance().setEditorConfig(
+                        updatedConfig);
+                };
+            const auto saveSpectrumAfterEdit = [&]() {
+                if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                     m_layoutSpectrumConfigDirty ) {
+                    appConfig.save();
+                    m_layoutSpectrumConfigDirty = false;
+                }
+            };
+            const auto drawSpectrumColorControl =
+                [&](std::string_view label,
+                    const char*      id,
+                    std::array<float, 4>
+                        Config::BackgroundSpectrumConfig::* colorMember) {
+                    auto spectrum =
+                        appConfig.getVisualConfig().background.spectrum;
+                    auto editableColor = fromStoredColor(spectrum.*colorMember);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(label.data());
+                    ImGui::SameLine();
+                    const float remainingWidth =
+                        ImGui::GetContentRegionAvail().x;
+                    if ( remainingWidth > colorButtonSize ) {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                             remainingWidth - colorButtonSize);
+                    }
+                    ImGui::PushID(id);
+                    if ( ::MMM::UI::FeedbackColorButton(
+                             "##Color",
+                             toImVec4(editableColor),
+                             ImGuiColorEditFlags_NoTooltip |
+                                 ImGuiColorEditFlags_NoPicker |
+                                 ImGuiColorEditFlags_AlphaPreviewHalf,
+                             ImVec2(colorButtonSize, colorButtonSize)) ) {
+                        ::MMM::UI::FeedbackOpenPopup("ColorPicker");
+                    }
+                    if ( ImGui::BeginPopup("ColorPicker") ) {
+                        anyColorPickerOpen = true;
+                        if ( ImGui::ColorPicker4(
+                                 "##Value",
+                                 &editableColor.r,
+                                 ImGuiColorEditFlags_AlphaBar |
+                                     ImGuiColorEditFlags_AlphaPreviewHalf |
+                                     ImGuiColorEditFlags_DisplayRGB) ) {
+                            spectrum =
+                                appConfig.getVisualConfig().background.spectrum;
+                            spectrum.*colorMember =
+                                toStoredColor(editableColor);
+                            applySpectrumConfig(spectrum);
+                            m_layoutSpectrumConfigDirty = true;
+                        }
+                        saveSpectrumAfterEdit();
+                        ImGui::EndPopup();
+                    }
+                    ImGui::PopID();
+                };
 
-        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&
-             m_layoutComponentColorDirty ) {
-            appConfig.save();
-            m_layoutComponentColorDirty = false;
+            auto spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.band_count").data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderInt(
+                     "##LayoutBackgroundSpectrumBands",
+                     &spectrum.bandCount,
+                     Config::BACKGROUND_SPECTRUM_MIN_BANDS,
+                     Config::BACKGROUND_SPECTRUM_MAX_BANDS) ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.width_ratio")
+                    .data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumWidth",
+                     &spectrum.widthRatio,
+                     0.10F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.height_ratio")
+                    .data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumHeight",
+                     &spectrum.heightRatio,
+                     0.05F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.settings.visual.background_spectrum."
+                        "match_canvas_aspect")
+                         .data(),
+                     ImVec2(spectrumControlWidth, 0.0F)) ) {
+                spectrum.widthRatio  = 1.0F;
+                spectrum.heightRatio = 1.0F;
+                applySpectrumConfig(spectrum);
+                appConfig.save();
+                m_layoutSpectrumConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(TR("ui.settings.visual.background_spectrum."
+                               "match_canvas_aspect_hint")
+                                .data());
+            }
+
+            drawSpectrumColorControl(
+                TR("ui.settings.visual.background_spectrum.left_bar_color"),
+                "BackgroundLevelLeft",
+                &Config::BackgroundSpectrumConfig::leftBarColor);
+            drawSpectrumColorControl(
+                TR("ui.settings.visual.background_spectrum.right_bar_color"),
+                "BackgroundLevelRight",
+                &Config::BackgroundSpectrumConfig::rightBarColor);
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.opacity").data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumOpacity",
+                     &spectrum.opacity,
+                     0.0F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.settings.visual.background_spectrum."
+                        "include_hit_effects")
+                         .data(),
+                     &spectrum.includeHitEffects) ) {
+                applySpectrumConfig(spectrum);
+                appConfig.save();
+                m_layoutSpectrumConfigDirty = false;
+            }
+        }
+        drawComponentControl(Config::CanvasComponentType::Kps,
+                             TR("ui.toolbar.layout_kps"));
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.toolbar.layout_kps_sync_settings").data(),
+                 ImGuiTreeNodeFlags_DefaultOpen) ) {
+            bool syncKpsTrackSizes =
+                appConfig.getVisualConfig().canvasComponents.syncKpsTrackSizes;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
+                     &syncKpsTrackSizes) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents.syncKpsTrackSizes =
+                    syncKpsTrackSizes;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_track_sizes_hint").data());
+            }
+
+            bool syncKpsTrackRelativePositions =
+                appConfig.getVisualConfig()
+                    .canvasComponents.syncKpsTrackRelativePositions;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_track_positions").data(),
+                     &syncKpsTrackRelativePositions) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents
+                    .setSyncKpsTrackRelativePositions(
+                        syncKpsTrackRelativePositions);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_track_positions_hint")
+                        .data());
+            }
+
+            bool syncAllKpsComponentPositions =
+                appConfig.getVisualConfig()
+                    .canvasComponents.syncAllKpsComponentPositions;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_all_positions").data(),
+                     &syncAllKpsComponentPositions) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents
+                    .setSyncAllKpsComponentPositions(
+                        syncAllKpsComponentPositions);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_all_positions_hint").data());
+            }
+        }
+
+        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen ) {
+            if ( m_layoutComponentColorDirty || m_layoutSpectrumConfigDirty ||
+                 m_layoutVisualConfigDirty ) {
+                appConfig.save();
+                m_layoutComponentColorDirty = false;
+                m_layoutSpectrumConfigDirty = false;
+                m_layoutVisualConfigDirty   = false;
+            }
         }
         m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 

@@ -117,7 +117,8 @@ private:
         const Config::EditorConfig&                  config,
         const std::vector<const TimelineComponent*>& bpmEvents,
         double currentTime, const ScrollCache* cache, float leftX, float topY,
-        float bottomY, float trackAreaW, float renderScaleY);
+        float bottomY, float trackAreaW, float renderScaleY,
+        bool revealNearCursor);
 
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。
@@ -234,10 +235,10 @@ private:
         double currentAbsY, double currentTime, float judgmentLineY,
         float leftX, float rightX, float topY, float bottomY,
         float singleTrackW, float renderScaleY, glm::vec4 colorHead,
-        glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd,
-        glm::vec4 colorNode, glm::vec4 colorArrow,
-        entt::entity entity = entt::null, bool generateHitboxes = false,
-        HoverPart glowPart = HoverPart::None, int glowSubIndex = -1);
+        glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd, glm::vec4 colorNode,
+        glm::vec4 colorArrow, entt::entity entity = entt::null,
+        bool generateHitboxes = false, HoverPart glowPart = HoverPart::None,
+        int glowSubIndex = -1);
 
     /// @brief 绘制当前快照中的音符拾取包围盒，辅助排查悬浮命中区域。
     /// @warning 热路径：仅在 debugDrawHitboxes

@@ -34,6 +34,7 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
   src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
+  src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp
   src/logic/ecs/system/NoteTransformSystem.cpp
   src/logic/ecs/system/ScrollCache.cpp
   src/logic/ecs/system/HitFXSystem.cpp)
@@ -92,3 +93,8 @@ mmm_add_test_executable(Logic BrushPaletteSessionStateTest
                         tests/BrushPaletteSessionStateTest.cpp)
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
 add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
+
+# 打击音效立体声测试覆盖普通物件固定声像和 Flick 全程线性移动。
+mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
+target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
+add_test(NAME HitEffectStereoTest COMMAND HitEffectStereoTest)

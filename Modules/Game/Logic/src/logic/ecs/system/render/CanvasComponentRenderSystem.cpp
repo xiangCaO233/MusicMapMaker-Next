@@ -30,6 +30,7 @@ constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
 /// @param text 以空字符结尾的 ASCII 文本。
 /// @param placement 文本组件布局。
 /// @param layoutRegion 当前实例允许布局的像素区域。
+/// @param fontReferenceHeight 字号比例使用的固定画布参考高度。
 /// @param outBounds 输出实际文字内容边界。
 /// @param visibleRegion 可选的实例可见性判定区域。
 /// @param outEffectiveLayoutRegion 输出应用文字尺寸偏移后的实际布局区域。
@@ -41,15 +42,15 @@ constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
 bool renderAsciiText(Batcher& batcher, const char* text,
                      const Config::CanvasComponentPlacement& placement,
                      CanvasComponentBounds                   layoutRegion,
-                     CanvasComponentBounds&                  outBounds,
+                     float                        fontReferenceHeight,
+                     CanvasComponentBounds&       outBounds,
                      const CanvasComponentBounds* visibleRegion      = nullptr,
                      CanvasComponentBounds* outEffectiveLayoutRegion = nullptr,
                      bool                   extendForBeatHeadCenter  = false)
 {
-    const auto  sanitized = sanitizeCanvasComponentPlacement(placement);
-    const float fontPixelHeight =
-        sanitized.fontSizeRatio * layoutRegion.height();
-    const auto selection = Common::selectAsciiFont(
+    const auto  sanitized       = sanitizeCanvasComponentPlacement(placement);
+    const float fontPixelHeight = sanitized.fontSizeRatio * fontReferenceHeight;
+    const auto  selection       = Common::selectAsciiFont(
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
     if ( !selection || !text ) return false;
 
@@ -156,8 +157,12 @@ void renderJudgmentLineTime(Batcher& batcher, double currentTime,
         0.0f, 0.0f, viewportWidth, viewportHeight
     };
     CanvasComponentBounds bounds;
-    if ( renderAsciiText(
-             batcher, text.data(), placement, layoutRegion, bounds) ) {
+    if ( renderAsciiText(batcher,
+                         text.data(),
+                         placement,
+                         layoutRegion,
+                         viewportHeight,
+                         bounds) ) {
         appendComponentInstance(*batcher.snapshot,
                                 Config::CanvasComponentType::JudgmentLineTime,
                                 0,
@@ -241,8 +246,8 @@ void renderBeatGridTexts(Batcher&                                batcher,
         const auto* bpmEvent = context.bpmEvents[index];
         if ( !bpmEvent ) continue;
 
-        const double bpmTime      = bpmEvent->m_timestamp;
-        const double bpm          = normalizedGridTextBpm(bpmEvent->m_value,
+        const double bpmTime = bpmEvent->m_timestamp;
+        const double bpm = normalizedGridTextBpm(bpmEvent->m_value,
                                                  batcher.snapshot->fallbackBpm);
         const double gridDuration = 60.0 / bpm / static_cast<double>(divisor);
         const double nextBpmTime =
@@ -283,10 +288,10 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                      static_cast<float>(cache->getDisplayDelta(
                                          gridStart, currentAbsY, gridStart)) *
                                          context.renderScaleY;
-                const float endY = context.judgmentLineY -
-                                   static_cast<float>(cache->getDisplayDelta(
-                                       gridEnd, currentAbsY, gridEnd)) *
-                                       context.renderScaleY;
+                const float endY   = context.judgmentLineY -
+                                     static_cast<float>(cache->getDisplayDelta(
+                                         gridEnd, currentAbsY, gridEnd)) *
+                                         context.renderScaleY;
                 const CanvasComponentBounds layoutRegion{
                     0.0f,
                     std::min(startY, endY),
@@ -304,6 +309,7 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                          text.data(),
                                          placement,
                                          layoutRegion,
+                                         context.viewportHeight,
                                          bounds,
                                          &visibleRegion,
                                          &effectiveLayoutRegion,
@@ -375,6 +381,151 @@ void renderBeatLineTimes(Batcher&                                batcher,
         });
 }
 
+/// @brief 将单轨 KPS 格式化为不含轨道编号的紧凑文本。
+/// @param kps 最近一秒触发次数。
+/// @return `12 KPS` 格式文本。
+/// @warning 热路径：单轨完整文本超过轨道宽度时调用；不得引入堆分配。
+std::array<char, 32> formatTrackKpsWithoutTrack(std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(
+        result.data(), result.size(), "%u KPS", static_cast<unsigned int>(kps));
+    return result;
+}
+
+/// @brief 将单轨 KPS 格式化为只含数值的最简文本。
+/// @param kps 最近一秒触发次数。
+/// @return `12` 格式文本。
+/// @warning 热路径：不含轨道编号的文本仍超过轨道宽度时调用；不得引入堆分配。
+std::array<char, 32> formatTrackKpsValue(std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(
+        result.data(), result.size(), "%u", static_cast<unsigned int>(kps));
+    return result;
+}
+
+/// @brief 按单轨可用宽度选择 KPS 完整或紧凑文本。
+/// @param snapshot 当前渲染快照。
+/// @param trackIndex 从零开始的轨道序号。
+/// @param kps 最近一秒触发次数。
+/// @param fontPixelHeight 当前单轨 KPS 字号的像素高度。
+/// @param trackPixelWidth 单条轨道的像素宽度。
+/// @return 优先保留完整文本，其次移除轨道编号，最后只保留数值。
+/// @warning 热路径：每条轨道每次快照生成调用；只测量最多三条短 ASCII 文本。
+std::array<char, 32> selectTrackKpsText(const RenderSnapshot& snapshot,
+                                        std::int32_t          trackIndex,
+                                        std::uint32_t         kps,
+                                        float                 fontPixelHeight,
+                                        float                 trackPixelWidth)
+{
+    auto text = CanvasComponentRenderSystem::formatTrackKps(trackIndex, kps);
+    const auto selection = Common::selectAsciiFont(
+        snapshot.asciiFontAtlasMetrics, fontPixelHeight);
+    if ( !selection ) return text;
+
+    const float availableWidth =
+        std::isfinite(trackPixelWidth) ? std::max(0.0f, trackPixelWidth) : 0.0f;
+    if ( Common::measureAsciiText(
+             *selection.metrics, text.data(), fontPixelHeight)
+             .width <= availableWidth ) {
+        return text;
+    }
+
+    text = formatTrackKpsWithoutTrack(kps);
+    if ( Common::measureAsciiText(
+             *selection.metrics, text.data(), fontPixelHeight)
+             .width <= availableWidth ) {
+        return text;
+    }
+    return formatTrackKpsValue(kps);
+}
+
+/// @brief 绘制逐轨 KPS 与总 KPS。
+/// @param batcher 目标覆盖层批处理器。
+/// @param context 当前主画布与逐轨 KPS 上下文。
+/// @param config 画布组件布局配置。
+/// @warning 热路径：KPS 启用时每次主画布快照调用；只遍历当前轨道数量。
+void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
+               const Config::CanvasComponentLayoutConfig& config)
+{
+    // 拍号和分拍线时间会使用轨道视口裁剪，KPS 必须显式恢复全画布范围。
+    batcher.setScissor(
+        0.0f, 0.0f, context.viewportWidth, context.viewportHeight);
+
+    const auto trackCount = std::max<std::int32_t>(context.trackCount, 0);
+    const CanvasComponentBounds layoutRegion{
+        0.0f, 0.0f, context.viewportWidth, context.viewportHeight
+    };
+    const float trackPixelWidth =
+        trackCount > 0
+            ? context.viewportWidth *
+                  std::max(0.0f, context.trackRight - context.trackLeft) /
+                  static_cast<float>(trackCount)
+            : context.viewportWidth;
+
+    std::uint64_t totalKps = 0U;
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        std::uint32_t trackKps = 0U;
+        if ( batcher.snapshot->isPlaying &&
+             static_cast<std::size_t>(trackIndex) < context.trackKps.size() ) {
+            trackKps = context.trackKps[static_cast<std::size_t>(trackIndex)];
+        }
+        totalKps += trackKps;
+
+        const auto placement =
+            config.resolvedPlacement(Config::CanvasComponentType::Kps,
+                                     trackIndex,
+                                     trackCount,
+                                     context.trackLeft,
+                                     context.trackRight);
+        const float fontPixelHeight =
+            sanitizeCanvasComponentPlacement(placement).fontSizeRatio *
+            context.viewportHeight;
+        const auto            text = selectTrackKpsText(*batcher.snapshot,
+                                                        trackIndex,
+                                                        trackKps,
+                                                        fontPixelHeight,
+                                                        trackPixelWidth);
+        CanvasComponentBounds bounds;
+        if ( renderAsciiText(batcher,
+                             text.data(),
+                             placement,
+                             layoutRegion,
+                             context.viewportHeight,
+                             bounds) ) {
+            appendComponentInstance(*batcher.snapshot,
+                                    Config::CanvasComponentType::Kps,
+                                    trackIndex,
+                                    bounds,
+                                    layoutRegion);
+        }
+    }
+
+    const auto text = CanvasComponentRenderSystem::formatTotalKps(
+        static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            totalKps, std::numeric_limits<std::uint32_t>::max())));
+    const auto placement =
+        config.resolvedPlacement(Config::CanvasComponentType::Kps,
+                                 Config::KPS_TOTAL_INSTANCE_INDEX,
+                                 trackCount,
+                                 context.trackLeft,
+                                 context.trackRight);
+    CanvasComponentBounds bounds;
+    if ( renderAsciiText(batcher,
+                         text.data(),
+                         placement,
+                         layoutRegion,
+                         context.viewportHeight,
+                         bounds) ) {
+        appendComponentInstance(*batcher.snapshot,
+                                Config::CanvasComponentType::Kps,
+                                Config::KPS_TOTAL_INSTANCE_INDEX,
+                                bounds,
+                                layoutRegion);
+    }
+}
+
 }  // namespace
 
 void CanvasComponentRenderSystem::render(
@@ -409,6 +560,13 @@ void CanvasComponentRenderSystem::render(
         case Config::CanvasComponentType::BeatLineTime:
             if ( !snapshot->hasBeatmap ) break;
             renderBeatLineTimes(batcher, context, placement);
+            break;
+        case Config::CanvasComponentType::Kps:
+            if ( !snapshot->hasBeatmap ) break;
+            renderKps(batcher, context, config);
+            break;
+        case Config::CanvasComponentType::BackgroundSpectrum:
+            // 频谱必须紧邻背景图片绘制，此处只保留统一类型遍历入口。
             break;
         case Config::CanvasComponentType::Count: break;
         }
@@ -458,6 +616,29 @@ std::array<char, 24> CanvasComponentRenderSystem::formatBeatNumber(
     } else {
         *conversion.ptr = '\0';
     }
+    return result;
+}
+
+std::array<char, 32> CanvasComponentRenderSystem::formatTrackKps(
+    std::int32_t zeroBasedTrackIndex, std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(result.data(),
+                  result.size(),
+                  "K%d %u KPS",
+                  std::max(zeroBasedTrackIndex, 0) + 1,
+                  static_cast<unsigned int>(kps));
+    return result;
+}
+
+std::array<char, 32> CanvasComponentRenderSystem::formatTotalKps(
+    std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(result.data(),
+                  result.size(),
+                  "TOTAL %u KPS",
+                  static_cast<unsigned int>(kps));
     return result;
 }
 

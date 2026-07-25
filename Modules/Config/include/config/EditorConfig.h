@@ -20,6 +20,30 @@ struct EditorConfig {
 
     /// @brief 最近打开的项目路径列表
     std::vector<std::string> recentProjects;
+
+    /// @brief 将物件渲染选项恢复为应用默认配置。
+    /// @details 恢复横纵缩放、长条填充模式和打开项目时的默认调色方案。
+    void resetNoteRenderingToDefaults()
+    {
+        const EditorConfig defaults;
+        visual.noteScaleX   = defaults.visual.noteScaleX;
+        visual.noteScaleY   = defaults.visual.noteScaleY;
+        visual.noteFillMode = defaults.visual.noteFillMode;
+        settings.defaultColorPaletteSchemeName =
+            defaults.settings.defaultColorPaletteSchemeName;
+    }
+
+    /// @brief 将背景图像渲染选项恢复为应用默认配置。
+    /// @details 仅恢复填充模式、不透明度和暗化程度，保留背景电平图配置。
+    void resetBackgroundRenderingToDefaults()
+    {
+        const EditorConfig defaults;
+        visual.background.fillMode = defaults.visual.background.fillMode;
+        visual.background.opaque_ratio =
+            defaults.visual.background.opaque_ratio;
+        visual.background.darken_ratio =
+            defaults.visual.background.darken_ratio;
+    }
 };
 
 inline void to_json(nlohmann::json& j, const EditorConfig& c)

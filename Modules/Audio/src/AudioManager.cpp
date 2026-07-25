@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -152,6 +153,19 @@ void AudioManager::init()
 
     m_mainMixer         = std::make_shared<ice::MixBus>();
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
+    m_hitEffectMixer    = std::make_shared<ice::MixBus>();
+    m_hitEffectSpectrumCapture =
+        std::make_shared<BackgroundSpectrumCaptureNode>(m_hitEffectMixer);
+    m_backgroundSpectrumAnalyzer =
+        std::make_unique<BackgroundSpectrumAnalyzer>();
+    const bool syncHitEffects = Config::AppConfig::instance()
+                                    .getEditorSettings()
+                                    .sfxConfig.hitSfxSyncSpeed;
+    if ( syncHitEffects ) {
+        m_preStretcherMixer->add_source(m_hitEffectSpectrumCapture);
+    } else {
+        m_mainMixer->add_source(m_hitEffectSpectrumCapture);
+    }
 
     if ( createPlaybackBackend(m_playbackBackend) ) {
         XINFO("Audio playback backend opened with configured backend: {}.",
@@ -182,7 +196,11 @@ void AudioManager::shutdown()
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
     m_bgmSource.reset();
+    m_bgmSpectrumCapture.reset();
     m_stretcher.reset();
+    m_backgroundSpectrumAnalyzer.reset();
+    m_hitEffectSpectrumCapture.reset();
+    m_hitEffectMixer.reset();
     m_mainMixer.reset();
     m_preStretcherMixer.reset();
     m_player.reset();

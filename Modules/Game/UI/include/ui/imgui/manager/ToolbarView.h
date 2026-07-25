@@ -55,6 +55,10 @@ private:
     float m_layoutPopupHeight{ 100.0f };
     /// @brief 布局组件颜色是否有尚未写入配置文件的修改。
     bool m_layoutComponentColorDirty{ false };
+    /// @brief 背景电平图折叠菜单是否有尚未写入配置文件的连续调整。
+    bool m_layoutSpectrumConfigDirty{ false };
+    /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
+    bool m_layoutVisualConfigDirty{ false };
     /// @brief 上一帧布局组件颜色选择器是否打开。
     bool  m_layoutComponentColorPickerOpen{ false };
     bool  m_showDivisorPopup = false;
@@ -65,6 +69,16 @@ private:
     float m_lastKeyBtnY      = 0.0f;
     float m_keyPopupWidth    = 160.0f;
     float m_keyPopupHeight   = 120.0f;
+    /// @brief 是否显示分拍线模式设置弹窗。
+    bool m_showBeatLinePopup{ false };
+    /// @brief 上一帧分拍线模式按钮的屏幕 Y 坐标，用于定位弹窗。
+    float m_lastBeatLineBtnY{ 0.0f };
+    /// @brief 分拍线模式弹窗上一帧宽度。
+    float m_beatLinePopupWidth{ 260.0f };
+    /// @brief 分拍线模式弹窗上一帧高度。
+    float m_beatLinePopupHeight{ 220.0f };
+    /// @brief 自动显示比例是否有尚未写入配置文件的修改。
+    bool m_beatLinePopupConfigDirty{ false };
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -161,6 +175,11 @@ private:
     /// @param dpiScale 当前 DPI 缩放。
     /// @warning UI 热路径：仅在布局工具激活时绘制固定数量控件。
     void renderLayoutPopup(float dpiScale);
+
+    /// @brief 绘制分拍线显示模式与自动渐隐范围弹窗。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
+    void renderBeatLinePopup(float dpiScale);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。
