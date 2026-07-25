@@ -69,13 +69,14 @@ Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
 {
     if ( !enabled || trackCount <= 0 ) return {};
 
-    // 按物件中心的归一化轨道坐标直接生成用户定义的左声道分量，
+    // 轨道索引从画面左侧向右递增，因此左声道增益应随索引增大而减小。
     // 右声道始终使用其补数，确保启用后两侧增益之和为 1。
     const auto leftGainAtTrack = [trackCount](int trackIndex) {
         const int boundedTrack =
             std::clamp(trackIndex, 0, static_cast<int>(trackCount) - 1);
-        return (static_cast<float>(boundedTrack) + 0.5F) /
-               static_cast<float>(trackCount);
+        const float rightPosition = (static_cast<float>(boundedTrack) + 0.5F) /
+                                    static_cast<float>(trackCount);
+        return 1.0F - rightPosition;
     };
 
     const float startLeft = leftGainAtTrack(ev.trackIndex);
