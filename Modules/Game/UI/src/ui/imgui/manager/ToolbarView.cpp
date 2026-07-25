@@ -1324,6 +1324,9 @@ void ToolbarView::update(UIManager* sourceManager)
 
                 // 常用 Key 数快速设置按钮
                 const std::vector<int> commonKeys = { 4, 5, 6, 7, 8 };
+                // 固定尺寸快捷按钮不继承主题内容内边距，避免 K
+                // 标签被挤压或裁切。
+                Utils::pushFixedButtonStyleVars();
                 for ( size_t i = 0; i < commonKeys.size(); ++i ) {
                     if ( i > 0 ) ImGui::SameLine();
                     char buf[64];
@@ -1341,6 +1344,7 @@ void ToolbarView::update(UIManager* sourceManager)
                             Logic::CmdUpdateBeatmapMetadata{ meta });
                     }
                 }
+                Utils::popFixedButtonStyleVars();
             } else {
                 m_showKeyPopup = false;
             }
