@@ -9,6 +9,12 @@
 namespace MMM::Config
 {
 
+namespace
+{
+/// @brief 旧版拍号与分拍线时间相对局部区间高度的默认字号比例。
+constexpr float LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO = 0.18f;
+}  // namespace
+
 void to_json(nlohmann::json& j, const BeatLineDisplayMode& mode)
 {
     switch ( mode ) {
@@ -316,6 +322,7 @@ void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
         { "judgmentLineTime", config.judgmentLineTime },
         { "beatNumber", config.beatNumber },
         { "beatLineTime", config.beatLineTime },
+        { "fontSizeUsesCanvasHeight", true },
         { "kps", config.kps },
         { "backgroundSpectrum", config.backgroundSpectrum },
         { "kpsTracks", config.kpsTracks },
@@ -334,6 +341,24 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
     config.beatNumber = j.value("beatNumber", DEFAULT_BEAT_NUMBER_PLACEMENT);
     config.beatLineTime =
         j.value("beatLineTime", DEFAULT_BEAT_LINE_TIME_PLACEMENT);
+    const bool fontSizeUsesCanvasHeight =
+        j.value("fontSizeUsesCanvasHeight", false);
+    if ( !fontSizeUsesCanvasHeight && j.contains("beatNumber") ) {
+        config.beatNumber.fontSizeRatio =
+            std::clamp(config.beatNumber.fontSizeRatio *
+                           (DEFAULT_BEAT_NUMBER_PLACEMENT.fontSizeRatio /
+                            LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO),
+                       0.0125f,
+                       0.25f);
+    }
+    if ( !fontSizeUsesCanvasHeight && j.contains("beatLineTime") ) {
+        config.beatLineTime.fontSizeRatio =
+            std::clamp(config.beatLineTime.fontSizeRatio *
+                           (DEFAULT_BEAT_LINE_TIME_PLACEMENT.fontSizeRatio /
+                            LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO),
+                       0.0125f,
+                       0.25f);
+    }
     config.kps = j.value("kps", DEFAULT_KPS_TOTAL_PLACEMENT);
     config.backgroundSpectrum =
         j.value("backgroundSpectrum", DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);

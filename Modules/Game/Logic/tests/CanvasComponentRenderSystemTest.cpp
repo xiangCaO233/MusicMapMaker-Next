@@ -336,7 +336,7 @@ bool testBeatNumberLayoutRegionCentersOnBeatHead()
     constexpr float rawRegionTop    = -160.0f;
     constexpr float rawRegionBottom = 90.0f;
     const float     fontHeight =
-        config.beatNumber.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+        config.beatNumber.fontSizeRatio * context.viewportHeight;
     const auto selection = MMM::Common::selectAsciiFont(
         snapshot.asciiFontAtlasMetrics, fontHeight);
     const auto text =
@@ -410,7 +410,7 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
     constexpr float rawRegionTop    = 237.5f;
     constexpr float rawRegionBottom = 300.0f;
     const float     fontHeight =
-        config.beatLineTime.fontSizeRatio * (rawRegionBottom - rawRegionTop);
+        config.beatLineTime.fontSizeRatio * context.viewportHeight;
     const auto selection = MMM::Common::selectAsciiFont(
         snapshot.asciiFontAtlasMetrics, fontHeight);
     const auto text =
@@ -432,6 +432,31 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
          std::abs((instance->right - instance->left) - textSize.width) >
              epsilon ) {
         XERROR("Beat line time escaped its subdivision layout region");
+        return false;
+    }
+
+    MMM::Logic::RenderSnapshot stretchedSnapshot;
+    configureAsciiFont(stretchedSnapshot);
+    stretchedSnapshot.hasBeatmap  = true;
+    auto stretchedContext         = context;
+    stretchedContext.renderScaleY = 5.0f;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &stretchedSnapshot, stretchedContext, config);
+    const auto stretchedInstance = std::find_if(
+        stretchedSnapshot.canvasComponentInstances.begin(),
+        stretchedSnapshot.canvasComponentInstances.end(),
+        [](const auto& candidate) {
+            return candidate.type ==
+                       MMM::Config::CanvasComponentType::BeatLineTime &&
+                   candidate.instanceIndex == 9;
+        });
+    if ( stretchedInstance ==
+             stretchedSnapshot.canvasComponentInstances.end() ||
+         std::abs((stretchedInstance->right - stretchedInstance->left) -
+                  (instance->right - instance->left)) > epsilon ||
+         std::abs((stretchedInstance->bottom - stretchedInstance->top) -
+                  (instance->bottom - instance->top)) > epsilon ) {
+        XERROR("Beat line time size changed with the visual grid height");
         return false;
     }
 
@@ -534,9 +559,9 @@ bool testKpsRendersPerTrackAndTotal()
          std::abs(secondCenterY - 30.0f) > epsilon ||
          second->right >= context.trackLeft * context.viewportWidth ||
          second->bottom >= context.visibleTop ||
-         total->bottom >= context.visibleTop ||
-         second->regionLeft != 0.0f || second->regionTop != 0.0f ||
-         second->regionRight != 800.0f || second->regionBottom != 600.0f ) {
+         total->bottom >= context.visibleTop || second->regionLeft != 0.0f ||
+         second->regionTop != 0.0f || second->regionRight != 800.0f ||
+         second->regionBottom != 600.0f ) {
         XERROR("Per-track KPS override was constrained to the track region");
         return false;
     }

@@ -515,7 +515,8 @@ bool testCanvasComponentConfigRoundTrip()
     const auto independentDefaultKpsTrack =
         independentlyEditable.resolvedPlacement(
             MMM::Config::CanvasComponentType::Kps, 1, 4, 0.2f, 0.8f);
-    return restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
+    return encoded.value("fontSizeUsesCanvasHeight", false) &&
+           restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
            near(restoredTime.anchorY, 0.76f) &&
            near(restoredTime.fontSizeRatio, 0.08f) &&
            near(restoredTime.color[0], 0.1f) &&
@@ -552,6 +553,29 @@ bool testCanvasComponentConfigRoundTrip()
            near(decoded.kpsTrackFontSizeRatio, 0.064f) &&
            near(independentStoredKpsTrack.fontSizeRatio, 0.064f) &&
            near(independentDefaultKpsTrack.fontSizeRatio, 0.064f);
+}
+
+/// @brief 验证旧版拍内字号比例迁移为固定画布参考比例。
+/// @return 默认旧字号得到新默认尺寸且位置比例保持不变时返回 true。
+bool testLegacyRepeatedTextSizeMigration()
+{
+    const nlohmann::json legacy{
+        { "beatNumber",
+          { { "anchorX", 0.31f },
+            { "anchorY", 0.44f },
+            { "fontSizeRatio", 0.18f } } },
+        { "beatLineTime",
+          { { "anchorX", 0.27f },
+            { "anchorY", 0.63f },
+            { "fontSizeRatio", 0.18f } } },
+    };
+    const auto decoded = legacy.get<MMM::Config::CanvasComponentLayoutConfig>();
+    return near(decoded.beatNumber.anchorX, 0.31f) &&
+           near(decoded.beatNumber.anchorY, 0.44f) &&
+           near(decoded.beatNumber.fontSizeRatio, 0.075f) &&
+           near(decoded.beatLineTime.anchorX, 0.27f) &&
+           near(decoded.beatLineTime.anchorY, 0.63f) &&
+           near(decoded.beatLineTime.fontSizeRatio, 0.025f);
 }
 
 }  // namespace
@@ -599,11 +623,14 @@ int main()
     if ( !testCanvasComponentConfigRoundTrip() ) {
         return 13;
     }
-    if ( !testCanvasComponentSnapping() ) {
+    if ( !testLegacyRepeatedTextSizeMigration() ) {
         return 14;
     }
-    if ( !testTrackLayoutSnapping() ) {
+    if ( !testCanvasComponentSnapping() ) {
         return 15;
+    }
+    if ( !testTrackLayoutSnapping() ) {
+        return 16;
     }
     return 0;
 }

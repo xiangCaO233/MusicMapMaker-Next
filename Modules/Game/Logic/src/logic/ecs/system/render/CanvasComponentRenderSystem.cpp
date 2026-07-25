@@ -30,6 +30,7 @@ constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
 /// @param text 以空字符结尾的 ASCII 文本。
 /// @param placement 文本组件布局。
 /// @param layoutRegion 当前实例允许布局的像素区域。
+/// @param fontReferenceHeight 字号比例使用的固定画布参考高度。
 /// @param outBounds 输出实际文字内容边界。
 /// @param visibleRegion 可选的实例可见性判定区域。
 /// @param outEffectiveLayoutRegion 输出应用文字尺寸偏移后的实际布局区域。
@@ -41,15 +42,15 @@ constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
 bool renderAsciiText(Batcher& batcher, const char* text,
                      const Config::CanvasComponentPlacement& placement,
                      CanvasComponentBounds                   layoutRegion,
-                     CanvasComponentBounds&                  outBounds,
+                     float                        fontReferenceHeight,
+                     CanvasComponentBounds&       outBounds,
                      const CanvasComponentBounds* visibleRegion      = nullptr,
                      CanvasComponentBounds* outEffectiveLayoutRegion = nullptr,
                      bool                   extendForBeatHeadCenter  = false)
 {
-    const auto  sanitized = sanitizeCanvasComponentPlacement(placement);
-    const float fontPixelHeight =
-        sanitized.fontSizeRatio * layoutRegion.height();
-    const auto selection = Common::selectAsciiFont(
+    const auto  sanitized       = sanitizeCanvasComponentPlacement(placement);
+    const float fontPixelHeight = sanitized.fontSizeRatio * fontReferenceHeight;
+    const auto  selection       = Common::selectAsciiFont(
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
     if ( !selection || !text ) return false;
 
@@ -156,8 +157,12 @@ void renderJudgmentLineTime(Batcher& batcher, double currentTime,
         0.0f, 0.0f, viewportWidth, viewportHeight
     };
     CanvasComponentBounds bounds;
-    if ( renderAsciiText(
-             batcher, text.data(), placement, layoutRegion, bounds) ) {
+    if ( renderAsciiText(batcher,
+                         text.data(),
+                         placement,
+                         layoutRegion,
+                         viewportHeight,
+                         bounds) ) {
         appendComponentInstance(*batcher.snapshot,
                                 Config::CanvasComponentType::JudgmentLineTime,
                                 0,
@@ -304,6 +309,7 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                          text.data(),
                                          placement,
                                          layoutRegion,
+                                         context.viewportHeight,
                                          bounds,
                                          &visibleRegion,
                                          &effectiveLayoutRegion,
@@ -482,8 +488,12 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
                                                         fontPixelHeight,
                                                         trackPixelWidth);
         CanvasComponentBounds bounds;
-        if ( renderAsciiText(
-                 batcher, text.data(), placement, layoutRegion, bounds) ) {
+        if ( renderAsciiText(batcher,
+                             text.data(),
+                             placement,
+                             layoutRegion,
+                             context.viewportHeight,
+                             bounds) ) {
             appendComponentInstance(*batcher.snapshot,
                                     Config::CanvasComponentType::Kps,
                                     trackIndex,
@@ -502,8 +512,12 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
                                  context.trackLeft,
                                  context.trackRight);
     CanvasComponentBounds bounds;
-    if ( renderAsciiText(
-             batcher, text.data(), placement, layoutRegion, bounds) ) {
+    if ( renderAsciiText(batcher,
+                         text.data(),
+                         placement,
+                         layoutRegion,
+                         context.viewportHeight,
+                         bounds) ) {
         appendComponentInstance(*batcher.snapshot,
                                 Config::CanvasComponentType::Kps,
                                 Config::KPS_TOTAL_INSTANCE_INDEX,
