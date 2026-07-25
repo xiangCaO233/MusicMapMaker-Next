@@ -446,7 +446,7 @@ void from_json(const nlohmann::json& j, PreviewAreaConfig& config)
     config.areaRatio             = j.value("areaRatio", 5.0f);
     config.edgeScrollSensitivity = j.value("edgeScrollSensitivity", 1.0f);
     config.margin          = j.value("margin", PreviewAreaConfig::AreaMargin());
-    config.drawBeatLines   = j.value("drawBeatLines", true);
+    config.drawBeatLines   = j.value("drawBeatLines", false);
     config.drawTimingLines = j.value("drawTimingLines", true);
 }
 

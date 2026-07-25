@@ -23,7 +23,7 @@ struct PreviewAreaConfig {
 
     AreaMargin margin;
     /// @brief 是否绘制分拍线。
-    bool drawBeatLines{ true };
+    bool drawBeatLines{ false };
     /// @brief 是否绘制 Timing 线。
     bool drawTimingLines{ true };
 };

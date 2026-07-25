@@ -100,6 +100,55 @@ void SettingsView::drawVisualSettings()
         return nullptr;
     };
 
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##VisualOffset",
+                                                  &visual.visualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##WaveformVisualOffset",
+                                                  &visual.waveformVisualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragFloat("##SpectrumVisualOffset",
+                                                  &visual.spectrumVisualOffset,
+                                                  0.001f,
+                                                  -0.5f,
+                                                  0.5f,
+                                                  "%.3f s") )
+                    changed = true;
+            });
+    }
+
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(),
                                true) ) {
         addSettingItem(
@@ -116,23 +165,6 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.preview").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.visual.preview_ratio").data(),
-            TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity")
-                .data(),
-            TR_CACHE("ui.settings.visual.preview_margin_left").data(),
-            TR_CACHE("ui.settings.visual.preview_margin_top").data(),
-            TR_CACHE("ui.settings.visual.preview_margin_right").data(),
-            TR_CACHE("ui.settings.visual.preview_margin_bottom").data(),
-            TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
-            TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
-            TR_CACHE("ui.settings.visual.timeline_zoom").data(),
-            TR_CACHE("ui.settings.visual.scroll_animation_duration").data(),
-            TR_CACHE("ui.settings.visual.linear_scroll").data(),
-            TR_CACHE("ui.settings.visual.snap_threshold").data(),
-        };
-        // 采用全局统一最大标签宽度 maxLabelW
-
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.visual.preview_ratio").data(),
@@ -227,6 +259,10 @@ void SettingsView::drawVisualSettings()
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
             });
+    }
+
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.visual.canvas_interaction").data(), true) ) {
         addSettingItem(
             *sec,
             rowIndex,
@@ -393,56 +429,6 @@ void SettingsView::drawVisualSettings()
                         TR("ui.settings.visual.spectrum_detail.tooltip").data(),
                         Utils::TooltipDir::Right);
                 }
-            });
-    }
-
-    if ( auto* sec =
-             addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.visual_offset").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackDragFloat("##VisualOffset",
-                                                  &visual.visualOffset,
-                                                  0.001f,
-                                                  -0.5f,
-                                                  0.5f,
-                                                  "%.3f s") )
-                    changed = true;
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackDragFloat("##WaveformVisualOffset",
-                                                  &visual.waveformVisualOffset,
-                                                  0.001f,
-                                                  -0.5f,
-                                                  0.5f,
-                                                  "%.3f s") )
-                    changed = true;
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackDragFloat("##SpectrumVisualOffset",
-                                                  &visual.spectrumVisualOffset,
-                                                  0.001f,
-                                                  -0.5f,
-                                                  0.5f,
-                                                  "%.3f s") )
-                    changed = true;
             });
     }
 

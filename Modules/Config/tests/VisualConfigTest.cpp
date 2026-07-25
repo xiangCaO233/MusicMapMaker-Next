@@ -75,6 +75,21 @@ bool testBeatLineAutoRatioClamping()
     return true;
 }
 
+/// @brief 验证预览区默认隐藏分拍线并继续显示 Timing 线。
+/// @return 默认构造和缺省 JSON 均使用相同的安全显示状态时返回 true。
+bool testPreviewAreaLineDefaults()
+{
+    const MMM::Config::PreviewAreaConfig defaults;
+    const auto                           restored =
+        nlohmann::json::object().get<MMM::Config::PreviewAreaConfig>();
+    if ( defaults.drawBeatLines || restored.drawBeatLines ||
+         !defaults.drawTimingLines || !restored.drawTimingLines ) {
+        XERROR("Preview area line defaults were not preserved");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证背景频谱配置能够完整往返。
 /// @return 当前格式往返无损时返回 true。
 bool testBackgroundSpectrumRoundTrip()
@@ -176,13 +191,14 @@ bool testBackgroundSpectrumClamping()
 
 }  // namespace
 
-/// @brief 运行分拍线显示模式配置兼容性测试。
+/// @brief 运行视觉配置兼容性与默认值测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
     return testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
+                   testPreviewAreaLineDefaults() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&
                    testBackgroundSpectrumClamping()

@@ -229,6 +229,7 @@ return {
 	["ui.settings.visual.preview_margin_bottom"] = "视口下留白",
 	["ui.settings.visual.preview_draw_beat_lines"] = "绘制分拍线",
 	["ui.settings.visual.preview_draw_timing_lines"] = "绘制 Timing 线",
+	["ui.settings.visual.canvas_interaction"] = "画布交互",
 	["ui.settings.visual.timeline_zoom"] = "时间线缩放",
 	["ui.settings.visual.scroll_animation_duration"] = "滚动动画时间",
 	["ui.settings.visual.linear_scroll"] = "线性流速映射",
