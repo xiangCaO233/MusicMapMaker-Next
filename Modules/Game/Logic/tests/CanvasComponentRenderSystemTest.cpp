@@ -568,6 +568,83 @@ bool testKpsRendersPerTrackAndTotal()
            std::string(System::formatTotalKps(12U).data()) == "TOTAL 12 KPS";
 }
 
+/// @brief 验证轨道宽度不足时依次隐藏轨道编号与 KPS 后缀。
+/// @return 三条轨道分别使用完整、无编号和纯数值文本时返回 true。
+bool testKpsTextAdaptsToTrackWidth()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    snapshot.hasBeatmap = true;
+    snapshot.isPlaying  = true;
+    config.kps.visible  = true;
+
+    constexpr std::int32_t              trackCount = 3;
+    constexpr float                     trackLeft  = 0.2f;
+    constexpr float                     trackRight = 0.8f;
+    const std::array<float, trackCount> fontSizeRatios{ 0.035f, 0.06f, 0.1f };
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        auto& placement =
+            config.editablePlacement(MMM::Config::CanvasComponentType::Kps,
+                                     trackIndex,
+                                     trackCount,
+                                     trackLeft,
+                                     trackRight);
+        placement.fontSizeRatio =
+            fontSizeRatios[static_cast<std::size_t>(trackIndex)];
+    }
+
+    const std::array<std::uint32_t, trackCount> kps{ 1U, 2U, 3U };
+    auto context       = makeRenderContext(1.0);
+    context.trackCount = trackCount;
+    context.trackLeft  = trackLeft;
+    context.trackRight = trackRight;
+    context.trackKps   = kps;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    const std::array<const char*, trackCount> expectedTexts{ "K1 1 KPS",
+                                                             "2 KPS",
+                                                             "3" };
+    constexpr float                           epsilon = 1e-4f;
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        const auto instance =
+            std::find_if(snapshot.canvasComponentInstances.begin(),
+                         snapshot.canvasComponentInstances.end(),
+                         [trackIndex](const auto& candidate) {
+                             return candidate.type ==
+                                        MMM::Config::CanvasComponentType::Kps &&
+                                    candidate.instanceIndex == trackIndex;
+                         });
+        if ( instance == snapshot.canvasComponentInstances.end() ) {
+            XERROR("Adaptive KPS text did not render track {}", trackIndex);
+            return false;
+        }
+
+        const float fontPixelHeight =
+            fontSizeRatios[static_cast<std::size_t>(trackIndex)] *
+            context.viewportHeight;
+        const auto selection = MMM::Common::selectAsciiFont(
+            snapshot.asciiFontAtlasMetrics, fontPixelHeight);
+        if ( !selection ) {
+            XERROR("Adaptive KPS text did not select an ASCII font");
+            return false;
+        }
+        const float expectedWidth =
+            MMM::Common::measureAsciiText(
+                *selection.metrics,
+                expectedTexts[static_cast<std::size_t>(trackIndex)],
+                fontPixelHeight)
+                .width;
+        if ( std::abs((instance->right - instance->left) - expectedWidth) >
+             epsilon ) {
+            XERROR("Adaptive KPS text selected the wrong compact level");
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证 HitEffect 消费事件形成逐轨一秒滚动 KPS。
 /// @return 新事件、过期事件和清空路径的计数均正确时返回 true。
 bool testHitEffectKpsRollingWindow()
@@ -648,6 +725,7 @@ int main()
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&
                    testBeatLineTimesRenderInsideEachSubdivision() &&
                    testKpsRendersPerTrackAndTotal() &&
+                   testKpsTextAdaptsToTrackWidth() &&
                    testHitEffectKpsRollingWindow() &&
                    testJudgmentLineTimeFormatting()
                ? 0

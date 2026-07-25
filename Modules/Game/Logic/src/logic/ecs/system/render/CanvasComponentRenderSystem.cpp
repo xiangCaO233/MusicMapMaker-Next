@@ -375,6 +375,66 @@ void renderBeatLineTimes(Batcher&                                batcher,
         });
 }
 
+/// @brief 将单轨 KPS 格式化为不含轨道编号的紧凑文本。
+/// @param kps 最近一秒触发次数。
+/// @return `12 KPS` 格式文本。
+/// @warning 热路径：单轨完整文本超过轨道宽度时调用；不得引入堆分配。
+std::array<char, 32> formatTrackKpsWithoutTrack(std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(
+        result.data(), result.size(), "%u KPS", static_cast<unsigned int>(kps));
+    return result;
+}
+
+/// @brief 将单轨 KPS 格式化为只含数值的最简文本。
+/// @param kps 最近一秒触发次数。
+/// @return `12` 格式文本。
+/// @warning 热路径：不含轨道编号的文本仍超过轨道宽度时调用；不得引入堆分配。
+std::array<char, 32> formatTrackKpsValue(std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(
+        result.data(), result.size(), "%u", static_cast<unsigned int>(kps));
+    return result;
+}
+
+/// @brief 按单轨可用宽度选择 KPS 完整或紧凑文本。
+/// @param snapshot 当前渲染快照。
+/// @param trackIndex 从零开始的轨道序号。
+/// @param kps 最近一秒触发次数。
+/// @param fontPixelHeight 当前单轨 KPS 字号的像素高度。
+/// @param trackPixelWidth 单条轨道的像素宽度。
+/// @return 优先保留完整文本，其次移除轨道编号，最后只保留数值。
+/// @warning 热路径：每条轨道每次快照生成调用；只测量最多三条短 ASCII 文本。
+std::array<char, 32> selectTrackKpsText(const RenderSnapshot& snapshot,
+                                        std::int32_t          trackIndex,
+                                        std::uint32_t         kps,
+                                        float                 fontPixelHeight,
+                                        float                 trackPixelWidth)
+{
+    auto text = CanvasComponentRenderSystem::formatTrackKps(trackIndex, kps);
+    const auto selection = Common::selectAsciiFont(
+        snapshot.asciiFontAtlasMetrics, fontPixelHeight);
+    if ( !selection ) return text;
+
+    const float availableWidth =
+        std::isfinite(trackPixelWidth) ? std::max(0.0f, trackPixelWidth) : 0.0f;
+    if ( Common::measureAsciiText(
+             *selection.metrics, text.data(), fontPixelHeight)
+             .width <= availableWidth ) {
+        return text;
+    }
+
+    text = formatTrackKpsWithoutTrack(kps);
+    if ( Common::measureAsciiText(
+             *selection.metrics, text.data(), fontPixelHeight)
+             .width <= availableWidth ) {
+        return text;
+    }
+    return formatTrackKpsValue(kps);
+}
+
 /// @brief 绘制逐轨 KPS 与总 KPS。
 /// @param batcher 目标覆盖层批处理器。
 /// @param context 当前主画布与逐轨 KPS 上下文。
@@ -391,6 +451,12 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
     const CanvasComponentBounds layoutRegion{
         0.0f, 0.0f, context.viewportWidth, context.viewportHeight
     };
+    const float trackPixelWidth =
+        trackCount > 0
+            ? context.viewportWidth *
+                  std::max(0.0f, context.trackRight - context.trackLeft) /
+                  static_cast<float>(trackCount)
+            : context.viewportWidth;
 
     std::uint64_t totalKps = 0U;
     for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
@@ -401,14 +467,20 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
         }
         totalKps += trackKps;
 
-        const auto text =
-            CanvasComponentRenderSystem::formatTrackKps(trackIndex, trackKps);
         const auto placement =
             config.resolvedPlacement(Config::CanvasComponentType::Kps,
                                      trackIndex,
                                      trackCount,
                                      context.trackLeft,
                                      context.trackRight);
+        const float fontPixelHeight =
+            sanitizeCanvasComponentPlacement(placement).fontSizeRatio *
+            context.viewportHeight;
+        const auto            text = selectTrackKpsText(*batcher.snapshot,
+                                                        trackIndex,
+                                                        trackKps,
+                                                        fontPixelHeight,
+                                                        trackPixelWidth);
         CanvasComponentBounds bounds;
         if ( renderAsciiText(
                  batcher, text.data(), placement, layoutRegion, bounds) ) {
