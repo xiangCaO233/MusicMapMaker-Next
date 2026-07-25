@@ -221,6 +221,70 @@ void drawCanvasComponentSnapGuide(ImDrawList& drawList, const ImVec2& start,
     }
 }
 
+/// @brief 暗化组件实际可调区域以外的画布并标出区域边界。
+/// @param drawList 目标 ImGui 前景绘制列表。
+/// @param region 组件实例在画布局部坐标中的实际可调区域。
+/// @param canvasScreenX 画布左上角屏幕横坐标。
+/// @param canvasScreenY 画布左上角屏幕纵坐标。
+/// @param canvasWidth 画布宽度。
+/// @param canvasHeight 画布高度。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 布局热路径：悬停或拖动受限组件时每帧调用，只生成固定四块遮罩
+/// 和一个边框。
+void drawCanvasComponentEditableRegionMask(
+    ImDrawList& drawList, const Logic::CanvasComponentBounds& region,
+    float canvasScreenX, float canvasScreenY, float canvasWidth,
+    float canvasHeight, float dpiScale)
+{
+    const float left =
+        std::clamp(std::min(region.left, region.right), 0.0f, canvasWidth);
+    const float top =
+        std::clamp(std::min(region.top, region.bottom), 0.0f, canvasHeight);
+    const float right =
+        std::clamp(std::max(region.left, region.right), 0.0f, canvasWidth);
+    const float bottom =
+        std::clamp(std::max(region.top, region.bottom), 0.0f, canvasHeight);
+    if ( right <= left || bottom <= top ) return;
+
+    constexpr float edgeEpsilon  = 0.5f;
+    const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
+    if ( coversCanvas ) return;
+
+    const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
+    const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
+                               canvasScreenY + canvasHeight };
+    const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
+    const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
+    constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
+    if ( allowedMin.y > canvasMin.y ) {
+        drawList.AddRectFilled(
+            canvasMin, { canvasMax.x, allowedMin.y }, maskColor);
+    }
+    if ( allowedMax.y < canvasMax.y ) {
+        drawList.AddRectFilled(
+            { canvasMin.x, allowedMax.y }, canvasMax, maskColor);
+    }
+    if ( allowedMin.x > canvasMin.x ) {
+        drawList.AddRectFilled({ canvasMin.x, allowedMin.y },
+                               { allowedMin.x, allowedMax.y },
+                               maskColor);
+    }
+    if ( allowedMax.x < canvasMax.x ) {
+        drawList.AddRectFilled({ allowedMax.x, allowedMin.y },
+                               { canvasMax.x, allowedMax.y },
+                               maskColor);
+    }
+
+    drawList.AddRect(allowedMin,
+                     allowedMax,
+                     IM_COL32(255, 218, 96, 210),
+                     0.0f,
+                     0,
+                     std::max(1.5f, 2.0f * dpiScale));
+}
+
 /// @brief 将 ASCII 扩展名转换为小写。
 /// @param value 输入扩展名。
 /// @return 小写后的扩展名。
@@ -630,7 +694,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -702,7 +766,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -1816,6 +1880,25 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                             IM_COL32(0, 0, 0, 72));
     drawList->AddRectFilled(layoutMin, layoutMax, IM_COL32(64, 180, 255, 24));
 
+    std::optional<Logic::CanvasComponentBounds> editableComponentRegion;
+    if ( m_canvasComponentDragTarget.has_value() ) {
+        editableComponentRegion = m_canvasComponentDragRegion;
+    } else if ( hoveredComponentInstance.has_value() &&
+                hoveredComponentHandle !=
+                    Logic::CanvasComponentDragHandle::None ) {
+        editableComponentRegion =
+            canvasComponentLayoutRegion(*hoveredComponentInstance);
+    }
+    if ( editableComponentRegion.has_value() ) {
+        drawCanvasComponentEditableRegionMask(*drawList,
+                                              *editableComponentRegion,
+                                              canvasScreenX,
+                                              canvasScreenY,
+                                              targetWidth,
+                                              targetHeight,
+                                              dpiScale);
+    }
+
     const ImU32 edgeColor        = IM_COL32(64, 190, 255, 230);
     const ImU32 highlightedColor = IM_COL32(255, 218, 96, 255);
     const float edgeThickness    = std::max(2.0f, 2.0f * dpiScale);
@@ -2035,7 +2118,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -2144,8 +2227,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
