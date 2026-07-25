@@ -989,7 +989,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragInstanceIndex = 0;
     m_layoutConfigurationChanged       = false;
-    m_synchronizedKpsResizeStarts.clear();
+    m_synchronizedKpsTransformStarts.clear();
 }
 
 void Basic2DCanvasInteraction::handleLayoutEditing(
@@ -1103,15 +1103,22 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 canvasComponentLayoutRegion(*hoveredComponentInstance);
             m_canvasComponentDragInstanceIndex =
                 hoveredComponentInstance->instanceIndex;
-            m_synchronizedKpsResizeStarts.clear();
+            m_synchronizedKpsTransformStarts.clear();
             const auto& canvasComponents =
                 appConfig.getVisualConfig().canvasComponents;
+            const bool captureSynchronizedKpsMove =
+                hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncKpsTrackRelativePositions;
+            const bool captureSynchronizedKpsResize =
+                hoveredComponentHandle !=
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncKpsTrackSizes;
             if ( *hoveredComponent == Config::CanvasComponentType::Kps &&
                  hoveredComponentInstance->instanceIndex >= 0 &&
-                 hoveredComponentHandle !=
-                     Logic::CanvasComponentDragHandle::Move &&
-                 canvasComponents.syncKpsTrackSizes ) {
-                m_synchronizedKpsResizeStarts.reserve(
+                 (captureSynchronizedKpsMove ||
+                  captureSynchronizedKpsResize) ) {
+                m_synchronizedKpsTransformStarts.reserve(
                     currentSnapshot.canvasComponentInstances.size());
                 for ( const auto& instance :
                       currentSnapshot.canvasComponentInstances ) {
@@ -1119,7 +1126,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                          instance.instanceIndex < 0 ) {
                         continue;
                     }
-                    m_synchronizedKpsResizeStarts.push_back(
+                    m_synchronizedKpsTransformStarts.push_back(
                         { instance.instanceIndex,
                           canvasComponents.resolvedPlacement(
                               Config::CanvasComponentType::Kps,
@@ -1187,6 +1194,53 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              std::abs(component.fontSizeRatio - candidate.fontSizeRatio) >
                  componentPositionEpsilon ) {
             component = candidate;
+            const bool synchronizeKpsTrackRelativePosition =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragInstanceIndex >= 0 &&
+                m_canvasComponentDragHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncKpsTrackRelativePositions;
+            if ( synchronizeKpsTrackRelativePosition ) {
+                const float candidateCenterX =
+                    m_canvasComponentDragRegion.left +
+                    candidate.anchorX * m_canvasComponentDragRegion.width();
+                const float candidateCenterY =
+                    m_canvasComponentDragRegion.top +
+                    candidate.anchorY * m_canvasComponentDragRegion.height();
+                const float startCenterX =
+                    (m_canvasComponentDragStartBounds.left +
+                     m_canvasComponentDragStartBounds.right) *
+                    0.5f;
+                const float startCenterY =
+                    (m_canvasComponentDragStartBounds.top +
+                     m_canvasComponentDragStartBounds.bottom) *
+                    0.5f;
+                const float offsetX = candidateCenterX - startCenterX;
+                const float offsetY = candidateCenterY - startCenterY;
+                for ( const auto& transformStart :
+                      m_synchronizedKpsTransformStarts ) {
+                    if ( transformStart.instanceIndex ==
+                         m_canvasComponentDragInstanceIndex ) {
+                        continue;
+                    }
+                    auto synchronizedPlacement =
+                        Logic::moveCanvasComponentByOffsetInRegion(
+                            transformStart.placement,
+                            transformStart.bounds,
+                            offsetX,
+                            offsetY,
+                            transformStart.region);
+                    auto& synchronizedComponent =
+                        canvasComponents.editablePlacement(
+                            Config::CanvasComponentType::Kps,
+                            transformStart.instanceIndex,
+                            currentSnapshot.trackCount,
+                            layout.left,
+                            layout.right);
+                    synchronizedComponent = synchronizedPlacement;
+                }
+            }
             const bool synchronizeKpsTrackSize =
                 *m_canvasComponentDragTarget ==
                     Config::CanvasComponentType::Kps &&
@@ -1195,23 +1249,23 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     Logic::CanvasComponentDragHandle::Move &&
                 canvasComponents.syncKpsTrackSizes;
             if ( synchronizeKpsTrackSize ) {
-                for ( const auto& resizeStart :
-                      m_synchronizedKpsResizeStarts ) {
-                    if ( resizeStart.instanceIndex ==
+                for ( const auto& transformStart :
+                      m_synchronizedKpsTransformStarts ) {
+                    if ( transformStart.instanceIndex ==
                          m_canvasComponentDragInstanceIndex ) {
                         continue;
                     }
                     auto synchronizedPlacement =
                         Logic::resizeCanvasComponentToFontSizeInRegion(
-                            resizeStart.placement,
+                            transformStart.placement,
                             m_canvasComponentDragHandle,
-                            resizeStart.bounds,
+                            transformStart.bounds,
                             candidate.fontSizeRatio,
-                            resizeStart.region);
+                            transformStart.region);
                     auto& synchronizedComponent =
                         canvasComponents.editablePlacement(
                             Config::CanvasComponentType::Kps,
-                            resizeStart.instanceIndex,
+                            transformStart.instanceIndex,
                             currentSnapshot.trackCount,
                             layout.left,
                             layout.right);

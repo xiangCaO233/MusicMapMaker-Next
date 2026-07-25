@@ -85,6 +85,8 @@ struct CanvasComponentLayoutConfig {
     std::vector<CanvasKpsTrackPlacement> kpsTracks;
     /// @brief 是否在缩放任意逐轨 KPS 时同步全部逐轨字号。
     bool syncKpsTrackSizes{ false };
+    /// @brief 是否在移动任意逐轨 KPS 时同步全部逐轨相对位置。
+    bool syncKpsTrackRelativePositions{ false };
     /// @brief 最近一次批量同步的逐轨 KPS 字号；零表示使用轨道数自适应字号。
     float kpsTrackFontSizeRatio{ 0.0f };
 

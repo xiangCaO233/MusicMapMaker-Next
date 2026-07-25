@@ -218,6 +218,33 @@ moveCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
         contentHeight);
 }
 
+/// @brief 按相同像素位移移动组件并保持其内容尺寸。
+/// @param placement 移动开始时的布局。
+/// @param startBounds 移动开始时的组件边界。
+/// @param offsetX 横向同步位移，单位像素。
+/// @param offsetY 纵向同步位移，单位像素。
+/// @param region 组件允许占用的像素区域。
+/// @return 应用位移并限制在布局区域内的布局。
+/// @warning 热路径：同步组件移动期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement
+moveCanvasComponentByOffsetInRegion(Config::CanvasComponentPlacement placement,
+                                    const CanvasComponentBounds& startBounds,
+                                    float offsetX, float offsetY,
+                                    const CanvasComponentBounds& region)
+{
+    if ( !std::isfinite(offsetX) || !std::isfinite(offsetY) ) {
+        return sanitizeCanvasComponentPlacement(placement);
+    }
+    const float startCenterX = (startBounds.left + startBounds.right) * 0.5f;
+    const float startCenterY = (startBounds.top + startBounds.bottom) * 0.5f;
+    return moveCanvasComponentInRegion(placement,
+                                       startCenterX + offsetX,
+                                       startCenterY + offsetY,
+                                       region,
+                                       startBounds.width(),
+                                       startBounds.height());
+}
+
 /// @brief 命中组件移动区域或四角缩放把手。
 /// @param bounds 组件像素边界。
 /// @param pointerX 指针横坐标。

@@ -215,6 +215,47 @@ bool testSynchronizedCanvasComponentResize()
            !near(resizedCenterX, startCenterX);
 }
 
+/// @brief 验证同步移动会给其他组件应用相同位移并保留相对间距。
+/// @return 两个组件移动后的中心差与移动前一致时返回 true。
+bool testSynchronizedCanvasComponentMove()
+{
+    const MMM::Logic::CanvasComponentBounds region{
+        0.0f, 0.0f, 1024.0f, 512.0f
+    };
+    MMM::Config::CanvasComponentPlacement first;
+    first.visible                                = true;
+    first.anchorX                                = 0.25f;
+    first.anchorY                                = 0.5f;
+    MMM::Config::CanvasComponentPlacement second = first;
+    second.anchorX                               = 0.625f;
+    const auto firstBounds =
+        MMM::Logic::canvasComponentBoundsInRegion(first, region, 160.0f, 32.0f);
+    const auto secondBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        second, region, 240.0f, 32.0f);
+
+    constexpr float offsetX = 64.0f;
+    constexpr float offsetY = 32.0f;
+    const auto movedFirst   = MMM::Logic::moveCanvasComponentByOffsetInRegion(
+        first, firstBounds, offsetX, offsetY, region);
+    const auto movedSecond = MMM::Logic::moveCanvasComponentByOffsetInRegion(
+        second, secondBounds, offsetX, offsetY, region);
+    const auto movedFirstBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        movedFirst, region, 160.0f, 32.0f);
+    const auto movedSecondBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        movedSecond, region, 240.0f, 32.0f);
+    const float startCenterDistance =
+        (secondBounds.left + secondBounds.right) * 0.5f -
+        (firstBounds.left + firstBounds.right) * 0.5f;
+    const float movedCenterDistance =
+        (movedSecondBounds.left + movedSecondBounds.right) * 0.5f -
+        (movedFirstBounds.left + movedFirstBounds.right) * 0.5f;
+    return near(movedFirst.anchorX, 0.3125f) &&
+           near(movedFirst.anchorY, 0.5625f) &&
+           near(movedSecond.anchorX, 0.6875f) &&
+           near(movedSecond.anchorY, 0.5625f) &&
+           near(movedCenterDistance, startCenterDistance);
+}
+
 /// @brief 验证拍内组件移动和缩放不会越过所属整拍的垂直边界。
 /// @return 垂直范围受整拍限制且横向仍可使用完整画布时返回 true。
 bool testBeatRelativeComponentConstraints()
@@ -279,8 +320,9 @@ bool testCanvasComponentPlacementReset()
             if ( type == MMM::Config::CanvasComponentType::Kps ) {
                 auto& trackPlacement =
                     config.editablePlacement(type, 2, 4, 0.2f, 0.8f);
-                trackPlacement.anchorX   = 0.72f;
-                config.syncKpsTrackSizes = true;
+                trackPlacement.anchorX               = 0.72f;
+                config.syncKpsTrackSizes             = true;
+                config.syncKpsTrackRelativePositions = true;
                 config.synchronizeKpsTrackFontSize(0.08f);
             }
 
@@ -302,7 +344,8 @@ bool testCanvasComponentPlacementReset()
         verifyReset(MMM::Config::CanvasComponentType::Kps,
                     MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT);
     return allPlacementsReset && config.kpsTracks.empty() &&
-           near(config.kpsTrackFontSizeRatio, 0.0f) && config.syncKpsTrackSizes;
+           near(config.kpsTrackFontSizeRatio, 0.0f) &&
+           config.syncKpsTrackSizes && config.syncKpsTrackRelativePositions;
 }
 
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
@@ -335,10 +378,11 @@ bool testCanvasComponentConfigRoundTrip()
     source.kps.color           = { 0.9f, 0.8f, 0.2f, 0.85f };
     auto& kpsTrack             = source.editablePlacement(
         MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
-    kpsTrack.anchorX         = 0.73f;
-    kpsTrack.anchorY         = 0.24f;
-    kpsTrack.fontSizeRatio   = 0.045f;
-    source.syncKpsTrackSizes = true;
+    kpsTrack.anchorX                     = 0.73f;
+    kpsTrack.anchorY                     = 0.24f;
+    kpsTrack.fontSizeRatio               = 0.045f;
+    source.syncKpsTrackSizes             = true;
+    source.syncKpsTrackRelativePositions = true;
     source.synchronizeKpsTrackFontSize(0.064f);
 
     const nlohmann::json encoded = source;
@@ -391,7 +435,7 @@ bool testCanvasComponentConfigRoundTrip()
            near(restoredKpsTrack.fontSizeRatio, 0.064f) &&
            near(defaultKpsTrack.anchorX, 0.425f) &&
            near(defaultKpsTrack.fontSizeRatio, 0.064f) &&
-           decoded.syncKpsTrackSizes &&
+           decoded.syncKpsTrackSizes && decoded.syncKpsTrackRelativePositions &&
            near(decoded.kpsTrackFontSizeRatio, 0.064f) &&
            near(independentStoredKpsTrack.fontSizeRatio, 0.064f) &&
            near(independentDefaultKpsTrack.fontSizeRatio, 0.064f);
@@ -427,14 +471,17 @@ int main()
     if ( !testSynchronizedCanvasComponentResize() ) {
         return 8;
     }
-    if ( !testBeatRelativeComponentConstraints() ) {
+    if ( !testSynchronizedCanvasComponentMove() ) {
         return 9;
     }
-    if ( !testCanvasComponentPlacementReset() ) {
+    if ( !testBeatRelativeComponentConstraints() ) {
         return 10;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testCanvasComponentPlacementReset() ) {
         return 11;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 12;
     }
     return 0;
 }

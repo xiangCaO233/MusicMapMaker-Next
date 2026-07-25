@@ -2852,20 +2852,43 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              TR("ui.toolbar.layout_beat_line_time"));
         drawComponentControl(Config::CanvasComponentType::Kps,
                              TR("ui.toolbar.layout_kps"));
-        bool syncKpsTrackSizes =
-            appConfig.getVisualConfig().canvasComponents.syncKpsTrackSizes;
-        if ( ::MMM::UI::FeedbackCheckbox(
-                 TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
-                 &syncKpsTrackSizes) ) {
-            auto updatedConfig = appConfig.getEditorConfig();
-            updatedConfig.visual.canvasComponents.syncKpsTrackSizes =
-                syncKpsTrackSizes;
-            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
-            appConfig.save();
-        }
-        if ( ImGui::IsItemHovered() ) {
-            drawTooltip(
-                TR("ui.toolbar.layout_kps_sync_track_sizes_hint").data());
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.toolbar.layout_kps_sync_settings").data(),
+                 ImGuiTreeNodeFlags_DefaultOpen) ) {
+            bool syncKpsTrackSizes =
+                appConfig.getVisualConfig().canvasComponents.syncKpsTrackSizes;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
+                     &syncKpsTrackSizes) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents.syncKpsTrackSizes =
+                    syncKpsTrackSizes;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_track_sizes_hint").data());
+            }
+
+            bool syncKpsTrackRelativePositions =
+                appConfig.getVisualConfig()
+                    .canvasComponents.syncKpsTrackRelativePositions;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_track_positions").data(),
+                     &syncKpsTrackRelativePositions) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents
+                    .syncKpsTrackRelativePositions =
+                    syncKpsTrackRelativePositions;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_track_positions_hint")
+                        .data());
+            }
         }
 
         if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&

@@ -266,6 +266,8 @@ void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
                         { "kps", config.kps },
                         { "kpsTracks", config.kpsTracks },
                         { "syncKpsTrackSizes", config.syncKpsTrackSizes },
+                        { "syncKpsTrackRelativePositions",
+                          config.syncKpsTrackRelativePositions },
                         { "kpsTrackFontSizeRatio",
                           config.kpsTrackFontSizeRatio } };
 }
@@ -280,7 +282,9 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
     config.kps = j.value("kps", DEFAULT_KPS_TOTAL_PLACEMENT);
     config.kpsTracks =
         j.value("kpsTracks", std::vector<CanvasKpsTrackPlacement>{});
-    config.syncKpsTrackSizes     = j.value("syncKpsTrackSizes", false);
+    config.syncKpsTrackSizes = j.value("syncKpsTrackSizes", false);
+    config.syncKpsTrackRelativePositions =
+        j.value("syncKpsTrackRelativePositions", false);
     config.kpsTrackFontSizeRatio = j.value("kpsTrackFontSizeRatio", 0.0f);
     if ( !std::isfinite(config.kpsTrackFontSizeRatio) ||
          config.kpsTrackFontSizeRatio <= 0.0f ) {
