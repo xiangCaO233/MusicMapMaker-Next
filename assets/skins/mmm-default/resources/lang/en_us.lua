@@ -316,7 +316,7 @@ return {
 	["ui.settings.editor.sfx_strategy.all_as_normal"] = "All as Normal",
 	["ui.settings.editor.sfx_flick_scale"] = "Flick Volume Scaling",
 	["ui.settings.editor.sfx_flick_mul"] = "Per-Track Volume Multiplier",
-	["ui.settings.editor.sfx_flick_directional_channels"] = "Keep Flick SFX on Swipe Side Only",
+	["ui.settings.editor.sfx_stereo_hit_effects"] = "Stereo Hit Effects",
 	["ui.settings.editor.sfx_sync_speed"] = "Sync Skin SFX Speed with Main Track",
 
 	["ui.settings.shortcut"] = "Shortcut Config",

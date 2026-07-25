@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/StereoGainEnvelope.h"
 #include "config/EditorSettings.h"
 #include "mmm/project/AudioResource.h"
 #include <cstddef>
@@ -458,10 +459,11 @@ public:
     /// @param key 标识符
     /// @param targetTime 目标播放时间 (秒)
     /// @param volumeFactor 额外音量倍率
-    /// @param channelMode 本次播放的双声道输出模式
+    /// @param stereoEnvelope 本次播放的线性双声道增益包络；仅 SDL
+    /// 后端应用。
     void playSoundEffectScheduled(
         const std::string& key, double targetTime, float volumeFactor = 1.0f,
-        MixerChannelMode channelMode = MixerChannelMode::Stereo);
+        const StereoGainEnvelope& stereoEnvelope = {});
 
     /// @brief 清空并停止所有正在播放和预定的音效
     void clearAllScheduledSoundEffects();

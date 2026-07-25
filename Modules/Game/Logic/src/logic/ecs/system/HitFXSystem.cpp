@@ -17,7 +17,7 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
     return (currentTime - startTime) >= totalDuration;
 }
 
-void HitFXSystem::triggerAudio(const HitEvent&             ev,
+void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
                                const Config::EditorConfig& config)
 {
     if ( !config.settings.sfxConfig.enableHitSfx ) return;
@@ -58,18 +58,36 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
                              ? "hiteffect.flick"
                              : "hiteffect.note";
 
-    Audio::MixerChannelMode channelMode = Audio::MixerChannelMode::Stereo;
-    if ( effectiveType == ::MMM::NoteType::FLICK &&
-         config.settings.sfxConfig.enableDirectionalFlickChannels ) {
-        if ( ev.trackOffset < 0 ) {
-            channelMode = Audio::MixerChannelMode::MuteRight;
-        } else if ( ev.trackOffset > 0 ) {
-            channelMode = Audio::MixerChannelMode::MuteLeft;
-        }
-    }
-
+    const auto stereoEnvelope = stereoGainEnvelopeForEvent(
+        ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
     audioManager.playSoundEffectScheduled(
-        sfxKey, ev.timestamp, volumeFactor, channelMode);
+        sfxKey, ev.timestamp, volumeFactor, stereoEnvelope);
+}
+
+Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
+    const HitEvent& ev, std::int32_t trackCount, bool enabled)
+{
+    if ( !enabled || trackCount <= 0 ) return {};
+
+    // 按物件中心的归一化轨道坐标直接生成用户定义的左声道分量，
+    // 右声道始终使用其补数，确保启用后两侧增益之和为 1。
+    const auto leftGainAtTrack = [trackCount](int trackIndex) {
+        const int boundedTrack =
+            std::clamp(trackIndex, 0, static_cast<int>(trackCount) - 1);
+        return (static_cast<float>(boundedTrack) + 0.5F) /
+               static_cast<float>(trackCount);
+    };
+
+    const float startLeft = leftGainAtTrack(ev.trackIndex);
+    const float endLeft = ev.type == ::MMM::NoteType::FLICK
+                              ? leftGainAtTrack(ev.trackIndex + ev.trackOffset)
+                              : startLeft;
+    return {
+        .startLeft  = startLeft,
+        .startRight = 1.0F - startLeft,
+        .endLeft    = endLeft,
+        .endRight   = 1.0F - endLeft,
+    };
 }
 
 void HitFXSystem::triggerVisual(const HitEvent&             ev,

@@ -213,8 +213,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.sfx_strategy").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
-            TR_CACHE("ui.settings.editor.sfx_flick_directional_channels")
-                .data(),
+            TR_CACHE("ui.settings.editor.sfx_stereo_hit_effects").data(),
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);

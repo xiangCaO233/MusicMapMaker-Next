@@ -337,11 +337,10 @@ void AudioManager::resumeSoundEffect(const std::string& key)
 /// @param key 音效池标识。
 /// @param targetTime 目标有效出声时间，单位为秒。
 /// @param volumeFactor 本次播放额外音量倍率。
-/// @param channelMode 本次播放的双声道输出模式。
-void AudioManager::playSoundEffectScheduled(const std::string& key,
-                                            double             targetTime,
-                                            float              volumeFactor,
-                                            MixerChannelMode   channelMode)
+/// @param stereoEnvelope 本次播放的线性双声道增益包络。
+void AudioManager::playSoundEffectScheduled(
+    const std::string& key, double targetTime, float volumeFactor,
+    const StereoGainEnvelope& stereoEnvelope)
 {
     if ( getSFXPoolMute(key) ) return;
 
@@ -363,11 +362,21 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
         return 0;
     };
 
+    const std::size_t currentReferenceFrame = m_bgmSource->get_playpos();
+    const std::size_t scheduledDelayFrames =
+        targetFrame > currentReferenceFrame
+            ? targetFrame - currentReferenceFrame
+            : 0U;
+    const StereoGainEnvelope effectiveEnvelope =
+        m_playbackBackend == Config::AudioPlaybackBackend::SDL
+            ? stereoEnvelope
+            : StereoGainEnvelope{};
     it->second->playScheduled(
         getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
         targetFrame,
         bgmRef,
-        channelMode);
+        effectiveEnvelope,
+        scheduledDelayFrames);
 }
 
 /// @brief 清空并停止所有正在播放和预定的音效

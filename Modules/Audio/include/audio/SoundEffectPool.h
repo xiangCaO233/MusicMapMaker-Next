@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio/StereoGainEnvelope.h"
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -18,7 +20,7 @@ class TimeStretcher;
 namespace MMM::Audio
 {
 
-enum class MixerChannelMode;
+class StereoGainNode;
 
 /**
  * @brief 音效池，用于管理同一音效的多个并发播放实例
@@ -52,10 +54,12 @@ public:
     /// @param volume 播放音量
     /// @param targetFrame 目标帧位置（基于 BGM）
     /// @param refProvider 参考源位置提供者
-    /// @param channelMode 本次播放的双声道输出模式
+    /// @param stereoEnvelope 本次播放的线性双声道增益包络。
+    /// @param scheduledDelayFrames 从当前参考位置到目标帧的预计间隔。
     void playScheduled(float volume, size_t targetFrame,
-                       std::function<size_t()> refProvider,
-                       MixerChannelMode        channelMode);
+                       std::function<size_t()>   refProvider,
+                       const StereoGainEnvelope& stereoEnvelope,
+                       std::size_t               scheduledDelayFrames);
 
     /// @brief 停止所有正在播放或预定的音效，并重置状态
     void stopAll();
@@ -99,6 +103,9 @@ private:
         /// @brief 每个实例独立的变调拉伸器。
         std::shared_ptr<ice::TimeStretcher> pitchStretcher;
 
+        /// @brief 每个实例独立的双声道增益包络节点。
+        std::shared_ptr<StereoGainNode> stereoGainNode;
+
         /// @brief 每个实例独立的声道控制总线。
         std::shared_ptr<ice::MixBus> channelMixer;
     };
@@ -118,8 +125,6 @@ private:
     mutable std::mutex                            m_mtx;
 
     float m_volume{ 1.0f };
-
-    class SFXPlayCallback;
 };
 
 }  // namespace MMM::Audio
