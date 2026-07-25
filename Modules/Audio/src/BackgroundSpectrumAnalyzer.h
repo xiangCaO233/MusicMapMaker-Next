@@ -85,11 +85,18 @@ private:
     /// @param smoothed 当前声道跨帧平滑缓存。
     /// @param output 当前声道的归一化绘制结果。
     /// @param bandCount 当前有效频段数。
-    void updateChannel(
+    /// @return 本帧平滑前的最高频段电平，用于判断是否仍有有效信号。
+    [[nodiscard]] float updateChannel(
         const fftw_complex*                                       spectrum,
         std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& smoothed,
         std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& output,
         std::size_t                                               bandCount);
+
+    /// @brief 按当前立体声最高电平动态调整绘制范围。
+    /// @param signalPeak 本帧平滑前的最高频段电平。
+    /// @param bandCount 当前有效频段数。
+    /// @warning 逻辑更新热路径：每次电平图刷新调用，只允许固定频段遍历。
+    void normalizeLevels(float signalPeak, std::size_t bandCount);
 
     /// @brief 当前 BGM 与可选 HitEffect 合并后的左声道采样。
     std::array<float, BackgroundSpectrumCaptureNode::FFT_SIZE> m_captureLeft{};
@@ -121,6 +128,8 @@ private:
     fftw_plan m_fftPlanRight{ nullptr };
     /// @brief 上次分析使用的频段数，用于检测平滑缓存重置时机。
     std::size_t m_previousBandCount{ 0U };
+    /// @brief 动态高度归一化使用的跨帧峰值参考。
+    float m_adaptivePeakReference{ 0.0f };
     /// @brief 返回给渲染层的稳定频段存储。
     BackgroundSpectrumLevels m_levels;
 };

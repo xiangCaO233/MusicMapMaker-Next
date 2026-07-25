@@ -151,7 +151,8 @@ const BackgroundSpectrumLevels& BackgroundSpectrumAnalyzer::analyze(
     if ( bandCount != m_previousBandCount ) {
         m_smoothedLeft.fill(0.0f);
         m_smoothedRight.fill(0.0f);
-        m_previousBandCount = bandCount;
+        m_adaptivePeakReference = 0.0f;
+        m_previousBandCount     = bandCount;
     }
 
     m_captureLeft.fill(0.0f);
@@ -173,6 +174,7 @@ const BackgroundSpectrumLevels& BackgroundSpectrumAnalyzer::analyze(
          !m_fftInputRight || !m_fftOutputLeft || !m_fftOutputRight ) {
         m_levels.left.fill(0.0f);
         m_levels.right.fill(0.0f);
+        m_adaptivePeakReference = 0.0f;
         return m_levels;
     }
 
@@ -186,12 +188,15 @@ const BackgroundSpectrumLevels& BackgroundSpectrumAnalyzer::analyze(
     }
     fftw_execute(m_fftPlanLeft);
     fftw_execute(m_fftPlanRight);
-    updateChannel(m_fftOutputLeft, m_smoothedLeft, m_levels.left, bandCount);
-    updateChannel(m_fftOutputRight, m_smoothedRight, m_levels.right, bandCount);
+    const float leftSignalPeak = updateChannel(
+        m_fftOutputLeft, m_smoothedLeft, m_levels.left, bandCount);
+    const float rightSignalPeak = updateChannel(
+        m_fftOutputRight, m_smoothedRight, m_levels.right, bandCount);
+    normalizeLevels(std::max(leftSignalPeak, rightSignalPeak), bandCount);
     return m_levels;
 }
 
-void BackgroundSpectrumAnalyzer::updateChannel(
+float BackgroundSpectrumAnalyzer::updateChannel(
     const fftw_complex*                                       spectrum,
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& smoothed,
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& output,
@@ -202,20 +207,21 @@ void BackgroundSpectrumAnalyzer::updateChannel(
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( !spectrum || sampleRate <= 0.0 ) {
         output.fill(0.0f);
-        return;
+        return 0.0f;
     }
 
     constexpr double minFrequency = 40.0;
     const double     maxFrequency = std::min(16000.0, sampleRate * 0.5);
     if ( maxFrequency <= minFrequency ) {
         output.fill(0.0f);
-        return;
+        return 0.0f;
     }
     const double     logMin        = std::log(minFrequency);
     const double     logRange      = std::log(maxFrequency) - logMin;
     const double     binFrequency  = sampleRate / static_cast<double>(fftSize);
     constexpr double responseScale = 80.0;
     const double     responseDenominator = std::log1p(responseScale);
+    float            signalPeak          = 0.0f;
 
     for ( std::size_t band = 0U; band < bandCount; ++band ) {
         const double lowerRatio =
@@ -248,11 +254,61 @@ void BackgroundSpectrumAnalyzer::updateChannel(
                            responseDenominator)),
                        0.0f,
                        1.0f);
+        signalPeak            = std::max(signalPeak, target);
         const float smoothing = target > smoothed[band] ? 0.58f : 0.14f;
         smoothed[band] += (target - smoothed[band]) * smoothing;
         output[band] = smoothed[band];
     }
     std::fill(output.begin() + bandCount, output.end(), 0.0f);
+    return signalPeak;
+}
+
+void BackgroundSpectrumAnalyzer::normalizeLevels(float       signalPeak,
+                                                 std::size_t bandCount)
+{
+    constexpr float signalFloor            = 0.0125f;
+    constexpr float targetFill             = 0.94f;
+    constexpr float referenceAttack        = 0.65f;
+    constexpr float referenceRelease       = 0.18f;
+    constexpr float silentReferenceRelease = 0.94f;
+    constexpr float maximumHeadroom        = 1.25f;
+
+    float displayPeak = 0.0f;
+    for ( std::size_t band = 0U; band < bandCount; ++band ) {
+        displayPeak = std::max(
+            displayPeak, std::max(m_levels.left[band], m_levels.right[band]));
+    }
+
+    if ( std::isfinite(signalPeak) && signalPeak > signalFloor &&
+         displayPeak > 0.0f ) {
+        if ( m_adaptivePeakReference <= signalFloor ) {
+            m_adaptivePeakReference = displayPeak;
+        } else {
+            const float response = displayPeak > m_adaptivePeakReference
+                                       ? referenceAttack
+                                       : referenceRelease;
+            m_adaptivePeakReference +=
+                (displayPeak - m_adaptivePeakReference) * response;
+            // 音量降低时限制保留余量，避免电平柱长时间只占据底部。
+            m_adaptivePeakReference = std::min(m_adaptivePeakReference,
+                                               displayPeak * maximumHeadroom);
+        }
+        m_adaptivePeakReference =
+            std::max(m_adaptivePeakReference, signalFloor);
+    } else {
+        // 静音时参考峰值比频段平滑值回落得更慢，使残余柱自然收缩而非放大底噪。
+        m_adaptivePeakReference = std::max(
+            signalFloor, m_adaptivePeakReference * silentReferenceRelease);
+    }
+
+    const float scale =
+        targetFill / std::max(m_adaptivePeakReference, signalFloor);
+    for ( std::size_t band = 0U; band < bandCount; ++band ) {
+        m_levels.left[band] =
+            std::clamp(m_levels.left[band] * scale, 0.0f, 1.0f);
+        m_levels.right[band] =
+            std::clamp(m_levels.right[band] * scale, 0.0f, 1.0f);
+    }
 }
 
 const BackgroundSpectrumLevels& AudioManager::updateBackgroundSpectrum(
