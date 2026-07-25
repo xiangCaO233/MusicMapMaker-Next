@@ -14,15 +14,15 @@ enum class CanvasComponentType : std::uint8_t {
     BeatNumber,
     BeatLineTime,
     Kps,
+    BackgroundSpectrum,
     Count,
 };
 
 /// @brief 全部画布组件类型的稳定遍历顺序。
-inline constexpr std::array<CanvasComponentType, 4> CANVAS_COMPONENT_TYPES{
-    CanvasComponentType::JudgmentLineTime,
-    CanvasComponentType::BeatNumber,
-    CanvasComponentType::BeatLineTime,
-    CanvasComponentType::Kps,
+inline constexpr std::array<CanvasComponentType, 5> CANVAS_COMPONENT_TYPES{
+    CanvasComponentType::JudgmentLineTime,   CanvasComponentType::BeatNumber,
+    CanvasComponentType::BeatLineTime,       CanvasComponentType::Kps,
+    CanvasComponentType::BackgroundSpectrum,
 };
 
 /// @brief KPS 总计文字使用的稳定实例序号。
@@ -61,6 +61,11 @@ inline constexpr CanvasComponentPlacement DEFAULT_KPS_TOTAL_PLACEMENT{
     false, 0.5f, 0.08f, 0.035f, { 1.0f, 1.0f, 1.0f, 1.0f },
 };
 
+/// @brief 背景频谱组件的默认画布布局。
+inline constexpr CanvasComponentPlacement DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT{
+    false, 0.5f, 0.825f, 0.035f, { 1.0f, 1.0f, 1.0f, 1.0f },
+};
+
 /// @brief 单条轨道 KPS 组件的布局覆盖。
 struct CanvasKpsTrackPlacement {
     /// @brief 从零开始的轨道序号。
@@ -81,6 +86,10 @@ struct CanvasComponentLayoutConfig {
     CanvasComponentPlacement beatLineTime{ DEFAULT_BEAT_LINE_TIME_PLACEMENT };
     /// @brief KPS 总计布局，同时提供整组 KPS 的显隐与颜色。
     CanvasComponentPlacement kps{ DEFAULT_KPS_TOTAL_PLACEMENT };
+    /// @brief 背景图片上方的实时立体声频谱布局。
+    CanvasComponentPlacement backgroundSpectrum{
+        DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT
+    };
     /// @brief 用户调整过的逐轨 KPS 独立布局。
     std::vector<CanvasKpsTrackPlacement> kpsTracks;
     /// @brief 是否在缩放任意逐轨 KPS 时同步全部逐轨字号。
@@ -102,6 +111,7 @@ struct CanvasComponentLayoutConfig {
         case CanvasComponentType::BeatNumber: return beatNumber;
         case CanvasComponentType::BeatLineTime: return beatLineTime;
         case CanvasComponentType::Kps: return kps;
+        case CanvasComponentType::BackgroundSpectrum: return backgroundSpectrum;
         case CanvasComponentType::Count: break;
         }
         return judgmentLineTime;
@@ -117,6 +127,7 @@ struct CanvasComponentLayoutConfig {
         case CanvasComponentType::BeatNumber: return beatNumber;
         case CanvasComponentType::BeatLineTime: return beatLineTime;
         case CanvasComponentType::Kps: return kps;
+        case CanvasComponentType::BackgroundSpectrum: return backgroundSpectrum;
         case CanvasComponentType::Count: break;
         }
         return judgmentLineTime;

@@ -38,13 +38,19 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
     }
 
     const auto& spectrumConfig = config.visual.background.spectrum;
-    if ( spectrumConfig.enabled ) {
+    const auto& spectrumPlacement =
+        config.visual.canvasComponents.backgroundSpectrum;
+    if ( spectrumPlacement.visible ) {
         const auto& levels =
             Audio::AudioManager::instance().updateBackgroundSpectrum(
                 static_cast<std::size_t>(spectrumConfig.bandCount),
                 spectrumConfig.includeHitEffects);
-        BackgroundSpectrumRenderSystem::render(
-            batcher, viewportWidth, viewportHeight, spectrumConfig, levels);
+        BackgroundSpectrumRenderSystem::render(batcher,
+                                               viewportWidth,
+                                               viewportHeight,
+                                               spectrumConfig,
+                                               spectrumPlacement,
+                                               levels);
     }
 }
 

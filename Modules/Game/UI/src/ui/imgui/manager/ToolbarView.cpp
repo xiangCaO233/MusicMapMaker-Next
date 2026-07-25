@@ -2717,6 +2717,10 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             Config::AppConfig::instance().save();
             m_layoutComponentColorDirty = false;
         }
+        if ( m_layoutSpectrumConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_layoutSpectrumConfigDirty = false;
+        }
         m_layoutComponentColorPickerOpen = false;
         return;
     }
@@ -2774,7 +2778,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             ImGui::GetStyle().FramePadding.x * 2.0f;
         bool       anyColorPickerOpen   = false;
         const auto drawComponentControl = [&](Config::CanvasComponentType type,
-                                              std::string_view label) {
+                                              std::string_view            label,
+                                              bool showColor = true) {
             ImGui::PushID(static_cast<int>(type));
             bool visible = appConfig.getVisualConfig()
                                .canvasComponents.placement(type)
@@ -2783,26 +2788,31 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.canvasComponents.placement(type).visible =
                     visible;
+                if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
+                    updatedConfig.visual.background.spectrum.enabled = visible;
+                }
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
 
-            ImGui::SameLine();
-            const auto componentColor =
-                fromStoredColor(appConfig.getVisualConfig()
-                                    .canvasComponents.placement(type)
-                                    .color);
-            if ( ::MMM::UI::FeedbackColorButton(
-                     "##Color",
-                     toImVec4(componentColor),
-                     ImGuiColorEditFlags_NoTooltip |
-                         ImGuiColorEditFlags_NoPicker |
-                         ImGuiColorEditFlags_AlphaPreviewHalf,
-                     ImVec2(colorButtonSize, colorButtonSize)) ) {
-                ::MMM::UI::FeedbackOpenPopup("ColorPicker");
-            }
-            if ( ImGui::IsItemHovered() ) {
-                drawTooltip(TR("ui.toolbar.layout_component_color").data());
+            if ( showColor ) {
+                ImGui::SameLine();
+                const auto componentColor =
+                    fromStoredColor(appConfig.getVisualConfig()
+                                        .canvasComponents.placement(type)
+                                        .color);
+                if ( ::MMM::UI::FeedbackColorButton(
+                         "##Color",
+                         toImVec4(componentColor),
+                         ImGuiColorEditFlags_NoTooltip |
+                             ImGuiColorEditFlags_NoPicker |
+                             ImGuiColorEditFlags_AlphaPreviewHalf,
+                         ImVec2(colorButtonSize, colorButtonSize)) ) {
+                    ::MMM::UI::FeedbackOpenPopup("ColorPicker");
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    drawTooltip(TR("ui.toolbar.layout_component_color").data());
+                }
             }
 
             ImGui::SameLine();
@@ -2816,6 +2826,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.canvasComponents.resetPlacementToDefault(
                     type);
+                if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
+                    const Config::BackgroundSpectrumConfig defaults;
+                    updatedConfig.visual.background.spectrum.widthRatio =
+                        defaults.widthRatio;
+                    updatedConfig.visual.background.spectrum.heightRatio =
+                        defaults.heightRatio;
+                    updatedConfig.visual.background.spectrum.baselineRatio =
+                        defaults.baselineRatio;
+                }
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
@@ -2824,7 +2843,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     TR("ui.toolbar.layout_component_reset_hint").data());
             }
 
-            if ( ImGui::BeginPopup("ColorPicker") ) {
+            if ( showColor && ImGui::BeginPopup("ColorPicker") ) {
                 anyColorPickerOpen = true;
                 auto editableColor =
                     fromStoredColor(appConfig.getVisualConfig()
@@ -2859,6 +2878,103 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              TR("ui.toolbar.layout_beat_number"));
         drawComponentControl(Config::CanvasComponentType::BeatLineTime,
                              TR("ui.toolbar.layout_beat_line_time"));
+        drawComponentControl(Config::CanvasComponentType::BackgroundSpectrum,
+                             TR("ui.toolbar.layout_background_spectrum"),
+                             false);
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.toolbar.layout_background_spectrum_settings")
+                     .data()) ) {
+            const float spectrumControlWidth = std::floor(230.0F * dpiScale);
+            const auto  applySpectrumConfig =
+                [&](const Config::BackgroundSpectrumConfig& spectrum) {
+                    auto updatedConfig = appConfig.getEditorConfig();
+                    updatedConfig.visual.background.spectrum = spectrum;
+                    updatedConfig.visual.background.spectrum.enabled =
+                        updatedConfig.visual.canvasComponents.backgroundSpectrum
+                            .visible;
+                    Logic::EditorEngine::instance().setEditorConfig(
+                        updatedConfig);
+                };
+            const auto saveSpectrumAfterEdit = [&]() {
+                if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                     m_layoutSpectrumConfigDirty ) {
+                    appConfig.save();
+                    m_layoutSpectrumConfigDirty = false;
+                }
+            };
+
+            auto spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.band_count").data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderInt(
+                     "##LayoutBackgroundSpectrumBands",
+                     &spectrum.bandCount,
+                     Config::BACKGROUND_SPECTRUM_MIN_BANDS,
+                     Config::BACKGROUND_SPECTRUM_MAX_BANDS) ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.width_ratio")
+                    .data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumWidth",
+                     &spectrum.widthRatio,
+                     0.10F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.height_ratio")
+                    .data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumHeight",
+                     &spectrum.heightRatio,
+                     0.05F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.background_spectrum.opacity").data());
+            ImGui::SetNextItemWidth(spectrumControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutBackgroundSpectrumOpacity",
+                     &spectrum.opacity,
+                     0.0F,
+                     1.0F,
+                     "%.2f") ) {
+                applySpectrumConfig(spectrum);
+                m_layoutSpectrumConfigDirty = true;
+            }
+            saveSpectrumAfterEdit();
+
+            spectrum = appConfig.getVisualConfig().background.spectrum;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.settings.visual.background_spectrum."
+                        "include_hit_effects")
+                         .data(),
+                     &spectrum.includeHitEffects) ) {
+                applySpectrumConfig(spectrum);
+                appConfig.save();
+                m_layoutSpectrumConfigDirty = false;
+            }
+        }
         drawComponentControl(Config::CanvasComponentType::Kps,
                              TR("ui.toolbar.layout_kps"));
         if ( ::MMM::UI::FeedbackCollapsingHeader(

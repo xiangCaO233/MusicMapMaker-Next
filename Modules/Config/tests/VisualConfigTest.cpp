@@ -81,22 +81,51 @@ bool testBackgroundSpectrumRoundTrip()
 {
     MMM::Config::VisualConfig source;
     auto&                     spectrum = source.background.spectrum;
-    spectrum.enabled                   = true;
-    spectrum.bandCount                 = 48;
-    spectrum.widthRatio                = 0.72F;
-    spectrum.heightRatio               = 0.44F;
-    spectrum.baselineRatio             = 0.83F;
-    spectrum.opacity                   = 0.27F;
-    spectrum.includeHitEffects         = false;
+    auto& placement            = source.canvasComponents.backgroundSpectrum;
+    placement.visible          = true;
+    placement.anchorX          = 0.37F;
+    placement.anchorY          = 0.42F;
+    placement.fontSizeRatio    = 0.08F;
+    spectrum.bandCount         = 48;
+    spectrum.widthRatio        = 0.72F;
+    spectrum.heightRatio       = 0.44F;
+    spectrum.baselineRatio     = 0.83F;
+    spectrum.opacity           = 0.27F;
+    spectrum.includeHitEffects = false;
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::VisualConfig>();
     const auto&          result   = restored.background.spectrum;
+    const auto& resultPlacement = restored.canvasComponents.backgroundSpectrum;
     if ( !result.enabled || result.bandCount != 48 ||
          !near(result.widthRatio, 0.72F) || !near(result.heightRatio, 0.44F) ||
          !near(result.baselineRatio, 0.83F) || !near(result.opacity, 0.27F) ||
-         result.includeHitEffects ) {
+         result.includeHitEffects || !resultPlacement.visible ||
+         !near(resultPlacement.anchorX, 0.37F) ||
+         !near(resultPlacement.anchorY, 0.42F) ||
+         !near(resultPlacement.fontSizeRatio, 0.08F) ) {
         XERROR("Background spectrum config did not survive JSON round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧版背景频谱显隐和底边位置迁移到画布组件布局。
+/// @return 旧字段生成可见组件且保持原始垂直位置时返回 true。
+bool testLegacyBackgroundSpectrumMigration()
+{
+    const nlohmann::json json{
+        { "background",
+          { { "spectrum",
+              { { "enabled", true },
+                { "heightRatio", 0.4F },
+                { "baselineRatio", 0.9F } } } } },
+    };
+    const auto  config    = json.get<MMM::Config::VisualConfig>();
+    const auto& placement = config.canvasComponents.backgroundSpectrum;
+    if ( !placement.visible || !config.background.spectrum.enabled ||
+         !near(placement.anchorY, 0.7F) ) {
+        XERROR("Legacy background spectrum was not migrated to canvas layout");
         return false;
     }
     return true;
@@ -136,6 +165,7 @@ int main()
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
                    testBackgroundSpectrumRoundTrip() &&
+                   testLegacyBackgroundSpectrumMigration() &&
                    testBackgroundSpectrumClamping()
                ? 0
                : 1;

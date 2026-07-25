@@ -121,7 +121,6 @@ bool testStereoSpectrumRendersAboveBackground()
     snapshot.bgSize = { 320.0F, 180.0F };
 
     MMM::Config::BackgroundSpectrumConfig config;
-    config.enabled       = true;
     config.bandCount     = 10;
     config.widthRatio    = 1.0F;
     config.heightRatio   = 0.5F;
@@ -133,6 +132,11 @@ bool testStereoSpectrumRendersAboveBackground()
     levels.left[0]   = 0.5F;
     levels.right[0]  = 0.75F;
 
+    MMM::Config::CanvasComponentPlacement placement =
+        MMM::Config::DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT;
+    placement.visible = true;
+    placement.anchorY = 0.55F;
+
     MMM::Logic::System::Batcher batcher(&snapshot);
     batcher.setTexture(MMM::Logic::TextureID::Background);
     batcher.pushFilledQuad(0.0F,
@@ -143,16 +147,28 @@ bool testStereoSpectrumRendersAboveBackground()
                            MMM::Config::BackgroundFillMode::Stretch,
                            glm::vec4{ 1.0F });
     MMM::Logic::System::BackgroundSpectrumRenderSystem::render(
-        batcher, 320.0F, 180.0F, config, levels);
+        batcher, 320.0F, 180.0F, config, placement, levels);
     batcher.flush();
 
     if ( snapshot.vertices.size() != 12U || snapshot.indices.size() != 18U ||
          snapshot.cmds.size() != 2U ||
+         snapshot.canvasComponentInstances.size() != 1U ||
+         snapshot.canvasComponentInstances.front().type !=
+             MMM::Config::CanvasComponentType::BackgroundSpectrum ||
          snapshot.cmds[0].customTextureId !=
              static_cast<uint32_t>(MMM::Logic::TextureID::Background) ||
          snapshot.cmds[1].customTextureId !=
              static_cast<uint32_t>(MMM::Logic::TextureID::None) ) {
         XERROR("Stereo spectrum was not layered directly above background");
+        return false;
+    }
+
+    const auto& componentBounds = snapshot.canvasComponentInstances.front();
+    if ( !near(componentBounds.left, 0.0F) ||
+         !near(componentBounds.top, 54.0F) ||
+         !near(componentBounds.right, 320.0F) ||
+         !near(componentBounds.bottom, 144.0F) ) {
+        XERROR("Background spectrum did not publish editable canvas bounds");
         return false;
     }
 

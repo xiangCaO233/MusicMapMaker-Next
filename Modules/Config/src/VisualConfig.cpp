@@ -290,6 +290,10 @@ void CanvasComponentLayoutConfig::resetPlacementToDefault(
         kpsTracks.clear();
         kpsTrackFontSizeRatio = 0.0f;
         break;
+    case CanvasComponentType::BackgroundSpectrum:
+        resetPlacementGeometry(backgroundSpectrum,
+                               DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
+        break;
     case CanvasComponentType::Count: break;
     }
 }
@@ -313,6 +317,7 @@ void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
         { "beatNumber", config.beatNumber },
         { "beatLineTime", config.beatLineTime },
         { "kps", config.kps },
+        { "backgroundSpectrum", config.backgroundSpectrum },
         { "kpsTracks", config.kpsTracks },
         { "syncKpsTrackSizes", config.syncKpsTrackSizes },
         { "syncKpsTrackRelativePositions",
@@ -330,6 +335,8 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
     config.beatLineTime =
         j.value("beatLineTime", DEFAULT_BEAT_LINE_TIME_PLACEMENT);
     config.kps = j.value("kps", DEFAULT_KPS_TOTAL_PLACEMENT);
+    config.backgroundSpectrum =
+        j.value("backgroundSpectrum", DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
     config.kpsTracks =
         j.value("kpsTracks", std::vector<CanvasKpsTrackPlacement>{});
     config.syncKpsTrackSizes = j.value("syncKpsTrackSizes", false);
@@ -446,10 +453,13 @@ void from_json(const nlohmann::json& j, TrackLayout& layout)
 
 void to_json(nlohmann::json& j, const VisualConfig& config)
 {
+    auto background = config.background;
+    background.spectrum.enabled =
+        config.canvasComponents.backgroundSpectrum.visible;
     j = nlohmann::json{
         { "trackLayout", config.trackLayout },
         { "canvasComponents", config.canvasComponents },
-        { "background", config.background },
+        { "background", background },
         { "previewConfig", config.previewConfig },
         { "trackBoxLineWidth", config.trackBoxLineWidth },
         { "judgeline_pos", config.judgeline_pos },
@@ -479,10 +489,25 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
 
 void from_json(const nlohmann::json& j, VisualConfig& config)
 {
+    const bool hasBackgroundSpectrumComponent =
+        j.contains("canvasComponents") &&
+        j.at("canvasComponents").is_object() &&
+        j.at("canvasComponents").contains("backgroundSpectrum");
     config.trackLayout = j.value("trackLayout", TrackLayout());
     config.canvasComponents =
         j.value("canvasComponents", CanvasComponentLayoutConfig());
-    config.background        = j.value("background", BackgroundConfig());
+    config.background = j.value("background", BackgroundConfig());
+    if ( !hasBackgroundSpectrumComponent ) {
+        config.canvasComponents.backgroundSpectrum.visible =
+            config.background.spectrum.enabled;
+        config.canvasComponents.backgroundSpectrum.anchorY =
+            std::clamp(config.background.spectrum.baselineRatio -
+                           config.background.spectrum.heightRatio * 0.5f,
+                       0.0f,
+                       1.0f);
+    }
+    config.background.spectrum.enabled =
+        config.canvasComponents.backgroundSpectrum.visible;
     config.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
     config.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
     config.judgeline_pos     = j.value("judgeline_pos", 0.85f);

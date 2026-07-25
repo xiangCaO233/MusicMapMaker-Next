@@ -425,7 +425,9 @@ bool testCanvasComponentPlacementReset()
         verifyReset(MMM::Config::CanvasComponentType::BeatLineTime,
                     MMM::Config::DEFAULT_BEAT_LINE_TIME_PLACEMENT) &&
         verifyReset(MMM::Config::CanvasComponentType::Kps,
-                    MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT);
+                    MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BackgroundSpectrum,
+                    MMM::Config::DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
     return allPlacementsReset && config.kpsTracks.empty() &&
            near(config.kpsTrackFontSizeRatio, 0.0f) &&
            config.syncKpsTrackSizes && config.syncKpsTrackRelativePositions &&

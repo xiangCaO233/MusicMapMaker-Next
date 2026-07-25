@@ -241,8 +241,8 @@ void renderBeatGridTexts(Batcher&                                batcher,
         const auto* bpmEvent = context.bpmEvents[index];
         if ( !bpmEvent ) continue;
 
-        const double bpmTime      = bpmEvent->m_timestamp;
-        const double bpm          = normalizedGridTextBpm(bpmEvent->m_value,
+        const double bpmTime = bpmEvent->m_timestamp;
+        const double bpm = normalizedGridTextBpm(bpmEvent->m_value,
                                                  batcher.snapshot->fallbackBpm);
         const double gridDuration = 60.0 / bpm / static_cast<double>(divisor);
         const double nextBpmTime =
@@ -283,10 +283,10 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                      static_cast<float>(cache->getDisplayDelta(
                                          gridStart, currentAbsY, gridStart)) *
                                          context.renderScaleY;
-                const float endY = context.judgmentLineY -
-                                   static_cast<float>(cache->getDisplayDelta(
-                                       gridEnd, currentAbsY, gridEnd)) *
-                                       context.renderScaleY;
+                const float endY   = context.judgmentLineY -
+                                     static_cast<float>(cache->getDisplayDelta(
+                                         gridEnd, currentAbsY, gridEnd)) *
+                                         context.renderScaleY;
                 const CanvasComponentBounds layoutRegion{
                     0.0f,
                     std::min(startY, endY),
@@ -550,6 +550,9 @@ void CanvasComponentRenderSystem::render(
         case Config::CanvasComponentType::Kps:
             if ( !snapshot->hasBeatmap ) break;
             renderKps(batcher, context, config);
+            break;
+        case Config::CanvasComponentType::BackgroundSpectrum:
+            // 频谱必须紧邻背景图片绘制，此处只保留统一类型遍历入口。
             break;
         case Config::CanvasComponentType::Count: break;
         }
