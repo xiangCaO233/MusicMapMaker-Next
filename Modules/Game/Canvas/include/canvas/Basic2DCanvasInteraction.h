@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -105,6 +106,14 @@ private:
         Logic::CanvasComponentBounds region;
     };
 
+    /// @brief 当前快照中一个可见物件合并后的布局包围框。
+    struct NoteLayoutInstance {
+        /// @brief 对应的物件实体。
+        entt::entity entity{ entt::null };
+        /// @brief 物件全部可交互渲染部位的合并像素边界。
+        Logic::CanvasComponentBounds bounds;
+    };
+
     std::string              m_canvasName;
     std::string              m_cameraId;
     std::vector<PendingDrop> m_pendingDrops;
@@ -130,6 +139,12 @@ private:
                              float targetWidth, float targetHeight,
                              bool                         isHovered,
                              const Logic::RenderSnapshot& currentSnapshot);
+    /// @brief 从当前渲染快照的物件拾取盒重建逐物件布局包围框。
+    /// @param currentSnapshot 当前画布渲染快照。
+    /// @warning UI 布局热路径：每帧只遍历当前可见拾取盒，不得扫描 ECS
+    /// 或完整谱面。
+    void rebuildNoteLayoutInstances(
+        const Logic::RenderSnapshot& currentSnapshot);
     /// @brief 结束布局拖动，并在发生修改时持久化一次编辑器配置。
     /// @warning 低频路径：鼠标释放或退出布局模式时调用，允许写入配置文件。
     void finishLayoutEditing();
@@ -203,6 +218,20 @@ private:
     Config::TrackLayout m_trackLayoutDragStart;
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
+    /// @brief 当前快照中可见物件的合并布局包围框。
+    std::vector<NoteLayoutInstance> m_noteLayoutInstances;
+    /// @brief 重建物件布局包围框时复用的实体到数组下标映射。
+    std::unordered_map<entt::entity, std::size_t> m_noteLayoutIndexScratch;
+    /// @brief 当前正在通过包围框缩放的物件实体。
+    std::optional<entt::entity> m_noteScaleDragTarget;
+    /// @brief 当前物件缩放拖动的角点。
+    Logic::CanvasComponentDragHandle m_noteScaleDragHandle{
+        Logic::CanvasComponentDragHandle::None
+    };
+    /// @brief 物件缩放开始时的合并像素边界。
+    Logic::CanvasComponentBounds m_noteScaleDragStartBounds;
+    /// @brief 物件缩放开始时的横纵比例。
+    Logic::NoteRenderScale m_noteScaleDragStart;
     /// @brief 当前正在拖动的可选画布组件。
     std::optional<Config::CanvasComponentType> m_canvasComponentDragTarget;
     /// @brief 当前可选画布组件的移动或缩放部位。

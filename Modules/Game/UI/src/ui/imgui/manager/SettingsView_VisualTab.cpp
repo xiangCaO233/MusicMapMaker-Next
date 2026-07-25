@@ -21,7 +21,6 @@ void SettingsView::drawVisualSettings()
 {
     auto& appConfig = Config::AppConfig::instance();
     auto& visual    = appConfig.getVisualConfig();
-    auto& settings  = appConfig.getEditorSettings();
     bool  changed   = false;
 
     m_contentVBox.clear();
@@ -103,17 +102,6 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(),
                                true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##BeatLineAlpha", &visual.beatLineAlpha, 0.0f, 1.0f);
-            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -123,147 +111,6 @@ void SettingsView::drawVisualSettings()
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##BeatLineBeforeFirstTiming",
                     &visual.drawBeatLinesBeforeFirstTiming);
-            });
-    }
-
-    if ( auto* sec =
-             addHeader(TR_CACHE("ui.settings.visual.note").data(), true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.note_scale_x").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ::MMM::UI::FeedbackSliderFloat(
-                               "##NoteScaleX", &visual.noteScaleX, 0.5f, 3.0f);
-                       });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.note_scale_y").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ::MMM::UI::FeedbackSliderFloat(
-                               "##NoteScaleY", &visual.noteScaleY, 0.5f, 3.0f);
-                       });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.note_fill_mode").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int         noteFillMode = (int)visual.noteFillMode;
-                const char* fillModes[]  = {
-                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
-                };
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackCombo("##NoteFillMode",
-                                              &noteFillMode,
-                                              fillModes,
-                                              IM_ARRAYSIZE(fillModes)) ) {
-                    visual.noteFillMode =
-                        (Config::BackgroundFillMode)noteFillMode;
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.note_palette_default").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                auto& paletteConfig = settings.colorPalettes;
-                auto& defaultScheme = settings.defaultColorPaletteSchemeName;
-                std::string previewName =
-                    defaultScheme ==
-                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
-                        ? std::string(
-                              TR_CACHE(
-                                  "ui.toolbar.note_palette.skin_default_scheme")
-                                  .data())
-                        : defaultScheme;
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackBeginCombo("##DefaultNotePalette",
-                                                   previewName.c_str()) ) {
-                    const bool skinSelected =
-                        defaultScheme ==
-                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                    if ( ::MMM::UI::FeedbackSelectable(
-                             TR_CACHE(
-                                 "ui.toolbar.note_palette.skin_default_scheme")
-                                 .data(),
-                             skinSelected) ) {
-                        defaultScheme =
-                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                        changed = true;
-                    }
-                    if ( skinSelected ) ImGui::SetItemDefaultFocus();
-
-                    for ( const auto& scheme : paletteConfig.schemes ) {
-                        const bool selected = defaultScheme == scheme.name;
-                        if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
-                                                           selected) ) {
-                            defaultScheme = scheme.name;
-                            changed       = true;
-                        }
-                        if ( selected ) ImGui::SetItemDefaultFocus();
-                    }
-                    ::MMM::UI::FeedbackEndCombo();
-                }
-            });
-    }
-
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(),
-                               true) ) {
-        // 采用全局统一最大标签宽度 maxLabelW
-
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int         bgFillMode  = (int)visual.background.fillMode;
-                const char* fillModes[] = {
-                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
-                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
-                };
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackCombo("##BgFillMode",
-                                              &bgFillMode,
-                                              fillModes,
-                                              IM_ARRAYSIZE(fillModes)) ) {
-                    visual.background.fillMode =
-                        (Config::BackgroundFillMode)bgFillMode;
-                    changed = true;
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.bg_opaque").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##BgOpaque", &visual.background.opaque_ratio, 0.0f, 1.0f);
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.bg_darken").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##BgDarken", &visual.background.darken_ratio, 0.0f, 1.0f);
             });
     }
 

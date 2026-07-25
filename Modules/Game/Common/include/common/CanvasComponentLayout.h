@@ -25,6 +25,10 @@ enum class CanvasComponentDragHandle {
 inline constexpr float CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO = 0.0125f;
 /// @brief 允许保存的最大字号高度比例。
 inline constexpr float CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO = 0.25f;
+/// @brief 允许通过布局包围框设置的最小物件横纵缩放。
+inline constexpr float NOTE_RENDER_MIN_SCALE = 0.5f;
+/// @brief 允许通过布局包围框设置的最大物件横纵缩放。
+inline constexpr float NOTE_RENDER_MAX_SCALE = 3.0f;
 
 /// @brief 画布组件在当前视口中的像素边界。
 struct CanvasComponentBounds {
@@ -58,6 +62,56 @@ struct CanvasComponentPoint {
     /// @brief 纵坐标。
     float y{ 0.0f };
 };
+
+/// @brief 物件渲染的独立横纵缩放。
+struct NoteRenderScale {
+    /// @brief 横向缩放。
+    float x{ 1.0f };
+    /// @brief 纵向缩放。
+    float y{ 1.0f };
+};
+
+/// @brief 依据以物件中心为固定点的四角拖动计算独立横纵缩放。
+/// @param startScale 拖动开始时的横纵缩放。
+/// @param handle 当前拖动的包围框角点。
+/// @param startBounds 拖动开始时的物件像素边界。
+/// @param pointerX 当前指针横坐标。
+/// @param pointerY 当前指针纵坐标。
+/// @return 限制在视觉配置合法范围内的横纵缩放。
+/// @warning UI 布局热路径：物件缩放期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline NoteRenderScale resizeNoteRenderScale(
+    NoteRenderScale startScale, CanvasComponentDragHandle handle,
+    const CanvasComponentBounds& startBounds, float pointerX, float pointerY)
+{
+    const auto sanitizeScale = [](float value) {
+        if ( !std::isfinite(value) ) return 1.0f;
+        return std::clamp(value, NOTE_RENDER_MIN_SCALE, NOTE_RENDER_MAX_SCALE);
+    };
+    startScale.x = sanitizeScale(startScale.x);
+    startScale.y = sanitizeScale(startScale.y);
+    if ( handle == CanvasComponentDragHandle::None ||
+         handle == CanvasComponentDragHandle::Move ||
+         startBounds.width() <= 0.0f || startBounds.height() <= 0.0f ||
+         !std::isfinite(pointerX) || !std::isfinite(pointerY) ) {
+        return startScale;
+    }
+
+    const float centerX   = (startBounds.left + startBounds.right) * 0.5f;
+    const float centerY   = (startBounds.top + startBounds.bottom) * 0.5f;
+    const bool  dragsLeft = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::BottomLeft;
+    const bool  dragsTop  = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::TopRight;
+    const float targetHalfWidth =
+        dragsLeft ? centerX - pointerX : pointerX - centerX;
+    const float targetHalfHeight =
+        dragsTop ? centerY - pointerY : pointerY - centerY;
+    startScale.x = sanitizeScale(startScale.x * targetHalfWidth /
+                                 (startBounds.width() * 0.5f));
+    startScale.y = sanitizeScale(startScale.y * targetHalfHeight /
+                                 (startBounds.height() * 0.5f));
+    return startScale;
+}
 
 /// @brief 组件移动对齐到目标线后的二维吸附结果。
 struct CanvasComponentSnapResult {

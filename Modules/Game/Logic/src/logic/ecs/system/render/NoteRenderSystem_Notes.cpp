@@ -154,9 +154,11 @@ void NoteRenderSystem::renderNotes(
         noteEntities,
         noteSeen);
 
-    bool shouldGenerateHitboxes = !snapshot->isPlaying &&
-                                  snapshot->acceptsInteraction &&
-                                  SessionUtils::isMainCanvasCameraId(cameraId);
+    // 布局模式即使正在播放也需要逐物件边界，供 UI 直接调整渲染比例。
+    const bool shouldGenerateHitboxes =
+        (!snapshot->isPlaying || snapshot->currentTool == EditTool::Layout) &&
+        snapshot->acceptsInteraction &&
+        SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
     if ( shouldGenerateHitboxes ) {

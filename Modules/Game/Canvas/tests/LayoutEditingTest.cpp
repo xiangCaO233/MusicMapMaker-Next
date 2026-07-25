@@ -267,6 +267,37 @@ bool testCanvasComponentResize()
            near(resized.anchorX, 0.625f) && near(resized.anchorY, 0.52f);
 }
 
+/// @brief 验证物件包围框四角会以中心为固定点独立调整横纵缩放。
+/// @return 横纵缩放、反向角点与上下限均符合预期时返回 true。
+bool testNoteRenderScaleResize()
+{
+    using Handle = MMM::Logic::CanvasComponentDragHandle;
+    const MMM::Logic::CanvasComponentBounds bounds{
+        100.0f, 80.0f, 200.0f, 120.0f
+    };
+    const MMM::Logic::NoteRenderScale start{ 1.2f, 1.2f };
+    const auto resized = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::BottomRight, bounds, 225.0f, 130.0f);
+    if ( !near(resized.x, 1.8f) || !near(resized.y, 1.8f) ) {
+        return false;
+    }
+
+    const auto independent = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::TopLeft, bounds, 75.0f, 90.0f);
+    if ( !near(independent.x, 1.8f) || !near(independent.y, 0.6f) ) {
+        return false;
+    }
+
+    const auto clampedMaximum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::BottomRight, bounds, 1000.0f, 1000.0f);
+    const auto clampedMinimum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::TopLeft, bounds, 149.0f, 99.0f);
+    return near(clampedMaximum.x, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
+           near(clampedMaximum.y, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
+           near(clampedMinimum.x, MMM::Logic::NOTE_RENDER_MIN_SCALE) &&
+           near(clampedMinimum.y, MMM::Logic::NOTE_RENDER_MIN_SCALE);
+}
+
 /// @brief 验证同步字号缩放会让其他组件沿用当前把手的固定对角点。
 /// @return 其他组件字号变化后左上角保持不动且中心随尺寸移动时返回 true。
 bool testSynchronizedCanvasComponentResize()
@@ -631,6 +662,9 @@ int main()
     }
     if ( !testTrackLayoutSnapping() ) {
         return 16;
+    }
+    if ( !testNoteRenderScaleResize() ) {
+        return 17;
     }
     return 0;
 }

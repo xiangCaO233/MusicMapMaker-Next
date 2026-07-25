@@ -57,6 +57,8 @@ private:
     bool m_layoutComponentColorDirty{ false };
     /// @brief 背景电平图折叠菜单是否有尚未写入配置文件的连续调整。
     bool m_layoutSpectrumConfigDirty{ false };
+    /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
+    bool m_layoutVisualConfigDirty{ false };
     /// @brief 上一帧布局组件颜色选择器是否打开。
     bool  m_layoutComponentColorPickerOpen{ false };
     bool  m_showDivisorPopup = false;

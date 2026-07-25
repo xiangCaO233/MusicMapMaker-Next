@@ -2725,6 +2725,10 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             Config::AppConfig::instance().save();
             m_layoutSpectrumConfigDirty = false;
         }
+        if ( m_layoutVisualConfigDirty ) {
+            Config::AppConfig::instance().save();
+            m_layoutVisualConfigDirty = false;
+        }
         m_layoutComponentColorPickerOpen = false;
         return;
     }
@@ -2771,16 +2775,177 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         std::floor(aesthetics.frameRounding * dpiScale));
 
     if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
-        ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
+        ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
         ImGui::Separator();
 
-        auto&       appConfig        = Config::AppConfig::instance();
-        const float colorButtonSize  = std::floor(22.0f * dpiScale);
+        auto&       appConfig          = Config::AppConfig::instance();
+        const float colorButtonSize    = std::floor(22.0f * dpiScale);
+        const float visualControlWidth = std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
         const float resetButtonWidth =
             ImGui::CalcTextSize(resetButtonLabel.data()).x +
             ImGui::GetStyle().FramePadding.x * 2.0f;
-        bool       anyColorPickerOpen   = false;
+        bool       anyColorPickerOpen = false;
+        const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
+            auto updatedConfig   = appConfig.getEditorConfig();
+            updatedConfig.visual = visual;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+        };
+        const auto saveVisualAfterEdit = [&]() {
+            if ( ImGui::IsItemDeactivatedAfterEdit() &&
+                 m_layoutVisualConfigDirty ) {
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+        };
+
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.settings.visual.note").data()) ) {
+            auto visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_scale_x").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleX",
+                                                &visual.noteScaleX,
+                                                0.5f,
+                                                3.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_scale_y").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleY",
+                                                &visual.noteScaleY,
+                                                0.5f,
+                                                3.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual                   = appConfig.getVisualConfig();
+            int         noteFillMode = static_cast<int>(visual.noteFillMode);
+            const char* fillModes[]  = {
+                TR("ui.settings.visual.fill_mode.stretch").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fit").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fill").data(),
+                TR("ui.settings.visual.fill_mode.center").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_fill_mode").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutNoteFillMode",
+                                          &noteFillMode,
+                                          fillModes,
+                                          IM_ARRAYSIZE(fillModes)) ) {
+                visual.noteFillMode =
+                    static_cast<Config::BackgroundFillMode>(noteFillMode);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+
+            auto&       settings      = appConfig.getEditorSettings();
+            auto&       defaultScheme = settings.defaultColorPaletteSchemeName;
+            const auto& paletteConfig = settings.colorPalettes;
+            const std::string previewName =
+                defaultScheme == Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+                    ? std::string(
+                          TR("ui.toolbar.note_palette.skin_default_scheme")
+                              .data())
+                    : defaultScheme;
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_palette_default").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackBeginCombo("##LayoutDefaultNotePalette",
+                                               previewName.c_str()) ) {
+                const bool skinSelected =
+                    defaultScheme ==
+                    Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                if ( ::MMM::UI::FeedbackSelectable(
+                         TR("ui.toolbar.note_palette.skin_default_scheme")
+                             .data(),
+                         skinSelected) ) {
+                    defaultScheme =
+                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                    appConfig.save();
+                }
+                if ( skinSelected ) ImGui::SetItemDefaultFocus();
+                for ( const auto& scheme : paletteConfig.schemes ) {
+                    const bool selected = defaultScheme == scheme.name;
+                    if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                                       selected) ) {
+                        defaultScheme = scheme.name;
+                        appConfig.save();
+                    }
+                    if ( selected ) ImGui::SetItemDefaultFocus();
+                }
+                ::MMM::UI::FeedbackEndCombo();
+            }
+            ImGui::TextDisabled(
+                "%s", TR("ui.toolbar.layout_note_resize_hint").data());
+        }
+
+        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                 TR("ui.settings.visual.background").data()) ) {
+            auto visual     = appConfig.getVisualConfig();
+            int  bgFillMode = static_cast<int>(visual.background.fillMode);
+            const char* fillModes[] = {
+                TR("ui.settings.visual.fill_mode.stretch").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fit").data(),
+                TR("ui.settings.visual.fill_mode.aspect_fill").data(),
+                TR("ui.settings.visual.fill_mode.center").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.bg_fill_mode").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutBackgroundFillMode",
+                                          &bgFillMode,
+                                          fillModes,
+                                          IM_ARRAYSIZE(fillModes)) ) {
+                visual.background.fillMode =
+                    static_cast<Config::BackgroundFillMode>(bgFillMode);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(TR("ui.settings.visual.bg_opaque").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundOpaque",
+                                                &visual.background.opaque_ratio,
+                                                0.0f,
+                                                1.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(TR("ui.settings.visual.bg_darken").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundDarken",
+                                                &visual.background.darken_ratio,
+                                                0.0f,
+                                                1.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
+        }
+
+        ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
+        ImGui::Separator();
+
         const auto drawComponentControl = [&](Config::CanvasComponentType type,
                                               std::string_view            label,
                                               bool showColor = true) {
@@ -3121,10 +3286,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         }
 
         if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen ) {
-            if ( m_layoutComponentColorDirty || m_layoutSpectrumConfigDirty ) {
+            if ( m_layoutComponentColorDirty || m_layoutSpectrumConfigDirty ||
+                 m_layoutVisualConfigDirty ) {
                 appConfig.save();
                 m_layoutComponentColorDirty = false;
                 m_layoutSpectrumConfigDirty = false;
+                m_layoutVisualConfigDirty   = false;
             }
         }
         m_layoutComponentColorPickerOpen = anyColorPickerOpen;

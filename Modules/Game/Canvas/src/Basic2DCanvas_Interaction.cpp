@@ -1202,6 +1202,38 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 在此处移除以防止重复触发。
 }
 
+void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
+    const Logic::RenderSnapshot& currentSnapshot)
+{
+    m_noteLayoutInstances.clear();
+    m_noteLayoutIndexScratch.clear();
+    m_noteLayoutInstances.reserve(currentSnapshot.hitboxes.size());
+    m_noteLayoutIndexScratch.reserve(currentSnapshot.hitboxes.size());
+
+    for ( const auto& hitbox : currentSnapshot.hitboxes ) {
+        if ( hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
+             !std::isfinite(hitbox.y) || !std::isfinite(hitbox.w) ||
+             !std::isfinite(hitbox.h) || hitbox.w <= 0.0f ||
+             hitbox.h <= 0.0f ) {
+            continue;
+        }
+
+        const Logic::CanvasComponentBounds bounds{
+            hitbox.x, hitbox.y, hitbox.x + hitbox.w, hitbox.y + hitbox.h
+        };
+        const auto [it, inserted] = m_noteLayoutIndexScratch.try_emplace(
+            hitbox.entity, m_noteLayoutInstances.size());
+        if ( inserted ) {
+            m_noteLayoutInstances.push_back({ hitbox.entity, bounds });
+            continue;
+        }
+
+        bool hasBounds = true;
+        mergeCanvasComponentBounds(
+            bounds, m_noteLayoutInstances[it->second].bounds, hasBounds);
+    }
+}
+
 void Basic2DCanvasInteraction::finishLayoutEditing()
 {
     if ( m_layoutConfigurationChanged ) {
@@ -1209,6 +1241,8 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    m_noteScaleDragTarget.reset();
+    m_noteScaleDragHandle = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragTarget.reset();
     m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragInstanceIndex = 0;
@@ -1227,12 +1261,15 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 {
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
         if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+              m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
             finishLayoutEditing();
         }
         return;
     }
+
+    rebuildNoteLayoutInstances(currentSnapshot);
 
     auto& appConfig = Config::AppConfig::instance();
     auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
@@ -1249,12 +1286,37 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         m_canvasComponentDragTarget.has_value() &&
         m_canvasComponentDragHandle == Logic::CanvasComponentDragHandle::Move;
     const bool movingTrackLayout =
+        !m_noteScaleDragTarget.has_value() &&
         !m_canvasComponentDragTarget.has_value() &&
         m_trackLayoutDragHandle == TrackLayoutDragHandle::Move;
     if ( (!movingCanvasComponent && !movingTrackLayout) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
+    }
+
+    std::optional<entt::entity>                 hoveredNote;
+    std::optional<Logic::CanvasComponentBounds> hoveredNoteBounds;
+    Logic::CanvasComponentDragHandle            hoveredNoteHandle =
+        Logic::CanvasComponentDragHandle::None;
+    if ( m_noteScaleDragTarget.has_value() ) {
+        hoveredNote       = m_noteScaleDragTarget;
+        hoveredNoteHandle = m_noteScaleDragHandle;
+    } else if ( !m_canvasComponentDragTarget.has_value() && isHovered ) {
+        for ( auto it = m_noteLayoutInstances.rbegin();
+              it != m_noteLayoutInstances.rend();
+              ++it ) {
+            const auto hit = Logic::hitTestCanvasComponent(
+                it->bounds, pointerX, pointerY, componentCornerHitRadius);
+            if ( hit == Logic::CanvasComponentDragHandle::None ||
+                 hit == Logic::CanvasComponentDragHandle::Move ) {
+                continue;
+            }
+            hoveredNote       = it->entity;
+            hoveredNoteBounds = it->bounds;
+            hoveredNoteHandle = hit;
+            break;
+        }
     }
 
     std::optional<Config::CanvasComponentType> hoveredComponent;
@@ -1265,7 +1327,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( m_canvasComponentDragTarget.has_value() ) {
         hoveredComponent       = m_canvasComponentDragTarget;
         hoveredComponentHandle = m_canvasComponentDragHandle;
-    } else if ( isHovered ) {
+    } else if ( !hoveredNote.has_value() && isHovered ) {
         for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
               it != currentSnapshot.canvasComponentInstances.rend();
               ++it ) {
@@ -1292,7 +1354,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     TrackLayoutDragHandle hoveredHandle = TrackLayoutDragHandle::None;
     if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ) {
         hoveredHandle = m_trackLayoutDragHandle;
-    } else if ( isHovered && !hoveredComponent.has_value() ) {
+    } else if ( isHovered && !hoveredNote.has_value() &&
+                !hoveredComponent.has_value() ) {
         hoveredHandle = hitTestTrackLayout(layout,
                                            judgmentLinePosition,
                                            pointerX,
@@ -1303,16 +1366,20 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                            moveHandleRadius);
     }
 
-    if ( hoveredComponentHandle == Logic::CanvasComponentDragHandle::TopLeft ||
-         hoveredComponentHandle ==
+    const Logic::CanvasComponentDragHandle hoveredResizeHandle =
+        hoveredNoteHandle != Logic::CanvasComponentDragHandle::None
+            ? hoveredNoteHandle
+            : hoveredComponentHandle;
+    if ( hoveredResizeHandle == Logic::CanvasComponentDragHandle::TopLeft ||
+         hoveredResizeHandle ==
              Logic::CanvasComponentDragHandle::BottomRight ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
-    } else if ( hoveredComponentHandle ==
+    } else if ( hoveredResizeHandle ==
                     Logic::CanvasComponentDragHandle::TopRight ||
-                hoveredComponentHandle ==
+                hoveredResizeHandle ==
                     Logic::CanvasComponentDragHandle::BottomLeft ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW);
-    } else if ( hoveredComponentHandle ==
+    } else if ( hoveredResizeHandle ==
                 Logic::CanvasComponentDragHandle::Move ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Left ||
@@ -1327,8 +1394,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
-        if ( hoveredComponent.has_value() &&
-             hoveredComponentInstance.has_value() ) {
+        if ( hoveredNote.has_value() && hoveredNoteBounds.has_value() ) {
+            m_noteScaleDragTarget      = hoveredNote;
+            m_noteScaleDragHandle      = hoveredNoteHandle;
+            m_noteScaleDragStartBounds = *hoveredNoteBounds;
+            const auto& visual         = appConfig.getVisualConfig();
+            m_noteScaleDragStart = { visual.noteScaleX, visual.noteScaleY };
+        } else if ( hoveredComponent.has_value() &&
+                    hoveredComponentInstance.has_value() ) {
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
             const auto placement =
@@ -1404,6 +1477,26 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 pointerX / targetWidth,
                 pointerY / targetHeight,
             };
+        }
+    }
+
+    if ( m_noteScaleDragTarget.has_value() &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        constexpr float scaleEpsilon = 1e-6f;
+        const auto      candidate =
+            Logic::resizeNoteRenderScale(m_noteScaleDragStart,
+                                         m_noteScaleDragHandle,
+                                         m_noteScaleDragStartBounds,
+                                         pointerX,
+                                         pointerY);
+        const auto& visual = appConfig.getVisualConfig();
+        if ( std::abs(visual.noteScaleX - candidate.x) > scaleEpsilon ||
+             std::abs(visual.noteScaleY - candidate.y) > scaleEpsilon ) {
+            appConfig.getVisualConfig().noteScaleX = candidate.x;
+            appConfig.getVisualConfig().noteScaleY = candidate.y;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_layoutConfigurationChanged = true;
         }
     }
 
@@ -1730,7 +1823,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( !m_canvasComponentDragTarget.has_value() &&
+    if ( !m_noteScaleDragTarget.has_value() &&
+         !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         const float         normalizedX = pointerX / targetWidth;
@@ -1846,6 +1940,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         finishLayoutEditing();
@@ -2057,6 +2152,42 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                      snapGuideGap);
     }
 
+    const ImU32 noteBoundsColor = IM_COL32(255, 150, 96, 220);
+    for ( const auto& instance : m_noteLayoutInstances ) {
+        const auto& bounds = instance.bounds;
+        if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
+        const bool highlighted =
+            (hoveredNote.has_value() && *hoveredNote == instance.entity) ||
+            (m_noteScaleDragTarget.has_value() &&
+             *m_noteScaleDragTarget == instance.entity);
+        const ImU32 componentColor =
+            highlighted ? highlightedColor : noteBoundsColor;
+        const ImVec2 componentMin{ canvasScreenX + bounds.left,
+                                   canvasScreenY + bounds.top };
+        const ImVec2 componentMax{ canvasScreenX + bounds.right,
+                                   canvasScreenY + bounds.bottom };
+        drawList->AddRect(componentMin,
+                          componentMax,
+                          componentColor,
+                          0.0f,
+                          0,
+                          std::max(1.0f, 1.25f * dpiScale));
+
+        const float handleHalf = std::max(2.5f, 3.0f * dpiScale);
+        const std::array<ImVec2, 4> corners{
+            componentMin,
+            ImVec2{ componentMax.x, componentMin.y },
+            ImVec2{ componentMin.x, componentMax.y },
+            componentMax,
+        };
+        for ( const auto& corner : corners ) {
+            drawList->AddRectFilled(
+                { corner.x - handleHalf, corner.y - handleHalf },
+                { corner.x + handleHalf, corner.y + handleHalf },
+                componentColor);
+        }
+    }
+
     for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
         const auto& placement =
             appConfig.getVisualConfig().canvasComponents.placement(
@@ -2147,6 +2278,7 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     if ( !isLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value() ||
           m_layoutConfigurationChanged) ) {
         finishLayoutEditing();
