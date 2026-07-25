@@ -223,6 +223,22 @@ void CanvasComponentLayoutConfig::synchronizeKpsTrackFontSize(
     }
 }
 
+void CanvasComponentLayoutConfig::setSyncKpsTrackRelativePositions(bool enabled)
+{
+    syncKpsTrackRelativePositions = enabled;
+    if ( enabled ) {
+        syncAllKpsComponentPositions = false;
+    }
+}
+
+void CanvasComponentLayoutConfig::setSyncAllKpsComponentPositions(bool enabled)
+{
+    syncAllKpsComponentPositions = enabled;
+    if ( enabled ) {
+        syncKpsTrackRelativePositions = false;
+    }
+}
+
 void CanvasComponentLayoutConfig::resetPlacementToDefault(
     CanvasComponentType type)
 {
@@ -260,16 +276,18 @@ void from_json(const nlohmann::json& j, CanvasKpsTrackPlacement& placement)
 
 void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
 {
-    j = nlohmann::json{ { "judgmentLineTime", config.judgmentLineTime },
-                        { "beatNumber", config.beatNumber },
-                        { "beatLineTime", config.beatLineTime },
-                        { "kps", config.kps },
-                        { "kpsTracks", config.kpsTracks },
-                        { "syncKpsTrackSizes", config.syncKpsTrackSizes },
-                        { "syncKpsTrackRelativePositions",
-                          config.syncKpsTrackRelativePositions },
-                        { "kpsTrackFontSizeRatio",
-                          config.kpsTrackFontSizeRatio } };
+    j = nlohmann::json{
+        { "judgmentLineTime", config.judgmentLineTime },
+        { "beatNumber", config.beatNumber },
+        { "beatLineTime", config.beatLineTime },
+        { "kps", config.kps },
+        { "kpsTracks", config.kpsTracks },
+        { "syncKpsTrackSizes", config.syncKpsTrackSizes },
+        { "syncKpsTrackRelativePositions",
+          config.syncKpsTrackRelativePositions },
+        { "syncAllKpsComponentPositions", config.syncAllKpsComponentPositions },
+        { "kpsTrackFontSizeRatio", config.kpsTrackFontSizeRatio }
+    };
 }
 
 void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
@@ -285,6 +303,8 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
     config.syncKpsTrackSizes = j.value("syncKpsTrackSizes", false);
     config.syncKpsTrackRelativePositions =
         j.value("syncKpsTrackRelativePositions", false);
+    config.setSyncAllKpsComponentPositions(
+        j.value("syncAllKpsComponentPositions", false));
     config.kpsTrackFontSizeRatio = j.value("kpsTrackFontSizeRatio", 0.0f);
     if ( !std::isfinite(config.kpsTrackFontSizeRatio) ||
          config.kpsTrackFontSizeRatio <= 0.0f ) {

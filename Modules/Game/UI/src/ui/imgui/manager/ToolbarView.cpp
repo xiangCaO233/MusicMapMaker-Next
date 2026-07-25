@@ -2766,11 +2766,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
         ImGui::Separator();
 
-        auto&       appConfig            = Config::AppConfig::instance();
-        const float colorButtonSize      = std::floor(22.0f * dpiScale);
-        bool        anyColorPickerOpen   = false;
-        const auto  drawComponentControl = [&](Config::CanvasComponentType type,
-                                               std::string_view label) {
+        auto&       appConfig        = Config::AppConfig::instance();
+        const float colorButtonSize  = std::floor(22.0f * dpiScale);
+        const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
+        const float resetButtonWidth =
+            ImGui::CalcTextSize(resetButtonLabel.data()).x +
+            ImGui::GetStyle().FramePadding.x * 2.0f;
+        bool       anyColorPickerOpen   = false;
+        const auto drawComponentControl = [&](Config::CanvasComponentType type,
+                                              std::string_view label) {
             ImGui::PushID(static_cast<int>(type));
             bool visible = appConfig.getVisualConfig()
                                .canvasComponents.placement(type)
@@ -2802,8 +2806,13 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
 
             ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackSmallButton(
-                     TR("ui.toolbar.layout_component_reset").data()) ) {
+            // 将所有复位按钮锚定到弹窗内容区右侧，避免标签长度造成错位。
+            const float remainingWidth = ImGui::GetContentRegionAvail().x;
+            if ( remainingWidth > resetButtonWidth ) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + remainingWidth -
+                                     resetButtonWidth);
+            }
+            if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.canvasComponents.resetPlacementToDefault(
                     type);
@@ -2879,8 +2888,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                      &syncKpsTrackRelativePositions) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.canvasComponents
-                    .syncKpsTrackRelativePositions =
-                    syncKpsTrackRelativePositions;
+                    .setSyncKpsTrackRelativePositions(
+                        syncKpsTrackRelativePositions);
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
@@ -2888,6 +2897,24 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 drawTooltip(
                     TR("ui.toolbar.layout_kps_sync_track_positions_hint")
                         .data());
+            }
+
+            bool syncAllKpsComponentPositions =
+                appConfig.getVisualConfig()
+                    .canvasComponents.syncAllKpsComponentPositions;
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_kps_sync_all_positions").data(),
+                     &syncAllKpsComponentPositions) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents
+                    .setSyncAllKpsComponentPositions(
+                        syncAllKpsComponentPositions);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_kps_sync_all_positions_hint").data());
             }
         }
 

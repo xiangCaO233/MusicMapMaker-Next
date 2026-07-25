@@ -87,6 +87,8 @@ struct CanvasComponentLayoutConfig {
     bool syncKpsTrackSizes{ false };
     /// @brief 是否在移动任意逐轨 KPS 时同步全部逐轨相对位置。
     bool syncKpsTrackRelativePositions{ false };
+    /// @brief 是否在移动任意 KPS 组件时同步逐轨与总计位置。
+    bool syncAllKpsComponentPositions{ false };
     /// @brief 最近一次批量同步的逐轨 KPS 字号；零表示使用轨道数自适应字号。
     float kpsTrackFontSizeRatio{ 0.0f };
 
@@ -151,6 +153,16 @@ struct CanvasComponentLayoutConfig {
     /// @param fontSizeRatio 字号相对画布高度的比例。
     /// @warning 布局拖动路径：逐轨 KPS 同步缩放时调用；只遍历已保存的覆盖项。
     void synchronizeKpsTrackFontSize(float fontSizeRatio);
+
+    /// @brief 设置是否只同步单轨 KPS 位置，并保证与全 KPS 模式互斥。
+    /// @param enabled 是否启用只同步单轨 KPS 位置。
+    /// @warning UI 低频路径：用户切换同步模式时调用；不遍历布局覆盖。
+    void setSyncKpsTrackRelativePositions(bool enabled);
+
+    /// @brief 设置是否同步全部 KPS 组件位置，并保证与单轨模式互斥。
+    /// @param enabled 是否启用全部 KPS 组件位置同步。
+    /// @warning UI 低频路径：用户切换同步模式时调用；不遍历布局覆盖。
+    void setSyncAllKpsComponentPositions(bool enabled);
 
     /// @brief 将指定组件的位置和尺寸恢复为默认值。
     /// @param type 需要复位的组件类型。

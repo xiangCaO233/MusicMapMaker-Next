@@ -1106,24 +1106,31 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_synchronizedKpsTransformStarts.clear();
             const auto& canvasComponents =
                 appConfig.getVisualConfig().canvasComponents;
-            const bool captureSynchronizedKpsMove =
+            const bool draggedKpsTrack =
+                hoveredComponentInstance->instanceIndex >= 0;
+            const bool captureAllKpsMove =
                 hoveredComponentHandle ==
                     Logic::CanvasComponentDragHandle::Move &&
-                canvasComponents.syncKpsTrackRelativePositions;
+                canvasComponents.syncAllKpsComponentPositions;
+            const bool captureKpsTrackMove =
+                hoveredComponentHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                draggedKpsTrack &&
+                canvasComponents.syncKpsTrackRelativePositions &&
+                !captureAllKpsMove;
             const bool captureSynchronizedKpsResize =
                 hoveredComponentHandle !=
                     Logic::CanvasComponentDragHandle::Move &&
-                canvasComponents.syncKpsTrackSizes;
+                draggedKpsTrack && canvasComponents.syncKpsTrackSizes;
             if ( *hoveredComponent == Config::CanvasComponentType::Kps &&
-                 hoveredComponentInstance->instanceIndex >= 0 &&
-                 (captureSynchronizedKpsMove ||
+                 (captureAllKpsMove || captureKpsTrackMove ||
                   captureSynchronizedKpsResize) ) {
                 m_synchronizedKpsTransformStarts.reserve(
                     currentSnapshot.canvasComponentInstances.size());
                 for ( const auto& instance :
                       currentSnapshot.canvasComponentInstances ) {
                     if ( instance.type != Config::CanvasComponentType::Kps ||
-                         instance.instanceIndex < 0 ) {
+                         (!captureAllKpsMove && instance.instanceIndex < 0) ) {
                         continue;
                     }
                     m_synchronizedKpsTransformStarts.push_back(
@@ -1194,14 +1201,22 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              std::abs(component.fontSizeRatio - candidate.fontSizeRatio) >
                  componentPositionEpsilon ) {
             component = candidate;
-            const bool synchronizeKpsTrackRelativePosition =
+            const bool synchronizeAllKpsComponentPositions =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragHandle ==
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncAllKpsComponentPositions;
+            const bool synchronizeKpsTrackRelativePositions =
                 *m_canvasComponentDragTarget ==
                     Config::CanvasComponentType::Kps &&
                 m_canvasComponentDragInstanceIndex >= 0 &&
                 m_canvasComponentDragHandle ==
                     Logic::CanvasComponentDragHandle::Move &&
+                !synchronizeAllKpsComponentPositions &&
                 canvasComponents.syncKpsTrackRelativePositions;
-            if ( synchronizeKpsTrackRelativePosition ) {
+            if ( synchronizeAllKpsComponentPositions ||
+                 synchronizeKpsTrackRelativePositions ) {
                 const float candidateCenterX =
                     m_canvasComponentDragRegion.left +
                     candidate.anchorX * m_canvasComponentDragRegion.width();

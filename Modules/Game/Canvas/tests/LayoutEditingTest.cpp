@@ -320,9 +320,9 @@ bool testCanvasComponentPlacementReset()
             if ( type == MMM::Config::CanvasComponentType::Kps ) {
                 auto& trackPlacement =
                     config.editablePlacement(type, 2, 4, 0.2f, 0.8f);
-                trackPlacement.anchorX               = 0.72f;
-                config.syncKpsTrackSizes             = true;
-                config.syncKpsTrackRelativePositions = true;
+                trackPlacement.anchorX   = 0.72f;
+                config.syncKpsTrackSizes = true;
+                config.setSyncKpsTrackRelativePositions(true);
                 config.synchronizeKpsTrackFontSize(0.08f);
             }
 
@@ -345,7 +345,34 @@ bool testCanvasComponentPlacementReset()
                     MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT);
     return allPlacementsReset && config.kpsTracks.empty() &&
            near(config.kpsTrackFontSizeRatio, 0.0f) &&
-           config.syncKpsTrackSizes && config.syncKpsTrackRelativePositions;
+           config.syncKpsTrackSizes && config.syncKpsTrackRelativePositions &&
+           !config.syncAllKpsComponentPositions;
+}
+
+/// @brief 验证两种 KPS 位置同步模式始终互斥。
+/// @return 设置接口与冲突配置读取后均只保留一个模式时返回 true。
+bool testKpsPositionSyncModeMutualExclusion()
+{
+    MMM::Config::CanvasComponentLayoutConfig config;
+    config.setSyncKpsTrackRelativePositions(true);
+    if ( !config.syncKpsTrackRelativePositions ||
+         config.syncAllKpsComponentPositions ) {
+        return false;
+    }
+
+    config.setSyncAllKpsComponentPositions(true);
+    if ( config.syncKpsTrackRelativePositions ||
+         !config.syncAllKpsComponentPositions ) {
+        return false;
+    }
+
+    nlohmann::json encoded                   = config;
+    encoded["syncKpsTrackRelativePositions"] = true;
+    encoded["syncAllKpsComponentPositions"]  = true;
+    const auto decoded =
+        encoded.get<MMM::Config::CanvasComponentLayoutConfig>();
+    return !decoded.syncKpsTrackRelativePositions &&
+           decoded.syncAllKpsComponentPositions;
 }
 
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
@@ -378,11 +405,11 @@ bool testCanvasComponentConfigRoundTrip()
     source.kps.color           = { 0.9f, 0.8f, 0.2f, 0.85f };
     auto& kpsTrack             = source.editablePlacement(
         MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
-    kpsTrack.anchorX                     = 0.73f;
-    kpsTrack.anchorY                     = 0.24f;
-    kpsTrack.fontSizeRatio               = 0.045f;
-    source.syncKpsTrackSizes             = true;
-    source.syncKpsTrackRelativePositions = true;
+    kpsTrack.anchorX         = 0.73f;
+    kpsTrack.anchorY         = 0.24f;
+    kpsTrack.fontSizeRatio   = 0.045f;
+    source.syncKpsTrackSizes = true;
+    source.setSyncKpsTrackRelativePositions(true);
     source.synchronizeKpsTrackFontSize(0.064f);
 
     const nlohmann::json encoded = source;
@@ -436,6 +463,7 @@ bool testCanvasComponentConfigRoundTrip()
            near(defaultKpsTrack.anchorX, 0.425f) &&
            near(defaultKpsTrack.fontSizeRatio, 0.064f) &&
            decoded.syncKpsTrackSizes && decoded.syncKpsTrackRelativePositions &&
+           !decoded.syncAllKpsComponentPositions &&
            near(decoded.kpsTrackFontSizeRatio, 0.064f) &&
            near(independentStoredKpsTrack.fontSizeRatio, 0.064f) &&
            near(independentDefaultKpsTrack.fontSizeRatio, 0.064f);
@@ -480,8 +508,11 @@ int main()
     if ( !testCanvasComponentPlacementReset() ) {
         return 11;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testKpsPositionSyncModeMutualExclusion() ) {
         return 12;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 13;
     }
     return 0;
 }
