@@ -267,6 +267,107 @@ void SettingsView::drawVisualSettings()
             });
     }
 
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.visual.background_spectrum").data(),
+             true) ) {
+        auto& spectrum = visual.background.spectrum;
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.enabled").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##BackgroundSpectrumEnabled", &spectrum.enabled);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.band_count")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderInt(
+                    "##BackgroundSpectrumBandCount",
+                    &spectrum.bandCount,
+                    Config::BACKGROUND_SPECTRUM_MIN_BANDS,
+                    Config::BACKGROUND_SPECTRUM_MAX_BANDS);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.width_ratio")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |=
+                    ::MMM::UI::FeedbackSliderFloat("##BackgroundSpectrumWidth",
+                                                   &spectrum.widthRatio,
+                                                   0.10F,
+                                                   1.0F,
+                                                   "%.2f");
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.height_ratio")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |=
+                    ::MMM::UI::FeedbackSliderFloat("##BackgroundSpectrumHeight",
+                                                   &spectrum.heightRatio,
+                                                   0.05F,
+                                                   1.0F,
+                                                   "%.2f");
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.baseline_ratio")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##BackgroundSpectrumBaseline",
+                    &spectrum.baselineRatio,
+                    0.05F,
+                    1.0F,
+                    "%.2f");
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.background_spectrum.opacity").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##BackgroundSpectrumOpacity",
+                    &spectrum.opacity,
+                    0.0F,
+                    1.0F,
+                    "%.2f");
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE(
+                "ui.settings.visual.background_spectrum.include_hit_effects")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##BackgroundSpectrumHitEffects",
+                    &spectrum.includeHitEffects);
+            });
+    }
+
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.preview").data(), true) ) {
         const char* labels[] = {

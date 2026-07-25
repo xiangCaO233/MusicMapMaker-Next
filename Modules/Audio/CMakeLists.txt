@@ -2,6 +2,7 @@
 
 add_library(
   Audio STATIC
+  src/BackgroundSpectrumAnalyzer.cpp
   src/AudioManager.cpp
   src/AudioManager_BGM.cpp
   src/AudioManager_EQ.cpp

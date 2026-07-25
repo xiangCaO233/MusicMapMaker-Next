@@ -1,3 +1,4 @@
+#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
@@ -105,7 +106,10 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
 /// @param syncSpeed 是否让 hiteffect.* 音效跟随主音轨变速器。
 void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
 {
-    if ( !m_mainMixer || !m_preStretcherMixer ) return;
+    if ( !m_mainMixer || !m_preStretcherMixer || !m_hitEffectMixer ||
+         !m_hitEffectSpectrumCapture ) {
+        return;
+    }
 
     for ( auto& [key, pool] : m_sfxPools ) {
         auto mixer = pool->getMixer();
@@ -113,11 +117,19 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
 
         m_mainMixer->remove_source(mixer);
         m_preStretcherMixer->remove_source(mixer);
-        if ( syncSpeed && isHitSoundEffectKey(key) ) {
-            m_preStretcherMixer->add_source(mixer);
+        m_hitEffectMixer->remove_source(mixer);
+        if ( isHitSoundEffectKey(key) ) {
+            m_hitEffectMixer->add_source(mixer);
         } else {
             m_mainMixer->add_source(mixer);
         }
+    }
+    m_mainMixer->remove_source(m_hitEffectSpectrumCapture);
+    m_preStretcherMixer->remove_source(m_hitEffectSpectrumCapture);
+    if ( syncSpeed ) {
+        m_preStretcherMixer->add_source(m_hitEffectSpectrumCapture);
+    } else {
+        m_mainMixer->add_source(m_hitEffectSpectrumCapture);
     }
 }
 
@@ -179,7 +191,9 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
                                       const std::string& filePath,
                                       float defaultVolume, double leadInSeconds)
 {
-    if ( !m_audioPool || !m_threadPool || !m_mainMixer ) return false;
+    if ( !m_audioPool || !m_threadPool || !m_mainMixer || !m_hitEffectMixer ) {
+        return false;
+    }
 
     // 检查是否已经有配置好的音量 (来自 EditorSettings 或之前的加载)
     float activeVolume = defaultVolume;
@@ -203,9 +217,9 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
     pool->setVolume(activeVolume);
     pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
 
-    // 根据配置决定连接到哪个 Mixer，只有打击音效需要跟随主音轨变速。
-    if ( sfxCfg.hitSfxSyncSpeed && isHitSoundEffectKey(key) ) {
-        m_preStretcherMixer->add_source(pool->getMixer());
+    // 打击音效先汇总到独立总线，便于背景频谱按配置单独采样。
+    if ( isHitSoundEffectKey(key) ) {
+        m_hitEffectMixer->add_source(pool->getMixer());
     } else {
         m_mainMixer->add_source(pool->getMixer());
     }
@@ -225,6 +239,9 @@ void AudioManager::unloadSoundEffect(const std::string& key)
         if ( mixer ) {
             m_mainMixer->remove_source(mixer);
             m_preStretcherMixer->remove_source(mixer);
+            if ( m_hitEffectMixer ) {
+                m_hitEffectMixer->remove_source(mixer);
+            }
         }
         m_sfxPools.erase(it);
         m_sfxLeadInSeconds.erase(key);

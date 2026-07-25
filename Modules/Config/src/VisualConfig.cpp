@@ -56,11 +56,42 @@ void from_json(const nlohmann::json& j, BackgroundFillMode& mode)
     }
 }
 
+void to_json(nlohmann::json& j, const BackgroundSpectrumConfig& config)
+{
+    j = nlohmann::json{ { "enabled", config.enabled },
+                        { "bandCount", config.bandCount },
+                        { "widthRatio", config.widthRatio },
+                        { "heightRatio", config.heightRatio },
+                        { "baselineRatio", config.baselineRatio },
+                        { "opacity", config.opacity },
+                        { "includeHitEffects", config.includeHitEffects } };
+}
+
+void from_json(const nlohmann::json& j, BackgroundSpectrumConfig& config)
+{
+    const BackgroundSpectrumConfig defaults;
+    config.enabled   = j.value("enabled", defaults.enabled);
+    config.bandCount = std::clamp(j.value("bandCount", defaults.bandCount),
+                                  BACKGROUND_SPECTRUM_MIN_BANDS,
+                                  BACKGROUND_SPECTRUM_MAX_BANDS);
+    config.widthRatio =
+        std::clamp(j.value("widthRatio", defaults.widthRatio), 0.10f, 1.0f);
+    config.heightRatio =
+        std::clamp(j.value("heightRatio", defaults.heightRatio), 0.05f, 1.0f);
+    config.baselineRatio = std::clamp(
+        j.value("baselineRatio", defaults.baselineRatio), 0.05f, 1.0f);
+    config.opacity =
+        std::clamp(j.value("opacity", defaults.opacity), 0.0f, 1.0f);
+    config.includeHitEffects =
+        j.value("includeHitEffects", defaults.includeHitEffects);
+}
+
 void to_json(nlohmann::json& j, const BackgroundConfig& config)
 {
     j = nlohmann::json{ { "fillMode", config.fillMode },
                         { "darken_ratio", config.darken_ratio },
-                        { "opaque_ratio", config.opaque_ratio } };
+                        { "opaque_ratio", config.opaque_ratio },
+                        { "spectrum", config.spectrum } };
 }
 
 void from_json(const nlohmann::json& j, BackgroundConfig& config)
@@ -68,6 +99,7 @@ void from_json(const nlohmann::json& j, BackgroundConfig& config)
     config.fillMode     = j.value("fillMode", BackgroundFillMode::AspectFill);
     config.darken_ratio = j.value("darken_ratio", 0.7f);
     config.opaque_ratio = j.value("opaque_ratio", 1.0f);
+    config.spectrum     = j.value("spectrum", BackgroundSpectrumConfig());
 }
 
 void to_json(nlohmann::json& j, const CanvasComponentPlacement& placement)

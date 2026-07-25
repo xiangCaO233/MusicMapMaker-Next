@@ -34,6 +34,7 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
   src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
+  src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp
   src/logic/ecs/system/NoteTransformSystem.cpp
   src/logic/ecs/system/ScrollCache.cpp
   src/logic/ecs/system/HitFXSystem.cpp)

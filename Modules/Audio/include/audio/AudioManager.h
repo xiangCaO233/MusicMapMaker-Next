@@ -26,6 +26,9 @@ namespace MMM::Audio
 {
 
 class SoundEffectPool;
+struct BackgroundSpectrumLevels;
+class BackgroundSpectrumAnalyzer;
+class BackgroundSpectrumCaptureNode;
 
 /**
  * @brief 播放状态
@@ -255,6 +258,15 @@ public:
     float getMainTrackLevelL() const;
     /// @brief 获取主音轨 (BGM) 的实时电平 (R)
     float getMainTrackLevelR() const;
+
+    /// @brief 刷新背景频谱使用的实时立体声频段。
+    /// @param bandCount 每个声道请求的频段数。
+    /// @param includeHitEffects 是否混入实际播放的 HitEffect 总线。
+    /// @return 内部稳定保存的归一化频段电平。
+    /// @warning 逻辑更新热路径：启用背景频谱时每次主画布快照调用一次，执行固定
+    /// 2048 点 FFT；返回引用只在下一次调用前保持内容不变。
+    [[nodiscard]] const BackgroundSpectrumLevels& updateBackgroundSpectrum(
+        std::size_t bandCount, bool includeHitEffects);
 
     /// @brief 获取特定音效池的实时电平 (L)
     float getSFXPoolLevelL(const std::string& key) const;
@@ -574,6 +586,9 @@ private:
     /// @brief 当前主音轨时间拉伸节点。
     std::shared_ptr<ice::TimeStretcher> m_stretcher;
 
+    /// @brief 当前 BGM 分支的实时频谱采样节点。
+    std::shared_ptr<BackgroundSpectrumCaptureNode> m_bgmSpectrumCapture;
+
     /// @brief 当前独立试听音轨数据。
     std::shared_ptr<ice::AudioTrack> m_auditionTrack;
 
@@ -594,6 +609,15 @@ private:
 
     /// @brief 变速器前级混音器，用于 BGM、EQ 和可选同步变速音效。
     std::shared_ptr<ice::MixBus> m_preStretcherMixer;
+
+    /// @brief 仅汇总 hiteffect.* 音效的独立混音器。
+    std::shared_ptr<ice::MixBus> m_hitEffectMixer;
+
+    /// @brief HitEffect 总线的实时频谱采样节点。
+    std::shared_ptr<BackgroundSpectrumCaptureNode> m_hitEffectSpectrumCapture;
+
+    /// @brief 逻辑线程使用的固定容量实时频谱分析器。
+    std::unique_ptr<BackgroundSpectrumAnalyzer> m_backgroundSpectrumAnalyzer;
 
     /// @brief 已加载的音效池表。
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>

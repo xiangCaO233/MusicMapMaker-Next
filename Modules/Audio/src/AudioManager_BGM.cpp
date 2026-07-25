@@ -1,3 +1,4 @@
+#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "audio/SoundEffectPool.h"
 #include "config/Utf8Path.h"
@@ -109,6 +110,8 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     }
     if ( m_mainEQ ) {
         m_preStretcherMixer->remove_source(m_mainEQ);
+    } else if ( m_bgmSpectrumCapture ) {
+        m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
     } else if ( m_bgmSource ) {
         m_preStretcherMixer->remove_source(m_bgmSource);
     }
@@ -126,15 +129,17 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     if ( m_mainTrackMuted ) finalVol = 0.0f;
     m_bgmSource->setvolume(finalVol);
     m_bgmSource->add_playcallback(g_callback);
+    m_bgmSpectrumCapture =
+        std::make_shared<BackgroundSpectrumCaptureNode>(m_bgmSource);
 
     m_stretcher = std::make_shared<ice::TimeStretcher>();
     m_stretcher->set_inputnode(m_preStretcherMixer);
 
     if ( m_mainEQ ) {
-        m_mainEQ->set_inputnode(m_bgmSource);
+        m_mainEQ->set_inputnode(m_bgmSpectrumCapture);
         m_preStretcherMixer->add_source(m_mainEQ);
     } else {
-        m_preStretcherMixer->add_source(m_bgmSource);
+        m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
     }
     m_mainMixer->add_source(m_stretcher);
 
@@ -183,6 +188,8 @@ void AudioManager::unloadBGM()
     if ( m_preStretcherMixer ) {
         if ( m_mainEQ ) {
             m_preStretcherMixer->remove_source(m_mainEQ);
+        } else if ( m_bgmSpectrumCapture ) {
+            m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
         } else if ( m_bgmSource ) {
             m_preStretcherMixer->remove_source(m_bgmSource);
         }
@@ -191,6 +198,7 @@ void AudioManager::unloadBGM()
     m_mainEQ.reset();
     m_mainEQPreset = EQPreset::None;
     m_stretcher.reset();
+    m_bgmSpectrumCapture.reset();
     m_bgmSource.reset();
     m_bgmTrack.reset();
     m_bgmPath.clear();

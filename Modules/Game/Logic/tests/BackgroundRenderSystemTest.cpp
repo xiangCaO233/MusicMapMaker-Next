@@ -1,6 +1,8 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 
+#include "audio/BackgroundSpectrum.h"
 #include "log/colorful-log.h"
+#include "logic/ecs/system/BackgroundSpectrumRenderSystem.h"
 #include "logic/ecs/system/render/Batcher.h"
 
 #include <cmath>
@@ -111,6 +113,67 @@ bool testNoBeatmapSkipsBackgroundLayer()
     return true;
 }
 
+/// @brief 验证左右声道由画布中心分别向两侧绘制且位于背景命令之后。
+/// @return 立体声几何、透明度和图层顺序符合预期时返回 true。
+bool testStereoSpectrumRendersAboveBackground()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    snapshot.bgSize = { 320.0F, 180.0F };
+
+    MMM::Config::BackgroundSpectrumConfig config;
+    config.enabled       = true;
+    config.bandCount     = 10;
+    config.widthRatio    = 1.0F;
+    config.heightRatio   = 0.5F;
+    config.baselineRatio = 0.8F;
+    config.opacity       = 0.25F;
+
+    MMM::Audio::BackgroundSpectrumLevels levels;
+    levels.bandCount = 10U;
+    levels.left[0]   = 0.5F;
+    levels.right[0]  = 0.75F;
+
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    batcher.setTexture(MMM::Logic::TextureID::Background);
+    batcher.pushFilledQuad(0.0F,
+                           180.0F,
+                           320.0F,
+                           180.0F,
+                           snapshot.bgSize,
+                           MMM::Config::BackgroundFillMode::Stretch,
+                           glm::vec4{ 1.0F });
+    MMM::Logic::System::BackgroundSpectrumRenderSystem::render(
+        batcher, 320.0F, 180.0F, config, levels);
+    batcher.flush();
+
+    if ( snapshot.vertices.size() != 12U || snapshot.indices.size() != 18U ||
+         snapshot.cmds.size() != 2U ||
+         snapshot.cmds[0].customTextureId !=
+             static_cast<uint32_t>(MMM::Logic::TextureID::Background) ||
+         snapshot.cmds[1].customTextureId !=
+             static_cast<uint32_t>(MMM::Logic::TextureID::None) ) {
+        XERROR("Stereo spectrum was not layered directly above background");
+        return false;
+    }
+
+    const float centerX         = 160.0F;
+    const auto& leftBottomLeft  = snapshot.vertices[4];
+    const auto& leftTopRight    = snapshot.vertices[6];
+    const auto& rightBottomLeft = snapshot.vertices[8];
+    const auto& rightTopRight   = snapshot.vertices[10];
+    if ( leftTopRight.pos.x > centerX || rightBottomLeft.pos.x < centerX ||
+         !near(leftBottomLeft.pos.y, 144.0F) ||
+         !near(rightBottomLeft.pos.y, 144.0F) ||
+         leftTopRight.pos.y >= leftBottomLeft.pos.y ||
+         rightTopRight.pos.y >= rightBottomLeft.pos.y ||
+         !near(leftBottomLeft.color.a, 0.25F) ||
+         !near(rightBottomLeft.color.a, 0.25F) ) {
+        XERROR("Stereo spectrum geometry ignored channel split or ratios");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行背景渲染系统回归测试。
@@ -119,7 +182,8 @@ int main()
 {
     return testNoBeatmapSkipsBackgroundLayer() &&
                    testMissingBackgroundUsesFixedOverlay() &&
-                   testConfiguredBackgroundKeepsTexture()
+                   testConfiguredBackgroundKeepsTexture() &&
+                   testStereoSpectrumRendersAboveBackground()
                ? 0
                : 1;
 }

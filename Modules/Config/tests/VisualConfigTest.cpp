@@ -75,6 +75,57 @@ bool testBeatLineAutoRatioClamping()
     return true;
 }
 
+/// @brief 验证背景频谱配置能够完整往返。
+/// @return 当前格式往返无损时返回 true。
+bool testBackgroundSpectrumRoundTrip()
+{
+    MMM::Config::VisualConfig source;
+    auto&                     spectrum = source.background.spectrum;
+    spectrum.enabled                   = true;
+    spectrum.bandCount                 = 48;
+    spectrum.widthRatio                = 0.72F;
+    spectrum.heightRatio               = 0.44F;
+    spectrum.baselineRatio             = 0.83F;
+    spectrum.opacity                   = 0.27F;
+    spectrum.includeHitEffects         = false;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto&          result   = restored.background.spectrum;
+    if ( !result.enabled || result.bandCount != 48 ||
+         !near(result.widthRatio, 0.72F) || !near(result.heightRatio, 0.44F) ||
+         !near(result.baselineRatio, 0.83F) || !near(result.opacity, 0.27F) ||
+         result.includeHitEffects ) {
+        XERROR("Background spectrum config did not survive JSON round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证背景频谱配置在读取时被限制到设置菜单允许范围。
+/// @return 所有越界字段均被正确限制时返回 true。
+bool testBackgroundSpectrumClamping()
+{
+    const nlohmann::json json{ { "background",
+                                 { { "spectrum",
+                                     { { "bandCount", 2 },
+                                       { "widthRatio", 0.0F },
+                                       { "heightRatio", 2.0F },
+                                       { "baselineRatio", -1.0F },
+                                       { "opacity", 3.0F } } } } } };
+    const auto           config   = json.get<MMM::Config::VisualConfig>();
+    const auto&          spectrum = config.background.spectrum;
+    if ( spectrum.bandCount != MMM::Config::BACKGROUND_SPECTRUM_MIN_BANDS ||
+         !near(spectrum.widthRatio, 0.10F) ||
+         !near(spectrum.heightRatio, 1.0F) ||
+         !near(spectrum.baselineRatio, 0.05F) ||
+         !near(spectrum.opacity, 1.0F) ) {
+        XERROR("Background spectrum config escaped supported bounds");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行分拍线显示模式配置兼容性测试。
@@ -83,7 +134,9 @@ int main()
 {
     return testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
-                   testBeatLineAutoRatioClamping()
+                   testBeatLineAutoRatioClamping() &&
+                   testBackgroundSpectrumRoundTrip() &&
+                   testBackgroundSpectrumClamping()
                ? 0
                : 1;
 }
