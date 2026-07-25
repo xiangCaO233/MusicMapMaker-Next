@@ -91,7 +91,9 @@ bool testBackgroundSpectrumRoundTrip()
     spectrum.heightRatio       = 0.44F;
     spectrum.baselineRatio     = 0.83F;
     spectrum.opacity           = 0.27F;
-    spectrum.includeHitEffects = false;
+    spectrum.leftBarColor      = { 0.12F, 0.24F, 0.36F, 0.48F };
+    spectrum.rightBarColor     = { 0.51F, 0.62F, 0.73F, 0.84F };
+    spectrum.includeHitEffects = true;
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::VisualConfig>();
@@ -100,8 +102,11 @@ bool testBackgroundSpectrumRoundTrip()
     if ( !result.enabled || result.bandCount != 48 ||
          !near(result.widthRatio, 0.72F) || !near(result.heightRatio, 0.44F) ||
          !near(result.baselineRatio, 0.83F) || !near(result.opacity, 0.27F) ||
-         result.includeHitEffects || !resultPlacement.visible ||
-         !near(resultPlacement.anchorX, 0.37F) ||
+         !near(result.leftBarColor[0], 0.12F) ||
+         !near(result.leftBarColor[3], 0.48F) ||
+         !near(result.rightBarColor[0], 0.51F) ||
+         !near(result.rightBarColor[3], 0.84F) || !result.includeHitEffects ||
+         !resultPlacement.visible || !near(resultPlacement.anchorX, 0.37F) ||
          !near(resultPlacement.anchorY, 0.42F) ||
          !near(resultPlacement.fontSizeRatio, 0.08F) ) {
         XERROR("Background spectrum config did not survive JSON round trip");
@@ -124,8 +129,10 @@ bool testLegacyBackgroundSpectrumMigration()
     const auto  config    = json.get<MMM::Config::VisualConfig>();
     const auto& placement = config.canvasComponents.backgroundSpectrum;
     if ( !placement.visible || !config.background.spectrum.enabled ||
+         config.background.spectrum.includeHitEffects ||
          !near(placement.anchorY, 0.7F) ) {
-        XERROR("Legacy background spectrum was not migrated to canvas layout");
+        XERROR(
+            "Legacy background spectrum migration did not use safe defaults");
         return false;
     }
     return true;
@@ -135,20 +142,32 @@ bool testLegacyBackgroundSpectrumMigration()
 /// @return 所有越界字段均被正确限制时返回 true。
 bool testBackgroundSpectrumClamping()
 {
-    const nlohmann::json json{ { "background",
-                                 { { "spectrum",
-                                     { { "bandCount", 2 },
-                                       { "widthRatio", 0.0F },
-                                       { "heightRatio", 2.0F },
-                                       { "baselineRatio", -1.0F },
-                                       { "opacity", 3.0F } } } } } };
-    const auto           config   = json.get<MMM::Config::VisualConfig>();
-    const auto&          spectrum = config.background.spectrum;
+    const nlohmann::json json{
+        { "background",
+          { { "spectrum",
+              { { "bandCount", 2 },
+                { "widthRatio", 0.0F },
+                { "heightRatio", 2.0F },
+                { "baselineRatio", -1.0F },
+                { "opacity", 3.0F },
+                { "leftBarColor", { -1.0F, 0.25F, 2.0F, 0.75F } },
+                { "rightBarColor", { 1.5F, -0.5F, 0.5F, 2.0F } } } } } }
+    };
+    const auto  config   = json.get<MMM::Config::VisualConfig>();
+    const auto& spectrum = config.background.spectrum;
     if ( spectrum.bandCount != MMM::Config::BACKGROUND_SPECTRUM_MIN_BANDS ||
          !near(spectrum.widthRatio, 0.10F) ||
          !near(spectrum.heightRatio, 1.0F) ||
          !near(spectrum.baselineRatio, 0.05F) ||
-         !near(spectrum.opacity, 1.0F) ) {
+         !near(spectrum.opacity, 1.0F) ||
+         !near(spectrum.leftBarColor[0], 0.0F) ||
+         !near(spectrum.leftBarColor[1], 0.25F) ||
+         !near(spectrum.leftBarColor[2], 1.0F) ||
+         !near(spectrum.leftBarColor[3], 0.75F) ||
+         !near(spectrum.rightBarColor[0], 1.0F) ||
+         !near(spectrum.rightBarColor[1], 0.0F) ||
+         !near(spectrum.rightBarColor[2], 0.5F) ||
+         !near(spectrum.rightBarColor[3], 1.0F) ) {
         XERROR("Background spectrum config escaped supported bounds");
         return false;
     }

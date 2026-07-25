@@ -126,6 +126,8 @@ bool testStereoSpectrumRendersAboveBackground()
     config.heightRatio   = 0.5F;
     config.baselineRatio = 0.8F;
     config.opacity       = 0.25F;
+    config.leftBarColor  = { 0.1F, 0.2F, 0.3F, 0.4F };
+    config.rightBarColor = { 0.6F, 0.7F, 0.8F, 0.8F };
 
     MMM::Audio::BackgroundSpectrumLevels levels;
     levels.bandCount = 10U;
@@ -182,8 +184,14 @@ bool testStereoSpectrumRendersAboveBackground()
          !near(rightBottomLeft.pos.y, 144.0F) ||
          leftTopRight.pos.y >= leftBottomLeft.pos.y ||
          rightTopRight.pos.y >= rightBottomLeft.pos.y ||
-         !near(leftBottomLeft.color.a, 0.25F) ||
-         !near(rightBottomLeft.color.a, 0.25F) ) {
+         !near(leftBottomLeft.color.r, 0.1F) ||
+         !near(leftBottomLeft.color.g, 0.2F) ||
+         !near(leftBottomLeft.color.b, 0.3F) ||
+         !near(leftBottomLeft.color.a, 0.1F) ||
+         !near(rightBottomLeft.color.r, 0.6F) ||
+         !near(rightBottomLeft.color.g, 0.7F) ||
+         !near(rightBottomLeft.color.b, 0.8F) ||
+         !near(rightBottomLeft.color.a, 0.2F) ) {
         XERROR("Stereo spectrum geometry ignored channel split or ratios");
         return false;
     }

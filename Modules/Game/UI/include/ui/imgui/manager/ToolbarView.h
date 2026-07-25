@@ -55,7 +55,7 @@ private:
     float m_layoutPopupHeight{ 100.0f };
     /// @brief 布局组件颜色是否有尚未写入配置文件的修改。
     bool m_layoutComponentColorDirty{ false };
-    /// @brief 背景频谱折叠菜单是否有尚未写入配置文件的连续调整。
+    /// @brief 背景电平图折叠菜单是否有尚未写入配置文件的连续调整。
     bool m_layoutSpectrumConfigDirty{ false };
     /// @brief 上一帧布局组件颜色选择器是否打开。
     bool  m_layoutComponentColorPickerOpen{ false };

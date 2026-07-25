@@ -13,6 +13,20 @@ namespace
 {
 /// @brief 旧版拍号与分拍线时间相对局部区间高度的默认字号比例。
 constexpr float LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO = 0.18f;
+
+/// @brief 将背景电平柱颜色限制为可渲染的 RGBA 范围。
+/// @param color 待规整的配置颜色。
+/// @param fallback 非法分量使用的默认颜色。
+/// @return 所有分量均有限且位于零到一之间的颜色。
+std::array<float, 4> sanitizeBackgroundLevelColor(
+    std::array<float, 4> color, const std::array<float, 4>& fallback)
+{
+    for ( std::size_t index = 0U; index < color.size(); ++index ) {
+        if ( !std::isfinite(color[index]) ) color[index] = fallback[index];
+        color[index] = std::clamp(color[index], 0.0f, 1.0f);
+    }
+    return color;
+}
 }  // namespace
 
 void to_json(nlohmann::json& j, const BeatLineDisplayMode& mode)
@@ -70,6 +84,8 @@ void to_json(nlohmann::json& j, const BackgroundSpectrumConfig& config)
                         { "heightRatio", config.heightRatio },
                         { "baselineRatio", config.baselineRatio },
                         { "opacity", config.opacity },
+                        { "leftBarColor", config.leftBarColor },
+                        { "rightBarColor", config.rightBarColor },
                         { "includeHitEffects", config.includeHitEffects } };
 }
 
@@ -88,6 +104,11 @@ void from_json(const nlohmann::json& j, BackgroundSpectrumConfig& config)
         j.value("baselineRatio", defaults.baselineRatio), 0.05f, 1.0f);
     config.opacity =
         std::clamp(j.value("opacity", defaults.opacity), 0.0f, 1.0f);
+    config.leftBarColor = sanitizeBackgroundLevelColor(
+        j.value("leftBarColor", defaults.leftBarColor), defaults.leftBarColor);
+    config.rightBarColor = sanitizeBackgroundLevelColor(
+        j.value("rightBarColor", defaults.rightBarColor),
+        defaults.rightBarColor);
     config.includeHitEffects =
         j.value("includeHitEffects", defaults.includeHitEffects);
 }

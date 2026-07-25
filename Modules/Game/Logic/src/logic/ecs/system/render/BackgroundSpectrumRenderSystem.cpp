@@ -61,16 +61,22 @@ void BackgroundSpectrumRenderSystem::render(
                                 Config::BACKGROUND_SPECTRUM_MAX_BANDS)));
     if ( bandCount == 0U ) return;
 
-    const float     halfWidth = bounds.width() * 0.5F;
-    const float     centerX   = (bounds.left + bounds.right) * 0.5F;
-    const float     slotWidth = halfWidth / static_cast<float>(bandCount);
-    const float     barWidth  = std::max(1.0F, slotWidth * 0.72F);
-    const float     barInset  = (slotWidth - barWidth) * 0.5F;
-    const float     baseline  = bounds.bottom;
-    const float     maxHeight = bounds.height();
-    const float     opacity   = std::clamp(config.opacity, 0.0F, 1.0F);
-    const glm::vec4 leftColor{ 0.18F, 0.72F, 1.0F, opacity };
-    const glm::vec4 rightColor{ 1.0F, 0.30F, 0.72F, opacity };
+    const float halfWidth    = bounds.width() * 0.5F;
+    const float centerX      = (bounds.left + bounds.right) * 0.5F;
+    const float slotWidth    = halfWidth / static_cast<float>(bandCount);
+    const float barWidth     = std::max(1.0F, slotWidth * 0.72F);
+    const float barInset     = (slotWidth - barWidth) * 0.5F;
+    const float baseline     = bounds.bottom;
+    const float maxHeight    = bounds.height();
+    const float opacity      = std::clamp(config.opacity, 0.0F, 1.0F);
+    const auto  makeBarColor = [opacity](const std::array<float, 4>& stored) {
+        return glm::vec4{ std::clamp(stored[0], 0.0F, 1.0F),
+                          std::clamp(stored[1], 0.0F, 1.0F),
+                          std::clamp(stored[2], 0.0F, 1.0F),
+                          std::clamp(stored[3], 0.0F, 1.0F) * opacity };
+    };
+    const glm::vec4 leftColor  = makeBarColor(config.leftBarColor);
+    const glm::vec4 rightColor = makeBarColor(config.rightBarColor);
 
     batcher.setTexture(TextureID::None);
     for ( std::size_t band = 0U; band < bandCount; ++band ) {

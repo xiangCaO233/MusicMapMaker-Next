@@ -2902,6 +2902,53 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     m_layoutSpectrumConfigDirty = false;
                 }
             };
+            const auto drawSpectrumColorControl =
+                [&](std::string_view label,
+                    const char*      id,
+                    std::array<float, 4>
+                        Config::BackgroundSpectrumConfig::* colorMember) {
+                    auto spectrum =
+                        appConfig.getVisualConfig().background.spectrum;
+                    auto editableColor = fromStoredColor(spectrum.*colorMember);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(label.data());
+                    ImGui::SameLine();
+                    const float remainingWidth =
+                        ImGui::GetContentRegionAvail().x;
+                    if ( remainingWidth > colorButtonSize ) {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                             remainingWidth - colorButtonSize);
+                    }
+                    ImGui::PushID(id);
+                    if ( ::MMM::UI::FeedbackColorButton(
+                             "##Color",
+                             toImVec4(editableColor),
+                             ImGuiColorEditFlags_NoTooltip |
+                                 ImGuiColorEditFlags_NoPicker |
+                                 ImGuiColorEditFlags_AlphaPreviewHalf,
+                             ImVec2(colorButtonSize, colorButtonSize)) ) {
+                        ::MMM::UI::FeedbackOpenPopup("ColorPicker");
+                    }
+                    if ( ImGui::BeginPopup("ColorPicker") ) {
+                        anyColorPickerOpen = true;
+                        if ( ImGui::ColorPicker4(
+                                 "##Value",
+                                 &editableColor.r,
+                                 ImGuiColorEditFlags_AlphaBar |
+                                     ImGuiColorEditFlags_AlphaPreviewHalf |
+                                     ImGuiColorEditFlags_DisplayRGB) ) {
+                            spectrum =
+                                appConfig.getVisualConfig().background.spectrum;
+                            spectrum.*colorMember =
+                                toStoredColor(editableColor);
+                            applySpectrumConfig(spectrum);
+                            m_layoutSpectrumConfigDirty = true;
+                        }
+                        saveSpectrumAfterEdit();
+                        ImGui::EndPopup();
+                    }
+                    ImGui::PopID();
+                };
 
             auto spectrum = appConfig.getVisualConfig().background.spectrum;
             ImGui::TextUnformatted(
@@ -2948,6 +2995,32 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutSpectrumConfigDirty = true;
             }
             saveSpectrumAfterEdit();
+
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.settings.visual.background_spectrum."
+                        "match_canvas_aspect")
+                         .data(),
+                     ImVec2(spectrumControlWidth, 0.0F)) ) {
+                spectrum.widthRatio  = 1.0F;
+                spectrum.heightRatio = 1.0F;
+                applySpectrumConfig(spectrum);
+                appConfig.save();
+                m_layoutSpectrumConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(TR("ui.settings.visual.background_spectrum."
+                               "match_canvas_aspect_hint")
+                                .data());
+            }
+
+            drawSpectrumColorControl(
+                TR("ui.settings.visual.background_spectrum.left_bar_color"),
+                "BackgroundLevelLeft",
+                &Config::BackgroundSpectrumConfig::leftBarColor);
+            drawSpectrumColorControl(
+                TR("ui.settings.visual.background_spectrum.right_bar_color"),
+                "BackgroundLevelRight",
+                &Config::BackgroundSpectrumConfig::rightBarColor);
 
             spectrum = appConfig.getVisualConfig().background.spectrum;
             ImGui::TextUnformatted(
@@ -3034,10 +3107,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
         }
 
-        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&
-             m_layoutComponentColorDirty ) {
-            appConfig.save();
-            m_layoutComponentColorDirty = false;
+        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen ) {
+            if ( m_layoutComponentColorDirty || m_layoutSpectrumConfigDirty ) {
+                appConfig.save();
+                m_layoutComponentColorDirty = false;
+                m_layoutSpectrumConfigDirty = false;
+            }
         }
         m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 
