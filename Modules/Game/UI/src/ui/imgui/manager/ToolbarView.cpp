@@ -2801,6 +2801,20 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 drawTooltip(TR("ui.toolbar.layout_component_color").data());
             }
 
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackSmallButton(
+                     TR("ui.toolbar.layout_component_reset").data()) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                updatedConfig.visual.canvasComponents.resetPlacementToDefault(
+                    type);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_component_reset_hint").data());
+            }
+
             if ( ImGui::BeginPopup("ColorPicker") ) {
                 anyColorPickerOpen = true;
                 auto editableColor =

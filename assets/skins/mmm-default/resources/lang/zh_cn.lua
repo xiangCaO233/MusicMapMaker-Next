@@ -571,6 +571,8 @@ return {
 	["ui.toolbar.layout_kps_sync_track_sizes"] = "同步调整逐轨 KPS 尺寸",
 	["ui.toolbar.layout_kps_sync_track_sizes_hint"] = "开启后，缩放任意轨道 KPS 会同步所有轨道；位置和总 KPS 不受影响。",
 	["ui.toolbar.layout_component_color"] = "颜色",
+	["ui.toolbar.layout_component_reset"] = "复位",
+	["ui.toolbar.layout_component_reset_hint"] = "恢复该组件的默认位置和尺寸；显隐与颜色保持不变。",
 	["ui.toolbar.layout_component_drag_hint"] = "拖动文字可移动，拖动包围框四角可调整大小",
 	["ui.toolbar.short.move"] = "抓取",
 	["ui.toolbar.short.marquee"] = "选取",

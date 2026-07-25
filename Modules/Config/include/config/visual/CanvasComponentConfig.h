@@ -42,6 +42,10 @@ struct CanvasComponentPlacement {
     std::array<float, 4> color{ 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
+/// @brief 当前判定线时间组件的默认画布布局。
+inline constexpr CanvasComponentPlacement
+    DEFAULT_JUDGMENT_LINE_TIME_PLACEMENT{};
+
 /// @brief 拍号组件的默认拍内布局。
 inline constexpr CanvasComponentPlacement DEFAULT_BEAT_NUMBER_PLACEMENT{
     false, 0.08f, 0.5f, 0.18f, { 1.0f, 140.0f / 255.0f, 0.0f, 1.0f },
@@ -68,7 +72,9 @@ struct CanvasKpsTrackPlacement {
 /// @brief 主画布可选组件的布局集合。
 struct CanvasComponentLayoutConfig {
     /// @brief 当前判定线时间组件布局。
-    CanvasComponentPlacement judgmentLineTime;
+    CanvasComponentPlacement judgmentLineTime{
+        DEFAULT_JUDGMENT_LINE_TIME_PLACEMENT
+    };
     /// @brief 逐拍绘制的拍号组件拍内布局。
     CanvasComponentPlacement beatNumber{ DEFAULT_BEAT_NUMBER_PLACEMENT };
     /// @brief 逐分拍绘制的分拍线时间组件布局。
@@ -143,6 +149,11 @@ struct CanvasComponentLayoutConfig {
     /// @param fontSizeRatio 字号相对画布高度的比例。
     /// @warning 布局拖动路径：逐轨 KPS 同步缩放时调用；只遍历已保存的覆盖项。
     void synchronizeKpsTrackFontSize(float fontSizeRatio);
+
+    /// @brief 将指定组件的位置和尺寸恢复为默认值。
+    /// @param type 需要复位的组件类型。
+    /// @warning UI 低频路径：用户点击复位按钮时调用；KPS 会清除逐轨布局覆盖。
+    void resetPlacementToDefault(CanvasComponentType type);
 };
 
 /// @brief 将单个画布组件布局序列化为 JSON。

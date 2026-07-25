@@ -123,6 +123,17 @@ CanvasComponentPlacement defaultKpsTrackPlacement(
     return result;
 }
 
+/// @brief 恢复组件的默认位置和尺寸，并保留显隐与颜色。
+/// @param placement 需要复位的组件布局。
+/// @param defaultPlacement 对应组件的默认布局。
+void resetPlacementGeometry(CanvasComponentPlacement&       placement,
+                            const CanvasComponentPlacement& defaultPlacement)
+{
+    placement.anchorX       = defaultPlacement.anchorX;
+    placement.anchorY       = defaultPlacement.anchorY;
+    placement.fontSizeRatio = defaultPlacement.fontSizeRatio;
+}
+
 }  // namespace
 
 CanvasComponentPlacement CanvasComponentLayoutConfig::resolvedPlacement(
@@ -209,6 +220,29 @@ void CanvasComponentLayoutConfig::synchronizeKpsTrackFontSize(
     kpsTrackFontSizeRatio = std::clamp(fontSizeRatio, 0.0125f, 0.25f);
     for ( auto& track : kpsTracks ) {
         track.placement.fontSizeRatio = kpsTrackFontSizeRatio;
+    }
+}
+
+void CanvasComponentLayoutConfig::resetPlacementToDefault(
+    CanvasComponentType type)
+{
+    switch ( type ) {
+    case CanvasComponentType::JudgmentLineTime:
+        resetPlacementGeometry(judgmentLineTime,
+                               DEFAULT_JUDGMENT_LINE_TIME_PLACEMENT);
+        break;
+    case CanvasComponentType::BeatNumber:
+        resetPlacementGeometry(beatNumber, DEFAULT_BEAT_NUMBER_PLACEMENT);
+        break;
+    case CanvasComponentType::BeatLineTime:
+        resetPlacementGeometry(beatLineTime, DEFAULT_BEAT_LINE_TIME_PLACEMENT);
+        break;
+    case CanvasComponentType::Kps:
+        resetPlacementGeometry(kps, DEFAULT_KPS_TOTAL_PLACEMENT);
+        kpsTracks.clear();
+        kpsTrackFontSizeRatio = 0.0f;
+        break;
+    case CanvasComponentType::Count: break;
     }
 }
 

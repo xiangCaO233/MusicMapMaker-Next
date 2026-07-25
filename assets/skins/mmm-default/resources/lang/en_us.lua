@@ -567,6 +567,8 @@ return {
 	["ui.toolbar.layout_kps_sync_track_sizes"] = "Sync Track KPS Sizes",
 	["ui.toolbar.layout_kps_sync_track_sizes_hint"] = "When enabled, resizing any track KPS resizes every track KPS; positions and total KPS are unchanged.",
 	["ui.toolbar.layout_component_color"] = "Color",
+	["ui.toolbar.layout_component_reset"] = "Reset",
+	["ui.toolbar.layout_component_reset_hint"] = "Restore this component's default position and size while preserving visibility and color.",
 	["ui.toolbar.layout_component_drag_hint"] = "Drag text to move; drag bounding-box corners to resize",
 	["ui.toolbar.short.move"] = "Grab",
 	["ui.toolbar.short.marquee"] = "Pick",

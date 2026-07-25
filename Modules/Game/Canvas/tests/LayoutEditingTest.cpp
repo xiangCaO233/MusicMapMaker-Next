@@ -261,6 +261,50 @@ bool testBeatRelativeComponentConstraints()
            resizedBounds.bottom <= beatRegion.bottom;
 }
 
+/// @brief 验证所有画布组件均可仅复位位置和尺寸。
+/// @return 默认几何恢复、显示属性保留且 KPS 逐轨覆盖被清除时返回 true。
+bool testCanvasComponentPlacementReset()
+{
+    MMM::Config::CanvasComponentLayoutConfig config;
+    const auto                               verifyReset =
+        [&](MMM::Config::CanvasComponentType             type,
+            const MMM::Config::CanvasComponentPlacement& expected) {
+            auto& placement         = config.placement(type);
+            placement.visible       = true;
+            placement.anchorX       = 0.91f;
+            placement.anchorY       = 0.83f;
+            placement.fontSizeRatio = 0.21f;
+            placement.color         = { 0.2f, 0.3f, 0.4f, 0.5f };
+
+            if ( type == MMM::Config::CanvasComponentType::Kps ) {
+                auto& trackPlacement =
+                    config.editablePlacement(type, 2, 4, 0.2f, 0.8f);
+                trackPlacement.anchorX   = 0.72f;
+                config.syncKpsTrackSizes = true;
+                config.synchronizeKpsTrackFontSize(0.08f);
+            }
+
+            config.resetPlacementToDefault(type);
+            const auto& reset = config.placement(type);
+            return reset.visible && near(reset.anchorX, expected.anchorX) &&
+                   near(reset.anchorY, expected.anchorY) &&
+                   near(reset.fontSizeRatio, expected.fontSizeRatio) &&
+                   near(reset.color[0], 0.2f) && near(reset.color[3], 0.5f);
+        };
+
+    const bool allPlacementsReset =
+        verifyReset(MMM::Config::CanvasComponentType::JudgmentLineTime,
+                    MMM::Config::DEFAULT_JUDGMENT_LINE_TIME_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BeatNumber,
+                    MMM::Config::DEFAULT_BEAT_NUMBER_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::BeatLineTime,
+                    MMM::Config::DEFAULT_BEAT_LINE_TIME_PLACEMENT) &&
+        verifyReset(MMM::Config::CanvasComponentType::Kps,
+                    MMM::Config::DEFAULT_KPS_TOTAL_PLACEMENT);
+    return allPlacementsReset && config.kpsTracks.empty() &&
+           near(config.kpsTrackFontSizeRatio, 0.0f) && config.syncKpsTrackSizes;
+}
+
 /// @brief 验证画布组件布局配置可独立完成 JSON 往返。
 /// @return 显隐、锚点、字号与颜色均保持时返回 true。
 bool testCanvasComponentConfigRoundTrip()
@@ -386,8 +430,11 @@ int main()
     if ( !testBeatRelativeComponentConstraints() ) {
         return 9;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testCanvasComponentPlacementReset() ) {
         return 10;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 11;
     }
     return 0;
 }
