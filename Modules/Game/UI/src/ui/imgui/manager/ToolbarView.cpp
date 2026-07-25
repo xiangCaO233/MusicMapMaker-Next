@@ -2801,6 +2801,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
 
             if ( showColor ) {
                 ImGui::SameLine();
+                // 颜色按钮固定在复位列左侧，避免组件名称长度改变颜色列位置。
+                const float contentRight =
+                    ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+                const float colorColumnX = contentRight - resetButtonWidth -
+                                           ImGui::GetStyle().ItemSpacing.x -
+                                           colorButtonSize;
+                if ( ImGui::GetCursorPosX() < colorColumnX ) {
+                    ImGui::SetCursorPosX(colorColumnX);
+                }
                 const auto componentColor =
                     fromStoredColor(appConfig.getVisualConfig()
                                         .canvasComponents.placement(type)
