@@ -13,9 +13,8 @@ if(NOT TARGET nfd::nfd)
   set(_nfd_default_library "")
   foreach(_nfd_config IN LISTS _nfd_configs)
     string(TOUPPER "${_nfd_config}" _nfd_config_upper)
-    prebuilt_find_library(
-      _nfd_library nativefiledialog-extended "${_nfd_config}" nfd
-      nativefiledialog-extended)
+    prebuilt_find_library(_nfd_library nativefiledialog-extended
+                          "${_nfd_config}" nfd nativefiledialog-extended)
     list(APPEND _nfd_imported_configs "${_nfd_config_upper}")
     set_target_properties(
       nfd::nfd PROPERTIES "IMPORTED_LOCATION_${_nfd_config_upper}"
@@ -36,7 +35,17 @@ endif()
 if(NOT TARGET 3rd_nfd)
   add_library(3rd_nfd INTERFACE)
   target_link_libraries(3rd_nfd INTERFACE nfd::nfd)
-  if(UNIX AND NOT APPLE)
+  if(APPLE)
+    # macOS 静态 NFD 依赖这些系统框架，导入目标必须与源码目标保持一致。
+    find_library(_nfd_core_services_framework CoreServices REQUIRED)
+    find_library(_nfd_appkit_framework AppKit REQUIRED)
+    find_library(_nfd_uniform_type_identifiers_framework UniformTypeIdentifiers
+                 REQUIRED)
+    target_link_libraries(
+      3rd_nfd
+      INTERFACE "${_nfd_core_services_framework}" "${_nfd_appkit_framework}"
+                "${_nfd_uniform_type_identifiers_framework}")
+  elseif(UNIX)
     # Linux 版 NFD 静态库使用 GTK/GDK 后端；源码构建时这些依赖来自 nfd::nfd，预编译导入目标需要显式恢复。
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(
