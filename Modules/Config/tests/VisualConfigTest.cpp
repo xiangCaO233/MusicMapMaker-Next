@@ -1,4 +1,4 @@
-#include "config/VisualConfig.h"
+#include "config/EditorConfig.h"
 
 #include "log/colorful-log.h"
 
@@ -85,6 +85,50 @@ bool testPreviewAreaLineDefaults()
     if ( defaults.drawBeatLines || restored.drawBeatLines ||
          !defaults.drawTimingLines || !restored.drawTimingLines ) {
         XERROR("Preview area line defaults were not preserved");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
+/// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
+bool testRenderingDefaultsReset()
+{
+    MMM::Config::EditorConfig config;
+    config.visual.noteScaleX   = 2.4F;
+    config.visual.noteScaleY   = 0.7F;
+    config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
+    config.settings.defaultColorPaletteSchemeName = "Custom";
+    config.visual.background.fillMode =
+        MMM::Config::BackgroundFillMode::Stretch;
+    config.visual.background.opaque_ratio       = 0.2F;
+    config.visual.background.darken_ratio       = 0.1F;
+    config.visual.background.spectrum.bandCount = 64;
+    config.visual.background.spectrum.opacity   = 0.8F;
+
+    config.resetNoteRenderingToDefaults();
+    const MMM::Config::EditorConfig defaults;
+    if ( !near(config.visual.noteScaleX, defaults.visual.noteScaleX) ||
+         !near(config.visual.noteScaleY, defaults.visual.noteScaleY) ||
+         config.visual.noteFillMode != defaults.visual.noteFillMode ||
+         config.settings.defaultColorPaletteSchemeName !=
+             defaults.settings.defaultColorPaletteSchemeName ||
+         config.visual.background.fillMode !=
+             MMM::Config::BackgroundFillMode::Stretch ) {
+        XERROR("Note rendering reset escaped its configuration boundary");
+        return false;
+    }
+
+    config.resetBackgroundRenderingToDefaults();
+    if ( config.visual.background.fillMode !=
+             defaults.visual.background.fillMode ||
+         !near(config.visual.background.opaque_ratio,
+               defaults.visual.background.opaque_ratio) ||
+         !near(config.visual.background.darken_ratio,
+               defaults.visual.background.darken_ratio) ||
+         config.visual.background.spectrum.bandCount != 64 ||
+         !near(config.visual.background.spectrum.opacity, 0.8F) ) {
+        XERROR("Background rendering reset escaped its configuration boundary");
         return false;
     }
     return true;
@@ -199,6 +243,7 @@ int main()
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
                    testPreviewAreaLineDefaults() &&
+                   testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&
                    testBackgroundSpectrumClamping()

@@ -595,6 +595,7 @@ return {
 	["ui.toolbar.layout_component_color"] = "颜色",
 	["ui.toolbar.layout_component_reset"] = "复位",
 	["ui.toolbar.layout_component_reset_hint"] = "恢复该组件的默认位置和尺寸；显隐与颜色保持不变。",
+	["ui.toolbar.layout_render_reset_hint"] = "恢复此分组中的渲染选项为应用默认配置。",
 	["ui.toolbar.layout_component_drag_hint"] = "拖动组件可移动，拖动包围框四角可调整大小",
 	["ui.toolbar.short.move"] = "抓取",
 	["ui.toolbar.short.marquee"] = "选取",

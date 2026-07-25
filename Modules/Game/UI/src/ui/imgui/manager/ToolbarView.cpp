@@ -2798,9 +2798,34 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutVisualConfigDirty = false;
             }
         };
+        const auto drawRenderingResetButton = [&](const char* id,
+                                                  auto&&      resetConfig) {
+            ImGui::PushID(id);
+            const float remainingWidth = ImGui::GetContentRegionAvail().x;
+            if ( remainingWidth > resetButtonWidth ) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + remainingWidth -
+                                     resetButtonWidth);
+            }
+            if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
+                auto updatedConfig = appConfig.getEditorConfig();
+                resetConfig(updatedConfig);
+                appConfig.getEditorConfig() = updatedConfig;
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(TR("ui.toolbar.layout_render_reset_hint").data());
+            }
+            ImGui::PopID();
+        };
 
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.settings.visual.note").data()) ) {
+            drawRenderingResetButton("NoteRenderingReset",
+                                     [](Config::EditorConfig& config) {
+                                         config.resetNoteRenderingToDefaults();
+                                     });
             auto visual = appConfig.getVisualConfig();
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.note_scale_x").data());
@@ -2894,6 +2919,10 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
 
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.settings.visual.background").data()) ) {
+            drawRenderingResetButton(
+                "BackgroundRenderingReset", [](Config::EditorConfig& config) {
+                    config.resetBackgroundRenderingToDefaults();
+                });
             auto visual     = appConfig.getVisualConfig();
             int  bgFillMode = static_cast<int>(visual.background.fillMode);
             const char* fillModes[] = {
