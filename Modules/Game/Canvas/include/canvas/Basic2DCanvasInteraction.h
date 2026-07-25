@@ -217,6 +217,14 @@ private:
     Logic::CanvasComponentBounds m_canvasComponentDragRegion;
     /// @brief 组件拖动开始时实例中心相对指针的像素偏移。
     glm::vec2 m_canvasComponentPointerOffset{ 0.0f, 0.0f };
+    /// @brief 当前组件吸附到的纵向参考线横坐标。
+    std::optional<float> m_canvasComponentSnapGuideX;
+    /// @brief 当前组件吸附到的横向参考线纵坐标。
+    std::optional<float> m_canvasComponentSnapGuideY;
+    /// @brief 布局拖动期间复用的纵向吸附目标线缓存。
+    std::vector<float> m_canvasComponentSnapTargetsX;
+    /// @brief 布局拖动期间复用的横向吸附目标线缓存。
+    std::vector<float> m_canvasComponentSnapTargetsY;
     /// @brief 当前拖动的组件实例序号；KPS 总计使用负一。
     std::int64_t m_canvasComponentDragInstanceIndex{ 0 };
     /// @brief 当前同步移动或缩放手势开始时的全部单轨 KPS 状态。

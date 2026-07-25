@@ -2,8 +2,11 @@
 
 #include "config/visual/CanvasComponentConfig.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <span>
 
 namespace MMM::Logic
 {
@@ -55,6 +58,77 @@ struct CanvasComponentPoint {
     /// @brief 纵坐标。
     float y{ 0.0f };
 };
+
+/// @brief 组件移动对齐到目标线后的二维吸附结果。
+struct CanvasComponentSnapResult {
+    /// @brief 应用于组件的新中心位置。
+    CanvasComponentPoint center;
+    /// @brief 横向是否已吸附。
+    bool snappedX{ false };
+    /// @brief 纵向是否已吸附。
+    bool snappedY{ false };
+    /// @brief 横向吸附目标线的像素坐标。
+    float targetX{ 0.0f };
+    /// @brief 纵向吸附目标线的像素坐标。
+    float targetY{ 0.0f };
+};
+
+/// @brief 将组件左、中、右与上、中、下对齐到各轴最近的目标线。
+/// @param bounds 尚未吸附的组件像素边界。
+/// @param xTargets 可吸附的纵向目标线横坐标。
+/// @param yTargets 可吸附的横向目标线纵坐标。
+/// @param threshold 最大吸附距离，单位像素。
+/// @return 横纵轴独立选择最近目标后的组件中心与目标线。
+/// @warning UI 拖动热路径：每帧扫描已缓存的目标坐标，禁止加入文件访问、
+/// 阻塞操作或共享所有权复制。
+[[nodiscard]] inline CanvasComponentSnapResult snapCanvasComponentBounds(
+    const CanvasComponentBounds& bounds, std::span<const float> xTargets,
+    std::span<const float> yTargets, float threshold)
+{
+    CanvasComponentSnapResult result;
+    result.center = { (bounds.left + bounds.right) * 0.5f,
+                      (bounds.top + bounds.bottom) * 0.5f };
+    if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) {
+        return result;
+    }
+
+    threshold = std::isfinite(threshold) ? std::max(0.0f, threshold) : 0.0f;
+    const auto snapAxis = [threshold](const std::array<float, 3>& sourceLines,
+                                      std::span<const float>
+                                             targets,
+                                      float& center,
+                                      bool&  snapped,
+                                      float& targetLine) {
+        float bestDistance = std::numeric_limits<float>::max();
+        float bestOffset   = 0.0f;
+        for ( float target : targets ) {
+            if ( !std::isfinite(target) ) continue;
+            for ( float source : sourceLines ) {
+                const float offset   = target - source;
+                const float distance = std::abs(offset);
+                if ( distance <= threshold && distance < bestDistance ) {
+                    bestDistance = distance;
+                    bestOffset   = offset;
+                    targetLine   = target;
+                    snapped      = true;
+                }
+            }
+        }
+        if ( snapped ) center += bestOffset;
+    };
+
+    const std::array<float, 3> sourceX{ bounds.left,
+                                        result.center.x,
+                                        bounds.right };
+    const std::array<float, 3> sourceY{ bounds.top,
+                                        result.center.y,
+                                        bounds.bottom };
+    snapAxis(
+        sourceX, xTargets, result.center.x, result.snappedX, result.targetX);
+    snapAxis(
+        sourceY, yTargets, result.center.y, result.snappedY, result.targetY);
+    return result;
+}
 
 /// @brief 规整画布组件的归一化锚点。
 /// @param placement 待规整布局。

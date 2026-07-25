@@ -1,6 +1,7 @@
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -85,6 +86,36 @@ bool testMovePreservesSize()
            near(movedBottomRight.bottom - movedBottomRight.top, 0.7f);
 }
 
+/// @brief 验证整个轨道布局可按其边缘和中心吸附到像素目标线。
+/// @return 横向边缘与纵向中心吸附后仍保持轨道宽高时返回 true。
+bool testTrackLayoutSnapping()
+{
+    MMM::Config::TrackLayout candidate;
+    candidate.left                                         = 0.2f;
+    candidate.top                                          = 0.2f;
+    candidate.right                                        = 0.6f;
+    candidate.bottom                                       = 0.8f;
+    constexpr float                         viewportWidth  = 1000.0f;
+    constexpr float                         viewportHeight = 500.0f;
+    const MMM::Logic::CanvasComponentBounds candidateBounds{
+        candidate.left * viewportWidth,
+        candidate.top * viewportHeight,
+        candidate.right * viewportWidth,
+        candidate.bottom * viewportHeight,
+    };
+    const std::array<float, 1> targetX{ 606.0f };
+    const std::array<float, 1> targetY{ 247.0f };
+    const auto                 snap = MMM::Logic::snapCanvasComponentBounds(
+        candidateBounds, targetX, targetY, 8.0f);
+    const auto snapped = MMM::Canvas::moveTrackLayoutToPixelCenter(
+        candidate, snap.center.x, snap.center.y, viewportWidth, viewportHeight);
+
+    return snap.snappedX && snap.snappedY && near(snapped.right, 0.606f) &&
+           near((snapped.top + snapped.bottom) * 0.5f, 0.494f) &&
+           near(snapped.right - snapped.left, 0.4f) &&
+           near(snapped.bottom - snapped.top, 0.6f);
+}
+
 /// @brief 验证判定线位置会被限制在画布范围内。
 /// @return 有限值、越界值和非有限值均得到合法结果时返回 true。
 bool testJudgmentLineConstraints()
@@ -153,6 +184,58 @@ bool testCanvasComponentPlacement()
     return near(bounds.left, 0.0f) && near(bounds.bottom, 600.0f) &&
            bounds.right <= 800.0f && bounds.top >= 0.0f &&
            bounds.contains(bounds.left, bounds.top);
+}
+
+/// @brief 验证组件边缘与中心会在阈值内独立吸附到最近横纵目标线。
+/// @return 边缘、中心、阈值外和非有限目标均按预期处理时返回 true。
+bool testCanvasComponentSnapping()
+{
+    const MMM::Logic::CanvasComponentBounds bounds{
+        100.0f, 80.0f, 180.0f, 120.0f
+    };
+    const std::array<float, 3> edgeTargetsX{
+        94.0f, 184.0f, std::numeric_limits<float>::quiet_NaN()
+    };
+    const std::array<float, 2> edgeTargetsY{ 74.0f, 125.0f };
+    const auto                 edgeSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, edgeTargetsX, edgeTargetsY, 8.0f);
+    if ( !edgeSnap.snappedX || !edgeSnap.snappedY ||
+         !near(edgeSnap.center.x, 144.0f) || !near(edgeSnap.center.y, 105.0f) ||
+         !near(edgeSnap.targetX, 184.0f) || !near(edgeSnap.targetY, 125.0f) ) {
+        return false;
+    }
+
+    const std::array<float, 1> centerTargetX{ 146.0f };
+    const std::array<float, 1> centerTargetY{ 93.0f };
+    const auto centerSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, centerTargetX, centerTargetY, 8.0f);
+    if ( !centerSnap.snappedX || !centerSnap.snappedY ||
+         !near(centerSnap.center.x, 146.0f) ||
+         !near(centerSnap.center.y, 93.0f) ) {
+        return false;
+    }
+
+    const MMM::Logic::CanvasComponentBounds synchronizedGroupBounds{
+        20.0f, 30.0f, 220.0f, 130.0f
+    };
+    const std::array<float, 1> groupTargetX{ 225.0f };
+    const std::array<float, 0> noTargets;
+    const auto groupSnap = MMM::Logic::snapCanvasComponentBounds(
+        synchronizedGroupBounds, groupTargetX, noTargets, 8.0f);
+    if ( !groupSnap.snappedX || groupSnap.snappedY ||
+         !near(groupSnap.center.x, 125.0f) ||
+         !near(groupSnap.center.y, 80.0f) ||
+         !near(groupSnap.targetX, 225.0f) ) {
+        return false;
+    }
+
+    const std::array<float, 1> distantTargetX{ 189.0f };
+    const std::array<float, 1> distantTargetY{ 129.0f };
+    const auto distantSnap = MMM::Logic::snapCanvasComponentBounds(
+        bounds, distantTargetX, distantTargetY, 8.0f);
+    return !distantSnap.snappedX && !distantSnap.snappedY &&
+           near(distantSnap.center.x, 140.0f) &&
+           near(distantSnap.center.y, 100.0f);
 }
 
 /// @brief 验证四角包围框会等比调整字号并保持对角点。
@@ -513,6 +596,12 @@ int main()
     }
     if ( !testCanvasComponentConfigRoundTrip() ) {
         return 13;
+    }
+    if ( !testCanvasComponentSnapping() ) {
+        return 14;
+    }
+    if ( !testTrackLayoutSnapping() ) {
+        return 15;
     }
     return 0;
 }

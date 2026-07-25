@@ -122,6 +122,32 @@ enum class TrackLayoutDragHandle {
     return layout;
 }
 
+/// @brief 将整个轨道布局中心移动到指定画布像素坐标。
+/// @param layout 当前轨道布局。
+/// @param centerX 目标中心相对画布左侧的像素坐标。
+/// @param centerY 目标中心相对画布顶部的像素坐标。
+/// @param viewportWidth 画布宽度。
+/// @param viewportHeight 画布高度。
+/// @return 保持宽高且完整位于画布内的布局。
+/// @warning UI 热路径纯计算：整体轨道吸附期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::TrackLayout moveTrackLayoutToPixelCenter(
+    Config::TrackLayout layout, float centerX, float centerY,
+    float viewportWidth, float viewportHeight)
+{
+    layout = sanitizeTrackLayout(layout);
+    if ( !std::isfinite(centerX) || !std::isfinite(centerY) ||
+         !std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) ||
+         viewportWidth <= 0.0f || viewportHeight <= 0.0f ) {
+        return layout;
+    }
+
+    const float currentCenterX = (layout.left + layout.right) * 0.5f;
+    const float currentCenterY = (layout.top + layout.bottom) * 0.5f;
+    return moveTrackLayout(layout,
+                           centerX / viewportWidth - currentCenterX,
+                           centerY / viewportHeight - currentCenterY);
+}
+
 /// @brief 在画布像素坐标中命中轨道边界、判定线或整体移动把手。
 /// @param layout 当前轨道布局。
 /// @param judgmentLinePosition 当前判定线归一化位置。
