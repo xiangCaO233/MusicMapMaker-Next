@@ -383,6 +383,10 @@ void renderBeatLineTimes(Batcher&                                batcher,
 void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
                const Config::CanvasComponentLayoutConfig& config)
 {
+    // 拍号和分拍线时间会使用轨道视口裁剪，KPS 必须显式恢复全画布范围。
+    batcher.setScissor(
+        0.0f, 0.0f, context.viewportWidth, context.viewportHeight);
+
     const auto trackCount = std::max<std::int32_t>(context.trackCount, 0);
     const CanvasComponentBounds layoutRegion{
         0.0f, 0.0f, context.viewportWidth, context.viewportHeight

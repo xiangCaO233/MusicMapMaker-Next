@@ -451,22 +451,37 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
     return !snapshot.vertices.empty() && !snapshot.overlayCmds.empty();
 }
 
-/// @brief 验证 KPS 会按当前轨道数生成独立实例与总计实例。
-/// @return 实例数量、索引、独立布局和颜色均正确时返回 true。
+/// @brief 验证逐轨及总 KPS 实例，并覆盖单轨 KPS 位于轨道外的场景。
+/// @return 实例数量、索引、全画布布局与裁剪以及颜色均正确时返回 true。
 bool testKpsRendersPerTrackAndTotal()
 {
     MMM::Logic::RenderSnapshot               snapshot;
     MMM::Config::CanvasComponentLayoutConfig config;
     configureAsciiFont(snapshot);
-    snapshot.hasBeatmap = true;
-    snapshot.isPlaying  = true;
-    config.kps.visible  = true;
-    config.kps.color    = { 0.3f, 0.8f, 0.9f, 0.75f };
-    auto& secondTrack   = config.editablePlacement(
+    snapshot.hasBeatmap       = true;
+    snapshot.isPlaying        = true;
+    config.beatNumber.visible = true;
+    config.kps.visible        = true;
+    config.kps.anchorY        = 0.05f;
+    config.kps.color          = { 0.3f, 0.8f, 0.9f, 0.75f };
+    auto& secondTrack         = config.editablePlacement(
         MMM::Config::CanvasComponentType::Kps, 1, 3, 0.2f, 0.8f);
-    secondTrack.anchorX       = 0.9f;
-    secondTrack.anchorY       = 0.28f;
+    secondTrack.anchorX       = 0.1f;
+    secondTrack.anchorY       = 0.05f;
     secondTrack.fontSizeRatio = 0.04f;
+
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    auto&          bpm =
+        timelineRegistry.emplace<MMM::Logic::TimelineComponent>(bpmEntity);
+    bpm.m_timestamp = 0.0;
+    bpm.m_effect    = MMM::TimingEffect::BPM;
+    bpm.m_value     = 120.0;
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{ &bpm };
 
     const std::array<std::uint32_t, 3> kps{ 2U, 4U, 6U };
     auto                               context = makeRenderContext(1.0);
@@ -474,10 +489,20 @@ bool testKpsRendersPerTrackAndTotal()
     context.trackLeft                          = 0.2f;
     context.trackRight                         = 0.8f;
     context.trackKps                           = kps;
+    context.bpmEvents                          = bpmEvents;
+    context.scrollCache                        = &cache;
+    context.visibleTop                         = 100.0f;
+    context.visibleBottom                      = 500.0f;
     MMM::Logic::System::CanvasComponentRenderSystem::render(
         &snapshot, context, config);
 
-    if ( snapshot.canvasComponentInstances.size() != 4U ) {
+    const auto kpsInstanceCount = std::count_if(
+        snapshot.canvasComponentInstances.begin(),
+        snapshot.canvasComponentInstances.end(),
+        [](const auto& instance) {
+            return instance.type == MMM::Config::CanvasComponentType::Kps;
+        });
+    if ( kpsInstanceCount != 4 ) {
         XERROR("KPS component did not produce three tracks and one total");
         return false;
     }
@@ -505,13 +530,31 @@ bool testKpsRendersPerTrackAndTotal()
     constexpr float epsilon       = 1e-4f;
     const float     secondCenterX = (second->left + second->right) * 0.5f;
     const float     secondCenterY = (second->top + second->bottom) * 0.5f;
-    if ( std::abs(secondCenterX - 720.0f) > epsilon ||
-         std::abs(secondCenterY - 168.0f) > epsilon ||
-         second->regionLeft != 0.0f || second->regionRight != 800.0f ) {
-        XERROR("Per-track KPS override did not use its independent layout");
+    if ( std::abs(secondCenterX - 80.0f) > epsilon ||
+         std::abs(secondCenterY - 30.0f) > epsilon ||
+         second->right >= context.trackLeft * context.viewportWidth ||
+         second->bottom >= context.visibleTop ||
+         total->bottom >= context.visibleTop ||
+         second->regionLeft != 0.0f || second->regionTop != 0.0f ||
+         second->regionRight != 800.0f || second->regionBottom != 600.0f ) {
+        XERROR("Per-track KPS override was constrained to the track region");
         return false;
     }
-    for ( const auto& vertex : snapshot.vertices ) {
+    if ( snapshot.overlayCmds.empty() ) {
+        XERROR("KPS component did not produce an overlay command");
+        return false;
+    }
+    const auto& kpsCommand = snapshot.overlayCmds.back();
+    if ( kpsCommand.scissor.offset.x != 0 || kpsCommand.scissor.offset.y != 0 ||
+         kpsCommand.scissor.extent.width != 800U ||
+         kpsCommand.scissor.extent.height != 600U ) {
+        XERROR("KPS inherited the preceding beat component scissor");
+        return false;
+    }
+    const auto commandIndexEnd = kpsCommand.indexOffset + kpsCommand.indexCount;
+    for ( std::uint32_t index = kpsCommand.indexOffset; index < commandIndexEnd;
+          ++index ) {
+        const auto& vertex = snapshot.vertices[snapshot.indices[index]];
         if ( std::abs(vertex.color.r - config.kps.color[0]) > epsilon ||
              std::abs(vertex.color.g - config.kps.color[1]) > epsilon ||
              std::abs(vertex.color.b - config.kps.color[2]) > epsilon ||
