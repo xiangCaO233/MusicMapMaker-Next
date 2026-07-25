@@ -1,6 +1,8 @@
 #include "config/VisualConfig.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 
@@ -87,11 +89,151 @@ void from_json(const nlohmann::json& j, CanvasComponentPlacement& placement)
         j.value("color", std::array<float, 4>{ 1.0f, 1.0f, 1.0f, 1.0f });
 }
 
+namespace
+{
+
+/// @brief 按当前轨道布局生成单轨 KPS 的默认位置。
+/// @param trackIndex 从零开始的轨道序号。
+/// @param trackCount 当前轨道总数。
+/// @param trackLeft 轨道区域左边界比例。
+/// @param trackRight 轨道区域右边界比例。
+/// @param color KPS 整组颜色。
+/// @return 位于对应轨道中心上方的默认布局。
+/// @warning 渲染热路径：未自定义的逐轨 KPS 每帧调用；只做常数次数值计算。
+CanvasComponentPlacement defaultKpsTrackPlacement(
+    std::int32_t trackIndex, std::int32_t trackCount, float trackLeft,
+    float trackRight, const std::array<float, 4>& color)
+{
+    const auto safeTrackCount = std::max(trackCount, 1);
+    const auto safeTrackIndex = std::clamp(trackIndex, 0, safeTrackCount - 1);
+    trackLeft                 = std::clamp(trackLeft, 0.0f, 1.0f);
+    trackRight                = std::clamp(trackRight, trackLeft, 1.0f);
+
+    CanvasComponentPlacement result;
+    result.visible = true;
+    result.anchorX = trackLeft + (static_cast<float>(safeTrackIndex) + 0.5f) /
+                                     static_cast<float>(safeTrackCount) *
+                                     (trackRight - trackLeft);
+    result.anchorY = 0.15f;
+    result.fontSizeRatio =
+        std::clamp(0.044f / std::sqrt(static_cast<float>(safeTrackCount)),
+                   0.0125f,
+                   0.035f);
+    result.color = color;
+    return result;
+}
+
+}  // namespace
+
+CanvasComponentPlacement CanvasComponentLayoutConfig::resolvedPlacement(
+    CanvasComponentType type, std::int64_t instanceIndex,
+    std::int32_t trackCount, float trackLeft, float trackRight) const
+{
+    if ( type != CanvasComponentType::Kps ||
+         instanceIndex == KPS_TOTAL_INSTANCE_INDEX ) {
+        return placement(type);
+    }
+
+    if ( instanceIndex > std::numeric_limits<std::int32_t>::max() ) {
+        return kps;
+    }
+    const auto trackIndex         = static_cast<std::int32_t>(instanceIndex);
+    const auto automaticPlacement = defaultKpsTrackPlacement(
+        trackIndex, trackCount, trackLeft, trackRight, kps.color);
+    const bool hasSynchronizedFontSize =
+        std::isfinite(kpsTrackFontSizeRatio) && kpsTrackFontSizeRatio > 0.0f;
+    const float synchronizedFontSize =
+        hasSynchronizedFontSize
+            ? std::clamp(kpsTrackFontSizeRatio, 0.0125f, 0.25f)
+            : automaticPlacement.fontSizeRatio;
+    CanvasComponentPlacement result = automaticPlacement;
+    if ( hasSynchronizedFontSize ) {
+        result.fontSizeRatio = synchronizedFontSize;
+    }
+    const auto stored =
+        std::lower_bound(kpsTracks.begin(),
+                         kpsTracks.end(),
+                         trackIndex,
+                         [](const auto& entry, std::int32_t index) {
+                             return entry.trackIndex < index;
+                         });
+    if ( stored != kpsTracks.end() && stored->trackIndex == trackIndex ) {
+        result = stored->placement;
+    }
+    if ( syncKpsTrackSizes ) {
+        result.fontSizeRatio = synchronizedFontSize;
+    }
+    result.visible = kps.visible;
+    result.color   = kps.color;
+    return result;
+}
+
+CanvasComponentPlacement& CanvasComponentLayoutConfig::editablePlacement(
+    CanvasComponentType type, std::int64_t instanceIndex,
+    std::int32_t trackCount, float trackLeft, float trackRight)
+{
+    if ( type != CanvasComponentType::Kps ||
+         instanceIndex == KPS_TOTAL_INSTANCE_INDEX || instanceIndex < 0 ) {
+        return placement(type);
+    }
+
+    if ( instanceIndex > std::numeric_limits<std::int32_t>::max() ) {
+        return kps;
+    }
+    const auto trackIndex = static_cast<std::int32_t>(instanceIndex);
+    const auto stored =
+        std::lower_bound(kpsTracks.begin(),
+                         kpsTracks.end(),
+                         trackIndex,
+                         [](const auto& entry, std::int32_t index) {
+                             return entry.trackIndex < index;
+                         });
+    if ( stored != kpsTracks.end() && stored->trackIndex == trackIndex ) {
+        return stored->placement;
+    }
+
+    auto newPlacement = defaultKpsTrackPlacement(
+        trackIndex, trackCount, trackLeft, trackRight, kps.color);
+    if ( std::isfinite(kpsTrackFontSizeRatio) &&
+         kpsTrackFontSizeRatio > 0.0f ) {
+        newPlacement.fontSizeRatio =
+            std::clamp(kpsTrackFontSizeRatio, 0.0125f, 0.25f);
+    }
+    return kpsTracks.insert(stored, { trackIndex, newPlacement })->placement;
+}
+
+void CanvasComponentLayoutConfig::synchronizeKpsTrackFontSize(
+    float fontSizeRatio)
+{
+    if ( !std::isfinite(fontSizeRatio) ) return;
+    kpsTrackFontSizeRatio = std::clamp(fontSizeRatio, 0.0125f, 0.25f);
+    for ( auto& track : kpsTracks ) {
+        track.placement.fontSizeRatio = kpsTrackFontSizeRatio;
+    }
+}
+
+void to_json(nlohmann::json& j, const CanvasKpsTrackPlacement& placement)
+{
+    j = nlohmann::json{ { "trackIndex", placement.trackIndex },
+                        { "placement", placement.placement } };
+}
+
+void from_json(const nlohmann::json& j, CanvasKpsTrackPlacement& placement)
+{
+    placement.trackIndex = j.value("trackIndex", 0);
+    placement.placement  = j.value("placement", CanvasComponentPlacement{});
+}
+
 void to_json(nlohmann::json& j, const CanvasComponentLayoutConfig& config)
 {
     j = nlohmann::json{ { "judgmentLineTime", config.judgmentLineTime },
                         { "beatNumber", config.beatNumber },
-                        { "beatLineTime", config.beatLineTime } };
+                        { "beatLineTime", config.beatLineTime },
+                        { "kps", config.kps },
+                        { "kpsTracks", config.kpsTracks },
+                        { "syncKpsTrackSizes", config.syncKpsTrackSizes },
+                        { "kpsTrackFontSizeRatio",
+                          config.kpsTrackFontSizeRatio } };
 }
 
 void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
@@ -101,6 +243,33 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
     config.beatNumber = j.value("beatNumber", DEFAULT_BEAT_NUMBER_PLACEMENT);
     config.beatLineTime =
         j.value("beatLineTime", DEFAULT_BEAT_LINE_TIME_PLACEMENT);
+    config.kps = j.value("kps", DEFAULT_KPS_TOTAL_PLACEMENT);
+    config.kpsTracks =
+        j.value("kpsTracks", std::vector<CanvasKpsTrackPlacement>{});
+    config.syncKpsTrackSizes     = j.value("syncKpsTrackSizes", false);
+    config.kpsTrackFontSizeRatio = j.value("kpsTrackFontSizeRatio", 0.0f);
+    if ( !std::isfinite(config.kpsTrackFontSizeRatio) ||
+         config.kpsTrackFontSizeRatio <= 0.0f ) {
+        config.kpsTrackFontSizeRatio = 0.0f;
+    } else {
+        config.kpsTrackFontSizeRatio =
+            std::clamp(config.kpsTrackFontSizeRatio, 0.0125f, 0.25f);
+    }
+    std::erase_if(config.kpsTracks, [](const auto& placement) {
+        return placement.trackIndex < 0;
+    });
+    std::stable_sort(config.kpsTracks.begin(),
+                     config.kpsTracks.end(),
+                     [](const auto& lhs, const auto& rhs) {
+                         return lhs.trackIndex < rhs.trackIndex;
+                     });
+    config.kpsTracks.erase(std::unique(config.kpsTracks.begin(),
+                                       config.kpsTracks.end(),
+                                       [](const auto& lhs, const auto& rhs) {
+                                           return lhs.trackIndex ==
+                                                  rhs.trackIndex;
+                                       }),
+                           config.kpsTracks.end());
 }
 
 void to_json(nlohmann::json& j, const PreviewAreaConfig::AreaMargin& margin)

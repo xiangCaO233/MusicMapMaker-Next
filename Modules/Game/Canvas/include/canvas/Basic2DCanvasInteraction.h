@@ -93,6 +93,18 @@ private:
         bool secondaryModifier{ false };
     };
 
+    /// @brief 同步缩放开始时的单轨 KPS 布局与像素边界。
+    struct SynchronizedKpsResizeStart {
+        /// @brief 从零开始的轨道序号。
+        std::int64_t instanceIndex{ 0 };
+        /// @brief 缩放开始时的布局。
+        Config::CanvasComponentPlacement placement;
+        /// @brief 缩放开始时的实际文字边界。
+        Logic::CanvasComponentBounds bounds;
+        /// @brief 该实例允许占用的布局区域。
+        Logic::CanvasComponentBounds region;
+    };
+
     std::string              m_canvasName;
     std::string              m_cameraId;
     std::vector<PendingDrop> m_pendingDrops;
@@ -205,8 +217,10 @@ private:
     Logic::CanvasComponentBounds m_canvasComponentDragRegion;
     /// @brief 组件拖动开始时实例中心相对指针的像素偏移。
     glm::vec2 m_canvasComponentPointerOffset{ 0.0f, 0.0f };
-    /// @brief 当前拖动的重复组件实例序号；非重复组件为 0。
+    /// @brief 当前拖动的组件实例序号；KPS 总计使用负一。
     std::int64_t m_canvasComponentDragInstanceIndex{ 0 };
+    /// @brief 当前同步缩放手势开始时的全部单轨 KPS 状态。
+    std::vector<SynchronizedKpsResizeStart> m_synchronizedKpsResizeStarts;
     /// @brief 当前布局配置拖动手势是否实际修改过配置。
     bool m_layoutConfigurationChanged{ false };
 };

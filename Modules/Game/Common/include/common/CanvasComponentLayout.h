@@ -273,6 +273,53 @@ moveCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
 }
 
 /// @brief 按四角拖动结果在指定区域内等比调整组件字号和中心位置。
+/// @param placement 缩放开始时的布局。
+/// @param handle 当前缩放把手。
+/// @param startBounds 缩放开始时的组件边界。
+/// @param targetFontSizeRatio 目标字号相对画布高度的比例。
+/// @param region 组件允许占用的像素区域。
+/// @return 以当前把手对角点为固定点更新后的布局。
+/// @warning 热路径：同步组件缩放期间每帧调用；只允许常量级数值计算。
+[[nodiscard]] inline Config::CanvasComponentPlacement
+resizeCanvasComponentToFontSizeInRegion(
+    Config::CanvasComponentPlacement placement,
+    CanvasComponentDragHandle handle, const CanvasComponentBounds& startBounds,
+    float targetFontSizeRatio, const CanvasComponentBounds& region)
+{
+    placement                = sanitizeCanvasComponentPlacement(placement);
+    const float regionWidth  = region.width();
+    const float regionHeight = region.height();
+    if ( handle == CanvasComponentDragHandle::None ||
+         handle == CanvasComponentDragHandle::Move ||
+         startBounds.width() <= 0.0f || startBounds.height() <= 0.0f ||
+         regionWidth <= 0.0f || regionHeight <= 0.0f ||
+         !std::isfinite(targetFontSizeRatio) ) {
+        return placement;
+    }
+
+    const float startRatio   = placement.fontSizeRatio;
+    placement.fontSizeRatio  = std::clamp(targetFontSizeRatio,
+                                          CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO,
+                                          CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO);
+    const float appliedScale = placement.fontSizeRatio / startRatio;
+    const float width        = startBounds.width() * appliedScale;
+    const float height       = startBounds.height() * appliedScale;
+
+    const CanvasComponentPoint opposite =
+        canvasComponentOppositeCorner(startBounds, handle);
+    const bool  growsLeft = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::BottomLeft;
+    const bool  growsUp   = handle == CanvasComponentDragHandle::TopLeft ||
+                            handle == CanvasComponentDragHandle::TopRight;
+    const float centerX =
+        opposite.x + (growsLeft ? -width * 0.5f : width * 0.5f);
+    const float centerY =
+        opposite.y + (growsUp ? -height * 0.5f : height * 0.5f);
+    return moveCanvasComponentInRegion(
+        placement, centerX, centerY, region, width, height);
+}
+
+/// @brief 按四角拖动结果在指定区域内等比调整组件字号和中心位置。
 /// @param placement 拖动开始时的布局。
 /// @param handle 当前缩放把手。
 /// @param startBounds 拖动开始时的组件边界。
@@ -330,24 +377,12 @@ resizeCanvasComponentInRegion(Config::CanvasComponentPlacement placement,
         0.01f,
         (pointerVector.x * startVector.x + pointerVector.y * startVector.y) /
             denominator);
-    const float startRatio   = placement.fontSizeRatio;
-    placement.fontSizeRatio  = std::clamp(startRatio * scale,
-                                         CANVAS_COMPONENT_MIN_FONT_SIZE_RATIO,
-                                         CANVAS_COMPONENT_MAX_FONT_SIZE_RATIO);
-    const float appliedScale = placement.fontSizeRatio / startRatio;
-    const float width        = startBounds.width() * appliedScale;
-    const float height       = startBounds.height() * appliedScale;
-
-    const bool growsLeft = handle == CanvasComponentDragHandle::TopLeft ||
-                           handle == CanvasComponentDragHandle::BottomLeft;
-    const bool growsUp = handle == CanvasComponentDragHandle::TopLeft ||
-                         handle == CanvasComponentDragHandle::TopRight;
-    const float centerX =
-        opposite.x + (growsLeft ? -width * 0.5f : width * 0.5f);
-    const float centerY =
-        opposite.y + (growsUp ? -height * 0.5f : height * 0.5f);
-    return moveCanvasComponentInRegion(
-        placement, centerX, centerY, region, width, height);
+    return resizeCanvasComponentToFontSizeInRegion(
+        placement,
+        handle,
+        startBounds,
+        placement.fontSizeRatio * scale,
+        region);
 }
 
 /// @brief 按四角拖动结果等比调整组件字号和中心位置。

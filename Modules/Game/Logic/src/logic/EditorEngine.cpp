@@ -112,7 +112,8 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
         ctx.nextHitIndex++;
     }
 
-    ctx.hitFXSystem.update(ctx.animateTime, triggeredEvents, config);
+    ctx.hitFXSystem.update(
+        ctx.animateTime, triggeredEvents, ctx.trackCount, config);
 }
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。

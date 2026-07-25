@@ -989,6 +989,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     m_canvasComponentDragHandle        = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragInstanceIndex = 0;
     m_layoutConfigurationChanged       = false;
+    m_synchronizedKpsResizeStarts.clear();
 }
 
 void Basic2DCanvasInteraction::handleLayoutEditing(
@@ -1088,9 +1089,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              hoveredComponentInstance.has_value() ) {
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
-            const auto& placement =
-                appConfig.getVisualConfig().canvasComponents.placement(
-                    *hoveredComponent);
+            const auto placement =
+                appConfig.getVisualConfig().canvasComponents.resolvedPlacement(
+                    *hoveredComponent,
+                    hoveredComponentInstance->instanceIndex,
+                    currentSnapshot.trackCount,
+                    layout.left,
+                    layout.right);
             m_canvasComponentDragStart = placement;
             m_canvasComponentDragStartBounds =
                 canvasComponentContentBounds(*hoveredComponentInstance);
@@ -1098,6 +1103,34 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 canvasComponentLayoutRegion(*hoveredComponentInstance);
             m_canvasComponentDragInstanceIndex =
                 hoveredComponentInstance->instanceIndex;
+            m_synchronizedKpsResizeStarts.clear();
+            const auto& canvasComponents =
+                appConfig.getVisualConfig().canvasComponents;
+            if ( *hoveredComponent == Config::CanvasComponentType::Kps &&
+                 hoveredComponentInstance->instanceIndex >= 0 &&
+                 hoveredComponentHandle !=
+                     Logic::CanvasComponentDragHandle::Move &&
+                 canvasComponents.syncKpsTrackSizes ) {
+                m_synchronizedKpsResizeStarts.reserve(
+                    currentSnapshot.canvasComponentInstances.size());
+                for ( const auto& instance :
+                      currentSnapshot.canvasComponentInstances ) {
+                    if ( instance.type != Config::CanvasComponentType::Kps ||
+                         instance.instanceIndex < 0 ) {
+                        continue;
+                    }
+                    m_synchronizedKpsResizeStarts.push_back(
+                        { instance.instanceIndex,
+                          canvasComponents.resolvedPlacement(
+                              Config::CanvasComponentType::Kps,
+                              instance.instanceIndex,
+                              currentSnapshot.trackCount,
+                              layout.left,
+                              layout.right),
+                          canvasComponentContentBounds(instance),
+                          canvasComponentLayoutRegion(instance) });
+                }
+            }
             const float centerX = (m_canvasComponentDragStartBounds.left +
                                    m_canvasComponentDragStartBounds.right) *
                                   0.5f;
@@ -1121,9 +1154,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( m_canvasComponentDragTarget.has_value() &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         constexpr float componentPositionEpsilon = 1e-6f;
-        auto&           component =
-            appConfig.getVisualConfig().canvasComponents.placement(
-                *m_canvasComponentDragTarget);
+        auto& canvasComponents = appConfig.getVisualConfig().canvasComponents;
+        auto& component        = canvasComponents.editablePlacement(
+            *m_canvasComponentDragTarget,
+            m_canvasComponentDragInstanceIndex,
+            currentSnapshot.trackCount,
+            layout.left,
+            layout.right);
         Config::CanvasComponentPlacement candidate = component;
         if ( m_canvasComponentDragHandle ==
              Logic::CanvasComponentDragHandle::Move ) {
@@ -1150,6 +1187,39 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              std::abs(component.fontSizeRatio - candidate.fontSizeRatio) >
                  componentPositionEpsilon ) {
             component = candidate;
+            const bool synchronizeKpsTrackSize =
+                *m_canvasComponentDragTarget ==
+                    Config::CanvasComponentType::Kps &&
+                m_canvasComponentDragInstanceIndex >= 0 &&
+                m_canvasComponentDragHandle !=
+                    Logic::CanvasComponentDragHandle::Move &&
+                canvasComponents.syncKpsTrackSizes;
+            if ( synchronizeKpsTrackSize ) {
+                for ( const auto& resizeStart :
+                      m_synchronizedKpsResizeStarts ) {
+                    if ( resizeStart.instanceIndex ==
+                         m_canvasComponentDragInstanceIndex ) {
+                        continue;
+                    }
+                    auto synchronizedPlacement =
+                        Logic::resizeCanvasComponentToFontSizeInRegion(
+                            resizeStart.placement,
+                            m_canvasComponentDragHandle,
+                            resizeStart.bounds,
+                            candidate.fontSizeRatio,
+                            resizeStart.region);
+                    auto& synchronizedComponent =
+                        canvasComponents.editablePlacement(
+                            Config::CanvasComponentType::Kps,
+                            resizeStart.instanceIndex,
+                            currentSnapshot.trackCount,
+                            layout.left,
+                            layout.right);
+                    synchronizedComponent = synchronizedPlacement;
+                }
+                canvasComponents.synchronizeKpsTrackFontSize(
+                    candidate.fontSizeRatio);
+            }
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;

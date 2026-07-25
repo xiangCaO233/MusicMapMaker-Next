@@ -495,6 +495,11 @@ void NoteRenderSystem::generateSnapshot(
             .visibleBottom  = bottomY,
             .renderScaleY   = renderScaleY,
             .beatDivisor    = config.settings.beatDivisor,
+            .trackCount     = trackCount,
+            .trackLeft      = config.visual.trackLayout.left,
+            .trackRight     = config.visual.trackLayout.right,
+            .trackKps       = hitFXSystem ? hitFXSystem->trackKps()
+                                          : std::span<const std::uint32_t>{},
             .bpmEvents      = bpmEvents,
             .scrollCache    = cache,
         };

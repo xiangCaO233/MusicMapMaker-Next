@@ -34,6 +34,14 @@ struct CanvasComponentRenderContext {
     float renderScaleY{ 1.0f };
     /// @brief 当前编辑器分拍数。
     int beatDivisor{ 4 };
+    /// @brief 当前谱面轨道数量。
+    std::int32_t trackCount{ 0 };
+    /// @brief 轨道区域左边界占画布宽度的比例。
+    float trackLeft{ 0.2f };
+    /// @brief 轨道区域右边界占画布宽度的比例。
+    float trackRight{ 0.8f };
+    /// @brief 最近一秒内逐轨实际消费的 HitEffect 数量。
+    std::span<const std::uint32_t> trackKps;
     /// @brief 已排序且已缓存的 BPM 事件。
     std::span<const TimelineComponent* const> bpmEvents;
     /// @brief 当前会话的滚动坐标缓存。
@@ -72,6 +80,20 @@ public:
     /// @warning 热路径：每个可见拍号实例调用；不得引入堆分配。
     [[nodiscard]] static std::array<char, 24> formatBeatNumber(
         std::int64_t beatIndex);
+
+    /// @brief 将单条轨道 KPS 格式化为固定长度 ASCII 文本。
+    /// @param zeroBasedTrackIndex 从零开始的轨道序号。
+    /// @param kps 最近一秒触发次数。
+    /// @return `K1 12 KPS` 格式文本。
+    /// @warning 热路径：每个可见轨道每次快照生成调用；不得引入堆分配。
+    [[nodiscard]] static std::array<char, 32> formatTrackKps(
+        std::int32_t zeroBasedTrackIndex, std::uint32_t kps);
+
+    /// @brief 将总 KPS 格式化为固定长度 ASCII 文本。
+    /// @param kps 最近一秒全部轨道触发次数。
+    /// @return `TOTAL 48 KPS` 格式文本。
+    /// @warning 热路径：KPS 启用时每次快照生成调用；不得引入堆分配。
+    [[nodiscard]] static std::array<char, 32> formatTotalKps(std::uint32_t kps);
 };
 
 }  // namespace MMM::Logic::System

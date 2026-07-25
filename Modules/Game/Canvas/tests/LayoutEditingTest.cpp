@@ -184,6 +184,37 @@ bool testCanvasComponentResize()
            near(resized.anchorX, 0.625f) && near(resized.anchorY, 0.52f);
 }
 
+/// @brief 验证同步字号缩放会让其他组件沿用当前把手的固定对角点。
+/// @return 其他组件字号变化后左上角保持不动且中心随尺寸移动时返回 true。
+bool testSynchronizedCanvasComponentResize()
+{
+    const MMM::Logic::CanvasComponentBounds region{
+        0.0f, 0.0f, 1024.0f, 512.0f
+    };
+    MMM::Config::CanvasComponentPlacement placement;
+    placement.visible       = true;
+    placement.anchorX       = 0.375f;
+    placement.anchorY       = 0.5f;
+    placement.fontSizeRatio = 0.03125f;
+    const auto startBounds  = MMM::Logic::canvasComponentBoundsInRegion(
+        placement, region, 160.0f, 32.0f);
+    const auto resized = MMM::Logic::resizeCanvasComponentToFontSizeInRegion(
+        placement,
+        MMM::Logic::CanvasComponentDragHandle::BottomRight,
+        startBounds,
+        0.0625f,
+        region);
+    const auto resizedBounds = MMM::Logic::canvasComponentBoundsInRegion(
+        resized, region, 320.0f, 64.0f);
+    const float startCenterX = (startBounds.left + startBounds.right) * 0.5f;
+    const float resizedCenterX =
+        (resizedBounds.left + resizedBounds.right) * 0.5f;
+    return near(resized.fontSizeRatio, 0.0625f) &&
+           near(resizedBounds.left, startBounds.left) &&
+           near(resizedBounds.top, startBounds.top) &&
+           !near(resizedCenterX, startCenterX);
+}
+
 /// @brief 验证拍内组件移动和缩放不会越过所属整拍的垂直边界。
 /// @return 垂直范围受整拍限制且横向仍可使用完整画布时返回 true。
 bool testBeatRelativeComponentConstraints()
@@ -253,6 +284,18 @@ bool testCanvasComponentConfigRoundTrip()
     beatLineTime.anchorY       = 0.67f;
     beatLineTime.fontSizeRatio = 0.19f;
     beatLineTime.color         = { 0.2f, 0.9f, 0.6f, 0.75f };
+    source.kps.visible         = true;
+    source.kps.anchorX         = 0.61f;
+    source.kps.anchorY         = 0.09f;
+    source.kps.fontSizeRatio   = 0.06f;
+    source.kps.color           = { 0.9f, 0.8f, 0.2f, 0.85f };
+    auto& kpsTrack             = source.editablePlacement(
+        MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    kpsTrack.anchorX         = 0.73f;
+    kpsTrack.anchorY         = 0.24f;
+    kpsTrack.fontSizeRatio   = 0.045f;
+    source.syncKpsTrackSizes = true;
+    source.synchronizeKpsTrackFontSize(0.064f);
 
     const nlohmann::json encoded = source;
     const auto           decoded =
@@ -260,6 +303,18 @@ bool testCanvasComponentConfigRoundTrip()
     const auto& restoredTime         = decoded.judgmentLineTime;
     const auto& restoredBeat         = decoded.beatNumber;
     const auto& restoredBeatLineTime = decoded.beatLineTime;
+    const auto  restoredKpsTrack     = decoded.resolvedPlacement(
+        MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    const auto defaultKpsTrack = decoded.resolvedPlacement(
+        MMM::Config::CanvasComponentType::Kps, 1, 4, 0.2f, 0.8f);
+    auto independentlyEditable              = decoded;
+    independentlyEditable.syncKpsTrackSizes = false;
+    const auto independentStoredKpsTrack =
+        independentlyEditable.resolvedPlacement(
+            MMM::Config::CanvasComponentType::Kps, 2, 4, 0.2f, 0.8f);
+    const auto independentDefaultKpsTrack =
+        independentlyEditable.resolvedPlacement(
+            MMM::Config::CanvasComponentType::Kps, 1, 4, 0.2f, 0.8f);
     return restoredTime.visible && near(restoredTime.anchorX, 0.23f) &&
            near(restoredTime.anchorY, 0.76f) &&
            near(restoredTime.fontSizeRatio, 0.08f) &&
@@ -280,7 +335,22 @@ bool testCanvasComponentConfigRoundTrip()
            near(restoredBeatLineTime.color[0], 0.2f) &&
            near(restoredBeatLineTime.color[1], 0.9f) &&
            near(restoredBeatLineTime.color[2], 0.6f) &&
-           near(restoredBeatLineTime.color[3], 0.75f);
+           near(restoredBeatLineTime.color[3], 0.75f) && decoded.kps.visible &&
+           near(decoded.kps.anchorX, 0.61f) &&
+           near(decoded.kps.anchorY, 0.09f) &&
+           near(decoded.kps.fontSizeRatio, 0.06f) &&
+           near(decoded.kps.color[0], 0.9f) &&
+           near(decoded.kps.color[3], 0.85f) &&
+           decoded.kpsTracks.size() == 1U &&
+           near(restoredKpsTrack.anchorX, 0.73f) &&
+           near(restoredKpsTrack.anchorY, 0.24f) &&
+           near(restoredKpsTrack.fontSizeRatio, 0.064f) &&
+           near(defaultKpsTrack.anchorX, 0.425f) &&
+           near(defaultKpsTrack.fontSizeRatio, 0.064f) &&
+           decoded.syncKpsTrackSizes &&
+           near(decoded.kpsTrackFontSizeRatio, 0.064f) &&
+           near(independentStoredKpsTrack.fontSizeRatio, 0.064f) &&
+           near(independentDefaultKpsTrack.fontSizeRatio, 0.064f);
 }
 
 }  // namespace
@@ -310,11 +380,14 @@ int main()
     if ( !testCanvasComponentResize() ) {
         return 7;
     }
-    if ( !testBeatRelativeComponentConstraints() ) {
+    if ( !testSynchronizedCanvasComponentResize() ) {
         return 8;
     }
-    if ( !testCanvasComponentConfigRoundTrip() ) {
+    if ( !testBeatRelativeComponentConstraints() ) {
         return 9;
+    }
+    if ( !testCanvasComponentConfigRoundTrip() ) {
+        return 10;
     }
     return 0;
 }

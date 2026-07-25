@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include <algorithm>
 #include <cmath>
 
 namespace MMM::Logic::System
@@ -118,8 +119,16 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
 /// 执行；只处理本帧事件和当前活跃特效表。
 void HitFXSystem::update(double                       animateTime,
                          const std::vector<HitEvent>& events,
+                         std::int32_t                 trackCount,
                          const Config::EditorConfig&  config)
 {
+    if ( config.visual.canvasComponents.kps.visible ) {
+        updateKps(animateTime, events, trackCount);
+    } else if ( !m_recentHitEvents.empty() || !m_trackKps.empty() ) {
+        clearKps();
+        m_trackKps.clear();
+    }
+
     for ( const auto& ev : events ) {
         triggerVisual(ev, config);
     }
@@ -154,6 +163,62 @@ void HitFXSystem::update(double                       animateTime,
         }
         ++it;
     }
+}
+
+void HitFXSystem::updateKps(double                       animateTime,
+                            const std::vector<HitEvent>& events,
+                            std::int32_t                 trackCount)
+{
+    const auto safeTrackCount =
+        static_cast<std::size_t>(std::max<std::int32_t>(trackCount, 0));
+    if ( m_trackKps.size() != safeTrackCount ) {
+        m_recentHitEvents.clear();
+        m_trackKps.assign(safeTrackCount, 0U);
+    }
+
+    if ( !std::isfinite(animateTime) ||
+         (m_lastKpsTime >= 0.0 && animateTime < m_lastKpsTime) ) {
+        clearKps();
+    }
+    m_lastKpsTime = std::isfinite(animateTime) ? animateTime : -1.0;
+    if ( !std::isfinite(animateTime) ) return;
+
+    for ( const auto& event : events ) {
+        const auto hitTrack = static_cast<std::int64_t>(event.trackIndex) +
+                              static_cast<std::int64_t>(event.trackOffset);
+        if ( !std::isfinite(event.timestamp) || hitTrack < 0 ||
+             static_cast<std::size_t>(hitTrack) >= m_trackKps.size() ) {
+            continue;
+        }
+        m_recentHitEvents.push_back(
+            { event.timestamp, static_cast<std::int32_t>(hitTrack) });
+        ++m_trackKps[static_cast<std::size_t>(hitTrack)];
+    }
+
+    const double windowStart = animateTime - 1.0;
+    while ( !m_recentHitEvents.empty() &&
+            m_recentHitEvents.front().timestamp <= windowStart ) {
+        const auto trackIndex = m_recentHitEvents.front().trackIndex;
+        if ( trackIndex >= 0 &&
+             static_cast<std::size_t>(trackIndex) < m_trackKps.size() ) {
+            auto& count = m_trackKps[static_cast<std::size_t>(trackIndex)];
+            if ( count > 0U ) --count;
+        }
+        m_recentHitEvents.pop_front();
+    }
+}
+
+void HitFXSystem::clearKps()
+{
+    m_recentHitEvents.clear();
+    std::fill(m_trackKps.begin(), m_trackKps.end(), 0U);
+    m_lastKpsTime = -1.0;
+}
+
+void HitFXSystem::clearActiveEffects()
+{
+    m_trackActiveEffects.clear();
+    clearKps();
 }
 
 /// @brief 生成打击特效的渲染指令。

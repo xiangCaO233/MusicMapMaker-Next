@@ -487,7 +487,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 m_ctx->nextHitIndex++;
             }
         }
-        m_ctx->hitFXSystem.update(m_ctx->animateTime, triggeredEvents, config);
+        m_ctx->hitFXSystem.update(
+            m_ctx->animateTime, triggeredEvents, m_ctx->trackCount, config);
     } else {
         updateAnimateTime(dt, config, false);
         m_ctx->syncTimer = 0.0;

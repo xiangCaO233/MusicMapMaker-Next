@@ -2836,6 +2836,23 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              TR("ui.toolbar.layout_beat_number"));
         drawComponentControl(Config::CanvasComponentType::BeatLineTime,
                              TR("ui.toolbar.layout_beat_line_time"));
+        drawComponentControl(Config::CanvasComponentType::Kps,
+                             TR("ui.toolbar.layout_kps"));
+        bool syncKpsTrackSizes =
+            appConfig.getVisualConfig().canvasComponents.syncKpsTrackSizes;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
+                 &syncKpsTrackSizes) ) {
+            auto updatedConfig = appConfig.getEditorConfig();
+            updatedConfig.visual.canvasComponents.syncKpsTrackSizes =
+                syncKpsTrackSizes;
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            appConfig.save();
+        }
+        if ( ImGui::IsItemHovered() ) {
+            drawTooltip(
+                TR("ui.toolbar.layout_kps_sync_track_sizes_hint").data());
+        }
 
         if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen &&
              m_layoutComponentColorDirty ) {

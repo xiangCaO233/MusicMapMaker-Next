@@ -5,8 +5,10 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/HitFXSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -449,6 +451,130 @@ bool testBeatLineTimesRenderInsideEachSubdivision()
     return !snapshot.vertices.empty() && !snapshot.overlayCmds.empty();
 }
 
+/// @brief 验证 KPS 会按当前轨道数生成独立实例与总计实例。
+/// @return 实例数量、索引、独立布局和颜色均正确时返回 true。
+bool testKpsRendersPerTrackAndTotal()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    snapshot.hasBeatmap = true;
+    snapshot.isPlaying  = true;
+    config.kps.visible  = true;
+    config.kps.color    = { 0.3f, 0.8f, 0.9f, 0.75f };
+    auto& secondTrack   = config.editablePlacement(
+        MMM::Config::CanvasComponentType::Kps, 1, 3, 0.2f, 0.8f);
+    secondTrack.anchorX       = 0.9f;
+    secondTrack.anchorY       = 0.28f;
+    secondTrack.fontSizeRatio = 0.04f;
+
+    const std::array<std::uint32_t, 3> kps{ 2U, 4U, 6U };
+    auto                               context = makeRenderContext(1.0);
+    context.trackCount                         = 3;
+    context.trackLeft                          = 0.2f;
+    context.trackRight                         = 0.8f;
+    context.trackKps                           = kps;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    if ( snapshot.canvasComponentInstances.size() != 4U ) {
+        XERROR("KPS component did not produce three tracks and one total");
+        return false;
+    }
+    const auto findInstance = [&snapshot](std::int64_t instanceIndex) {
+        return std::find_if(
+            snapshot.canvasComponentInstances.begin(),
+            snapshot.canvasComponentInstances.end(),
+            [instanceIndex](const auto& instance) {
+                return instance.type == MMM::Config::CanvasComponentType::Kps &&
+                       instance.instanceIndex == instanceIndex;
+            });
+    };
+    const auto total  = findInstance(MMM::Config::KPS_TOTAL_INSTANCE_INDEX);
+    const auto first  = findInstance(0);
+    const auto second = findInstance(1);
+    const auto third  = findInstance(2);
+    if ( total == snapshot.canvasComponentInstances.end() ||
+         first == snapshot.canvasComponentInstances.end() ||
+         second == snapshot.canvasComponentInstances.end() ||
+         third == snapshot.canvasComponentInstances.end() ) {
+        XERROR("KPS component instance indices were not stable");
+        return false;
+    }
+
+    constexpr float epsilon       = 1e-4f;
+    const float     secondCenterX = (second->left + second->right) * 0.5f;
+    const float     secondCenterY = (second->top + second->bottom) * 0.5f;
+    if ( std::abs(secondCenterX - 720.0f) > epsilon ||
+         std::abs(secondCenterY - 168.0f) > epsilon ||
+         second->regionLeft != 0.0f || second->regionRight != 800.0f ) {
+        XERROR("Per-track KPS override did not use its independent layout");
+        return false;
+    }
+    for ( const auto& vertex : snapshot.vertices ) {
+        if ( std::abs(vertex.color.r - config.kps.color[0]) > epsilon ||
+             std::abs(vertex.color.g - config.kps.color[1]) > epsilon ||
+             std::abs(vertex.color.b - config.kps.color[2]) > epsilon ||
+             std::abs(vertex.color.a - config.kps.color[3]) > epsilon ) {
+            XERROR("KPS instances did not share the configured group color");
+            return false;
+        }
+    }
+    using System = MMM::Logic::System::CanvasComponentRenderSystem;
+    return std::string(System::formatTrackKps(1, 4U).data()) == "K2 4 KPS" &&
+           std::string(System::formatTotalKps(12U).data()) == "TOTAL 12 KPS";
+}
+
+/// @brief 验证 HitEffect 消费事件形成逐轨一秒滚动 KPS。
+/// @return 新事件、过期事件和清空路径的计数均正确时返回 true。
+bool testHitEffectKpsRollingWindow()
+{
+    using HitSystem      = MMM::Logic::System::HitFXSystem;
+    const auto makeEvent = [](double timestamp, int trackIndex) {
+        return HitSystem::HitEvent{ timestamp,
+                                    MMM::NoteType::NOTE,
+                                    HitSystem::HitEvent::Role::None,
+                                    1,
+                                    trackIndex,
+                                    0,
+                                    0.0,
+                                    false };
+    };
+
+    HitSystem                 system;
+    MMM::Config::EditorConfig config;
+    config.visual.enableHitEffects             = false;
+    config.visual.canvasComponents.kps.visible = true;
+    auto offsetEvent                           = makeEvent(0.8, 0);
+    offsetEvent.type                           = MMM::NoteType::FLICK;
+    offsetEvent.trackOffset                    = 2;
+    system.update(
+        1.0, { makeEvent(0.4, 0), makeEvent(1.0, 0), offsetEvent }, 3, config);
+    auto kps = system.trackKps();
+    if ( kps.size() != 3U || kps[0] != 2U || kps[1] != 0U || kps[2] != 1U ) {
+        XERROR("Initial per-track KPS counts were incorrect");
+        return false;
+    }
+
+    system.update(1.5, { makeEvent(1.5, 1) }, 3, config);
+    kps = system.trackKps();
+    if ( kps[0] != 1U || kps[1] != 1U || kps[2] != 1U ) {
+        XERROR("KPS rolling window did not expire the oldest event");
+        return false;
+    }
+
+    system.update(2.01, {}, 3, config);
+    kps = system.trackKps();
+    if ( kps[0] != 0U || kps[1] != 1U || kps[2] != 0U ) {
+        XERROR("KPS rolling window did not retain only the last second");
+        return false;
+    }
+
+    system.clearActiveEffects();
+    kps = system.trackKps();
+    return kps.size() == 3U && kps[0] == 0U && kps[1] == 0U && kps[2] == 0U;
+}
+
 /// @brief 验证判定线时间的固定精度格式与负值处理。
 /// @return 常规、负值和非有限输入均符合约定时返回 true。
 bool testJudgmentLineTimeFormatting()
@@ -478,6 +604,8 @@ int main()
                    testBeatNumberRendersUntilLayoutViewportExit() &&
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&
                    testBeatLineTimesRenderInsideEachSubdivision() &&
+                   testKpsRendersPerTrackAndTotal() &&
+                   testHitEffectKpsRollingWindow() &&
                    testJudgmentLineTimeFormatting()
                ? 0
                : 1;

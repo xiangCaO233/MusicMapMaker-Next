@@ -375,6 +375,67 @@ void renderBeatLineTimes(Batcher&                                batcher,
         });
 }
 
+/// @brief 绘制逐轨 KPS 与总 KPS。
+/// @param batcher 目标覆盖层批处理器。
+/// @param context 当前主画布与逐轨 KPS 上下文。
+/// @param config 画布组件布局配置。
+/// @warning 热路径：KPS 启用时每次主画布快照调用；只遍历当前轨道数量。
+void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
+               const Config::CanvasComponentLayoutConfig& config)
+{
+    const auto trackCount = std::max<std::int32_t>(context.trackCount, 0);
+    const CanvasComponentBounds layoutRegion{
+        0.0f, 0.0f, context.viewportWidth, context.viewportHeight
+    };
+
+    std::uint64_t totalKps = 0U;
+    for ( std::int32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex ) {
+        std::uint32_t trackKps = 0U;
+        if ( batcher.snapshot->isPlaying &&
+             static_cast<std::size_t>(trackIndex) < context.trackKps.size() ) {
+            trackKps = context.trackKps[static_cast<std::size_t>(trackIndex)];
+        }
+        totalKps += trackKps;
+
+        const auto text =
+            CanvasComponentRenderSystem::formatTrackKps(trackIndex, trackKps);
+        const auto placement =
+            config.resolvedPlacement(Config::CanvasComponentType::Kps,
+                                     trackIndex,
+                                     trackCount,
+                                     context.trackLeft,
+                                     context.trackRight);
+        CanvasComponentBounds bounds;
+        if ( renderAsciiText(
+                 batcher, text.data(), placement, layoutRegion, bounds) ) {
+            appendComponentInstance(*batcher.snapshot,
+                                    Config::CanvasComponentType::Kps,
+                                    trackIndex,
+                                    bounds,
+                                    layoutRegion);
+        }
+    }
+
+    const auto text = CanvasComponentRenderSystem::formatTotalKps(
+        static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            totalKps, std::numeric_limits<std::uint32_t>::max())));
+    const auto placement =
+        config.resolvedPlacement(Config::CanvasComponentType::Kps,
+                                 Config::KPS_TOTAL_INSTANCE_INDEX,
+                                 trackCount,
+                                 context.trackLeft,
+                                 context.trackRight);
+    CanvasComponentBounds bounds;
+    if ( renderAsciiText(
+             batcher, text.data(), placement, layoutRegion, bounds) ) {
+        appendComponentInstance(*batcher.snapshot,
+                                Config::CanvasComponentType::Kps,
+                                Config::KPS_TOTAL_INSTANCE_INDEX,
+                                bounds,
+                                layoutRegion);
+    }
+}
+
 }  // namespace
 
 void CanvasComponentRenderSystem::render(
@@ -409,6 +470,10 @@ void CanvasComponentRenderSystem::render(
         case Config::CanvasComponentType::BeatLineTime:
             if ( !snapshot->hasBeatmap ) break;
             renderBeatLineTimes(batcher, context, placement);
+            break;
+        case Config::CanvasComponentType::Kps:
+            if ( !snapshot->hasBeatmap ) break;
+            renderKps(batcher, context, config);
             break;
         case Config::CanvasComponentType::Count: break;
         }
@@ -458,6 +523,29 @@ std::array<char, 24> CanvasComponentRenderSystem::formatBeatNumber(
     } else {
         *conversion.ptr = '\0';
     }
+    return result;
+}
+
+std::array<char, 32> CanvasComponentRenderSystem::formatTrackKps(
+    std::int32_t zeroBasedTrackIndex, std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(result.data(),
+                  result.size(),
+                  "K%d %u KPS",
+                  std::max(zeroBasedTrackIndex, 0) + 1,
+                  static_cast<unsigned int>(kps));
+    return result;
+}
+
+std::array<char, 32> CanvasComponentRenderSystem::formatTotalKps(
+    std::uint32_t kps)
+{
+    std::array<char, 32> result{};
+    std::snprintf(result.data(),
+                  result.size(),
+                  "TOTAL %u KPS",
+                  static_cast<unsigned int>(kps));
     return result;
 }
 
