@@ -51,6 +51,7 @@ Environment:
   DEEPSEEK_MAX_TOKENS                changelog 最大输出 token，默认 12000。
   MMM_RELEASE_WINDOWS_DIR            网站公开 Windows 下载优先使用的产物目录，默认 windows-msvc-clang。
   MMM_RELEASE_LINUX_DIR              网站公开 Linux 下载优先使用的产物目录，默认 linux-gcc14。
+  MMM_RELEASE_MACOS_DIR              网站公开 macOS 下载使用的产物目录，默认 macos-arm64。
   MMM_VERSION_UPDATE_COMMIT          手动指定“上一次版本更新提交”，默认从 CMakeLists.txt 的 APPVER 变更记录推断。
 EOF
 }
@@ -406,20 +407,30 @@ build_and_deploy_website() {
     local changelog_file="$3"
     local preferred_windows_dir="${MMM_RELEASE_WINDOWS_DIR:-windows-msvc-clang}"
     local preferred_linux_dir="${MMM_RELEASE_LINUX_DIR:-linux-gcc14}"
+    local preferred_macos_dir="${MMM_RELEASE_MACOS_DIR:-macos-arm64}"
     local windows_exe
     local windows_updater
     local windows_pdb
     local linux_exe
+    local macos_dmg
+    local macos_app_zip
+    local macos_updater
     local release_args
 
     windows_exe="$(find_file_by_name "${website_release_dir}/${preferred_windows_dir}" "MusicMapMaker-Next.exe" "${website_release_dir}")"
     windows_updater="$(find_file_by_name "${website_release_dir}/${preferred_windows_dir}" "MusicMapMaker-Updater.exe" "${website_release_dir}")"
     windows_pdb="$(find_file_by_name "${website_release_dir}/${preferred_windows_dir}" "MusicMapMaker-Next.pdb" "${website_release_dir}")"
     linux_exe="$(find_file_by_name "${website_release_dir}/${preferred_linux_dir}" "MusicMapMaker-Next" "${website_release_dir}")"
+    macos_dmg="$(find_file_by_name "${website_release_dir}/${preferred_macos_dir}" "MusicMapMaker-Next.dmg" "${website_release_dir}")"
+    macos_app_zip="$(find_file_by_name "${website_release_dir}/${preferred_macos_dir}" "MusicMapMaker-Next.app.zip" "${website_release_dir}")"
+    macos_updater="$(find_file_by_name "${website_release_dir}/${preferred_macos_dir}" "MusicMapMaker-Updater" "${website_release_dir}")"
 
     [[ -n "${windows_exe}" ]] || fail "找不到 Windows 主程序产物"
     [[ -n "${windows_updater}" ]] || fail "找不到 Windows 更新器产物"
     [[ -n "${windows_pdb}" ]] || fail "找不到 Windows PDB 产物"
+    [[ -n "${macos_dmg}" ]] || fail "找不到 macOS DMG 产物"
+    [[ -n "${macos_app_zip}" ]] || fail "找不到 macOS App ZIP 产物"
+    [[ -n "${macos_updater}" ]] || fail "找不到 macOS 更新器产物"
     [[ -f "${website_release_dir}/assets.zip" ]] || fail "找不到 assets.zip"
 
     release_args=(
@@ -430,6 +441,9 @@ build_and_deploy_website() {
         --windows-exe "${windows_exe}"
         --windows-updater "${windows_updater}"
         --windows-pdb "${windows_pdb}"
+        --macos-dmg "${macos_dmg}"
+        --macos-app-zip "${macos_app_zip}"
+        --macos-updater "${macos_updater}"
         --assets "${website_release_dir}/assets.zip"
     )
     if [[ -n "${linux_exe}" ]]; then
