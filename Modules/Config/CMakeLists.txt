@@ -3,6 +3,7 @@
 add_library(
   Config STATIC
   src/skin/SkinLoader.cpp
+  src/skin/SkinPackageService.cpp
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
@@ -14,6 +15,7 @@ target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
                                     Log)
+target_link_libraries(Config PRIVATE 3rd_miniz)
 
 mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
@@ -35,6 +37,14 @@ add_test(
   COMMAND
     SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
     "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua")
+
+# MSK 皮肤包测试覆盖安全导入、目录定位、覆盖保护和导出往返。
+mmm_add_test_executable(Config SkinPackageServiceTest
+                        tests/SkinPackageServiceTest.cpp)
+target_link_libraries(SkinPackageServiceTest PRIVATE Config 3rd_miniz)
+add_test(NAME SkinPackageServiceTest
+         COMMAND SkinPackageServiceTest
+                 "${CMAKE_BINARY_DIR}/test_output/skin_package_service")
 
 # 调色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
 mmm_add_test_executable(Config ColorPaletteFileTest
