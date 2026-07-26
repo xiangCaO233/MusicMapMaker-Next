@@ -981,14 +981,9 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     BackgroundRenderSystem::render(
         batcher, viewportWidth, viewportHeight, config, snapshot);
 
-    // 设置轨道区域裁剪
-    float lx = viewportWidth * config.visual.trackLayout.left;
-    float rx = viewportWidth * config.visual.trackLayout.right;
-    // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量
-    batcher.setScissor(
-        lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
-
     if ( !snapshot->hasBeatmap ) {
+        // Logo 属于完整画布占位内容，不应继承轨道布局的水平裁剪范围。
+        batcher.setScissor(0.0f, 0.0f, viewportWidth, viewportHeight);
         batcher.setTexture(TextureID::Logo);
         float logoSize = std::min(viewportWidth, viewportHeight) * 0.4f;
         float cx       = viewportWidth * 0.5f;
@@ -999,6 +994,12 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                          logoSize,
                          { 1.0f, 1.0f, 1.0f, 0.15f });
     } else {
+        // 谱面布局只允许在轨道水平范围内生成基础绘制命令。
+        const float lx = viewportWidth * config.visual.trackLayout.left;
+        const float rx = viewportWidth * config.visual.trackLayout.right;
+        // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量。
+        batcher.setScissor(
+            lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
         NoteRenderSystem::renderTrackLayout(batcher,
                                             viewportWidth,
                                             viewportHeight,

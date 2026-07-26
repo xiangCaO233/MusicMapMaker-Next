@@ -89,6 +89,12 @@ target_link_libraries(CanvasComponentRenderSystemTest PRIVATE Logic Log)
 add_test(NAME CanvasComponentRenderSystemTest
          COMMAND CanvasComponentRenderSystemTest)
 
+# Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
+mmm_add_test_executable(Logic LogoPlaceholderScissorTest
+                        tests/LogoPlaceholderScissorTest.cpp)
+target_link_libraries(LogoPlaceholderScissorTest PRIVATE Logic Log)
+add_test(NAME LogoPlaceholderScissorTest COMMAND LogoPlaceholderScissorTest)
+
 mmm_add_test_executable(Logic BrushPaletteSessionStateTest
                         tests/BrushPaletteSessionStateTest.cpp)
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
