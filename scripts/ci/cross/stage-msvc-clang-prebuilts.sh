@@ -298,7 +298,7 @@ stageMainLibWithPdb "glfw" "glfw3.lib" "glfw.pdb" "lib/glfw3.lib" "lib/glfw.lib"
 stageMainLibWithPdb "imgui" "imgui-static.lib" "imgui-static.pdb" "lib/imgui-static.lib"
 stageMainLibWithPdb "implot" "3rd_implot.lib" "3rd_implot.pdb" "lib/3rd_implot.lib"
 stageMainLibWithPdb "libsamplerate" "samplerate.lib" "samplerate.pdb" "3rdpty/libsamplerate/samplerate.lib" "lib/samplerate.lib"
-stageMainLibWithPdb "luajit" "lua51.lib" "lua51.pdb" "luajit/src/lua51.lib" "luajit/src/libluajit.a"
+# LuaJIT 的 MinGW Makefile 不能生成 MSVC ABI 静态库；clang-cl 交叉刷新时保留既有的 MSVC 产物。
 stageMainLibWithPdb "lunasvg" "lunasvg.lib" "lunasvg.pdb" "lib/lunasvg.lib"
 stageMainLibWithPdb "lunasvg" "plutovg.lib" "plutovg.pdb" "lib/plutovg.lib"
 stageMainLibWithPdb "miniz" "3rd_miniz.lib" "3rd_miniz.pdb" "lib/3rd_miniz.lib"

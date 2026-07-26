@@ -275,8 +275,7 @@ if (( prebuiltTargets )); then
         fmt \
         spdlog \
         OpenAL \
-        SDL3-static \
-        luajit_build
+        SDL3-static
 else
     cmake --build "${buildDir}" --parallel "${buildJobs}"
 fi
