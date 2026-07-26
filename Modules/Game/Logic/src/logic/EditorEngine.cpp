@@ -1093,11 +1093,11 @@ void EditorEngine::finishOpenProject(
         }
     }
 
-    for ( const auto& preload : openResult.m_effectPreloads ) {
-        Audio::AudioManager::instance().preloadSoundEffect(
-            preload.m_resource.m_id,
-            Config::pathToUtf8(preload.m_absolutePath),
-            preload.m_resource.m_config.volume);
+    for ( const auto& registration : openResult.m_effectRegistrations ) {
+        Audio::AudioManager::instance().registerSoundEffect(
+            registration.m_resource.m_id,
+            Config::pathToUtf8(registration.m_absolutePath),
+            registration.m_resource.m_config.volume);
     }
 
     XINFO("Project '{}' loaded successfully with {} beatmaps.",
@@ -1220,7 +1220,7 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     createSession(result.m_beatmap, result.m_displayName);
 }
 
-/// @brief 处理导入音频指令并执行音效预加载和项目保存副作用。
+/// @brief 处理导入音频指令并执行音效登记和项目保存副作用。
 void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1231,20 +1231,20 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
         return;
     }
 
-    if ( result.m_effectPreload ) {
-        Audio::AudioManager::instance().preloadSoundEffect(
-            result.m_effectPreload->m_resource.m_id,
-            Config::pathToUtf8(result.m_effectPreload->m_absolutePath),
-            result.m_effectPreload->m_resource.m_config.volume);
+    if ( result.m_effectRegistration ) {
+        Audio::AudioManager::instance().registerSoundEffect(
+            result.m_effectRegistration->m_resource.m_id,
+            Config::pathToUtf8(result.m_effectRegistration->m_absolutePath),
+            result.m_effectRegistration->m_resource.m_config.volume);
     }
 
     saveProject();
 }
 
-/// @brief 重新预加载当前项目中的 Effect 音频资源。
-/// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
-/// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
-void EditorEngine::reloadCurrentProjectEffectSoundEffects()
+/// @brief 重新登记当前项目中按需加载的 Effect 音频资源。
+/// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；只访问项目
+/// 资源表并更新内存描述，不执行音频解码。
+void EditorEngine::registerCurrentProjectEffectSoundEffects()
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
@@ -1260,7 +1260,7 @@ void EditorEngine::reloadCurrentProjectEffectSoundEffects()
 
         const auto absolutePath =
             currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
-        Audio::AudioManager::instance().preloadSoundEffect(
+        Audio::AudioManager::instance().registerSoundEffect(
             res.m_id, Config::pathToUtf8(absolutePath), res.m_config.volume);
     }
 }
@@ -2297,8 +2297,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                     }
                     const std::string audioPathUtf8 =
                         Config::pathToUtf8(audioPath);
-                    if ( shouldKeepPlaybackOnTarget &&
-                         audio.getLoadedBGMPath() == audioPathUtf8 ) {
+                    if ( audio.getLoadedBGMPath() == audioPathUtf8 ) {
                         ctx.loadedMainAudioPath = audioPathUtf8;
                         ctx.mainAudioTotalTime  = audio.getTotalTime();
                         if ( shouldSyncTargetPlaybackSpeed ) {
@@ -2680,7 +2679,7 @@ void EditorEngine::loop()
     }
 }
 
-/// @brief 处理音频资源更新指令并执行音效预加载和项目保存副作用。
+/// @brief 处理音频资源更新指令并执行音效登记和项目保存副作用。
 void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -2691,11 +2690,15 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
         return;
     }
 
-    if ( result.m_effectPreload ) {
-        Audio::AudioManager::instance().preloadSoundEffect(
-            result.m_effectPreload->m_resource.m_id,
-            Config::pathToUtf8(result.m_effectPreload->m_absolutePath),
-            result.m_effectPreload->m_resource.m_config.volume);
+    if ( result.m_effectResourceIdToUnload ) {
+        Audio::AudioManager::instance().unloadSoundEffect(
+            *result.m_effectResourceIdToUnload);
+    }
+    if ( result.m_effectRegistration ) {
+        Audio::AudioManager::instance().registerSoundEffect(
+            result.m_effectRegistration->m_resource.m_id,
+            Config::pathToUtf8(result.m_effectRegistration->m_absolutePath),
+            result.m_effectRegistration->m_resource.m_config.volume);
     }
     saveProject();
 }
@@ -2883,12 +2886,12 @@ void EditorEngine::scanProjectDirectory()
     /// @brief 当前目录资源同步结果。
     auto syncResult = ProjectController::instance().scanProjectDirectory();
 
-    // 自动加载音效
-    for ( const auto& res : syncResult.m_effectResourcesToPreload ) {
+    // 登记新发现的音效，首次显式使用时再解码。
+    for ( const auto& res : syncResult.m_effectResourcesToRegister ) {
         /// @brief 新音效资源的项目内绝对路径。
         auto absAudioPath =
             currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
-        Audio::AudioManager::instance().preloadSoundEffect(
+        Audio::AudioManager::instance().registerSoundEffect(
             res.m_id, Config::pathToUtf8(absAudioPath), res.m_config.volume);
     }
 

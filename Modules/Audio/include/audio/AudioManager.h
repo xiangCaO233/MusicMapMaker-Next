@@ -417,6 +417,29 @@ public:
     /// @brief 获取特定 SFX 池最近一次播放进度
     double getSFXPlaybackTime(const std::string& key) const;
 
+    /// @brief 登记可按需加载的音效文件，不执行解码或创建混音节点。
+    /// @param key 音效标识符。
+    /// @param filePath 音效文件绝对路径。
+    /// @param defaultVolume 首次加载时使用的默认音量。
+    /// @param leadInSeconds 文件开头到有效出声点的延迟。
+    /// @warning 低频资源登记路径：只更新内存描述，不访问文件系统。
+    void registerSoundEffect(const std::string& key,
+                             const std::string& filePath,
+                             float              defaultVolume = 1.0f,
+                             double             leadInSeconds = 0.0);
+
+    /// @brief 确保已登记音效完成解码并接入混音器。
+    /// @param key 音效标识符。
+    /// @return 已加载或成功加载时返回 true。
+    /// @warning 低频显式加载路径：可能访问文件系统并等待解码，禁止在每帧
+    /// UI、渲染、逻辑 update 或音频回调中调用。
+    bool ensureSoundEffectLoaded(const std::string& key);
+
+    /// @brief 查询指定音效是否已经完成解码并创建音效池。
+    /// @param key 音效标识符。
+    /// @return 音效池已存在时返回 true。
+    bool isSoundEffectLoaded(const std::string& key) const;
+
     /// @brief 预加载音效文件
     /// @param key 标识符（如 "hiteffect.note"）
     /// @param filePath 音效文件绝对路径
@@ -620,6 +643,22 @@ private:
 
     /// @brief 逻辑线程使用的固定容量实时频谱分析器。
     std::unique_ptr<BackgroundSpectrumAnalyzer> m_backgroundSpectrumAnalyzer;
+
+    /// @brief 可按需解码的音效资源描述。
+    struct RegisteredSoundEffect {
+        /// @brief 音效文件绝对路径。
+        std::string m_filePath;
+
+        /// @brief 首次加载使用的默认音量。
+        float m_defaultVolume{ 1.0f };
+
+        /// @brief 文件开头到有效出声点的延迟，单位为秒。
+        double m_leadInSeconds{ 0.0 };
+    };
+
+    /// @brief 已登记音效描述表；登记本身不创建解码数据或混音节点。
+    std::unordered_map<std::string, RegisteredSoundEffect>
+        m_registeredSoundEffects;
 
     /// @brief 已加载的音效池表。
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>

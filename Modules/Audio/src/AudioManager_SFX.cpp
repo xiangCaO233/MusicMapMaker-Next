@@ -62,6 +62,11 @@ float AudioManager::getSFXEffectiveGain(const std::string& key) const
 void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
                                     bool isPermanent)
 {
+    auto registration = m_registeredSoundEffects.find(key);
+    if ( registration != m_registeredSoundEffects.end() ) {
+        registration->second.m_defaultVolume = volume;
+    }
+
     auto it = m_sfxPools.find(key);
     if ( it != m_sfxPools.end() ) {
         it->second->setVolume(volume);
@@ -142,6 +147,18 @@ float AudioManager::getSFXPoolVolume(const std::string& key) const
     if ( it != m_sfxPools.end() ) {
         return it->second->getVolume();
     }
+
+    const auto& sfxCfg =
+        Config::AppConfig::instance().getEditorSettings().sfxConfig;
+    if ( auto volume = sfxCfg.permanentSfxVolumes.find(key);
+         volume != sfxCfg.permanentSfxVolumes.end() ) {
+        return volume->second;
+    }
+
+    auto registration = m_registeredSoundEffects.find(key);
+    if ( registration != m_registeredSoundEffects.end() ) {
+        return registration->second.m_defaultVolume;
+    }
     return 1.0f;
 }
 
@@ -181,6 +198,113 @@ double AudioManager::getSFXPlaybackTime(const std::string& key) const
     return 0.0;
 }
 
+/// @brief 登记可按需加载的音效文件。
+/// @param key 音效标识符。
+/// @param filePath 音效文件绝对路径。
+/// @param defaultVolume 首次加载时使用的默认音量。
+/// @param leadInSeconds 文件开头到有效出声点的延迟。
+/// @warning 低频资源登记路径：只更新内存描述，不访问文件系统。
+void AudioManager::registerSoundEffect(const std::string& key,
+                                       const std::string& filePath,
+                                       float              defaultVolume,
+                                       double             leadInSeconds)
+{
+    auto       existingRegistration = m_registeredSoundEffects.find(key);
+    const bool loadedPathChanged =
+        existingRegistration != m_registeredSoundEffects.end() &&
+        existingRegistration->second.m_filePath != filePath &&
+        m_sfxPools.contains(key);
+    if ( loadedPathChanged ) {
+        unloadSoundEffect(key);
+    }
+
+    m_registeredSoundEffects[key] = RegisteredSoundEffect{
+        .m_filePath      = filePath,
+        .m_defaultVolume = defaultVolume,
+        .m_leadInSeconds = std::max(0.0, leadInSeconds),
+    };
+
+    auto loadedPool = m_sfxPools.find(key);
+    if ( loadedPool == m_sfxPools.end() ) {
+        return;
+    }
+
+    float       activeVolume = defaultVolume;
+    const auto& sfxCfg =
+        Config::AppConfig::instance().getEditorSettings().sfxConfig;
+    if ( auto configuredVolume = sfxCfg.permanentSfxVolumes.find(key);
+         configuredVolume != sfxCfg.permanentSfxVolumes.end() ) {
+        activeVolume = configuredVolume->second;
+    }
+    loadedPool->second->setVolume(activeVolume);
+    loadedPool->second->updateEffectiveVolume(getSFXEffectiveGain(key),
+                                              getSFXPoolMute(key));
+    m_sfxLeadInSeconds[key] = std::max(0.0, leadInSeconds);
+}
+
+/// @brief 确保已登记音效完成解码并接入混音器。
+/// @param key 音效标识符。
+/// @return 已加载或成功加载时返回 true。
+/// @warning 低频显式加载路径：可能访问文件系统并等待解码，禁止在每帧
+/// UI、渲染、逻辑 update 或音频回调中调用。
+bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
+{
+    if ( m_sfxPools.contains(key) ) {
+        return true;
+    }
+    if ( !m_audioPool || !m_threadPool || !m_mainMixer || !m_hitEffectMixer ) {
+        return false;
+    }
+
+    auto registration = m_registeredSoundEffects.find(key);
+    if ( registration == m_registeredSoundEffects.end() ) {
+        return false;
+    }
+
+    float       activeVolume = registration->second.m_defaultVolume;
+    const auto& sfxCfg =
+        Config::AppConfig::instance().getEditorSettings().sfxConfig;
+    if ( auto configuredVolume = sfxCfg.permanentSfxVolumes.find(key);
+         configuredVolume != sfxCfg.permanentSfxVolumes.end() ) {
+        activeVolume = configuredVolume->second;
+    }
+
+    XINFO("Loading registered SFX: {} from {} (Volume: {})",
+          key,
+          registration->second.m_filePath,
+          activeVolume);
+    auto trackWeak = m_audioPool->get_or_load(*m_threadPool,
+                                              registration->second.m_filePath);
+    auto track     = trackWeak.lock();
+    if ( !track ) {
+        XERROR("Failed to load SFX track: {}", registration->second.m_filePath);
+        return false;
+    }
+
+    auto pool = std::make_shared<SoundEffectPool>(track);
+    pool->init(8);
+    pool->setVolume(activeVolume);
+    pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
+
+    if ( isHitSoundEffectKey(key) ) {
+        m_hitEffectMixer->add_source(pool->getMixer());
+    } else {
+        m_mainMixer->add_source(pool->getMixer());
+    }
+
+    m_sfxPools[key]         = std::move(pool);
+    m_sfxLeadInSeconds[key] = registration->second.m_leadInSeconds;
+    return true;
+}
+
+/// @brief 查询指定音效是否已经完成解码并创建音效池。
+/// @param key 音效标识符。
+/// @return 音效池已存在时返回 true。
+bool AudioManager::isSoundEffectLoaded(const std::string& key) const
+{
+    return m_sfxPools.contains(key);
+}
+
 /// @brief 预加载音效文件并接入对应混音器。
 /// @param key 音效池标识。
 /// @param filePath 音效文件绝对路径。
@@ -191,42 +315,8 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
                                       const std::string& filePath,
                                       float defaultVolume, double leadInSeconds)
 {
-    if ( !m_audioPool || !m_threadPool || !m_mainMixer || !m_hitEffectMixer ) {
-        return false;
-    }
-
-    // 检查是否已经有配置好的音量 (来自 EditorSettings 或之前的加载)
-    float activeVolume = defaultVolume;
-    auto& sfxCfg = Config::AppConfig::instance().getEditorSettings().sfxConfig;
-    if ( sfxCfg.permanentSfxVolumes.count(key) ) {
-        activeVolume = sfxCfg.permanentSfxVolumes.at(key);
-    }
-
-    XINFO(
-        "Preloading SFX: {} from {} (Volume: {})", key, filePath, activeVolume);
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
-
-    if ( !track ) {
-        XERROR("Failed to load SFX track: {}", filePath);
-        return false;
-    }
-
-    auto pool = std::make_shared<SoundEffectPool>(track);
-    pool->init(8);  // 预分配 8 个并发节点
-    pool->setVolume(activeVolume);
-    pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
-
-    // 打击音效先汇总到独立总线，便于背景频谱按配置单独采样。
-    if ( isHitSoundEffectKey(key) ) {
-        m_hitEffectMixer->add_source(pool->getMixer());
-    } else {
-        m_mainMixer->add_source(pool->getMixer());
-    }
-
-    m_sfxPools[key]         = std::move(pool);
-    m_sfxLeadInSeconds[key] = std::max(0.0, leadInSeconds);
-    return true;
+    registerSoundEffect(key, filePath, defaultVolume, leadInSeconds);
+    return ensureSoundEffectLoaded(key);
 }
 
 /// @brief 卸载指定音效池并断开混音路由。
@@ -244,10 +334,11 @@ void AudioManager::unloadSoundEffect(const std::string& key)
             }
         }
         m_sfxPools.erase(it);
-        m_sfxLeadInSeconds.erase(key);
-        m_sfxMutes.erase(key);
         XINFO("Unloaded SFX: {}", key);
     }
+    m_registeredSoundEffects.erase(key);
+    m_sfxLeadInSeconds.erase(key);
+    m_sfxMutes.erase(key);
 }
 
 /// @brief 停止并释放所有已加载音效池。
@@ -268,6 +359,7 @@ void AudioManager::clearSoundEffects()
         unloadSoundEffect(key);
     }
 
+    m_registeredSoundEffects.clear();
     m_sfxLeadInSeconds.clear();
     m_sfxMutes.clear();
 }

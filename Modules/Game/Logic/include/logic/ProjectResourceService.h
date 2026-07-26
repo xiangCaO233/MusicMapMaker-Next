@@ -28,8 +28,8 @@ public:
         /// @brief 本次同步是否改变了项目资源列表或资源类型。
         bool m_changed{ false };
 
-        /// @brief 新发现且需要由音频引擎预加载的音效资源列表。
-        std::vector<AudioResource> m_effectResourcesToPreload;
+        /// @brief 新发现且需要登记到音频引擎的按需加载音效资源列表。
+        std::vector<AudioResource> m_effectResourcesToRegister;
     };
 
     /// @brief 根据初次目录扫描结果填充项目的谱面和音频资源列表。

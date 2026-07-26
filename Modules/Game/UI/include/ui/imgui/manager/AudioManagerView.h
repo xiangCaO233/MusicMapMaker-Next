@@ -67,11 +67,8 @@ private:
         /// @brief 当前皮肤常驻音效数量。
         size_t permanentSfxCount{ 0 };
 
-        /// @brief 当前项目主音轨数量。
-        size_t mainTrackCount{ 0 };
-
-        /// @brief 当前项目音效音轨数量。
-        size_t effectTrackCount{ 0 };
+        /// @brief 当前项目全部音频资源数量。
+        size_t projectAudioCount{ 0 };
 
         /// @brief 当前是否展开全局设置段落。
         bool showGlobalSettings{ true };
@@ -232,6 +229,9 @@ private:
         /// @brief 音频资源路径。
         std::string m_path;
 
+        /// @brief 用于按需读取元数据的音频文件绝对路径。
+        std::filesystem::path m_absolutePath;
+
         /// @brief 音频资源类型。
         AudioTrackType m_type{ AudioTrackType::Effect };
 
@@ -249,6 +249,9 @@ private:
 
         /// @brief 是否成功读取最后修改时间。
         bool m_hasLastWriteTime{ false };
+
+        /// @brief 是否已经尝试读取文件大小和修改时间。
+        bool m_metadataLoaded{ false };
     };
 
     /// @brief 当前是否展开全局设置段落。
@@ -310,7 +313,7 @@ private:
 
     /// @brief 捕获当前音频管理器布局输入。
     /// @return 当前项目、皮肤音效数量和展开状态。
-    /// @warning UI 热路径：每帧仅统计音频资源数量，禁止拷贝资源内容。
+    /// @warning UI 热路径：每帧只读取容器大小，禁止遍历或拷贝资源内容。
     LayoutInputSnapshot captureLayoutInput() const;
 
     /// @brief 获取音频管理器布局测量缓存。

@@ -145,9 +145,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         const std::string audioPathUtf8 = Utf8::pathToUtf8(audioPath);
         auto&             audio         = Audio::AudioManager::instance();
         if ( audio.getLoadedBGMPath() == audioPathUtf8 ) {
-            config.playbackSpeed = static_cast<float>(audio.getPlaybackSpeed());
-        }
-        if ( audio.loadBGM(audioPathUtf8, config) ) {
+            ctx.loadedMainAudioPath = audioPathUtf8;
+            ctx.mainAudioTotalTime  = audio.getTotalTime();
+        } else if ( audio.loadBGM(audioPathUtf8, config) ) {
             ctx.loadedMainAudioPath = audioPathUtf8;
             ctx.mainAudioTotalTime  = audio.getTotalTime();
         }

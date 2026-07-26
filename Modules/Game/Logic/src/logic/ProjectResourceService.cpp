@@ -359,7 +359,7 @@ ProjectResourceService::syncDirectoryResources(
         } else {
             resource = createAudioResource(project, audioPath, mainAudioPaths);
             if ( resource.m_type == AudioTrackType::Effect ) {
-                result.m_effectResourcesToPreload.push_back(resource);
+                result.m_effectResourcesToRegister.push_back(resource);
             }
             result.m_changed = true;
             XINFO("Directory Listener: Discovered new audio file: {}",

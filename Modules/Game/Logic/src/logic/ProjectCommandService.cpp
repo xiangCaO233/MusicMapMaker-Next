@@ -462,11 +462,11 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
     project.m_audioResources.push_back(resource);
 
     if ( resource.m_type == AudioTrackType::Effect ) {
-        /// @brief 新导入音效的预加载请求。
-        AudioPreloadRequest preloadRequest;
-        preloadRequest.m_resource     = resource;
-        preloadRequest.m_absolutePath = finalAbsolutePath;
-        result.m_effectPreload        = preloadRequest;
+        /// @brief 新导入音效的按需加载登记请求。
+        AudioRegistrationRequest registrationRequest;
+        registrationRequest.m_resource     = resource;
+        registrationRequest.m_absolutePath = finalAbsolutePath;
+        result.m_effectRegistration        = registrationRequest;
     }
 
     result.m_imported = true;
@@ -637,8 +637,13 @@ ProjectCommandService::updateAudioResource(
             continue;
         }
 
-        resource.m_type  = cmd.newType;
-        result.m_updated = true;
+        const AudioTrackType previousType = resource.m_type;
+        resource.m_type                   = cmd.newType;
+        result.m_updated                  = true;
+        if ( previousType == AudioTrackType::Effect &&
+             resource.m_type == AudioTrackType::Main ) {
+            result.m_effectResourceIdToUnload = resource.m_id;
+        }
         if ( resource.m_type == AudioTrackType::Effect ) {
             /// @brief 音频资源在项目目录中的绝对路径。
             auto absPath = resolveProjectPath(
@@ -646,11 +651,11 @@ ProjectCommandService::updateAudioResource(
             std::error_code resourcePathError;
             if ( std::filesystem::exists(absPath, resourcePathError) &&
                  !resourcePathError ) {
-                /// @brief 更新后音效的预加载请求。
-                AudioPreloadRequest preloadRequest;
-                preloadRequest.m_resource     = resource;
-                preloadRequest.m_absolutePath = absPath;
-                result.m_effectPreload        = preloadRequest;
+                /// @brief 更新后音效的按需加载登记请求。
+                AudioRegistrationRequest registrationRequest;
+                registrationRequest.m_resource     = resource;
+                registrationRequest.m_absolutePath = absPath;
+                result.m_effectRegistration        = registrationRequest;
             }
         }
         break;

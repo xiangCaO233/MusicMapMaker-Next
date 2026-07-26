@@ -21,9 +21,9 @@ namespace MMM::Logic
 class ProjectCommandService
 {
 public:
-    /// @brief 音效资源预加载请求。
-    struct AudioPreloadRequest {
-        /// @brief 需要预加载的项目音频资源。
+    /// @brief 音效资源按需加载登记请求。
+    struct AudioRegistrationRequest {
+        /// @brief 需要登记的项目音频资源。
         AudioResource m_resource;
 
         /// @brief 音频资源在文件系统中的绝对路径。
@@ -47,8 +47,8 @@ public:
         /// @brief 是否成功导入音频并登记资源。
         bool m_imported{ false };
 
-        /// @brief 新导入资源若为音效，则需要由引擎预加载。
-        std::optional<AudioPreloadRequest> m_effectPreload;
+        /// @brief 新导入资源若为音效，则需要由引擎登记。
+        std::optional<AudioRegistrationRequest> m_effectRegistration;
     };
 
     /// @brief 更新音频资源命令结果。
@@ -56,8 +56,11 @@ public:
         /// @brief 是否成功找到并更新音频资源。
         bool m_updated{ false };
 
-        /// @brief 更新后若资源变成音效，则需要由引擎预加载。
-        std::optional<AudioPreloadRequest> m_effectPreload;
+        /// @brief 更新后若资源变成音效，则需要由引擎登记。
+        std::optional<AudioRegistrationRequest> m_effectRegistration;
+
+        /// @brief 更新前若资源是音效且现已变成主音轨，需要卸载的音效 ID。
+        std::optional<std::string> m_effectResourceIdToUnload;
     };
 
     /// @brief 删除音频资源命令结果。

@@ -173,7 +173,10 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     auto& audio = Audio::AudioManager::instance();
     audio.clearSoundEffects();
     preloadCurrentSkinSoundEffects();
-    Logic::EditorEngine::instance().reloadCurrentProjectEffectSoundEffects();
+    Logic::EditorEngine::instance().registerCurrentProjectEffectSoundEffects();
+    if ( m_sourceManager ) {
+        m_sourceManager->reloadOpenEffectAudioTracks();
+    }
 
     if ( auto ctx = Graphic::VKContext::get() ) {
         ctx->get().applyTheme();

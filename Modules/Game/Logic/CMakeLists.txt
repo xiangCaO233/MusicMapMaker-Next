@@ -74,6 +74,11 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 
+mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
+                        tests/ProjectDirectoryWatcherTest.cpp)
+target_link_libraries(ProjectDirectoryWatcherTest PRIVATE Logic Log)
+add_test(NAME ProjectDirectoryWatcherTest COMMAND ProjectDirectoryWatcherTest)
+
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)

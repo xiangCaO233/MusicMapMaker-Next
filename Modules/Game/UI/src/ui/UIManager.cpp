@@ -1,4 +1,5 @@
 #include "ui/UIManager.h"
+#include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/Utf8Path.h"
@@ -192,6 +193,45 @@ bool resolveWorkspaceAudioTrack(
     }
 
     return false;
+}
+
+/// @brief 在打开音效控制器前按需加载对应音效。
+/// @param trackId 需要试听或控制的音效资源 ID。
+/// @return 音效已经加载或成功加载时返回 true。
+/// @warning 低频显式交互路径：仅在用户打开或恢复音效控制器时调用，可能
+/// 访问文件系统并等待单个音效解码，禁止放入每帧 UI 更新。
+bool ensureEffectAudioTrackLoaded(const std::string& trackId)
+{
+    auto& audio = Audio::AudioManager::instance();
+    if ( audio.isSoundEffectLoaded(trackId) ) {
+        return true;
+    }
+
+    auto* project = Logic::ProjectController::instance().currentProject();
+    if ( project ) {
+        for ( const auto& resource : project->m_audioResources ) {
+            if ( resource.m_id != trackId ||
+                 resource.m_type != AudioTrackType::Effect ) {
+                continue;
+            }
+
+            const auto absolutePath =
+                project->m_projectRoot / Config::utf8ToPath(resource.m_path);
+            audio.registerSoundEffect(trackId,
+                                      Config::pathToUtf8(absolutePath),
+                                      resource.m_config.volume);
+            return audio.ensureSoundEffectLoaded(trackId);
+        }
+    }
+
+    const auto& skinData = Config::SkinManager::instance().getData();
+    if ( auto path = skinData.audioPaths.find(trackId);
+         path != skinData.audioPaths.end() ) {
+        audio.registerSoundEffect(trackId,
+                                  Config::pathToUtf8(path->second),
+                                  audio.getSFXPoolVolume(trackId));
+    }
+    return audio.ensureSoundEffectLoaded(trackId);
 }
 
 /// @brief 判断文本是否拥有指定前缀。
@@ -543,6 +583,10 @@ void UIManager::openAudioTrackController(const std::string& trackId,
                                          const std::string& trackName,
                                          AudioTrackControllerUI::TrackType type)
 {
+    if ( type == AudioTrackControllerUI::TrackType::Effect ) {
+        (void)ensureEffectAudioTrackLoaded(trackId);
+    }
+
     std::string viewName   = AudioTrackControllerUI::makeViewName(trackId);
     auto*       controller = getView<AudioTrackControllerUI>(viewName);
     if ( !controller ) {
@@ -555,6 +599,26 @@ void UIManager::openAudioTrackController(const std::string& trackId,
     if ( controller ) {
         controller->requestDockTo(resolveAudioControllerDockId());
         controller->requestFocus();
+    }
+}
+
+/// @brief 重新加载当前已打开控制器引用的项目音效。
+/// @warning 低频皮肤重载路径：每个已打开音效控制器最多触发一次单文件
+/// 解码，禁止放入每帧 UI 更新。
+void UIManager::reloadOpenEffectAudioTracks()
+{
+    for ( const auto& [name, view] : m_uiviews ) {
+        if ( name.rfind("TrackController_", 0) != 0 || !view ) {
+            continue;
+        }
+
+        auto* controller =
+            static_cast<AudioTrackControllerUI*>(view->getActualInstance());
+        if ( !controller || controller->getTrackType() !=
+                                AudioTrackControllerUI::TrackType::Effect ) {
+            continue;
+        }
+        (void)ensureEffectAudioTrackLoaded(controller->getTrackId());
     }
 }
 
@@ -765,6 +829,9 @@ void UIManager::restoreProjectWorkspaceViews(
                                          trackType,
                                          trackName) ) {
             continue;
+        }
+        if ( trackType == AudioTrackControllerUI::TrackType::Effect ) {
+            (void)ensureEffectAudioTrackLoaded(controllerState.m_trackId);
         }
 
         std::string viewName =

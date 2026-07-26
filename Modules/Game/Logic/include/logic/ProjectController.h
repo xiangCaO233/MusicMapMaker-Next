@@ -59,9 +59,9 @@ public:
         /// @brief 项目内谱面数量。
         std::size_t m_beatmapCount{ 0 };
 
-        /// @brief 打开项目后需要由音频引擎预加载的音效资源。
-        std::vector<ProjectCommandService::AudioPreloadRequest>
-            m_effectPreloads;
+        /// @brief 打开项目后需要登记到音频引擎的按需加载音效资源。
+        std::vector<ProjectCommandService::AudioRegistrationRequest>
+            m_effectRegistrations;
     };
 
     /// @brief 关闭项目后的结果信息。

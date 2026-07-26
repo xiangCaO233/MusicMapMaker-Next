@@ -1198,11 +1198,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             continue;
         }
 
-        /// @brief 需要调用方预加载的音效请求。
-        ProjectCommandService::AudioPreloadRequest preloadRequest;
-        preloadRequest.m_resource     = resource;
-        preloadRequest.m_absolutePath = absolutePath;
-        result.m_effectPreloads.push_back(preloadRequest);
+        /// @brief 需要调用方登记的按需加载音效请求。
+        ProjectCommandService::AudioRegistrationRequest registrationRequest;
+        registrationRequest.m_resource     = resource;
+        registrationRequest.m_absolutePath = absolutePath;
+        result.m_effectRegistrations.push_back(registrationRequest);
     }
 
     m_currentProject = std::move(newProject);

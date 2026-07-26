@@ -42,6 +42,13 @@ bool collectDirectoryPollingSnapshot(const std::filesystem::path& root,
     const std::filesystem::recursive_directory_iterator end;
     while ( !iteratorError && iterator != end ) {
         const auto currentPath = iterator->path().lexically_normal();
+        const auto relativePath =
+            currentPath.lexically_relative(root.lexically_normal());
+        if ( !ProjectDirectoryWatcher::isRelevantProjectPathChange(
+                 relativePath) ) {
+            iterator.increment(iteratorError);
+            continue;
+        }
 
         std::error_code timeError;
         const auto      writeTime =
@@ -158,6 +165,16 @@ bool ProjectDirectoryWatcher::consumeChangePending()
     return m_changePending.exchange(false, std::memory_order_acq_rel);
 }
 
+/// @brief 判断项目内相对路径变化是否需要触发资源重扫。
+/// @param relativePath 相对于项目根目录的变化路径。
+/// @return 资源文件变化返回 true；项目描述文件自身变化返回 false。
+bool ProjectDirectoryWatcher::isRelevantProjectPathChange(
+    const std::filesystem::path& relativePath)
+{
+    return relativePath.lexically_normal() !=
+           std::filesystem::path("mmm_project.json");
+}
+
 /// @brief 文件夹监听线程的主循环。
 /// @param watchPath 需要递归监听的项目目录路径。
 void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
@@ -238,8 +255,39 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
             CancelIoEx(directoryHandle, &overlapped);
             break;
         } else if ( waitResult == WAIT_OBJECT_0 + 1 ) {
-            // 成功监听到文件系统事件，通知主逻辑线程挂起变更
-            m_changePending.store(true, std::memory_order_release);
+            /// @brief 本次重叠目录读取实际返回的通知字节数。
+            DWORD transferredBytes = 0;
+            if ( !GetOverlappedResult(
+                     directoryHandle, &overlapped, &transferredBytes, FALSE) ) {
+                if ( GetLastError() == ERROR_OPERATION_ABORTED ) {
+                    break;
+                }
+                continue;
+            }
+
+            /// @brief 当前通知缓冲区中是否包含需要重扫的资源路径。
+            bool  hasRelevantChange  = false;
+            DWORD notificationOffset = 0;
+            while ( notificationOffset < transferredBytes ) {
+                const auto* notification =
+                    reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(
+                        buffer + notificationOffset);
+                const std::wstring relativeName(
+                    notification->FileName,
+                    notification->FileNameLength / sizeof(wchar_t));
+                if ( isRelevantProjectPathChange(
+                         std::filesystem::path(relativeName)) ) {
+                    hasRelevantChange = true;
+                    break;
+                }
+                if ( notification->NextEntryOffset == 0 ) {
+                    break;
+                }
+                notificationOffset += notification->NextEntryOffset;
+            }
+            if ( hasRelevantChange ) {
+                m_changePending.store(true, std::memory_order_release);
+            }
         } else {
             // 发生错误
             break;

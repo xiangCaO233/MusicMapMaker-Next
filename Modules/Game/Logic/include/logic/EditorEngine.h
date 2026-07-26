@@ -107,10 +107,10 @@ public:
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
 
-    /// @brief 重新预加载当前项目中的 Effect 音频资源。
-    /// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
-    /// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
-    void reloadCurrentProjectEffectSoundEffects();
+    /// @brief 重新登记当前项目中按需加载的 Effect 音频资源。
+    /// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；只访问项目
+    /// 资源表并更新内存描述，不执行音频解码。
+    void registerCurrentProjectEffectSoundEffects();
 
     /// @brief 更新音轨资源信息
     void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
