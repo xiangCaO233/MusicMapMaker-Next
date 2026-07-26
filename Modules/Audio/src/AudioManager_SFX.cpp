@@ -5,7 +5,9 @@
 #include "log/colorful-log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <ice/core/MixBus.hpp>
@@ -38,6 +40,17 @@ bool isInteractionSoundEffectKey(const std::string& key)
     return key.rfind(INTERACTION_SOUND_EFFECT_KEY_PREFIX, 0) == 0;
 }
 }  // namespace
+
+/// @brief 判断指定音效是否应接入打击音效总线。
+/// @param key 音效资源标识。
+/// @return 内置打击音效或谱面绑定采样返回 true。
+bool AudioManager::usesHitEffectRouting(const std::string& key) const
+{
+    if ( isHitSoundEffectKey(key) ) return true;
+    const auto registration = m_registeredSoundEffects.find(key);
+    return registration != m_registeredSoundEffects.end() &&
+           registration->second.m_isBoundNoteSound;
+}
 
 /// @brief 根据音效类型获取当前有效基础音量。
 /// @param key 音效池标识。
@@ -123,7 +136,7 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
         m_mainMixer->remove_source(mixer);
         m_preStretcherMixer->remove_source(mixer);
         m_hitEffectMixer->remove_source(mixer);
-        if ( isHitSoundEffectKey(key) ) {
+        if ( usesHitEffectRouting(key) ) {
             m_hitEffectMixer->add_source(mixer);
         } else {
             m_mainMixer->add_source(mixer);
@@ -210,6 +223,9 @@ void AudioManager::registerSoundEffect(const std::string& key,
                                        double             leadInSeconds)
 {
     auto       existingRegistration = m_registeredSoundEffects.find(key);
+    const bool wasBoundNoteSound =
+        existingRegistration != m_registeredSoundEffects.end() &&
+        existingRegistration->second.m_isBoundNoteSound;
     const bool loadedPathChanged =
         existingRegistration != m_registeredSoundEffects.end() &&
         existingRegistration->second.m_filePath != filePath &&
@@ -219,10 +235,13 @@ void AudioManager::registerSoundEffect(const std::string& key,
     }
 
     m_registeredSoundEffects[key] = RegisteredSoundEffect{
-        .m_filePath      = filePath,
-        .m_defaultVolume = defaultVolume,
-        .m_leadInSeconds = std::max(0.0, leadInSeconds),
+        .m_filePath         = filePath,
+        .m_defaultVolume    = defaultVolume,
+        .m_leadInSeconds    = std::max(0.0, leadInSeconds),
+        .m_isBoundNoteSound = wasBoundNoteSound,
+        .m_revision         = m_nextSoundEffectRevision++,
     };
+    m_pendingSoundEffectLoads.erase(key);
 
     auto loadedPool = m_sfxPools.find(key);
     if ( loadedPool == m_sfxPools.end() ) {
@@ -240,6 +259,49 @@ void AudioManager::registerSoundEffect(const std::string& key,
     loadedPool->second->updateEffectiveVolume(getSFXEffectiveGain(key),
                                               getSFXPoolMute(key));
     m_sfxLeadInSeconds[key] = std::max(0.0, leadInSeconds);
+}
+
+/// @brief 使用已探测的音轨创建音效池并接入混音图。
+/// @param key 已登记的音效资源标识。
+/// @param track 后台加载完成的音轨。
+/// @return 成功接入或已存在时返回 true。
+bool AudioManager::attachSoundEffectPool(const std::string&               key,
+                                         std::shared_ptr<ice::AudioTrack> track)
+{
+    if ( m_sfxPools.contains(key) ) {
+        return true;
+    }
+    if ( !track || !m_mainMixer || !m_hitEffectMixer ) {
+        return false;
+    }
+
+    const auto registration = m_registeredSoundEffects.find(key);
+    if ( registration == m_registeredSoundEffects.end() ) {
+        return false;
+    }
+
+    float       activeVolume = registration->second.m_defaultVolume;
+    const auto& sfxCfg =
+        Config::AppConfig::instance().getEditorSettings().sfxConfig;
+    if ( auto configuredVolume = sfxCfg.permanentSfxVolumes.find(key);
+         configuredVolume != sfxCfg.permanentSfxVolumes.end() ) {
+        activeVolume = configuredVolume->second;
+    }
+
+    auto pool = std::make_shared<SoundEffectPool>(std::move(track));
+    pool->init(registration->second.m_isBoundNoteSound ? 1 : 8);
+    pool->setVolume(activeVolume);
+    pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
+
+    if ( usesHitEffectRouting(key) ) {
+        m_hitEffectMixer->add_source(pool->getMixer());
+    } else {
+        m_mainMixer->add_source(pool->getMixer());
+    }
+
+    m_sfxPools[key]         = std::move(pool);
+    m_sfxLeadInSeconds[key] = registration->second.m_leadInSeconds;
+    return true;
 }
 
 /// @brief 确保已登记音效完成解码并接入混音器。
@@ -261,18 +323,11 @@ bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
         return false;
     }
 
-    float       activeVolume = registration->second.m_defaultVolume;
-    const auto& sfxCfg =
-        Config::AppConfig::instance().getEditorSettings().sfxConfig;
-    if ( auto configuredVolume = sfxCfg.permanentSfxVolumes.find(key);
-         configuredVolume != sfxCfg.permanentSfxVolumes.end() ) {
-        activeVolume = configuredVolume->second;
-    }
-
     XINFO("Loading registered SFX: {} from {} (Volume: {})",
           key,
           registration->second.m_filePath,
-          activeVolume);
+          registration->second.m_defaultVolume);
+    m_pendingSoundEffectLoads.erase(key);
     auto trackWeak = m_audioPool->get_or_load(*m_threadPool,
                                               registration->second.m_filePath);
     auto track     = trackWeak.lock();
@@ -281,20 +336,140 @@ bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
         return false;
     }
 
-    auto pool = std::make_shared<SoundEffectPool>(track);
-    pool->init(8);
-    pool->setVolume(activeVolume);
-    pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
+    return attachSoundEffectPool(key, std::move(track));
+}
 
-    if ( isHitSoundEffectKey(key) ) {
-        m_hitEffectMixer->add_source(pool->getMixer());
-    } else {
-        m_mainMixer->add_source(pool->getMixer());
+/// @brief 将物件绑定音效加入后台按需加载队列。
+/// @param key 谱面物件绑定的项目音效资源标识。
+/// @return 已加载、已排队或成功加入队列时返回 true。
+/// @warning 逻辑预读热路径：仅访问内存登记表并对首次出现的资源排队，
+/// 不访问文件系统或等待解码。
+bool AudioManager::queueBoundNoteSoundEffectLoad(const std::string& key)
+{
+    if ( key.empty() ) return false;
+
+    auto registration = m_registeredSoundEffects.find(key);
+    if ( registration == m_registeredSoundEffects.end() ) {
+        return false;
     }
 
-    m_sfxPools[key]         = std::move(pool);
-    m_sfxLeadInSeconds[key] = registration->second.m_leadInSeconds;
+    const bool needsReroute = !registration->second.m_isBoundNoteSound;
+    registration->second.m_isBoundNoteSound = true;
+
+    if ( auto loaded = m_sfxPools.find(key); loaded != m_sfxPools.end() ) {
+        if ( needsReroute ) {
+            auto mixer = loaded->second->getMixer();
+            if ( mixer && m_mainMixer && m_preStretcherMixer &&
+                 m_hitEffectMixer ) {
+                m_mainMixer->remove_source(mixer);
+                m_preStretcherMixer->remove_source(mixer);
+                m_hitEffectMixer->remove_source(mixer);
+                m_hitEffectMixer->add_source(mixer);
+            }
+        }
+        return true;
+    }
+
+    if ( m_pendingSoundEffectLoads.contains(key) ) {
+        return true;
+    }
+
+    m_pendingSoundEffectLoads[key] = registration->second.m_revision;
+    m_queuedSoundEffectLoads.push_back({
+        .key      = key,
+        .filePath = registration->second.m_filePath,
+        .revision = registration->second.m_revision,
+    });
     return true;
+}
+
+/// @brief 推进后台音效加载任务并接入已准备好的音效池。
+/// @param maxPreparedPerUpdate 单次调用最多接入的音效数量。
+/// @warning 逻辑低频轮询路径：调用方必须节流；单次只启动固定数量后台任务，
+/// 文件探测和解码均在线程池执行。
+void AudioManager::updateQueuedSoundEffectLoads(
+    std::size_t maxPreparedPerUpdate)
+{
+    m_soundEffectLoadTasks.erase(
+        std::remove_if(m_soundEffectLoadTasks.begin(),
+                       m_soundEffectLoadTasks.end(),
+                       [](std::future<void>& task) {
+                           return task.valid() &&
+                                  task.wait_for(std::chrono::seconds(0)) ==
+                                      std::future_status::ready;
+                       }),
+        m_soundEffectLoadTasks.end());
+
+    std::deque<PreparedSoundEffectLoad> prepared;
+    {
+        std::unique_lock<std::mutex> lock(m_preparedSoundEffectLoadsMutex,
+                                          std::try_to_lock);
+        if ( lock.owns_lock() ) {
+            while ( prepared.size() < maxPreparedPerUpdate &&
+                    !m_preparedSoundEffectLoads.empty() ) {
+                prepared.push_back(
+                    std::move(m_preparedSoundEffectLoads.front()));
+                m_preparedSoundEffectLoads.pop_front();
+            }
+        }
+    }
+
+    for ( auto& result : prepared ) {
+        if ( m_activeSoundEffectLoadCount > 0U ) {
+            --m_activeSoundEffectLoadCount;
+        }
+
+        const auto pending = m_pendingSoundEffectLoads.find(result.key);
+        if ( pending == m_pendingSoundEffectLoads.end() ||
+             pending->second != result.revision ) {
+            continue;
+        }
+        m_pendingSoundEffectLoads.erase(pending);
+
+        const auto registration = m_registeredSoundEffects.find(result.key);
+        if ( registration == m_registeredSoundEffects.end() ||
+             registration->second.m_revision != result.revision ) {
+            continue;
+        }
+        if ( !result.track ) {
+            XERROR("Failed to prepare bound note SFX: {}", result.key);
+            continue;
+        }
+        XINFO("Prepared bound note SFX: {}", result.key);
+        attachSoundEffectPool(result.key, std::move(result.track));
+    }
+
+    constexpr std::size_t MAX_CONCURRENT_SOUND_EFFECT_LOADS = 4U;
+    while ( m_activeSoundEffectLoadCount < MAX_CONCURRENT_SOUND_EFFECT_LOADS &&
+            !m_queuedSoundEffectLoads.empty() && m_audioPool && m_threadPool ) {
+        QueuedSoundEffectLoad request =
+            std::move(m_queuedSoundEffectLoads.front());
+        m_queuedSoundEffectLoads.pop_front();
+
+        const auto pending      = m_pendingSoundEffectLoads.find(request.key);
+        const auto registration = m_registeredSoundEffects.find(request.key);
+        if ( pending == m_pendingSoundEffectLoads.end() ||
+             pending->second != request.revision ||
+             registration == m_registeredSoundEffects.end() ||
+             registration->second.m_revision != request.revision ) {
+            continue;
+        }
+
+        m_soundEffectLoadTasks.push_back(m_threadPool->enqueue(
+            [this, request = std::move(request)]() mutable {
+                auto trackWeak =
+                    m_audioPool->get_or_load(*m_threadPool, request.filePath);
+                PreparedSoundEffectLoad preparedResult{
+                    .key      = std::move(request.key),
+                    .revision = request.revision,
+                    .track    = trackWeak.lock(),
+                };
+                std::lock_guard<std::mutex> lock(
+                    m_preparedSoundEffectLoadsMutex);
+                m_preparedSoundEffectLoads.push_back(std::move(preparedResult));
+            }));
+        ++m_activeSoundEffectLoadCount;
+    }
 }
 
 /// @brief 查询指定音效是否已经完成解码并创建音效池。
@@ -337,6 +512,7 @@ void AudioManager::unloadSoundEffect(const std::string& key)
         XINFO("Unloaded SFX: {}", key);
     }
     m_registeredSoundEffects.erase(key);
+    m_pendingSoundEffectLoads.erase(key);
     m_sfxLeadInSeconds.erase(key);
     m_sfxMutes.erase(key);
 }
@@ -360,8 +536,36 @@ void AudioManager::clearSoundEffects()
     }
 
     m_registeredSoundEffects.clear();
+    m_queuedSoundEffectLoads.clear();
+    m_pendingSoundEffectLoads.clear();
     m_sfxLeadInSeconds.clear();
     m_sfxMutes.clear();
+
+    std::lock_guard<std::mutex> lock(m_preparedSoundEffectLoadsMutex);
+    const std::size_t discardedCount = m_preparedSoundEffectLoads.size();
+    m_preparedSoundEffectLoads.clear();
+    m_activeSoundEffectLoadCount =
+        discardedCount < m_activeSoundEffectLoadCount
+            ? m_activeSoundEffectLoadCount - discardedCount
+            : 0U;
+}
+
+/// @brief 等待所有后台音效文件探测任务完成。
+/// @warning 仅允许在 AudioManager 关闭路径调用，会阻塞等待线程池任务。
+void AudioManager::waitForQueuedSoundEffectLoads()
+{
+    for ( auto& task : m_soundEffectLoadTasks ) {
+        if ( task.valid() ) {
+            task.wait();
+        }
+    }
+    m_soundEffectLoadTasks.clear();
+
+    std::lock_guard<std::mutex> lock(m_preparedSoundEffectLoadsMutex);
+    m_preparedSoundEffectLoads.clear();
+    m_queuedSoundEffectLoads.clear();
+    m_pendingSoundEffectLoads.clear();
+    m_activeSoundEffectLoadCount = 0U;
 }
 
 /// @brief 立即播放指定音效。

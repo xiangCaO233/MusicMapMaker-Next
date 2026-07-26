@@ -171,8 +171,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -308,6 +308,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 s.trackIndex                    = parentNote.m_trackIndex;
                 s.dtrack                        = parentNote.m_dtrack;
                 s.metadata                      = parentNote.m_metadata;
+                s.boundSound                    = parentNote.m_boundSound;
                 s.customColors                  = parentNote.m_customColors;
                 ctx.brushState.polylineSegments = { s };
 
@@ -387,8 +388,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -410,8 +411,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-                 : 120.0);
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;
@@ -772,6 +773,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             flickSeg.trackIndex   = tailTrack;
                             flickSeg.dtrack       = nc.m_dtrack;
                             flickSeg.metadata     = nc.m_metadata;
+                            flickSeg.boundSound   = nc.m_boundSound;
                             flickSeg.customColors = nc.m_customColors;
                             segments.push_back(flickSeg);
 
@@ -816,6 +818,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             holdSeg.trackIndex   = tailTrack;
                             holdSeg.dtrack       = 0;
                             holdSeg.metadata     = nc.m_metadata;
+                            holdSeg.boundSound   = nc.m_boundSound;
                             holdSeg.customColors = nc.m_customColors;
                             segments.push_back(holdSeg);
 
@@ -1213,74 +1216,76 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                             std::vector<NoteComponent::SubNote> R(
                                 subNotes.begin() + k + 1, subNotes.end());
 
-                            auto processPart =
-                                [&](const std::vector<NoteComponent::SubNote>&
-                                        part) {
-                                    if ( part.empty() ) return;
-                                    if ( part.size() == 1 ) {
-                                        auto          s = part[0];
-                                        NoteComponent nextNC =
-                                            makeNoteComponentFromSubNote(
-                                                s, false, entt::null, -1);
-                                        if ( !hasAnyNoteColorOverride(
-                                                 nextNC.m_customColors) &&
-                                             hasAnyNoteColorOverride(
-                                                 nc.m_customColors) ) {
-                                            nextNC.m_customColors =
-                                                nc.m_customColors;
-                                            writeNoteColorOverridesToMetadata(
-                                                nextNC);
-                                        }
-
-                                        entt::entity newEnt =
-                                            ctx.noteRegistry.create();
-                                        entries.push_back(
-                                            { newEnt, std::nullopt, nextNC });
-                                    } else {
-                                        NoteComponent nextNC;
-                                        nextNC.m_type =
-                                            ::MMM::NoteType::POLYLINE;
-                                        nextNC.m_timestamp =
-                                            part.front().timestamp;
-                                        nextNC.m_trackIndex =
-                                            part.front().trackIndex;
-                                        nextNC.m_duration = 0.0;
-                                        nextNC.m_dtrack   = 0;
-                                        nextNC.m_metadata = nc.m_metadata;
+                            auto processPart = [&](const std::vector<
+                                                       NoteComponent::SubNote>&
+                                                        part,
+                                                   bool inheritsParentSound) {
+                                if ( part.empty() ) return;
+                                if ( part.size() == 1 ) {
+                                    auto          s = part[0];
+                                    NoteComponent nextNC =
+                                        makeNoteComponentFromSubNote(
+                                            s, false, entt::null, -1);
+                                    if ( nextNC.m_boundSound.empty() &&
+                                         inheritsParentSound ) {
+                                        nextNC.m_boundSound = nc.m_boundSound;
+                                    }
+                                    if ( !hasAnyNoteColorOverride(
+                                             nextNC.m_customColors) &&
+                                         hasAnyNoteColorOverride(
+                                             nc.m_customColors) ) {
                                         nextNC.m_customColors =
                                             nc.m_customColors;
-                                        nextNC.m_isSubNote      = false;
-                                        nextNC.m_parentPolyline = entt::null;
-                                        nextNC.m_subIndex       = -1;
-                                        nextNC.m_subNotes       = part;
-
-                                        entt::entity parentEnt =
-                                            ctx.noteRegistry.create();
-                                        entries.push_back({ parentEnt,
-                                                            std::nullopt,
-                                                            nextNC });
-
-                                        for ( size_t i = 0; i < part.size();
-                                              ++i ) {
-                                            const auto&   s = part[i];
-                                            NoteComponent subNC =
-                                                makeNoteComponentFromSubNote(
-                                                    s,
-                                                    true,
-                                                    parentEnt,
-                                                    static_cast<int>(i));
-
-                                            entt::entity subEnt =
-                                                ctx.noteRegistry.create();
-                                            entries.push_back({ subEnt,
-                                                                std::nullopt,
-                                                                subNC });
-                                        }
+                                        writeNoteColorOverridesToMetadata(
+                                            nextNC);
                                     }
-                                };
 
-                            processPart(L);
-                            processPart(R);
+                                    entt::entity newEnt =
+                                        ctx.noteRegistry.create();
+                                    entries.push_back(
+                                        { newEnt, std::nullopt, nextNC });
+                                } else {
+                                    NoteComponent nextNC;
+                                    nextNC.m_type = ::MMM::NoteType::POLYLINE;
+                                    nextNC.m_timestamp = part.front().timestamp;
+                                    nextNC.m_trackIndex =
+                                        part.front().trackIndex;
+                                    nextNC.m_duration = 0.0;
+                                    nextNC.m_dtrack   = 0;
+                                    nextNC.m_metadata = nc.m_metadata;
+                                    if ( inheritsParentSound ) {
+                                        nextNC.m_boundSound = nc.m_boundSound;
+                                    }
+                                    nextNC.m_customColors   = nc.m_customColors;
+                                    nextNC.m_isSubNote      = false;
+                                    nextNC.m_parentPolyline = entt::null;
+                                    nextNC.m_subIndex       = -1;
+                                    nextNC.m_subNotes       = part;
+
+                                    entt::entity parentEnt =
+                                        ctx.noteRegistry.create();
+                                    entries.push_back(
+                                        { parentEnt, std::nullopt, nextNC });
+
+                                    for ( size_t i = 0; i < part.size(); ++i ) {
+                                        const auto&   s = part[i];
+                                        NoteComponent subNC =
+                                            makeNoteComponentFromSubNote(
+                                                s,
+                                                true,
+                                                parentEnt,
+                                                static_cast<int>(i));
+
+                                        entt::entity subEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back(
+                                            { subEnt, std::nullopt, subNC });
+                                    }
+                                }
+                            };
+
+                            processPart(L, true);
+                            processPart(R, false);
                         }
 
                         handled = true;
@@ -1326,14 +1331,21 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                     subNotes.begin() + k + 1, subNotes.end());
 
                                 auto processPart = [&](const std::vector<
-                                                       NoteComponent::SubNote>&
-                                                           part) {
+                                                           NoteComponent::
+                                                               SubNote>& part,
+                                                       bool
+                                                           inheritsParentSound) {
                                     if ( part.empty() ) return;
                                     if ( part.size() == 1 ) {
                                         auto          s = part[0];
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
+                                        if ( nextNC.m_boundSound.empty() &&
+                                             inheritsParentSound ) {
+                                            nextNC.m_boundSound =
+                                                nc.m_boundSound;
+                                        }
                                         if ( !hasAnyNoteColorOverride(
                                                  nextNC.m_customColors) &&
                                              hasAnyNoteColorOverride(
@@ -1359,6 +1371,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_duration = 0.0;
                                         nextNC.m_dtrack   = 0;
                                         nextNC.m_metadata = nc.m_metadata;
+                                        if ( inheritsParentSound ) {
+                                            nextNC.m_boundSound =
+                                                nc.m_boundSound;
+                                        }
                                         nextNC.m_customColors =
                                             nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
@@ -1391,8 +1407,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                     }
                                 };
 
-                                processPart(L);
-                                processPart(R);
+                                processPart(L, true);
+                                processPart(R, false);
                             }
 
                             handled = true;

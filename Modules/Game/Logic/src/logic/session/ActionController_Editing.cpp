@@ -1,4 +1,3 @@
-#include "logic/session/ActionController.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -10,6 +9,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
@@ -508,6 +508,7 @@ NoteComponent makeNoteComponentFromBeatmapNote(const ::MMM::Note& note)
     component.m_timestamp  = note.m_timestamp / 1000.0;
     component.m_trackIndex = static_cast<int>(note.m_track);
     component.m_metadata   = note.m_metadata;
+    component.m_boundSound = note.m_boundSound;
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         component.m_duration =
@@ -533,6 +534,7 @@ NoteComponent::SubNote makeSubNoteComponentFromBeatmapNote(
     subNote.trackIndex = static_cast<int>(note.m_track);
     subNote.dtrack     = 0;
     subNote.metadata   = note.m_metadata;
+    subNote.boundSound = note.m_boundSound;
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         subNote.duration =
@@ -662,6 +664,7 @@ void replaceNoteComponents(SessionContext&                   ctx,
             subComponent.m_parentPolyline = entity;
             subComponent.m_subIndex       = static_cast<int>(index);
             subComponent.m_metadata       = sub.metadata;
+            subComponent.m_boundSound     = sub.boundSound;
             subComponent.m_customColors   = sub.customColors;
 
             auto subEntity = ctx.noteRegistry.create();

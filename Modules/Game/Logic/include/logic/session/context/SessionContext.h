@@ -144,6 +144,12 @@ struct SessionContext {
            hitEvents;                 ///< 当前谱面所有的打击事件序列
     size_t nextHitIndex{ 0 };         ///< 下一个待触发的视觉打击事件索引
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
+    size_t nextBoundSoundPrefetchIndex{
+        0
+    };  ///< 下一个待排队的物件绑定音效事件索引
+    double nextBoundSoundPrefetchSystemTime{
+        0.0
+    };  ///< 下一次推进绑定音效后台加载的系统时间
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*>
          bpmEvents;                  ///< 缓存并排序后的 BPM 事件

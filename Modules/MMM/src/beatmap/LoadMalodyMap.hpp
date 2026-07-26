@@ -676,6 +676,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
             // 物件元数据存储
             if ( notePtr ) {
+                if ( auto sound = n.find("sound");
+                     sound != n.end() && sound->is_string() ) {
+                    notePtr->m_boundSound =
+                        sound->get_ref<const std::string&>();
+                }
+
                 auto& props = notePtr->m_metadata
                                   .note_properties[NoteMetadataType::MALODY];
 

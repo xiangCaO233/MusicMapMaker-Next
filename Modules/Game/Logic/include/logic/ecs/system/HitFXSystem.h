@@ -32,6 +32,8 @@ public:
         int    trackOffset{ 0 };  // 用于 Flick 等偏移物件
         double duration;
         bool   isSubNote;
+        /// @brief 物件绑定的自定义音效资源标识；为空时使用内置音效。
+        std::string boundSound;
 
         bool operator<(const HitEvent& other) const
         {
@@ -71,6 +73,14 @@ public:
     /// @warning 逻辑预测播放热路径：仅执行常量时间算术，不得访问 ECS 或分配。
     [[nodiscard]] static Audio::StereoGainEnvelope stereoGainEnvelopeForEvent(
         const HitEvent& ev, std::int32_t trackCount, bool enabled);
+
+    /// @brief 解析打击事件实际使用的音效资源标识。
+    /// @param ev 待解析的打击事件。
+    /// @param effectiveType 已应用折线音效策略后的物件类型。
+    /// @return 自定义绑定存在时返回绑定资源，否则返回对应内置音效资源。
+    /// @warning 逻辑预测播放热路径：只返回稳定字符串引用，不得分配或访问文件。
+    [[nodiscard]] static const std::string& soundEffectKeyForEvent(
+        const HitEvent& ev, ::MMM::NoteType effectiveType);
 
     /**
      * @brief 触发视觉特效

@@ -64,3 +64,13 @@ target_include_directories(BackgroundSpectrumAnalyzerTest
 target_link_libraries(BackgroundSpectrumAnalyzerTest PRIVATE Audio Log Config)
 add_test(NAME BackgroundSpectrumAnalyzerTest
          COMMAND BackgroundSpectrumAnalyzerTest)
+
+# 绑定采样并发测试覆盖数十个独立播放进度，防止退化为单播放器切换资源。
+mmm_add_test_executable(Audio BoundSoundConcurrencyTest
+                        tests/BoundSoundConcurrencyTest.cpp)
+target_link_libraries(BoundSoundConcurrencyTest PRIVATE Audio Log Config)
+add_test(
+  NAME BoundSoundConcurrencyTest
+  COMMAND
+    BoundSoundConcurrencyTest
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")

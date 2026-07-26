@@ -527,12 +527,24 @@ void appendBeatLine(std::string& text, const ClipboardItem& item)
 void appendClipboardItem(std::string& text, const ClipboardItem& item)
 {
     appendMainNoteLine(text, item.note);
+    if ( !item.note.m_boundSound.empty() ) {
+        text.append("NS");
+        appendSeparator(text);
+        appendEscapedField(text, item.note.m_boundSound);
+        appendLineBreak(text);
+    }
     appendBeatLine(text, item);
     appendNoteColorLines(text, "NC", item.note.m_customColors);
     appendNoteMetadataLines(text, "NM", item.note.m_metadata);
 
     for ( const auto& subNote : item.note.m_subNotes ) {
         appendSubNoteLine(text, subNote);
+        if ( !subNote.boundSound.empty() ) {
+            text.append("SS");
+            appendSeparator(text);
+            appendEscapedField(text, subNote.boundSound);
+            appendLineBreak(text);
+        }
         appendNoteColorLines(text, "SC", subNote.customColors);
         appendNoteMetadataLines(text, "SM", subNote.metadata);
     }
@@ -721,6 +733,10 @@ ParsedClipboard parseNotePayload(std::string_view text)
             currentItem = &parsed.notes.back();
         } else if ( fields[0] == "NB" && currentItem ) {
             parseBeatLine(fields, *currentItem);
+        } else if ( fields[0] == "NS" && currentItem && fields.size() == 2 ) {
+            if ( auto sound = decodeEscapedField(fields[1]) ) {
+                currentItem->note.m_boundSound = std::move(*sound);
+            }
         } else if ( fields[0] == "NC" && currentItem ) {
             if ( auto color = parseColorLine(fields) ) {
                 assignColor(
@@ -731,6 +747,13 @@ ParsedClipboard parseNotePayload(std::string_view text)
         } else if ( fields[0] == "S" && currentItem ) {
             if ( auto subNote = parseSubNoteLine(fields) ) {
                 currentItem->note.m_subNotes.push_back(std::move(*subNote));
+            }
+        } else if ( fields[0] == "SS" && currentItem &&
+                    !currentItem->note.m_subNotes.empty() &&
+                    fields.size() == 2 ) {
+            if ( auto sound = decodeEscapedField(fields[1]) ) {
+                currentItem->note.m_subNotes.back().boundSound =
+                    std::move(*sound);
             }
         } else if ( fields[0] == "SC" && currentItem &&
                     !currentItem->note.m_subNotes.empty() ) {

@@ -54,14 +54,25 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
                        config.settings.sfxConfig.flickWidthVolumeMultiplier;
     }
 
-    std::string sfxKey = (effectiveType == ::MMM::NoteType::FLICK)
-                             ? "hiteffect.flick"
-                             : "hiteffect.note";
+    const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
         ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
     audioManager.playSoundEffectScheduled(
         sfxKey, ev.timestamp, volumeFactor, stereoEnvelope);
+}
+
+const std::string& HitFXSystem::soundEffectKeyForEvent(
+    const HitEvent& ev, ::MMM::NoteType effectiveType)
+{
+    if ( !ev.boundSound.empty() ) {
+        return ev.boundSound;
+    }
+
+    static const std::string NOTE_SOUND_EFFECT_KEY  = "hiteffect.note";
+    static const std::string FLICK_SOUND_EFFECT_KEY = "hiteffect.flick";
+    return effectiveType == ::MMM::NoteType::FLICK ? FLICK_SOUND_EFFECT_KEY
+                                                   : NOTE_SOUND_EFFECT_KEY;
 }
 
 Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(

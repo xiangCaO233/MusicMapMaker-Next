@@ -62,6 +62,12 @@ target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
 
+# 跨格式物件绑定音效测试覆盖 osu! sampleFile、Malody sound 与原生 MMM 往返。
+mmm_add_test_executable(MMM BoundNoteSoundTest tests/BoundNoteSoundTest.cpp)
+target_link_libraries(BoundNoteSoundTest PRIVATE MMM Log)
+add_test(NAME Test_Bound_Note_Sound
+         COMMAND BoundNoteSoundTest "${TEST_OUTPUT_DIR}/bound_note_sound")
+
 # 1. MMM Native Format Test
 mmm_add_test_executable(MMM MapConsistencyTest tests/MapConsistencyTest.cpp)
 target_link_libraries(MapConsistencyTest PRIVATE MMM Log)

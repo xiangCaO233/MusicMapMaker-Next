@@ -268,10 +268,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             if ( !nJson.is_object() ) continue;
             std::string type = readMMMString(nJson, "type", "note");
             if ( type == "polyline" ) {
-                Polyline& poly   = beatMap.m_noteData.polylines.emplace_back();
-                poly.m_type      = NoteType::POLYLINE;
-                poly.m_timestamp = readMMMDouble(nJson, "timestamp", 0.0);
-                poly.m_track     = readMMMU32(nJson, "track", 0);
+                Polyline& poly    = beatMap.m_noteData.polylines.emplace_back();
+                poly.m_type       = NoteType::POLYLINE;
+                poly.m_timestamp  = readMMMDouble(nJson, "timestamp", 0.0);
+                poly.m_track      = readMMMU32(nJson, "track", 0);
+                poly.m_boundSound = readMMMString(nJson, "bound_sound");
 
                 loadNoteMetadata(poly, nJson);
 
@@ -281,6 +282,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     double   duration;
                     int      track;
                     int      dtrack;
+                    /// @brief 子物件绑定的自定义音效资源标识。
+                    std::string boundSound;
                 };
                 std::vector<TempSub> tempSubs;
 
@@ -291,10 +294,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         std::string stype =
                             readMMMString(snJson, "type", "note");
                         TempSub sn;
-                        sn.timestamp = readMMMDouble(snJson, "timestamp", 0.0);
-                        sn.track     = readMMMInt(snJson, "track", 0);
-                        sn.duration  = 0.0;
-                        sn.dtrack    = 0;
+                        sn.timestamp  = readMMMDouble(snJson, "timestamp", 0.0);
+                        sn.track      = readMMMInt(snJson, "track", 0);
+                        sn.duration   = 0.0;
+                        sn.dtrack     = 0;
+                        sn.boundSound = readMMMString(snJson, "bound_sound");
 
                         if ( stype == "hold" ) {
                             sn.duration =
@@ -339,12 +343,18 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                 if ( curr.type == next.type ) {
                                     if ( curr.type == NoteType::HOLD ) {
                                         curr.duration += next.duration;
+                                        if ( curr.boundSound.empty() ) {
+                                            curr.boundSound = next.boundSound;
+                                        }
                                         tempSubs.erase(tempSubs.begin() + i +
                                                        1);
                                         changed = true;
                                         continue;
                                     } else if ( curr.type == NoteType::FLICK ) {
                                         curr.dtrack += next.dtrack;
+                                        if ( curr.boundSound.empty() ) {
+                                            curr.boundSound = next.boundSound;
+                                        }
                                         tempSubs.erase(tempSubs.begin() + i +
                                                        1);
                                         changed = true;
@@ -360,11 +370,12 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 // 根据清洗后的结果决定最终去向
                 if ( tempSubs.empty() ) {
                     // 彻底退化为普通 Note
-                    Note& n       = beatMap.m_noteData.notes.emplace_back();
-                    n.m_type      = NoteType::NOTE;
-                    n.m_timestamp = poly.m_timestamp;
-                    n.m_track     = poly.m_track;
-                    n.m_metadata  = poly.m_metadata;
+                    Note& n        = beatMap.m_noteData.notes.emplace_back();
+                    n.m_type       = NoteType::NOTE;
+                    n.m_timestamp  = poly.m_timestamp;
+                    n.m_track      = poly.m_track;
+                    n.m_boundSound = poly.m_boundSound;
+                    n.m_metadata   = poly.m_metadata;
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
                 } else if ( tempSubs.size() == 1 ) {
@@ -376,20 +387,29 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         h.m_timestamp = s.timestamp;
                         h.m_track     = s.track;
                         h.m_duration  = s.duration;
-                        h.m_metadata  = poly.m_metadata;
+                        h.m_boundSound = s.boundSound.empty()
+                                             ? poly.m_boundSound
+                                             : s.boundSound;
+                        h.m_metadata   = poly.m_metadata;
                     } else if ( s.type == NoteType::FLICK ) {
                         Flick& f = beatMap.m_noteData.flicks.emplace_back();
                         f.m_type = NoteType::FLICK;
-                        f.m_timestamp = s.timestamp;
-                        f.m_track     = s.track;
-                        f.m_dtrack    = s.dtrack;
-                        f.m_metadata  = poly.m_metadata;
+                        f.m_timestamp  = s.timestamp;
+                        f.m_track      = s.track;
+                        f.m_dtrack     = s.dtrack;
+                        f.m_boundSound = s.boundSound.empty()
+                                             ? poly.m_boundSound
+                                             : s.boundSound;
+                        f.m_metadata   = poly.m_metadata;
                     } else {
                         Note& n       = beatMap.m_noteData.notes.emplace_back();
                         n.m_type      = NoteType::NOTE;
                         n.m_timestamp = s.timestamp;
                         n.m_track     = s.track;
-                        n.m_metadata  = poly.m_metadata;
+                        n.m_boundSound = s.boundSound.empty()
+                                             ? poly.m_boundSound
+                                             : s.boundSound;
+                        n.m_metadata   = poly.m_metadata;
                     }
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
@@ -399,19 +419,21 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         if ( s.type == NoteType::HOLD ) {
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
-                            h.m_timestamp = s.timestamp;
-                            h.m_track     = s.track;
-                            h.m_duration  = s.duration;
-                            h.m_isSubNote = true;
+                            h.m_timestamp  = s.timestamp;
+                            h.m_track      = s.track;
+                            h.m_duration   = s.duration;
+                            h.m_isSubNote  = true;
+                            h.m_boundSound = s.boundSound;
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
                         } else if ( s.type == NoteType::FLICK ) {
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
-                            f.m_timestamp = s.timestamp;
-                            f.m_track     = s.track;
-                            f.m_dtrack    = s.dtrack;
-                            f.m_isSubNote = true;
+                            f.m_timestamp  = s.timestamp;
+                            f.m_track      = s.track;
+                            f.m_dtrack     = s.dtrack;
+                            f.m_isSubNote  = true;
+                            f.m_boundSound = s.boundSound;
                             poly.m_subNotes.push_back(f);
                             poly.m_subFlicks.push_back(f);
                         }
@@ -428,11 +450,12 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                          readMMMU32(nJson, "track", 0) }) ) {
                     continue;
                 }
-                Hold& h       = beatMap.m_noteData.holds.emplace_back();
-                h.m_type      = NoteType::HOLD;
-                h.m_timestamp = readMMMDouble(nJson, "timestamp", 0.0);
-                h.m_track     = readMMMU32(nJson, "track", 0);
-                h.m_duration  = readMMMDouble(nJson, "duration", 0.0);
+                Hold& h        = beatMap.m_noteData.holds.emplace_back();
+                h.m_type       = NoteType::HOLD;
+                h.m_timestamp  = readMMMDouble(nJson, "timestamp", 0.0);
+                h.m_track      = readMMMU32(nJson, "track", 0);
+                h.m_duration   = readMMMDouble(nJson, "duration", 0.0);
+                h.m_boundSound = readMMMString(nJson, "bound_sound");
                 loadNoteMetadata(h, nJson);
             } else if ( type == "flick" ) {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
@@ -440,11 +463,12 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                          readMMMU32(nJson, "track", 0) }) ) {
                     continue;
                 }
-                Flick& f      = beatMap.m_noteData.flicks.emplace_back();
-                f.m_type      = NoteType::FLICK;
-                f.m_timestamp = readMMMDouble(nJson, "timestamp", 0.0);
-                f.m_track     = readMMMU32(nJson, "track", 0);
-                f.m_dtrack    = readMMMInt(nJson, "dtrack", 0);
+                Flick& f       = beatMap.m_noteData.flicks.emplace_back();
+                f.m_type       = NoteType::FLICK;
+                f.m_timestamp  = readMMMDouble(nJson, "timestamp", 0.0);
+                f.m_track      = readMMMU32(nJson, "track", 0);
+                f.m_dtrack     = readMMMInt(nJson, "dtrack", 0);
+                f.m_boundSound = readMMMString(nJson, "bound_sound");
                 loadNoteMetadata(f, nJson);
             } else {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
@@ -452,10 +476,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                          readMMMU32(nJson, "track", 0) }) ) {
                     continue;
                 }
-                Note& n       = beatMap.m_noteData.notes.emplace_back();
-                n.m_type      = NoteType::NOTE;
-                n.m_timestamp = readMMMDouble(nJson, "timestamp", 0.0);
-                n.m_track     = readMMMU32(nJson, "track", 0);
+                Note& n        = beatMap.m_noteData.notes.emplace_back();
+                n.m_type       = NoteType::NOTE;
+                n.m_timestamp  = readMMMDouble(nJson, "timestamp", 0.0);
+                n.m_track      = readMMMU32(nJson, "track", 0);
+                n.m_boundSound = readMMMString(nJson, "bound_sound");
                 loadNoteMetadata(n, nJson);
             }
         }

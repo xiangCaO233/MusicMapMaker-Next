@@ -794,6 +794,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
         }
+        if ( note.m_boundSound.empty() ) {
+            nj.erase("sound");
+        } else {
+            nj["sound"] = note.m_boundSound;
+        }
         return nj;
     };
 

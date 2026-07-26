@@ -72,6 +72,7 @@ bool testNoteRoundTrip()
     item.note.m_duration   = 1.25;
     item.note.m_trackIndex = 2;
     item.note.m_dtrack     = 1;
+    item.note.m_boundSound = "main\tbound.wav";
     item.note.m_metadata
         .note_properties[MMM::NoteMetadataType::MMM]["authorNote"] =
         "copy\tline\n%";
@@ -83,6 +84,7 @@ bool testNoteRoundTrip()
     hold.duration   = 0.75;
     hold.trackIndex = 3;
     hold.dtrack     = 0;
+    hold.boundSound = "hold.wav";
     hold.metadata.note_properties[MMM::NoteMetadataType::OSU]["edge"] = "hold";
     hold.customColors.head = glm::vec4{ 0.4F, 0.5F, 0.6F, 1.0F };
 
@@ -92,6 +94,7 @@ bool testNoteRoundTrip()
     flick.duration   = 0.0;
     flick.trackIndex = 5;
     flick.dtrack     = -1;
+    flick.boundSound = "flick.wav";
     flick.metadata.note_properties[MMM::NoteMetadataType::MALODY]["sound"] =
         "snap";
     flick.customColors.flickArrow = glm::vec4{ 0.7F, 0.8F, 0.9F, 1.0F };
@@ -123,6 +126,7 @@ bool testNoteRoundTrip()
     if ( note.m_type != MMM::NoteType::POLYLINE ||
          !near(note.m_timestamp, 12.5) || !near(note.m_duration, 1.25) ||
          note.m_trackIndex != 2 || note.m_dtrack != 1 ||
+         note.m_boundSound != item.note.m_boundSound ||
          note.m_subNotes.size() != 2 ) {
         XERROR("Note clipboard protocol changed core note fields");
         return false;
@@ -139,6 +143,7 @@ bool testNoteRoundTrip()
     }
     if ( note.m_subNotes[0].type != MMM::NoteType::HOLD ||
          !near(note.m_subNotes[0].timestamp, 13.0) ||
+         note.m_subNotes[0].boundSound != hold.boundSound ||
          !sameColor(note.m_subNotes[0].customColors.head,
                     hold.customColors.head) ) {
         XERROR("Note clipboard protocol changed first sub note");
@@ -146,6 +151,7 @@ bool testNoteRoundTrip()
     }
     if ( note.m_subNotes[1].type != MMM::NoteType::FLICK ||
          note.m_subNotes[1].dtrack != -1 ||
+         note.m_subNotes[1].boundSound != flick.boundSound ||
          !sameColor(note.m_subNotes[1].customColors.flickArrow,
                     flick.customColors.flickArrow) ) {
         XERROR("Note clipboard protocol changed second sub note");

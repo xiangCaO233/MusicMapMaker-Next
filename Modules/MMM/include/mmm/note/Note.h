@@ -2,6 +2,7 @@
 
 #include "mmm/Metadata.h"
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace MMM
@@ -35,6 +36,9 @@ public:
 
     /// @brief 是否为子物件（隶属于 Polyline）
     bool m_isSubNote{ false };
+
+    /// @brief 物件绑定的自定义音效资源标识；为空时使用内置打击音效。
+    std::string m_boundSound;
 
     /// @brief 所有物件元数据
     NoteMetadata m_metadata;

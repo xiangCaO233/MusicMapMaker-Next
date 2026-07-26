@@ -319,6 +319,10 @@ void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
                                               scheduledDelayFrames);
         }
         node->play();
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            m_latestNode = node;
+        }
     }
 }
 

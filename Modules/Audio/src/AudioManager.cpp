@@ -189,6 +189,8 @@ void AudioManager::init()
 void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
+    waitForQueuedSoundEffectLoads();
+    clearSoundEffects();
     destroyPlaybackBackend();
     unloadAuditionTrack();
 

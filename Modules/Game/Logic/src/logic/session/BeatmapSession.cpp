@@ -43,6 +43,40 @@ constexpr double VISUAL_ANIMATION_MAX_DT = 0.05;
 /// @brief 指数平滑系数，约等于在配置时长内完成 99.75% 的位移。
 constexpr double VISUAL_ANIMATION_RESPONSE = 6.0;
 
+/// @brief 物件绑定音效后台加载推进间隔。
+constexpr double BOUND_SOUND_PREFETCH_INTERVAL_SECONDS = 0.01;
+
+/// @brief 物件绑定音效相对当前播放位置的预读窗口。
+constexpr double BOUND_SOUND_PREFETCH_WINDOW_SECONDS = 5.0;
+
+/// @brief 单次预读最多检查的打击事件数量。
+constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
+
+/// @brief 将当前时间窗口内的物件绑定音效增量加入后台加载队列。
+/// @param ctx 当前谱面会话。
+/// @warning 逻辑低频预读路径：由系统时间节流，只线性推进尚未检查的事件，
+/// 不得访问文件系统或回扫完整事件表。
+void prefetchBoundNoteSounds(SessionContext& ctx)
+{
+    auto&        audioManager = Audio::AudioManager::instance();
+    const double prefetchEnd =
+        ctx.animateTime + BOUND_SOUND_PREFETCH_WINDOW_SECONDS;
+    std::size_t examinedCount = 0U;
+
+    while ( ctx.nextBoundSoundPrefetchIndex < ctx.hitEvents.size() &&
+            examinedCount < MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK ) {
+        const auto& event = ctx.hitEvents[ctx.nextBoundSoundPrefetchIndex];
+        if ( event.timestamp > prefetchEnd ) break;
+        if ( !event.boundSound.empty() ) {
+            audioManager.queueBoundNoteSoundEffectLoad(event.boundSound);
+        }
+        ++ctx.nextBoundSoundPrefetchIndex;
+        ++examinedCount;
+    }
+
+    audioManager.updateQueuedSoundEffectLoads();
+}
+
 /// @brief 规范化时间线缩放倍率，避免无效配置进入视觉动画。
 /// @param zoom 输入缩放倍率。
 /// @return 可用于坐标映射的正缩放倍率。
@@ -324,6 +358,15 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
+
+    const bool shouldPrefetchBoundSounds =
+        isActiveSession || m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+    if ( shouldPrefetchBoundSounds &&
+         currentSysTime >= m_ctx->nextBoundSoundPrefetchSystemTime ) {
+        prefetchBoundNoteSounds(*m_ctx);
+        m_ctx->nextBoundSoundPrefetchSystemTime =
+            currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
+    }
 
     bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                                m_ctx->brushState.isActive ||

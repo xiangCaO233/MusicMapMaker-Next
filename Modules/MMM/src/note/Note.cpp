@@ -3,9 +3,51 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 
 namespace MMM
 {
+namespace
+{
+/// @brief 按冒号拆分 osu! HitSample，并保留结尾空字段。
+/// @param value 待拆分的 HitSample 字符串。
+/// @return HitSample 字段列表。
+std::vector<std::string> splitOsuHitSample(std::string_view value)
+{
+    std::vector<std::string> fields;
+    std::size_t              start = 0;
+    while ( start <= value.size() ) {
+        const std::size_t end = value.find(':', start);
+        fields.emplace_back(value.substr(start,
+                                         end == std::string_view::npos
+                                             ? value.size() - start
+                                             : end - start));
+        if ( end == std::string_view::npos ) break;
+        start = end + 1;
+    }
+    return fields;
+}
+
+/// @brief 将 osu! HitSample 的前四个参数与自定义音效文件名重新组合。
+/// @param original 原始 HitSample 字符串。
+/// @param sampleFile 通用物件字段保存的自定义音效文件名。
+/// @return 固定包含五段参数的 HitSample 字符串。
+std::string composeOsuHitSample(std::string_view original,
+                                std::string_view sampleFile)
+{
+    auto fields = splitOsuHitSample(original);
+    fields.resize(5);
+    fields[4] = sampleFile;
+
+    std::ostringstream stream;
+    for ( std::size_t index = 0; index < fields.size(); ++index ) {
+        if ( index > 0 ) stream << ':';
+        stream << fields[index];
+    }
+    return stream.str();
+}
+}  // namespace
+
 Note::Note() {}
 
 Note::~Note() {}
@@ -33,6 +75,8 @@ void Note::from_osu_description(const std::vector<std::string>& description,
 
     // 音效组
     osunote_prop["samplegroup"] = MMM::Internal::safeAt(description, 5);
+    const auto hitSampleFields = splitOsuHitSample(osunote_prop["samplegroup"]);
+    m_boundSound               = MMM::Internal::safeAt(hitSampleFields, 4);
 }
 
 /// @brief 转换为osu描述
@@ -75,13 +119,10 @@ std::string Note::to_osu_description(int32_t orbit_count)
     }
 
     // 音效组参数
-    if ( auto it = osunote_prop.find("samplegroup");
-         it != osunote_prop.end() ) {
-        std::string notegroup = it->second;
-        oss << notegroup;
-    } else {
-        oss << "0:0:0:0:";
-    }
+    const auto sampleGroup = osunote_prop.contains("samplegroup")
+                                 ? osunote_prop.at("samplegroup")
+                                 : std::string("0:0:0:0:");
+    oss << composeOsuHitSample(sampleGroup, m_boundSound);
 
     return oss.str();
 }

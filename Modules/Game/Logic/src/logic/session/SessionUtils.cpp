@@ -301,7 +301,7 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float  snapY    = judgmentLineY -
+        float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( config.settings.scrollSnap ||
@@ -335,12 +335,13 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
+    auto it = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });
-    ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
-    ctx.nextPredictHitIndex = ctx.nextHitIndex;
+    ctx.nextHitIndex                = std::distance(ctx.hitEvents.begin(), it);
+    ctx.nextPredictHitIndex         = ctx.nextHitIndex;
+    ctx.nextBoundSoundPrefetchIndex = ctx.nextHitIndex;
 }
 
 void ensureBpmEvents(SessionContext& ctx)
@@ -379,7 +380,8 @@ void ensureHitEvents(SessionContext& ctx)
 void rebuildHitEvents(SessionContext& ctx)
 {
     ctx.hitEvents.clear();
-    ctx.nextHitIndex = 0;
+    ctx.nextHitIndex                = 0;
+    ctx.nextBoundSoundPrefetchIndex = 0;
 
     double maxEndTime = 0.0;
 
@@ -410,14 +412,19 @@ void rebuildHitEvents(SessionContext& ctx)
                     span = std::abs(sn.dtrack) + 1;
                 }
 
-                ctx.hitEvents.push_back({ sn.timestamp,
-                                          sn.type,
-                                          role,
-                                          span,
-                                          sn.trackIndex,
-                                          sn.dtrack,
-                                          sn.duration,
-                                          true });
+                ctx.hitEvents.push_back(
+                    { sn.timestamp,
+                      sn.type,
+                      role,
+                      span,
+                      sn.trackIndex,
+                      sn.dtrack,
+                      sn.duration,
+                      true,
+                      !sn.boundSound.empty()
+                          ? sn.boundSound
+                          : (role == HitRole::Head ? note.m_boundSound
+                                                   : std::string{}) });
 
                 double snEndTime = sn.timestamp + sn.duration;
                 if ( snEndTime > maxEndTime ) {
@@ -437,7 +444,8 @@ void rebuildHitEvents(SessionContext& ctx)
                                       note.m_trackIndex,
                                       note.m_dtrack,
                                       note.m_duration,
-                                      false });
+                                      false,
+                                      note.m_boundSound });
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());

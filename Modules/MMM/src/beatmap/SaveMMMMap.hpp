@@ -117,6 +117,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         json n;
         n["timestamp"] = note.m_timestamp;
         n["track"]     = note.m_track;
+        if ( !note.m_boundSound.empty() ) {
+            n["bound_sound"] = note.m_boundSound;
+        }
 
         switch ( note.m_type ) {
         case NoteType::NOTE: n["type"] = "note"; break;
@@ -140,6 +143,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 double   duration;
                 int      track;
                 int      dtrack;
+                /// @brief 清洗过程中随子物件保留的绑定音效资源标识。
+                std::string boundSound;
             };
             std::vector<CleanSeg> cleanSubs;
             for ( const auto& subNoteRef : poly.m_subNotes ) {
@@ -151,14 +156,16 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                                           sn.m_timestamp,
                                           dur,
                                           (int)sn.m_track,
-                                          0 });
+                                          0,
+                                          sn.m_boundSound });
                 } else if ( sn.m_type == NoteType::FLICK ) {
                     cleanSubs.push_back(
                         { NoteType::FLICK,
                           sn.m_timestamp,
                           0.0,
                           (int)sn.m_track,
-                          static_cast<const Flick&>(sn).m_dtrack });
+                          static_cast<const Flick&>(sn).m_dtrack,
+                          sn.m_boundSound });
                 }
             }
 
@@ -188,11 +195,17 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                         if ( curr.type == next.type ) {
                             if ( curr.type == NoteType::HOLD ) {
                                 curr.duration += next.duration;
+                                if ( curr.boundSound.empty() ) {
+                                    curr.boundSound = next.boundSound;
+                                }
                                 cleanSubs.erase(cleanSubs.begin() + i + 1);
                                 changed = true;
                                 continue;
                             } else if ( curr.type == NoteType::FLICK ) {
                                 curr.dtrack += next.dtrack;
+                                if ( curr.boundSound.empty() ) {
+                                    curr.boundSound = next.boundSound;
+                                }
                                 cleanSubs.erase(cleanSubs.begin() + i + 1);
                                 changed = true;
                                 continue;
@@ -219,6 +232,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 }
                 n["timestamp"] = s.timestamp;
                 n["track"]     = s.track;
+                if ( note.m_boundSound.empty() && !s.boundSound.empty() ) {
+                    n["bound_sound"] = s.boundSound;
+                }
             } else {
                 n["type"]         = "polyline";
                 json subNotesJson = json::array();
@@ -232,6 +248,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                     } else if ( s.type == NoteType::FLICK ) {
                         snj["type"]   = "flick";
                         snj["dtrack"] = s.dtrack;
+                    }
+                    if ( !s.boundSound.empty() ) {
+                        snj["bound_sound"] = s.boundSound;
                     }
                     subNotesJson.push_back(snj);
                 }

@@ -4,7 +4,11 @@
 #include "config/EditorSettings.h"
 #include "mmm/project/AudioResource.h"
 #include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -435,6 +439,19 @@ public:
     /// UI、渲染、逻辑 update 或音频回调中调用。
     bool ensureSoundEffectLoaded(const std::string& key);
 
+    /// @brief 将物件绑定音效加入后台按需加载队列。
+    /// @param key 谱面物件绑定的项目音效资源标识。
+    /// @return 已加载、已排队或成功加入队列时返回 true。
+    /// @warning 逻辑预读热路径：仅访问内存登记表并对首次出现的资源排队，
+    /// 不得访问文件系统或等待解码。
+    bool queueBoundNoteSoundEffectLoad(const std::string& key);
+
+    /// @brief 推进后台音效加载任务并接入已准备好的音效池。
+    /// @param maxPreparedPerUpdate 单次调用最多接入的音效数量。
+    /// @warning 逻辑低频轮询路径：调用方必须节流；单次只启动固定数量后台任务，
+    /// 文件探测和解码均在线程池执行。
+    void updateQueuedSoundEffectLoads(std::size_t maxPreparedPerUpdate = 2U);
+
     /// @brief 查询指定音效是否已经完成解码并创建音效池。
     /// @param key 音效标识符。
     /// @return 音效池已存在时返回 true。
@@ -529,6 +546,22 @@ private:
     /// @param key 音效池标识。
     /// @return 已包含全局音量和对应总线增益的基础音量。
     float getSFXEffectiveGain(const std::string& key) const;
+
+    /// @brief 判断指定音效是否应接入打击音效总线。
+    /// @param key 音效资源标识。
+    /// @return 内置打击音效或谱面绑定采样返回 true。
+    bool usesHitEffectRouting(const std::string& key) const;
+
+    /// @brief 使用已探测的音轨创建音效池并接入混音图。
+    /// @param key 已登记的音效资源标识。
+    /// @param track 后台加载完成的音轨。
+    /// @return 成功接入或已存在时返回 true。
+    bool attachSoundEffectPool(const std::string&               key,
+                               std::shared_ptr<ice::AudioTrack> track);
+
+    /// @brief 等待所有后台音效文件探测任务完成。
+    /// @warning 仅允许在 AudioManager 关闭路径调用，会阻塞等待线程池任务。
+    void waitForQueuedSoundEffectLoads();
 
     /// @brief 刷新所有音效池当前播放节点的有效音量。
     void refreshSFXEffectiveVolumes();
@@ -654,11 +687,62 @@ private:
 
         /// @brief 文件开头到有效出声点的延迟，单位为秒。
         double m_leadInSeconds{ 0.0 };
+
+        /// @brief 是否由谱面物件绑定并需要接入打击音效总线。
+        bool m_isBoundNoteSound{ false };
+
+        /// @brief 本次登记的唯一修订号，用于丢弃过期后台加载结果。
+        std::uint64_t m_revision{ 0U };
+    };
+
+    /// @brief 等待线程池探测的音效加载请求。
+    struct QueuedSoundEffectLoad {
+        /// @brief 音效资源标识。
+        std::string key;
+
+        /// @brief 登记时的音频文件绝对路径。
+        std::string filePath;
+
+        /// @brief 登记修订号。
+        std::uint64_t revision{ 0U };
+    };
+
+    /// @brief 文件探测完成并等待逻辑线程接入混音图的音效。
+    struct PreparedSoundEffectLoad {
+        /// @brief 音效资源标识。
+        std::string key;
+
+        /// @brief 登记修订号。
+        std::uint64_t revision{ 0U };
+
+        /// @brief 探测成功后创建的异步解码音轨。
+        std::shared_ptr<ice::AudioTrack> track;
     };
 
     /// @brief 已登记音效描述表；登记本身不创建解码数据或混音节点。
     std::unordered_map<std::string, RegisteredSoundEffect>
         m_registeredSoundEffects;
+
+    /// @brief 等待提交到后台线程池的物件绑定音效请求。
+    std::deque<QueuedSoundEffectLoad> m_queuedSoundEffectLoads;
+
+    /// @brief 已排队或正在探测的音效及其登记修订号。
+    std::unordered_map<std::string, std::uint64_t> m_pendingSoundEffectLoads;
+
+    /// @brief 后台探测任务产生的待接入结果。
+    std::deque<PreparedSoundEffectLoad> m_preparedSoundEffectLoads;
+
+    /// @brief 保护后台任务写入待接入结果队列。
+    std::mutex m_preparedSoundEffectLoadsMutex;
+
+    /// @brief 后台文件探测任务句柄；关闭音频系统前必须全部等待完成。
+    std::vector<std::future<void>> m_soundEffectLoadTasks;
+
+    /// @brief 当前正在后台探测文件的任务数量。
+    std::size_t m_activeSoundEffectLoadCount{ 0U };
+
+    /// @brief 下一个音效登记修订号。
+    std::uint64_t m_nextSoundEffectRevision{ 1U };
 
     /// @brief 已加载的音效池表。
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>

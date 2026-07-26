@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -152,10 +153,13 @@ std::vector<CleanPolylineSubSegment> cleanPolylineSubSegments(
 /// @brief 将单个折线子段转为独立音符组件。
 /// @param target 被降级的父音符组件。
 /// @param sub 保留下来的唯一子段。
+/// @param inheritsParentSound 子段是否仍包含原折线头部。
 void applyStandaloneSubSegment(NoteComponent&                target,
-                               const NoteComponent::SubNote& sub)
+                               const NoteComponent::SubNote& sub,
+                               bool inheritsParentSound)
 {
-    const NoteColorOverrides parentColors = target.m_customColors;
+    const NoteColorOverrides parentColors     = target.m_customColors;
+    const std::string        parentBoundSound = target.m_boundSound;
 
     target.m_type           = sub.type;
     target.m_timestamp      = sub.timestamp;
@@ -166,6 +170,10 @@ void applyStandaloneSubSegment(NoteComponent&                target,
     target.m_parentPolyline = entt::null;
     target.m_subIndex       = -1;
     target.m_metadata       = sub.metadata;
+    target.m_boundSound     = sub.boundSound;
+    if ( target.m_boundSound.empty() && inheritsParentSound ) {
+        target.m_boundSound = parentBoundSound;
+    }
     applyNoteColorOverrides(
         target, mergeStandalonePolylineColors(sub.customColors, parentColors));
     target.m_subNotes.clear();
@@ -191,7 +199,9 @@ void applyCleanedPolylineSubSegments(
     }
 
     if ( segments.size() == 1 ) {
-        applyStandaloneSubSegment(parentAfter, segments.front().sub);
+        applyStandaloneSubSegment(parentAfter,
+                                  segments.front().sub,
+                                  segments.front().sourceIndex == 0);
         return;
     }
 
@@ -343,9 +353,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -552,12 +562,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW = (it->second.viewportWidth *
-                             (ctx.lastConfig.visual.trackLayout.right -
-                              ctx.lastConfig.visual.trackLayout.left)) /
-                            static_cast<float>(ctx.trackCount);
-            float lx = it->second.viewportWidth *
-                       ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW  = (it->second.viewportWidth *
+                              (ctx.lastConfig.visual.trackLayout.right -
+                               ctx.lastConfig.visual.trackLayout.left)) /
+                             static_cast<float>(ctx.trackCount);
+            float lx       = it->second.viewportWidth *
+                             ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {
@@ -728,6 +738,7 @@ void GrabTool::syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
         subNC.m_trackIndex   = sub.trackIndex;
         subNC.m_dtrack       = sub.dtrack;
         subNC.m_metadata     = sub.metadata;
+        subNC.m_boundSound   = sub.boundSound;
         subNC.m_customColors = sub.customColors;
     }
 }

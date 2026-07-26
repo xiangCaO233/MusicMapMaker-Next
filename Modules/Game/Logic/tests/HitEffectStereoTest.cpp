@@ -101,6 +101,32 @@ bool testDisabledKeepsOriginalStereo()
     return true;
 }
 
+/// @brief 验证绑定音效严格优先于内置 Note/Flick 音效。
+/// @return 非空绑定返回原资源，空绑定按物件类型返回内置资源时返回 true。
+bool testBoundSoundOverridesDefault()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto boundEvent       = makeEvent(MMM::NoteType::FLICK, 1, 1);
+    boundEvent.boundSound = "sample.wav";
+    if ( HitFXSystem::soundEffectKeyForEvent(
+             boundEvent, MMM::NoteType::FLICK) != "sample.wav" ) {
+        XERROR("Bound note sound did not override the built-in Flick sound");
+        return false;
+    }
+
+    const auto noteEvent  = makeEvent(MMM::NoteType::NOTE, 0);
+    const auto flickEvent = makeEvent(MMM::NoteType::FLICK, 0, 1);
+    if ( HitFXSystem::soundEffectKeyForEvent(noteEvent, MMM::NoteType::NOTE) !=
+             "hiteffect.note" ||
+         HitFXSystem::soundEffectKeyForEvent(
+             flickEvent, MMM::NoteType::FLICK) != "hiteffect.flick" ) {
+        XERROR("Empty bound sound did not select the built-in hit effect");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
@@ -109,7 +135,8 @@ int main()
 {
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
                    testTrackSidesMatchChannels() &&
-                   testDisabledKeepsOriginalStereo()
+                   testDisabledKeepsOriginalStereo() &&
+                   testBoundSoundOverridesDefault()
                ? 0
                : 1;
 }
