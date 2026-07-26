@@ -110,6 +110,19 @@ bool testPluginLoad(MMM::Graphic::ImGuiThemeRegistry& registry,
                 "有效主题实例未进入注册表");
     ok &= check(registry.findTheme("test.invalid") == nullptr,
                 "无效主题实例不应进入注册表");
+    ok &= check(registry.plugins().size() == 2, "插件清单数量不匹配");
+    const auto* validPluginInfo = registry.findPlugin("themes/01-valid.lua");
+    const auto* invalidPluginInfo =
+        registry.findPlugin("themes/02-invalid.lua");
+    ok &= check(validPluginInfo && validPluginInfo->enabled &&
+                    validPluginInfo->loadedThemeCount == 1 &&
+                    validPluginInfo->errorCount == 0,
+                "有效插件清单状态不匹配");
+    ok &= check(invalidPluginInfo && invalidPluginInfo->enabled &&
+                    invalidPluginInfo->loadedThemeCount == 0 &&
+                    invalidPluginInfo->errorCount == 1 &&
+                    !invalidPluginInfo->firstError.empty(),
+                "无效插件清单状态不匹配");
 
     ImGuiStyle style;
     ok &= check(registry.applyTheme("test.ocean", style), "自定义主题应用失败");
@@ -159,6 +172,41 @@ bool testReloadClearsOldThemes(MMM::Graphic::ImGuiThemeRegistry& registry,
                 "重载后旧主题实例仍然存在");
     ok &= check(registry.findTheme("test.reloaded") != nullptr,
                 "重载后新主题实例不存在");
+    return ok;
+}
+
+/// @brief 验证插件文件禁用后不执行，重新启用后立即恢复实例。
+/// @param registry 主题注册表。
+/// @param pluginDirectory 测试插件目录。
+/// @return 禁用与重新启用状态均正确时返回 true。
+bool testPluginHotToggle(MMM::Graphic::ImGuiThemeRegistry& registry,
+                         const std::filesystem::path&      pluginDirectory)
+{
+    const std::vector<std::string> disabledPluginIds{ "themes/01-valid.lua" };
+    const auto                     disabledResult =
+        registry.reloadThemePlugins(pluginDirectory, disabledPluginIds);
+    bool ok = check(disabledResult.success(), "禁用插件不应产生加载错误");
+    ok &= check(disabledResult.disabledPluginFiles == 1,
+                "禁用插件文件计数不匹配");
+    ok &=
+        check(disabledResult.loadedThemeCount == 0, "禁用插件不应创建主题实例");
+    ok &= check(registry.findTheme("test.reloaded") == nullptr,
+                "禁用插件后主题实例仍然存在");
+    const auto* disabledPlugin = registry.findPlugin("themes/01-valid.lua");
+    ok &= check(disabledPlugin && !disabledPlugin->enabled &&
+                    disabledPlugin->loadedThemeCount == 0,
+                "插件清单未保留禁用状态");
+
+    const auto enabledResult = registry.reloadThemePlugins(pluginDirectory);
+    ok &= check(enabledResult.success(), "重新启用插件应成功加载");
+    ok &= check(enabledResult.disabledPluginFiles == 0,
+                "重新启用后不应保留禁用计数");
+    ok &= check(registry.findTheme("test.reloaded") != nullptr,
+                "重新启用后主题实例未恢复");
+    const auto* enabledPlugin = registry.findPlugin("themes/01-valid.lua");
+    ok &= check(enabledPlugin && enabledPlugin->enabled &&
+                    enabledPlugin->loadedThemeCount == 1,
+                "重新启用后的插件清单状态不匹配");
     return ok;
 }
 
@@ -225,6 +273,7 @@ int main(int argc, char* argv[])
     bool ok = check(registerBaseTheme(registry), "内置基底主题注册失败");
     ok &= testPluginLoad(registry, pluginDirectory);
     ok &= testReloadClearsOldThemes(registry, pluginDirectory);
+    ok &= testPluginHotToggle(registry, pluginDirectory);
     ok &= testDocumentedExample(
         examplePath, pluginDirectory.parent_path() / "theme_plugin_example");
     return ok ? 0 : 1;

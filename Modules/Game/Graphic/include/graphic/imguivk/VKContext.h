@@ -18,6 +18,7 @@
 #include <expected>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -180,6 +181,13 @@ public:
     /// @warning 低频插件重载路径：会访问文件系统并执行
     /// Lua，只能从启动或菜单动作调用。
     ThemePluginReloadResult reloadPlugins();
+
+    /// @brief 热切换单个已扫描插件的启用状态并立即重载插件。
+    /// @param pluginId 配置根目录相对插件 ID。
+    /// @param enabled 切换后的启用状态。
+    /// @return 找到插件且配置成功保存时返回 true；运行时切换不因保存失败回滚。
+    /// @warning 低频插件管理路径：会保存配置、访问文件系统并执行 Lua。
+    bool setPluginEnabled(std::string_view pluginId, bool enabled);
 
     /// @brief 获取当前上下文持有的主题实例注册表。
     /// @return 主题注册表只读引用。

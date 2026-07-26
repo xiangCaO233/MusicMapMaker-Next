@@ -637,6 +637,11 @@ struct EditorSettings {
     /// 任何非 Auto 值均可引用内置或 Lua 插件主题实例。
     std::string theme{ UI_THEME_AUTO_ID };
 
+    /// @brief 已禁用插件的配置根目录相对 ID。
+    /// @details 当前主题插件使用 themes/<相对 Lua 路径>，移动配置根目录不会
+    /// 改变开关状态；移动插件文件会被视为新插件。
+    std::vector<std::string> disabledPluginIds;
+
     /// @brief 当前选择的皮肤目录名，位于 AppPaths::skinsRootPath() 下。
     std::string selectedSkinDirectory{ "mmm-default" };
 
@@ -810,6 +815,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "filePickerStyle", c.filePickerStyle },
         { "cursorStyle", c.cursorStyle },
         { "theme", c.theme },
+        { "disabledPluginIds", c.disabledPluginIds },
         { "selectedSkinDirectory", c.selectedSkinDirectory },
         { "beatDivisor", c.beatDivisor },
         { "overlapTimeWindowMs", c.overlapTimeWindowMs },
@@ -886,6 +892,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     } else {
         c.theme = UI_THEME_AUTO_ID;
     }
+    c.disabledPluginIds =
+        j.value("disabledPluginIds", std::vector<std::string>());
     c.selectedSkinDirectory =
         j.value("selectedSkinDirectory", std::string("mmm-default"));
     c.beatDivisor         = j.value("beatDivisor", 4);

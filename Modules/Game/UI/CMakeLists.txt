@@ -44,6 +44,7 @@ add_library(
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
+  src/ui/imgui/menu/actions/tools/OpenPluginListAction.cpp
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp

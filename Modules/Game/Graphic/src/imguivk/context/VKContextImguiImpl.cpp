@@ -591,10 +591,31 @@ void VKContext::registerBuiltInThemes()
 ThemePluginReloadResult VKContext::reloadPlugins()
 {
     registerBuiltInThemes();
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
     ThemePluginReloadResult result = m_themeRegistry.reloadThemePlugins(
-        Config::AppPaths::themePluginsRootPath());
+        Config::AppPaths::themePluginsRootPath(), settings.disabledPluginIds);
     applyTheme();
     return result;
+}
+
+bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
+{
+    if ( !m_themeRegistry.findPlugin(pluginId) ) return false;
+
+    auto& disabledPluginIds =
+        Config::AppConfig::instance().getEditorSettings().disabledPluginIds;
+    if ( enabled ) {
+        std::erase(disabledPluginIds, pluginId);
+    } else if ( std::find(disabledPluginIds.begin(),
+                          disabledPluginIds.end(),
+                          pluginId) == disabledPluginIds.end() ) {
+        disabledPluginIds.emplace_back(pluginId);
+        std::sort(disabledPluginIds.begin(), disabledPluginIds.end());
+    }
+
+    const bool saved = Config::AppConfig::instance().save();
+    reloadPlugins();
+    return saved;
 }
 
 void VKContext::applyTheme()

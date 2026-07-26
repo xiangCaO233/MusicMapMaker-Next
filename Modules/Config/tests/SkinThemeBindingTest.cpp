@@ -75,7 +75,11 @@ bool verifyLegacyAppConfigSemantics()
     from_json(manualJson, manualSettings);
 
     MMM::Config::EditorSettings pluginSettings;
-    const nlohmann::json        pluginJson{ { "theme", "example.twilight" } };
+    const nlohmann::json        pluginJson{
+        { "theme", "example.twilight" },
+        { "disabledPluginIds",
+          nlohmann::json::array({ "themes/example.lua" }) },
+    };
     from_json(pluginJson, pluginSettings);
 
     MMM::Config::EditorSettings legacyCeciliaSettings;
@@ -93,6 +97,9 @@ bool verifyLegacyAppConfigSemantics()
                 "旧版非 Auto 主题应继续表示用户手动选择");
     ok &= check(pluginSettings.theme == "example.twilight",
                 "插件主题稳定 ID 应原样载入");
+    ok &= check(pluginSettings.disabledPluginIds ==
+                    std::vector<std::string>{ "themes/example.lua" },
+                "禁用插件 ID 应原样载入");
     ok &= check(legacyCeciliaSettings.theme == "Cecilia",
                 "旧版 MmmDefault 主题应迁移为 Cecilia");
     ok &= check(serializedAutomatic.value("theme", std::string()) == "Auto",
@@ -100,6 +107,10 @@ bool verifyLegacyAppConfigSemantics()
     ok &= check(
         serializedPlugin.value("theme", std::string()) == "example.twilight",
         "插件主题稳定 ID 应原样序列化");
+    ok &= check(serializedPlugin.value("disabledPluginIds",
+                                       std::vector<std::string>()) ==
+                    std::vector<std::string>{ "themes/example.lua" },
+                "禁用插件 ID 应原样序列化");
     return ok;
 }
 }  // namespace

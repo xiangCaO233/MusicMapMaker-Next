@@ -49,6 +49,12 @@ MainMenuTools::MainMenuTools()
         nullptr,
         createOpenBeatmapSpeedExportAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_BARS,
+        "ui.tools.plugin_list",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenPluginListAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_COG,
         "ui.tools.reload_plugins",
         MainMenuItemTextKind::TranslationKey,

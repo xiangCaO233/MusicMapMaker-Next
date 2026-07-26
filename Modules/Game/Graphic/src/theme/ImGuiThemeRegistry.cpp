@@ -486,12 +486,30 @@ std::unique_ptr<ImGuiTheme> parseThemeDefinition(
 /// @param message 错误说明。
 void appendPluginError(ThemePluginReloadResult&     result,
                        const std::filesystem::path& sourcePath,
-                       std::string                  message)
+                       std::string                  message,
+                       ThemePluginInfo*             pluginInfo = nullptr)
 {
     XERROR("Theme plugin load failed [{}]: {}",
            Config::pathToUtf8(sourcePath),
            message);
+    if ( pluginInfo ) {
+        ++pluginInfo->errorCount;
+        if ( pluginInfo->firstError.empty() ) {
+            pluginInfo->firstError = message;
+        }
+    }
     result.errors.push_back({ sourcePath, std::move(message) });
+}
+
+/// @brief 生成主题插件相对于配置根目录的稳定 ID。
+/// @param pluginDirectory 主题插件根目录。
+/// @param pluginPath 插件 Lua 文件路径。
+/// @return 使用通用分隔符的 themes/<相对路径>。
+std::string makeThemePluginId(const std::filesystem::path& pluginDirectory,
+                              const std::filesystem::path& pluginPath)
+{
+    const auto relativePath = pluginPath.lexically_relative(pluginDirectory);
+    return "themes/" + Config::pathToUtf8Generic(relativePath);
 }
 
 }  // namespace
@@ -508,9 +526,11 @@ bool ImGuiThemeRegistry::registerBuiltInTheme(std::unique_ptr<ImGuiTheme> theme)
 }
 
 ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
-    const std::filesystem::path& pluginDirectory)
+    const std::filesystem::path& pluginDirectory,
+    std::span<const std::string> disabledPluginIds)
 {
     clearPluginThemes();
+    m_plugins.clear();
     ThemePluginReloadResult result;
 
     std::error_code filesystemError;
@@ -563,10 +583,27 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
     result.discoveredPluginFiles = pluginFiles.size();
 
     for ( const auto& pluginPath : pluginFiles ) {
+        const std::string pluginId =
+            makeThemePluginId(pluginDirectory, pluginPath);
+        const bool enabled = std::find(disabledPluginIds.begin(),
+                                       disabledPluginIds.end(),
+                                       pluginId) == disabledPluginIds.end();
+        m_plugins.push_back({
+            .id         = pluginId,
+            .sourcePath = pluginPath,
+            .enabled    = enabled,
+        });
+        ThemePluginInfo& pluginInfo = m_plugins.back();
+        if ( !enabled ) {
+            ++result.disabledPluginFiles;
+            continue;
+        }
+
         std::ifstream pluginFile(pluginPath, std::ios::in | std::ios::binary);
         if ( !pluginFile ) {
             ++result.failedThemeCount;
-            appendPluginError(result, pluginPath, "无法打开 Lua 插件文件");
+            appendPluginError(
+                result, pluginPath, "无法打开 Lua 插件文件", &pluginInfo);
             continue;
         }
         const std::string script((std::istreambuf_iterator<char>(pluginFile)),
@@ -581,7 +618,7 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
         if ( !scriptResult.valid() ) {
             ++result.failedThemeCount;
             const sol::error error = scriptResult;
-            appendPluginError(result, pluginPath, error.what());
+            appendPluginError(result, pluginPath, error.what(), &pluginInfo);
             continue;
         }
 
@@ -589,7 +626,7 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
         if ( !pluginObject.is<sol::table>() ) {
             ++result.failedThemeCount;
             appendPluginError(
-                result, pluginPath, "插件入口必须返回一个 Lua 表");
+                result, pluginPath, "插件入口必须返回一个 Lua 表", &pluginInfo);
             continue;
         }
         const sol::table  pluginTable = pluginObject.as<sol::table>();
@@ -597,8 +634,10 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
             pluginTable["type"].get_or(std::string());
         if ( pluginType != "theme" ) {
             ++result.failedThemeCount;
-            appendPluginError(
-                result, pluginPath, "主题插件的 type 必须为 theme");
+            appendPluginError(result,
+                              pluginPath,
+                              "主题插件的 type 必须为 theme",
+                              &pluginInfo);
             continue;
         }
 
@@ -608,8 +647,10 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
              themesObject.get_type() != sol::type::nil ) {
             if ( !themesObject.is<sol::table>() ) {
                 ++result.failedThemeCount;
-                appendPluginError(
-                    result, pluginPath, "themes 必须是主题定义数组");
+                appendPluginError(result,
+                                  pluginPath,
+                                  "themes 必须是主题定义数组",
+                                  &pluginInfo);
                 continue;
             }
             const sol::table themes = themesObject.as<sol::table>();
@@ -624,7 +665,8 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
                     appendPluginError(result,
                                       pluginPath,
                                       "themes[" + std::to_string(index) +
-                                          "] 必须是主题定义表");
+                                          "] 必须是主题定义表",
+                                      &pluginInfo);
                     continue;
                 }
                 definitions.push_back(definition.as<sol::table>());
@@ -635,7 +677,8 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
 
         if ( definitions.empty() ) {
             ++result.failedThemeCount;
-            appendPluginError(result, pluginPath, "插件没有定义任何主题");
+            appendPluginError(
+                result, pluginPath, "插件没有定义任何主题", &pluginInfo);
             continue;
         }
 
@@ -644,7 +687,8 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
             auto theme = parseThemeDefinition(definition, pluginPath, error);
             if ( !theme ) {
                 ++result.failedThemeCount;
-                appendPluginError(result, pluginPath, std::move(error));
+                appendPluginError(
+                    result, pluginPath, std::move(error), &pluginInfo);
                 continue;
             }
             const std::string themeId(theme->id());
@@ -653,18 +697,32 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
                 appendPluginError(
                     result,
                     pluginPath,
-                    "主题 ID 重复、非法或 base 不是已注册内置主题: " + themeId);
+                    "主题 ID 重复、非法或 base 不是已注册内置主题: " + themeId,
+                    &pluginInfo);
                 continue;
             }
             ++result.loadedThemeCount;
+            ++pluginInfo.loadedThemeCount;
         }
     }
 
-    XINFO("Theme plugins reloaded: {} file(s), {} theme(s), {} error(s)",
-          result.discoveredPluginFiles,
-          result.loadedThemeCount,
-          result.errors.size());
+    XINFO(
+        "Theme plugins reloaded: {} file(s), {} disabled, {} theme(s), {} "
+        "error(s)",
+        result.discoveredPluginFiles,
+        result.disabledPluginFiles,
+        result.loadedThemeCount,
+        result.errors.size());
     return result;
+}
+
+const ThemePluginInfo* ImGuiThemeRegistry::findPlugin(std::string_view id) const
+{
+    const auto plugin =
+        std::find_if(m_plugins.begin(), m_plugins.end(), [&](const auto& item) {
+            return item.id == id;
+        });
+    return plugin == m_plugins.end() ? nullptr : &*plugin;
 }
 
 const ImGuiTheme* ImGuiThemeRegistry::findTheme(std::string_view id) const
