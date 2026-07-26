@@ -55,8 +55,8 @@ else()
   set(_mmm_package_arch "${PROJECT_PREBUILT_ARCH}")
 endif()
 
-# CPack 只在 macOS 生成 DragNDrop DMG；其它平台无需进入打包流程。
-set(CPACK_GENERATOR "DragNDrop")
+# CPack 同时生成供人工安装的 DMG，以及供自动更新器解压的完整 App ZIP。
+set(CPACK_GENERATOR "DragNDrop;ZIP")
 set(CPACK_MONOLITHIC_INSTALL ON)
 set(CPACK_PACKAGE_NAME "MusicMapMaker-Next")
 set(CPACK_PACKAGE_VENDOR "MusicMapMaker")

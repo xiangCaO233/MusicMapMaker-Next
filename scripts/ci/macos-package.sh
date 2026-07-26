@@ -5,12 +5,12 @@ showUsage() {
     cat <<'EOF'
 Usage: scripts/ci/macos-package.sh [options]
 
-Build the native macOS app bundle and package it as a CPack DragNDrop DMG.
+Build the native macOS app bundle and package DMG and ZIP release artifacts.
 
 Options:
   --arch <arm64|x86_64>      Target architecture. Default: host architecture
   --build-dir <path>         Build directory. Default: build_macos_package_<arch>
-  --package-dir <path>       DMG output directory. Default: <build-dir>/packages
+  --package-dir <path>       Package output directory. Default: <build-dir>/packages
   --build-type <type>        CMake build type. Default: RelWithDebInfo
   --deployment-target <ver>  Minimum macOS deployment target. Default: 11.0
   --jobs <count>             Parallel build jobs passed to macos-build.sh
@@ -205,6 +205,24 @@ cpack --config "${cpackConfig}" \
     -G DragNDrop \
     -C "${buildType}" \
     -B "${packageDir}"
+cpack --config "${cpackConfig}" \
+    -G ZIP \
+    -C "${buildType}" \
+    -B "${packageDir}"
+
+updaterSource="${buildDir}/bin/MusicMapMaker-Updater"
+updaterOutput="${packageDir}/MusicMapMaker-Updater"
+if [[ ! -f "${updaterSource}" ]]; then
+    printf "error: updater executable not found: %s\n" "${updaterSource}" >&2
+    exit 1
+fi
+cp "${updaterSource}" "${updaterOutput}"
+if [[ -n "${codesignIdentity}" ]]; then
+    requireCommand codesign
+    codesign --force --sign "${codesignIdentity}" "${updaterOutput}"
+fi
 
 printf "macOS package output:\n"
-find "${packageDir}" -maxdepth 1 -type f -name '*.dmg' -print | sort
+find "${packageDir}" -maxdepth 1 -type f \
+    \( -name '*.dmg' -o -name '*.zip' -o -name 'MusicMapMaker-Updater' \) \
+    -print | sort

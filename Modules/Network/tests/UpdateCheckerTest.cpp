@@ -67,6 +67,9 @@ static int testUpdateInfoDefaults()
     checkStr(info.downloadUrl, "", "downloadUrl");
     checkStr(info.checksum, "", "checksum");
     checkStr(info.errorMessage, "", "errorMessage");
+    checkStr(info.updaterUrl, "", "updaterUrl");
+    checkStr(info.updaterChecksum, "", "updaterChecksum");
+    checkStr(info.updaterFilePath, "", "updaterFilePath");
     checkStr(info.downloadedFilePath, "", "downloadedFilePath");
 
     if ( info.status == UpdateStatus::kChecking ) {
@@ -156,9 +159,9 @@ static int testIsFinished()
         bool isTransient = (tc.status == UpdateStatus::kChecking ||
                             tc.status == UpdateStatus::kDownloading);
         bool isDone      = (tc.status == UpdateStatus::kUpToDate ||
-                       tc.status == UpdateStatus::kUpdateFound ||
-                       tc.status == UpdateStatus::kDownloaded ||
-                       tc.status == UpdateStatus::kError);
+                            tc.status == UpdateStatus::kUpdateFound ||
+                            tc.status == UpdateStatus::kDownloaded ||
+                            tc.status == UpdateStatus::kError);
 
         // 检查枚举值分类一致性
         if ( isTransient != isDone && tc.expectFinished == isDone ) {
