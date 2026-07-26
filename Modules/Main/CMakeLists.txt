@@ -1,6 +1,17 @@
 # Modules/Main/CMakeLists.txt
 
-if(WIN32)
+if(APPLE)
+  # macOS 使用标准 .app 应用束，供 CPack DragNDrop 生成可直接拖入 Applications 的 DMG。
+  add_executable(MusicMapMaker-Next MACOSX_BUNDLE src/main.cpp)
+  set_target_properties(
+    MusicMapMaker-Next
+    PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME "MusicMapMaker-Next"
+               MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+               MACOSX_BUNDLE_GUI_IDENTIFIER "top.xiang233.musicmapmaker-next"
+               MACOSX_BUNDLE_INFO_PLIST
+               "${CMAKE_SOURCE_DIR}/cmake/MacOSBundleInfo.plist.in"
+               MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+elseif(WIN32)
   # Windows 可执行文件编译配置 编译MusicMapMaker-Next.exe
   set(ICON_RESOURCE src/icon.rc)
   if(CMAKE_BUILD_TYPE STREQUAL Debug)
@@ -14,7 +25,7 @@ if(WIN32)
                                                         "/ENTRY:mainCRTStartup")
   endif()
 else()
-  # Linux/Macos 可执行文件编译配置 编译MusicMapMaker-Next可执行文件
+  # Linux 可执行文件编译配置 编译MusicMapMaker-Next可执行文件
   add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
 add_gcc_debug_extract(MusicMapMaker-Next)

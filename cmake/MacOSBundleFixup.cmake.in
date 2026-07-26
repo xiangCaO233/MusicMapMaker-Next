@@ -1,0 +1,32 @@
+# CPack 安装阶段需要把非系统动态库复制进应用束，并修正 Mach-O install name。
+set(_mmm_bundle "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/MusicMapMaker-Next.app")
+set(_mmm_moltenvk "${_mmm_bundle}/Contents/Frameworks/libMoltenVK.dylib")
+set(_mmm_dependency_dirs "@MMM_MACOS_DEPENDENCY_DIRS@")
+
+include(BundleUtilities)
+fixup_bundle("${_mmm_bundle}" "${_mmm_moltenvk}" "${_mmm_dependency_dirs}")
+
+# fixup_bundle 会改写应用束内容，因此签名必须最后执行。默认 "-" 为本地 ad-hoc 签名； CI 可通过
+# MMM_MACOS_CODESIGN_IDENTITY 换成 Developer ID。
+set(_mmm_codesign_identity "@MMM_MACOS_CODESIGN_IDENTITY@")
+if(NOT _mmm_codesign_identity STREQUAL "")
+  find_program(_mmm_codesign codesign REQUIRED)
+  set(_mmm_codesign_arguments --force --deep --sign "${_mmm_codesign_identity}")
+  if(NOT _mmm_codesign_identity STREQUAL "-")
+    list(APPEND _mmm_codesign_arguments --options runtime --timestamp)
+  endif()
+  list(APPEND _mmm_codesign_arguments "${_mmm_bundle}")
+
+  execute_process(COMMAND "${_mmm_codesign}" ${_mmm_codesign_arguments}
+                  RESULT_VARIABLE _mmm_codesign_result)
+  if(NOT _mmm_codesign_result EQUAL 0)
+    message(FATAL_ERROR "macOS 应用束签名失败：${_mmm_bundle}")
+  endif()
+
+  execute_process(
+    COMMAND "${_mmm_codesign}" --verify --deep --strict --verbose=2
+            "${_mmm_bundle}" RESULT_VARIABLE _mmm_codesign_verify_result)
+  if(NOT _mmm_codesign_verify_result EQUAL 0)
+    message(FATAL_ERROR "macOS 应用束签名校验失败：${_mmm_bundle}")
+  endif()
+endif()

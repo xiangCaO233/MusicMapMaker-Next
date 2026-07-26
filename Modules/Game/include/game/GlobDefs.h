@@ -13,6 +13,9 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+#elif defined(__APPLE__)
+#    include <limits.h>
+#    include <mach-o/dyld.h>
 #else
 #    include <limits.h>
 #    include <unistd.h>
@@ -36,6 +39,7 @@ constexpr int EXIT_WINDOW_EXEPTION = 1;
  * 利用静态对象的生命周期自动初始化和关闭日志系统。
  */
 struct RTTILogger {
+    /// @brief 初始化日志，并把工作目录切换到当前可执行文件所在目录。
     RTTILogger()
     {
 #ifdef _WIN32
@@ -66,6 +70,16 @@ struct RTTILogger {
         wchar_t buffer[MAX_PATH];
         DWORD   pathLength = GetModuleFileNameW(NULL, buffer, MAX_PATH);
         if ( pathLength == 0 || pathLength >= MAX_PATH ) {
+            workingDirectoryError = "failed to query executable path";
+        } else {
+            exePath = std::filesystem::path(buffer);
+        }
+#elif defined(__APPLE__)
+        /// @brief 保存 macOS 当前可执行文件路径。
+        char buffer[PATH_MAX];
+        /// @brief 记录路径缓冲区容量，并接收实际所需容量。
+        uint32_t pathLength = sizeof(buffer);
+        if ( _NSGetExecutablePath(buffer, &pathLength) != 0 ) {
             workingDirectoryError = "failed to query executable path";
         } else {
             exePath = std::filesystem::path(buffer);

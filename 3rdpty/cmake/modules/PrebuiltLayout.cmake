@@ -63,9 +63,12 @@ function(prebuilt_init default_root)
         CACHE STRING "Prebuilt platform directory name.")
   endif()
 
-  # 目前预编译目录按指针宽度区分架构。
+  # macOS 默认使用 Apple Silicon 预编译布局；其它平台继续按指针宽度选择。 交叉构建或 Intel macOS 构建可显式设置
+  # PROJECT_PREBUILT_ARCH 覆盖默认值。
   if(NOT DEFINED PROJECT_PREBUILT_ARCH OR PROJECT_PREBUILT_ARCH STREQUAL "")
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    if(APPLE)
+      set(_arch "arm64")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
       set(_arch "x86_64")
     else()
       set(_arch "x86")

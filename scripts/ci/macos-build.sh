@@ -32,6 +32,7 @@ Environment overrides:
   MACOS_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
   MACOS_SDK                    Default macOS SDK path or CMake SDK name
   MACOSX_DEPLOYMENT_TARGET     Default minimum macOS deployment target
+  MACOS_CODESIGN_IDENTITY      CPack app signing identity. Default: - (ad-hoc)
   CMAKE_GENERATOR              Default: Ninja
 EOF
 }
@@ -350,6 +351,7 @@ cmakeArgs=(
     -DMMM_DISABLE_CLANG_LTO="${disableClangLto}"
     -DMMM_PGO_INSTRUMENT=OFF
     -DMMM_PGO_USE=OFF
+    -DMMM_MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:--}"
     -DCMAKE_OSX_DEPLOYMENT_TARGET="${deploymentTarget}"
 )
 cmakeArgs+=(-S "${projectRoot}" -B "${buildDir}")
