@@ -1,4 +1,5 @@
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 
 #include <fmt/format.h>
@@ -145,6 +146,7 @@ void VKContext::registerGLFWExtensions()
  */
 void VKContext::releaseGLFW()
 {
+    VKRenderer::releaseGlfwCursorResources();
     glfwTerminate();
     XDEBUG("GLFW Terminated.");
 }

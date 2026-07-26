@@ -235,6 +235,10 @@ private:
 
     void releaseCursorManager();
 
+    /// @brief 在 GLFW 终止前销毁并清空进程级原生光标缓存。
+    /// @warning 低频 GLFW 生命周期路径：只能在主线程且 GLFW 仍已初始化时调用。
+    static void releaseGlfwCursorResources();
+
     /// @brief 确保离屏录制任务槽数量足够。
     /// @param taskCount 当前帧需要的任务槽数量。
     /// @warning 渲染热路径低频分支：只有可渲染视图数量增加时才创建 Vulkan

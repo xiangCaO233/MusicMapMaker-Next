@@ -245,15 +245,27 @@ bool isNativeResizeCursor(ImGuiMouseCursor cursor)
            cursor == ImGuiMouseCursor_ResizeNWSE;
 }
 
+constexpr size_t IMGUI_MOUSE_CURSOR_COUNT =
+    static_cast<size_t>(ImGuiMouseCursor_COUNT);
+using GlfwStandardCursorCache =
+    std::array<GLFWcursor*, IMGUI_MOUSE_CURSOR_COUNT>;
+
+/// @brief 获取由当前 GLFW 生命周期拥有的标准光标缓存。
+/// @return 标准光标句柄数组。
+/// @warning 渲染热路径：每帧可能访问；不得在此加入分配或 GLFW 调用。
+GlfwStandardCursorCache& glfwStandardCursorCache()
+{
+    static GlfwStandardCursorCache cursors{};
+    return cursors;
+}
+
 /// @brief 获取对应 ImGui 光标类型的 GLFW 标准光标。
 /// @param cursor 当前 ImGui 光标类型。
 /// @return GLFW 标准光标句柄，不支持时返回 nullptr。
 /// @warning 渲染热路径低频分支：首次遇到某个光标类型时创建 GLFW cursor。
 GLFWcursor* getGlfwStandardCursor(ImGuiMouseCursor cursor)
 {
-    constexpr size_t IMGUI_MOUSE_CURSOR_COUNT =
-        static_cast<size_t>(ImGuiMouseCursor_COUNT);
-    static std::array<GLFWcursor*, IMGUI_MOUSE_CURSOR_COUNT> cursors{};
+    auto& cursors = glfwStandardCursorCache();
 
     if ( cursor < 0 || cursor >= ImGuiMouseCursor_COUNT ) {
         return nullptr;
@@ -330,6 +342,24 @@ struct MainWindowFocusState {
     bool focused{ false };
 };
 
+/// @brief 获取 GLFW 主窗口光标状态缓存。
+/// @return 可修改的光标状态。
+/// @warning 渲染热路径：每帧访问；不得在此加入分配或 GLFW 调用。
+GlfwCursorState& glfwCursorState()
+{
+    static GlfwCursorState state;
+    return state;
+}
+
+/// @brief 获取 GLFW 主窗口焦点状态缓存。
+/// @return 可修改的焦点状态。
+/// @warning 渲染热路径：每帧访问；不得在此加入分配或 GLFW 调用。
+MainWindowFocusState& mainWindowFocusState()
+{
+    static MainWindowFocusState state;
+    return state;
+}
+
 /// @brief 对 GLFW 主窗口应用光标模式，并跳过重复状态写入。
 /// @param window GLFW 窗口句柄。
 /// @param cursorMode GLFW 光标模式。
@@ -338,7 +368,7 @@ struct MainWindowFocusState {
 void applyGlfwCursorMode(GLFWwindow* window, int cursorMode,
                          ImGuiMouseCursor cursor)
 {
-    static GlfwCursorState state;
+    auto& state = glfwCursorState();
 
     if ( !window ) {
         return;
@@ -394,7 +424,7 @@ void applyNativeCursor(GLFWwindow* window, ImGuiMouseCursor cursor)
 /// @warning 渲染热路径：每帧调用；只读取 GLFW 窗口属性和更新静态缓存。
 bool consumeMainWindowActivation(GLFWwindow* window)
 {
-    static MainWindowFocusState state;
+    auto& state = mainWindowFocusState();
 
     if ( !window ) {
         state.window  = nullptr;
@@ -530,6 +560,22 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
 #endif
 }
 }  // namespace
+
+/// @brief 在 GLFW 终止前销毁并清空进程级原生光标缓存。
+/// @warning 低频 GLFW 生命周期路径：只能在主线程且 GLFW 仍已初始化时调用。
+void VKRenderer::releaseGlfwCursorResources()
+{
+    auto& cursors = glfwStandardCursorCache();
+    for ( GLFWcursor*& cursor : cursors ) {
+        if ( cursor ) {
+            glfwDestroyCursor(cursor);
+            cursor = nullptr;
+        }
+    }
+
+    glfwCursorState()      = {};
+    mainWindowFocusState() = {};
+}
 
 // clang-format off
 /**
