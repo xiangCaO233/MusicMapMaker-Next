@@ -6,6 +6,7 @@
 #    include "event/ui/UpdateDragAreaEvent.h"
 #    include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #    include "graphic/glfw/window/adapters/IWindowFrameHost.h"
+#    include <optional>
 #    include <vector>
 
 struct GLFWwindow;
@@ -33,13 +34,13 @@ public:
     /// @return 成功将拖动交给 Window Server 时返回 true。
     bool requestMove() override;
 
-    /// @brief macOS 当前不从 GLFW 客户区回调发起原生缩放。
+    /// @brief 开始由客户端驱动的 macOS 无边框窗口缩放。
     /// @param edge 缩放方向。
-    /// @return 固定返回 false。
+    /// @return 成功记录缩放起始状态时返回 true。
     bool requestResize(WindowFrameResizeEdge edge) override;
 
-    /// @brief 判断是否需要 UI 层主动发起 frame 请求。
-    /// @return macOS 固定返回 false，普通拖动由 Cocoa 背景拖动处理。
+    /// @brief 判断是否需要 UI 层显示无边框窗口缩放光标。
+    /// @return 主窗口句柄有效时返回 true。
     [[nodiscard]] bool supportsClientFrameRequests() const override;
 
     /// @brief 判断是否需要 UI 层补绘边框和阴影。
@@ -81,6 +82,19 @@ private:
     /// @brief 移除 Cocoa content view 上关联的原生拖动命中桥接。
     void removeNativeDragBridge();
 
+    /// @brief 判断鼠标是否命中窗口边缘缩放区域。
+    /// @param cursorX 鼠标在窗口客户区中的 X 坐标。
+    /// @param cursorY 鼠标在窗口客户区中的 Y 坐标。
+    /// @return 命中的缩放方向；未命中时返回 std::nullopt。
+    [[nodiscard]] std::optional<WindowFrameResizeEdge> resolveResizeEdge(
+        double cursorX, double cursorY) const;
+
+    /// @brief 使用当前屏幕鼠标位置更新活动缩放矩形。
+    /// @return 成功向 AppKit 提交窗口矩形时返回 true。
+    /// @warning 输入热路径：仅在左键边缘缩放期间执行一次常量规模几何计算和
+    /// AppKit 窗口矩形更新。
+    bool updateActiveResize();
+
     /// @brief 判断鼠标是否命中标题栏拖拽区域。
     /// @param cursorX 鼠标在窗口客户区中的 X 坐标。
     /// @param cursorY 鼠标在窗口客户区中的 Y 坐标。
@@ -108,11 +122,35 @@ private:
     /// @brief 左键按下后是否等待触发标题栏移动。
     bool m_pendingMove{ false };
 
+    /// @brief 当前是否正在执行客户端驱动的边缘缩放。
+    bool m_resizeActive{ false };
+
+    /// @brief 当前活动缩放方向。
+    WindowFrameResizeEdge m_resizeEdge{ WindowFrameResizeEdge::Right };
+
     /// @brief 触发移动前记录的按下位置 X。
     double m_pressX{ 0.0 };
 
     /// @brief 触发移动前记录的按下位置 Y。
     double m_pressY{ 0.0 };
+
+    /// @brief 缩放开始时鼠标的屏幕 X 坐标。
+    double m_resizeStartMouseX{ 0.0 };
+
+    /// @brief 缩放开始时鼠标的屏幕 Y 坐标。
+    double m_resizeStartMouseY{ 0.0 };
+
+    /// @brief 缩放开始时窗口左下角的屏幕 X 坐标。
+    double m_resizeStartFrameX{ 0.0 };
+
+    /// @brief 缩放开始时窗口左下角的屏幕 Y 坐标。
+    double m_resizeStartFrameY{ 0.0 };
+
+    /// @brief 缩放开始时窗口宽度。
+    double m_resizeStartFrameWidth{ 0.0 };
+
+    /// @brief 缩放开始时窗口高度。
+    double m_resizeStartFrameHeight{ 0.0 };
 };
 
 }  // namespace MMM::Graphic

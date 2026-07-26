@@ -8,6 +8,7 @@
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <algorithm>
 #include <objc/runtime.h>
 
 namespace MMM::Graphic
@@ -16,6 +17,15 @@ namespace
 {
 /// @brief macOS 普通窗口的原生内容裁剪圆角半径。
 constexpr CGFloat MACOS_WINDOW_CORNER_RADIUS = 12.0;
+
+/// @brief macOS 无边框窗口缩放热区宽度。
+constexpr double MACOS_FRAME_RESIZE_HIT_THICKNESS = 7.0;
+
+/// @brief macOS 主窗口允许缩放到的最小宽度。
+constexpr CGFloat MACOS_MIN_WINDOW_WIDTH = 640.0;
+
+/// @brief macOS 主窗口允许缩放到的最小高度。
+constexpr CGFloat MACOS_MIN_WINDOW_HEIGHT = 480.0;
 
 /// @brief Cocoa 窗口上保存原始左键按下事件的关联键。
 char MACOS_MOUSE_DOWN_EVENT_ASSOCIATION_KEY;
@@ -125,13 +135,37 @@ bool MacOSWindowAdapter::requestMove()
 
 bool MacOSWindowAdapter::requestResize(WindowFrameResizeEdge edge)
 {
-    (void)edge;
-    return false;
+    if ( !m_window || glfwGetWindowMonitor(m_window) != nullptr ||
+         m_host.isFrameMaximized() ) {
+        return false;
+    }
+
+    NSWindow* nativeWindow = glfwGetCocoaWindow(m_window);
+    if ( !nativeWindow ) {
+        return false;
+    }
+
+    const NSRect frame = [nativeWindow frame];
+    if ( frame.size.width <= 0.0 || frame.size.height <= 0.0 ) {
+        return false;
+    }
+
+    const NSPoint mouseLocation = [NSEvent mouseLocation];
+    m_pendingMove               = false;
+    m_resizeActive              = true;
+    m_resizeEdge                = edge;
+    m_resizeStartMouseX         = mouseLocation.x;
+    m_resizeStartMouseY         = mouseLocation.y;
+    m_resizeStartFrameX         = frame.origin.x;
+    m_resizeStartFrameY         = frame.origin.y;
+    m_resizeStartFrameWidth     = frame.size.width;
+    m_resizeStartFrameHeight    = frame.size.height;
+    return true;
 }
 
 bool MacOSWindowAdapter::supportsClientFrameRequests() const
 {
-    return false;
+    return m_window != nullptr;
 }
 
 bool MacOSWindowAdapter::usesClientFrameOverlay() const
@@ -179,8 +213,15 @@ bool MacOSWindowAdapter::handleClientMouseButton(int button, int action,
     }
 
     if ( action != GLFW_PRESS || !m_window ||
-         glfwGetWindowMonitor(m_window) != nullptr ||
-         !isInsideDragArea(cursorX, cursorY) ) {
+         glfwGetWindowMonitor(m_window) != nullptr ) {
+        return false;
+    }
+
+    if ( auto edge = resolveResizeEdge(cursorX, cursorY) ) {
+        return requestResize(*edge);
+    }
+
+    if ( !isInsideDragArea(cursorX, cursorY) ) {
         return false;
     }
 
@@ -216,6 +257,10 @@ bool MacOSWindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
          glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS ) {
         resetPendingFrameRequest();
         return false;
+    }
+
+    if ( m_resizeActive ) {
+        return updateActiveResize();
     }
 
     if ( !m_pendingMove || !m_host.isFrameMaximized() ) {
@@ -272,6 +317,114 @@ void MacOSWindowAdapter::removeNativeDragBridge()
     cacheMouseDownEvent(nativeWindow, nil);
 }
 
+std::optional<WindowFrameResizeEdge> MacOSWindowAdapter::resolveResizeEdge(
+    double cursorX, double cursorY) const
+{
+    if ( !m_window || m_host.isFrameMaximized() ) {
+        return std::nullopt;
+    }
+
+    int width  = 0;
+    int height = 0;
+    glfwGetWindowSize(m_window, &width, &height);
+    if ( width <= 0 || height <= 0 ) {
+        return std::nullopt;
+    }
+
+    const bool left = cursorX <= MACOS_FRAME_RESIZE_HIT_THICKNESS;
+    const bool right =
+        cursorX >= static_cast<double>(width) -
+                       MACOS_FRAME_RESIZE_HIT_THICKNESS;
+    const bool top = cursorY <= MACOS_FRAME_RESIZE_HIT_THICKNESS;
+    const bool bottom =
+        cursorY >= static_cast<double>(height) -
+                       MACOS_FRAME_RESIZE_HIT_THICKNESS;
+
+    if ( top && left ) return WindowFrameResizeEdge::TopLeft;
+    if ( top && right ) return WindowFrameResizeEdge::TopRight;
+    if ( bottom && left ) return WindowFrameResizeEdge::BottomLeft;
+    if ( bottom && right ) return WindowFrameResizeEdge::BottomRight;
+    if ( left ) return WindowFrameResizeEdge::Left;
+    if ( right ) return WindowFrameResizeEdge::Right;
+    if ( top ) return WindowFrameResizeEdge::Top;
+    if ( bottom ) return WindowFrameResizeEdge::Bottom;
+    return std::nullopt;
+}
+
+bool MacOSWindowAdapter::updateActiveResize()
+{
+    NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
+    if ( !m_resizeActive || !nativeWindow ) {
+        return false;
+    }
+
+    const NSPoint mouseLocation = [NSEvent mouseLocation];
+    const CGFloat deltaX =
+        static_cast<CGFloat>(mouseLocation.x - m_resizeStartMouseX);
+    const CGFloat deltaY =
+        static_cast<CGFloat>(mouseLocation.y - m_resizeStartMouseY);
+    const CGFloat startX = static_cast<CGFloat>(m_resizeStartFrameX);
+    const CGFloat startY = static_cast<CGFloat>(m_resizeStartFrameY);
+    const CGFloat startWidth =
+        static_cast<CGFloat>(m_resizeStartFrameWidth);
+    const CGFloat startHeight =
+        static_cast<CGFloat>(m_resizeStartFrameHeight);
+
+    const NSSize nativeMinSize = [nativeWindow minSize];
+    const NSSize nativeMaxSize = [nativeWindow maxSize];
+    const CGFloat minWidth =
+        std::max(MACOS_MIN_WINDOW_WIDTH, nativeMinSize.width);
+    const CGFloat minHeight =
+        std::max(MACOS_MIN_WINDOW_HEIGHT, nativeMinSize.height);
+    const CGFloat maxWidth =
+        std::max({ minWidth, startWidth, nativeMaxSize.width });
+    const CGFloat maxHeight =
+        std::max({ minHeight, startHeight, nativeMaxSize.height });
+
+    const bool resizeLeft =
+        m_resizeEdge == WindowFrameResizeEdge::Left ||
+        m_resizeEdge == WindowFrameResizeEdge::TopLeft ||
+        m_resizeEdge == WindowFrameResizeEdge::BottomLeft;
+    const bool resizeRight =
+        m_resizeEdge == WindowFrameResizeEdge::Right ||
+        m_resizeEdge == WindowFrameResizeEdge::TopRight ||
+        m_resizeEdge == WindowFrameResizeEdge::BottomRight;
+    const bool resizeTop =
+        m_resizeEdge == WindowFrameResizeEdge::Top ||
+        m_resizeEdge == WindowFrameResizeEdge::TopLeft ||
+        m_resizeEdge == WindowFrameResizeEdge::TopRight;
+    const bool resizeBottom =
+        m_resizeEdge == WindowFrameResizeEdge::Bottom ||
+        m_resizeEdge == WindowFrameResizeEdge::BottomLeft ||
+        m_resizeEdge == WindowFrameResizeEdge::BottomRight;
+
+    CGFloat targetWidth = startWidth;
+    if ( resizeLeft ) {
+        targetWidth =
+            std::clamp(startWidth - deltaX, minWidth, maxWidth);
+    } else if ( resizeRight ) {
+        targetWidth =
+            std::clamp(startWidth + deltaX, minWidth, maxWidth);
+    }
+
+    CGFloat targetHeight = startHeight;
+    if ( resizeBottom ) {
+        targetHeight =
+            std::clamp(startHeight - deltaY, minHeight, maxHeight);
+    } else if ( resizeTop ) {
+        targetHeight =
+            std::clamp(startHeight + deltaY, minHeight, maxHeight);
+    }
+
+    NSRect targetFrame = NSMakeRect(
+        resizeLeft ? startX + startWidth - targetWidth : startX,
+        resizeBottom ? startY + startHeight - targetHeight : startY,
+        targetWidth,
+        targetHeight);
+    [nativeWindow setFrame:targetFrame display:NO animate:NO];
+    return true;
+}
+
 bool MacOSWindowAdapter::isInsideDragArea(double cursorX, double cursorY) const
 {
     for ( const auto& area : m_blockedDragAreas ) {
@@ -304,7 +457,8 @@ bool MacOSWindowAdapter::isInsideDragArea(double cursorX, double cursorY) const
 
 void MacOSWindowAdapter::resetPendingFrameRequest()
 {
-    m_pendingMove = false;
+    m_pendingMove  = false;
+    m_resizeActive = false;
     NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
     cacheMouseDownEvent(nativeWindow, nil);
 }
