@@ -142,6 +142,15 @@ target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
 
+# 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。
+mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
+                        tests/BeatLineDisplayModeHistoryTest.cpp)
+target_include_directories(BeatLineDisplayModeHistoryTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(BeatLineDisplayModeHistoryTest PRIVATE Config)
+add_test(NAME BeatLineDisplayModeHistoryTest
+         COMMAND BeatLineDisplayModeHistoryTest)
+
 mmm_add_test_executable(UI PackageDefaultSelectionTest
                         tests/PackageDefaultSelectionTest.cpp)
 target_include_directories(PackageDefaultSelectionTest

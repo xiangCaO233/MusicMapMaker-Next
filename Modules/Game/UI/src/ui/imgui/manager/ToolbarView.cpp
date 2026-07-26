@@ -40,22 +40,6 @@ namespace MMM::UI
 
 namespace
 {
-/// @brief 获取快捷键切换后的下一种分拍线显示模式。
-/// @param mode 当前显示模式。
-/// @return 按始终显示、光标附近、隐藏顺序循环后的模式。
-Config::BeatLineDisplayMode nextBeatLineDisplayMode(
-    Config::BeatLineDisplayMode mode)
-{
-    switch ( mode ) {
-    case Config::BeatLineDisplayMode::Always:
-        return Config::BeatLineDisplayMode::NearCursor;
-    case Config::BeatLineDisplayMode::NearCursor:
-        return Config::BeatLineDisplayMode::Hidden;
-    case Config::BeatLineDisplayMode::Hidden:
-    default: return Config::BeatLineDisplayMode::Always;
-    }
-}
-
 /// @brief 将颜色槽位转换为数组索引。
 std::size_t colorSlotIndex(Logic::NoteColorSlot slot)
 {
@@ -423,7 +407,9 @@ void ToolbarView::update(UIManager* sourceManager)
         auto&       engine      = Logic::EditorEngine::instance();
         const auto& editorCfg   = engine.getEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
-        const bool  shouldPlayAdjustmentFeedback =
+        m_beatLineDisplayModeHistory.observe(
+            editorCfg.visual.beatLineDisplayMode);
+        const bool shouldPlayAdjustmentFeedback =
             editorCfg.settings.stopPlaybackOnScroll;
 
         auto tooltipWithShortcut =
@@ -487,9 +473,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                       !config.visual.enableLinearScrollMapping;
                               });
             tryToggleShortcut(shortcutConfig.toggleBeatLines,
-                              [](Config::EditorConfig& config) {
+                              [this](Config::EditorConfig& config) {
                                   config.visual.beatLineDisplayMode =
-                                      nextBeatLineDisplayMode(
+                                      m_beatLineDisplayModeHistory.toggleTarget(
                                           config.visual.beatLineDisplayMode);
                               });
             tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
@@ -2641,6 +2627,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
             auto updatedConfig = appConfig.getEditorConfig();
             updatedConfig.visual.beatLineDisplayMode = candidate;
             Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            m_beatLineDisplayModeHistory.observe(candidate);
             appConfig.save();
             m_beatLinePopupConfigDirty = false;
             mode                       = candidate;

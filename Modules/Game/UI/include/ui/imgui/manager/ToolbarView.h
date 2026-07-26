@@ -4,6 +4,7 @@
 #include "common/NoteColor.h"
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
+#include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
 #include <array>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -26,6 +27,7 @@ public:
 
     /// @brief 绘制工具栏主界面。
     /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：每帧执行，禁止引入阻塞或文件系统操作。
     void update(UIManager* sourceManager) override;
 
 private:
@@ -79,6 +81,8 @@ private:
     float m_beatLinePopupHeight{ 220.0f };
     /// @brief 自动显示比例是否有尚未写入配置文件的修改。
     bool m_beatLinePopupConfigDirty{ false };
+    /// @brief 最近使用的两个分拍线显示模式，用于快捷键双向切换。
+    BeatLineDisplayModeHistory m_beatLineDisplayModeHistory;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
