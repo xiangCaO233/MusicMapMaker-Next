@@ -54,3 +54,8 @@ target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game Network)
 if(COMMAND prebuilt_copy_runtime_files)
   prebuilt_copy_runtime_files(MusicMapMaker-Next)
 endif()
+
+if(APPLE)
+  # 普通构建的 .app 需要与发布包一致的 Vulkan 运行时布局和完整签名。
+  include("${CMAKE_SOURCE_DIR}/cmake/macos-development-bundle.cmake")
+endif()
