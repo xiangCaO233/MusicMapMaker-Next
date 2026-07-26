@@ -232,6 +232,44 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
                     "IVM 纹理尺寸不符合约定");
     }
 
+    /// @brief IVM 特效序列应暴露的键、目录和帧数。
+    struct EffectExpectation {
+        /// @brief SkinManager 中的特效序列键。
+        std::string_view key;
+        /// @brief IVM 资源目录下的序列子目录。
+        std::string_view directory;
+        /// @brief 期望序列帧数。
+        std::size_t frameCount;
+    };
+    constexpr std::array<EffectExpectation, 2> EFFECT_EXPECTATIONS{
+        EffectExpectation{ "note.effect.note", "note", 6U },
+        EffectExpectation{ "note.effect.flick", "flick", 16U },
+    };
+    const auto effectRoot =
+        skinPath.parent_path() / "resources/image/note/effect";
+    for ( const auto& expectation : EFFECT_EXPECTATIONS ) {
+        const auto* sequence =
+            skinManager.getEffectSequence(std::string(expectation.key));
+        ok &= check(sequence != nullptr, "IVM 特效序列必须存在");
+        if ( !sequence ) continue;
+
+        ok &= check(sequence->frames.size() == expectation.frameCount,
+                    "IVM 特效序列帧数不符合约定");
+        const auto expectedDirectory =
+            (effectRoot / expectation.directory).lexically_normal();
+        for ( const auto& framePath : sequence->frames ) {
+            std::uint32_t width  = 0U;
+            std::uint32_t height = 0U;
+            ok &= check(
+                framePath.parent_path().lexically_normal() == expectedDirectory,
+                "IVM 特效不得复用默认皮肤资源");
+            ok &= check(readPngDimensions(framePath, width, height),
+                        "IVM 特效帧必须是有效 PNG");
+            ok &= check(width == 256U && height == 128U,
+                        "IVM 特效帧必须与物件和判定区同尺寸");
+        }
+    }
+
     const auto      fontPath = skinManager.getFontPath("ascii");
     std::error_code fontError;
     ok &= check(fontPath.filename() == "LiberationSans-Regular.ttf" &&

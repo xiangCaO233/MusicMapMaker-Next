@@ -283,10 +283,9 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         if ( itTex == snapshot->uvMap.end() ) continue;
         float texAspect = itTex->second.z / itTex->second.w;
 
-        // 计算基准尺寸：特效宽度 = 音符宽度 * 2.5 (稍微大一点)
-        float noteW   = singleTrackW * config.visual.noteScaleX;
-        float effectW = noteW;
-        float effectH = effectW / texAspect;
+        // 横纵轴分别复用物件缩放，确保同宽高比的皮肤特效与物件完全重合。
+        float effectW = singleTrackW * config.visual.noteScaleX;
+        float effectH = (singleTrackW / texAspect) * config.visual.noteScaleY;
 
         // 计算位置：
         // 打击点中心 X：起始轨道 X + (偏移量 + 0.5) * 轨道宽

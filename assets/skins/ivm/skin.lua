@@ -1,6 +1,6 @@
 -- IVM 独立皮肤。
--- 自维护资源只包含字体、物件纹理与判定区纹理；通用语言、音效、光标、
--- Logo、特效和 Shader 复用随软件一同分发的 mmm-default 皮肤资源。
+-- 自维护资源包含字体、物件纹理、判定区与打击特效纹理；通用语言、音效、
+-- 光标、Logo 和 Shader 复用随软件一同分发的 mmm-default 皮肤资源。
 local skin_dir = __SKINLUA_DIR__
 local resource_root = skin_dir .. "resources/"
 local default_resource_root = skin_dir .. "../mmm-default/resources/"
@@ -187,8 +187,8 @@ return {
 			arrowleft = resource("image/note/arrowleft.png"),
 			arrowright = resource("image/note/arrowright.png"),
 			effect = {
-				note = default_resource("image/note/effect/note/[1 .. 6].png"),
-				flick = default_resource("image/note/effect/flick/[1 .. 16].png"),
+				note = resource("image/note/effect/note/[1 .. 6].png"),
+				flick = resource("image/note/effect/flick/[1 .. 16].png"),
 			},
 		},
 	},
