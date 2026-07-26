@@ -3,15 +3,14 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "logic/EditorEngine.h"
+#include "mmm/SafeParse.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <string_view>
-#include <system_error>
 
 namespace MMM::UI
 {
@@ -25,10 +24,9 @@ float parseDockLayoutFloat(std::string_view value, float fallback)
 {
     if ( value.empty() ) return fallback;
 
-    float      parsed = fallback;
-    const auto result =
-        std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+    const auto  result = Internal::parseFloatingPrefix(value);
+    const float parsed = static_cast<float>(result.value);
+    if ( result.error == std::errc{} && result.parsedLength != 0 &&
          std::isfinite(parsed) ) {
         return parsed;
     }
@@ -170,10 +168,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                 0.12f);
             ImGuiID dock_id_tool = 0;
             dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
-                                                       ImGuiDir_Right,
-                                                       toolNodeRatio,
-                                                       nullptr,
-                                                       &dock_id_work);
+                                                               ImGuiDir_Right,
+                                                               toolNodeRatio,
+                                                               nullptr,
+                                                               &dock_id_work);
             ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
             MainDockSpaceUI::setToolDockId(dock_id_tool);
         } else {

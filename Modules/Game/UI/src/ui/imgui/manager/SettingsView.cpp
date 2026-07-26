@@ -4,6 +4,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "imgui.h"
+#include "mmm/SafeParse.h"
 #include "ui/Icons.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
@@ -13,7 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
-#include <charconv>
 #include <cmath>
 #include <utility>
 
@@ -55,10 +55,10 @@ float measureSettingsText(const char* text, ImFont* font, float fontSize)
 /// @brief 无异常解析皮肤布局中的浮点值。
 float parseLayoutFloat(const std::string& value, float fallback)
 {
-    float parsed = fallback;
-    auto  result =
-        std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if ( result.ec != std::errc() ) {
+    const auto  result = Internal::parseFloatingPrefix(value);
+    const float parsed = static_cast<float>(result.value);
+    if ( result.error != std::errc{} || result.parsedLength == 0 ||
+         !std::isfinite(parsed) ) {
         return fallback;
     }
     return parsed;

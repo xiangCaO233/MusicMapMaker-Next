@@ -10,8 +10,8 @@
 #include "imgui_impl_glfw.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include "mmm/SafeParse.h"
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -41,10 +41,9 @@ static float parseFontLayoutFloat(std::string_view value, float fallback)
 {
     if ( value.empty() ) return fallback;
 
-    float      parsed = fallback;
-    const auto result =
-        std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+    const auto  result = Internal::parseFloatingPrefix(value);
+    const float parsed = static_cast<float>(result.value);
+    if ( result.error == std::errc{} && result.parsedLength != 0 &&
          std::isfinite(parsed) && parsed > 0.0f ) {
         return parsed;
     }

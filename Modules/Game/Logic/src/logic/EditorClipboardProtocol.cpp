@@ -1,7 +1,9 @@
 #include "logic/EditorClipboardProtocol.h"
+#include "mmm/SafeParse.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -95,14 +97,7 @@ std::optional<std::string> decodeEscapedField(std::string_view value)
 /// @brief 追加一个整数字段。
 void appendIntField(std::string& text, int value)
 {
-    std::array<char, 32> buffer{};
-    auto [ptr, ec] =
-        std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if ( ec != std::errc{} ) {
-        text.push_back('0');
-        return;
-    }
-    text.append(buffer.data(), ptr);
+    text += fmt::format("{}", value);
 }
 
 /// @brief 以 0 或 1 追加一个布尔字段。
@@ -118,18 +113,7 @@ void appendDoubleField(std::string& text, double value)
         text.push_back('0');
         return;
     }
-
-    std::array<char, 64> buffer{};
-    auto [ptr, ec] = std::to_chars(buffer.data(),
-                                   buffer.data() + buffer.size(),
-                                   value,
-                                   std::chars_format::general,
-                                   17);
-    if ( ec != std::errc{} ) {
-        text.push_back('0');
-        return;
-    }
-    text.append(buffer.data(), ptr);
+    text += fmt::format("{:.17g}", value);
 }
 
 /// @brief 解析一个整数字段。
@@ -155,16 +139,12 @@ std::optional<bool> parseBoolField(std::string_view field)
 /// @brief 解析一个有限浮点数字段。
 std::optional<double> parseDoubleField(std::string_view field)
 {
-    double value   = 0.0;
-    auto [ptr, ec] = std::from_chars(field.data(),
-                                     field.data() + field.size(),
-                                     value,
-                                     std::chars_format::general);
-    if ( ec != std::errc{} || ptr != field.data() + field.size() ||
-         !std::isfinite(value) ) {
+    const auto result = Internal::parseFloatingPrefix(field);
+    if ( result.error != std::errc{} || result.parsedLength != field.size() ||
+         !std::isfinite(result.value) ) {
         return std::nullopt;
     }
-    return value;
+    return result.value;
 }
 
 /// @brief 拆分一行以制表符分隔的协议文本。

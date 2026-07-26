@@ -9,7 +9,9 @@
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
 #include <fstream>
+#include <string>
 
 namespace MMM
 {
@@ -377,7 +379,7 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     beatMap.sync();
 
     basemeta.name =
-        std::format("[rm] {} [{}k] {}",
+        fmt::format("[rm] {} [{}k] {}",
                     (file_presuffix.empty() ? "Map" : file_presuffix),
                     basemeta.track_count,
                     basemeta.version);
