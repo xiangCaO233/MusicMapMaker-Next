@@ -1,0 +1,15 @@
+# clang-cl 在 Linux 上交叉构建 Windows 目标时，Meson 需要显式工具链与目标平台信息。
+[binaries]
+c = ['clang-cl', '-fuse-ld=lld-link']
+cpp = ['clang-cl', '-fuse-ld=lld-link']
+ar = 'llvm-lib'
+strip = 'llvm-strip-22'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true

@@ -171,7 +171,7 @@ runMsvcBuild() {
         --build-dir "${buildDir}" \
         --build-type "${config}" \
         --compiler-tag 2026 \
-        --strict-symbols
+        --embedded-symbols
 }
 
 runMingwClangConfigure() {

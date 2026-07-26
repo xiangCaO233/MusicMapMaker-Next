@@ -189,13 +189,23 @@ fi
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 export VCPKG_ROOT="${VCPKG_ROOT:-${WINDOWS_CROSS_ROOT}/vcpkg}"
 export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
+export MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231}"
+export WINSDK_BASE="${WINSDK_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10}"
+export WINSDK_VER="${WINSDK_VER:-10.0.26100.0}"
+
+# Meson 的 clang-cl 依赖扫描不会继承 CMake 的 -imsvc 与 /libpath 参数，需提供标准 MSVC 环境变量。
+export INCLUDE="${MSVC_BASE}/include;${MSVC_BASE}/atlmfc/include;${WINSDK_BASE}/Include/${WINSDK_VER}/ucrt;${WINSDK_BASE}/Include/${WINSDK_VER}/shared;${WINSDK_BASE}/Include/${WINSDK_VER}/um;${WINSDK_BASE}/Include/${WINSDK_VER}/winrt"
+export LIB="${MSVC_BASE}/lib/x64;${MSVC_BASE}/atlmfc/lib/x64;${WINSDK_BASE}/Lib/${WINSDK_VER}/ucrt/x64;${WINSDK_BASE}/Lib/${WINSDK_VER}/um/x64;${projectRoot}/lib_proxy"
 
 "${scriptDir}/list-msvc-toolchain-layout.sh" --max-entries "${MMM_MSVC_LAYOUT_MAX_ENTRIES:-120}"
 
 requireCommand cmake
 requireCommand clang-cl-22
+requireCommand clang-cl
 requireCommand lld-link-22
+requireCommand lld-link
 requireCommand llvm-lib-22
+requireCommand llvm-lib
 requireCommand llvm-rc-22
 requireCommand llvm-mt-22
 
@@ -235,15 +245,19 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -S "${projectRoot}" \
     -B "${buildDir}"
 
+if [[ "${sourcesBuild}" == "ON" ]]; then
+    # ICE 当前把 Windows 空设备 NUL 作为 Meson native file；Linux 交叉构建需在工作目录提供同名空文件。
+    mkdir -p "${buildDir}/rb_bld"
+    : >"${buildDir}/rb_bld/NUL"
+fi
+
 if (( configureOnly )); then
     exit 0
 fi
 
 if (( prebuiltTargets )); then
+    # MSVC 下 FFmpeg 由 vcpkg 提供，不会生成 zlib/lame/ffmpeg ExternalProject 目标。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
-        zlib_project \
-        lame_project \
-        ffmpeg_project \
         fftw_project \
         rubberband_project \
         samplerate \

@@ -106,14 +106,14 @@ set(ALSOFT_ENABLE_MODULES
     OFF
     CACHE BOOL "" FORCE)
 
-# 预编译库的 Debug/RelWithDebInfo 必须生成外置 PDB。CMake 的 MSVC 默认 调试信息策略在 clang-cl
-# 交叉编译下不稳定，这里显式使用 ProgramDatabase。
+# clang-cl 的 Linux 交叉编译不会生成 cl.exe 的编译器 PDB，因此将完整 CodeView 调试信息保留在 COFF
+# 对象中，随静态归档一起分发。
 if(POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
 endif()
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-    "ProgramDatabase"
-    CACHE STRING "Use external PDB debug information for clang-cl prebuilts."
+    "Embedded"
+    CACHE STRING "Embed CodeView debug information in clang-cl prebuilts."
           FORCE)
 
 # --- 核心：配置头文件搜索路径 (-imsvc 模拟 MSVC 的包含逻辑) ---
@@ -148,16 +148,16 @@ set(CMAKE_CXX_FLAGS
     "${FLAGS} ${WIN_VER_FLAGS} ${MSVC_INCLUDE_STR}"
     CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DEBUG
-    "/Zi /Ob0 /Od /RTC1"
+    "/Z7 /Ob0 /Od /RTC1"
     CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_DEBUG
-    "/Zi /Ob0 /Od /RTC1"
+    "/Z7 /Ob0 /Od /RTC1"
     CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_RELWITHDEBINFO
-    "/Zi /O2 /Ob1 /DNDEBUG"
+    "/Z7 /O2 /Ob1 /DNDEBUG"
     CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
-    "/Zi /O2 /Ob1 /DNDEBUG"
+    "/Z7 /O2 /Ob1 /DNDEBUG"
     CACHE STRING "" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS
     "${MSVC_LIB_STR}"
