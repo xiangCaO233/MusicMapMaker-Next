@@ -116,6 +116,10 @@ local Skin = {
 
 	-- 效果配置
 	effects = {
+		hit_effect = {
+			-- fixed 保留判定线中心的固定尺寸序列帧；也可设为 track_fill 填满单轨。
+			layout = "fixed",
+		},
 		glow = {
 			passes = 6,
 			intensity = 0.5,

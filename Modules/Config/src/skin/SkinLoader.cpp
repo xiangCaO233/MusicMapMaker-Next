@@ -241,7 +241,19 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     sol::optional<sol::table> effectsTableOpt = skinTable["effects"];
     if ( effectsTableOpt ) {
         sol::table                effectsTable = effectsTableOpt.value();
-        sol::optional<sol::table> glowOpt      = effectsTable["glow"];
+        sol::optional<sol::table> hitEffectOpt = effectsTable["hit_effect"];
+        if ( hitEffectOpt ) {
+            const std::string layout =
+                hitEffectOpt.value()["layout"].get_or<std::string>("fixed");
+            if ( layout == "track_fill" ) {
+                m_data.effects.hitEffect.layout =
+                    HitEffectLayoutMode::TrackFill;
+            } else if ( layout != "fixed" ) {
+                XWARN("未知的打击特效布局模式 '{}', 已回退到 fixed", layout);
+            }
+        }
+
+        sol::optional<sol::table> glowOpt = effectsTable["glow"];
         if ( glowOpt ) {
             m_data.effects.glow.passes = glowOpt.value()["passes"].get_or(8);
             m_data.effects.glow.intensity =

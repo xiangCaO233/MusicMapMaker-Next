@@ -183,19 +183,23 @@ void NoteRenderSystem::generateSnapshot(
     float   renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
-    // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
-    // 因此，我们在设置 staticVertexCount
-    // 之前生成它的顶点，但将其命令延迟到最后插入。
+    // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
+    // 绘制命令再按皮肤布局模式插入对应覆盖层。
     uint32_t fxCmdStart = static_cast<uint32_t>(snapshot->cmds.size());
-    if ( hitFXSystem && (isMainCanvas || cameraId == "Preview") ) {
+    if ( hitFXSystem && trackCount > 0 &&
+         (isMainCanvas || cameraId == "Preview") ) {
         // 提前计算轨道参数
-        float tempLX = 0, tempRX = 0;
+        float tempLX = 0, tempRX = 0, tempTY = 0, tempBY = viewportHeight;
         if ( isMainCanvas ) {
             tempLX = viewportWidth * config.visual.trackLayout.left;
             tempRX = viewportWidth * config.visual.trackLayout.right;
+            tempTY = viewportHeight * config.visual.trackLayout.top;
+            tempBY = viewportHeight * config.visual.trackLayout.bottom;
         } else {
             tempLX = config.visual.previewConfig.margin.left;
             tempRX = viewportWidth - config.visual.previewConfig.margin.right;
+            tempTY = config.visual.previewConfig.margin.top;
+            tempBY = viewportHeight - config.visual.previewConfig.margin.bottom;
         }
         float tempSTW = (tempRX - tempLX) / static_cast<float>(trackCount);
 
@@ -205,6 +209,8 @@ void NoteRenderSystem::generateSnapshot(
                                       trackCount,
                                       judgmentLineY,
                                       tempLX,
+                                      tempTY,
+                                      tempBY,
                                       tempSTW);
     }
     uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
@@ -283,6 +289,18 @@ void NoteRenderSystem::generateSnapshot(
             snapshot->hoveredBeatIndex = SessionUtils::calculateBeatIndex(
                 hoveredTime, bpmEvents, snapshot->fallbackBpm);
         }
+    }
+
+    // 整轨光效属于轨道覆盖层：在静态布局之后、拍线和物件之前绘制，
+    // 避免半透明渐变覆盖物件本身；固定尺寸特效继续在 Phase 3 置顶。
+    if ( Config::SkinManager::instance().getHitEffectLayoutMode() ==
+             Config::HitEffectLayoutMode::TrackFill &&
+         !deferredHitCmds.empty() ) {
+        batcher.flush();
+        snapshot->cmds.insert(snapshot->cmds.end(),
+                              deferredHitCmds.begin(),
+                              deferredHitCmds.end());
+        deferredHitCmds.clear();
     }
 
     // 记录静态边界 (此时 snapshot->vertices 包含了特效和布局的顶点)

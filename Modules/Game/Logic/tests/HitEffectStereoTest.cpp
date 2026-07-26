@@ -1,6 +1,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 
 #include "audio/StereoGainEnvelope.h"
+#include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 
 #include <cmath>
@@ -127,6 +128,56 @@ bool testBoundSoundOverridesDefault()
     return true;
 }
 
+/// @brief 验证旧皮肤的固定模式仍在判定线中心按原尺寸绘制。
+/// @return 固定矩形的中心、宽高与旧算法一致时返回 true。
+bool testFixedHitEffectBounds()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    const auto bounds = HitFXSystem::calculateRenderBounds(
+        MMM::Config::HitEffectLayoutMode::Fixed,
+        4,
+        1,
+        1,
+        300.0F,
+        100.0F,
+        20.0F,
+        500.0F,
+        50.0F,
+        40.0F,
+        20.0F);
+    if ( !near(bounds.x, 205.0F) || !near(bounds.y, 310.0F) ||
+         !near(bounds.width, 40.0F) || !near(bounds.height, 20.0F) ) {
+        XERROR("Fixed hit effect bounds no longer match legacy placement");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证整轨模式覆盖 Flick 目标轨道的完整可见区域。
+/// @return 目标轨道宽度和上下边界均精确匹配时返回 true。
+bool testTrackFillHitEffectBounds()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    const auto bounds = HitFXSystem::calculateRenderBounds(
+        MMM::Config::HitEffectLayoutMode::TrackFill,
+        4,
+        1,
+        1,
+        300.0F,
+        100.0F,
+        20.0F,
+        500.0F,
+        50.0F,
+        40.0F,
+        20.0F);
+    if ( !near(bounds.x, 200.0F) || !near(bounds.y, 500.0F) ||
+         !near(bounds.width, 50.0F) || !near(bounds.height, 480.0F) ) {
+        XERROR("Track-fill hit effect did not cover the destination track");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
@@ -136,7 +187,8 @@ int main()
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
                    testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo() &&
-                   testBoundSoundOverridesDefault()
+                   testBoundSoundOverridesDefault() &&
+                   testFixedHitEffectBounds() && testTrackFillHitEffectBounds()
                ? 0
                : 1;
 }

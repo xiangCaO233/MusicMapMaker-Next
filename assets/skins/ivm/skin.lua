@@ -124,8 +124,12 @@ return {
 		},
 	},
 
-	-- IVM 强调无渐变纯色，不启用悬浮模糊发光。
+	-- IVM 物件保持纯色，不启用悬浮模糊发光；打击时使用独立的轨道渐变。
 	effects = {
+		hit_effect = {
+			-- fixed：在判定线按物件尺寸绘制；track_fill：拉伸到整条可见轨道。
+			layout = "track_fill",
+		},
 		glow = {
 			passes = 0,
 			intensity = 0.0,

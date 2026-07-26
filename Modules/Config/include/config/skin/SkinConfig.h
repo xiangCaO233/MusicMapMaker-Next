@@ -20,6 +20,12 @@ enum class SkinThemeAppearance : std::uint8_t {
     Dark    ///< 系统偏好暗色外观。
 };
 
+/// @brief 打击特效纹理在轨道中的布局方式。
+enum class HitEffectLayoutMode : std::uint8_t {
+    Fixed,     ///< 在判定线打击点按物件缩放绘制固定尺寸纹理。
+    TrackFill  ///< 将纹理拉伸至对应单轨的完整可见区域。
+};
+
 // 简单的颜色结构
 struct Color {
     float r, g, b, a;
@@ -82,6 +88,12 @@ struct SkinData {
 
 
     struct EffectsConfig {
+        /// @brief 打击特效纹理布局配置。
+        struct HitEffect {
+            /// @brief 旧皮肤默认保持固定位置、固定尺寸绘制。
+            HitEffectLayoutMode layout{ HitEffectLayoutMode::Fixed };
+        } hitEffect;
+
         struct Glow {
             int   passes    = 8;
             float intensity = 1.0f;
@@ -168,6 +180,12 @@ public:
 
     ///@brief 获取特效基础帧率
     float getEffectBaseFps() const { return m_data.effectBaseFps; }
+
+    /// @brief 获取打击特效纹理布局方式。
+    HitEffectLayoutMode getHitEffectLayoutMode() const
+    {
+        return m_data.effects.hitEffect.layout;
+    }
 
     ///@brief 获取画布配置
     const SkinData::CanvasConfig& getCanvasConfig(

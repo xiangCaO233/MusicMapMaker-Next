@@ -11,10 +11,26 @@
 #include <unordered_map>
 #include <vector>
 
+namespace MMM::Config
+{
+enum class HitEffectLayoutMode : std::uint8_t;
+}
+
 namespace MMM::Logic::System
 {
 struct Batcher;
 
+/// @brief 打击特效纹理最终写入快照的矩形范围。
+struct HitEffectRenderBounds {
+    /// @brief 左边界。
+    float x{ 0.0f };
+    /// @brief 底边坐标。
+    float y{ 0.0f };
+    /// @brief 绘制宽度。
+    float width{ 0.0f };
+    /// @brief 绘制高度。
+    float height{ 0.0f };
+};
 
 /**
  * @brief 打击音效与视觉特效系统
@@ -82,6 +98,26 @@ public:
     [[nodiscard]] static const std::string& soundEffectKeyForEvent(
         const HitEvent& ev, ::MMM::NoteType effectiveType);
 
+    /// @brief 计算固定尺寸或整轨填充打击特效的绘制范围。
+    /// @param layoutMode 皮肤指定的布局方式。
+    /// @param trackCount 当前谱面轨道数。
+    /// @param trackIndex 物件起始轨道。
+    /// @param trackOffset Flick 等物件的目标轨道偏移。
+    /// @param judgmentLineY 判定线 Y 坐标。
+    /// @param leftX 轨道区域左边界。
+    /// @param topY 轨道可见区域上边界。
+    /// @param bottomY 轨道可见区域下边界。
+    /// @param singleTrackWidth 单轨宽度。
+    /// @param fixedWidth 固定模式下的纹理宽度。
+    /// @param fixedHeight 固定模式下的纹理高度。
+    /// @return 可直接传给 Batcher 的底边坐标矩形。
+    /// @warning 渲染热路径：每个活跃特效调用一次，只允许常量时间算术。
+    [[nodiscard]] static HitEffectRenderBounds calculateRenderBounds(
+        Config::HitEffectLayoutMode layoutMode, std::int32_t trackCount,
+        std::int32_t trackIndex, std::int32_t trackOffset, float judgmentLineY,
+        float leftX, float topY, float bottomY, float singleTrackWidth,
+        float fixedWidth, float fixedHeight);
+
     /**
      * @brief 触发视觉特效
      */
@@ -96,6 +132,8 @@ public:
      * @param trackCount 总轨道数
      * @param judgmentLineY 判定线 Y 坐标
      * @param leftX 轨道区域左边界
+     * @param topY 轨道区域上边界
+     * @param bottomY 轨道区域下边界
      * @param singleTrackW 单个轨道宽度
      */
     /// @warning 渲染热路径：快照生成阶段执行。
@@ -104,7 +142,7 @@ public:
     void generateSnapshot(Batcher& batcher, double animateTime,
                           const Config::EditorConfig& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
-                          float singleTrackW);
+                          float topY, float bottomY, float singleTrackW);
 
     /**
      * @brief 清空当前所有正在播放的特效与 KPS 滚动窗口。

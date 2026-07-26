@@ -63,6 +63,9 @@ bool verifyThemeBinding(const std::filesystem::path& path,
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Dark) == expectedDark,
                 "暗色主题绑定不匹配");
+    ok &= check(skinManager.getHitEffectLayoutMode() ==
+                    MMM::Config::HitEffectLayoutMode::Fixed,
+                "未声明布局的旧皮肤必须保持固定尺寸打击特效");
     return ok;
 }
 
@@ -171,6 +174,9 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
                     skinManager.getDefaultTheme(
                         MMM::Config::SkinThemeAppearance::Dark) == "IVM",
                 "IVM 皮肤亮暗分支都必须绑定内置 IVM 主题");
+    ok &= check(skinManager.getHitEffectLayoutMode() ==
+                    MMM::Config::HitEffectLayoutMode::TrackFill,
+                "IVM 皮肤必须启用整轨填充打击特效");
 
     const auto holdColor = skinManager.getColor("note_hold");
     const auto nodeColor = skinManager.getColor("note_node");
@@ -265,8 +271,8 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
                 "IVM 特效不得复用默认皮肤资源");
             ok &= check(readPngDimensions(framePath, width, height),
                         "IVM 特效帧必须是有效 PNG");
-            ok &= check(width == 256U && height == 128U,
-                        "IVM 特效帧必须与物件和判定区同尺寸");
+            ok &= check(width == 32U && height == 256U,
+                        "IVM 特效帧必须使用纵向渐变纹理尺寸");
         }
     }
 
