@@ -256,8 +256,10 @@ if (( configureOnly )); then
 fi
 
 if (( prebuiltTargets )); then
-    # MSVC 下 FFmpeg 由 vcpkg 提供，不会生成 zlib/lame/ffmpeg ExternalProject 目标。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
+        zlib_project \
+        lame_project \
+        ffmpeg_project \
         fftw_project \
         rubberband_project \
         samplerate \
@@ -275,7 +277,8 @@ if (( prebuiltTargets )); then
         fmt \
         spdlog \
         OpenAL \
-        SDL3-static
+        SDL3-static \
+        luajit_build
 else
     cmake --build "${buildDir}" --parallel "${buildJobs}"
 fi

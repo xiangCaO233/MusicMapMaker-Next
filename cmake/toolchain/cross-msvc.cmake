@@ -51,6 +51,16 @@ find_program(MMM_LLD_LINK NAMES lld-link-22)
 find_program(MMM_LLVM_LIB NAMES llvm-lib-22)
 find_program(MMM_LLVM_RC NAMES llvm-rc-22)
 find_program(MMM_LLVM_MT NAMES llvm-mt-22)
+find_program(MMM_LLVM_RANLIB NAMES llvm-ranlib-22)
+find_program(MMM_LLVM_STRIP NAMES llvm-strip-22)
+find_program(
+  MMM_LLVM_NM
+  NAMES llvm-nm-22 llvm-nm
+  PATHS /opt/llvm-22/bin)
+find_program(
+  MMM_LLVM_OBJCOPY
+  NAMES llvm-objcopy-22 llvm-objcopy
+  PATHS /opt/llvm-22/bin)
 if(NOT MMM_CLANG_CL)
   message(FATAL_ERROR "找不到 clang-cl-22，请安装 LLVM 22 clang-cl。")
 endif()
@@ -65,6 +75,12 @@ if(NOT MMM_LLVM_RC)
 endif()
 if(NOT MMM_LLVM_MT)
   message(FATAL_ERROR "找不到 llvm-mt-22，请安装 LLVM 22 manifest tool。")
+endif()
+if(NOT MMM_LLVM_RANLIB
+   OR NOT MMM_LLVM_STRIP
+   OR NOT MMM_LLVM_NM
+   OR NOT MMM_LLVM_OBJCOPY)
+  message(FATAL_ERROR "找不到完整的 LLVM 22 归档与二进制检查工具。")
 endif()
 set(CMAKE_C_COMPILER
     "${MMM_CLANG_CL}"
@@ -84,6 +100,18 @@ set(CMAKE_RC_COMPILER
 set(CMAKE_MT
     "${MMM_LLVM_MT}"
     CACHE FILEPATH "LLVM manifest tool." FORCE)
+set(CMAKE_RANLIB
+    "${MMM_LLVM_RANLIB}"
+    CACHE FILEPATH "LLVM archive indexer." FORCE)
+set(CMAKE_NM
+    "${MMM_LLVM_NM}"
+    CACHE FILEPATH "LLVM symbol inspector." FORCE)
+set(CMAKE_STRIP
+    "${MMM_LLVM_STRIP}"
+    CACHE FILEPATH "LLVM strip tool." FORCE)
+set(CMAKE_OBJCOPY
+    "${MMM_LLVM_OBJCOPY}"
+    CACHE FILEPATH "LLVM object copy tool." FORCE)
 
 # 告诉 clang-cl 目标平台
 set(MSVC_TARGET_TRIPLE x86_64-pc-windows-msvc)
