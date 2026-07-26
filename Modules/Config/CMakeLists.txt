@@ -26,13 +26,15 @@ mmm_add_test_executable(Config FrameLimitUtilsTest
 target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
 add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
 
-# 皮肤主题绑定测试覆盖旧字符串格式、亮暗双分支以及旧应用配置的 Auto 语义。
+# 皮肤主题绑定测试覆盖旧格式、Auto 语义及 IVM 内置皮肤资源约束。
 mmm_add_test_executable(Config SkinThemeBindingTest
                         tests/SkinThemeBindingTest.cpp)
 target_link_libraries(SkinThemeBindingTest PRIVATE Config)
-add_test(NAME SkinThemeBindingTest
-         COMMAND SkinThemeBindingTest
-                 "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")
+add_test(
+  NAME SkinThemeBindingTest
+  COMMAND
+    SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
+    "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua")
 
 # 调色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
 mmm_add_test_executable(Config ColorPaletteFileTest

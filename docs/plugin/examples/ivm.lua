@@ -1,4 +1,4 @@
--- IVM（IMD Visual Maker）经典工具软件风格示例插件。
+-- 内置 IVM（IMD Visual Maker）主题的 Lua 插件接口移植示例。
 -- 设计目标：浅灰 Windows 界面、白色编辑区域、细直角边框和紧凑控件，
 -- 并用原软件画布中的荧光绿、青色与淡紫色作为交互强调色。
 --
@@ -9,7 +9,7 @@
 return {
     type = "theme",
     id = "example.ivm",
-    name = "IVM",
+    name = "IVM（Lua 示例）",
     base = "Light",
 
     style = {

@@ -65,6 +65,8 @@ static void applyDeepDarkStyle(ImGuiStyle& style);
 static void applyDarkStyle(ImGuiStyle& style);
 /// @brief 内置 Light 主题样式。
 static void applyLightStyle(ImGuiStyle& style);
+/// @brief 内置 IVM 经典 Windows 工具软件主题样式。
+static void applyIvmStyle(ImGuiStyle& style);
 /// @brief 内置 Classic 主题样式。
 static void applyClassicStyle(ImGuiStyle& style);
 /// @brief 内置 Microsoft 主题样式。
@@ -561,6 +563,7 @@ void VKContext::registerBuiltInThemes()
     registerTheme("DeepDark", applyDeepDarkStyle);
     registerTheme("Dark", applyDarkStyle);
     registerTheme("Light", applyLightStyle);
+    registerTheme("IVM", applyIvmStyle);
     registerTheme("Classic", applyClassicStyle);
     registerTheme("Microsoft", applyMicrosoftStyle);
     registerTheme("Darcula", applyDarculaStyle);
@@ -1073,6 +1076,127 @@ static void applyLightStyle(ImGuiStyle& style)
         ImVec4(0.69803923f, 0.69803923f, 0.69803923f, 0.7f);
     style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.2f, 0.2f, 0.2f, 0.2f);
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.2f, 0.2f, 0.2f, 0.35f);
+}
+
+/// @brief 设置 IVM 经典 Windows 工具软件样式。
+/// @param style 待覆盖的 ImGui 样式。
+static void applyIvmStyle(ImGuiStyle& style)
+{
+    applyLightStyle(style);
+
+    style.Alpha                    = 1.0f;
+    style.DisabledAlpha            = 0.55f;
+    style.WindowPadding            = ImVec2(7.0f, 6.0f);
+    style.WindowMinSize            = ImVec2(32.0f, 32.0f);
+    style.WindowRounding           = 0.0f;
+    style.WindowBorderSize         = 1.0f;
+    style.WindowBorderHoverPadding = 3.0f;
+    style.WindowTitleAlign         = ImVec2(0.0f, 0.5f);
+    style.WindowMenuButtonPosition = ImGuiDir_Left;
+    style.ChildRounding            = 0.0f;
+    style.ChildBorderSize          = 1.0f;
+    style.PopupRounding            = 0.0f;
+    style.PopupBorderSize          = 1.0f;
+    style.FramePadding             = ImVec2(6.0f, 3.0f);
+    style.FrameRounding            = 0.0f;
+    style.FrameBorderSize          = 1.0f;
+    style.ItemSpacing              = ImVec2(7.0f, 5.0f);
+    style.ItemInnerSpacing         = ImVec2(5.0f, 4.0f);
+    style.CellPadding              = ImVec2(5.0f, 3.0f);
+    style.IndentSpacing            = 18.0f;
+    style.ScrollbarSize            = 16.0f;
+    style.ScrollbarRounding        = 0.0f;
+    style.ScrollbarPadding         = 1.0f;
+    style.GrabMinSize              = 12.0f;
+    style.GrabRounding             = 0.0f;
+    style.TabRounding              = 0.0f;
+    style.TabBorderSize            = 1.0f;
+    style.TabBarBorderSize         = 1.0f;
+    style.TabBarOverlineSize       = 2.0f;
+    style.MenuItemRounding         = 0.0f;
+    style.SelectableRounding       = 0.0f;
+    style.ButtonTextAlign          = ImVec2(0.5f, 0.5f);
+    style.SelectableTextAlign      = ImVec2(0.0f, 0.0f);
+    style.SeparatorSize            = 1.0f;
+    style.SeparatorTextBorderSize  = 1.0f;
+    style.DockingSeparatorSize     = 1.0f;
+    style.AntiAliasedLines         = true;
+    style.AntiAliasedLinesUseTex   = true;
+    style.AntiAliasedFill          = true;
+
+    style.Colors[ImGuiCol_Text]         = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.43f, 0.43f, 0.43f, 1.0f);
+    style.Colors[ImGuiCol_WindowBg]     = ImVec4(0.941f, 0.941f, 0.941f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_PopupBg]      = ImVec4(0.965f, 0.965f, 0.965f, 1.0f);
+    style.Colors[ImGuiCol_Border]       = ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
+    style.Colors[ImGuiCol_BorderShadow] = ImVec4(1.0f, 1.0f, 1.0f, 0.55f);
+    style.Colors[ImGuiCol_FrameBg]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.82f, 0.97f, 0.95f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive]  = ImVec4(0.66f, 0.92f, 0.89f, 1.0f);
+    style.Colors[ImGuiCol_TitleBg]       = ImVec4(0.925f, 0.949f, 0.957f, 1.0f);
+    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.925f, 0.949f, 0.957f, 1.0f);
+    style.Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.90f, 0.92f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_MenuBarBg]     = ImVec4(0.949f, 0.949f, 0.949f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarBg]   = ImVec4(0.91f, 0.91f, 0.91f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.72f, 0.72f, 0.72f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrabHovered] =
+        ImVec4(0.61f, 0.61f, 0.61f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrabActive] =
+        ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
+    style.Colors[ImGuiCol_CheckMark]        = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrab]       = ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.0f, 0.88f, 0.16f, 1.0f);
+    style.Colors[ImGuiCol_Button]           = ImVec4(0.91f, 0.91f, 0.91f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered]    = ImVec4(0.82f, 0.97f, 0.95f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive]     = ImVec4(0.67f, 0.91f, 0.88f, 1.0f);
+    style.Colors[ImGuiCol_Header]           = ImVec4(0.91f, 0.82f, 0.92f, 1.0f);
+    style.Colors[ImGuiCol_HeaderHovered]    = ImVec4(0.77f, 0.95f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_HeaderActive]     = ImVec4(0.56f, 0.88f, 0.84f, 1.0f);
+    style.Colors[ImGuiCol_Separator]        = ImVec4(0.63f, 0.63f, 0.63f, 1.0f);
+    style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_SeparatorActive]  = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_ResizeGrip] = ImVec4(0.55f, 0.55f, 0.55f, 0.20f);
+    style.Colors[ImGuiCol_ResizeGripHovered] =
+        ImVec4(0.08f, 0.75f, 0.70f, 0.65f);
+    style.Colors[ImGuiCol_ResizeGripActive] = ImVec4(0.0f, 0.82f, 0.12f, 0.90f);
+    style.Colors[ImGuiCol_InputTextCursor]  = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+    style.Colors[ImGuiCol_TabHovered]       = ImVec4(0.77f, 0.95f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_Tab]              = ImVec4(0.88f, 0.88f, 0.88f, 1.0f);
+    style.Colors[ImGuiCol_TabSelected]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_TabSelectedOverline] =
+        ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmed] = ImVec4(0.86f, 0.86f, 0.86f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmedSelected] =
+        ImVec4(0.92f, 0.92f, 0.92f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmedSelectedOverline] =
+        ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+    style.Colors[ImGuiCol_DockingPreview] = ImVec4(0.08f, 0.75f, 0.70f, 0.55f);
+    style.Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.86f, 0.86f, 0.86f, 1.0f);
+    style.Colors[ImGuiCol_PlotLines]      = ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
+    style.Colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.0f, 0.10f, 0.10f, 1.0f);
+    style.Colors[ImGuiCol_PlotHistogram]    = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_PlotHistogramHovered] =
+        ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_TableHeaderBg] = ImVec4(0.93f, 0.93f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_TableBorderStrong] =
+        ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
+    style.Colors[ImGuiCol_TableBorderLight] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    style.Colors[ImGuiCol_TableRowBg]       = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_TableRowBgAlt]  = ImVec4(0.90f, 0.96f, 0.96f, 0.55f);
+    style.Colors[ImGuiCol_TextLink]       = ImVec4(0.0f, 0.40f, 0.38f, 1.0f);
+    style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.08f, 0.75f, 0.70f, 0.35f);
+    style.Colors[ImGuiCol_TreeLines]      = ImVec4(0.62f, 0.62f, 0.62f, 1.0f);
+    style.Colors[ImGuiCol_DragDropTarget] = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_DragDropTargetBg] = ImVec4(0.0f, 0.82f, 0.12f, 0.16f);
+    style.Colors[ImGuiCol_UnsavedMarker]    = ImVec4(1.0f, 0.12f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_NavCursor]        = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_NavWindowingHighlight] =
+        ImVec4(0.08f, 0.75f, 0.70f, 0.70f);
+    style.Colors[ImGuiCol_NavWindowingDimBg] =
+        ImVec4(0.80f, 0.80f, 0.80f, 0.30f);
+    style.Colors[ImGuiCol_ModalWindowDimBg] =
+        ImVec4(0.78f, 0.78f, 0.78f, 0.55f);
 }
 
 static void applyClassicStyle(ImGuiStyle& style)
