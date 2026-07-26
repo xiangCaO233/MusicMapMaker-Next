@@ -1450,7 +1450,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
             int              toggledGroupIndex = -1;
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(visibleRowCount), rowHeight);
+            // 由 ImGui 根据首行实际占用高度计算裁剪步长，避免表格单元格
+            // 内边距造成累计误差，使列表底部提前到达滚动上限。
+            clipper.Begin(static_cast<int>(visibleRowCount));
             while ( clipper.Step() ) {
                 for ( int visibleRow = clipper.DisplayStart;
                       visibleRow < clipper.DisplayEnd;
@@ -1633,14 +1635,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGui::PopStyleVar();
                     });
 
-    ImVec2 totalSize = rootVBox.renderInCurrent(
-        layoutContext.m_startPos,
-        { layoutContext.m_avail.x,
-          std::max(0.0f, layoutContext.m_avail.y - footerH) });
+    const float listAreaHeight =
+        std::max(0.0f, layoutContext.m_avail.y - footerH);
+    if ( listAreaHeight > 0.0f ) {
+        rootVBox.renderInCurrent(layoutContext.m_startPos,
+                                 { layoutContext.m_avail.x, listAreaHeight });
+    }
 
     // 3. 底部全局控制区域 (独立渲染)
     ImVec2 footerPos = { layoutContext.m_startPos.x,
-                         layoutContext.m_startPos.y + totalSize.y };
+                         layoutContext.m_startPos.y + listAreaHeight };
 
     float controlH = layoutMetrics.globalControlsHeight;
     footerVBox.renderInCurrent(footerPos,
