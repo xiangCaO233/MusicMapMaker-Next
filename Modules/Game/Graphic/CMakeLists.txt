@@ -30,6 +30,8 @@ add_library(
   src/imguivk/VKSwapchain.cpp
   src/imguivk/VKTexture.cpp
   src/imguivk/VKTextureAtlas.cpp
+  src/theme/ImGuiTheme.cpp
+  src/theme/ImGuiThemeRegistry.cpp
   src/system/SystemTheme.cpp
   src/CursorManager.cpp)
 
@@ -50,11 +52,22 @@ target_link_libraries(
          3rd_clay
          3rd_stb
          3rd_lunasvg
+         3rd_sol2
+         luajit::luajit
          Vulkan::Vulkan)
 
 if(WIN32)
   target_link_libraries(Graphic PRIVATE dwmapi comctl32 advapi32)
 endif()
+
+# 主题插件测试覆盖 Lua 解析、内置主题继承以及重载时清除旧实例。
+mmm_add_test_executable(Graphic ThemePluginLoaderTest
+                        tests/ThemePluginLoaderTest.cpp)
+target_link_libraries(ThemePluginLoaderTest PRIVATE Graphic)
+add_test(
+  NAME ThemePluginLoaderTest
+  COMMAND ThemePluginLoaderTest "${CMAKE_BINARY_DIR}/test_output/theme_plugins"
+          "${CMAKE_SOURCE_DIR}/docs/plugin/examples/theme-example.lua")
 
 if(APPLE)
   target_sources(

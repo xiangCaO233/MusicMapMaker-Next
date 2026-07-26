@@ -515,55 +515,53 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.theme").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         theme    = static_cast<int>(settings.theme);
-                const char* themes[] = {
-                    TR_CACHE("ui.settings.software.theme.auto").data(),
-                    "DeepDark",
-                    "Dark",
-                    "Light",
-                    "Classic",
-                    "Microsoft",
-                    "Darcula",
-                    "Photoshop",
-                    "Unreal",
-                    "Gold",
-                    "RoundedVisualStudio",
-                    "SonicRiders",
-                    "DarkRuda",
-                    "SoftCherry",
-                    "Enemymouse",
-                    "DiscordDark",
-                    "Comfy",
-                    "PurpleComfy",
-                    "FutureDark",
-                    "CleanDark",
-                    "Moonlight",
-                    "Cecilia",
-                    "ComfortableLight",
-                    "HazyDark",
-                    "Everforest",
-                    "Windark",
-                    "Rest",
-                    "ComfortableDarkCyan",
-                    "KazamCherry"
-                };
-                const int themeCount = IM_ARRAYSIZE(themes);
-                if ( theme < 0 || theme >= themeCount ) {
-                    theme          = static_cast<int>(Config::UITheme::Auto);
-                    settings.theme = Config::UITheme::Auto;
-                    if ( auto ctx = Graphic::VKContext::get() ) {
-                        ctx->get().applyTheme();
-                    }
-                    changed = true;
-                }
+                auto context = Graphic::VKContext::get();
+                const Graphic::ImGuiThemeRegistry* themeRegistry =
+                    context ? &context->get().getThemeRegistry() : nullptr;
+                const Graphic::ImGuiTheme* selectedTheme =
+                    themeRegistry ? themeRegistry->findTheme(settings.theme)
+                                  : nullptr;
+                const char* preview =
+                    settings.theme == Config::UI_THEME_AUTO_ID
+                        ? TR_CACHE("ui.settings.software.theme.auto").data()
+                    : selectedTheme ? selectedTheme->displayName().data()
+                                    : settings.theme.c_str();
+
                 ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackCombo(
-                         "##ThemeCombo", &theme, themes, themeCount) ) {
-                    settings.theme = static_cast<Config::UITheme>(theme);
-                    if ( auto ctx = Graphic::VKContext::get() ) {
-                        ctx->get().applyTheme();
+                if ( ::MMM::UI::FeedbackBeginCombo("##ThemeCombo", preview) ) {
+                    const bool automaticSelected =
+                        settings.theme == Config::UI_THEME_AUTO_ID;
+                    if ( ::MMM::UI::FeedbackSelectable(
+                             TR_CACHE("ui.settings.software.theme.auto").data(),
+                             automaticSelected) ) {
+                        settings.theme = Config::UI_THEME_AUTO_ID;
+                        if ( context ) {
+                            context->get().applyTheme();
+                        }
+                        changed = true;
                     }
-                    changed = true;
+                    if ( automaticSelected ) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+
+                    if ( themeRegistry ) {
+                        for ( const auto& theme : themeRegistry->themes() ) {
+                            if ( !theme ) continue;
+                            const bool selected = settings.theme == theme->id();
+                            ImGui::PushID(theme->id().data());
+                            if ( ::MMM::UI::FeedbackSelectable(
+                                     theme->displayName().data(), selected) ) {
+                                settings.theme = theme->id();
+                                context->get().applyTheme();
+                                changed = true;
+                            }
+                            ImGui::PopID();
+                            if ( selected ) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                    }
+                    ::MMM::UI::FeedbackEndCombo();
                 }
             });
 

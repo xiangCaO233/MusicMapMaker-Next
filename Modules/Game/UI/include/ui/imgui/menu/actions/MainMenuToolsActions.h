@@ -30,4 +30,7 @@ createAlignSelectedToCommonBeatsAction();
 std::unique_ptr<IMainMenuItemActionHandler>
 createOpenBeatmapSpeedExportAction();
 
+/// @brief 创建重载全部插件实例动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createReloadPluginsAction();
+
 }  // namespace MMM::UI

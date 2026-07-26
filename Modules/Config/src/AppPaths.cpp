@@ -38,6 +38,12 @@ constexpr const char* kAssetsDirectoryName = "assets";
 /// @brief 用户资源包中的皮肤目录名。
 constexpr const char* kSkinsDirectoryName = "skins";
 
+/// @brief 用户插件目录名。
+constexpr const char* kPluginsDirectoryName = "plugins";
+
+/// @brief Lua 主题插件目录名。
+constexpr const char* kThemePluginsDirectoryName = "themes";
+
 /// @brief 默认资源包中的皮肤脚本相对路径。
 constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
 
@@ -199,6 +205,20 @@ std::filesystem::path AppPaths::skinsRootPath()
 {
     std::filesystem::path path = assetsRootPath();
     path /= kSkinsDirectoryName;
+    return path;
+}
+
+std::filesystem::path AppPaths::pluginsRootPath()
+{
+    std::filesystem::path path = configRootPath();
+    path /= kPluginsDirectoryName;
+    return path;
+}
+
+std::filesystem::path AppPaths::themePluginsRootPath()
+{
+    std::filesystem::path path = pluginsRootPath();
+    path /= kThemePluginsDirectoryName;
     return path;
 }
 

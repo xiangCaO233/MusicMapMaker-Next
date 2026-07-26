@@ -6,6 +6,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::Config
@@ -525,71 +526,8 @@ inline void from_json(const nlohmann::json& j, OpenALSpatialConfig& c)
     c.rolloffFactor     = j.value("rolloffFactor", 1.0f);
 }
 
-enum class UITheme {
-    Auto,
-    DeepDark,
-    Dark,
-    Light,
-    Classic,
-    Microsoft,
-    Darcula,
-    Photoshop,
-    Unreal,
-    Gold,
-    RoundedVisualStudio,
-    SonicRiders,
-    DarkRuda,
-    SoftCherry,
-    Enemymouse,
-    DiscordDark,
-    Comfy,
-    PurpleComfy,
-    FutureDark,
-    CleanDark,
-    Moonlight,
-    Cecilia,  ///< 基于 mmm-default 塞西莉娅配色的 Moonlight 派生主题。
-    ComfortableLight,
-    HazyDark,
-    Everforest,
-    Windark,
-    Rest,
-    ComfortableDarkCyan,
-    KazamCherry,
-};
-
-NLOHMANN_JSON_SERIALIZE_ENUM(
-    UITheme, {
-                 { UITheme::Auto, "Auto" },
-                 { UITheme::DeepDark, "DeepDark" },
-                 { UITheme::Dark, "Dark" },
-                 { UITheme::Light, "Light" },
-                 { UITheme::Classic, "Classic" },
-                 { UITheme::Microsoft, "Microsoft" },
-                 { UITheme::Darcula, "Darcula" },
-                 { UITheme::Photoshop, "Photoshop" },
-                 { UITheme::Unreal, "Unreal" },
-                 { UITheme::Gold, "Gold" },
-                 { UITheme::RoundedVisualStudio, "RoundedVisualStudio" },
-                 { UITheme::SonicRiders, "SonicRiders" },
-                 { UITheme::DarkRuda, "DarkRuda" },
-                 { UITheme::SoftCherry, "SoftCherry" },
-                 { UITheme::Enemymouse, "Enemymouse" },
-                 { UITheme::DiscordDark, "DiscordDark" },
-                 { UITheme::Comfy, "Comfy" },
-                 { UITheme::PurpleComfy, "PurpleComfy" },
-                 { UITheme::FutureDark, "FutureDark" },
-                 { UITheme::CleanDark, "CleanDark" },
-                 { UITheme::Moonlight, "Moonlight" },
-                 { UITheme::Cecilia, "Cecilia" },
-                 { UITheme::Cecilia, "MmmDefault" },
-                 { UITheme::ComfortableLight, "ComfortableLight" },
-                 { UITheme::HazyDark, "HazyDark" },
-                 { UITheme::Everforest, "Everforest" },
-                 { UITheme::Windark, "Windark" },
-                 { UITheme::Rest, "Rest" },
-                 { UITheme::ComfortableDarkCyan, "ComfortableDarkCyan" },
-                 { UITheme::KazamCherry, "KazamCherry" },
-             })
+/// @brief 自动主题选择使用的稳定 ID。
+inline constexpr std::string_view UI_THEME_AUTO_ID = "Auto";
 
 enum class SelectionMode {
     Strict,       ///< 严格模式 (必须完全包含)
@@ -694,10 +632,10 @@ struct EditorSettings {
     /// @brief 光标样式
     CursorStyle cursorStyle{ CursorStyle::Software };
 
-    /// @brief UI 主题偏好；Auto 表示用户未手动指定，跟随系统与皮肤亮暗绑定。
+    /// @brief UI 主题稳定 ID；Auto 表示用户未手动指定，跟随系统与皮肤亮暗绑定。
     /// @details 旧版配置中的 Auto 即“跟随皮肤”，加载后继续视为未手动修改；
-    /// 任何非 Auto 值均表示用户明确选择，不参与系统亮暗自动切换。
-    UITheme theme{ UITheme::Auto };
+    /// 任何非 Auto 值均可引用内置或 Lua 插件主题实例。
+    std::string theme{ UI_THEME_AUTO_ID };
 
     /// @brief 当前选择的皮肤目录名，位于 AppPaths::skinsRootPath() 下。
     std::string selectedSkinDirectory{ "mmm-default" };
@@ -937,7 +875,17 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.sfxConfig       = j.value("sfxConfig", SfxConfig());
     c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Native);
     c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
-    c.theme           = j.value("theme", UITheme::Auto);
+    if ( auto themeIt = j.find("theme");
+         themeIt != j.end() && themeIt->is_string() ) {
+        c.theme = themeIt->get<std::string>();
+        if ( c.theme.empty() ) {
+            c.theme = UI_THEME_AUTO_ID;
+        } else if ( c.theme == "MmmDefault" ) {
+            c.theme = "Cecilia";
+        }
+    } else {
+        c.theme = UI_THEME_AUTO_ID;
+    }
     c.selectedSkinDirectory =
         j.value("selectedSkinDirectory", std::string("mmm-default"));
     c.beatDivisor         = j.value("beatDivisor", 4);

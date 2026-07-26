@@ -10,6 +10,7 @@
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "graphic/system/SystemTheme.h"
+#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui_impl_vulkan.h"
 #include <atomic>
 #include <chrono>
@@ -174,6 +175,19 @@ public:
      */
     void applyTheme();
 
+    /// @brief 删除所有自定义插件实例并重新载入插件目录。
+    /// @return 主题插件扫描与加载结果。
+    /// @warning 低频插件重载路径：会访问文件系统并执行
+    /// Lua，只能从启动或菜单动作调用。
+    ThemePluginReloadResult reloadPlugins();
+
+    /// @brief 获取当前上下文持有的主题实例注册表。
+    /// @return 主题注册表只读引用。
+    [[nodiscard]] const ImGuiThemeRegistry& getThemeRegistry() const
+    {
+        return m_themeRegistry;
+    }
+
     /**
      * @brief 显式释放资源
      *
@@ -231,6 +245,9 @@ private:
     /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
     /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
     std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
+
+    /// @brief 当前图形上下文持有的内置与 Lua 插件主题实例。
+    ImGuiThemeRegistry m_themeRegistry;
 
     /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
     /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
@@ -454,145 +471,8 @@ private:
     /// @warning 启动低频路径：只修改 ImGui 样式状态。
     void applyBootstrapTheme();
 
-    /**
-     * @brief 设置DeepDark样式
-     */
-    void setDeepDarkStyle();
-
-    /**
-     * @brief 设置Dark样式
-     */
-    void setDarkStyle();
-
-    /**
-     * @brief 设置Light样式
-     */
-    void setLightStyle();
-
-    /**
-     * @brief 设置Classic样式
-     */
-    void setClassicStyle();
-
-    /**
-     * @brief 设置Microsoft样式
-     */
-    void setMicrosoftStyle();
-
-    /**
-     * @brief 设置Darcula样式
-     */
-    void setDarculaStyle();
-
-    /**
-     * @brief 设置Photoshop样式
-     */
-    void setPhotoshopStyle();
-
-    /**
-     * @brief 设置Unreal样式
-     */
-    void setUnrealStyle();
-
-    /**
-     * @brief 设置Gold样式
-     */
-    void setGoldStyle();
-
-    /**
-     * @brief 设置RoundedVisualStudio样式
-     */
-    void setRoundedVisualStudioStyle();
-
-    /**
-     * @brief 设置SonicRiders样式
-     */
-    void setSonicRidersStyle();
-
-    /**
-     * @brief 设置DarkRuda样式
-     */
-    void setDarkRudaStyle();
-
-    /**
-     * @brief 设置SoftCherry样式
-     */
-    void setSoftCherryStyle();
-
-    /**
-     * @brief 设置Enemymouse样式
-     */
-    void setEnemymouseStyle();
-
-    /**
-     * @brief 设置DiscordDark样式
-     */
-    void setDiscordDarkStyle();
-
-    /**
-     * @brief 设置Comfy样式
-     */
-    void setComfyStyle();
-
-    /**
-     * @brief 设置PurpleComfy样式
-     */
-    void setPurpleComfyStyle();
-
-    /**
-     * @brief 设置FutureDark样式
-     */
-    void setFutureDarkStyle();
-
-    /**
-     * @brief 设置CleanDark样式
-     */
-    void setCleanDarkStyle();
-
-    /**
-     * @brief 设置Moonlight样式
-     */
-    void setMoonlightStyle();
-
-    /**
-     * @brief 设置 Cecilia 塞西莉娅配色派生样式。
-     */
-    void setCeciliaStyle();
-
-    /**
-     * @brief 设置ComfortableLight样式
-     */
-    void setComfortableLightStyle();
-
-    /**
-     * @brief 设置HazyDark样式
-     */
-    void setHazyDarkStyle();
-
-    /**
-     * @brief 设置Everforest样式
-     */
-    void setEverforestStyle();
-
-    /**
-     * @brief 设置Windark样式
-     */
-    void setWindarkStyle();
-
-    /**
-     * @brief 设置Rest样式
-     */
-    void setRestStyle();
-
-    /**
-     * @brief 设置ComfortableDarkCyan样式
-     */
-    void setComfortableDarkCyanStyle();
-
-    /**
-     * @brief 设置KazamCherry样式
-     */
-    void setKazamCherryStyle();
+    /// @brief 将全部编译期主题注册为独立实例。
+    void registerBuiltInThemes();
 
     friend class VKRenderer;
 };

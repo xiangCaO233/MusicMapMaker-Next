@@ -1,0 +1,53 @@
+# MusicMapMaker-Next 插件系统
+
+插件系统用于从用户配置目录载入可热重载的 Lua 扩展。当前第一阶段只开放
+`theme` 类型，即 Dear ImGui 自定义主题；后续插件类型应继续放在
+`plugins/<类型目录>` 下，并复用“启动加载、菜单重载、实例注册”的生命周期。
+
+## 目录位置
+
+应用通过 `MMM::Config::AppPaths` 计算目录，不依赖当前工作目录：
+
+- 插件根目录：`<配置根目录>/plugins`
+- 主题插件目录：`<配置根目录>/plugins/themes`
+- Linux/macOS 默认配置根目录：`~/.config/mmm`
+- Linux/macOS 设置了 `XDG_CONFIG_HOME` 时：`$XDG_CONFIG_HOME/mmm`
+- Windows：`%USERPROFILE%/.config/mmm`
+
+启动应用或首次重载时会自动创建主题插件目录。目录内的 `.lua` 文件会被递归
+扫描，所以插件可以放在独立子目录中，例如：
+
+```text
+plugins/
+└── themes/
+    └── twilight/
+        └── theme.lua
+```
+
+仓库内可直接复制的示例位于
+[`examples/theme-example.lua`](examples/theme-example.lua)。
+
+## 生命周期
+
+1. 应用图形上下文完成 ImGui 与字体初始化。
+2. 注册所有编译进程序的内置主题实例。
+3. 清除内存中此前由插件创建的全部主题实例。
+4. 递归扫描 `plugins/themes`，按 UTF-8 路径排序并执行每个 `.lua` 文件。
+5. 校验插件返回值，为每个有效定义创建独立主题实例并加入主题列表。
+6. 重新应用设置中保存的主题稳定 ID；ID 不存在时回退到 `DeepDark`。
+
+运行期间可点击“工具 → 重载插件”重复执行第 3 至第 6 步。内置主题不会被
+删除；已从磁盘移除或改名的自定义主题会在这次重载后从列表消失。重载结果会
+显示成功载入的主题数和错误数，详细错误写入应用日志。
+
+## 插件约束
+
+- 插件是本地 Lua 代码，会在加载时执行，只应安装可信来源的插件。
+- 每个插件文件使用独立 Lua 状态，不能依赖另一个插件留下的全局变量。
+- 当前开放 `base`、`table`、`string`、`math` Lua 标准库。
+- 加载失败只跳过对应文件或主题定义，不影响其他插件继续载入。
+- 插件实例只存在于内存；主题选择以稳定字符串 ID 保存到
+  `user_config.json`。
+
+完整返回结构、字段类型、颜色名和多主题写法见
+[`theme-plugin.md`](theme-plugin.md)。

@@ -48,6 +48,12 @@ MainMenuTools::MainMenuTools()
         MainMenuItemTextKind::Literal,
         nullptr,
         createOpenBeatmapSpeedExportAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COG,
+        "ui.tools.reload_plugins",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createReloadPluginsAction()));
 }
 
 /// @brief 获取工具菜单标识。

@@ -52,7 +52,7 @@ bool verifyThemeBinding(const std::filesystem::path& path,
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
     bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
-                    "皮肤应成功加载");
+                     "皮肤应成功加载");
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Light) == expectedLight,
                 "亮色主题绑定不匹配");
@@ -74,15 +74,32 @@ bool verifyLegacyAppConfigSemantics()
     const nlohmann::json        manualJson{ { "theme", "Moonlight" } };
     from_json(manualJson, manualSettings);
 
+    MMM::Config::EditorSettings pluginSettings;
+    const nlohmann::json        pluginJson{ { "theme", "example.twilight" } };
+    from_json(pluginJson, pluginSettings);
+
+    MMM::Config::EditorSettings legacyCeciliaSettings;
+    const nlohmann::json        legacyCeciliaJson{ { "theme", "MmmDefault" } };
+    from_json(legacyCeciliaJson, legacyCeciliaSettings);
+
     nlohmann::json serializedAutomatic;
     to_json(serializedAutomatic, automaticSettings);
+    nlohmann::json serializedPlugin;
+    to_json(serializedPlugin, pluginSettings);
 
-    bool ok = check(automaticSettings.theme == MMM::Config::UITheme::Auto,
+    bool ok = check(automaticSettings.theme == MMM::Config::UI_THEME_AUTO_ID,
                     "旧版 Auto 应继续表示未手动指定主题");
-    ok &= check(manualSettings.theme == MMM::Config::UITheme::Moonlight,
+    ok &= check(manualSettings.theme == "Moonlight",
                 "旧版非 Auto 主题应继续表示用户手动选择");
+    ok &= check(pluginSettings.theme == "example.twilight",
+                "插件主题稳定 ID 应原样载入");
+    ok &= check(legacyCeciliaSettings.theme == "Cecilia",
+                "旧版 MmmDefault 主题应迁移为 Cecilia");
     ok &= check(serializedAutomatic.value("theme", std::string()) == "Auto",
                 "自动主题序列化哨兵必须保持为 Auto");
+    ok &= check(
+        serializedPlugin.value("theme", std::string()) == "example.twilight",
+        "插件主题稳定 ID 应原样序列化");
     return ok;
 }
 }  // namespace
