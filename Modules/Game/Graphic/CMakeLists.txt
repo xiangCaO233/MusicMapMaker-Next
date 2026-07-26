@@ -66,8 +66,10 @@ mmm_add_test_executable(Graphic ThemePluginLoaderTest
 target_link_libraries(ThemePluginLoaderTest PRIVATE Graphic)
 add_test(
   NAME ThemePluginLoaderTest
-  COMMAND ThemePluginLoaderTest "${CMAKE_BINARY_DIR}/test_output/theme_plugins"
-          "${CMAKE_SOURCE_DIR}/docs/plugin/examples/theme-example.lua")
+  COMMAND
+    ThemePluginLoaderTest "${CMAKE_BINARY_DIR}/test_output/theme_plugins"
+    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/theme-example.lua"
+    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.lua")
 
 if(APPLE)
   target_sources(

@@ -44,12 +44,12 @@ bool writePlugin(const std::filesystem::path& path, std::string_view content)
     return file.good();
 }
 
-/// @brief 注册测试使用的最小 DeepDark 内置主题。
+/// @brief 注册测试使用的最小 DeepDark 与 Light 内置主题。
 /// @param registry 目标注册表。
-/// @return 注册成功时返回 true。
+/// @return 两个基底主题均注册成功时返回 true。
 bool registerBaseTheme(MMM::Graphic::ImGuiThemeRegistry& registry)
 {
-    return registry.registerBuiltInTheme(
+    const bool deepDarkRegistered = registry.registerBuiltInTheme(
         std::make_unique<MMM::Graphic::ImGuiTheme>(
             "DeepDark",
             "DeepDark",
@@ -63,6 +63,20 @@ bool registerBaseTheme(MMM::Graphic::ImGuiThemeRegistry& registry)
                 style.Colors[ImGuiCol_WindowBg] =
                     ImVec4(0.4f, 0.5f, 0.6f, 1.0f);
             }));
+    const bool lightRegistered = registry.registerBuiltInTheme(
+        std::make_unique<MMM::Graphic::ImGuiTheme>(
+            "Light",
+            "Light",
+            MMM::Graphic::ImGuiThemeOrigin::BuiltIn,
+            std::string(),
+            std::filesystem::path(),
+            [](ImGuiStyle& style) {
+                style.Alpha                 = 1.0f;
+                style.Colors[ImGuiCol_Text] = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+                style.Colors[ImGuiCol_WindowBg] =
+                    ImVec4(0.94f, 0.94f, 0.94f, 1.0f);
+            }));
+    return deepDarkRegistered && lightRegistered;
 }
 
 /// @brief 验证 Lua 主题字段解析与内置基底继承。
@@ -212,9 +226,11 @@ bool testPluginHotToggle(MMM::Graphic::ImGuiThemeRegistry& registry,
 
 /// @brief 验证文档附带的完整示例始终符合实际加载接口。
 /// @param examplePath 仓库内示例插件路径。
+/// @param expectedThemeId 示例应注册的主题稳定 ID。
 /// @param pluginDirectory 独立测试插件目录。
 /// @return 示例被复制、解析并注册时返回 true。
 bool testDocumentedExample(const std::filesystem::path& examplePath,
+                           std::string_view             expectedThemeId,
                            const std::filesystem::path& pluginDirectory)
 {
     std::error_code filesystemError;
@@ -226,7 +242,7 @@ bool testDocumentedExample(const std::filesystem::path& examplePath,
     }
     std::filesystem::copy_file(
         examplePath,
-        pluginDirectory / "theme-example.lua",
+        pluginDirectory / examplePath.filename(),
         std::filesystem::copy_options::overwrite_existing,
         filesystemError);
     if ( filesystemError ) {
@@ -238,7 +254,7 @@ bool testDocumentedExample(const std::filesystem::path& examplePath,
     const auto result = registry.reloadThemePlugins(pluginDirectory);
     ok &= check(result.success(), "文档示例插件应成功载入");
     ok &= check(result.loadedThemeCount == 1, "文档示例应创建一个主题实例");
-    ok &= check(registry.findTheme("example.twilight") != nullptr,
+    ok &= check(registry.findTheme(expectedThemeId) != nullptr,
                 "文档示例主题实例未进入注册表");
     return ok;
 }
@@ -247,18 +263,18 @@ bool testDocumentedExample(const std::filesystem::path& examplePath,
 
 /// @brief 主题 Lua 插件加载与重载回归测试入口。
 /// @param argc 命令行参数数量。
-/// @param argv 首个附加参数为测试输出目录，第二个为文档示例插件路径。
+/// @param argv 首个附加参数为测试输出目录，后两个为文档示例插件路径。
 /// @return 全部断言通过时返回 0。
 int main(int argc, char* argv[])
 {
-    if ( argc < 3 || !argv[1] || !argv[2] ) {
-        XERROR(
-            "ThemePluginLoaderTest requires output and example plugin paths");
+    if ( argc < 4 || !argv[1] || !argv[2] || !argv[3] ) {
+        XERROR("ThemePluginLoaderTest requires output and two example paths");
         return 1;
     }
 
     const std::filesystem::path pluginDirectory = argv[1];
     const std::filesystem::path examplePath     = argv[2];
+    const std::filesystem::path ivmExamplePath  = argv[3];
     std::error_code             filesystemError;
     std::filesystem::remove_all(pluginDirectory, filesystemError);
     filesystemError.clear();
@@ -275,6 +291,12 @@ int main(int argc, char* argv[])
     ok &= testReloadClearsOldThemes(registry, pluginDirectory);
     ok &= testPluginHotToggle(registry, pluginDirectory);
     ok &= testDocumentedExample(
-        examplePath, pluginDirectory.parent_path() / "theme_plugin_example");
+        examplePath,
+        "example.twilight",
+        pluginDirectory.parent_path() / "theme_plugin_example");
+    ok &= testDocumentedExample(
+        ivmExamplePath,
+        "example.ivm",
+        pluginDirectory.parent_path() / "ivm_theme_plugin_example");
     return ok ? 0 : 1;
 }

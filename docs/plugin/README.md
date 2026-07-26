@@ -24,8 +24,17 @@ plugins/
         └── theme.lua
 ```
 
-仓库内可直接复制的示例位于
-[`examples/theme-example.lua`](examples/theme-example.lua)。
+仓库内可直接复制的示例：
+
+- [`examples/theme-example.lua`](examples/theme-example.lua)：完整字段与颜色注释模板；
+- [`examples/ivm.lua`](examples/ivm.lua)：仿 IMD Visual Maker 经典 Windows
+  工具软件观感的 `IVM` 浅色主题；
+- [`examples/ivm.mmpalette`](examples/ivm.mmpalette)：与 `IVM` 主题配套的
+  物件及分拍线配色，使用调色盘弹窗中的“导入方案”载入。
+
+`IVM` 配色中的普通物件使用青色；头部、Body、尾部、滑键箭头和折线节点
+统一使用同一组荧光绿 RGBA，其中节点颜色与 Body 完全一致。整拍线使用截图
+中的红色，其余分拍线采用灰色与低饱和紫色层级。
 
 ## 生命周期
 

@@ -38,9 +38,11 @@ add_test(NAME SkinThemeBindingTest
 mmm_add_test_executable(Config ColorPaletteFileTest
                         tests/ColorPaletteFileTest.cpp)
 target_link_libraries(ColorPaletteFileTest PRIVATE Config)
-add_test(NAME ColorPaletteFileTest
-         COMMAND ColorPaletteFileTest
-                 "${CMAKE_BINARY_DIR}/test_output/color_palette_file")
+add_test(
+  NAME ColorPaletteFileTest
+  COMMAND
+    ColorPaletteFileTest "${CMAKE_BINARY_DIR}/test_output/color_palette_file"
+    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.mmpalette")
 
 # 视觉配置测试覆盖分拍线三态模式、旧布尔开关迁移和自动范围约束。
 mmm_add_test_executable(Config VisualConfigTest tests/VisualConfigTest.cpp)
