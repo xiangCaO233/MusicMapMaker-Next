@@ -4,6 +4,7 @@
 #include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -265,6 +266,15 @@ private:
 
     /// @brief 音频资源表格行缓存。
     std::vector<AudioTableRow> m_audioTableRows;
+
+    /// @brief 各类音频资源分组的展开状态，索引与分组排序等级一致。
+    std::array<bool, 4> m_audioTableGroupExpanded{ false, false, true, true };
+
+    /// @brief 各类音频资源在排序行缓存中的起始索引。
+    std::array<size_t, 4> m_audioTableGroupStarts{};
+
+    /// @brief 各类音频资源在排序行缓存中的资源数量。
+    std::array<size_t, 4> m_audioTableGroupSizes{};
 
     /// @brief 上次构造音频表格缓存时的皮肤常驻音效数量。
     size_t m_cachedPermanentSfxCount{ 0 };

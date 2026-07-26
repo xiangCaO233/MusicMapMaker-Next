@@ -899,8 +899,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto audioTableTypeSortRank = [](AudioTableRowKind kind) {
         switch ( kind ) {
-        case AudioTableRowKind::InteractionSfx: return 0;
-        case AudioTableRowKind::PermanentSfx: return 1;
+        case AudioTableRowKind::PermanentSfx: return 0;
+        case AudioTableRowKind::InteractionSfx: return 1;
         case AudioTableRowKind::MainTrack: return 2;
         case AudioTableRowKind::ProjectSfx: return 3;
         }
@@ -964,15 +964,24 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             m_audioTableRows.begin(),
             m_audioTableRows.end(),
             [&](const AudioTableRow& lhs, const AudioTableRow& rhs) {
+                const int lhsGroupRank = audioTableTypeSortRank(lhs.m_kind);
+                const int rhsGroupRank = audioTableTypeSortRank(rhs.m_kind);
+                if ( lhsGroupRank != rhsGroupRank ) {
+                    int groupCompareResult = lhsGroupRank - rhsGroupRank;
+                    if ( m_audioTableSortKey == AudioTableSortKey::Type &&
+                         m_audioTableSortDirection ==
+                             SortDirection::Descending ) {
+                        groupCompareResult = -groupCompareResult;
+                    }
+                    return groupCompareResult < 0;
+                }
+
                 int compareResult = 0;
                 switch ( m_audioTableSortKey ) {
                 case AudioTableSortKey::Id:
                     compareResult = compareAsciiText(lhs.m_id, rhs.m_id);
                     break;
-                case AudioTableSortKey::Type:
-                    compareResult = audioTableTypeSortRank(lhs.m_kind) -
-                                    audioTableTypeSortRank(rhs.m_kind);
-                    break;
+                case AudioTableSortKey::Type: break;
                 case AudioTableSortKey::Path:
                     compareResult = compareAsciiText(lhs.m_path, rhs.m_path);
                     break;
@@ -1000,6 +1009,18 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 }
                 return compareResult < 0;
             });
+
+        m_audioTableGroupStarts.fill(0);
+        m_audioTableGroupSizes.fill(0);
+        for ( size_t rowIndex = 0; rowIndex < m_audioTableRows.size();
+              ++rowIndex ) {
+            const size_t groupIndex = static_cast<size_t>(
+                audioTableTypeSortRank(m_audioTableRows[rowIndex].m_kind));
+            if ( m_audioTableGroupSizes[groupIndex] == 0 ) {
+                m_audioTableGroupStarts[groupIndex] = rowIndex;
+            }
+            m_audioTableGroupSizes[groupIndex]++;
+        }
 
         m_cachedPermanentSfxCount  = skinData.audioPaths.size();
         m_cachedProjectAudioCount  = projectAudioCount;
@@ -1201,8 +1222,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
 
-        if ( ImGui::BeginTable(
-                 "AudioManagerTable", 5, tableFlags, { r.width, r.height }) ) {
+        if ( ImGui::BeginTable("AudioManagerGroupedTable",
+                               5,
+                               tableFlags,
+                               { r.width, r.height }) ) {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_id").data(),
@@ -1211,7 +1234,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGuiTableColumnFlags_PreferSortAscending);
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_type").data(),
-                ImGuiTableColumnFlags_WidthFixed |
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 116.0f * ImGui::GetFontSize() / 17.0f));
             ImGui::TableSetupColumn(
@@ -1256,7 +1280,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 isTableColumnEnabled(table, AudioTableColumnModifiedTime);
             int firstEnabledColumn = AudioTableColumnId;
             if ( table ) {
-                for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                for ( int displayOrder = 0; displayOrder < table->ColumnsCount;
+                      ++displayOrder ) {
+                    const int column = table->DisplayOrderToIndex[displayOrder];
                     if ( isTableColumnEnabled(table, column) ) {
                         firstEnabledColumn = column;
                         break;
@@ -1264,90 +1290,206 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 }
             }
 
-            const float      rowHeight = layoutMetrics.audioItemHeight;
+            const float rowHeight = layoutMetrics.audioItemHeight;
+            const float rowSelectableHeight =
+                std::max(ImGui::GetFontSize(),
+                         rowHeight - ImGui::GetStyle().CellPadding.y * 2.0f);
+            auto renderAudioResourceRow = [&](size_t rowIndex) {
+                auto& rowData = m_audioTableRows[rowIndex];
+                if ( sizeColumnVisible || modifiedColumnVisible ) {
+                    loadAudioTableRowMetadata(rowData);
+                }
+                const std::string typeText =
+                    audioTableTypeLabel(rowData.m_kind);
+
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+                (void)ImGui::TableSetColumnIndex(firstEnabledColumn);
+
+                const float       rowCursorY = ImGui::GetCursorScreenPos().y;
+                const std::string rowId   = fmt::format("##AudioRow_{}_{}_{}",
+                                                        rowData.m_id,
+                                                        rowData.m_path,
+                                                        rowIndex);
+                const bool        clicked = ::MMM::UI::FeedbackSelectable(
+                    rowId.c_str(),
+                    false,
+                    ImGuiSelectableFlags_SpanAllColumns,
+                    { 0.0f, rowSelectableHeight });
+                const bool hovered = ImGui::IsItemHovered();
+                if ( clicked ) {
+                    const auto controllerType =
+                        rowData.m_type == AudioTrackType::Main
+                            ? AudioTrackControllerUI::TrackType::Main
+                            : AudioTrackControllerUI::TrackType::Effect;
+                    sourceManager->openAudioTrackController(
+                        rowData.m_id, rowData.m_id, controllerType);
+                }
+
+                if ( hovered &&
+                     (rowData.m_kind == AudioTableRowKind::MainTrack ||
+                      rowData.m_kind == AudioTableRowKind::ProjectSfx) &&
+                     ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+                    m_manageTrackId   = rowData.m_id;
+                    m_manageTrackType = rowData.m_type;
+                    m_openManageModal = true;
+                }
+                if ( hovered ) {
+                    const std::string tooltipText =
+                        fmt::format("{}\n{}: {}",
+                                    rowData.m_path.c_str(),
+                                    TR("ui.audio_manager.column_type").data(),
+                                    typeText.c_str());
+                    Utils::renderTooltip(tooltipText.c_str());
+                }
+
+                auto renderColumnText = [&](int                column,
+                                            const std::string& text) {
+                    if ( !ImGui::TableSetColumnIndex(column) ) {
+                        return;
+                    }
+                    ImVec2 cellPos = ImGui::GetCursorScreenPos();
+                    cellPos.y      = rowCursorY;
+                    renderScrollingTableText(text,
+                                             cellPos,
+                                             ImGui::GetContentRegionAvail().x,
+                                             rowSelectableHeight);
+                };
+
+                const std::string idText =
+                    std::string(ICON_MMM_MUSIC) + "  " + rowData.m_id;
+                renderColumnText(AudioTableColumnId, idText);
+                renderColumnText(AudioTableColumnType, typeText);
+                renderColumnText(AudioTableColumnPath, rowData.m_path);
+                if ( sizeColumnVisible ) {
+                    renderColumnText(
+                        AudioTableColumnSize,
+                        formatSizeColumn(rowData.m_hasSize, rowData.m_size));
+                }
+                if ( modifiedColumnVisible ) {
+                    renderColumnText(
+                        AudioTableColumnModifiedTime,
+                        formatModifiedColumn(rowData.m_hasLastWriteTime,
+                                             rowData.m_lastWriteTime));
+                }
+            };
+
+            auto renderAudioGroupHeader = [&](AudioTableRowKind groupKind,
+                                              size_t            groupSize,
+                                              bool              expanded) {
+                const size_t groupIndex =
+                    static_cast<size_t>(audioTableTypeSortRank(groupKind));
+
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+                ImGui::TableSetBgColor(
+                    ImGuiTableBgTarget_RowBg0,
+                    ImGui::GetColorU32(ImGuiCol_Header, 0.30f));
+                (void)ImGui::TableSetColumnIndex(firstEnabledColumn);
+
+                const ImVec2      headerPos = ImGui::GetCursorScreenPos();
+                const std::string headerId =
+                    fmt::format("##AudioGroup_{}", groupIndex);
+                const bool clicked = ::MMM::UI::FeedbackSelectable(
+                    headerId.c_str(),
+                    false,
+                    ImGuiSelectableFlags_SpanAllColumns,
+                    { 0.0f, rowSelectableHeight });
+
+                const float arrowScale = 0.70f;
+                const float arrowSize  = ImGui::GetFontSize() * arrowScale;
+                const float contentY =
+                    headerPos.y +
+                    (rowSelectableHeight - ImGui::GetFontSize()) * 0.5f;
+                ImGui::RenderArrow(
+                    ImGui::GetWindowDrawList(),
+                    ImVec2(
+                        headerPos.x,
+                        contentY + (ImGui::GetFontSize() - arrowSize) * 0.5f),
+                    ImGui::GetColorU32(ImGuiCol_Text),
+                    expanded ? ImGuiDir_Down : ImGuiDir_Right,
+                    arrowScale);
+
+                const std::string headerText = audioTableTypeLabel(groupKind);
+                const ImVec2 textPos(headerPos.x + ImGui::GetFontSize() * 1.25f,
+                                     contentY);
+                ImGui::GetWindowDrawList()->AddText(
+                    textPos,
+                    ImGui::GetColorU32(ImGuiCol_Text),
+                    headerText.c_str());
+                const std::string countText = fmt::format("{}", groupSize);
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(textPos.x +
+                               ImGui::CalcTextSize(headerText.c_str()).x +
+                               ImGui::GetStyle().ItemInnerSpacing.x,
+                           contentY),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                    countText.c_str());
+
+                return clicked;
+            };
+
+            std::array<AudioTableRowKind, 4> groupOrder{
+                AudioTableRowKind::PermanentSfx,
+                AudioTableRowKind::InteractionSfx,
+                AudioTableRowKind::MainTrack,
+                AudioTableRowKind::ProjectSfx
+            };
+            if ( m_audioTableSortKey == AudioTableSortKey::Type &&
+                 m_audioTableSortDirection == SortDirection::Descending ) {
+                std::reverse(groupOrder.begin(), groupOrder.end());
+            }
+
+            const auto expandedGroups  = m_audioTableGroupExpanded;
+            size_t     visibleRowCount = groupOrder.size();
+            for ( const auto groupKind : groupOrder ) {
+                const size_t groupIndex =
+                    static_cast<size_t>(audioTableTypeSortRank(groupKind));
+                if ( expandedGroups[groupIndex] ) {
+                    visibleRowCount += m_audioTableGroupSizes[groupIndex];
+                }
+            }
+
+            int              toggledGroupIndex = -1;
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(m_audioTableRows.size()), rowHeight);
+            clipper.Begin(static_cast<int>(visibleRowCount), rowHeight);
             while ( clipper.Step() ) {
-                for ( int row = clipper.DisplayStart; row < clipper.DisplayEnd;
-                      ++row ) {
-                    auto& rowData = m_audioTableRows[static_cast<size_t>(row)];
-                    if ( sizeColumnVisible || modifiedColumnVisible ) {
-                        loadAudioTableRowMetadata(rowData);
-                    }
-                    const std::string typeText =
-                        audioTableTypeLabel(rowData.m_kind);
-
-                    ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
-                    (void)ImGui::TableSetColumnIndex(firstEnabledColumn);
-
-                    const float rowCursorY  = ImGui::GetCursorScreenPos().y;
-                    const std::string rowId = fmt::format("##AudioRow_{}_{}_{}",
-                                                          rowData.m_id,
-                                                          rowData.m_path,
-                                                          row);
-                    const bool        clicked = ::MMM::UI::FeedbackSelectable(
-                        rowId.c_str(),
-                        false,
-                        ImGuiSelectableFlags_SpanAllColumns,
-                        { 0.0f, rowHeight });
-                    const bool hovered = ImGui::IsItemHovered();
-                    if ( clicked ) {
-                        const auto controllerType =
-                            rowData.m_type == AudioTrackType::Main
-                                ? AudioTrackControllerUI::TrackType::Main
-                                : AudioTrackControllerUI::TrackType::Effect;
-                        sourceManager->openAudioTrackController(
-                            rowData.m_id, rowData.m_id, controllerType);
-                    }
-
-                    if ( hovered &&
-                         (rowData.m_kind == AudioTableRowKind::MainTrack ||
-                          rowData.m_kind == AudioTableRowKind::ProjectSfx) &&
-                         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
-                        m_manageTrackId   = rowData.m_id;
-                        m_manageTrackType = rowData.m_type;
-                        m_openManageModal = true;
-                    }
-                    if ( hovered ) {
-                        const std::string tooltipText = fmt::format(
-                            "{}\n{}: {}",
-                            rowData.m_path.c_str(),
-                            TR("ui.audio_manager.column_type").data(),
-                            typeText.c_str());
-                        Utils::renderTooltip(tooltipText.c_str());
-                    }
-
-                    auto renderColumnText = [&](int                column,
-                                                const std::string& text) {
-                        if ( !ImGui::TableSetColumnIndex(column) ) {
-                            return;
+                for ( int visibleRow = clipper.DisplayStart;
+                      visibleRow < clipper.DisplayEnd;
+                      ++visibleRow ) {
+                    size_t groupRelativeRow = static_cast<size_t>(visibleRow);
+                    for ( const auto groupKind : groupOrder ) {
+                        const size_t groupIndex = static_cast<size_t>(
+                            audioTableTypeSortRank(groupKind));
+                        const size_t groupSize =
+                            m_audioTableGroupSizes[groupIndex];
+                        if ( groupRelativeRow == 0 ) {
+                            if ( renderAudioGroupHeader(
+                                     groupKind,
+                                     groupSize,
+                                     expandedGroups[groupIndex]) ) {
+                                toggledGroupIndex =
+                                    static_cast<int>(groupIndex);
+                            }
+                            break;
                         }
-                        ImVec2 cellPos = ImGui::GetCursorScreenPos();
-                        cellPos.y      = rowCursorY;
-                        renderScrollingTableText(
-                            text,
-                            cellPos,
-                            ImGui::GetContentRegionAvail().x,
-                            rowHeight);
-                    };
 
-                    const std::string idText =
-                        std::string(ICON_MMM_MUSIC) + "  " + rowData.m_id;
-                    renderColumnText(AudioTableColumnId, idText);
-                    renderColumnText(AudioTableColumnType, typeText);
-                    renderColumnText(AudioTableColumnPath, rowData.m_path);
-                    if ( sizeColumnVisible ) {
-                        renderColumnText(AudioTableColumnSize,
-                                         formatSizeColumn(rowData.m_hasSize,
-                                                          rowData.m_size));
-                    }
-                    if ( modifiedColumnVisible ) {
-                        renderColumnText(
-                            AudioTableColumnModifiedTime,
-                            formatModifiedColumn(rowData.m_hasLastWriteTime,
-                                                 rowData.m_lastWriteTime));
+                        groupRelativeRow--;
+                        if ( expandedGroups[groupIndex] ) {
+                            if ( groupRelativeRow < groupSize ) {
+                                renderAudioResourceRow(
+                                    m_audioTableGroupStarts[groupIndex] +
+                                    groupRelativeRow);
+                                break;
+                            }
+                            groupRelativeRow -= groupSize;
+                        }
                     }
                 }
+            }
+            if ( toggledGroupIndex >= 0 ) {
+                const size_t groupIndex =
+                    static_cast<size_t>(toggledGroupIndex);
+                m_audioTableGroupExpanded[groupIndex] =
+                    !m_audioTableGroupExpanded[groupIndex];
             }
             ImGui::EndTable();
         }
