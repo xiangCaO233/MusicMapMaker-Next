@@ -29,8 +29,8 @@ public:
     MacOSWindowAdapter& operator=(MacOSWindowAdapter&&)      = delete;
     MacOSWindowAdapter& operator=(const MacOSWindowAdapter&) = delete;
 
-    /// @brief macOS 非最大化拖动由 Cocoa 背景拖动处理。
-    /// @return 固定返回 false。
+    /// @brief 使用原始左键事件请求 AppKit 开始原生窗口拖动。
+    /// @return 成功将拖动交给 Window Server 时返回 true。
     bool requestMove() override;
 
     /// @brief macOS 当前不从 GLFW 客户区回调发起原生缩放。
@@ -46,7 +46,7 @@ public:
     /// @return macOS 固定返回 false。
     [[nodiscard]] bool usesClientFrameOverlay() const override;
 
-    /// @brief macOS 当前无需刷新额外窗口外形。
+    /// @brief 刷新 macOS 普通窗口的内容圆角和原生阴影。
     void refreshFrameShape() override;
 
     /// @brief 在 GLFW 鼠标按键回调中记录 macOS 标题栏拖动候选。
@@ -70,11 +70,6 @@ public:
     /// @param focused 主窗口获得焦点时为 true。
     void handleClientFocusChange(bool focused) override;
 
-    /// @brief 供 Cocoa content view 查询当前 mouse-down 是否允许移动窗口。
-    /// @return 当前原生 mouse-down 位于拖动区域时返回 true。
-    /// @warning 输入热路径：AppKit 原生鼠标按下阶段执行；只做常量规模命中判断。
-    [[nodiscard]] bool handleNativeMouseDownCanMoveWindow() const;
-
 private:
     /// @brief 处理拖拽区域更新事件。
     /// @param event 拖拽区域更新事件。
@@ -85,13 +80,6 @@ private:
 
     /// @brief 移除 Cocoa content view 上关联的原生拖动命中桥接。
     void removeNativeDragBridge();
-
-    /// @brief 获取当前 AppKit mouse-down 事件在 GLFW 客户区中的坐标。
-    /// @param cursorX 输出客户区 X 坐标。
-    /// @param cursorY 输出客户区 Y 坐标。
-    /// @return 当前事件可转换为客户区坐标时返回 true。
-    [[nodiscard]] bool getCurrentNativeMouseDownPosition(double& cursorX,
-                                                         double& cursorY) const;
 
     /// @brief 判断鼠标是否命中标题栏拖拽区域。
     /// @param cursorX 鼠标在窗口客户区中的 X 坐标。

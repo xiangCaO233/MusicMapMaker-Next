@@ -7,9 +7,10 @@
 #include "event/input/MMMInput.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/glfw/window/NativeWindow.h"
+#include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "imgui.h"
 
-#include "graphic/glfw/window/NativeWindow.h"
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
 
@@ -479,6 +480,11 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
 
     // 转换为 vk::SurfaceKHR
     m_vkSurface = surface;
+    // MoltenVK 会在创建 Surface 时安装实际的 CAMetalLayer，必须在此后重新
+    // 应用 macOS 圆角裁剪和原生外扩散阴影。
+    if ( auto* frameAdapter = native_window_ptr->getWindowFrameAdapter() ) {
+        frameAdapter->refreshFrameShape();
+    }
     addStartupDiagnostic("Vulkan window surface created successfully.");
     XDEBUG("Vulkan Surface created.");
     collectPhysicalDeviceDiagnostics(true);

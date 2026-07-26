@@ -1,45 +1,78 @@
 #if defined(__APPLE__)
 
 #include "graphic/glfw/window/adapters/MacOSWindowAdapter.h"
+#include "event/ui/GLFWNativeEvent.h"
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3native.h>
 
 #import <AppKit/AppKit.h>
+#import <QuartzCore/QuartzCore.h>
 #include <objc/runtime.h>
 
 namespace MMM::Graphic
 {
 namespace
 {
-/// @brief Cocoa 内容视图上保存 macOS 窗口框架适配器的关联键。
-char MACOS_WINDOW_ADAPTER_ASSOCIATION_KEY;
+/// @brief macOS 普通窗口的原生内容裁剪圆角半径。
+constexpr CGFloat MACOS_WINDOW_CORNER_RADIUS = 12.0;
 
-/// @brief 从 Cocoa 内容视图读取 macOS 窗口框架适配器。
-/// @param view Cocoa 内容视图。
-/// @return 关联的适配器；未关联时返回 nullptr。
-MacOSWindowAdapter* adapterForContentView(NSView* view)
+/// @brief Cocoa 窗口上保存原始左键按下事件的关联键。
+char MACOS_MOUSE_DOWN_EVENT_ASSOCIATION_KEY;
+
+/// @brief 获取当前正在派发的左键按下事件。
+/// @param nativeWindow 目标 Cocoa 窗口。
+/// @return 属于目标窗口的左键按下事件；当前不是按下阶段时返回 nil。
+NSEvent* currentLeftMouseDownEvent(NSWindow* nativeWindow)
 {
-    if ( !view ) {
-        return nullptr;
+    if ( !nativeWindow ) {
+        return nil;
     }
 
-    NSValue* adapterValue = objc_getAssociatedObject(
-        view, &MACOS_WINDOW_ADAPTER_ASSOCIATION_KEY);
-    return adapterValue ? static_cast<MacOSWindowAdapter*>(
-                              [adapterValue pointerValue])
-                        : nullptr;
+    NSEvent* event = [NSApp currentEvent];
+    if ( !event || [event window] != nativeWindow ||
+         [event type] != NSEventTypeLeftMouseDown ) {
+        return nil;
+    }
+    return event;
 }
 
-/// @brief Cocoa 内容视图的 mouseDownCanMoveWindow 实现。
-/// @param self Cocoa 内容视图。
-/// @param selector Objective-C 选择器。
-/// @return 当前鼠标按下命中拖动区域时返回 YES。
-BOOL contentViewMouseDownCanMoveWindow(id self, SEL selector)
+/// @brief 缓存供 AppKit 原生窗口拖动使用的初始左键事件。
+/// @param nativeWindow 目标 Cocoa 窗口。
+/// @param event 原始左键按下事件；传入 nil 时清空缓存。
+void cacheMouseDownEvent(NSWindow* nativeWindow, NSEvent* event)
 {
-    (void)selector;
-    auto* adapter = adapterForContentView((NSView*)self);
-    return adapter && adapter->handleNativeMouseDownCanMoveWindow() ? YES : NO;
+    if ( !nativeWindow ) {
+        return;
+    }
+
+    objc_setAssociatedObject(nativeWindow,
+                             &MACOS_MOUSE_DOWN_EVENT_ASSOCIATION_KEY,
+                             event,
+                             event ? OBJC_ASSOCIATION_RETAIN_NONATOMIC
+                                   : OBJC_ASSOCIATION_ASSIGN);
+}
+
+/// @brief 对承载窗口画面的 Cocoa 视图层应用圆角裁剪。
+/// @param view 需要裁剪的视图。
+/// @param cornerRadius 当前窗口状态对应的圆角半径。
+/// @param shouldClip 普通窗口状态下为 true。
+void applyRoundedContentLayer(NSView* view, CGFloat cornerRadius,
+                              bool shouldClip)
+{
+    if ( !view ) {
+        return;
+    }
+
+    [view setWantsLayer:YES];
+    CALayer* layer = [view layer];
+    if ( !layer ) {
+        return;
+    }
+
+    [layer setCornerRadius:cornerRadius];
+    [layer setMasksToBounds:shouldClip ? YES : NO];
+    [layer setAllowsEdgeAntialiasing:YES];
 }
 }  // namespace
 
@@ -65,7 +98,29 @@ MacOSWindowAdapter::~MacOSWindowAdapter()
 
 bool MacOSWindowAdapter::requestMove()
 {
-    return false;
+    if ( !m_window || glfwGetWindowMonitor(m_window) != nullptr ||
+         m_host.isFrameMaximized() ) {
+        return false;
+    }
+
+    NSWindow* nativeWindow = glfwGetCocoaWindow(m_window);
+    if ( !nativeWindow ) {
+        return false;
+    }
+
+    NSEvent* mouseDownEvent = currentLeftMouseDownEvent(nativeWindow);
+    if ( !mouseDownEvent ) {
+        mouseDownEvent = objc_getAssociatedObject(
+            nativeWindow, &MACOS_MOUSE_DOWN_EVENT_ASSOCIATION_KEY);
+    }
+    if ( !mouseDownEvent || [mouseDownEvent window] != nativeWindow ||
+         [mouseDownEvent type] != NSEventTypeLeftMouseDown ) {
+        return false;
+    }
+
+    [nativeWindow performWindowDragWithEvent:mouseDownEvent];
+    cacheMouseDownEvent(nativeWindow, nil);
+    return true;
 }
 
 bool MacOSWindowAdapter::requestResize(WindowFrameResizeEdge edge)
@@ -84,7 +139,32 @@ bool MacOSWindowAdapter::usesClientFrameOverlay() const
     return false;
 }
 
-void MacOSWindowAdapter::refreshFrameShape() {}
+void MacOSWindowAdapter::refreshFrameShape()
+{
+    NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
+    if ( !nativeWindow ) {
+        return;
+    }
+
+    const bool useWindowEffects =
+        glfwGetWindowMonitor(m_window) == nullptr && !m_host.isFrameMaximized();
+    NSView* contentView = [nativeWindow contentView];
+
+    [nativeWindow setOpaque:NO];
+    [nativeWindow setBackgroundColor:[NSColor clearColor]];
+    [nativeWindow setHasShadow:useWindowEffects ? YES : NO];
+
+    if ( contentView ) {
+        const CGFloat cornerRadius =
+            useWindowEffects ? MACOS_WINDOW_CORNER_RADIUS : 0.0;
+        applyRoundedContentLayer(
+            contentView, cornerRadius, useWindowEffects);
+        applyRoundedContentLayer(
+            [contentView superview], cornerRadius, useWindowEffects);
+    }
+
+    [nativeWindow invalidateShadow];
+}
 
 bool MacOSWindowAdapter::handleClientMouseButton(int button, int action,
                                                  double cursorX, double cursorY)
@@ -100,18 +180,34 @@ bool MacOSWindowAdapter::handleClientMouseButton(int button, int action,
 
     if ( action != GLFW_PRESS || !m_window ||
          glfwGetWindowMonitor(m_window) != nullptr ||
-         !m_host.isFrameMaximized() ) {
+         !isInsideDragArea(cursorX, cursorY) ) {
         return false;
+    }
+
+    NSWindow* nativeWindow = glfwGetCocoaWindow(m_window);
+    NSEvent*  mouseDownEvent = currentLeftMouseDownEvent(nativeWindow);
+    if ( mouseDownEvent ) {
+        cacheMouseDownEvent(nativeWindow, mouseDownEvent);
+    }
+
+    if ( mouseDownEvent && [mouseDownEvent clickCount] >= 2 ) {
+        resetPendingFrameRequest();
+        Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+            .type =
+                Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+        return true;
+    }
+
+    if ( !m_host.isFrameMaximized() ) {
+        return requestMove();
     }
 
     m_pressX = cursorX;
     m_pressY = cursorY;
     resetPendingFrameRequest();
-
-    if ( isInsideDragArea(cursorX, cursorY) ) {
-        m_pendingMove = true;
-    }
-    return false;
+    cacheMouseDownEvent(nativeWindow, mouseDownEvent);
+    m_pendingMove = true;
+    return true;
 }
 
 bool MacOSWindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
@@ -134,29 +230,17 @@ bool MacOSWindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
     }
 
     m_pendingMove = false;
-    return m_host.restoreFrameForClientMove(cursorX, cursorY);
+    if ( !m_host.restoreFrameForClientMove(cursorX, cursorY) ) {
+        resetPendingFrameRequest();
+        return false;
+    }
+    return requestMove();
 }
 
 void MacOSWindowAdapter::handleClientFocusChange(bool focused)
 {
     (void)focused;
     resetPendingFrameRequest();
-}
-
-bool MacOSWindowAdapter::handleNativeMouseDownCanMoveWindow() const
-{
-    if ( !m_window || glfwGetWindowMonitor(m_window) != nullptr ||
-         m_host.isFrameMaximized() ) {
-        return false;
-    }
-
-    double cursorX = 0.0;
-    double cursorY = 0.0;
-    if ( !getCurrentNativeMouseDownPosition(cursorX, cursorY) ) {
-        return false;
-    }
-
-    return isInsideDragArea(cursorX, cursorY);
 }
 
 void MacOSWindowAdapter::onUpdateDragArea(
@@ -173,26 +257,9 @@ void MacOSWindowAdapter::installNativeDragBridge()
         return;
     }
 
-    NSView* contentView = [nativeWindow contentView];
-    if ( !contentView ) {
-        return;
-    }
-
-    Class contentViewClass = object_getClass(contentView);
-    if ( !contentViewClass ) {
-        return;
-    }
-
-    class_replaceMethod(contentViewClass,
-                        @selector(mouseDownCanMoveWindow),
-                        reinterpret_cast<IMP>(contentViewMouseDownCanMoveWindow),
-                        "c@:");
-    objc_setAssociatedObject(contentView,
-                             &MACOS_WINDOW_ADAPTER_ASSOCIATION_KEY,
-                             [NSValue valueWithPointer:this],
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [nativeWindow setMovable:YES];
-    [nativeWindow setMovableByWindowBackground:YES];
+    [nativeWindow setMovableByWindowBackground:NO];
+    refreshFrameShape();
 }
 
 void MacOSWindowAdapter::removeNativeDragBridge()
@@ -202,49 +269,7 @@ void MacOSWindowAdapter::removeNativeDragBridge()
         return;
     }
 
-    NSView* contentView = [nativeWindow contentView];
-    if ( !contentView ) {
-        return;
-    }
-
-    objc_setAssociatedObject(contentView,
-                             &MACOS_WINDOW_ADAPTER_ASSOCIATION_KEY,
-                             nil,
-                             OBJC_ASSOCIATION_ASSIGN);
-}
-
-bool MacOSWindowAdapter::getCurrentNativeMouseDownPosition(double& cursorX,
-                                                           double& cursorY) const
-{
-    NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
-    if ( !nativeWindow ) {
-        return false;
-    }
-
-    NSEvent* currentEvent = [NSApp currentEvent];
-    if ( !currentEvent || [currentEvent window] != nativeWindow ||
-         [currentEvent type] != NSEventTypeLeftMouseDown ) {
-        return false;
-    }
-
-    NSView* contentView = [nativeWindow contentView];
-    if ( !contentView ) {
-        return false;
-    }
-
-    const NSPoint windowPoint = [currentEvent locationInWindow];
-    const NSPoint viewPoint = [contentView convertPoint:windowPoint fromView:nil];
-    const NSRect  bounds    = [contentView bounds];
-    const CGFloat localX    = viewPoint.x - bounds.origin.x;
-    const CGFloat localY    = viewPoint.y - bounds.origin.y;
-    if ( localX < 0.0 || localY < 0.0 || localX > bounds.size.width ||
-         localY > bounds.size.height ) {
-        return false;
-    }
-
-    cursorX = static_cast<double>(localX);
-    cursorY = static_cast<double>(bounds.size.height - localY);
-    return true;
+    cacheMouseDownEvent(nativeWindow, nil);
 }
 
 bool MacOSWindowAdapter::isInsideDragArea(double cursorX, double cursorY) const
@@ -280,6 +305,8 @@ bool MacOSWindowAdapter::isInsideDragArea(double cursorX, double cursorY) const
 void MacOSWindowAdapter::resetPendingFrameRequest()
 {
     m_pendingMove = false;
+    NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
+    cacheMouseDownEvent(nativeWindow, nil);
 }
 
 }  // namespace MMM::Graphic
