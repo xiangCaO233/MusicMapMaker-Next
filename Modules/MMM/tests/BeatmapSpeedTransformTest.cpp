@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -108,6 +109,8 @@ MMM::BeatMap makeFixture()
     beatmap.m_baseMapMetadata.preference_bpm  = 120.0;
     beatmap.m_baseMapMetadata.map_length      = 90000.0;
     beatmap.m_baseMapMetadata.video_starttime = 1000;
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 2;
 
     MMM::Timing bpm;
     bpm.m_timestamp             = 1000.0;
@@ -158,6 +161,16 @@ MMM::BeatMap makeFixture()
     polyline.m_subNotes.push_back(subFlickRef);
     polyline.m_subFlicks.push_back(subFlickRef);
 
+    MMM::AudioSampleEvent sample;
+    sample.m_timestamp       = 7200.0;
+    sample.m_offsetMs        = 101;
+    sample.m_track           = 5;
+    sample.m_audioResourceId = "stem.ogg";
+    sample.m_volume          = 0.75F;
+    sample.m_metadata.sample_properties[MMM::SampleMetadataType::MMM]["label"] =
+        "stem";
+    beatmap.m_audioSamples.push_back(sample);
+
     beatmap.m_noteData.polylines.push_back(polyline);
     beatmap.sync();
     return beatmap;
@@ -188,18 +201,21 @@ bool runFixtureCoverage()
         isNearlyEqual(result.beatmap.m_baseMapMetadata.preference_bpm, 180.0),
         "metadata bpm scaled");
     ok &= check(
-        isNearlyEqual(result.beatmap.m_baseMapMetadata.map_length, 4000.0),
+        isNearlyEqual(result.beatmap.m_baseMapMetadata.map_length, 4867.0),
         "map length uses content end");
     ok &= check(
         isNearlyEqual(
             MMM::BeatmapSpeedTransform::calculateContentEndTime(result.beatmap),
-            4000.0),
+            4867.0),
         "content end time calculated");
     ok &= check(result.beatmap.m_baseMapMetadata.video_starttime == 667,
                 "video start time scaled");
     ok &= check(result.beatmap.m_baseMapMetadata.main_audio_path ==
                     std::filesystem::path("audio_1_5x.wav"),
                 "audio path updated");
+    ok &= check(result.beatmap.m_baseMapMetadata.song_file_hint ==
+                    std::filesystem::path("audio_1_5x.wav"),
+                "song file hint updated");
 
     ok &= check(result.beatmap.m_timings.size() == 2, "timing count kept");
     ok &= check(
@@ -245,14 +261,44 @@ bool runFixtureCoverage()
         isNearlyEqual(polyline.m_subNotes.back().get().m_timestamp, 4000.0),
         "polyline second sub timestamp scaled");
 
+    ok &= check(result.beatmap.m_audioSamples.size() == 1,
+                "automatic sample count kept");
+    if ( result.beatmap.m_audioSamples.size() == 1 ) {
+        const auto& sample = result.beatmap.m_audioSamples.front();
+        ok &= check(isNearlyEqual(sample.m_timestamp, 4800.0),
+                    "automatic sample anchor scaled");
+        ok &= check(sample.m_offsetMs == 67,
+                    "automatic sample offset rounded to nearest millisecond");
+        ok &= check(isNearlyEqual(sample.effectiveTimestamp(), 4867.0),
+                    "automatic sample trigger time scaled");
+        ok &= check(sample.m_track == 5 &&
+                        sample.m_audioResourceId == "stem.ogg" &&
+                        isNearlyEqual(sample.m_volume, 0.75F),
+                    "automatic sample identity kept");
+        ok &= check(sample.m_metadata.getValue<std::string>(
+                        MMM::SampleMetadataType::MMM, "label") == "stem",
+                    "automatic sample metadata kept");
+    }
+
     auto shortSource                         = makeFixture();
     shortSource.m_baseMapMetadata.map_length = 3000.0;
     auto shortResult =
         MMM::BeatmapSpeedTransform::createSpeedVersion(shortSource, options);
     ok &= check(shortResult.success, "short metadata transform succeeds");
     ok &= check(
-        isNearlyEqual(shortResult.beatmap.m_baseMapMetadata.map_length, 4000.0),
+        isNearlyEqual(shortResult.beatmap.m_baseMapMetadata.map_length, 4867.0),
         "map length ignores divided metadata tail");
+
+    auto tieSource                              = makeFixture();
+    tieSource.m_audioSamples.front().m_offsetMs = -1;
+    auto tieOptions                             = options;
+    tieOptions.speed                            = 2.0;
+    auto tieResult =
+        MMM::BeatmapSpeedTransform::createSpeedVersion(tieSource, tieOptions);
+    ok &= check(tieResult.success &&
+                    tieResult.beatmap.m_audioSamples.size() == 1 &&
+                    tieResult.beatmap.m_audioSamples.front().m_offsetMs == -1,
+                "negative half millisecond rounds away from zero");
 
     MMM::BeatmapSpeedTransformOptions invalidOptions;
     invalidOptions.speed = 0.0;
@@ -303,11 +349,14 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
                 "resource note count kept");
     ok &= check(result.beatmap.m_timings.size() == source.m_timings.size(),
                 "resource timing count kept");
+    ok &= check(
+        result.beatmap.m_audioSamples.size() == source.m_audioSamples.size(),
+        "resource automatic sample count kept");
 
     if ( sourceContentEnd > 0.0 ) {
         ok &= check(isNearlyEqual(result.beatmap.m_baseMapMetadata.map_length,
                                   sourceContentEnd / speed,
-                                  1e-3),
+                                  0.501),
                     "resource content end scaled");
     }
     if ( !source.m_allNotes.empty() && !result.beatmap.m_allNotes.empty() ) {
@@ -348,6 +397,26 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
     ok &= check(timingTimestampsOk, "resource timing timestamps scaled");
     ok &= check(bpmValuesOk, "resource bpm values scaled");
 
+    const auto sampleCount = std::min(source.m_audioSamples.size(),
+                                      result.beatmap.m_audioSamples.size());
+    bool       sampleTimelineOk = true;
+    for ( std::size_t i = 0; i < sampleCount; ++i ) {
+        const auto& before         = source.m_audioSamples[i];
+        const auto& after          = result.beatmap.m_audioSamples[i];
+        const auto  expectedOffset = static_cast<std::int64_t>(
+            std::round(static_cast<long double>(before.m_offsetMs) / speed));
+        if ( !isNearlyEqual(
+                 after.m_timestamp, before.m_timestamp / speed, 1e-3) ||
+             after.m_offsetMs != expectedOffset ||
+             after.m_track != before.m_track ||
+             after.m_audioResourceId != before.m_audioResourceId ||
+             !isNearlyEqual(after.m_volume, before.m_volume) ) {
+            XERROR("[speed-transform] automatic sample mismatch at {}", i);
+            sampleTimelineOk = false;
+        }
+    }
+    ok &= check(sampleTimelineOk, "resource automatic sample timeline scaled");
+
     std::error_code createError;
     std::filesystem::create_directories(outputPath.parent_path(), createError);
     ok &= check(!createError, "resource output directory created");
@@ -375,6 +444,17 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
                 reloaded.m_timings.size());
         } else {
             check(true, "resource transformed map reload timing count");
+        }
+        if ( reloaded.m_audioSamples.size() !=
+             result.beatmap.m_audioSamples.size() ) {
+            XWARN(
+                "[speed-transform] transformed MMM reload sample count "
+                "differs for {}: saved={} reloaded={}",
+                inputPath.string(),
+                result.beatmap.m_audioSamples.size(),
+                reloaded.m_audioSamples.size());
+        } else {
+            check(true, "resource transformed map reload sample count");
         }
     }
 

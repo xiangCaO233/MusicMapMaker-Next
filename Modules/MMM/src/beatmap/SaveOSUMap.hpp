@@ -6,6 +6,8 @@
 #include "mmm/note/Hold.h"
 #include "mmm/timing/Timing.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -16,6 +18,10 @@
 namespace MMM
 {
 
+/// @brief 将谱面保存为 osu! 文本格式。
+/// @param beatMap 待保存谱面。
+/// @param path 输出路径。
+/// @return 保存成功时返回 true；采样时间线无法无损表达时返回 false。
 inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     using enum MapMetadataType;
@@ -34,6 +40,38 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         return default_val;
     };
 
+    const AudioSampleEvent* legacyAudioSample = nullptr;
+    if ( beatMap.m_audioSamples.size() > 1 ) {
+        XERROR(
+            "osu! 导出失败：格式只能表达一个全局音频，当前有 {} 个自动采样对象",
+            beatMap.m_audioSamples.size());
+        return false;
+    }
+    if ( !beatMap.m_audioSamples.empty() ) {
+        legacyAudioSample            = &beatMap.m_audioSamples.front();
+        const uint32_t firstBgmTrack = static_cast<uint32_t>(
+            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        if ( legacyAudioSample->m_audioResourceId.empty() ||
+             !std::isfinite(legacyAudioSample->m_timestamp) ||
+             std::abs(legacyAudioSample->m_timestamp) > 1e-6 ||
+             legacyAudioSample->m_offsetMs != 0 ||
+             legacyAudioSample->m_track != firstBgmTrack ||
+             !std::isfinite(legacyAudioSample->m_volume) ||
+             std::abs(legacyAudioSample->m_volume - 1.0F) > 1e-6F ) {
+            XERROR(
+                "osu! 导出失败：自动采样必须是 timestamp=0、offset=0、"
+                "track={}、volume=1 且音频引用非空；当前为 "
+                "timestamp={}、offset={}、track={}、volume={}、ref='{}'",
+                firstBgmTrack,
+                legacyAudioSample->m_timestamp,
+                legacyAudioSample->m_offsetMs,
+                legacyAudioSample->m_track,
+                legacyAudioSample->m_volume,
+                legacyAudioSample->m_audioResourceId);
+            return false;
+        }
+    }
+
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) {
         XWARN("打开文件[{}]进行写出失败", Config::pathToUtf8(path));
@@ -45,10 +83,10 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "osu file format " << format_ver << "\n\n";
 
     ofs << "[General]\n";
-    std::string audio_path =
-        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
-    if ( audio_path.empty() )
-        audio_path = get_prop("General::AudioFilename", "");
+    std::string audio_path;
+    if ( legacyAudioSample != nullptr ) {
+        audio_path = legacyAudioSample->m_audioResourceId;
+    }
     ofs << "AudioFilename: " << audio_path << "\n";
 
     ofs << "AudioLeadIn: " << get_prop("General::AudioLeadIn", "0") << "\n";

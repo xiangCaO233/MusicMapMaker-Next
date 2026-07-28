@@ -44,7 +44,7 @@ class BeatmapSpeedTransform
 public:
     /// @brief 计算谱面实际内容末尾时间。
     /// @param beatmap 谱面。
-    /// @return 所有物件和时间线事件的最大结束时间，单位毫秒。
+    /// @return 所有物件、时间线与自动采样实际触发时间的最大值，单位毫秒。
     static double calculateContentEndTime(const BeatMap& beatmap);
 
     /// @brief 生成与变速音频同步的谱面副本。

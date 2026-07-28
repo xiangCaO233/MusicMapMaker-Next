@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <string_view>
 #include <system_error>
@@ -222,6 +223,8 @@ bool testMMMVersion2AudioSampleRoundTrip(
     ok &= check(saved["metadata"]["base"].value("song_file_hint", "") ==
                     "display-hint.ogg",
                 "MMM v2 should save song file hint separately");
+    ok &= check(!saved["metadata"]["base"].contains("audio"),
+                "MMM v2 should not emit the legacy audio field");
     ok &= check(
         saved.contains("audio_samples") && saved["audio_samples"].size() == 2,
         "MMM v2 should save every automatic sample");
@@ -262,10 +265,10 @@ bool testMMMVersion2AudioSampleRoundTrip(
     ok &= check(loaded.m_baseMapMetadata.bgm_track_count == 3,
                 "MMM v2 should reload BGM track count");
     ok &= check(loaded.m_baseMapMetadata.main_audio_path ==
-                        std::filesystem::path("legacy-main.ogg") &&
+                        std::filesystem::path("display-hint.ogg") &&
                     loaded.m_baseMapMetadata.song_file_hint ==
                         std::filesystem::path("display-hint.ogg"),
-                "MMM v2 should keep legacy audio path and song hint distinct");
+                "MMM v2 should use song file hint as its compatibility path");
     ok &= check(loaded.m_audioSamples.size() == 2,
                 "MMM v2 should reload every automatic sample");
     if ( loaded.m_audioSamples.size() == 2 ) {
@@ -310,7 +313,7 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
 {
     const auto path = outputDirectory / "legacy_metadata_defaults.mmm";
     constexpr std::string_view content =
-        R"({"metadata":{"base":{"name":"Legacy","audio":"legacy.ogg","cover":"legacy.png","track_count":4}},"timing":[],"note":[{"type":"note","timestamp":1000,"track":1,"bound_sound":"legacy-hit.wav"}]})";
+        R"({"metadata":{"base":{"name":"Legacy","audio":"legacy.ogg","cover":"legacy.png","track_count":4}},"timing":[{"timestamp":250,"bpm":120,"beat_length":500,"effect":"bpm","param":120}],"note":[{"type":"note","timestamp":1000,"track":1,"bound_sound":"legacy-hit.wav"}]})";
     if ( !writeTextFile(path, content) ) return false;
 
     MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
@@ -340,12 +343,17 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
     ok &= check(loaded.m_allNotes.size() == 1,
                 "legacy playable note should still load");
     if ( loaded.m_allNotes.size() == 1 ) {
+        ok &= check(loaded.m_allNotes.front().get().m_timestamp == 1000.0,
+                    "legacy audio migration should not move playable notes");
         const auto binding = loaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(binding.has_value() &&
                         binding->m_audioResourceId == "legacy-hit.wav" &&
                         std::abs(binding->m_volume - 1.0F) < 1e-6F,
                     "legacy bound_sound should default binding volume to one");
     }
+    ok &= check(loaded.m_timings.size() == 1 &&
+                    loaded.m_timings.front().m_timestamp == 250.0,
+                "legacy audio migration should not move timing events");
 
     const auto migratedPath =
         outputDirectory / "legacy_metadata_migrated_v2.mmm";
@@ -357,6 +365,8 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
         input >> migrated;
         ok &= check(migrated.value("format_version", 0) == 2,
                     "migrated legacy MMM should save as v2");
+        ok &= check(!migrated["metadata"]["base"].contains("audio"),
+                    "migrated MMM v2 should omit the legacy audio field");
         ok &= check(migrated.contains("audio_samples") &&
                         migrated["audio_samples"].size() == 1 &&
                         migrated["audio_samples"][0].value("offset_ms", 1) == 0,
@@ -368,6 +378,244 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
                   "migrated legacy note should emit canonical sample binding");
     }
     return ok;
+}
+
+/// @brief 验证 osu! 单音频字段迁移到第一条 BGM 轨且往返不移动谱面事件。
+/// @param outputDirectory 测试输出目录。
+/// @return 验证是否通过。
+bool testOSUSingleAudioMigration(const std::filesystem::path& outputDirectory)
+{
+    const auto sourcePath = outputDirectory / "osu_single_audio_source.osu";
+    constexpr std::string_view content = R"(osu file format v14
+
+[General]
+AudioFilename: legacy audio.ogg
+Mode: 3
+
+[Difficulty]
+CircleSize: 4
+
+[TimingPoints]
+0,500,4,2,0,100,1,0
+
+[HitObjects]
+64,192,1000,1,0,0:0:0:0:
+)";
+    if ( !writeTextFile(sourcePath, content) ) return false;
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    bool         ok     = true;
+    ok &= check(loaded.m_baseMapMetadata.main_audio_path ==
+                        std::filesystem::path("legacy audio.ogg") &&
+                    loaded.m_baseMapMetadata.song_file_hint ==
+                        std::filesystem::path("legacy audio.ogg"),
+                "osu! audio should populate both compatibility fields");
+    ok &= check(loaded.m_baseMapMetadata.track_count == 4 &&
+                    loaded.m_baseMapMetadata.bgm_track_count >= 1,
+                "osu! audio should reserve the first BGM track");
+    ok &= check(loaded.m_audioSamples.size() == 1,
+                "osu! audio should migrate to one automatic sample");
+    if ( loaded.m_audioSamples.size() == 1 ) {
+        const auto& sample = loaded.m_audioSamples.front();
+        ok &= check(sample.m_timestamp == 0.0 && sample.m_offsetMs == 0 &&
+                        sample.m_track == 4 &&
+                        sample.m_audioResourceId == "legacy audio.ogg" &&
+                        std::abs(sample.m_volume - 1.0F) < 1e-6F,
+                    "osu! automatic sample migration should use 0/0/K");
+    }
+    ok &= check(loaded.m_timings.size() == 1 &&
+                    loaded.m_timings.front().m_timestamp == 0.0,
+                "osu! audio migration should not move timing events");
+    ok &= check(loaded.m_allNotes.size() == 1 &&
+                    loaded.m_allNotes.front().get().m_timestamp == 1000.0,
+                "osu! audio migration should not move playable notes");
+
+    const auto exportedPath = outputDirectory / "osu_single_audio_exported.osu";
+    ok &= check(loaded.saveToFile(exportedPath),
+                "canonical osu! single audio should export");
+    if ( ok ) {
+        MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportedPath);
+        ok &= check(reloaded.m_audioSamples.size() == 1 &&
+                        reloaded.m_audioSamples.front().m_timestamp == 0.0 &&
+                        reloaded.m_audioSamples.front().m_offsetMs == 0 &&
+                        reloaded.m_audioSamples.front().m_track == 4 &&
+                        reloaded.m_audioSamples.front().m_audioResourceId ==
+                            "legacy audio.ogg",
+                    "canonical osu! single audio should round trip");
+        ok &= check(reloaded.m_timings.size() == 1 &&
+                        reloaded.m_timings.front().m_timestamp == 0.0 &&
+                        reloaded.m_allNotes.size() == 1 &&
+                        reloaded.m_allNotes.front().get().m_timestamp == 1000.0,
+                    "osu! round trip should keep timing and note positions");
+    }
+    return ok;
+}
+
+/// @brief 验证 RM/IMD 同名前缀音频迁移到第一条 BGM 轨。
+/// @param outputDirectory 测试输出目录。
+/// @return 验证是否通过。
+bool testRMSingleAudioMigration(const std::filesystem::path& outputDirectory)
+{
+    const auto audioPath = outputDirectory / "LegacyAudio.flac";
+    if ( !writeTextFile(audioPath, "fLaC") ) return false;
+
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count     = 4;
+    source.m_baseMapMetadata.bgm_track_count = 1;
+    MMM::AudioSampleEvent sample;
+    sample.m_timestamp       = 0.0;
+    sample.m_offsetMs        = 0;
+    sample.m_track           = 4;
+    sample.m_audioResourceId = "LegacyAudio.flac";
+    sample.m_volume          = 1.0F;
+    source.m_audioSamples.push_back(sample);
+
+    const auto mapPath = outputDirectory / "LegacyAudio_4k_Test.imd";
+    bool       ok      = true;
+    ok &= check(source.saveToFile(mapPath),
+                "canonical RM/IMD single audio should export");
+    if ( !ok ) return false;
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(mapPath);
+    ok &= check(loaded.m_baseMapMetadata.main_audio_path ==
+                        std::filesystem::path("LegacyAudio.flac") &&
+                    loaded.m_baseMapMetadata.song_file_hint ==
+                        std::filesystem::path("LegacyAudio.flac"),
+                "RM/IMD audio should populate both compatibility fields");
+    ok &= check(loaded.m_baseMapMetadata.track_count == 4 &&
+                    loaded.m_baseMapMetadata.bgm_track_count >= 1,
+                "RM/IMD audio should reserve the first BGM track");
+    ok &= check(loaded.m_audioSamples.size() == 1,
+                "RM/IMD audio should migrate to one automatic sample");
+    if ( loaded.m_audioSamples.size() == 1 ) {
+        const auto& loadedSample = loaded.m_audioSamples.front();
+        ok &= check(loadedSample.m_timestamp == 0.0 &&
+                        loadedSample.m_offsetMs == 0 &&
+                        loadedSample.m_track == 4 &&
+                        loadedSample.m_audioResourceId == "LegacyAudio.flac" &&
+                        std::abs(loadedSample.m_volume - 1.0F) < 1e-6F,
+                    "RM/IMD automatic sample migration should use 0/0/K");
+    }
+    ok &= check(loaded.m_timings.empty() && loaded.m_allNotes.empty(),
+                "RM/IMD audio migration should not add timing or notes");
+    return ok;
+}
+
+/// @brief 验证单音频格式拒绝无法无损表达的自动采样时间线。
+/// @param outputDirectory 测试输出目录。
+/// @return 验证是否通过。
+bool testSingleAudioExporterRejection(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap timedSource;
+    timedSource.m_baseMapMetadata.track_count = 4;
+    MMM::AudioSampleEvent timedSample;
+    timedSample.m_timestamp       = 500.0;
+    timedSample.m_offsetMs        = -25;
+    timedSample.m_track           = 4;
+    timedSample.m_audioResourceId = "Reject.ogg";
+    timedSource.m_audioSamples.push_back(timedSample);
+
+    const auto      timedOSUPath = outputDirectory / "reject_timed_sample.osu";
+    const auto      timedIMDPath = outputDirectory / "Reject_4k_Timed.imd";
+    std::error_code removeError;
+    std::filesystem::remove(timedOSUPath, removeError);
+    removeError.clear();
+    std::filesystem::remove(timedIMDPath, removeError);
+
+    bool ok = true;
+    ok &= check(!timedSource.saveToFile(timedOSUPath),
+                "osu! should reject a timed automatic sample");
+    ok &= check(!timedSource.saveToFile(timedIMDPath),
+                "RM/IMD should reject a timed automatic sample");
+    ok &= check(!std::filesystem::exists(timedOSUPath) &&
+                    !std::filesystem::exists(timedIMDPath),
+                "rejected timed exports should not leave partial files");
+
+    MMM::BeatMap layeredSource;
+    layeredSource.m_baseMapMetadata.track_count = 4;
+    MMM::AudioSampleEvent first;
+    first.m_track           = 4;
+    first.m_audioResourceId = "Layered.ogg";
+    layeredSource.m_audioSamples.push_back(first);
+    MMM::AudioSampleEvent second;
+    second.m_track           = 5;
+    second.m_audioResourceId = "effect.wav";
+    layeredSource.m_audioSamples.push_back(second);
+
+    const auto layeredOSUPath = outputDirectory / "reject_layered_audio.osu";
+    const auto layeredIMDPath = outputDirectory / "Layered_4k_Test.imd";
+    removeError.clear();
+    std::filesystem::remove(layeredOSUPath, removeError);
+    removeError.clear();
+    std::filesystem::remove(layeredIMDPath, removeError);
+    ok &= check(!layeredSource.saveToFile(layeredOSUPath),
+                "osu! should reject multiple automatic samples");
+    ok &= check(!layeredSource.saveToFile(layeredIMDPath),
+                "RM/IMD should reject multiple automatic samples");
+    ok &= check(!std::filesystem::exists(layeredOSUPath) &&
+                    !std::filesystem::exists(layeredIMDPath),
+                "rejected layered exports should not leave partial files");
+    return ok;
+}
+
+/// @brief 验证 Malody 保存器不再根据歌曲提示伪造 SOUND 对象。
+/// @param outputDirectory 测试输出目录。
+/// @return 验证是否通过。
+bool testMalodySaverDoesNotSynthesizeAudioSample(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count    = 4;
+    source.m_baseMapMetadata.song_file_hint = "hint.ogg";
+
+    const auto path = outputDirectory / "malody_hint_without_sample.mc";
+    if ( !source.saveToFile(path) ) {
+        return false;
+    }
+
+    json          saved;
+    std::ifstream input(path);
+    if ( !input ) return false;
+    input >> saved;
+
+    bool hasAutomaticSample = false;
+    if ( saved.contains("note") && saved["note"].is_array() ) {
+        for ( const auto& note : saved["note"] ) {
+            if ( note.is_object() && note.value("type", 0) == 1 ) {
+                hasAutomaticSample = true;
+                break;
+            }
+        }
+    }
+    return check(!hasAutomaticSample,
+                 "Malody saver should serialize only explicit samples");
+}
+
+/// @brief 验证 osu! 保存器不会把仅作提示的旧音频字段重新物化为播放内容。
+/// @param outputDirectory 测试输出目录。
+/// @return 验证是否通过。
+bool testOSUSaverDoesNotSynthesizeAudioSample(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count     = 4;
+    source.m_baseMapMetadata.main_audio_path = "legacy.ogg";
+    source.m_baseMapMetadata.song_file_hint  = "hint.ogg";
+    source.m_metadata
+        .map_properties[MMM::MapMetadataType::OSU]["General::AudioFilename"] =
+        "source.ogg";
+
+    const auto path = outputDirectory / "osu_hint_without_sample.osu";
+    if ( !source.saveToFile(path) ) return false;
+
+    std::ifstream input(path);
+    if ( !input ) return false;
+    const std::string saved((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    return check(saved.find("AudioFilename: \n") != std::string::npos,
+                 "osu! saver should serialize audio only from an explicit "
+                 "sample");
 }
 
 }  // namespace
@@ -399,6 +647,11 @@ int main(int argc, char* argv[])
     ok &= testMMMVideoMetadataRoundTrip(outputDirectory);
     ok &= testMMMVersion2AudioSampleRoundTrip(outputDirectory);
     ok &= testLegacyMMMMetadataDefaults(outputDirectory);
+    ok &= testOSUSingleAudioMigration(outputDirectory);
+    ok &= testRMSingleAudioMigration(outputDirectory);
+    ok &= testSingleAudioExporterRejection(outputDirectory);
+    ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
+    ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
 
     if ( ok ) {
         XINFO("Metadata compatibility tests passed.");

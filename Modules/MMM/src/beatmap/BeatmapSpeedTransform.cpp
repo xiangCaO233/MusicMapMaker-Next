@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace MMM
@@ -16,6 +18,28 @@ namespace
 double scaledMilliseconds(double value, double speed)
 {
     return value / speed;
+}
+
+/// @brief 计算倍速后的整数毫秒偏移。
+/// @param value 原整数毫秒偏移。
+/// @param speed 倍速倍率。
+/// @return 按最接近整数、半值远离零舍入并限制在 int64 范围内的结果。
+std::int64_t scaledOffsetMilliseconds(std::int64_t value, double speed)
+{
+    const long double scaled =
+        static_cast<long double>(value) / static_cast<long double>(speed);
+    const long double rounded = std::round(scaled);
+    const long double minimum =
+        static_cast<long double>(std::numeric_limits<std::int64_t>::min());
+    const long double maximum =
+        static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+    if ( rounded <= minimum ) {
+        return std::numeric_limits<std::int64_t>::min();
+    }
+    if ( rounded >= maximum ) {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    return static_cast<std::int64_t>(rounded);
 }
 
 /// @brief 缩放单个普通物件时间。
@@ -166,6 +190,20 @@ void copyScaledTimings(BeatMap& target, const BeatMap& source, double speed)
     }
 }
 
+/// @brief 复制并缩放自动采样时间线。
+/// @param target 接收结果的新谱面。
+/// @param source 原谱面。
+/// @param speed 倍速倍率。
+void copyScaledAudioSamples(BeatMap& target, const BeatMap& source,
+                            double speed)
+{
+    target.m_audioSamples = source.m_audioSamples;
+    for ( auto& sample : target.m_audioSamples ) {
+        sample.m_timestamp = scaledMilliseconds(sample.m_timestamp, speed);
+        sample.m_offsetMs  = scaledOffsetMilliseconds(sample.m_offsetMs, speed);
+    }
+}
+
 }  // namespace
 
 double BeatmapSpeedTransform::calculateContentEndTime(const BeatMap& beatmap)
@@ -174,6 +212,12 @@ double BeatmapSpeedTransform::calculateContentEndTime(const BeatMap& beatmap)
     for ( const auto& timing : beatmap.m_timings ) {
         if ( std::isfinite(timing.m_timestamp) ) {
             endTime = std::max(endTime, timing.m_timestamp);
+        }
+    }
+    for ( const auto& sample : beatmap.m_audioSamples ) {
+        const double effectiveTimestamp = sample.effectiveTimestamp();
+        if ( std::isfinite(effectiveTimestamp) ) {
+            endTime = std::max(endTime, effectiveTimestamp);
         }
     }
     for ( const auto& note : beatmap.m_noteData.notes ) {
@@ -233,6 +277,7 @@ BeatmapSpeedTransformResult BeatmapSpeedTransform::createSpeedVersion(
     }
     meta.map_path        = options.mapPath;
     meta.main_audio_path = options.audioPath;
+    meta.song_file_hint  = options.audioPath;
     if ( meta.preference_bpm > 0.0 && std::isfinite(meta.preference_bpm) ) {
         meta.preference_bpm *= options.speed;
     }
@@ -243,6 +288,7 @@ BeatmapSpeedTransformResult BeatmapSpeedTransform::createSpeedVersion(
     }
 
     copyScaledTimings(result.beatmap, source, options.speed);
+    copyScaledAudioSamples(result.beatmap, source, options.speed);
     copyScaledNotes(result.beatmap, source, options.speed);
     meta.map_length = calculateContentEndTime(result.beatmap);
 

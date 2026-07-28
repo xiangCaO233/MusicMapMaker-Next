@@ -139,6 +139,8 @@ inline BeatMap loadRMMap(std::filesystem::path path)
         if ( basemeta.main_audio_path.empty() ) {
             basemeta.main_audio_path.clear();
             XWARN("未找到imd对应音频文件");
+        } else {
+            basemeta.song_file_hint = basemeta.main_audio_path;
         }
 
         // 同文件夹内查询可能存在的封面文件
@@ -374,6 +376,18 @@ inline BeatMap loadRMMap(std::filesystem::path path)
                 poly.m_subFlicks.push_back(std::ref(ref));
             }
         }
+    }
+
+    // RM/IMD 通过文件名前缀隐式引用单音频，将其迁移为第一条 BGM 轨。
+    if ( !basemeta.song_file_hint.empty() ) {
+        AudioSampleEvent& sample = beatMap.m_audioSamples.emplace_back();
+        sample.m_timestamp       = 0.0;
+        sample.m_offsetMs        = 0;
+        sample.m_track =
+            static_cast<uint32_t>(std::max(0, basemeta.track_count));
+        sample.m_audioResourceId = Config::pathToUtf8(basemeta.song_file_hint);
+        sample.m_volume          = 1.0F;
+        basemeta.bgm_track_count = std::max(1, basemeta.bgm_track_count);
     }
 
     beatMap.sync();

@@ -29,10 +29,6 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
 {
     json root;
     root["format_version"] = 2;
-    const std::filesystem::path& songFileHint =
-        beatMap.m_baseMapMetadata.song_file_hint.empty()
-            ? beatMap.m_baseMapMetadata.main_audio_path
-            : beatMap.m_baseMapMetadata.song_file_hint;
 
     // 1. 元数据。
     auto& metadata = root["metadata"];
@@ -46,9 +42,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["artist_unicode"] = beatMap.m_baseMapMetadata.artist_unicode;
     base["version"]        = beatMap.m_baseMapMetadata.version;
     base["author"]         = beatMap.m_baseMapMetadata.author;
-    base["audio"] =
-        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
-    base["song_file_hint"] = Config::pathToUtf8(songFileHint);
+    base["song_file_hint"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.song_file_hint);
     base["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
     base["cover_img"] =

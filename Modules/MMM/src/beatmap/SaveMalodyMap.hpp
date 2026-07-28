@@ -887,22 +887,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return sampleJson;
     };
 
-    std::vector<AudioSampleEvent>        compatibilitySamples;
     std::vector<const AudioSampleEvent*> sortedSamples;
-    sortedSamples.reserve(beatMap.m_audioSamples.size() + 1);
+    sortedSamples.reserve(beatMap.m_audioSamples.size());
     for ( const auto& sample : beatMap.m_audioSamples ) {
         if ( !sample.m_audioResourceId.empty() ) {
             sortedSamples.push_back(&sample);
         }
-    }
-
-    // 仅为尚未迁移的单音频调用方保留一次性兼容入口。
-    if ( sortedSamples.empty() && !songFileHint.empty() ) {
-        AudioSampleEvent sample;
-        sample.m_track           = static_cast<uint32_t>(trackCount);
-        sample.m_audioResourceId = songFileValue;
-        compatibilitySamples.push_back(std::move(sample));
-        sortedSamples.push_back(&compatibilitySamples.back());
     }
 
     std::stable_sort(
