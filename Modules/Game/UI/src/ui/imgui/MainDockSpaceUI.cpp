@@ -248,6 +248,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     const float deltaSeconds = ImGui::GetIO().DeltaTime;
     m_statusMessageService.update(deltaSeconds);
     m_saveResultFeedback.update(deltaSeconds);
+    m_beatmapLoadDiagnosticFeedback.update();
     m_mainMenuview.update(sourceManager, m_statusMessageService);
 
     auto&                engine   = Logic::EditorEngine::instance();

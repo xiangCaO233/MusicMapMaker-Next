@@ -18,6 +18,7 @@ add_library(
   src/logic/session/tool/DrawTool.cpp
   src/logic/EditorClipboard.cpp
   src/logic/EditorClipboardProtocol.cpp
+  src/logic/BeatmapLoadDiagnosticPublisher.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
@@ -127,3 +128,10 @@ add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
 mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
 target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
 add_test(NAME HitEffectStereoTest COMMAND HitEffectStereoTest)
+
+# 旧 MMM 加载诊断测试覆盖一次载入内的事件生成、去重与空输入行为。
+mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest
+                        tests/BeatmapLoadDiagnosticPublisherTest.cpp)
+target_link_libraries(BeatmapLoadDiagnosticPublisherTest PRIVATE Logic Log)
+add_test(NAME BeatmapLoadDiagnosticPublisherTest
+         COMMAND BeatmapLoadDiagnosticPublisherTest)

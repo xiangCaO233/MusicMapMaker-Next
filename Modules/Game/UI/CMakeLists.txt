@@ -10,6 +10,7 @@ add_library(
   src/ui/imgui/MainDockSpaceUI_StatusBar.cpp
   src/ui/imgui/FloatingManagerUI.cpp
   src/ui/imgui/SideBarUI.cpp
+  src/ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.cpp
   src/ui/imgui/feedback/SaveResultFeedback.cpp
   src/ui/imgui/menu/MainMenuView.cpp
   src/ui/imgui/menu/MainMenuNavigationController.cpp

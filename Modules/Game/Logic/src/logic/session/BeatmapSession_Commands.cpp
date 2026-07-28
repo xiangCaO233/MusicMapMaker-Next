@@ -9,6 +9,7 @@
 #include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -1107,6 +1108,9 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
+    if ( m_ctx->currentBeatmap ) {
+        publishBeatmapLoadDiagnostics(*m_ctx->currentBeatmap);
+    }
     m_savedBeatmapFileHashes.clear();
     if ( m_ctx->currentBeatmap ) {
         rememberBeatmapFileHash(

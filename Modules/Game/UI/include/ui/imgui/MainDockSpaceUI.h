@@ -4,6 +4,7 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.h"
 #include "ui/imgui/feedback/SaveResultFeedback.h"
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/MainMenuView.h"
@@ -147,6 +148,9 @@ public:
 
     /// @brief 保存结果事件反馈气泡组件。
     SaveResultFeedback m_saveResultFeedback;
+
+    /// @brief 谱面加载兼容诊断的中央通知组件。
+    BeatmapLoadDiagnosticFeedback m_beatmapLoadDiagnosticFeedback;
 
     /// @brief PGO 性能数据上传授权窗口组件。
     PgoUploadConsentWindow m_pgoUploadConsentWindow;
