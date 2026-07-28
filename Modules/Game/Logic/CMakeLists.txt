@@ -26,6 +26,7 @@ add_library(
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
+  src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/BeatmapSyncBuffer.cpp
   src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp
@@ -80,6 +81,11 @@ mmm_add_test_executable(Logic ProjectAudioReferenceTest
                         tests/ProjectAudioReferenceTest.cpp)
 target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
 add_test(NAME ProjectAudioReferenceTest COMMAND ProjectAudioReferenceTest)
+
+mmm_add_test_executable(Logic AudioTimelineDescriptorTest
+                        tests/AudioTimelineDescriptorTest.cpp)
+target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
+add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
 
 mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
                         tests/ProjectDirectoryWatcherTest.cpp)
