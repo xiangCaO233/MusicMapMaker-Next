@@ -34,18 +34,18 @@ constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
     1.0 / 120.0;
 
 /// @brief Timeline 专业模式轨道数量。
-constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 5;
+constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 4;
 
 /// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
 int professionalTimelineLane(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
-    case ::MMM::TimingEffect::BPM: return 1;
-    case ::MMM::TimingEffect::SCROLL: return 2;
-    case ::MMM::TimingEffect::JUMP: return 3;
-    case ::MMM::TimingEffect::HS: return 4;
+    case ::MMM::TimingEffect::BPM: return 0;
+    case ::MMM::TimingEffect::SCROLL: return 1;
+    case ::MMM::TimingEffect::JUMP: return 2;
+    case ::MMM::TimingEffect::HS: return 3;
     }
-    return 1;
+    return 0;
 }
 
 /// @brief 获取 Timeline Timing 类型的快照效果掩码。
@@ -669,8 +669,9 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     if ( professionalMode ) {
         constexpr glm::vec4 laneColors[PROFESSIONAL_TIMELINE_LANE_COUNT] = {
-            { 0.39f, 0.69f, 0.75f, 0.22f }, { 1.0f, 0.28f, 0.28f, 0.20f },
-            { 0.28f, 1.0f, 0.38f, 0.18f },  { 0.34f, 0.55f, 1.0f, 0.18f },
+            { 1.0f, 0.28f, 0.28f, 0.20f },
+            { 0.28f, 1.0f, 0.38f, 0.18f },
+            { 0.34f, 0.55f, 1.0f, 0.18f },
             { 1.0f, 0.87f, 0.28f, 0.18f },
         };
         const float laneWidth =

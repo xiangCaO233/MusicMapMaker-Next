@@ -557,7 +557,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     std::string snapshotBeatmapName;
     bool        snapshotIsDirty     = false;
     double      snapshotFallbackBpm = 120.0;
-    std::vector<TimelineAudioTrackSnapshot> snapshotMainAudioTracks;
     if ( m_ctx->currentBeatmap ) {
         const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         if ( metadata.preference_bpm > 0.0 &&
@@ -583,28 +582,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshotBeatmapPathKey = Config::pathToUtf8(metadata.map_path);
         snapshotBeatmapName    = metadata.name;
         snapshotIsDirty        = m_ctx->actionStack.isDirty();
-
-        if ( !metadata.main_audio_path.empty() ||
-             m_ctx->mainAudioTotalTime > 0.0 ) {
-            TimelineAudioTrackSnapshot track;
-            if ( !metadata.main_audio_path.empty() ) {
-                track.label =
-                    Config::pathToUtf8(metadata.main_audio_path.filename());
-            }
-            if ( track.label.empty() && !m_ctx->loadedMainAudioPath.empty() ) {
-                track.label = Config::pathToUtf8(
-                    Config::utf8ToPath(m_ctx->loadedMainAudioPath).filename());
-            }
-            if ( track.label.empty() ) {
-                track.label = "BGM";
-            }
-
-            track.duration = m_ctx->mainAudioTotalTime;
-            if ( !(std::isfinite(track.duration) && track.duration > 0.0) ) {
-                track.duration = snapshotTotalTime;
-            }
-            snapshotMainAudioTracks.push_back(track);
-        }
     }
 
     double    snapshotCurrentBpm       = snapshotFallbackBpm;
@@ -700,10 +677,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->backgroundIsVideo = snapshotBackgroundIsVideo;
             snapshot->backgroundVideoStartTime =
                 snapshotBackgroundVideoStartTime;
-            snapshot->beatmapPathKey  = snapshotBeatmapPathKey;
-            snapshot->beatmapName     = snapshotBeatmapName;
-            snapshot->isDirty         = snapshotIsDirty;
-            snapshot->mainAudioTracks = snapshotMainAudioTracks;
+            snapshot->beatmapPathKey = snapshotBeatmapPathKey;
+            snapshot->beatmapName    = snapshotBeatmapName;
+            snapshot->isDirty        = snapshotIsDirty;
         }
 
         // 计算可见时间范围 (基于动画时间)

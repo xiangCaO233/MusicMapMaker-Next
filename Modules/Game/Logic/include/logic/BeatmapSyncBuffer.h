@@ -205,15 +205,6 @@ struct TimelineInteractiveElement {
     uint32_t markerIndexCount{ 0 };
 };
 
-/// @brief Timeline 专业模式中显示的主音轨快照。
-struct TimelineAudioTrackSnapshot {
-    /// @brief 显示名称。
-    std::string label;
-
-    /// @brief 音频时长，单位秒。
-    double duration{ 0.0 };
-};
-
 /// @brief 单个可选画布组件实例的渲染与布局编辑边界。
 struct CanvasComponentInstanceSnapshot {
     /// @brief 组件类型。
@@ -258,7 +249,6 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               overlayCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
-    std::vector<TimelineAudioTrackSnapshot>     mainAudioTracks;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     std::vector<System::ScrollSegment>
@@ -485,7 +475,6 @@ struct RenderSnapshot {
         hitboxes.clear();
         overlapMasks.clear();
         timelineElements.clear();
-        mainAudioTracks.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
         previewDensity.clear();
