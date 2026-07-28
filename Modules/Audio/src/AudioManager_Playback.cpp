@@ -59,26 +59,38 @@ ice::TimeStretchQuality toIceStretchQuality(
 /// @brief 开始或恢复复合音频时间线。
 void AudioManager::play()
 {
-    if ( m_audioTimelineNode ) {
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
+        const bool restartFinishedStream = m_audioTimelineNode->finished();
+        if ( restartFinishedStream ) {
+            resetMainTimeStretcher();
+        }
         m_audioTimelineNode->play();
+        if ( m_stretcher ) {
+            m_stretcher->set_paused(false);
+        }
     }
 }
 
 /// @brief 暂停复合音频时间线。
 void AudioManager::pause()
 {
-    if ( m_audioTimelineNode ) {
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
         m_audioTimelineNode->pause();
-        resetMainTimeStretcher();
+        if ( m_stretcher ) {
+            m_stretcher->set_paused(true);
+        }
     }
 }
 
 /// @brief 停止复合音频时间线并回到起始位置。
 void AudioManager::stop()
 {
-    if ( m_audioTimelineNode ) {
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
         m_audioTimelineNode->stop();
         resetMainTimeStretcher();
+        if ( m_stretcher ) {
+            m_stretcher->set_paused(true);
+        }
         clearAllScheduledSoundEffects();
     }
 }
@@ -87,7 +99,7 @@ void AudioManager::stop()
 /// @param seconds 目标时间，单位为秒。
 void AudioManager::seek(double seconds)
 {
-    if ( m_audioTimelineNode ) {
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
         m_audioTimelineNode->seek(playbackSecondsToFrame(seconds));
         resetMainTimeStretcher();
         clearAllScheduledSoundEffects();
@@ -98,25 +110,34 @@ void AudioManager::seek(double seconds)
 /// @return 当前播放状态。
 PlaybackStatus AudioManager::getStatus() const
 {
-    if ( !m_audioTimelineNode ) {
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) {
         return PlaybackStatus::Stopped;
+    }
+    const auto requestedState = m_audioTimelineNode->requestedState();
+    if ( m_stretcher && m_stretcher->is_paused() ) {
+        return requestedState == AudioTimelinePlaybackState::Paused
+                   ? PlaybackStatus::Paused
+                   : PlaybackStatus::Stopped;
     }
     if ( m_audioTimelineNode->finished() ) {
+        if ( m_stretcher && !m_stretcher->is_final_input_drained() ) {
+            return PlaybackStatus::Playing;
+        }
         return PlaybackStatus::Stopped;
     }
-    switch ( m_audioTimelineNode->requestedState() ) {
+    switch ( requestedState ) {
     case AudioTimelinePlaybackState::Stopped: return PlaybackStatus::Stopped;
-    case AudioTimelinePlaybackState::Playing: return PlaybackStatus::Playing;
     case AudioTimelinePlaybackState::Paused: return PlaybackStatus::Paused;
+    case AudioTimelinePlaybackState::Playing: break;
     }
-    return PlaybackStatus::Stopped;
+    return PlaybackStatus::Playing;
 }
 
 /// @brief 获取复合音频时间线当前播放时间。
 /// @return 当前播放时间，单位为秒。
 double AudioManager::getCurrentTime() const
 {
-    if ( !m_audioTimelineNode ) return 0.0;
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return 0.0;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( sampleRate <= 0.0 ) return 0.0;
@@ -129,7 +150,7 @@ double AudioManager::getCurrentTime() const
 /// @return 总时长，单位为秒。
 double AudioManager::getTotalTime() const
 {
-    if ( !m_audioTimelineNode ) return 0.0;
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return 0.0;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( sampleRate <= 0.0 ) return 0.0;
@@ -137,21 +158,12 @@ double AudioManager::getTotalTime() const
            sampleRate;
 }
 
-/// @brief 通过低频节点替换清除 Rubber Band 尚未输出的历史采样。
-/// @warning 低频播放控制路径：会短暂修改主混音图，禁止每帧调用。
+/// @brief 请求在下一个 block 边界清除 Rubber Band 历史采样。
+/// @warning 低频播放控制路径：只写入 lock-free discontinuity 邮箱。
 void AudioManager::resetMainTimeStretcher()
 {
-    if ( !m_stretcher || !m_mainMixer || !m_preStretcherMixer ) return;
-
-    auto replacement = std::make_shared<ice::TimeStretcher>();
-    replacement->set_inputnode(m_preStretcherMixer);
-    replacement->set_playback_ratio(m_speed);
-    replacement->set_pitch_semitones(m_playbackPitch);
-    replacement->set_quality(toIceStretchQuality(m_playbackQuality));
-
-    m_mainMixer->remove_source(m_stretcher);
-    m_mainMixer->add_source(replacement);
-    m_stretcher = std::move(replacement);
+    if ( !m_stretcher ) return;
+    static_cast<void>(m_stretcher->request_discontinuity());
 }
 
 /// @brief 设置复合时间线全局预览播放倍率。

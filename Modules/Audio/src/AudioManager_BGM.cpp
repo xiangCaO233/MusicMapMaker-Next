@@ -1,6 +1,7 @@
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/AudioTimelineResourceProcessor.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
@@ -86,15 +87,6 @@ void appendTimelineDiagnostic(AudioTimelineLoadResult&        result,
     case AudioTimelineLoadDiagnosticCode::InvalidStartTime:
         message = "采样实际起播时间无效，已按 0 秒载入";
         break;
-    case AudioTimelineLoadDiagnosticCode::UnsupportedResourcePlaybackSpeed:
-        message = "暂不支持逐资源 playbackSpeed，未应用到复合时间线";
-        break;
-    case AudioTimelineLoadDiagnosticCode::UnsupportedResourcePitch:
-        message = "暂不支持逐资源 pitch，未应用到复合时间线";
-        break;
-    case AudioTimelineLoadDiagnosticCode::UnsupportedResourceEqualizer:
-        message = "暂不支持逐资源 EQ，未应用到复合时间线";
-        break;
     }
     result.diagnostics.push_back(AudioTimelineLoadDiagnostic{
         .code        = code,
@@ -120,21 +112,58 @@ float sanitizedEventVolume(float volume) noexcept
 {
     return std::isfinite(volume) ? std::max(volume, 0.0F) : 0.0F;
 }
+
 }  // namespace
+
+/// @brief 查找或建立自动采样与 HitEffect 共用的资源 DSP PCM。
+/// @warning 低频控制路径：缓存未命中且无候选时会执行完整离线 DSP。
+std::shared_ptr<const PreparedTimelineAudio>
+AudioManager::getOrPrepareAudioTimelineResource(
+    const std::string& filePath, const std::shared_ptr<ice::AudioTrack>& track,
+    const AudioTrackConfig&                      resourceConfig,
+    std::shared_ptr<const PreparedTimelineAudio> preparedCandidate)
+{
+    if ( !track || track->num_frames() == 0U ) return {};
+
+    const auto processingCacheKey =
+        makeAudioResourceProcessingCacheKey(filePath, resourceConfig);
+    const auto existingPreparedAudio =
+        m_audioTimelineResourceCache.find(processingCacheKey);
+    if ( existingPreparedAudio != m_audioTimelineResourceCache.end() &&
+         existingPreparedAudio->second.sourceTrack.lock() == track ) {
+        if ( auto prepared =
+                 existingPreparedAudio->second.preparedAudio.lock() ) {
+            return prepared;
+        }
+    }
+
+    auto preparedAudio = std::move(preparedCandidate);
+    if ( !preparedAudio ) {
+        preparedAudio = prepareAudioTimelineResource(track, resourceConfig);
+    }
+    if ( preparedAudio ) {
+        m_audioTimelineResourceCache.insert_or_assign(
+            processingCacheKey,
+            CachedTimelineResourceAudio{
+                .sourceTrack   = track,
+                .preparedAudio = preparedAudio,
+            });
+    }
+    return preparedAudio;
+}
 
 /// @brief 在非实时路径准备全部资源并替换复合音频时间线。
 /// @param events 自动采样事件。
 /// @param chartEndSeconds 非音频谱面内容结束时间。
 /// @param fingerprint 完整时间线稳定指纹。
 /// @return 图替换结果及逐事件诊断。
-/// @warning 低频资源路径：会访问文件系统并等待资源解码。
+/// @warning 低频资源路径：会访问文件系统、等待资源解码并执行资源级离线 DSP。
 AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     const std::vector<AudioTimelineLoadEvent>& events, double chartEndSeconds,
     const std::string& fingerprint)
 {
     AudioTimelineLoadResult result;
-    if ( !m_audioPool || !m_threadPool || !m_mainMixer ||
-         !m_preStretcherMixer ) {
+    if ( !m_audioPool || !m_threadPool || !m_audioTimelineNode ) {
         result.diagnostics.push_back(AudioTimelineLoadDiagnostic{
             .code    = AudioTimelineLoadDiagnosticCode::AudioSystemUnavailable,
             .message = "音频系统尚未初始化",
@@ -142,24 +171,17 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
         return result;
     }
 
-    const EQPreset     previousEqPreset = m_mainEQPreset;
-    std::vector<float> previousEqGains;
-    std::vector<float> previousEqQs;
-    if ( m_mainEQ && previousEqPreset != EQPreset::None ) {
-        const std::size_t bandCount = getMainTrackEQBandCount();
-        previousEqGains.reserve(bandCount);
-        previousEqQs.reserve(bandCount);
-        for ( std::size_t bandIndex = 0U; bandIndex < bandCount; ++bandIndex ) {
-            previousEqGains.push_back(getMainTrackEQBandGain(bandIndex));
-            previousEqQs.push_back(getMainTrackEQBandQ(bandIndex));
-        }
-    }
+    static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
 
     std::vector<PreparedTimelineClip> preparedClips;
     preparedClips.reserve(events.size());
     std::unordered_map<std::string, std::shared_ptr<ice::AudioTrack>>
         tracksByPath;
     tracksByPath.reserve(events.size());
+    std::erase_if(m_audioTimelineResourceCache, [](const auto& cacheEntry) {
+        return cacheEntry.second.sourceTrack.expired() ||
+               cacheEntry.second.preparedAudio.expired();
+    });
     std::shared_ptr<ice::AudioTrack> firstLoadedTrack;
 
     for ( const auto& event : events ) {
@@ -170,29 +192,6 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
                 AudioTimelineLoadDiagnosticCode::InvalidStartTime,
                 event);
             startSeconds = 0.0;
-        }
-
-        if ( !std::isfinite(event.resourceConfig.playbackSpeed) ||
-             std::abs(event.resourceConfig.playbackSpeed - 1.0F) > 1.0e-6F ) {
-            appendTimelineDiagnostic(result,
-                                     AudioTimelineLoadDiagnosticCode::
-                                         UnsupportedResourcePlaybackSpeed,
-                                     event);
-        }
-        if ( !std::isfinite(event.resourceConfig.playbackPitch) ||
-             std::abs(event.resourceConfig.playbackPitch) > 1.0e-6F ) {
-            appendTimelineDiagnostic(
-                result,
-                AudioTimelineLoadDiagnosticCode::UnsupportedResourcePitch,
-                event);
-        }
-        if ( event.resourceConfig.eqEnabled ||
-             event.resourceConfig.eqPreset !=
-                 static_cast<int>(EQPreset::None) ) {
-            appendTimelineDiagnostic(
-                result,
-                AudioTimelineLoadDiagnosticCode::UnsupportedResourceEqualizer,
-                event);
         }
 
         std::shared_ptr<ice::AudioTrack> track;
@@ -219,6 +218,17 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
             continue;
         }
 
+        auto preparedAudio = getOrPrepareAudioTimelineResource(
+            event.filePath, track, event.resourceConfig);
+        if ( !preparedAudio ) {
+            ++result.missingClipCount;
+            appendTimelineDiagnostic(
+                result,
+                AudioTimelineLoadDiagnosticCode::MissingResource,
+                event);
+            continue;
+        }
+
         if ( !firstLoadedTrack ) firstLoadedTrack = track;
         const float resourceVolume =
             event.resourceConfig.muted
@@ -229,42 +239,24 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
             .sourceKey  = event.resourceKey,
             .startFrame = secondsToTimelineFrame(startSeconds),
             .volume = resourceVolume * sanitizedEventVolume(event.eventVolume),
-            .track  = std::move(track),
+            .audio  = std::move(preparedAudio),
         });
     }
 
     const double normalizedChartEnd =
         std::isfinite(chartEndSeconds) ? std::max(chartEndSeconds, 0.0) : 0.0;
-    auto timelineNode = std::make_shared<AudioTimelineMixerNode>(
+    m_audioTimelineNode->replaceSchedule(
         std::move(preparedClips),
         secondsToTimelineFrame(normalizedChartEnd),
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
-
-    unloadAudioTimeline();
-
-    m_audioTimelineNode             = std::move(timelineNode);
+    resetMainTimeStretcher();
+    m_audioTimelineLoaded           = true;
     m_audioTimelineFingerprint      = fingerprint;
     m_audioTimelineClipCount        = m_audioTimelineNode->clipCount();
     m_missingAudioTimelineClipCount = result.missingClipCount;
     m_bgmTrack                      = std::move(firstLoadedTrack);
     m_bgmPath = events.size() == 1U ? events.front().filePath : std::string{};
     m_bgmSyncKey = fingerprint;
-    m_bgmSpectrumCapture =
-        std::make_shared<BackgroundSpectrumCaptureNode>(m_audioTimelineNode);
-    m_stretcher = std::make_shared<ice::TimeStretcher>();
-    m_stretcher->set_inputnode(m_preStretcherMixer);
-    if ( previousEqPreset != EQPreset::None ) {
-        createMainTrackEQ(previousEqPreset);
-        const std::size_t bandCount =
-            std::min(previousEqGains.size(), previousEqQs.size());
-        for ( std::size_t bandIndex = 0U; bandIndex < bandCount; ++bandIndex ) {
-            setMainTrackEQBandGain(bandIndex, previousEqGains[bandIndex]);
-            setMainTrackEQBandQ(bandIndex, previousEqQs[bandIndex]);
-        }
-    } else {
-        m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
-    }
-    m_mainMixer->add_source(m_stretcher);
 
     refreshAudioTimelineVolume();
     setPlaybackSpeed(m_speed);
@@ -285,36 +277,18 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
 /// @brief 停止并卸载当前复合音频时间线。
 void AudioManager::unloadAudioTimeline()
 {
-    if ( !m_audioTimelineNode && !m_bgmTrack && !m_stretcher ) {
+    if ( !m_audioTimelineNode || !m_audioTimelineLoaded ) {
         return;
     }
 
-    if ( m_audioTimelineNode ) {
-        m_audioTimelineNode->stop();
-    }
+    static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
+    m_audioTimelineNode->stop();
+    m_audioTimelineNode->clearLoop();
     clearAllScheduledSoundEffects();
-    if ( m_mainMixer ) {
-        if ( m_stretcher ) {
-            m_mainMixer->remove_source(m_stretcher);
-        } else if ( m_audioTimelineNode ) {
-            m_mainMixer->remove_source(m_audioTimelineNode);
-        }
-    }
-    if ( m_preStretcherMixer ) {
-        if ( m_mainEQ ) {
-            m_preStretcherMixer->remove_source(m_mainEQ);
-        } else if ( m_bgmSpectrumCapture ) {
-            m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
-        } else if ( m_audioTimelineNode ) {
-            m_preStretcherMixer->remove_source(m_audioTimelineNode);
-        }
-    }
-
-    m_mainEQ.reset();
-    m_mainEQPreset = EQPreset::None;
-    m_stretcher.reset();
-    m_bgmSpectrumCapture.reset();
-    m_audioTimelineNode.reset();
+    m_audioTimelineNode->replaceSchedule(
+        {}, 0, std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    resetMainTimeStretcher();
+    m_audioTimelineLoaded = false;
     m_audioTimelineFingerprint.clear();
     m_audioTimelineClipCount        = 0U;
     m_missingAudioTimelineClipCount = 0U;
@@ -349,7 +323,7 @@ std::size_t AudioManager::getMissingAudioTimelineClipCount() const
 /// @return 即使零片段时间线也在已构造时返回 true。
 bool AudioManager::hasLoadedAudioTimeline() const
 {
-    return static_cast<bool>(m_audioTimelineNode);
+    return m_audioTimelineLoaded;
 }
 
 /// @brief 提交主时间线半开循环范围。
@@ -358,8 +332,9 @@ bool AudioManager::hasLoadedAudioTimeline() const
 /// @return 参数和时间线均有效时返回 true。
 bool AudioManager::setAudioTimelineLoop(double startSeconds, double endSeconds)
 {
-    if ( !m_audioTimelineNode || !std::isfinite(startSeconds) ||
-         !std::isfinite(endSeconds) || startSeconds >= endSeconds ) {
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ||
+         !std::isfinite(startSeconds) || !std::isfinite(endSeconds) ||
+         startSeconds >= endSeconds ) {
         return false;
     }
     resetMainTimeStretcher();
@@ -370,7 +345,7 @@ bool AudioManager::setAudioTimelineLoop(double startSeconds, double endSeconds)
 /// @brief 关闭主时间线循环并清除拉伸历史。
 void AudioManager::clearAudioTimelineLoop()
 {
-    if ( m_audioTimelineNode ) {
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
         resetMainTimeStretcher();
         m_audioTimelineNode->clearLoop();
     }
@@ -378,7 +353,7 @@ void AudioManager::clearAudioTimelineLoop()
 
 /// @brief 将旧单 BGM 请求包装为零秒单事件时间线。
 /// @param filePath 音频文件路径。
-/// @param config 资源配置；仅 volume 和 muted 逐片段生效。
+/// @param config 完整资源配置；高级 DSP 离线应用且不覆盖全局预览参数。
 /// @return 单片段成功载入时返回 true。
 bool AudioManager::loadBGM(const std::string&      filePath,
                            const AudioTrackConfig& config)

@@ -3,10 +3,12 @@
 #include "audio/AudioTimelineMixerNode.h"
 #include "log/colorful-log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <vector>
 
+#include <ice/config/config.hpp>
 #include <ice/core/MixBus.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 
@@ -32,21 +34,22 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
     }
 
     auto newEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
+    newEQ->prepare(
+        ice::ICEConfig::internal_format,
+        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
 
     // 如果当前已加载复合时间线，需要热插拔全局预览 EQ。
     if ( m_audioTimelineNode && m_preStretcherMixer ) {
-        if ( m_mainEQ ) {
-            m_preStretcherMixer->remove_source(m_mainEQ);
-        } else if ( m_bgmSpectrumCapture ) {
-            m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
-        } else {
-            m_preStretcherMixer->remove_source(m_audioTimelineNode);
-        }
-
         std::shared_ptr<ice::IAudioNode> input = m_bgmSpectrumCapture;
         if ( !input ) input = m_audioTimelineNode;
-        newEQ->set_inputnode(std::move(input));
-        m_preStretcherMixer->add_source(newEQ);
+        newEQ->set_inputnode(input);
+
+        std::shared_ptr<ice::IAudioNode> currentRoute = m_mainEQ;
+        if ( !currentRoute ) currentRoute = input;
+        if ( !m_preStretcherMixer->replace_source(currentRoute, newEQ) ) {
+            XERROR("Failed to preserve main timeline route while creating EQ.");
+            return;
+        }
     }
 
     m_mainEQ       = std::move(newEQ);
@@ -60,11 +63,12 @@ void AudioManager::destroyMainTrackEQ()
     if ( !m_mainEQ ) return;
 
     if ( m_audioTimelineNode && m_preStretcherMixer ) {
-        m_preStretcherMixer->remove_source(m_mainEQ);
-        if ( m_bgmSpectrumCapture ) {
-            m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
-        } else {
-            m_preStretcherMixer->add_source(m_audioTimelineNode);
+        std::shared_ptr<ice::IAudioNode> restoredRoute = m_bgmSpectrumCapture;
+        if ( !restoredRoute ) restoredRoute = m_audioTimelineNode;
+        if ( !m_preStretcherMixer->replace_source(m_mainEQ, restoredRoute) ) {
+            XERROR(
+                "Failed to preserve main timeline route while destroying EQ.");
+            return;
         }
     }
 

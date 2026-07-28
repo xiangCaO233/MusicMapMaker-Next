@@ -73,16 +73,15 @@ AudioTimelineTransport::AudioTimelineTransport(
 
     m_clips = std::move(clips);
     m_clipEndFrames.reserve(m_clips.size());
-    m_prefixMaxEndFrames.reserve(m_clips.size());
 
-    AudioTimelineFrame prefixMaxEnd =
-        std::numeric_limits<AudioTimelineFrame>::min();
     for ( const auto& clip : m_clips ) {
         const auto endFrame =
             saturatingAdd(clip.startFrame, clip.durationFrames);
         m_clipEndFrames.push_back(endFrame);
-        prefixMaxEnd = std::max(prefixMaxEnd, endFrame);
-        m_prefixMaxEndFrames.push_back(prefixMaxEnd);
+    }
+    if ( !m_clips.empty() ) {
+        m_intervalMaxEndTree.resize(m_clips.size() * 4U);
+        static_cast<void>(buildIntervalMaxEndTree(1U, 0U, m_clips.size()));
     }
 }
 
@@ -227,8 +226,6 @@ void AudioTimelineTransport::appendActiveSpans(
     const AudioTimelineFrame endFrame = saturatingAdd(startFrame, frameCount);
     if ( endFrame <= startFrame ) return;
 
-    const auto firstCandidate = std::upper_bound(
-        m_prefixMaxEndFrames.begin(), m_prefixMaxEndFrames.end(), startFrame);
     const auto lastCandidate = std::lower_bound(
         m_clips.begin(),
         m_clips.end(),
@@ -237,26 +234,63 @@ void AudioTimelineTransport::appendActiveSpans(
             return clip.startFrame < frame;
         });
 
-    const std::size_t firstIndex = static_cast<std::size_t>(
-        std::distance(m_prefixMaxEndFrames.begin(), firstCandidate));
     const std::size_t lastIndex =
         static_cast<std::size_t>(std::distance(m_clips.begin(), lastCandidate));
+    if ( lastIndex == 0U ) return;
+    queryIntervalTree(1U,
+                      0U,
+                      m_clips.size(),
+                      lastIndex,
+                      startFrame,
+                      endFrame,
+                      outputStartFrame,
+                      queryEpoch,
+                      output,
+                      result);
+}
 
-    for ( std::size_t index = firstIndex; index < lastIndex; ++index ) {
-        const auto&              clip = m_clips[index];
+AudioTimelineFrame AudioTimelineTransport::buildIntervalMaxEndTree(
+    std::size_t node, std::size_t begin, std::size_t end)
+{
+    if ( end - begin == 1U ) {
+        m_intervalMaxEndTree[node] = m_clipEndFrames[begin];
+        return m_intervalMaxEndTree[node];
+    }
+
+    const std::size_t middle = begin + (end - begin) / 2U;
+    const auto leftMax  = buildIntervalMaxEndTree(node * 2U, begin, middle);
+    const auto rightMax = buildIntervalMaxEndTree(node * 2U + 1U, middle, end);
+    m_intervalMaxEndTree[node] = std::max(leftMax, rightMax);
+    return m_intervalMaxEndTree[node];
+}
+
+void AudioTimelineTransport::queryIntervalTree(
+    std::size_t node, std::size_t begin, std::size_t end,
+    std::size_t lastCandidate, AudioTimelineFrame queryStart,
+    AudioTimelineFrame queryEnd, AudioTimelineFrame outputStartFrame,
+    std::uint64_t queryEpoch, std::span<AudioTimelineActiveSpan> output,
+    AudioTimelineSpanQueryResult& result) const noexcept
+{
+    ++result.visitedNodeCount;
+    if ( begin >= lastCandidate || m_intervalMaxEndTree[node] <= queryStart ) {
+        return;
+    }
+
+    if ( end - begin == 1U ) {
+        const auto&              clip = m_clips[begin];
         const AudioTimelineFrame overlapStart =
-            std::max(startFrame, clip.startFrame);
+            std::max(queryStart, clip.startFrame);
         const AudioTimelineFrame overlapEnd =
-            std::min(endFrame, m_clipEndFrames[index]);
-        if ( overlapStart >= overlapEnd ) continue;
+            std::min(queryEnd, m_clipEndFrames[begin]);
+        if ( overlapStart >= overlapEnd ) return;
 
         if ( result.writtenSpanCount < output.size() ) {
             output[result.writtenSpanCount] = {
-                .clipIndex = index,
+                .clipIndex = begin,
                 .eventId   = clip.eventId,
                 .sourceKey = clip.sourceKey,
                 .outputStartFrame =
-                    outputStartFrame + (overlapStart - startFrame),
+                    outputStartFrame + (overlapStart - queryStart),
                 .sourceStartFrame = overlapStart - clip.startFrame,
                 .frameCount       = overlapEnd - overlapStart,
                 .volume           = clip.volume,
@@ -265,7 +299,30 @@ void AudioTimelineTransport::appendActiveSpans(
             ++result.writtenSpanCount;
         }
         ++result.totalSpanCount;
+        return;
     }
+
+    const std::size_t middle = begin + (end - begin) / 2U;
+    queryIntervalTree(node * 2U,
+                      begin,
+                      middle,
+                      lastCandidate,
+                      queryStart,
+                      queryEnd,
+                      outputStartFrame,
+                      queryEpoch,
+                      output,
+                      result);
+    queryIntervalTree(node * 2U + 1U,
+                      middle,
+                      end,
+                      lastCandidate,
+                      queryStart,
+                      queryEnd,
+                      outputStartFrame,
+                      queryEpoch,
+                      output,
+                      result);
 }
 
 }  // namespace MMM::Audio

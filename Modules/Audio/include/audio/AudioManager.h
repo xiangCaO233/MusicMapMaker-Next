@@ -32,6 +32,7 @@ namespace MMM::Audio
 
 class SoundEffectPool;
 class AudioTimelineMixerNode;
+class PreparedTimelineAudio;
 struct BackgroundSpectrumLevels;
 class BackgroundSpectrumAnalyzer;
 class BackgroundSpectrumCaptureNode;
@@ -104,16 +105,7 @@ enum class AudioTimelineLoadDiagnosticCode : std::uint8_t {
     MissingResource,
 
     /// @brief 起播时间不是有限数值，已按零秒恢复。
-    InvalidStartTime,
-
-    /// @brief 当前混音节点还不能逐片段表达资源播放倍率。
-    UnsupportedResourcePlaybackSpeed,
-
-    /// @brief 当前混音节点还不能逐片段表达资源音高。
-    UnsupportedResourcePitch,
-
-    /// @brief 当前混音节点还不能逐片段表达资源 EQ。
-    UnsupportedResourceEqualizer
+    InvalidStartTime
 };
 
 /// @brief 单个时间线加载问题及其来源。
@@ -214,8 +206,9 @@ public:
     /// @param fingerprint 调用方生成的稳定完整时间线指纹。
     /// @return 图替换状态、有效片段数量和逐事件诊断。
     /// @warning
-    /// 低频资源路径：会访问文件系统并等待所有引用资源完成解码，只能在谱面加载
-    /// 或时间线提交时调用，禁止放入 UI、逻辑 update 或音频回调热路径。
+    /// 低频资源路径：会访问文件系统、等待引用资源完成解码并执行资源级离线
+    /// DSP，只能在谱面加载或时间线提交时调用，禁止放入 UI、逻辑 update
+    /// 或音频回调热路径。
     [[nodiscard]] AudioTimelineLoadResult loadAudioTimeline(
         const std::vector<AudioTimelineLoadEvent>& events,
         double chartEndSeconds, const std::string& fingerprint);
@@ -252,7 +245,8 @@ public:
     /// @return 单文件成功进入自动采样调度表时返回 true。
     /// @warning
     /// 此接口仅物化一个零秒自动采样；其 SourceNode 不再充当主播放时钟。
-    /// 资源自身 playbackSpeed、pitch 和 EQ 不会提升为复合时间线全局参数。
+    /// 资源自身 playbackSpeed、pitch 和 EQ 会离线应用于该片段，不会提升为
+    /// 复合时间线全局预览参数。
     bool loadBGM(const std::string& filePath, const AudioTrackConfig& config);
 
     /// @brief 兼容入口：卸载当前主自动采样时间线。
@@ -533,6 +527,13 @@ public:
     /// @brief 获取特定 SFX 池的时长
     double getSFXDuration(const std::string& key) const;
 
+    /// @brief 诊断指定音效池是否与自动采样共用同一份预处理 PCM。
+    /// @param key 项目 Effect 资源标识。
+    /// @return 池与当前资源 DSP 弱缓存指向同一对象时返回 true。
+    /// @warning 低频测试与诊断接口：会查询哈希表并锁定 weak_ptr。
+    [[nodiscard]] bool isSFXUsingSharedTimelineAudio(
+        const std::string& key) const;
+
     /// @brief 实时更新打击音效路由策略。
     /// @param syncSpeed 是否让 hiteffect.* 音效跟随主音轨拉伸器。
     void updateSFXSyncSpeedRouting(bool syncSpeed);
@@ -551,6 +552,19 @@ public:
                              float              defaultVolume = 1.0f,
                              double             leadInSeconds = 0.0);
 
+    /// @brief 登记使用项目资源完整 DSP 配置的按需音效。
+    /// @param key 项目 Effect 资源标识。
+    /// @param filePath 音效文件绝对路径。
+    /// @param resourceConfig 与自动采样共享的资源级配置。
+    /// @param leadInSeconds 文件开头到有效出声点的延迟。
+    /// @warning
+    /// 低频资源登记路径：只更新描述和后台队列；不会在调用线程解码或执行
+    /// DSP。volume/mute 保持为播放增益，其余资源 DSP 由共享 PCM 缓存应用。
+    void registerSoundEffect(const std::string&      key,
+                             const std::string&      filePath,
+                             const AudioTrackConfig& resourceConfig,
+                             double                  leadInSeconds = 0.0);
+
     /// @brief 确保已登记音效完成解码并接入混音器。
     /// @param key 音效标识符。
     /// @return 已加载或成功加载时返回 true。
@@ -565,10 +579,12 @@ public:
     /// 不得访问文件系统或等待解码。
     bool queueBoundNoteSoundEffectLoad(const std::string& key);
 
-    /// @brief 推进后台音效加载任务并接入已准备好的音效池。
+    /// @brief 推进后台音效加载任务并回收已退役的时间线调度资源。
     /// @param maxPreparedPerUpdate 单次调用最多接入的音效数量。
-    /// @warning 逻辑低频轮询路径：调用方必须节流；单次只启动固定数量后台任务，
-    /// 文件探测和解码均在线程池执行。
+    /// @warning
+    /// 逻辑轮询路径：单次只启动固定数量后台任务，文件探测和解码均在线程池
+    /// 执行。无退役状态时只执行一次无锁指针读取；时间线发生替换时可能在
+    /// 控制线程析构 PCM 缓存，禁止放入音频回调或渲染路径。
     void updateQueuedSoundEffectLoads(std::size_t maxPreparedPerUpdate = 2U);
 
     /// @brief 查询指定音效是否已经完成解码并创建音效池。
@@ -671,12 +687,43 @@ private:
     /// @return 内置打击音效或谱面绑定采样返回 true。
     bool usesHitEffectRouting(const std::string& key) const;
 
-    /// @brief 使用已探测的音轨创建音效池并接入混音图。
+    /// @brief 使用已完成资源 DSP 的 PCM 创建音效池并接入混音图。
     /// @param key 已登记的音效资源标识。
-    /// @param track 后台加载完成的音轨。
+    /// @param preparedAudio 与自动采样时间线共享的只读 PCM。
     /// @return 成功接入或已存在时返回 true。
-    bool attachSoundEffectPool(const std::string&               key,
-                               std::shared_ptr<ice::AudioTrack> track);
+    bool attachSoundEffectPool(
+        const std::string&                           key,
+        std::shared_ptr<const PreparedTimelineAudio> preparedAudio);
+
+    /// @brief 断开并释放音效池，但保留资源登记、静音和后台修订状态。
+    /// @param key 音效资源标识。
+    void detachSoundEffectPool(const std::string& key);
+
+    /// @brief 统一登记皮肤音效或项目 Effect。
+    /// @param key 音效资源标识。
+    /// @param filePath 音频文件绝对路径。
+    /// @param resourceConfig 资源配置。
+    /// @param leadInSeconds 有效声音前导秒数。
+    /// @param usesProjectResourceConfig 是否以项目配置而非 AppConfig 为权威。
+    void registerSoundEffectImpl(const std::string&      key,
+                                 const std::string&      filePath,
+                                 const AudioTrackConfig& resourceConfig,
+                                 double                  leadInSeconds,
+                                 bool usesProjectResourceConfig);
+
+    /// @brief 查找或建立自动采样与 HitEffect 共用的资源 DSP PCM。
+    /// @param filePath 音频文件绝对路径。
+    /// @param track 已完成解码的原始音轨。
+    /// @param resourceConfig 资源 DSP 配置。
+    /// @param preparedCandidate 后台线程可预先提供的处理结果。
+    /// @return 缓存命中或处理成功时返回共享只读 PCM。
+    /// @warning 低频控制路径：缓存未命中且无候选时会执行完整离线 DSP。
+    std::shared_ptr<const PreparedTimelineAudio>
+    getOrPrepareAudioTimelineResource(
+        const std::string&                           filePath,
+        const std::shared_ptr<ice::AudioTrack>&      track,
+        const AudioTrackConfig&                      resourceConfig,
+        std::shared_ptr<const PreparedTimelineAudio> preparedCandidate = {});
 
     /// @brief 等待所有后台音效文件探测任务完成。
     /// @warning 仅允许在 AudioManager 关闭路径调用，会阻塞等待线程池任务。
@@ -693,7 +740,7 @@ private:
 
     /// @brief 清除主时间拉伸器的历史样本。
     /// @warning
-    /// 低频播放控制路径：可能与正在执行的拉伸 block 短暂同步，禁止每帧调用。
+    /// 低频播放控制路径：只写入 lock-free discontinuity 邮箱，禁止每帧调用。
     void resetMainTimeStretcher();
 
     /// @brief 创建并启动指定播放后端。
@@ -762,6 +809,9 @@ private:
     /// @brief 当前自动采样时间线的唯一传输和混音节点。
     std::shared_ptr<AudioTimelineMixerNode> m_audioTimelineNode;
 
+    /// @brief 稳定输出节点中是否已经提交一份谱面时间线。
+    bool m_audioTimelineLoaded{ false };
+
     /// @brief 当前完整自动采样时间线的稳定指纹。
     std::string m_audioTimelineFingerprint;
 
@@ -770,6 +820,22 @@ private:
 
     /// @brief 上次加载时缺失的自动采样片段数量。
     std::size_t m_missingAudioTimelineClipCount{ 0U };
+
+    /// @brief 跨相邻时间线提交复用的资源级 DSP 弱缓存项。
+    struct CachedTimelineResourceAudio {
+        /// @brief 生成 PCM 时对应的原始音轨。
+        std::weak_ptr<ice::AudioTrack> sourceTrack;
+
+        /// @brief 已完成资源级 DSP 的只读 PCM。
+        std::weak_ptr<const PreparedTimelineAudio> preparedAudio;
+    };
+
+    /// @brief 按文件和资源 DSP 配置索引的弱缓存。
+    ///
+    /// 弱引用避免时间线卸载后常驻大块 PCM；提交新时间线时，旧节点仍保持强
+    /// 引用，因此连续编辑可以直接复用未变化资源。
+    std::unordered_map<std::string, CachedTimelineResourceAudio>
+        m_audioTimelineResourceCache;
 
     /// @brief 当前主音轨图形均衡器节点。
     std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
@@ -818,6 +884,9 @@ private:
         /// @brief 音效文件绝对路径。
         std::string m_filePath;
 
+        /// @brief 与自动采样共用的完整资源配置。
+        AudioTrackConfig m_resourceConfig;
+
         /// @brief 首次加载使用的默认音量。
         float m_defaultVolume{ 1.0f };
 
@@ -826,6 +895,12 @@ private:
 
         /// @brief 是否由谱面物件绑定并需要接入打击音效总线。
         bool m_isBoundNoteSound{ false };
+
+        /// @brief volume/mute 是否由项目 AudioResource 配置直接控制。
+        bool m_usesProjectResourceConfig{ false };
+
+        /// @brief 排除 volume/mute 的资源 DSP 缓存键。
+        std::string m_processingCacheKey;
 
         /// @brief 本次登记的唯一修订号，用于丢弃过期后台加载结果。
         std::uint64_t m_revision{ 0U };
@@ -838,6 +913,9 @@ private:
 
         /// @brief 登记时的音频文件绝对路径。
         std::string filePath;
+
+        /// @brief 登记时固定的完整资源 DSP 配置。
+        AudioTrackConfig resourceConfig;
 
         /// @brief 登记修订号。
         std::uint64_t revision{ 0U };
@@ -853,6 +931,9 @@ private:
 
         /// @brief 探测成功后创建的异步解码音轨。
         std::shared_ptr<ice::AudioTrack> track;
+
+        /// @brief 后台线程完成资源 DSP 后生成的只读 PCM。
+        std::shared_ptr<const PreparedTimelineAudio> preparedAudio;
     };
 
     /// @brief 已登记音效描述表；登记本身不创建解码数据或混音节点。

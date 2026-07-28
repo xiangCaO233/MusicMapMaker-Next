@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <ice/config/config.hpp>
+#include <ice/manage/AudioTrack.hpp>
 #include <string>
 #include <thread>
 #include <vector>
@@ -78,12 +80,12 @@ bool testEmptyTimelineClock(MMM::Audio::AudioManager& manager)
     return true;
 }
 
-/// @brief 验证单片段加载不会把资源高级配置提升为全局预览参数。
+/// @brief 验证单片段资源 DSP 生效且不会提升为全局预览参数。
 /// @param manager 已初始化音频管理器。
 /// @param samplePath 可解码短音频路径。
 /// @return 验证通过时返回 true。
-bool testSingleClipDiagnostics(MMM::Audio::AudioManager& manager,
-                               const std::string&        samplePath)
+bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
+                                      const std::string&        samplePath)
 {
     MMM::AudioTrackConfig config;
     config.volume        = 0.75F;
@@ -91,6 +93,8 @@ bool testSingleClipDiagnostics(MMM::Audio::AudioManager& manager,
     config.playbackPitch = 3.0F;
     config.eqEnabled     = true;
     config.eqPreset      = static_cast<int>(MMM::Audio::EQPreset::TenBand);
+    config.eqBandGains.assign(10U, 3.0F);
+    config.eqBandQs.assign(10U, 1.2F);
 
     const auto result =
         manager.loadAudioTimeline({ MMM::Audio::AudioTimelineLoadEvent{
@@ -105,16 +109,7 @@ bool testSingleClipDiagnostics(MMM::Audio::AudioManager& manager,
                                   "single-timeline");
 
     if ( !result.success || result.loadedClipCount != 1U ||
-         result.missingClipCount != 0U ||
-         !hasDiagnostic(result,
-                        MMM::Audio::AudioTimelineLoadDiagnosticCode::
-                            UnsupportedResourcePlaybackSpeed) ||
-         !hasDiagnostic(result,
-                        MMM::Audio::AudioTimelineLoadDiagnosticCode::
-                            UnsupportedResourcePitch) ||
-         !hasDiagnostic(result,
-                        MMM::Audio::AudioTimelineLoadDiagnosticCode::
-                            UnsupportedResourceEqualizer) ||
+         result.missingClipCount != 0U || !result.diagnostics.empty() ||
          std::any_of(result.diagnostics.begin(),
                      result.diagnostics.end(),
                      [](const auto& diagnostic) {
@@ -127,6 +122,152 @@ bool testSingleClipDiagnostics(MMM::Audio::AudioManager& manager,
             "Per-resource advanced settings leaked into the composite graph");
         return false;
     }
+
+    const auto   rawTrack = manager.getBGMTrack();
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    if ( !rawTrack || sampleRate <= 0.0 ) return false;
+    const double expectedEnd =
+        0.01 + static_cast<double>(rawTrack->num_frames()) /
+                   (sampleRate * static_cast<double>(config.playbackSpeed));
+    if ( std::abs(manager.getTotalTime() - expectedEnd) > 0.02 ) {
+        XERROR("Per-resource playbackSpeed did not change clip duration");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证同一文件的不同资源倍率可并存且全局预览倍率不改写资源时长。
+bool testIndependentResourceAndGlobalSpeed(MMM::Audio::AudioManager& manager,
+                                           const std::string&        samplePath)
+{
+    MMM::AudioTrackConfig fastConfig;
+    fastConfig.playbackSpeed = 2.0F;
+    MMM::AudioTrackConfig slowConfig;
+    slowConfig.playbackSpeed = 0.5F;
+
+    manager.setPlaybackSpeed(1.0);
+    const auto result = manager.loadAudioTimeline(
+        {
+            {
+                .eventId               = 21U,
+                .resourceKey           = "fast",
+                .filePath              = samplePath,
+                .effectiveStartSeconds = 0.0,
+                .eventVolume           = 1.0F,
+                .resourceConfig        = fastConfig,
+            },
+            {
+                .eventId               = 22U,
+                .resourceKey           = "slow",
+                .filePath              = samplePath,
+                .effectiveStartSeconds = 0.0,
+                .eventVolume           = 1.0F,
+                .resourceConfig        = slowConfig,
+            },
+        },
+        0.0,
+        "independent-resource-speeds");
+    const auto   rawTrack = manager.getBGMTrack();
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    if ( !result.success || result.loadedClipCount != 2U || !rawTrack ||
+         sampleRate <= 0.0 ) {
+        XERROR("Different resource speeds did not load together");
+        return false;
+    }
+
+    const double expectedEnd =
+        static_cast<double>(rawTrack->num_frames()) /
+        (sampleRate * static_cast<double>(slowConfig.playbackSpeed));
+    const double resourceDefinedEnd = manager.getTotalTime();
+    manager.setPlaybackSpeed(1.75);
+    if ( std::abs(resourceDefinedEnd - expectedEnd) > 0.02 ||
+         std::abs(manager.getTotalTime() - resourceDefinedEnd) > 1.0e-9 ||
+         std::abs(manager.getPlaybackSpeed() - 1.75) > 1.0e-9 ) {
+        XERROR("Global preview speed overwrote per-resource duration");
+        return false;
+    }
+    manager.setPlaybackSpeed(1.0);
+    return true;
+}
+
+/// @brief 验证同一 Effect 的自动采样和 Note HitEffect 共用资源 DSP PCM。
+/// @param manager 已初始化音频管理器。
+/// @param samplePath 可解码短音频路径。
+/// @return 缓存身份、资源时长、初始静音和全局变速隔离均正确时返回 true。
+bool testDualUseEffectSharesPreparedAudio(MMM::Audio::AudioManager& manager,
+                                          const std::string&        samplePath)
+{
+    constexpr const char* EFFECT_KEY = "dual-use-effect";
+    MMM::AudioTrackConfig config;
+    config.volume        = 0.63F;
+    config.muted         = true;
+    config.playbackSpeed = 1.6F;
+    config.playbackPitch = 5.0F;
+    config.eqEnabled     = true;
+    config.eqPreset      = static_cast<int>(MMM::Audio::EQPreset::TenBand);
+    config.eqBandGains.assign(10U, 2.0F);
+    config.eqBandQs.assign(10U, 1.1F);
+
+    manager.setPlaybackSpeed(1.0);
+    const auto result =
+        manager.loadAudioTimeline({ MMM::Audio::AudioTimelineLoadEvent{
+                                      .eventId               = 31U,
+                                      .resourceKey           = EFFECT_KEY,
+                                      .filePath              = samplePath,
+                                      .effectiveStartSeconds = 0.0,
+                                      .eventVolume           = 1.0F,
+                                      .resourceConfig        = config,
+                                  } },
+                                  0.0,
+                                  "dual-use-effect-timeline");
+    const auto rawTrack = manager.getBGMTrack();
+    const auto sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    if ( !result.success || result.loadedClipCount != 1U || !rawTrack ||
+         sampleRate <= 0.0 ) {
+        XERROR("Dual-use Effect timeline could not be prepared");
+        return false;
+    }
+
+    manager.registerSoundEffect(EFFECT_KEY, samplePath, config);
+    if ( !manager.queueBoundNoteSoundEffectLoad(EFFECT_KEY) ||
+         !waitUntil([&]() {
+             manager.updateQueuedSoundEffectLoads();
+             return manager.isSoundEffectLoaded(EFFECT_KEY);
+         }) ) {
+        XERROR("Dual-use Effect could not create its HitEffect pool");
+        return false;
+    }
+
+    const double timelineDuration = manager.getTotalTime();
+    const double sfxDuration      = manager.getSFXDuration(EFFECT_KEY);
+    const double expectedDuration =
+        static_cast<double>(rawTrack->num_frames()) /
+        (sampleRate * static_cast<double>(config.playbackSpeed));
+    if ( !manager.isSFXUsingSharedTimelineAudio(EFFECT_KEY) ||
+         std::abs(timelineDuration - sfxDuration) > 1.0e-9 ||
+         std::abs(sfxDuration - expectedDuration) > 0.02 ||
+         std::abs(manager.getSFXPoolVolume(EFFECT_KEY) - config.volume) >
+             1.0e-6F ||
+         !manager.getSFXPoolMute(EFFECT_KEY) ) {
+        XERROR(
+            "Dual-use Effect did not share prepared DSP PCM or resource gain");
+        manager.unloadSoundEffect(EFFECT_KEY);
+        return false;
+    }
+
+    manager.setPlaybackSpeed(1.75);
+    if ( std::abs(manager.getTotalTime() - timelineDuration) > 1.0e-9 ||
+         std::abs(manager.getSFXDuration(EFFECT_KEY) - sfxDuration) > 1.0e-9 ) {
+        XERROR("Global preview speed was applied twice to dual-use Effect PCM");
+        manager.unloadSoundEffect(EFFECT_KEY);
+        return false;
+    }
+
+    manager.setPlaybackSpeed(1.0);
+    manager.unloadSoundEffect(EFFECT_KEY);
     return true;
 }
 
@@ -232,9 +373,12 @@ bool testCompositePlayback(MMM::Audio::AudioManager& manager,
     }
 
     manager.setPlaybackSpeed(1.5);
+    manager.seek(0.0);
     manager.play();
-    if ( !waitUntil([&]() { return manager.getCurrentTime() > 0.04; }) ||
-         std::abs(manager.getActualPlaybackSpeed() - 1.5) > 0.02 ) {
+    if ( !waitUntil([&]() {
+             return manager.getCurrentTime() > 0.04 &&
+                    std::abs(manager.getActualPlaybackSpeed() - 1.5) <= 0.02;
+         }) ) {
         XERROR("Composite timeline did not follow global preview speed");
         return false;
     }
@@ -318,10 +462,13 @@ int main(int argc, char** argv)
     manager.destroyMainTrackEQ();
 
     const std::string samplePath = argv[1];
-    const bool        passed = testEmptyTimelineClock(manager) &&
-                               testSingleClipDiagnostics(manager, samplePath) &&
-                               testLegacyBgmWrapper(manager, samplePath) &&
-                               testCompositePlayback(manager, samplePath);
+    const bool        passed =
+        testEmptyTimelineClock(manager) &&
+        testSingleClipResourceProcessing(manager, samplePath) &&
+        testIndependentResourceAndGlobalSpeed(manager, samplePath) &&
+        testDualUseEffectSharesPreparedAudio(manager, samplePath) &&
+        testLegacyBgmWrapper(manager, samplePath) &&
+        testCompositePlayback(manager, samplePath);
 
     manager.shutdown();
     MMM::Runtime::AppThreadPool::instance().shutdown();

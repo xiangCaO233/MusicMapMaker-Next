@@ -277,6 +277,43 @@ int testTruncatedOutputBuffer()
     return failures;
 }
 
+/// @brief 验证超长早期片段不会迫使晚期查询扫描全部历史短片段。
+/// @return 失败断言数量。
+int testSparseLateQueryUsesIntervalIndex()
+{
+    constexpr std::size_t         SHORT_CLIP_COUNT = 100000U;
+    std::vector<TimelineClipSpec> clips;
+    clips.reserve(SHORT_CLIP_COUNT + 1U);
+    clips.push_back(TimelineClipSpec{
+        .eventId        = 1U,
+        .sourceKey      = "long",
+        .startFrame     = 0,
+        .durationFrames = 200000,
+        .volume         = 1.0F,
+    });
+    for ( std::size_t index = 0U; index < SHORT_CLIP_COUNT; ++index ) {
+        clips.push_back(TimelineClipSpec{
+            .eventId        = index + 2U,
+            .sourceKey      = "short",
+            .startFrame     = static_cast<std::int64_t>(index),
+            .durationFrames = 1,
+            .volume         = 1.0F,
+        });
+    }
+
+    AudioTimelineTransport                 transport(std::move(clips));
+    std::array<AudioTimelineActiveSpan, 2> spans;
+    const auto result   = transport.queryActiveSpans(150000, 64, spans);
+    int        failures = expectTrue(
+        result.writtenSpanCount == 1U && result.totalSpanCount == 1U &&
+            spans.front().eventId == 1U,
+        "late query returns only the still-active long clip");
+    failures += expectTrue(
+        result.visitedNodeCount < 128U,
+        "interval index skips one hundred thousand expired short clips");
+    return failures;
+}
+
 }  // namespace
 
 /// @brief 运行纯逻辑音频时间线传输测试。
@@ -290,6 +327,7 @@ int main()
     failures += testPlaybackStateSeekAndEpoch();
     failures += testHalfOpenLoopAndEpoch();
     failures += testTruncatedOutputBuffer();
+    failures += testSparseLateQueryUsesIntervalIndex();
 
     if ( failures != 0 ) {
         XERROR("AudioTimelineTransportTest failed with {} assertion(s)",

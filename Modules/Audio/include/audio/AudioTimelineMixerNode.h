@@ -8,6 +8,7 @@
 #include <ice/core/IAudioNode.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,95 @@ class AudioTrack;
 namespace MMM::Audio
 {
 
+/// @brief 下一段时间线输入结束处的语义。
+enum class AudioTimelineInputBoundaryKind : std::uint8_t {
+    None,
+    Discontinuity,
+    Final,
+};
+
+/// @brief 音频线程在拉取时间线前取得的连续输入区间。
+struct AudioTimelineInputBoundary {
+    /// @brief 当前 transport 可连续处理且不跨边界的帧数。
+    std::size_t frameCount{ 0U };
+    /// @brief frameCount 末端的循环跳转或自然结束语义。
+    AudioTimelineInputBoundaryKind kind{ AudioTimelineInputBoundaryKind::None };
+};
+
+/// @brief 已在非实时线程固定下来的只读时间线 PCM 数据。
+///
+/// 原始音轨会在工厂函数中完成解码等待并取得稳定只读视图；经过资源级 DSP
+/// 的音轨则由本对象持有处理后的 PCM。音频回调只执行边界检查和内存复制。
+class PreparedTimelineAudio final
+{
+public:
+    /// @brief 从已完成缓存的 IonCachy 音轨创建只读 PCM 视图。
+    /// @param track 保持底层缓存存活的音轨。
+    /// @return 音轨为空或没有可读 PCM 时返回空指针。
+    /// @warning 低频资源路径：可能等待后台解码完成，禁止在音频回调中调用。
+    [[nodiscard]] static std::shared_ptr<const PreparedTimelineAudio> fromTrack(
+        std::shared_ptr<ice::AudioTrack> track);
+
+    /// @brief 从离线 DSP 结果创建自有 PCM。
+    /// @param channels 按声道分离且帧数一致的 PCM。
+    /// @param sourceOwner 可选的原始音轨所有者，用于跨时间线与 HitEffect
+    ///        缓存复用时保持同一解码资源存活。
+    /// @return 输入无有效声道或帧时返回空指针。
+    /// @warning 低频资源路径：会转移并整理 PCM 内存。
+    [[nodiscard]] static std::shared_ptr<const PreparedTimelineAudio>
+    fromOwnedChannels(std::vector<std::vector<float>>  channels,
+                      std::shared_ptr<ice::AudioTrack> sourceOwner = {});
+
+    PreparedTimelineAudio(const PreparedTimelineAudio&)            = delete;
+    PreparedTimelineAudio& operator=(const PreparedTimelineAudio&) = delete;
+    PreparedTimelineAudio(PreparedTimelineAudio&&)                 = delete;
+    PreparedTimelineAudio& operator=(PreparedTimelineAudio&&)      = delete;
+
+    /// @brief 构造引用外部缓存的 PCM；供工厂函数建立稳定视图。
+    PreparedTimelineAudio(std::shared_ptr<ice::AudioTrack>    track,
+                          std::vector<std::span<const float>> channelViews);
+
+    /// @brief 构造自有 PCM；供离线资源处理器转移结果。
+    /// @param channels 按声道分离的 PCM。
+    /// @param sourceOwner 可选的原始音轨所有者。
+    PreparedTimelineAudio(std::vector<std::vector<float>>  channels,
+                          std::shared_ptr<ice::AudioTrack> sourceOwner);
+
+    /// @brief 获取 PCM 帧数。
+    [[nodiscard]] std::size_t numFrames() const noexcept;
+
+    /// @brief 获取 PCM 声道数。
+    [[nodiscard]] std::size_t numChannels() const noexcept;
+
+    /// @brief 获取指定声道的只读 PCM。
+    /// @param channel 声道索引。
+    /// @return 越界时返回空 span。
+    [[nodiscard]] std::span<const float> channel(
+        std::size_t channel) const noexcept;
+
+    /// @brief 将指定帧区间复制到调用方预分配的缓冲区。
+    /// @param buffer 目标缓冲区。
+    /// @param startFrame 源起始帧。
+    /// @param frameCount 最多复制帧数。
+    /// @return 实际复制帧数。
+    /// @warning 音频回调热路径；不执行分配、锁、解码或文件访问。
+    std::size_t read(ice::AudioBuffer& buffer, std::size_t startFrame,
+                     std::size_t frameCount) const noexcept;
+
+private:
+    /// @brief 保持原始 AudioTrack 解码缓存生命周期。
+    ///
+    /// @warning
+    /// 共享所有权仅在低频构造和销毁时复制；音频回调不会复制 shared_ptr。
+    std::shared_ptr<ice::AudioTrack> m_sourceOwner;
+    /// @brief 离线 DSP 结果的自有 PCM。
+    std::vector<std::vector<float>> m_ownedChannels;
+    /// @brief 指向原始缓存或自有 PCM 的稳定声道视图。
+    std::vector<std::span<const float>> m_channelViews;
+    /// @brief 所有有效声道共同拥有的帧数。
+    std::size_t m_frameCount{ 0U };
+};
+
 /// @brief 已在非实时线程完成解析和缓存的时间线音频片段。
 struct PreparedTimelineClip {
     /// @brief 谱面采样物件的稳定标识。
@@ -29,12 +119,12 @@ struct PreparedTimelineClip {
     AudioTimelineFrame startFrame{ 0 };
     /// @brief 片段自身的线性音量。
     float volume{ 1.0F };
-    /// @brief 已完整缓存的音频数据。
+    /// @brief 已完整缓存并应用资源级 DSP 的只读音频数据。
     ///
     /// @warning
     /// 共享所有权仅用于保证音频回调期间缓存不被资源线程释放；该指针只在构造
     /// 和销毁节点时复制，process 热路径不会复制 shared_ptr。
-    std::shared_ptr<ice::AudioTrack> track;
+    std::shared_ptr<const PreparedTimelineAudio> audio;
 };
 
 /// @brief 将多个自动采样按统一时间线混合的实时音频节点。
@@ -45,6 +135,9 @@ struct PreparedTimelineClip {
 class AudioTimelineMixerNode final : public ice::IAudioNode
 {
 public:
+    /// @brief 不持有上下文的时间线自然结束通知函数。
+    using FinalInputListener = void (*)(void* context) noexcept;
+
     /// @brief 构造多采样时间线节点。
     /// @param clips 已在非实时线程完整缓存的音频片段。
     /// @param requestedTimelineEndFrame
@@ -54,6 +147,42 @@ public:
     AudioTimelineMixerNode(std::vector<PreparedTimelineClip> clips,
                            AudioTimelineFrame requestedTimelineEndFrame,
                            std::size_t        maximumProcessFrames);
+    /// @brief 回收控制线程延迟释放的调度状态。
+    ~AudioTimelineMixerNode() override;
+
+    AudioTimelineMixerNode(const AudioTimelineMixerNode&)            = delete;
+    AudioTimelineMixerNode& operator=(const AudioTimelineMixerNode&) = delete;
+    AudioTimelineMixerNode(AudioTimelineMixerNode&&)                 = delete;
+    AudioTimelineMixerNode& operator=(AudioTimelineMixerNode&&)      = delete;
+
+    /// @brief 在非实时线程准备并发布一份新的不可变调度状态。
+    /// @param clips 已完整缓存的新片段。
+    /// @param requestedTimelineEndFrame 谱面物件决定的排除结束帧。
+    /// @param maximumProcessFrames 回调内单次缓存读取的最大帧数。
+    /// @warning
+    /// 低频控制路径：允许分配和排序；音频线程只在下一个 block
+    /// 起点交换指针，旧状态由控制线程延迟回收。
+    void replaceSchedule(std::vector<PreparedTimelineClip> clips,
+                         AudioTimelineFrame requestedTimelineEndFrame,
+                         std::size_t        maximumProcessFrames);
+
+    /// @brief 在非实时控制线程释放全部已由音频线程退役的调度状态。
+    /// @return 本次完成释放的调度状态数量。
+    ///
+    /// 音频线程只负责把旧状态压入无锁退役栈；调用方应在时间线替换后的低频
+    /// 轮询路径重复调用，直至音频 block 已接管新状态并由本函数完成资源释放。
+    ///
+    /// @warning
+    /// 低频控制路径：可能析构完整 PCM 缓存和共享资源；允许与音频回调并发，
+    /// 但只允许单个非实时控制线程调用，禁止放入音频回调或渲染热路径。
+    [[nodiscard]] std::size_t reclaimRetiredSchedules() noexcept;
+
+    /// @brief 设置在自然结束 block 内同步触发的下游 final 通知。
+    /// @param context 生命周期覆盖音频后端的非拥有上下文。
+    /// @param listener 无异常、无阻塞、无分配的通知函数。
+    /// @warning 只能在音频后端启动前或停止后修改。
+    void setFinalInputListener(void*              context,
+                               FinalInputListener listener) noexcept;
 
     /// @brief 请求从当前位置播放。
     /// @warning 仅允许单个非实时逻辑线程写入控制邮箱。
@@ -85,6 +214,24 @@ public:
     /// @brief 获取最近一个已完成音频 block 的时间线位置。
     /// @return 下一 block 起始的有符号时间线帧。
     [[nodiscard]] AudioTimelineFrame positionFrame() const noexcept;
+
+    /// @brief 获取当前音频 block 开始时的时间线位置。
+    /// @return 主时间线节点开始生成最近 block 时的位置。
+    ///
+    /// @warning
+    /// 音频线程写入、同一混音 block 内后续音效源读取；依赖 MixBus
+    /// 保持来源插入顺序，供预定 HitEffect 计算 block 内起播偏移。
+    [[nodiscard]] AudioTimelineFrame blockStartFrame() const noexcept;
+
+    /// @brief 在拉取上游前取得不跨循环或自然结束点的连续输入范围。
+    /// @param maximumFrames 本次最多需要的时间线输入帧数。
+    /// @return 连续帧数及其末端语义。
+    ///
+    /// @warning
+    /// 音频回调热路径：只能由实际调用 process 的同一音频线程调用。该函数会
+    /// 在不推进时间的前提下接收控制邮箱，供下游变速器按边界拆分输入。
+    [[nodiscard]] AudioTimelineInputBoundary prepareInputBoundary(
+        std::size_t maximumFrames) noexcept;
 
     /// @brief 获取最近一个已完成音频 block 的播放状态。
     [[nodiscard]] AudioTimelinePlaybackState state() const noexcept;
@@ -134,6 +281,32 @@ private:
         Pause,
     };
 
+    /// @brief 单个音频 block 使用的完整不可变片段表与线程内传输状态。
+    struct ScheduleState {
+        /// @brief 构造已排序片段对应的预分配调度状态。
+        /// @param preparedClips 已完成过滤和排序的片段。
+        /// @param requestedTimelineEndFrame 谱面物件决定的排除结束帧。
+        /// @param maximumProcessFrames 单次缓存读取最大帧数。
+        ScheduleState(std::vector<PreparedTimelineClip> preparedClips,
+                      AudioTimelineFrame requestedTimelineEndFrame,
+                      std::size_t        maximumProcessFrames);
+
+        /// @brief 有效且已排序的预备片段。
+        std::vector<PreparedTimelineClip> clips;
+        /// @brief 只由音频回调线程推进的确定性传输核心。
+        AudioTimelineTransport transport;
+        /// @brief 谱面和采样共同决定的排除结束帧。
+        AudioTimelineFrame timelineEndFrame{ 0 };
+        /// @brief 单次缓存读取允许的最大帧数。
+        std::size_t maximumProcessFrames{ 1U };
+        /// @brief 回调外预分配的音频源读取缓存。
+        ice::AudioBuffer sourceScratch;
+        /// @brief 回调外预分配的活跃片段结果缓存。
+        std::vector<AudioTimelineActiveSpan> activeSpanScratch;
+        /// @brief 音频线程退役栈中的下一个状态。
+        ScheduleState* nextRetired{ nullptr };
+    };
+
     /// @brief 过滤、规范化并稳定排序预备片段。
     static std::vector<PreparedTimelineClip> prepareClips(
         std::vector<PreparedTimelineClip> clips);
@@ -146,6 +319,24 @@ private:
     static AudioTimelineFrame calculateTimelineEndFrame(
         const std::vector<PreparedTimelineClip>& clips,
         AudioTimelineFrame requestedTimelineEndFrame) noexcept;
+
+    /// @brief 在 block 起点接管控制线程发布的新调度状态。
+    /// @warning 音频热路径：只交换无锁指针并重建常数个传输状态。
+    void applyPendingSchedule() noexcept;
+
+    /// @brief 将旧调度状态压入控制线程回收的无锁退役栈。
+    /// @param state 不再由音频线程访问的旧状态。
+    /// @warning 音频热路径：只执行 lock-free 指针 CAS，不释放内存。
+    void retireSchedule(ScheduleState* state) noexcept;
+
+    /// @brief 按最近控制请求初始化刚交换进来的传输状态。
+    /// @param state 新的音频线程状态。
+    /// @warning 音频热路径：只读取固定数量原子邮箱并修改局部传输状态。
+    void initializeReplacementTransport(ScheduleState& state) noexcept;
+
+    /// @brief 标记时间线自然结束并通知下游提交当前 final 输入。
+    /// @warning 音频热路径：每次自然结束只调用一次轻量函数指针。
+    void markFinishedAndNotify() noexcept;
 
     /// @brief 在 block 边界读取稳定控制快照并更新传输状态。
     /// @warning 音频热路径；仅执行有界原子读取和常数时间状态修改。
@@ -171,18 +362,31 @@ private:
     /// @brief 请求播放命令并发布一个完整序列锁写入。
     void requestPlaybackCommand(PlaybackCommand command) noexcept;
 
-    /// @brief 有效且已排序的预备片段。
-    std::vector<PreparedTimelineClip> m_clips;
-    /// @brief 只由音频回调线程推进的确定性传输核心。
-    AudioTimelineTransport m_transport;
-    /// @brief 谱面和采样共同决定的排除结束帧。
-    AudioTimelineFrame m_timelineEndFrame{ 0 };
-    /// @brief 单次缓存读取允许的最大帧数。
-    std::size_t m_maximumProcessFrames{ 1U };
-    /// @brief 回调外预分配的音频源读取缓存。
-    ice::AudioBuffer m_sourceScratch;
-    /// @brief 回调外预分配的活跃片段结果缓存。
-    std::vector<AudioTimelineActiveSpan> m_activeSpanScratch;
+    /// @brief 当前只由音频线程访问的调度状态。
+    ScheduleState* m_scheduleState{ nullptr };
+    /// @brief prepareInputBoundary 已为紧随其后的 process 固定输入区间。
+    ///
+    /// @warning
+    /// 仅由同一音频线程读写；用于阻止边界查询与实际拉取之间接收第二批控制命令。
+    bool m_hasPreparedInputBoundary{ false };
+    /// @brief 已固定的下一次 process 帧数。
+    std::size_t m_preparedInputFrameCount{ 0U };
+    /// @brief 控制线程发布、音频线程在 block 起点接管的待用状态。
+    ///
+    /// @warning 单控制线程写、单音频线程交换；裸指针原子必须 lock-free。
+    std::atomic<ScheduleState*> m_pendingSchedule{ nullptr };
+    /// @brief 音频线程压入、控制线程低频回收的状态栈。
+    ///
+    /// @warning 音频线程只执行 CAS，不在回调中析构或释放状态。
+    std::atomic<ScheduleState*> m_retiredSchedules{ nullptr };
+    /// @brief 最近发布调度的复合结束帧。
+    std::atomic<AudioTimelineFrame> m_publishedTimelineEndFrame{ 0 };
+    /// @brief 最近发布调度的有效片段数量。
+    std::atomic<std::size_t> m_publishedClipCount{ 0U };
+    /// @brief 自然结束通知的非拥有上下文。
+    void* m_finalInputListenerContext{ nullptr };
+    /// @brief 当前 block 末尾的自然结束通知函数。
+    FinalInputListener m_finalInputListener{ nullptr };
 
     /// @brief 播放命令序列锁版本。
     ///
@@ -209,6 +413,12 @@ private:
     std::atomic<AudioTimelineFrame> m_requestedSeekFrame{ 0 };
     /// @brief 音频线程最后应用的 Seek 版本。
     std::uint64_t m_appliedSeekSequence{ 0U };
+    /// @brief 最近一次已完成 block 应用的 Seek 版本。
+    ///
+    /// @warning
+    /// 音频线程发布、逻辑线程读取；用于在暂停期间立即显示尚未被回调接收的
+    /// Seek 目标，避免为推进控制邮箱而伪造静音音频 block。
+    std::atomic<std::uint64_t> m_publishedAppliedSeekSequence{ 0U };
 
     /// @brief 循环命令序列锁版本。
     ///
@@ -235,6 +445,12 @@ private:
     /// @warning
     /// 音频线程写入、逻辑线程读取；relaxed 顺序足以提供独立状态快照。
     std::atomic<AudioTimelineFrame> m_publishedPositionFrame{ 0 };
+    /// @brief 最近一次 process 开始生成输出时的时间线位置。
+    ///
+    /// @warning
+    /// 音频线程写入、同一混音 block 内后续音效源读取；relaxed
+    /// 顺序配合固定来源执行顺序使用。
+    std::atomic<AudioTimelineFrame> m_publishedBlockStartFrame{ 0 };
     /// @brief 回调发布给逻辑线程的最新状态。
     ///
     /// @warning

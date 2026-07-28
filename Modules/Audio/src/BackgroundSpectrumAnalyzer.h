@@ -2,11 +2,11 @@
 
 #include "audio/BackgroundSpectrum.h"
 
-#include <fftw3.h>
 #include <ice/core/IAudioNode.hpp>
 
 #include <array>
 #include <atomic>
+#include <complex>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -58,10 +58,10 @@ private:
 class BackgroundSpectrumAnalyzer final
 {
 public:
-    /// @brief 分配固定 FFT 缓冲并创建双声道计划。
+    /// @brief 预计算固定 FFT 窗口、位反转索引和旋转因子。
     BackgroundSpectrumAnalyzer();
-    /// @brief 销毁 FFT 计划和缓冲。
-    ~BackgroundSpectrumAnalyzer();
+    /// @brief 释放固定容量频谱工作区。
+    ~BackgroundSpectrumAnalyzer() = default;
 
     BackgroundSpectrumAnalyzer(const BackgroundSpectrumAnalyzer&) = delete;
     BackgroundSpectrumAnalyzer& operator=(const BackgroundSpectrumAnalyzer&) =
@@ -80,6 +80,14 @@ public:
         std::size_t                          requestedBandCount);
 
 private:
+    /// @brief 对固定容量复数缓冲执行原地 radix-2 FFT。
+    /// @param buffer 已按位反转顺序填充的时域数据，返回频域数据。
+    /// @warning
+    /// 逻辑更新热路径：每个声道每次频谱刷新调用一次，只允许固定容量计算。
+    void executeFft(
+        std::span<std::complex<double>, BackgroundSpectrumCaptureNode::FFT_SIZE>
+            buffer) const;
+
     /// @brief 根据 FFT 输出刷新一个声道的对数频段。
     /// @param spectrum 当前声道的 FFT 复数输出。
     /// @param smoothed 当前声道跨帧平滑缓存。
@@ -87,7 +95,8 @@ private:
     /// @param bandCount 当前有效频段数。
     /// @return 本帧平滑前的最高频段电平，用于判断是否仍有有效信号。
     [[nodiscard]] float updateChannel(
-        const fftw_complex*                                       spectrum,
+        std::span<const std::complex<double>,
+                  BackgroundSpectrumCaptureNode::FFT_SIZE>        spectrum,
         std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& smoothed,
         std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& output,
         std::size_t                                               bandCount);
@@ -110,22 +119,23 @@ private:
         m_hitCaptureRight{};
     /// @brief 固定 FFT 窗口的 Hann 系数。
     std::array<double, BackgroundSpectrumCaptureNode::FFT_SIZE> m_window{};
+    /// @brief 固定 FFT 的位反转目标索引。
+    std::array<std::size_t, BackgroundSpectrumCaptureNode::FFT_SIZE>
+        m_bitReversedIndices{};
+    /// @brief 固定 FFT 各阶段复用的正向旋转因子。
+    std::array<std::complex<double>,
+               BackgroundSpectrumCaptureNode::FFT_SIZE / 2U>
+        m_twiddleFactors{};
     /// @brief 左声道跨帧平滑电平。
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS> m_smoothedLeft{};
     /// @brief 右声道跨帧平滑电平。
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS> m_smoothedRight{};
-    /// @brief FFTW 管理的左声道时域输入。
-    double* m_fftInputLeft{ nullptr };
-    /// @brief FFTW 管理的右声道时域输入。
-    double* m_fftInputRight{ nullptr };
-    /// @brief FFTW 管理的左声道频域输出。
-    fftw_complex* m_fftOutputLeft{ nullptr };
-    /// @brief FFTW 管理的右声道频域输出。
-    fftw_complex* m_fftOutputRight{ nullptr };
-    /// @brief 左声道固定 FFT 执行计划。
-    fftw_plan m_fftPlanLeft{ nullptr };
-    /// @brief 右声道固定 FFT 执行计划。
-    fftw_plan m_fftPlanRight{ nullptr };
+    /// @brief 左声道原地 FFT 工作缓冲。
+    std::array<std::complex<double>, BackgroundSpectrumCaptureNode::FFT_SIZE>
+        m_fftLeft{};
+    /// @brief 右声道原地 FFT 工作缓冲。
+    std::array<std::complex<double>, BackgroundSpectrumCaptureNode::FFT_SIZE>
+        m_fftRight{};
     /// @brief 上次分析使用的频段数，用于检测平滑缓存重置时机。
     std::size_t m_previousBandCount{ 0U };
     /// @brief 动态高度归一化使用的跨帧峰值参考。

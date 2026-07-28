@@ -20,6 +20,13 @@ namespace
 
 constexpr float SAMPLE_EPSILON = 1.0e-5F;
 
+/// @brief 记录时间线自然结束通知次数。
+void countFinalInputNotification(void* context) noexcept
+{
+    if ( !context ) return;
+    ++(*static_cast<std::size_t*>(context));
+}
+
 /// @brief 比较输出缓冲区与两个源区间的加权和。
 bool verifyMixedRange(const ice::AudioBuffer& output,
                       const ice::AudioBuffer& firstSource,
@@ -56,7 +63,8 @@ bool verifyMixedRange(const ice::AudioBuffer& output,
 
 /// @brief 验证负起点裁切、同文件多声部和 Seek 源帧恢复。
 bool testOverlapNegativeStartAndSeek(
-    const std::shared_ptr<ice::AudioTrack>& track)
+    const std::shared_ptr<ice::AudioTrack>&                         track,
+    const std::shared_ptr<const MMM::Audio::PreparedTimelineAudio>& audio)
 {
     constexpr std::size_t              BLOCK_FRAMES = 32U;
     MMM::Audio::AudioTimelineMixerNode node(
@@ -66,14 +74,14 @@ bool testOverlapNegativeStartAndSeek(
                 .sourceKey  = "same",
                 .startFrame = 8,
                 .volume     = 0.25F,
-                .track      = track,
+                .audio      = audio,
             },
             {
                 .eventId    = 10U,
                 .sourceKey  = "same",
                 .startFrame = -16,
                 .volume     = 0.5F,
-                .track      = track,
+                .audio      = audio,
             },
         },
         96,
@@ -160,6 +168,8 @@ bool testOverlapNegativeStartAndSeek(
 /// @brief 验证半开循环在 R 处截断并于每轮 L 重建交叠 voice。
 bool testHalfOpenLoop(const std::shared_ptr<ice::AudioTrack>& track)
 {
+    const auto audio = MMM::Audio::PreparedTimelineAudio::fromTrack(track);
+    if ( !audio ) return false;
     MMM::Audio::AudioTimelineMixerNode node(
         {
             {
@@ -167,7 +177,7 @@ bool testHalfOpenLoop(const std::shared_ptr<ice::AudioTrack>& track)
                 .sourceKey  = "loop",
                 .startFrame = 4,
                 .volume     = 1.0F,
-                .track      = track,
+                .audio      = audio,
             },
         },
         32,
@@ -210,11 +220,14 @@ bool testMissingResourceAndFinish()
                 .sourceKey  = "missing",
                 .startFrame = 0,
                 .volume     = 1.0F,
-                .track      = {},
+                .audio      = {},
             },
         },
         6,
         4U);
+    std::size_t finalNotificationCount = 0U;
+    node.setFinalInputListener(&finalNotificationCount,
+                               &countFinalInputNotification);
     if ( node.clipCount() != 0U ) {
         XERROR("Timeline mixer retained a missing audio resource");
         return false;
@@ -224,7 +237,10 @@ bool testMissingResourceAndFinish()
     ice::AudioBuffer output(ice::ICEConfig::internal_format, 10U);
     node.process(output);
     if ( node.positionFrame() != 6 || !node.finished() ||
-         node.state() != MMM::Audio::AudioTimelinePlaybackState::Paused ) {
+         finalNotificationCount != 1U ||
+         node.state() != MMM::Audio::AudioTimelinePlaybackState::Paused ||
+         node.requestedState() !=
+             MMM::Audio::AudioTimelinePlaybackState::Stopped ) {
         XERROR("Timeline mixer did not stop at the composite end frame");
         return false;
     }
@@ -236,12 +252,250 @@ bool testMissingResourceAndFinish()
     }
 
     node.seek(2);
+    if ( node.positionFrame() != 2 ) {
+        XERROR("Paused timeline did not expose its pending seek target");
+        return false;
+    }
     ice::AudioBuffer seekOutput(ice::ICEConfig::internal_format, 1U);
     node.process(seekOutput);
-    return node.positionFrame() == 2 && !node.finished() &&
-           node.state() == MMM::Audio::AudioTimelinePlaybackState::Paused &&
-           node.requestedState() ==
-               MMM::Audio::AudioTimelinePlaybackState::Paused;
+    if ( node.positionFrame() != 2 || node.finished() ||
+         finalNotificationCount != 1U ||
+         node.state() != MMM::Audio::AudioTimelinePlaybackState::Paused ||
+         node.requestedState() !=
+             MMM::Audio::AudioTimelinePlaybackState::Paused ) {
+        return false;
+    }
+
+    node.play();
+    node.process(output);
+    node.process(output);
+    return node.finished() && finalNotificationCount == 2U;
+}
+
+/// @brief 验证边界查询、精确结束和结束后的调度替换不会自行复活。
+bool testInputBoundaryAndFinishedReplacement()
+{
+    using MMM::Audio::AudioTimelineInputBoundaryKind;
+    using MMM::Audio::AudioTimelinePlaybackState;
+
+    MMM::Audio::AudioTimelineMixerNode node({}, 8, 8U);
+    std::size_t                        finalNotificationCount = 0U;
+    node.setFinalInputListener(&finalNotificationCount,
+                               &countFinalInputNotification);
+    node.play();
+
+    const auto finalBoundary = node.prepareInputBoundary(16U);
+    if ( finalBoundary.frameCount != 8U ||
+         finalBoundary.kind != AudioTimelineInputBoundaryKind::Final ) {
+        XERROR("Timeline mixer did not expose its exact final input boundary");
+        return false;
+    }
+
+    ice::AudioBuffer exactOutput(ice::ICEConfig::internal_format, 8U);
+    node.process(exactOutput);
+    if ( node.positionFrame() != 8 || !node.finished() ||
+         finalNotificationCount != 1U ||
+         node.requestedState() != AudioTimelinePlaybackState::Stopped ) {
+        XERROR("Timeline mixer did not publish an exact natural finish");
+        return false;
+    }
+
+    node.replaceSchedule({}, 16, 8U);
+    ice::AudioBuffer probeOutput(ice::ICEConfig::internal_format, 1U);
+    node.process(probeOutput);
+    if ( !node.finished() ||
+         node.state() != AudioTimelinePlaybackState::Stopped ||
+         node.requestedState() != AudioTimelinePlaybackState::Stopped ||
+         node.positionFrame() != 0 ) {
+        XERROR("Finished timeline restarted after a schedule replacement");
+        return false;
+    }
+
+    if ( !node.setLoop({ 2, 6 }) ) return false;
+    node.process(probeOutput);
+    if ( !node.finished() ||
+         node.state() != AudioTimelinePlaybackState::Stopped ) {
+        XERROR("Loop configuration revived a naturally finished timeline");
+        return false;
+    }
+
+    node.seek(2);
+    node.play();
+    const auto loopBoundary = node.prepareInputBoundary(16U);
+    if ( loopBoundary.frameCount != 4U ||
+         loopBoundary.kind != AudioTimelineInputBoundaryKind::Discontinuity ) {
+        XERROR("Timeline mixer did not expose its half-open loop boundary");
+        return false;
+    }
+
+    ice::AudioBuffer loopOutput(ice::ICEConfig::internal_format, 4U);
+    node.process(loopOutput);
+    return !node.finished() && node.positionFrame() == 2 &&
+           node.state() == AudioTimelinePlaybackState::Playing &&
+           finalNotificationCount == 1U;
+}
+
+/// @brief 验证 Stop 与紧随其后的 Play 仍会从零点开启新纪元。
+bool testImmediateStopThenPlay()
+{
+    MMM::Audio::AudioTimelineMixerNode node({}, 32, 8U);
+    ice::AudioBuffer block(ice::ICEConfig::internal_format, 4U);
+    node.play();
+    node.process(block);
+    if ( node.positionFrame() != 4 ) return false;
+
+    node.pause();
+    node.process(block);
+    node.stop();
+    node.play();
+
+    ice::AudioBuffer firstRestartFrame(ice::ICEConfig::internal_format, 1U);
+    node.process(firstRestartFrame);
+    if ( node.positionFrame() != 1 ||
+         node.state() != MMM::Audio::AudioTimelinePlaybackState::Playing ) {
+        XERROR("Immediate stop-then-play did not restart the timeline at zero");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证边界查询与紧随拉取共同形成一个不可插入控制命令的区间。
+bool testPreparedBoundarySealsNextPull()
+{
+    MMM::Audio::AudioTimelineMixerNode node({}, 20, 8U);
+    node.play();
+    const auto prepared = node.prepareInputBoundary(4U);
+    if ( prepared.frameCount != 4U ||
+         prepared.kind != MMM::Audio::AudioTimelineInputBoundaryKind::None ) {
+        return false;
+    }
+
+    node.seek(10);
+    ice::AudioBuffer firstPull(ice::ICEConfig::internal_format, 4U);
+    node.process(firstPull);
+    if ( node.blockStartFrame() != 0 || node.positionFrame() != 10 ) {
+        XERROR("Control command entered a previously prepared input segment");
+        return false;
+    }
+
+    const auto afterSeek = node.prepareInputBoundary(4U);
+    if ( afterSeek.frameCount != 4U ) return false;
+    ice::AudioBuffer secondPull(ice::ICEConfig::internal_format, 4U);
+    node.process(secondPull);
+    return node.blockStartFrame() == 10 && node.positionFrame() == 14;
+}
+
+/// @brief 验证连续调度提交只在 block 起点启用最后一份完整状态。
+bool testAtomicScheduleReplacement(
+    const std::shared_ptr<ice::AudioTrack>&                         track,
+    const std::shared_ptr<const MMM::Audio::PreparedTimelineAudio>& audio)
+{
+    constexpr std::size_t              BLOCK_FRAMES = 8U;
+    MMM::Audio::AudioTimelineMixerNode node(
+        {
+            {
+                .eventId    = 1U,
+                .sourceKey  = "old",
+                .startFrame = 0,
+                .volume     = 0.1F,
+                .audio      = audio,
+            },
+        },
+        64,
+        BLOCK_FRAMES);
+    node.play();
+
+    ice::AudioBuffer discarded(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    node.process(discarded);
+    if ( node.positionFrame() !=
+         static_cast<MMM::Audio::AudioTimelineFrame>(BLOCK_FRAMES) ) {
+        XERROR("Timeline replacement precondition did not advance");
+        return false;
+    }
+
+    node.replaceSchedule(
+        {
+            {
+                .eventId    = 2U,
+                .sourceKey  = "superseded",
+                .startFrame = 0,
+                .volume     = 0.25F,
+                .audio      = audio,
+            },
+        },
+        64,
+        BLOCK_FRAMES);
+    node.replaceSchedule(
+        {
+            {
+                .eventId    = 3U,
+                .sourceKey  = "replacement",
+                .startFrame = 0,
+                .volume     = 0.75F,
+                .audio      = audio,
+            },
+        },
+        64,
+        BLOCK_FRAMES);
+
+    ice::AudioBuffer output(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    ice::AudioBuffer reference(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    reference.clear();
+    track->read(reference, BLOCK_FRAMES, BLOCK_FRAMES);
+    node.process(output);
+    if ( !verifyMixedRange(output, reference, nullptr, 0U, 0.75F, 0.0F) ) {
+        XERROR("Timeline block observed a partial or superseded schedule");
+        return false;
+    }
+    return node.positionFrame() ==
+               static_cast<MMM::Audio::AudioTimelineFrame>(BLOCK_FRAMES * 2U) &&
+           node.clipCount() == 1U && !node.finished();
+}
+
+/// @brief 验证旧调度只在 block 接管新状态后由控制线程释放。
+/// @param track 已完整缓存的测试音轨。
+/// @return 验证通过时返回 true。
+bool testRetiredScheduleReclamation(
+    const std::shared_ptr<ice::AudioTrack>& track)
+{
+    constexpr std::size_t BLOCK_FRAMES = 8U;
+    auto retiredAudio = MMM::Audio::PreparedTimelineAudio::fromTrack(track);
+    if ( !retiredAudio ) return false;
+
+    std::weak_ptr<const MMM::Audio::PreparedTimelineAudio> retiredAudioWeak =
+        retiredAudio;
+    MMM::Audio::AudioTimelineMixerNode node(
+        {
+            {
+                .eventId    = 1U,
+                .sourceKey  = "retired",
+                .startFrame = 0,
+                .volume     = 1.0F,
+                .audio      = retiredAudio,
+            },
+        },
+        64,
+        BLOCK_FRAMES);
+    retiredAudio.reset();
+
+    node.replaceSchedule({}, 64, BLOCK_FRAMES);
+    if ( retiredAudioWeak.expired() || node.reclaimRetiredSchedules() != 0U ) {
+        XERROR("Active schedule was reclaimed before the block boundary");
+        return false;
+    }
+
+    ice::AudioBuffer output(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    node.process(output);
+    if ( retiredAudioWeak.expired() ) {
+        XERROR("Audio callback released a retired schedule");
+        return false;
+    }
+
+    if ( node.reclaimRetiredSchedules() != 1U || !retiredAudioWeak.expired() ) {
+        XERROR("Control thread did not release the retired schedule");
+        return false;
+    }
+    return node.reclaimRetiredSchedules() == 0U;
 }
 
 }  // namespace
@@ -262,9 +516,18 @@ int main(int argc, char** argv)
         XERROR("Failed to prepare timeline mixer test sample");
         return 1;
     }
+    const auto audio = MMM::Audio::PreparedTimelineAudio::fromTrack(track);
+    if ( !audio ) {
+        XERROR("Failed to freeze timeline mixer test PCM");
+        return 1;
+    }
 
-    const bool passed = testOverlapNegativeStartAndSeek(track) &&
-                        testHalfOpenLoop(track) &&
-                        testMissingResourceAndFinish();
+    const bool passed =
+        testOverlapNegativeStartAndSeek(track, audio) &&
+        testHalfOpenLoop(track) && testMissingResourceAndFinish() &&
+        testInputBoundaryAndFinishedReplacement() &&
+        testImmediateStopThenPlay() && testPreparedBoundarySealsNextPull() &&
+        testAtomicScheduleReplacement(track, audio) &&
+        testRetiredScheduleReclamation(track);
     return passed ? 0 : 1;
 }

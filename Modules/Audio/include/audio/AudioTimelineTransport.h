@@ -74,6 +74,8 @@ struct AudioTimelineSpanQueryResult {
     std::size_t totalSpanCount{ 0U };
     /// @brief 调用方缓冲区不足以容纳全部片段时为 true。
     bool truncated{ false };
+    /// @brief 本次区间树查询实际访问的节点数，供性能回归测试使用。
+    std::size_t visitedNodeCount{ 0U };
 };
 
 /// @brief 与音频设备和谱面对象解耦的确定性时间线传输与片段调度核心。
@@ -165,12 +167,42 @@ private:
                            std::span<AudioTimelineActiveSpan> output,
                            AudioTimelineSpanQueryResult& result) const noexcept;
 
+    /// @brief 构建片段结束位置的静态区间树。
+    /// @param node 当前树节点索引。
+    /// @param begin 当前片段索引区间起点。
+    /// @param end 当前片段索引区间排除终点。
+    /// @return 当前子树中的最大片段结束位置。
+    AudioTimelineFrame buildIntervalMaxEndTree(std::size_t node,
+                                               std::size_t begin,
+                                               std::size_t end);
+
+    /// @brief 按开始时间上界和子树最大结束位置查询相交片段。
+    /// @param node 当前树节点索引。
+    /// @param begin 当前片段索引区间起点。
+    /// @param end 当前片段索引区间排除终点。
+    /// @param lastCandidate 开始时间严格小于查询终点的片段数量。
+    /// @param queryStart 查询区间起点。
+    /// @param queryEnd 查询区间排除终点。
+    /// @param outputStartFrame 输出缓冲区中的基准偏移。
+    /// @param queryEpoch 当前分段对应的传输纪元。
+    /// @param output 调用方输出缓冲区。
+    /// @param result 跨子树累计的查询统计。
+    /// @warning 音频热路径内部函数；仅执行对数级树导航和活跃片段写入。
+    void queryIntervalTree(std::size_t node, std::size_t begin, std::size_t end,
+                           std::size_t                        lastCandidate,
+                           AudioTimelineFrame                 queryStart,
+                           AudioTimelineFrame                 queryEnd,
+                           AudioTimelineFrame                 outputStartFrame,
+                           std::uint64_t                      queryEpoch,
+                           std::span<AudioTimelineActiveSpan> output,
+                           AudioTimelineSpanQueryResult& result) const noexcept;
+
     /// @brief 排序后不可变的片段调度表。
     std::vector<TimelineClipSpec> m_clips;
     /// @brief 与 m_clips 同索引的片段排除端点。
     std::vector<AudioTimelineFrame> m_clipEndFrames;
-    /// @brief 用于跳过已结束前缀的单调最大排除端点索引。
-    std::vector<AudioTimelineFrame> m_prefixMaxEndFrames;
+    /// @brief 静态区间树；每个节点保存其片段子树的最大排除端点。
+    std::vector<AudioTimelineFrame> m_intervalMaxEndTree;
     /// @brief 当前传输状态。
     AudioTimelinePlaybackState m_state{ AudioTimelinePlaybackState::Stopped };
     /// @brief 下一次消费开始的有符号时间线帧。
