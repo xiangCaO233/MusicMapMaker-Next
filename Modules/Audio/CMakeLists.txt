@@ -2,6 +2,7 @@
 
 add_library(
   Audio STATIC
+  src/AudioTimelineMixerNode.cpp
   src/AudioTimelineTransport.cpp
   src/BackgroundSpectrumAnalyzer.cpp
   src/AudioManager.cpp
@@ -81,3 +82,13 @@ mmm_add_test_executable(Audio AudioTimelineTransportTest
                         tests/AudioTimelineTransportTest.cpp)
 target_link_libraries(AudioTimelineTransportTest PRIVATE Audio)
 add_test(NAME AudioTimelineTransportTest COMMAND AudioTimelineTransportTest)
+
+# 时间线混音测试使用已缓存短音频，覆盖负起点、多 voice、Seek、暂停、循环和自然结束。
+mmm_add_test_executable(Audio AudioTimelineMixerNodeTest
+                        tests/AudioTimelineMixerNodeTest.cpp)
+target_link_libraries(AudioTimelineMixerNodeTest PRIVATE Audio Log Config)
+add_test(
+  NAME AudioTimelineMixerNodeTest
+  COMMAND
+    AudioTimelineMixerNodeTest
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
