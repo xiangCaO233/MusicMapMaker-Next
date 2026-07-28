@@ -5,6 +5,7 @@
 #include "mmm/note/Hold.h"
 #include "mmm/note/Note.h"
 #include "mmm/note/Polyline.h"
+#include "mmm/sample/AudioSample.h"
 #include "mmm/timing/Timing.h"
 #include <deque>
 #include <filesystem>
@@ -62,6 +63,9 @@ public:
 
     /// @brief 所有时间线
     std::vector<Timing> m_timings;
+
+    /// @brief 所有无需玩家操作即可自动播放的采样对象。
+    std::deque<AudioSampleEvent> m_audioSamples;
 
     /// @brief 谱面基本元数据
     BaseMapMeta m_baseMapMetadata;

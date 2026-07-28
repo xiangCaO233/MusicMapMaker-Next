@@ -4,10 +4,14 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace MMM
 {
@@ -24,6 +28,11 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                        const std::filesystem::path& path)
 {
     json root;
+    root["format_version"] = 2;
+    const std::filesystem::path& songFileHint =
+        beatMap.m_baseMapMetadata.song_file_hint.empty()
+            ? beatMap.m_baseMapMetadata.main_audio_path
+            : beatMap.m_baseMapMetadata.song_file_hint;
 
     // 1. 元数据。
     auto& metadata = root["metadata"];
@@ -39,6 +48,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["author"]         = beatMap.m_baseMapMetadata.author;
     base["audio"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
+    base["song_file_hint"] = Config::pathToUtf8(songFileHint);
     base["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
     base["cover_img"] =
@@ -48,6 +58,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["bgxoffset"]       = beatMap.m_baseMapMetadata.bgxoffset;
     base["bgyoffset"]       = beatMap.m_baseMapMetadata.bgyoffset;
     base["track_count"]     = beatMap.m_baseMapMetadata.track_count;
+    base["bgm_track_count"] = beatMap.m_baseMapMetadata.bgm_track_count;
     base["bpm"]             = beatMap.m_baseMapMetadata.preference_bpm;
     base["duration"]        = beatMap.m_baseMapMetadata.map_length;
 
@@ -108,7 +119,61 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         timingArr.push_back(t);
     }
 
-    // 3. 音符。
+    // 3. 自动采样对象。
+    auto& sampleArr = root["audio_samples"];
+    sampleArr       = json::array();
+    std::vector<const AudioSampleEvent*> sortedSamples;
+    sortedSamples.reserve(beatMap.m_audioSamples.size());
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        sortedSamples.push_back(&sample);
+    }
+    std::stable_sort(
+        sortedSamples.begin(),
+        sortedSamples.end(),
+        [](const AudioSampleEvent* lhs, const AudioSampleEvent* rhs) {
+            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
+                return lhs->m_timestamp < rhs->m_timestamp;
+            }
+            if ( lhs->m_track != rhs->m_track ) {
+                return lhs->m_track < rhs->m_track;
+            }
+            if ( lhs->m_audioResourceId != rhs->m_audioResourceId ) {
+                return lhs->m_audioResourceId < rhs->m_audioResourceId;
+            }
+            return lhs->m_offsetMs < rhs->m_offsetMs;
+        });
+    for ( const AudioSampleEvent* sample : sortedSamples ) {
+        json sampleJson;
+        sampleJson["timestamp"] = sample->m_timestamp;
+        sampleJson["offset_ms"] = sample->m_offsetMs;
+        sampleJson["track"]     = sample->m_track;
+        sampleJson["audio_ref"] = sample->m_audioResourceId;
+        sampleJson["volume"]    = sample->m_volume;
+
+        auto& sampleExtra = sampleJson["extra"];
+        sampleExtra       = json::array();
+        for ( const auto& [type, props] :
+              sample->m_metadata.sample_properties ) {
+            std::string sourceName;
+            if ( type == SampleMetadataType::MALODY )
+                sourceName = "malody";
+            else if ( type == SampleMetadataType::MMM )
+                sourceName = "mmm";
+
+            if ( sourceName.empty() ) continue;
+
+            json propertyObject;
+            for ( const auto& [key, value] : props ) {
+                propertyObject[key] = value;
+            }
+            json sourceObject;
+            sourceObject[sourceName] = propertyObject;
+            sampleExtra.push_back(sourceObject);
+        }
+        sampleArr.push_back(sampleJson);
+    }
+
+    // 4. 玩家物件。
     auto& noteArr = root["note"];
     noteArr       = json::array();
 
@@ -117,8 +182,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         json n;
         n["timestamp"] = note.m_timestamp;
         n["track"]     = note.m_track;
-        if ( !note.m_boundSound.empty() ) {
-            n["bound_sound"] = note.m_boundSound;
+        if ( const auto binding = note.getSampleBinding() ) {
+            n["sample"] = { { "audio_ref", binding->m_audioResourceId },
+                            { "volume", binding->m_volume } };
         }
 
         switch ( note.m_type ) {
@@ -143,8 +209,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 double   duration;
                 int      track;
                 int      dtrack;
-                /// @brief 清洗过程中随子物件保留的绑定音效资源标识。
-                std::string boundSound;
+                /// @brief 清洗过程中随子物件保留的命中采样绑定。
+                std::optional<AudioSampleBinding> sampleBinding;
             };
             std::vector<CleanSeg> cleanSubs;
             for ( const auto& subNoteRef : poly.m_subNotes ) {
@@ -157,7 +223,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                                           dur,
                                           (int)sn.m_track,
                                           0,
-                                          sn.m_boundSound });
+                                          sn.getSampleBinding() });
                 } else if ( sn.m_type == NoteType::FLICK ) {
                     cleanSubs.push_back(
                         { NoteType::FLICK,
@@ -165,7 +231,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                           0.0,
                           (int)sn.m_track,
                           static_cast<const Flick&>(sn).m_dtrack,
-                          sn.m_boundSound });
+                          sn.getSampleBinding() });
                 }
             }
 
@@ -195,16 +261,16 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                         if ( curr.type == next.type ) {
                             if ( curr.type == NoteType::HOLD ) {
                                 curr.duration += next.duration;
-                                if ( curr.boundSound.empty() ) {
-                                    curr.boundSound = next.boundSound;
+                                if ( !curr.sampleBinding ) {
+                                    curr.sampleBinding = next.sampleBinding;
                                 }
                                 cleanSubs.erase(cleanSubs.begin() + i + 1);
                                 changed = true;
                                 continue;
                             } else if ( curr.type == NoteType::FLICK ) {
                                 curr.dtrack += next.dtrack;
-                                if ( curr.boundSound.empty() ) {
-                                    curr.boundSound = next.boundSound;
+                                if ( !curr.sampleBinding ) {
+                                    curr.sampleBinding = next.sampleBinding;
                                 }
                                 cleanSubs.erase(cleanSubs.begin() + i + 1);
                                 changed = true;
@@ -232,8 +298,10 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 }
                 n["timestamp"] = s.timestamp;
                 n["track"]     = s.track;
-                if ( note.m_boundSound.empty() && !s.boundSound.empty() ) {
-                    n["bound_sound"] = s.boundSound;
+                if ( !note.getSampleBinding() && s.sampleBinding ) {
+                    n["sample"] = { { "audio_ref",
+                                      s.sampleBinding->m_audioResourceId },
+                                    { "volume", s.sampleBinding->m_volume } };
                 }
             } else {
                 n["type"]         = "polyline";
@@ -249,8 +317,11 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                         snj["type"]   = "flick";
                         snj["dtrack"] = s.dtrack;
                     }
-                    if ( !s.boundSound.empty() ) {
-                        snj["bound_sound"] = s.boundSound;
+                    if ( s.sampleBinding ) {
+                        snj["sample"] = {
+                            { "audio_ref", s.sampleBinding->m_audioResourceId },
+                            { "volume", s.sampleBinding->m_volume }
+                        };
                     }
                     subNotesJson.push_back(snj);
                 }

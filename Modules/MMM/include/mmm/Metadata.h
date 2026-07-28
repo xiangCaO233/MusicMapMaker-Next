@@ -84,8 +84,10 @@ struct BaseMapMeta {
     std::string artist_unicode;
     // 谱面文件路径
     std::filesystem::path map_path;
-    // 主音频文件路径
+    /// @brief 旧版单主音频路径；仅供兼容尚未迁移的调用方，不再决定播放事件。
     std::filesystem::path main_audio_path;
+    /// @brief 歌曲文件提示，用于格式元数据显示和资源选择。
+    std::filesystem::path song_file_hint;
     // 主背景文件路径
     std::filesystem::path main_cover_path;
     /// @brief 封面图片文件路径
@@ -106,8 +108,10 @@ struct BaseMapMeta {
 
     // 谱面参考bpm
     double preference_bpm{ -1. };
-    // 谱面轨道数
+    /// @brief 玩家可操作的主轨道数量。
     int32_t track_count{ -1 };
+    /// @brief 主轨道区之后用于自动采样对象的 BGM 轨道数量。
+    int32_t bgm_track_count{ 0 };
     // 谱面总时长
     double map_length{ -1. };
 };
