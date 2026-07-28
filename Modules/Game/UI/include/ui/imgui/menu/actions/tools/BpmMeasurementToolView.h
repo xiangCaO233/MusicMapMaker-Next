@@ -49,7 +49,7 @@ public:
     void setMeasurementExportCallback(MeasurementExportCallback callback);
 
     /// @brief 打开窗口并选中指定项目音频轨道。
-    /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
+    /// @param audioTrackId 项目内音频资源 ID；为空时选择活动谱面的默认音频。
     void openWithAudioTrack(const std::string& audioTrackId);
 
     /// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。

@@ -219,15 +219,18 @@ bool testAudioReferenceMutationGuards()
 
     const auto sharedAudio = directory.path() / "shared.wav";
     const auto sampleAudio = directory.path() / "sample.wav";
+    const auto hintAudio   = directory.path() / "hint.wav";
     const auto unusedAudio = directory.path() / "unused.wav";
     if ( !createAudioPlaceholder(sharedAudio) ||
          !createAudioPlaceholder(sampleAudio) ||
+         !createAudioPlaceholder(hintAudio) ||
          !createAudioPlaceholder(unusedAudio) ) {
         return false;
     }
 
     const auto mapPath = directory.path() / "References.mmm";
-    if ( !saveReferenceBeatmap(mapPath, {}, "shared.wav", "sample.wav") ) {
+    if ( !saveReferenceBeatmap(
+             mapPath, "hint.wav", "shared.wav", "sample.wav") ) {
         return false;
     }
 
@@ -241,6 +244,9 @@ bool testAudioReferenceMutationGuards()
                             .m_type = MMM::AudioTrackType::Effect },
         MMM::AudioResource{ .m_id   = "sample.wav",
                             .m_path = "sample.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "hint.wav",
+                            .m_path = "hint.wav",
                             .m_type = MMM::AudioTrackType::Effect },
         MMM::AudioResource{ .m_id   = "unused.wav",
                             .m_path = "unused.wav",
@@ -276,6 +282,18 @@ bool testAudioReferenceMutationGuards()
         return false;
     }
 
+    updateResult =
+        service.updateAudioResource(project,
+                                    MMM::Logic::CmdUpdateAudioResource{
+                                        "hint.wav",
+                                        MMM::AudioTrackType::Main,
+                                    });
+    if ( !updateResult.m_updated ||
+         !updateResult.m_blockingBeatmapPaths.empty() ) {
+        XERROR("song_file_hint incorrectly blocked a type update");
+        return false;
+    }
+
     const auto removeBound = service.removeAudioResource(
         project, MMM::Logic::CmdRemoveAudioResource{ "shared.wav" });
     const auto removeSample = service.removeAudioResource(
@@ -284,6 +302,13 @@ bool testAudioReferenceMutationGuards()
          removeBound.m_blockingBeatmapPaths.empty() ||
          removeSample.m_blockingBeatmapPaths.empty() ) {
         XERROR("Referenced audio resource removal was not blocked");
+        return false;
+    }
+
+    const auto removeHint = service.removeAudioResource(
+        project, MMM::Logic::CmdRemoveAudioResource{ "hint.wav" });
+    if ( !removeHint.m_removed || !removeHint.m_blockingBeatmapPaths.empty() ) {
+        XERROR("song_file_hint incorrectly blocked resource removal");
         return false;
     }
 
@@ -348,6 +373,183 @@ bool testCreateBeatmapMaterializesMainSample()
     return !projectJson["m_beatmaps"][0].contains("m_audioTrackId");
 }
 
+/// @brief 验证活动谱面默认音频解析优先使用提示和 Main 自动采样。
+/// @return 默认资源选择符合预期时返回 true。
+bool testDefaultBeatmapAudioResolution()
+{
+    MMM::Project project;
+    project.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "effect.wav",
+                            .m_path = "audio/effect.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "main.ogg",
+                            .m_path = "audio/main.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+    };
+
+    MMM::BeatMap hintedBeatmap;
+    hintedBeatmap.m_baseMapMetadata.song_file_hint = "audio/effect.wav";
+    const auto* hinted =
+        MMM::Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
+            project, hintedBeatmap, "Hinted.mmm");
+    if ( !hinted || hinted->m_id != "effect.wav" ) {
+        XERROR("Beatmap song_file_hint was not preferred");
+        return false;
+    }
+
+    MMM::BeatMap          sampleBeatmap;
+    MMM::AudioSampleEvent earlyEffect;
+    earlyEffect.m_timestamp       = 0.0;
+    earlyEffect.m_audioResourceId = "effect.wav";
+    sampleBeatmap.m_audioSamples.push_back(earlyEffect);
+    MMM::AudioSampleEvent laterMain;
+    laterMain.m_timestamp       = 1000.0;
+    laterMain.m_audioResourceId = "main.ogg";
+    sampleBeatmap.m_audioSamples.push_back(laterMain);
+    const auto* sampleDefault =
+        MMM::Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
+            project, sampleBeatmap, "Samples.mmm");
+    if ( !sampleDefault || sampleDefault->m_id != "main.ogg" ) {
+        XERROR("Main automatic sample was not selected as beatmap default");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧项目单主音轨字段只为缺失时间线的 MMM 物化采样。
+/// @return 迁移不移动 Note/Timing 且不会重复物化时返回 true。
+bool testLegacyProjectAudioTrackMigration()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto audioPath = directory.path() / "audio" / "song.ogg";
+    if ( !createAudioPlaceholder(audioPath) ) return false;
+
+    const auto   mapPath = directory.path() / "Legacy.mmm";
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.name        = "Legacy";
+    source.m_baseMapMetadata.version     = "Legacy";
+    source.m_baseMapMetadata.track_count = 6;
+    MMM::Timing timing;
+    timing.m_timestamp = 123.0;
+    timing.m_bpm       = 150.0;
+    source.m_timings.push_back(timing);
+    MMM::Note note;
+    note.m_timestamp = 456.0;
+    note.m_track     = 2;
+    source.m_noteData.notes.push_back(note);
+    source.sync();
+    if ( !source.saveToFile(mapPath) ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Legacy", "Legacy.mmm", {} });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "song.ogg",
+                            .m_path = "audio/song.ogg",
+                            .m_type = MMM::AudioTrackType::Effect });
+
+    MMM::Project persistedProject;
+    persistedProject.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Legacy", "Legacy.mmm", "song.ogg" });
+
+    MMM::Logic::ProjectResourceService service;
+    const auto                         migration =
+        service.migrateLegacyBeatmapAudioTracks(project, persistedProject);
+    if ( migration.m_migratedBeatmapCount != 1 ||
+         !migration.m_failedBeatmapPaths.empty() ) {
+        XERROR("Legacy project audio track migration did not complete");
+        return false;
+    }
+
+    auto migrated = MMM::BeatMap::loadFromFile(mapPath);
+    if ( migrated.m_audioSamples.size() != 1 ||
+         migrated.m_audioSamples.front().m_timestamp != 0.0 ||
+         migrated.m_audioSamples.front().m_offsetMs != 0 ||
+         migrated.m_audioSamples.front().m_track != 6 ||
+         migrated.m_audioSamples.front().m_audioResourceId != "song.ogg" ||
+         migrated.m_baseMapMetadata.bgm_track_count < 1 ||
+         migrated.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/song.ogg") ||
+         migrated.m_timings.size() != 1 ||
+         migrated.m_timings.front().m_timestamp != 123.0 ||
+         migrated.m_noteData.notes.size() != 1 ||
+         migrated.m_noteData.notes.front().m_timestamp != 456.0 ||
+         migrated.m_noteData.notes.front().m_track != 2 ) {
+        XERROR("Legacy audio migration changed chart data or sample fields");
+        return false;
+    }
+    if ( project.m_audioResources.front().m_type !=
+         MMM::AudioTrackType::Main ) {
+        XERROR("Migrated legacy main resource did not retain Main type");
+        return false;
+    }
+
+    const auto repeatedMigration =
+        service.migrateLegacyBeatmapAudioTracks(project, persistedProject);
+    migrated = MMM::BeatMap::loadFromFile(mapPath);
+    if ( repeatedMigration.m_migratedBeatmapCount != 0 ||
+         migrated.m_audioSamples.size() != 1 ) {
+        XERROR("Legacy audio migration duplicated an existing timeline");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证文件移动只更新资源路径并保持谱面引用 ID 稳定。
+/// @return 单文件或目录移动后的路径重映射正确时返回 true。
+bool testAudioResourcePathRemap()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto oldDirectory = directory.path() / "old";
+    const auto newDirectory = directory.path() / "new";
+    const auto audioPath    = oldDirectory / "song.ogg";
+    if ( !createAudioPlaceholder(audioPath) ) return false;
+
+    const auto mapPath = directory.path() / "Move.mmm";
+    if ( !saveReferenceBeatmap(mapPath, "old/song.ogg", "", "old/song.ogg") ) {
+        return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Move", "Move.mmm", {} });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "stable-song-id",
+                            .m_path = "old/song.ogg",
+                            .m_type = MMM::AudioTrackType::Main });
+
+    std::error_code filesystemError;
+    std::filesystem::rename(oldDirectory, newDirectory, filesystemError);
+    if ( filesystemError ) return false;
+
+    const auto changed =
+        MMM::Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            project, oldDirectory, newDirectory);
+    if ( changed != 1 ||
+         project.m_audioResources.front().m_id != "stable-song-id" ||
+         project.m_audioResources.front().m_path != "new/song.ogg" ) {
+        XERROR("Moved audio resource path was not remapped with a stable ID");
+        return false;
+    }
+
+    const auto remappedBeatmap = MMM::BeatMap::loadFromFile(mapPath);
+    if ( remappedBeatmap.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("new/song.ogg") ||
+         remappedBeatmap.m_audioSamples.size() != 1 ||
+         remappedBeatmap.m_audioSamples.front().m_audioResourceId !=
+             "stable-song-id" ) {
+        XERROR("Moved audio references in MMM were not normalized");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频引用和资源约束测试。
@@ -357,7 +559,10 @@ int main()
     return testLegacyBeatmapEntryIsReadOnly() &&
                    testReferenceAwareDirectoryScan() &&
                    testAudioReferenceMutationGuards() &&
-                   testCreateBeatmapMaterializesMainSample()
+                   testCreateBeatmapMaterializesMainSample() &&
+                   testDefaultBeatmapAudioResolution() &&
+                   testLegacyProjectAudioTrackMigration() &&
+                   testAudioResourcePathRemap()
                ? 0
                : 1;
 }

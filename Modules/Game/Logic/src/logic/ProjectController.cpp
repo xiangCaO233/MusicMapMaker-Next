@@ -1144,6 +1144,23 @@ ProjectController::OpenProjectResult ProjectController::openProject(
                           legacyAudioResourceKeys.size());
                 }
 
+                const auto legacyBeatmapAudioMigration =
+                    m_projectResourceService.migrateLegacyBeatmapAudioTracks(
+                        *newProject, loadedProject);
+                if ( legacyBeatmapAudioMigration.m_migratedBeatmapCount > 0 ) {
+                    XINFO(
+                        "Migrated {} legacy beatmap audio track references to "
+                        "MMM v2 samples.",
+                        legacyBeatmapAudioMigration.m_migratedBeatmapCount);
+                }
+                for ( const auto& failedBeatmapPath :
+                      legacyBeatmapAudioMigration.m_failedBeatmapPaths ) {
+                    XWARN(
+                        "Failed to migrate legacy beatmap audio reference: "
+                        "{}",
+                        failedBeatmapPath);
+                }
+
                 XINFO("Project configuration loaded from mmm_project.json");
             }
         }

@@ -7,6 +7,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iterator>
+#include <limits>
 #include <system_error>
 
 namespace MMM::Logic
@@ -755,6 +756,327 @@ ProjectResourceService::findAudioResourceReferences(
         }
     }
     return result;
+}
+
+/// @brief 按谱面引用解析项目音频资源。
+/// @param project 待查询项目。
+/// @param beatmapPath 引用所在谱面的项目相对或绝对路径。
+/// @param audioReference 谱面保存的资源 ID 或路径。
+/// @return 匹配到的项目资源；未找到时返回空。
+const AudioResource* ProjectResourceService::findAudioResourceForReference(
+    const Project& project, const std::filesystem::path& beatmapPath,
+    const std::string& audioReference)
+{
+    if ( audioReference.empty() ) return nullptr;
+
+    const BeatmapAudioReference reference{
+        Config::pathToUtf8(beatmapPath),
+        audioReference,
+        BeatmapAudioReferenceKind::AudioSampleEvent,
+    };
+    for ( const auto& resource : project.m_audioResources ) {
+        if ( audioReferenceMatchesResource(project, reference, resource) ) {
+            return &resource;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief 为谱面选择适合预览或 BPM 测量的默认音频资源。
+/// @param project 谱面所属项目。
+/// @param beatMap 待解析的谱面。
+/// @param beatmapPath 谱面的项目相对或绝对路径。
+/// @return 优先匹配歌曲提示和 Main 自动采样的项目资源。
+const AudioResource* ProjectResourceService::findDefaultBeatmapAudioResource(
+    const Project& project, const BeatMap& beatMap,
+    const std::filesystem::path& beatmapPath)
+{
+    const auto& meta         = beatMap.m_baseMapMetadata;
+    const auto& songFileHint = meta.song_file_hint.empty()
+                                   ? meta.main_audio_path
+                                   : meta.song_file_hint;
+    if ( const auto* hintedResource = findAudioResourceForReference(
+             project, beatmapPath, Config::pathToUtf8(songFileHint)) ) {
+        return hintedResource;
+    }
+
+    const AudioResource* firstMainSampleResource = nullptr;
+    const AudioResource* firstSampleResource     = nullptr;
+    double firstMainTimestamp = std::numeric_limits<double>::infinity();
+    double firstTimestamp     = std::numeric_limits<double>::infinity();
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        const auto* resource = findAudioResourceForReference(
+            project, beatmapPath, sample.m_audioResourceId);
+        if ( !resource ) continue;
+
+        const double timestamp = sample.effectiveTimestamp();
+        if ( timestamp < firstTimestamp ) {
+            firstTimestamp      = timestamp;
+            firstSampleResource = resource;
+        }
+        if ( resource->m_type == AudioTrackType::Main &&
+             timestamp < firstMainTimestamp ) {
+            firstMainTimestamp      = timestamp;
+            firstMainSampleResource = resource;
+        }
+    }
+    if ( firstMainSampleResource ) return firstMainSampleResource;
+    if ( firstSampleResource ) return firstSampleResource;
+
+    const auto mainIterator =
+        std::find_if(project.m_audioResources.begin(),
+                     project.m_audioResources.end(),
+                     [](const AudioResource& resource) {
+                         return resource.m_type == AudioTrackType::Main;
+                     });
+    if ( mainIterator != project.m_audioResources.end() ) {
+        return &*mainIterator;
+    }
+    return project.m_audioResources.empty() ? nullptr
+                                            : &project.m_audioResources.front();
+}
+
+/// @brief 将旧项目条目的单主音轨迁移为 MMM v2 自动采样。
+/// @param project 当前目录扫描和资源合并后的项目。
+/// @param persistedProject 从旧项目描述文件读取的项目。
+/// @return 成功迁移数量和失败谱面路径。
+ProjectResourceService::LegacyAudioMigrationResult
+ProjectResourceService::migrateLegacyBeatmapAudioTracks(
+    Project& project, const Project& persistedProject) const
+{
+    LegacyAudioMigrationResult result;
+    for ( const auto& persistedEntry : persistedProject.m_beatmaps ) {
+        if ( persistedEntry.m_audioTrackId.empty() ) continue;
+
+        const auto currentEntryIterator = std::find_if(
+            project.m_beatmaps.begin(),
+            project.m_beatmaps.end(),
+            [&](const Project::BeatmapEntry& entry) {
+                return normalizeStoredProjectPath(project, entry.m_filePath) ==
+                       normalizeStoredProjectPath(project,
+                                                  persistedEntry.m_filePath);
+            });
+        if ( currentEntryIterator == project.m_beatmaps.end() ) continue;
+
+        const auto mapPath = resolveProjectPath(
+            project, Config::utf8ToPath(currentEntryIterator->m_filePath));
+        auto extension = Config::pathToUtf8(mapPath.extension());
+        std::transform(extension.begin(),
+                       extension.end(),
+                       extension.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if ( extension != ".mmm" ) {
+            XINFO(
+                "Skipping legacy m_audioTrackId migration for non-MMM "
+                "beatmap: {}",
+                currentEntryIterator->m_filePath);
+            continue;
+        }
+
+        auto beatMap = BeatMap::loadFromFile(mapPath);
+        if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
+            result.m_failedBeatmapPaths.push_back(
+                currentEntryIterator->m_filePath);
+            continue;
+        }
+        if ( !beatMap.m_audioSamples.empty() ) continue;
+
+        const auto* resource =
+            findAudioResourceForReference(project,
+                                          currentEntryIterator->m_filePath,
+                                          persistedEntry.m_audioTrackId);
+        if ( !resource ) {
+            XWARN(
+                "Cannot migrate legacy m_audioTrackId '{}' for beatmap '{}': "
+                "audio resource was not found",
+                persistedEntry.m_audioTrackId,
+                currentEntryIterator->m_filePath);
+            result.m_failedBeatmapPaths.push_back(
+                currentEntryIterator->m_filePath);
+            continue;
+        }
+
+        AudioSampleEvent sample;
+        sample.m_timestamp = 0.0;
+        sample.m_offsetMs  = 0;
+        sample.m_track     = static_cast<std::uint32_t>(
+            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        sample.m_audioResourceId = resource->m_id;
+        beatMap.m_audioSamples.push_back(std::move(sample));
+        beatMap.m_baseMapMetadata.bgm_track_count =
+            std::max(1, beatMap.m_baseMapMetadata.bgm_track_count);
+        if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
+            beatMap.m_baseMapMetadata.song_file_hint =
+                Config::utf8ToPath(resource->m_path);
+        }
+
+        if ( !beatMap.saveToFile(mapPath) ) {
+            result.m_failedBeatmapPaths.push_back(
+                currentEntryIterator->m_filePath);
+            continue;
+        }
+
+        const auto references = findAudioResourceReferences(project, *resource);
+        const bool boundToNote =
+            std::any_of(references.begin(),
+                        references.end(),
+                        [](const BeatmapAudioReference& reference) {
+                            return reference.m_kind ==
+                                   BeatmapAudioReferenceKind::NoteSampleBinding;
+                        });
+        if ( !boundToNote ) {
+            const auto mutableResource =
+                std::find_if(project.m_audioResources.begin(),
+                             project.m_audioResources.end(),
+                             [&](const AudioResource& candidate) {
+                                 return &candidate == resource;
+                             });
+            if ( mutableResource != project.m_audioResources.end() ) {
+                mutableResource->m_type = AudioTrackType::Main;
+            }
+        }
+
+        result.m_migratedBeatmapCount++;
+        XINFO(
+            "Migrated legacy m_audioTrackId '{}' to a beat-0 BGM sample in "
+            "'{}'",
+            resource->m_id,
+            currentEntryIterator->m_filePath);
+    }
+    return result;
+}
+
+/// @brief 文件移动或重命名后重映射项目音频资源路径并保持资源 ID 稳定。
+/// @param project 待更新项目。
+/// @param oldPath 移动前的文件或目录路径。
+/// @param newPath 移动后的文件或目录路径。
+/// @return 路径发生变化的音频资源数量。
+std::size_t ProjectResourceService::remapAudioResourcePathsAfterMove(
+    Project& project, const std::filesystem::path& oldPath,
+    const std::filesystem::path& newPath)
+{
+    if ( project.m_projectRoot.empty() || oldPath.empty() || newPath.empty() ) {
+        return 0;
+    }
+
+    const auto absoluteOldPath = weaklyCanonicalAbsolutePath(oldPath);
+    const auto absoluteNewPath = weaklyCanonicalAbsolutePath(newPath);
+    /// @brief 单个资源路径变化前后的快照，用于同步 MMM 内的路径型引用。
+    struct ResourcePathRemap {
+        /// @brief 移动前资源。
+        AudioResource m_before;
+
+        /// @brief 移动后项目相对路径。
+        std::string m_afterPath;
+    };
+    std::vector<ResourcePathRemap> remappedResources;
+    for ( auto& resource : project.m_audioResources ) {
+        const auto absoluteResourcePath = weaklyCanonicalAbsolutePath(
+            resolveProjectPath(project, Config::utf8ToPath(resource.m_path)));
+
+        std::filesystem::path suffix;
+        if ( absoluteResourcePath != absoluteOldPath ) {
+            std::error_code relativeError;
+            suffix = std::filesystem::relative(
+                absoluteResourcePath, absoluteOldPath, relativeError);
+            if ( relativeError || !isRelativePathInsideRoot(suffix) ) {
+                continue;
+            }
+        }
+
+        const auto remappedAbsolutePath =
+            suffix.empty() ? absoluteNewPath
+                           : (absoluteNewPath / suffix).lexically_normal();
+        const auto remappedRelativePath = makeRelativeToProjectRoot(
+            project.m_projectRoot, remappedAbsolutePath);
+        if ( remappedRelativePath.empty() ) continue;
+
+        const auto remappedPath =
+            Config::pathToUtf8(remappedRelativePath.lexically_normal());
+        if ( resource.m_path == remappedPath ) continue;
+        remappedResources.push_back(ResourcePathRemap{
+            resource,
+            remappedPath,
+        });
+        resource.m_path = remappedPath;
+    }
+    if ( remappedResources.empty() ) return 0;
+
+    for ( const auto& entry : project.m_beatmaps ) {
+        const auto mapPath =
+            resolveProjectPath(project, Config::utf8ToPath(entry.m_filePath));
+        auto extension = Config::pathToUtf8(mapPath.extension());
+        std::transform(extension.begin(),
+                       extension.end(),
+                       extension.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if ( extension != ".mmm" ) continue;
+
+        auto beatMap = BeatMap::loadFromFile(mapPath);
+        if ( beatMap.m_baseMapMetadata.map_path.empty() ) continue;
+        bool changedBeatmap = false;
+
+        for ( const auto& remap : remappedResources ) {
+            /// @brief 判断一个字符串引用是否指向本次移动前资源。
+            auto matchesBefore = [&](const std::string& audioReference) {
+                return audioReferenceMatchesResource(
+                    project,
+                    BeatmapAudioReference{
+                        entry.m_filePath,
+                        audioReference,
+                        BeatmapAudioReferenceKind::AudioSampleEvent,
+                    },
+                    remap.m_before);
+            };
+            /// @brief 将 metadata 路径提示更新为移动后的项目相对路径。
+            auto remapMetadataPath = [&](std::filesystem::path& path) {
+                if ( !matchesBefore(Config::pathToUtf8(path)) ) return;
+                path           = Config::utf8ToPath(remap.m_afterPath);
+                changedBeatmap = true;
+            };
+            remapMetadataPath(beatMap.m_baseMapMetadata.song_file_hint);
+            remapMetadataPath(beatMap.m_baseMapMetadata.main_audio_path);
+
+            /// @brief 将玩家物件路径型引用规范成稳定资源 ID。
+            auto remapNoteBinding = [&](Note& note) {
+                auto binding = note.getSampleBinding();
+                if ( !binding || !matchesBefore(binding->m_audioResourceId) ) {
+                    return;
+                }
+                binding->m_audioResourceId = remap.m_before.m_id;
+                note.setSampleBinding(std::move(*binding));
+                changedBeatmap = true;
+            };
+            for ( auto& note : beatMap.m_noteData.notes ) {
+                remapNoteBinding(note);
+            }
+            for ( auto& hold : beatMap.m_noteData.holds ) {
+                remapNoteBinding(hold);
+            }
+            for ( auto& flick : beatMap.m_noteData.flicks ) {
+                remapNoteBinding(flick);
+            }
+            for ( auto& polyline : beatMap.m_noteData.polylines ) {
+                remapNoteBinding(polyline);
+            }
+
+            for ( auto& sample : beatMap.m_audioSamples ) {
+                if ( !matchesBefore(sample.m_audioResourceId) ) continue;
+                sample.m_audioResourceId = remap.m_before.m_id;
+                changedBeatmap           = true;
+            }
+        }
+
+        if ( changedBeatmap && !beatMap.saveToFile(mapPath) ) {
+            XWARN("Failed to update moved audio references in beatmap: {}",
+                  entry.m_filePath);
+        }
+    }
+    return remappedResources.size();
 }
 
 /// @brief 创建默认音轨配置。

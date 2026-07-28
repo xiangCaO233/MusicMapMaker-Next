@@ -5,6 +5,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
@@ -505,6 +506,12 @@ struct PackageBeatmapInfo {
     /// @brief 谱面引用的资源路径列表。
     std::vector<std::string> dependencyRelativePaths;
 
+    /// @brief 无法解析为项目资源的谱面音频引用。
+    std::vector<std::string> unresolvedAudioReferences;
+
+    /// @brief 谱面文件是否读取失败。
+    bool loadFailed{ false };
+
     /// @brief 是否包含 Flick 或折线。
     bool hasStoreModeExtEligibleElements{ false };
 };
@@ -528,43 +535,31 @@ void appendPackageMetadataDependency(std::vector<std::string>&    dependencies,
         dependencies, makePackageProjectRelativeUtf8(projectRoot, resolved));
 }
 
-/// @brief 查找项目中指定谱面条目。
-/// @param project 项目。
-/// @param beatmapRelativePath UTF-8 项目相对谱面路径。
-/// @return 找到时返回谱面条目，否则返回空。
-const Project::BeatmapEntry* findPackageBeatmapEntry(
-    const Project& project, const std::string& beatmapRelativePath)
+/// @brief 解析并追加一个谱面音频资源引用。
+/// @param result 接收依赖或缺失诊断的谱面扫描结果。
+/// @param project 当前项目。
+/// @param beatmapRelativePath 引用所在谱面的项目相对路径。
+/// @param audioReference 谱面保存的音频资源 ID 或路径。
+/// @param fieldLabel 引用字段的人类可读名称。
+void appendPackageAudioResourceDependency(
+    PackageBeatmapInfo& result, const Project& project,
+    const std::string& beatmapRelativePath, const std::string& audioReference,
+    std::string_view fieldLabel)
 {
-    const auto normalizedBeatmapPath =
-        normalizePackageRelativeUtf8(beatmapRelativePath);
-    const auto it = std::find_if(
-        project.m_beatmaps.begin(),
-        project.m_beatmaps.end(),
-        [&](const Project::BeatmapEntry& entry) {
-            return normalizePackageRelativeUtf8(entry.m_filePath) ==
-                   normalizedBeatmapPath;
-        });
-    return it == project.m_beatmaps.end() ? nullptr : &(*it);
-}
+    if ( audioReference.empty() ) return;
+    const auto* resource =
+        Logic::ProjectResourceService::findAudioResourceForReference(
+            project, Config::utf8ToPath(beatmapRelativePath), audioReference);
+    if ( resource && !resource->m_path.empty() ) {
+        appendUniquePackageDependency(
+            result.dependencyRelativePaths,
+            normalizePackageRelativeUtf8(resource->m_path));
+        return;
+    }
 
-/// @brief 追加项目谱面条目绑定的主音轨资源路径。
-/// @param dependencies 依赖路径列表。
-/// @param project 项目。
-/// @param entry 项目谱面条目。
-void appendPackageBeatmapEntryAudioDependency(
-    std::vector<std::string>& dependencies, const Project& project,
-    const Project::BeatmapEntry& entry)
-{
-    if ( entry.m_audioTrackId.empty() ) return;
-    const auto audioIt =
-        std::find_if(project.m_audioResources.begin(),
-                     project.m_audioResources.end(),
-                     [&](const AudioResource& resource) {
-                         return resource.m_id == entry.m_audioTrackId;
-                     });
-    if ( audioIt == project.m_audioResources.end() ) return;
-    appendUniquePackageDependency(
-        dependencies, normalizePackageRelativeUtf8(audioIt->m_path));
+    const std::string diagnostic =
+        std::string(fieldLabel) + ": " + audioReference;
+    appendUniquePackageDependency(result.unresolvedAudioReferences, diagnostic);
 }
 
 /// @brief 收集一个谱面打包时需要的资源和元素信息。
@@ -579,16 +574,14 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         normalizePackageRelativeUtf8(beatmapRelativePath);
     if ( normalizedBeatmapPath.empty() ) return result;
 
-    if ( const auto* entry =
-             findPackageBeatmapEntry(project, normalizedBeatmapPath) ) {
-        appendPackageBeatmapEntryAudioDependency(
-            result.dependencyRelativePaths, project, *entry);
-    }
-
     const auto relativePath = Config::utf8ToPath(normalizedBeatmapPath);
     const auto mapPath =
         resolvePackageProjectPath(project.m_projectRoot, relativePath);
     auto beatMap = BeatMap::loadFromFile(mapPath);
+    if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
+        result.loadFailed = true;
+        return result;
+    }
 
     const auto mapDirectory      = mapPath.parent_path();
     auto       mapExtension      = Config::pathToUtf8(mapPath.extension());
@@ -600,11 +593,36 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         !beatMap.m_noteData.flicks.empty() ||
         !beatMap.m_noteData.polylines.empty();
 
-    appendPackageMetadataDependency(result.dependencyRelativePaths,
-                                    project.m_projectRoot,
-                                    mapDirectory,
-                                    meta.main_audio_path,
-                                    preferProjectRoot);
+    /// @brief 收集一个玩家物件绑定的采样资源。
+    auto appendNoteBinding = [&](const Note& note) {
+        const auto binding = note.getSampleBinding();
+        if ( !binding ) return;
+        appendPackageAudioResourceDependency(result,
+                                             project,
+                                             normalizedBeatmapPath,
+                                             binding->m_audioResourceId,
+                                             "Note sample");
+    };
+    for ( const auto& note : beatMap.m_noteData.notes ) {
+        appendNoteBinding(note);
+    }
+    for ( const auto& hold : beatMap.m_noteData.holds ) {
+        appendNoteBinding(hold);
+    }
+    for ( const auto& flick : beatMap.m_noteData.flicks ) {
+        appendNoteBinding(flick);
+    }
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        appendNoteBinding(polyline);
+    }
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        appendPackageAudioResourceDependency(result,
+                                             project,
+                                             normalizedBeatmapPath,
+                                             sample.m_audioResourceId,
+                                             "audio_samples");
+    }
+
     appendPackageMetadataDependency(result.dependencyRelativePaths,
                                     project.m_projectRoot,
                                     mapDirectory,
@@ -1493,11 +1511,17 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             std::move(beatmapInfo.dependencyRelativePaths);
         file.hasStoreModeExtEligibleElements =
             beatmapInfo.hasStoreModeExtEligibleElements;
-        file.missingDependencyRelativePaths.clear();
+        file.missingDependencyRelativePaths =
+            std::move(beatmapInfo.unresolvedAudioReferences);
+        if ( beatmapInfo.loadFailed ) {
+            file.missingDependencyRelativePaths.push_back(
+                "谱面文件读取失败，无法检查依赖");
+        }
         for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
             if ( candidateIndexByPath.find(dependencyPath) ==
                  candidateIndexByPath.end() ) {
-                file.missingDependencyRelativePaths.push_back(dependencyPath);
+                appendUniquePackageDependency(
+                    file.missingDependencyRelativePaths, dependencyPath);
             }
         }
     }

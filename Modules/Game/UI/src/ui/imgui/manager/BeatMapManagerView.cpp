@@ -8,6 +8,7 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/Icons.h"
@@ -671,6 +672,17 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         m_beatmapFileMetadata[index].version =
                             beatmap.m_baseMapMetadata.version;
                         m_beatmapFileMetadata[index].hasVersion = true;
+                        if ( const auto* audioResource =
+                                 Logic::ProjectResourceService::
+                                     findDefaultBeatmapAudioResource(
+                                         *project,
+                                         beatmap,
+                                         beatmaps[index].m_filePath) ) {
+                            m_beatmapFileMetadata[index].audioResourceId =
+                                audioResource->m_id;
+                            m_beatmapFileMetadata[index].hasAudioResource =
+                                true;
+                        }
                     }
                 }
                 std::stable_sort(
@@ -794,11 +806,15 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         m_openManageModal   = true;
                     }
                     if ( hovered ) {
+                        const std::string audioText =
+                            metadata.hasAudioResource
+                                ? metadata.audioResourceId
+                                : TR("ui.file_manager.value_unknown").data();
                         const std::string tooltipText =
-                            fmt::format("File: {}\nType: {}\nTrack: {}",
+                            fmt::format("File: {}\nType: {}\nAudio: {}",
                                         beatmap.m_filePath,
                                         typeText,
-                                        beatmap.m_audioTrackId);
+                                        audioText);
                         Utils::renderTooltip(tooltipText.c_str());
                     }
 

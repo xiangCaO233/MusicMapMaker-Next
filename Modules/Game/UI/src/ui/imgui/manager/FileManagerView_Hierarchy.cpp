@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -29,6 +30,7 @@
 #include <ctime>
 #include <fmt/format.h>
 #include <imgui_internal.h>
+#include <mutex>
 #include <optional>
 #include <system_error>
 
@@ -83,6 +85,27 @@ bool isAudioExtension(const std::string& extension)
     const auto ext = toLowerAscii(extension);
     return ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac" ||
            ext == ".opus" || ext == ".aac" || ext == ".m4a";
+}
+
+/// @brief 文件或目录移动后同步其中音频资源的项目路径。
+/// @param oldPath 移动前路径。
+/// @param newPath 移动后路径。
+/// @warning 低频文件操作路径：只在用户确认移动或重命名后扫描项目音频资源。
+void syncMovedProjectAudioResourcePaths(const std::filesystem::path& oldPath,
+                                        const std::filesystem::path& newPath)
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
+    auto*                                 project = engine.getCurrentProject();
+    if ( !project ) return;
+
+    const auto changedCount =
+        Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            *project, oldPath, newPath);
+    if ( changedCount == 0 ) return;
+
+    XINFO("Updated {} project audio resource path(s) after move", changedCount);
+    engine.saveProject();
 }
 
 /// @brief 计算目录直属项目数量。
@@ -1178,6 +1201,7 @@ void FileManagerView::pasteFileClipboardInto(
         makeUniqueDestinationPath(m_fileClipboardPath, targetDirectory);
     std::error_code filesystemError;
     if ( m_fileClipboardMode == FileClipboardMode::Cut ) {
+        const auto movedSourcePath = m_fileClipboardPath;
         std::filesystem::rename(
             m_fileClipboardPath, destination, filesystemError);
         if ( filesystemError ) {
@@ -1203,6 +1227,7 @@ void FileManagerView::pasteFileClipboardInto(
                    filesystemError.message());
             return;
         }
+        syncMovedProjectAudioResourcePaths(movedSourcePath, destination);
         m_fileClipboardPath.clear();
         m_fileClipboardMode = FileClipboardMode::None;
     } else {
@@ -1264,6 +1289,7 @@ void FileManagerView::confirmRename()
         return;
     }
 
+    syncMovedProjectAudioResourcePaths(m_pendingRenamePath, destination);
     invalidateDirectoryCache();
     ImGui::CloseCurrentPopup();
 }
