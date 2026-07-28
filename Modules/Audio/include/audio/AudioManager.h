@@ -31,6 +31,7 @@ namespace MMM::Audio
 {
 
 class SoundEffectPool;
+class AudioTimelineMixerNode;
 struct BackgroundSpectrumLevels;
 class BackgroundSpectrumAnalyzer;
 class BackgroundSpectrumCaptureNode;
@@ -71,6 +72,83 @@ enum class MixerChannelMode {
     MuteRight,        ///< 静音右声道，仅保留左声道。
     CopyLeftToRight,  ///< 将左声道复制到右声道，两侧都播放左声道。
     CopyRightToLeft   ///< 将右声道复制到左声道，两侧都播放右声道。
+};
+
+/// @brief 交给 AudioManager 准备的单个自动采样事件。
+struct AudioTimelineLoadEvent {
+    /// @brief 谱面内稳定且唯一的采样物件标识。
+    std::uint64_t eventId{ 0U };
+
+    /// @brief 项目音频资源的稳定标识。
+    std::string resourceKey;
+
+    /// @brief 音频资源的绝对文件路径。
+    std::string filePath;
+
+    /// @brief 已合并物件 offset 的实际起播时间，单位为秒，允许为负。
+    double effectiveStartSeconds{ 0.0 };
+
+    /// @brief 采样物件自身的线性音量。
+    float eventVolume{ 1.0F };
+
+    /// @brief 被引用音频资源的持久化配置。
+    AudioTrackConfig resourceConfig;
+};
+
+/// @brief 音频时间线加载诊断类型。
+enum class AudioTimelineLoadDiagnosticCode : std::uint8_t {
+    /// @brief AudioManager 尚未初始化，无法构造音频图。
+    AudioSystemUnavailable,
+
+    /// @brief 文件路径为空、无法探测或完整解码结果为空。
+    MissingResource,
+
+    /// @brief 起播时间不是有限数值，已按零秒恢复。
+    InvalidStartTime,
+
+    /// @brief 当前混音节点还不能逐片段表达资源播放倍率。
+    UnsupportedResourcePlaybackSpeed,
+
+    /// @brief 当前混音节点还不能逐片段表达资源音高。
+    UnsupportedResourcePitch,
+
+    /// @brief 当前混音节点还不能逐片段表达资源 EQ。
+    UnsupportedResourceEqualizer
+};
+
+/// @brief 单个时间线加载问题及其来源。
+struct AudioTimelineLoadDiagnostic {
+    /// @brief 诊断类型。
+    AudioTimelineLoadDiagnosticCode code{
+        AudioTimelineLoadDiagnosticCode::MissingResource
+    };
+
+    /// @brief 相关采样物件标识。
+    std::uint64_t eventId{ 0U };
+
+    /// @brief 相关项目音频资源标识。
+    std::string resourceKey;
+
+    /// @brief 相关资源文件路径。
+    std::string filePath;
+
+    /// @brief 可直接展示给用户的诊断说明。
+    std::string message;
+};
+
+/// @brief 构造复合音频时间线的结果。
+struct AudioTimelineLoadResult {
+    /// @brief 音频图是否已成功替换；即使没有有效片段也可为 true。
+    bool success{ false };
+
+    /// @brief 成功载入调度表的采样物件数量。
+    std::size_t loadedClipCount{ 0U };
+
+    /// @brief 因资源缺失而未进入调度表的采样物件数量。
+    std::size_t missingClipCount{ 0U };
+
+    /// @brief 可展示给用户或写入导入报告的非致命诊断。
+    std::vector<AudioTimelineLoadDiagnostic> diagnostics;
 };
 
 /// @brief 音频输出设备列表项。
@@ -130,13 +208,54 @@ public:
     /// @return OpenAL 空间化配置。
     const Config::OpenALSpatialConfig& getOpenALSpatialConfig() const;
 
-    /// @brief 加载 BGM
-    /// @param filePath 音频文件绝对路径
-    /// @param config 轨道详细配置 (从项目文件读取)
-    /// @return 是否加载成功
+    /// @brief 加载完整自动采样时间线并替换当前主播放时钟。
+    /// @param events 待缓存和调度的自动采样事件。
+    /// @param chartEndSeconds 玩家物件等非音频内容决定的谱面结束时间。
+    /// @param fingerprint 调用方生成的稳定完整时间线指纹。
+    /// @return 图替换状态、有效片段数量和逐事件诊断。
+    /// @warning
+    /// 低频资源路径：会访问文件系统并等待所有引用资源完成解码，只能在谱面加载
+    /// 或时间线提交时调用，禁止放入 UI、逻辑 update 或音频回调热路径。
+    [[nodiscard]] AudioTimelineLoadResult loadAudioTimeline(
+        const std::vector<AudioTimelineLoadEvent>& events,
+        double chartEndSeconds, const std::string& fingerprint);
+
+    /// @brief 卸载自动采样时间线并断开主时间线音频图。
+    /// @warning 低频资源切换路径；会停止全部已调度 HitEffect。
+    void unloadAudioTimeline();
+
+    /// @brief 获取当前完整时间线的稳定指纹。
+    /// @return 未加载时间线时返回空字符串。
+    [[nodiscard]] const std::string& getLoadedAudioTimelineFingerprint() const;
+
+    /// @brief 获取当前成功进入调度表的采样片段数量。
+    [[nodiscard]] std::size_t getLoadedAudioTimelineClipCount() const;
+
+    /// @brief 获取上次加载时缺失的采样片段数量。
+    [[nodiscard]] std::size_t getMissingAudioTimelineClipCount() const;
+
+    /// @brief 判断当前是否存在已构造的时间线时钟。
+    [[nodiscard]] bool hasLoadedAudioTimeline() const;
+
+    /// @brief 启用主时间线半开区间循环。
+    /// @param startSeconds 循环起点，单位为秒。
+    /// @param endSeconds 循环排除终点，单位为秒。
+    /// @return 参数有效且已提交到时间线时返回 true。
+    bool setAudioTimelineLoop(double startSeconds, double endSeconds);
+
+    /// @brief 关闭主时间线循环。
+    void clearAudioTimelineLoop();
+
+    /// @brief 加载单文件 BGM 的兼容入口。
+    /// @param filePath 音频文件绝对路径。
+    /// @param config 轨道详细配置。
+    /// @return 单文件成功进入自动采样调度表时返回 true。
+    /// @warning
+    /// 此接口仅物化一个零秒自动采样；其 SourceNode 不再充当主播放时钟。
+    /// 资源自身 playbackSpeed、pitch 和 EQ 不会提升为复合时间线全局参数。
     bool loadBGM(const std::string& filePath, const AudioTrackConfig& config);
 
-    /// @brief 卸载当前 BGM 轨道，并从混音图中断开。
+    /// @brief 兼容入口：卸载当前主自动采样时间线。
     void unloadBGM();
 
     /// @brief 开始/恢复播放
@@ -214,16 +333,16 @@ public:
     /// @return 音频文件路径；未加载时返回空字符串。
     const std::string& getLoadedAuditionPath() const;
 
-    /// @brief 设置主音轨音量 (0.0 ~ 1.0)
+    /// @brief 设置复合时间线主增益 (0.0 ~ 1.0)
     void setMainTrackVolume(float volume);
 
-    /// @brief 获取主音轨当前音量
+    /// @brief 获取复合时间线当前主增益
     float getMainTrackVolume() const;
 
-    /// @brief 设置主音轨静音状态
+    /// @brief 设置复合时间线主静音状态
     void setMainTrackMute(bool muted);
 
-    /// @brief 获取主音轨是否静音
+    /// @brief 获取复合时间线主静音状态
     bool isMainTrackMuted() const;
 
     /// @brief 设置全局音量 (0.0 ~ 1.0)
@@ -305,10 +424,10 @@ public:
     /// @brief 获取实际生效的播放倍率
     double getActualPlaybackSpeed() const;
 
-    /// @brief 设置主音轨音高偏移 (半音，-24.0 ~ +24.0)
+    /// @brief 设置复合时间线全局预览音高偏移 (半音，-24.0 ~ +24.0)
     void setPlaybackPitch(double semitones);
 
-    /// @brief 获取主音轨音高偏移
+    /// @brief 获取复合时间线全局预览音高偏移
     double getPlaybackPitch() const;
 
     /// @brief 主音轨时间拉伸质量。
@@ -349,11 +468,11 @@ public:
 
     // --- EQ 相关接口 ---
 
-    /// @brief 为主音轨创建均衡器
+    /// @brief 为复合时间线创建全局预览均衡器
     /// @param preset 预设类型
     void createMainTrackEQ(EQPreset preset);
 
-    /// @brief 销毁主音轨均衡器
+    /// @brief 销毁复合时间线全局预览均衡器
     void destroyMainTrackEQ();
 
     /// @brief 设置指定频段的增益
@@ -508,15 +627,15 @@ public:
     /// @brief 清空并停止所有正在播放和预定的音效
     void clearAllScheduledSoundEffects();
 
-    /// @brief 获取当前加载的 BGM 轨道数据 (用于可视化)
+    /// @brief 获取当前时间线首个成功加载的轨道数据，供旧可视化入口兼容。
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 
-    /// @brief 获取当前加载的 BGM 文件路径。
-    /// @return 当前 BGM 文件路径；未加载时返回空字符串。
+    /// @brief 获取单片段兼容时间线的文件路径。
+    /// @return 复合时间线或未加载时返回空字符串。
     const std::string& getLoadedBGMPath() const;
 
-    /// @brief 获取当前 BGM 文件的规范化绝对路径键。
-    /// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+    /// @brief 获取当前时间线兼容同步键。
+    /// @return 完整时间线指纹；未加载时为空。
     const std::string& getLoadedBGMSyncKey() const;
 
     /// @brief 获取独立试听文件的规范化绝对路径键。
@@ -568,6 +687,14 @@ private:
 
     /// @brief 刷新独立试听源的有效音量。
     void refreshAuditionTrackVolume();
+
+    /// @brief 刷新自动采样时间线的主总线有效音量。
+    void refreshAudioTimelineVolume();
+
+    /// @brief 清除主时间拉伸器的历史样本。
+    /// @warning
+    /// 低频播放控制路径：可能与正在执行的拉伸 block 短暂同步，禁止每帧调用。
+    void resetMainTimeStretcher();
 
     /// @brief 创建并启动指定播放后端。
     /// @param backend 目标播放后端。
@@ -632,8 +759,17 @@ private:
     /// @brief 当前主音轨文件的规范化绝对路径键。
     std::string m_bgmSyncKey;
 
-    /// @brief 当前主音轨播放源节点。
-    std::shared_ptr<ice::SourceNode> m_bgmSource;
+    /// @brief 当前自动采样时间线的唯一传输和混音节点。
+    std::shared_ptr<AudioTimelineMixerNode> m_audioTimelineNode;
+
+    /// @brief 当前完整自动采样时间线的稳定指纹。
+    std::string m_audioTimelineFingerprint;
+
+    /// @brief 当前有效自动采样片段数量。
+    std::size_t m_audioTimelineClipCount{ 0U };
+
+    /// @brief 上次加载时缺失的自动采样片段数量。
+    std::size_t m_missingAudioTimelineClipCount{ 0U };
 
     /// @brief 当前主音轨图形均衡器节点。
     std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
@@ -751,11 +887,8 @@ private:
     /// @brief 音效文件开头到有效出声点的延迟表，单位为秒。
     std::unordered_map<std::string, double> m_sfxLeadInSeconds;
 
-    /// @brief 当前主音轨播放状态。
-    PlaybackStatus m_status{ PlaybackStatus::Stopped };
-
     /// @brief 当前主音轨音量。
-    float m_mainTrackVolume{ 0.5f };
+    float m_mainTrackVolume{ 1.0f };
 
     /// @brief 当前主音轨是否静音。
     bool m_mainTrackMuted{ false };
@@ -795,6 +928,12 @@ private:
 
     /// @brief 当前请求的播放倍率。
     double m_speed{ 1.0 };
+
+    /// @brief 当前复合时间线全局预览音高。
+    double m_playbackPitch{ 0.0 };
+
+    /// @brief 当前复合时间线全局拉伸质量。
+    StretchQuality m_playbackQuality{ StretchQuality::Finer };
 
     /// @brief 当前独立试听通道请求的播放倍率。
     double m_auditionSpeed{ 1.0 };

@@ -86,6 +86,11 @@ bool testOverlapNegativeStartAndSeek(
         XERROR("Timeline mixer did not preserve both overlapping clips");
         return false;
     }
+    node.setMasterGain(0.5F);
+    if ( std::abs(node.masterGain() - 0.5F) > SAMPLE_EPSILON ) {
+        XERROR("Timeline mixer did not retain its master gain");
+        return false;
+    }
 
     ice::AudioBuffer output(ice::ICEConfig::internal_format, BLOCK_FRAMES);
     ice::AudioBuffer firstReference(ice::ICEConfig::internal_format,
@@ -102,7 +107,11 @@ bool testOverlapNegativeStartAndSeek(
     if ( node.positionFrame() !=
              static_cast<MMM::Audio::AudioTimelineFrame>(BLOCK_FRAMES) ||
          !verifyMixedRange(
-             output, firstReference, &secondReference, 8U, 0.5F, 0.25F) ) {
+             output, firstReference, &secondReference, 8U, 0.25F, 0.125F) ) {
+        return false;
+    }
+    if ( node.leftLevel() <= 0.0F || node.rightLevel() <= 0.0F ) {
+        XERROR("Timeline mixer did not publish output levels");
         return false;
     }
 
@@ -123,8 +132,8 @@ bool testOverlapNegativeStartAndSeek(
                            seekFirstReference,
                            &seekSecondReference,
                            0U,
-                           0.5F,
-                           0.25F) ) {
+                           0.25F,
+                           0.125F) ) {
         XERROR("Timeline seek did not resume every overlapping source frame");
         return false;
     }
@@ -144,7 +153,8 @@ bool testOverlapNegativeStartAndSeek(
         }
     }
     return node.positionFrame() == 28 &&
-           node.state() == MMM::Audio::AudioTimelinePlaybackState::Paused;
+           node.state() == MMM::Audio::AudioTimelinePlaybackState::Paused &&
+           node.leftLevel() == 0.0F && node.rightLevel() == 0.0F;
 }
 
 /// @brief 验证半开循环在 R 处截断并于每轮 L 重建交叠 voice。
@@ -224,7 +234,14 @@ bool testMissingResourceAndFinish()
             if ( output.raw_ptrs()[channel][frame] != 0.0F ) return false;
         }
     }
-    return true;
+
+    node.seek(2);
+    ice::AudioBuffer seekOutput(ice::ICEConfig::internal_format, 1U);
+    node.process(seekOutput);
+    return node.positionFrame() == 2 && !node.finished() &&
+           node.state() == MMM::Audio::AudioTimelinePlaybackState::Paused &&
+           node.requestedState() ==
+               MMM::Audio::AudioTimelinePlaybackState::Paused;
 }
 
 }  // namespace

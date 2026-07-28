@@ -1,5 +1,6 @@
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
+#include "audio/AudioTimelineMixerNode.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -643,7 +644,7 @@ void AudioManager::playSoundEffectScheduled(
     auto it = m_sfxPools.find(key);
     if ( it == m_sfxPools.end() ) return;
 
-    if ( !m_bgmSource ) return;
+    if ( !m_audioTimelineNode ) return;
 
     double samplerate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
@@ -652,13 +653,18 @@ void AudioManager::playSoundEffectScheduled(
     const double scheduledTime = std::max(0.0, targetTime - leadInSeconds);
     size_t       targetFrame = static_cast<size_t>(scheduledTime * samplerate);
 
-    // 获取 BGM 播放位置的闭包，用于 SourceNode 内部参考
-    auto bgmRef = [this]() -> size_t {
-        if ( m_bgmSource ) return m_bgmSource->get_playpos();
+    // 获取复合时间线播放位置的闭包，用于 SourceNode 内部参考。
+    auto timelineReference = [this]() -> size_t {
+        if ( m_audioTimelineNode ) {
+            const auto position = m_audioTimelineNode->positionFrame();
+            return position > 0 ? static_cast<std::size_t>(position) : 0U;
+        }
         return 0;
     };
 
-    const std::size_t currentReferenceFrame = m_bgmSource->get_playpos();
+    const auto        currentPosition = m_audioTimelineNode->positionFrame();
+    const std::size_t currentReferenceFrame =
+        currentPosition > 0 ? static_cast<std::size_t>(currentPosition) : 0U;
     const std::size_t scheduledDelayFrames =
         targetFrame > currentReferenceFrame
             ? targetFrame - currentReferenceFrame
@@ -670,7 +676,7 @@ void AudioManager::playSoundEffectScheduled(
     it->second->playScheduled(
         getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
         targetFrame,
-        bgmRef,
+        timelineReference,
         effectiveEnvelope,
         scheduledDelayFrames);
 }

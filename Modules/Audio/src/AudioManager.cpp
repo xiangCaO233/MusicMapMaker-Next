@@ -125,7 +125,7 @@ AudioManager::AudioManager()
     m_sfxGainMuted       = settings.sfxGainMuted;
     m_interactionSfxGain = settings.interactionSfxGain;
     m_interactionSfxGainMuted = settings.interactionSfxGainMuted;
-    m_mainTrackVolume         = 0.5f;  // 默认主音轨音量
+    m_mainTrackVolume         = 1.0f;
     m_playbackBackend         = settings.audioPlaybackBackend;
     m_sdlOutputDeviceName     = settings.sdlAudioOutputDeviceName;
     m_openALOutputDeviceName  = settings.openALAudioOutputDeviceName;
@@ -191,15 +191,21 @@ void AudioManager::shutdown()
     XINFO("Shutting down AudioManager...");
     waitForQueuedSoundEffectLoads();
     clearSoundEffects();
-    destroyPlaybackBackend();
+    unloadAudioTimeline();
     unloadAuditionTrack();
+    destroyPlaybackBackend();
 
     m_bgmTrack.reset();
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
-    m_bgmSource.reset();
+    m_audioTimelineNode.reset();
+    m_audioTimelineFingerprint.clear();
+    m_audioTimelineClipCount        = 0U;
+    m_missingAudioTimelineClipCount = 0U;
     m_bgmSpectrumCapture.reset();
     m_stretcher.reset();
+    m_mainEQ.reset();
+    m_mainEQPreset = EQPreset::None;
     m_backgroundSpectrumAnalyzer.reset();
     m_hitEffectSpectrumCapture.reset();
     m_hitEffectMixer.reset();

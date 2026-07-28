@@ -92,3 +92,16 @@ add_test(
   COMMAND
     AudioTimelineMixerNodeTest
     "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
+
+# AudioManager 集成测试通过 SDL dummy 后端覆盖零、单个和复合自动采样时间线。
+mmm_add_test_executable(Audio AudioManagerTimelineIntegrationTest
+                        tests/AudioManagerTimelineIntegrationTest.cpp)
+target_link_libraries(AudioManagerTimelineIntegrationTest PRIVATE Audio Log
+                                                                  Config)
+add_test(
+  NAME AudioManagerTimelineIntegrationTest
+  COMMAND
+    AudioManagerTimelineIntegrationTest
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
+set_tests_properties(AudioManagerTimelineIntegrationTest
+                     PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")

@@ -89,6 +89,10 @@ public:
     /// @brief 获取最近一个已完成音频 block 的播放状态。
     [[nodiscard]] AudioTimelinePlaybackState state() const noexcept;
 
+    /// @brief 获取逻辑线程最近请求的播放状态。
+    /// @return 尚未到达 block 边界时也立即反映最新控制请求。
+    [[nodiscard]] AudioTimelinePlaybackState requestedState() const noexcept;
+
     /// @brief 获取最近一个已完成音频 block 的传输纪元。
     [[nodiscard]] std::uint64_t epoch() const noexcept;
 
@@ -100,6 +104,21 @@ public:
 
     /// @brief 获取排序并过滤后的有效采样数量。
     [[nodiscard]] std::size_t clipCount() const noexcept;
+
+    /// @brief 设置复合时间线在逐事件音量之后应用的主增益。
+    /// @param gain 非负线性增益；非有限值按零处理。
+    /// @warning
+    /// 逻辑线程写、音频线程逐 block 读取；relaxed 原子用于避免播放热路径加锁。
+    void setMasterGain(float gain) noexcept;
+
+    /// @brief 获取当前请求的复合时间线主增益。
+    [[nodiscard]] float masterGain() const noexcept;
+
+    /// @brief 获取复合时间线最近 block 的左声道峰值。
+    [[nodiscard]] float leftLevel() const noexcept;
+
+    /// @brief 获取复合时间线最近 block 的右声道峰值。
+    [[nodiscard]] float rightLevel() const noexcept;
 
     /// @brief 生成一个设备音频 block。
     /// @param buffer 由上游预分配的输出缓冲区。
@@ -143,6 +162,11 @@ private:
     /// @warning 音频热路径；只读取完整缓存并写入预分配内存。
     void mixSegment(ice::AudioBuffer& output, std::size_t outputStartFrame,
                     std::size_t frameCount);
+
+    /// @brief 应用主增益并发布当前输出 block 峰值。
+    /// @param output 已完成逐片段混合的输出缓冲。
+    /// @warning 音频热路径；只执行固定声道样本遍历和 relaxed 原子写入。
+    void applyMasterGainAndPublishLevels(ice::AudioBuffer& output) noexcept;
 
     /// @brief 请求播放命令并发布一个完整序列锁写入。
     void requestPlaybackCommand(PlaybackCommand command) noexcept;
@@ -228,6 +252,22 @@ private:
     /// @warning
     /// 音频线程写入、逻辑线程读取；relaxed 顺序足以提供独立状态快照。
     std::atomic<bool> m_publishedFinished{ false };
+
+    /// @brief 逐事件音量之后应用的复合时间线主增益。
+    ///
+    /// @warning
+    /// 逻辑线程写、音频线程逐 block 读取；relaxed 顺序只要求获取最新独立值。
+    std::atomic<float> m_masterGain{ 1.0F };
+
+    /// @brief 最近输出 block 的左声道峰值。
+    ///
+    /// @warning 音频线程写、逻辑线程读；relaxed 顺序只提供独立电平快照。
+    std::atomic<float> m_leftLevel{ 0.0F };
+
+    /// @brief 最近输出 block 的右声道峰值。
+    ///
+    /// @warning 音频线程写、逻辑线程读；relaxed 顺序只提供独立电平快照。
+    std::atomic<float> m_rightLevel{ 0.0F };
 };
 
 }  // namespace MMM::Audio

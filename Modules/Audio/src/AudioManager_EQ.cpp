@@ -1,5 +1,6 @@
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
+#include "audio/AudioTimelineMixerNode.h"
 #include "log/colorful-log.h"
 
 #include <cmath>
@@ -7,12 +8,11 @@
 #include <vector>
 
 #include <ice/core/MixBus.hpp>
-#include <ice/core/SourceNode.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 
 namespace MMM::Audio
 {
-/// @brief 为主音轨创建或替换图形均衡器。
+/// @brief 为复合时间线创建或替换全局预览图形均衡器。
 /// @param preset 目标 EQ 预设。
 void AudioManager::createMainTrackEQ(EQPreset preset)
 {
@@ -33,21 +33,19 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
 
     auto newEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
 
-    // 如果当前正在播放 BGM，需要热插拔
-    if ( m_bgmSource && m_preStretcherMixer ) {
+    // 如果当前已加载复合时间线，需要热插拔全局预览 EQ。
+    if ( m_audioTimelineNode && m_preStretcherMixer ) {
         if ( m_mainEQ ) {
             m_preStretcherMixer->remove_source(m_mainEQ);
         } else if ( m_bgmSpectrumCapture ) {
             m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
         } else {
-            m_preStretcherMixer->remove_source(m_bgmSource);
+            m_preStretcherMixer->remove_source(m_audioTimelineNode);
         }
 
-        newEQ->set_inputnode(
-            m_bgmSpectrumCapture
-                ? std::static_pointer_cast<ice::IAudioNode>(
-                      m_bgmSpectrumCapture)
-                : std::static_pointer_cast<ice::IAudioNode>(m_bgmSource));
+        std::shared_ptr<ice::IAudioNode> input = m_bgmSpectrumCapture;
+        if ( !input ) input = m_audioTimelineNode;
+        newEQ->set_inputnode(std::move(input));
         m_preStretcherMixer->add_source(newEQ);
     }
 
@@ -56,17 +54,17 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
     XINFO("Main track EQ created with {} bands.", freqs.size());
 }
 
-/// @brief 销毁主音轨图形均衡器并恢复原始路由。
+/// @brief 销毁复合时间线全局预览均衡器并恢复原始路由。
 void AudioManager::destroyMainTrackEQ()
 {
     if ( !m_mainEQ ) return;
 
-    if ( m_bgmSource && m_preStretcherMixer ) {
+    if ( m_audioTimelineNode && m_preStretcherMixer ) {
         m_preStretcherMixer->remove_source(m_mainEQ);
         if ( m_bgmSpectrumCapture ) {
             m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
         } else {
-            m_preStretcherMixer->add_source(m_bgmSource);
+            m_preStretcherMixer->add_source(m_audioTimelineNode);
         }
     }
 

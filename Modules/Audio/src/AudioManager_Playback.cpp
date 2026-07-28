@@ -1,48 +1,95 @@
 #include "audio/AudioManager.h"
+#include "audio/AudioTimelineMixerNode.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <utility>
 
+#include <ice/core/MixBus.hpp>
 #include <ice/core/SourceNode.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
 
 namespace MMM::Audio
 {
-/// @brief 开始或恢复主音轨播放。
+namespace
+{
+/// @brief 将秒数安全转换为主时间线帧。
+AudioTimelineFrame playbackSecondsToFrame(double seconds) noexcept
+{
+    if ( !std::isfinite(seconds) ) return 0;
+    const long double frames =
+        static_cast<long double>(seconds) *
+        static_cast<long double>(ice::ICEConfig::internal_format.samplerate);
+    constexpr auto MIN_FRAME = static_cast<long double>(
+        std::numeric_limits<AudioTimelineFrame>::min());
+    constexpr auto MAX_FRAME = static_cast<long double>(
+        std::numeric_limits<AudioTimelineFrame>::max());
+    if ( frames <= MIN_FRAME ) {
+        return std::numeric_limits<AudioTimelineFrame>::min();
+    }
+    if ( frames >= MAX_FRAME ) {
+        return std::numeric_limits<AudioTimelineFrame>::max();
+    }
+    return static_cast<AudioTimelineFrame>(std::llround(frames));
+}
+
+/// @brief 将项目拉伸质量转换为 IonCachyEngine 质量。
+/// @param quality 项目全局预览质量。
+/// @return 对应引擎枚举。
+ice::TimeStretchQuality toIceStretchQuality(
+    AudioManager::StretchQuality quality) noexcept
+{
+    switch ( quality ) {
+    case AudioManager::StretchQuality::Fast:
+        return ice::TimeStretchQuality::Fast;
+    case AudioManager::StretchQuality::Balanced:
+        return ice::TimeStretchQuality::Balanced;
+    case AudioManager::StretchQuality::Finer:
+        return ice::TimeStretchQuality::Finer;
+    case AudioManager::StretchQuality::Best:
+        return ice::TimeStretchQuality::Best;
+    }
+    return ice::TimeStretchQuality::Finer;
+}
+}  // namespace
+
+/// @brief 开始或恢复复合音频时间线。
 void AudioManager::play()
 {
-    if ( m_bgmSource ) {
-        m_bgmSource->play();
-        m_status = PlaybackStatus::Playing;
+    if ( m_audioTimelineNode ) {
+        m_audioTimelineNode->play();
     }
 }
 
-/// @brief 暂停主音轨播放。
+/// @brief 暂停复合音频时间线。
 void AudioManager::pause()
 {
-    if ( m_bgmSource ) {
-        m_bgmSource->pause();
-        m_status = PlaybackStatus::Paused;
+    if ( m_audioTimelineNode ) {
+        m_audioTimelineNode->pause();
+        resetMainTimeStretcher();
     }
 }
 
-/// @brief 停止主音轨播放并回到起始位置。
+/// @brief 停止复合音频时间线并回到起始位置。
 void AudioManager::stop()
 {
-    if ( m_bgmSource ) {
-        m_bgmSource->pause();
-        m_bgmSource->set_playpos(static_cast<size_t>(0));
-        m_status = PlaybackStatus::Stopped;
+    if ( m_audioTimelineNode ) {
+        m_audioTimelineNode->stop();
+        resetMainTimeStretcher();
         clearAllScheduledSoundEffects();
     }
 }
 
-/// @brief 跳转主音轨播放位置。
+/// @brief 跳转复合音频时间线播放位置。
 /// @param seconds 目标时间，单位为秒。
 void AudioManager::seek(double seconds)
 {
-    if ( m_bgmSource ) {
-        m_bgmSource->set_playpos(std::chrono::duration<double>(seconds));
+    if ( m_audioTimelineNode ) {
+        m_audioTimelineNode->seek(playbackSecondsToFrame(seconds));
+        resetMainTimeStretcher();
         clearAllScheduledSoundEffects();
     }
 }
@@ -51,38 +98,67 @@ void AudioManager::seek(double seconds)
 /// @return 当前播放状态。
 PlaybackStatus AudioManager::getStatus() const
 {
-    return m_status;
+    if ( !m_audioTimelineNode ) {
+        return PlaybackStatus::Stopped;
+    }
+    if ( m_audioTimelineNode->finished() ) {
+        return PlaybackStatus::Stopped;
+    }
+    switch ( m_audioTimelineNode->requestedState() ) {
+    case AudioTimelinePlaybackState::Stopped: return PlaybackStatus::Stopped;
+    case AudioTimelinePlaybackState::Playing: return PlaybackStatus::Playing;
+    case AudioTimelinePlaybackState::Paused: return PlaybackStatus::Paused;
+    }
+    return PlaybackStatus::Stopped;
 }
 
-/// @brief 获取主音轨当前播放时间。
+/// @brief 获取复合音频时间线当前播放时间。
 /// @return 当前播放时间，单位为秒。
 double AudioManager::getCurrentTime() const
 {
-    if ( !m_bgmSource ) return 0.0;
-
-    auto   pos = m_bgmSource->get_playpos();
-    double samplerate =
+    if ( !m_audioTimelineNode ) return 0.0;
+    const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    if ( samplerate <= 0 ) return 0.0;
+    if ( sampleRate <= 0.0 ) return 0.0;
 
-    return static_cast<double>(pos) / samplerate;
+    return static_cast<double>(m_audioTimelineNode->positionFrame()) /
+           sampleRate;
 }
 
-/// @brief 获取主音轨总时长。
+/// @brief 获取谱面内容与所有自动采样共同决定的复合时长。
 /// @return 总时长，单位为秒。
 double AudioManager::getTotalTime() const
 {
-    if ( !m_bgmSource ) return 0.0;
-    return std::chrono::duration_cast<std::chrono::duration<double>>(
-               m_bgmSource->total_time())
-        .count();
+    if ( !m_audioTimelineNode ) return 0.0;
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    if ( sampleRate <= 0.0 ) return 0.0;
+    return static_cast<double>(m_audioTimelineNode->timelineEndFrame()) /
+           sampleRate;
 }
 
-/// @brief 设置主音轨播放倍率。
+/// @brief 通过低频节点替换清除 Rubber Band 尚未输出的历史采样。
+/// @warning 低频播放控制路径：会短暂修改主混音图，禁止每帧调用。
+void AudioManager::resetMainTimeStretcher()
+{
+    if ( !m_stretcher || !m_mainMixer || !m_preStretcherMixer ) return;
+
+    auto replacement = std::make_shared<ice::TimeStretcher>();
+    replacement->set_inputnode(m_preStretcherMixer);
+    replacement->set_playback_ratio(m_speed);
+    replacement->set_pitch_semitones(m_playbackPitch);
+    replacement->set_quality(toIceStretchQuality(m_playbackQuality));
+
+    m_mainMixer->remove_source(m_stretcher);
+    m_mainMixer->add_source(replacement);
+    m_stretcher = std::move(replacement);
+}
+
+/// @brief 设置复合时间线全局预览播放倍率。
 /// @param speed 目标播放倍率。
 void AudioManager::setPlaybackSpeed(double speed)
 {
-    m_speed = std::clamp(speed, 0.1, 4.0);
+    m_speed = std::isfinite(speed) ? std::clamp(speed, 0.1, 4.0) : 1.0;
     if ( m_stretcher ) {
         m_stretcher->set_playback_ratio(m_speed);
     }
@@ -105,65 +181,45 @@ double AudioManager::getActualPlaybackSpeed() const
     return m_speed;
 }
 
-/// @brief 设置主音轨音高偏移。
+/// @brief 设置复合时间线全局预览音高偏移。
 /// @param semitones 半音偏移量。
 void AudioManager::setPlaybackPitch(double semitones)
 {
-    // -24.0 到 24.0 的范围检查由 TimeStretcher 内部负责。
+    m_playbackPitch =
+        std::isfinite(semitones) ? std::clamp(semitones, -24.0, 24.0) : 0.0;
     if ( m_stretcher ) {
-        m_stretcher->set_pitch_semitones(semitones);
+        m_stretcher->set_pitch_semitones(m_playbackPitch);
     }
 }
 
-/// @brief 获取主音轨音高偏移。
+/// @brief 获取复合时间线全局预览音高偏移。
 /// @return 半音偏移量。
 double AudioManager::getPlaybackPitch() const
 {
-    if ( m_stretcher ) {
-        return m_stretcher->get_pitch_semitones();
-    }
-    return 0.0;
+    return m_playbackPitch;
 }
 
-/// @brief 设置主音轨变速拉伸质量。
+/// @brief 设置复合时间线全局预览拉伸质量。
 /// @param quality 目标拉伸质量。
 void AudioManager::setPlaybackQuality(StretchQuality quality)
 {
+    switch ( quality ) {
+    case StretchQuality::Fast:
+    case StretchQuality::Balanced:
+    case StretchQuality::Finer:
+    case StretchQuality::Best: m_playbackQuality = quality; break;
+    default: m_playbackQuality = StretchQuality::Finer; break;
+    }
     if ( m_stretcher ) {
-        ice::TimeStretchQuality iceQuality;
-        switch ( quality ) {
-        case StretchQuality::Fast:
-            iceQuality = ice::TimeStretchQuality::Fast;
-            break;
-        case StretchQuality::Balanced:
-            iceQuality = ice::TimeStretchQuality::Balanced;
-            break;
-        case StretchQuality::Finer:
-            iceQuality = ice::TimeStretchQuality::Finer;
-            break;
-        case StretchQuality::Best:
-            iceQuality = ice::TimeStretchQuality::Best;
-            break;
-        default: iceQuality = ice::TimeStretchQuality::Finer; break;
-        }
-        m_stretcher->set_quality(iceQuality);
+        m_stretcher->set_quality(toIceStretchQuality(m_playbackQuality));
     }
 }
 
-/// @brief 获取主音轨变速拉伸质量。
+/// @brief 获取复合时间线全局预览拉伸质量。
 /// @return 当前拉伸质量。
 AudioManager::StretchQuality AudioManager::getPlaybackQuality() const
 {
-    if ( m_stretcher ) {
-        auto iceQuality = m_stretcher->get_quality();
-        switch ( iceQuality ) {
-        case ice::TimeStretchQuality::Fast: return StretchQuality::Fast;
-        case ice::TimeStretchQuality::Balanced: return StretchQuality::Balanced;
-        case ice::TimeStretchQuality::Finer: return StretchQuality::Finer;
-        case ice::TimeStretchQuality::Best: return StretchQuality::Best;
-        }
-    }
-    return StretchQuality::Finer;
+    return m_playbackQuality;
 }
 
 /// @brief 开始或恢复独立试听音轨播放。

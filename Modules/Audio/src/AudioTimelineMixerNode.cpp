@@ -70,6 +70,7 @@ AudioTimelineMixerNode::AudioTimelineMixerNode(
 
 void AudioTimelineMixerNode::play() noexcept
 {
+    m_publishedFinished.store(false, std::memory_order_relaxed);
     requestPlaybackCommand(PlaybackCommand::Play);
 }
 
@@ -85,6 +86,9 @@ void AudioTimelineMixerNode::stop() noexcept
 
 void AudioTimelineMixerNode::seek(AudioTimelineFrame frame) noexcept
 {
+    if ( m_publishedFinished.exchange(false, std::memory_order_relaxed) ) {
+        requestPlaybackCommand(PlaybackCommand::Pause);
+    }
     m_seekSequence.fetch_add(1U, std::memory_order_acq_rel);
     m_requestedSeekFrame.store(frame, std::memory_order_relaxed);
     m_seekSequence.fetch_add(1U, std::memory_order_release);
@@ -120,6 +124,17 @@ AudioTimelinePlaybackState AudioTimelineMixerNode::state() const noexcept
     return m_publishedState.load(std::memory_order_relaxed);
 }
 
+AudioTimelinePlaybackState
+AudioTimelineMixerNode::requestedState() const noexcept
+{
+    switch ( m_requestedPlaybackCommand.load(std::memory_order_relaxed) ) {
+    case PlaybackCommand::Stop: return AudioTimelinePlaybackState::Stopped;
+    case PlaybackCommand::Play: return AudioTimelinePlaybackState::Playing;
+    case PlaybackCommand::Pause: return AudioTimelinePlaybackState::Paused;
+    }
+    return AudioTimelinePlaybackState::Stopped;
+}
+
 std::uint64_t AudioTimelineMixerNode::epoch() const noexcept
 {
     return m_publishedEpoch.load(std::memory_order_relaxed);
@@ -140,6 +155,27 @@ std::size_t AudioTimelineMixerNode::clipCount() const noexcept
     return m_clips.size();
 }
 
+void AudioTimelineMixerNode::setMasterGain(float gain) noexcept
+{
+    m_masterGain.store(std::isfinite(gain) ? std::max(gain, 0.0F) : 0.0F,
+                       std::memory_order_relaxed);
+}
+
+float AudioTimelineMixerNode::masterGain() const noexcept
+{
+    return m_masterGain.load(std::memory_order_relaxed);
+}
+
+float AudioTimelineMixerNode::leftLevel() const noexcept
+{
+    return m_leftLevel.load(std::memory_order_relaxed);
+}
+
+float AudioTimelineMixerNode::rightLevel() const noexcept
+{
+    return m_rightLevel.load(std::memory_order_relaxed);
+}
+
 void AudioTimelineMixerNode::process(ice::AudioBuffer& buffer)
 {
     buffer.clear();
@@ -147,6 +183,7 @@ void AudioTimelineMixerNode::process(ice::AudioBuffer& buffer)
 
     if ( m_transport.state() != AudioTimelinePlaybackState::Playing ||
          buffer.num_frames() == 0U ) {
+        applyMasterGainAndPublishLevels(buffer);
         publishTransportSnapshot();
         return;
     }
@@ -190,6 +227,7 @@ void AudioTimelineMixerNode::process(ice::AudioBuffer& buffer)
         outputStartFrame += frameCount;
     }
 
+    applyMasterGainAndPublishLevels(buffer);
     publishTransportSnapshot();
 }
 
@@ -200,7 +238,8 @@ std::vector<PreparedTimelineClip> AudioTimelineMixerNode::prepareClips(
         return !clip.track || clip.track->num_frames() == 0U;
     });
     for ( auto& clip : clips ) {
-        if ( !std::isfinite(clip.volume) ) clip.volume = 1.0F;
+        clip.volume =
+            std::isfinite(clip.volume) ? std::max(clip.volume, 0.0F) : 1.0F;
     }
     std::stable_sort(
         clips.begin(),
@@ -334,6 +373,7 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
           ++spanIndex ) {
         const auto& span = m_activeSpanScratch[spanIndex];
         const auto& clip = m_clips[span.clipIndex];
+        if ( span.volume <= 0.0F ) continue;
 
         m_sourceScratch.clear();
         const auto requestedFrames = static_cast<std::size_t>(span.frameCount);
@@ -355,6 +395,38 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
             }
         }
     }
+}
+
+void AudioTimelineMixerNode::applyMasterGainAndPublishLevels(
+    ice::AudioBuffer& output) noexcept
+{
+    if ( output.num_frames() == 0U || output.raw_ptrs() == nullptr ) {
+        m_leftLevel.store(0.0F, std::memory_order_relaxed);
+        m_rightLevel.store(0.0F, std::memory_order_relaxed);
+        return;
+    }
+
+    const float       gain      = m_masterGain.load(std::memory_order_relaxed);
+    const std::size_t channels  = output.num_channels();
+    float             leftPeak  = 0.0F;
+    float             rightPeak = 0.0F;
+
+    for ( std::size_t channel = 0U; channel < channels; ++channel ) {
+        float* channelData = output.raw_ptrs()[channel];
+        float  channelPeak = 0.0F;
+        for ( std::size_t frame = 0U; frame < output.num_frames(); ++frame ) {
+            channelData[frame] *= gain;
+            channelPeak = std::max(channelPeak, std::abs(channelData[frame]));
+        }
+        if ( channel == 0U ) {
+            leftPeak = channelPeak;
+        } else if ( channel == 1U ) {
+            rightPeak = channelPeak;
+        }
+    }
+    if ( channels == 1U ) rightPeak = leftPeak;
+    m_leftLevel.store(leftPeak, std::memory_order_relaxed);
+    m_rightLevel.store(rightPeak, std::memory_order_relaxed);
 }
 
 void AudioTimelineMixerNode::requestPlaybackCommand(
