@@ -40,16 +40,13 @@ public:
     /// @brief 是否为子物件（隶属于 Polyline）
     bool m_isSubNote{ false };
 
-    /// @brief 物件命中时触发的可选采样绑定。
+    /// @brief 物件命中时触发的可选采样绑定，是绑定状态的唯一权威来源。
     std::optional<AudioSampleBinding> m_sampleBinding;
 
-    /// @brief 旧版绑定音效字段；首轮迁移期间与 m_sampleBinding 保持兼容。
-    std::string m_boundSound;
-
-    /// @brief 所有物件元数据
+    /// @brief 所有物件元数据。
     NoteMetadata m_metadata;
 
-    /// @brief 设置物件命中采样并同步旧版字段。
+    /// @brief 设置物件命中采样。
     /// @param binding 待设置的采样绑定；资源标识为空时清除绑定。
     void setSampleBinding(AudioSampleBinding binding)
     {
@@ -57,27 +54,18 @@ public:
             clearSampleBinding();
             return;
         }
-        m_boundSound    = binding.m_audioResourceId;
         m_sampleBinding = std::move(binding);
     }
 
-    /// @brief 清除物件命中采样并同步旧版字段。
-    void clearSampleBinding()
-    {
-        m_sampleBinding.reset();
-        m_boundSound.clear();
-    }
+    /// @brief 清除物件命中采样。
+    void clearSampleBinding() { m_sampleBinding.reset(); }
 
-    /// @brief 获取兼容旧版字段后的物件命中采样。
+    /// @brief 获取物件命中采样。
     /// @return 有效采样绑定；没有绑定时返回空。
-    [[nodiscard]] std::optional<AudioSampleBinding> getSampleBinding() const
+    [[nodiscard]] const std::optional<AudioSampleBinding>&
+    getSampleBinding() const
     {
-        if ( m_boundSound.empty() ) return std::nullopt;
-        if ( m_sampleBinding &&
-             m_sampleBinding->m_audioResourceId == m_boundSound ) {
-            return m_sampleBinding;
-        }
-        return AudioSampleBinding{ m_boundSound, 1.0F };
+        return m_sampleBinding;
     }
 
     /// @brief 从osu描述加载

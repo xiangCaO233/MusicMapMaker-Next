@@ -643,7 +643,7 @@ void test_multiple_sound_objects_round_trip_without_global_shift()
                        { "sound", "hit.wav" },
                        { "vol", 65 } };
     json earlyStem{ { "beat", json::array({ 1, 0, 1 }) },
-                    { "type", 1 },
+                    { "type", 1.0 },
                     { "sound", "stem.ogg" },
                     { "offset", -125 },
                     { "x", 4 },
@@ -988,6 +988,20 @@ void test_invalid_sample_track_and_song_hint_conflict()
     TEST_ASSERT(sample.m_metadata.getValue<std::string>(
                     MMM::SampleMetadataType::MALODY, "original_x") == "2",
                 "invalid source x should remain available for diagnostics");
+    const auto relocationDiagnostic = std::find_if(
+        loaded.m_loadDiagnostics.begin(),
+        loaded.m_loadDiagnostics.end(),
+        [](const MMM::BeatmapLoadDiagnostic& diagnostic) {
+            return diagnostic.m_code == MMM::BeatmapLoadDiagnosticCode::
+                                            AUDIO_SAMPLE_TRACK_RELOCATED &&
+                   diagnostic.m_severity ==
+                       MMM::BeatmapLoadDiagnosticSeverity::WARNING;
+        });
+    TEST_ASSERT(relocationDiagnostic != loaded.m_loadDiagnostics.end(),
+                "invalid sample x should emit a non-fatal diagnostic");
+    TEST_ASSERT(relocationDiagnostic->m_relatedPath ==
+                    loaded.m_baseMapMetadata.map_path,
+                "sample track diagnostic should identify its source map");
 
     TEST_ASSERT(loaded.saveToFile(exportPath),
                 "normalized sample map should export");
@@ -1017,6 +1031,66 @@ void test_invalid_sample_track_and_song_hint_conflict()
                 "hint conflict output should keep one sample and one Note");
 
     XINFO("PASS: Invalid sample x and song hint conflict");
+}
+
+/// @brief 验证移动自动采样锚点后不会被导入时缓存的 beat 覆盖。
+void testEditedSampleTimestampOverridesImportedBeat()
+{
+    XINFO("=== Test: Edited sample timestamp overrides imported beat ===");
+
+    const fs::path sourcePath =
+        std::filesystem::temp_directory_path() / "edge_sample_move_source.mc";
+    const fs::path exportPath =
+        std::filesystem::temp_directory_path() / "edge_sample_move_export.mc";
+
+    json fileData;
+    fileData["meta"] = { { "creator", "Test" },
+                         { "version", "4K" },
+                         { "mode", 0 },
+                         { "mode_ext", { { "column", 4 } } },
+                         { "song",
+                           { { "title", "MoveSample" },
+                             { "artist", "Test" },
+                             { "file", "stem.ogg" },
+                             { "bpm", 120.0 } } } };
+    fileData["time"] = json::array(
+        { { { "beat", json::array({ 0, 0, 1 }) }, { "bpm", 120.0 } } });
+    fileData["note"] = json::array({ { { "beat", json::array({ 1, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "stem.ogg" },
+                                       { "offset", 0 },
+                                       { "x", 4 },
+                                       { "vol", 100 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open moved sample input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    TEST_ASSERT(loaded.m_audioSamples.size() == 1,
+                "moved sample fixture should load one sample");
+    loaded.m_audioSamples.front().m_timestamp = 1500.0;
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "map with moved sample should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+    const auto sampleIt = std::find_if(
+        exported["note"].begin(), exported["note"].end(), isSoundNode);
+    TEST_ASSERT(sampleIt != exported["note"].end(),
+                "moved sample should remain in output");
+    TEST_ASSERT((*sampleIt)["beat"] == json::array({ 3, 0, 1 }),
+                "exported beat should follow the edited sample timestamp");
+
+    const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    TEST_ASSERT(reloaded.m_audioSamples.size() == 1 &&
+                    std::abs(reloaded.m_audioSamples.front().m_timestamp -
+                             1500.0) < 1e-6,
+                "moved sample timestamp should survive round trip");
+
+    XINFO("PASS: Edited sample timestamp overrides imported beat");
 }
 
 /// @brief 确认近空 Malody 谱面中的字符串 BPM 可以无异常加载。
@@ -1266,6 +1340,7 @@ int main()
     test_multiple_sound_objects_round_trip_without_global_shift();
     test_timing_delay_and_sample_offset_round_trip_independently();
     test_invalid_sample_track_and_song_hint_conflict();
+    testEditedSampleTimestampOverridesImportedBeat();
     testStringBpmInNearlyEmptyMapLoads();
     testMetadataOnlyMapLoadsWithDefaults();
     test_original_structure_not_leaked();

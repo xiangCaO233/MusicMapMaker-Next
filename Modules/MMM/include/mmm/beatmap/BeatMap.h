@@ -21,6 +21,10 @@ enum class BeatmapLoadDiagnosticCode {
     /// @brief 旧 MMM 已完成有损单音频迁移，但旁边仍有可重新导入的原始 Malody
     /// 文件。
     LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
+
+    /// @brief 自动采样的来源轨道不属于 BGM 区，加载时已迁移到首条 BGM
+    /// 轨。
+    AUDIO_SAMPLE_TRACK_RELOCATED,
 };
 
 /// @brief 谱面加载诊断级别。

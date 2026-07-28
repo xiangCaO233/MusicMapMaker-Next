@@ -52,7 +52,7 @@ bool testOsuHitSampleField()
     }
     if ( !hold.to_osu_description(4).ends_with(
              "2000:1:2:3:70:custom-hold.wav") ) {
-        XERROR("osu! Hold m_boundSound was not saved as sampleFile");
+        XERROR("osu! Hold sample binding was not saved as sampleFile");
         return false;
     }
     return true;

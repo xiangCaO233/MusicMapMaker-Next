@@ -248,11 +248,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 Config::utf8ToPath(readMMMString(base, "audio"));
             beatMap.m_baseMapMetadata.song_file_hint =
                 Config::utf8ToPath(readMMMString(base, "song_file_hint"));
+            if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
+                beatMap.m_baseMapMetadata.song_file_hint = legacyAudioPath;
+            }
             if ( formatVersion < 2 ) {
                 beatMap.m_baseMapMetadata.main_audio_path = legacyAudioPath;
-                if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
-                    beatMap.m_baseMapMetadata.song_file_hint = legacyAudioPath;
-                }
             } else {
                 beatMap.m_baseMapMetadata.main_audio_path.clear();
             }
@@ -372,9 +372,33 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
 
             const int playableTrackCount =
                 std::max(0, beatMap.m_baseMapMetadata.track_count);
+            if ( sample.m_track < static_cast<uint32_t>(playableTrackCount) ) {
+                const uint32_t originalTrack = sample.m_track;
+                sample.m_metadata.sample_properties[SampleMetadataType::MMM]
+                                                   ["original_track"] =
+                    std::to_string(originalTrack);
+                sample.m_track = static_cast<uint32_t>(playableTrackCount);
+                beatMap.m_loadDiagnostics.push_back(
+                    { .m_code = BeatmapLoadDiagnosticCode::
+                          AUDIO_SAMPLE_TRACK_RELOCATED,
+                      .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
+                      .m_message =
+                          fmt::format("MMM 自动采样 '{}' 的轨道 {} 不属于 BGM "
+                                      "区，已迁移到首条 BGM 轨 {}",
+                                      sample.m_audioResourceId,
+                                      originalTrack,
+                                      playableTrackCount),
+                      .m_relatedPath = path });
+            }
             if ( sample.m_track >= static_cast<uint32_t>(playableTrackCount) ) {
+                const std::uint64_t requiredBgmTrackCount64 =
+                    static_cast<std::uint64_t>(sample.m_track) -
+                    static_cast<std::uint64_t>(playableTrackCount) + 1;
                 const int requiredBgmTrackCount =
-                    static_cast<int>(sample.m_track) - playableTrackCount + 1;
+                    static_cast<int>(std::min<std::uint64_t>(
+                        requiredBgmTrackCount64,
+                        static_cast<std::uint64_t>(
+                            std::numeric_limits<int>::max())));
                 beatMap.m_baseMapMetadata.bgm_track_count =
                     std::max(beatMap.m_baseMapMetadata.bgm_track_count,
                              requiredBgmTrackCount);
@@ -402,9 +426,9 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             beatMap.m_loadDiagnostics.push_back(
                 { .m_code = BeatmapLoadDiagnosticCode::
                       LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
-                  .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
-                  .m_message  = "旧版 MMM 已丢失部分 Malody SOUND "
-                               "信息，建议重新导入同目录的原始 .mc 文件",
+                  .m_severity    = BeatmapLoadDiagnosticSeverity::WARNING,
+                  .m_message     = "旧版 MMM 已丢失部分 Malody SOUND "
+                                   "信息，建议重新导入同目录的原始 .mc 文件",
                   .m_relatedPath = std::move(originalMalodyPath) });
         }
     }

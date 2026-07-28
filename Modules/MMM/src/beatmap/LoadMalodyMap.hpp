@@ -277,8 +277,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         if ( n.contains("type") ) {
             if ( n["type"].is_string() )
                 return n["type"].get<std::string>() == "SOUND";
-            if ( n["type"].is_number_integer() )
-                return n["type"].get<int>() == 1;
+            if ( n["type"].is_number() ) {
+                return std::abs(parseMalodyJsonDouble(n["type"], 0.0) - 1.0) <=
+                       std::numeric_limits<double>::epsilon();
+            }
         }
         return false;
     };
@@ -571,6 +573,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 } else {
                     sample.m_track      = static_cast<uint32_t>(finalK);
                     props["original_x"] = xIt == n.end() ? "null" : xIt->dump();
+                    beatMap.m_loadDiagnostics.push_back(
+                        { .m_code = BeatmapLoadDiagnosticCode::
+                              AUDIO_SAMPLE_TRACK_RELOCATED,
+                          .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
+                          .m_message  = fmt::format(
+                              "Malody 自动采样 '{}' 的轨道 x={} 不属于 "
+                              "BGM 区，已迁移到首条 BGM 轨 {}",
+                              sample.m_audioResourceId,
+                              props["original_x"],
+                              finalK),
+                          .m_relatedPath = basemeta.map_path });
                     XWARN(
                         "Malody 自动采样 '{}' 的 BGM 轨道 x={} "
                         "非法，已归入首个 "
@@ -580,8 +593,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         finalK);
                 }
 
+                const std::uint64_t requiredBgmTrackCount64 =
+                    static_cast<std::uint64_t>(sample.m_track) -
+                    static_cast<std::uint64_t>(finalK) + 1;
                 const int requiredBgmTrackCount =
-                    static_cast<int>(sample.m_track) - finalK + 1;
+                    static_cast<int>(std::min<std::uint64_t>(
+                        requiredBgmTrackCount64,
+                        static_cast<std::uint64_t>(
+                            std::numeric_limits<int>::max())));
                 basemeta.bgm_track_count =
                     std::max(basemeta.bgm_track_count, requiredBgmTrackCount);
                 basemeta.map_length =

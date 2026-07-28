@@ -26,34 +26,31 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     using enum MapMetadataType;
 
-    /// @brief 判断任意玩家物件是否绑定了 osu! 导出器无法表达的采样。
+    /// @brief 判断玩家物件是否包含 osu! HitObject 无法无损表达的采样绑定。
+    ///
+    /// 普通 Note、Hold 及顶层 Flick 均可复用 HitSample 的 sampleFile
+    /// 字段；Polyline 根节点不会直接写出，非 Hold 子节点也不会进入当前
+    /// osu! 展开结果，因此仅拒绝这些确实会丢失的绑定。
     const auto hasUnsupportedNoteSampleBinding = [&beatMap]() {
-        const auto containsBinding = [](const auto& notes) {
-            return std::any_of(
-                notes.begin(), notes.end(), [](const auto& note) {
-                    return note.getSampleBinding().has_value();
-                });
-        };
-        if ( containsBinding(beatMap.m_noteData.notes) ||
-             containsBinding(beatMap.m_noteData.holds) ||
-             containsBinding(beatMap.m_noteData.flicks) ||
-             containsBinding(beatMap.m_noteData.polylines) ) {
-            return true;
-        }
         return std::any_of(
             beatMap.m_noteData.polylines.begin(),
             beatMap.m_noteData.polylines.end(),
             [](const Polyline& polyline) {
+                if ( polyline.getSampleBinding() ) return true;
                 return std::any_of(
                     polyline.m_subNotes.begin(),
                     polyline.m_subNotes.end(),
                     [](const auto& noteRef) {
-                        return noteRef.get().getSampleBinding().has_value();
+                        const Note& note = noteRef.get();
+                        return note.m_type != NoteType::HOLD &&
+                               note.getSampleBinding().has_value();
                     });
             });
     };
     if ( hasUnsupportedNoteSampleBinding() ) {
-        XERROR("osu! 导出失败：当前导出器无法无损表达玩家物件采样绑定");
+        XERROR(
+            "osu! 导出失败：Polyline 根节点或非 Hold 子节点的采样绑定"
+            "无法由当前 HitObject 展开逻辑无损表达");
         return false;
     }
 

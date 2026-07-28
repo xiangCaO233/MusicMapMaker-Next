@@ -877,17 +877,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     auto serializeAudioSample = [&](const AudioSampleEvent& sample) {
         json sampleJson;
 
-        bool hasBeat = false;
         if ( auto it = sample.m_metadata.sample_properties.find(
                  SampleMetadataType::MALODY);
              it != sample.m_metadata.sample_properties.end() ) {
-            if ( it->second.contains("beat") ) {
-                if ( auto beatJson =
-                         parseMalodyBeatJsonValue(it->second.at("beat")) ) {
-                    sampleJson["beat"] = *beatJson;
-                    hasBeat            = true;
-                }
-            }
             for ( const auto& [key, value] : it->second ) {
                 if ( key != "beat" && key != "type" && key != "sound" &&
                      key != "offset" && key != "x" && key != "vol" &&
@@ -896,9 +888,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
         }
-        if ( !hasBeat ) {
-            sampleJson["beat"] = timeToBeat(sample.m_timestamp);
-        }
+        // beat 是 m_timestamp 的格式投影；不能让导入时保留的旧 beat
+        // 覆盖编辑器已经移动过的锚点。
+        sampleJson["beat"] = timeToBeat(sample.m_timestamp);
 
         sampleJson["type"]   = 1;
         sampleJson["sound"]  = sample.m_audioResourceId;

@@ -1,11 +1,13 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
@@ -411,6 +413,65 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
     return ok;
 }
 
+/// @brief 验证带版本号的过渡 MMM 仍能读取旧 metadata.base.audio 提示。
+/// @param outputDirectory 测试输出目录。
+/// @return 旧字段仅迁移为提示且不会隐式生成播放对象时返回 true。
+bool testVersion2LegacyAudioHintCompatibility(
+    const std::filesystem::path& outputDirectory)
+{
+    const auto path = outputDirectory / "v2_legacy_audio_hint.mmm";
+    constexpr std::string_view content =
+        R"({"format_version":2,"metadata":{"base":{"audio":"legacy-hint.ogg","track_count":4}},"audio_samples":[],"timing":[],"note":[]})";
+    if ( !writeTextFile(path, content) ) return false;
+
+    const MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
+    bool               ok     = true;
+    ok &= check(loaded.m_baseMapMetadata.main_audio_path.empty(),
+                "MMM v2 legacy audio field must not regain runtime authority");
+    ok &= check(loaded.m_baseMapMetadata.song_file_hint ==
+                    std::filesystem::path("legacy-hint.ogg"),
+                "MMM v2 should accept metadata.base.audio as a hint fallback");
+    ok &= check(loaded.m_audioSamples.empty(),
+                "MMM v2 hint fallback must not synthesize a playback object");
+    return ok;
+}
+
+/// @brief 验证 MMM v2 自动采样不会停留在玩家轨道区。
+/// @param outputDirectory 测试输出目录。
+/// @return 非法绝对轨道迁移到第一条 BGM 轨并保留来源值时返回 true。
+bool testVersion2InvalidSampleTrackRelocation(
+    const std::filesystem::path& outputDirectory)
+{
+    const auto path = outputDirectory / "v2_invalid_sample_track.mmm";
+    constexpr std::string_view content =
+        R"({"format_version":2,"metadata":{"base":{"track_count":4,"bgm_track_count":0}},"audio_samples":[{"timestamp":125,"offset_ms":-25,"track":2,"audio_ref":"effect.wav","volume":0.75}],"timing":[],"note":[]})";
+    if ( !writeTextFile(path, content) ) return false;
+
+    const MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
+    bool               ok     = true;
+    ok &= check(loaded.m_audioSamples.size() == 1,
+                "MMM v2 should retain an invalid-track sample");
+    if ( loaded.m_audioSamples.size() == 1 ) {
+        const auto& sample = loaded.m_audioSamples.front();
+        ok &=
+            check(sample.m_track == 4 &&
+                      loaded.m_baseMapMetadata.bgm_track_count == 1,
+                  "MMM v2 invalid sample track should move to first BGM lane");
+        ok &= check(sample.m_metadata.getValue<std::string>(
+                        MMM::SampleMetadataType::MMM, "original_track") == "2",
+                    "MMM v2 should retain the original invalid track");
+    }
+    ok &= check(std::any_of(loaded.m_loadDiagnostics.begin(),
+                            loaded.m_loadDiagnostics.end(),
+                            [](const MMM::BeatmapLoadDiagnostic& diagnostic) {
+                                return diagnostic.m_code ==
+                                       MMM::BeatmapLoadDiagnosticCode::
+                                           AUDIO_SAMPLE_TRACK_RELOCATED;
+                            }),
+                "MMM v2 invalid sample track should emit a diagnostic");
+    return ok;
+}
+
 /// @brief 验证 osu! 单音频字段迁移到第一条 BGM 轨且往返不移动谱面事件。
 /// @param outputDirectory 测试输出目录。
 /// @return 验证是否通过。
@@ -604,13 +665,23 @@ bool testSingleAudioExporterRejection(
     std::filesystem::remove(boundOSUPath, removeError);
     removeError.clear();
     std::filesystem::remove(boundIMDPath, removeError);
-    ok &= check(!boundSource.saveToFile(boundOSUPath),
-                "osu! should reject playable sample bindings");
+    ok &= check(boundSource.saveToFile(boundOSUPath),
+                "osu! should preserve representable playable sample bindings");
     ok &= check(!boundSource.saveToFile(boundIMDPath),
                 "RM/IMD should reject playable sample bindings");
-    ok &= check(!std::filesystem::exists(boundOSUPath) &&
+    ok &= check(std::filesystem::exists(boundOSUPath) &&
                     !std::filesystem::exists(boundIMDPath),
-                "rejected bound-note exports should not leave partial files");
+                "bound-note exports should follow each format capability");
+    if ( std::filesystem::exists(boundOSUPath) ) {
+        const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
+        const auto         binding =
+            reloaded.m_allNotes.empty()
+                ? std::optional<MMM::AudioSampleBinding>{}
+                : reloaded.m_allNotes.front().get().getSampleBinding();
+        ok &= check(
+            binding.has_value() && binding->m_audioResourceId == "hit.wav",
+            "osu! should round-trip a playable sample file");
+    }
 
     MMM::BeatMap emptyBgmSource;
     emptyBgmSource.m_baseMapMetadata.track_count     = 4;
@@ -720,6 +791,8 @@ int main(int argc, char* argv[])
     ok &= testMMMVideoMetadataRoundTrip(outputDirectory);
     ok &= testMMMVersion2AudioSampleRoundTrip(outputDirectory);
     ok &= testLegacyMMMMetadataDefaults(outputDirectory);
+    ok &= testVersion2LegacyAudioHintCompatibility(outputDirectory);
+    ok &= testVersion2InvalidSampleTrackRelocation(outputDirectory);
     ok &= testOSUSingleAudioMigration(outputDirectory);
     ok &= testRMSingleAudioMigration(outputDirectory);
     ok &= testSingleAudioExporterRejection(outputDirectory);

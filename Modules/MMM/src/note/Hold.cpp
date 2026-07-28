@@ -87,7 +87,12 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
     const auto        last_paras  = splitOsuHoldParameters(sampleGroup);
 
     osunote_prop["samplegroup"] = sampleGroup;
-    m_boundSound                = MMM::Internal::safeAt(last_paras, 5);
+    const auto sampleFile       = MMM::Internal::safeAt(last_paras, 5);
+    if ( sampleFile.empty() ) {
+        clearSampleBinding();
+    } else {
+        setSampleBinding(AudioSampleBinding{ sampleFile, 1.0F });
+    }
 
     m_duration = static_cast<int32_t>(MMM::Internal::safeStod(
                      MMM::Internal::safeAt(last_paras, 0))) -
@@ -137,10 +142,14 @@ std::string Hold::to_osu_description(int32_t orbit_count)
     oss << end_time << ":";
 
     // 音效组参数
-    const auto sampleGroup = osunote_prop.contains("samplegroup")
-                                 ? osunote_prop.at("samplegroup")
-                                 : std::string("0:0:0:0:0:");
-    oss << composeOsuHoldHitSample(sampleGroup, m_boundSound);
+    const auto             sampleGroup = osunote_prop.contains("samplegroup")
+                                             ? osunote_prop.at("samplegroup")
+                                             : std::string("0:0:0:0:0:");
+    const auto&            binding     = getSampleBinding();
+    const std::string_view sampleFile =
+        binding ? std::string_view(binding->m_audioResourceId)
+                : std::string_view{};
+    oss << composeOsuHoldHitSample(sampleGroup, sampleFile);
 
     return oss.str();
 }
