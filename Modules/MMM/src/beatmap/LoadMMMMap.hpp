@@ -244,17 +244,17 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 readMMMString(base, "artist_unicode");
             beatMap.m_baseMapMetadata.version = readMMMString(base, "version");
             beatMap.m_baseMapMetadata.author  = readMMMString(base, "author");
-            beatMap.m_baseMapMetadata.main_audio_path =
+            const std::filesystem::path legacyAudioPath =
                 Config::utf8ToPath(readMMMString(base, "audio"));
             beatMap.m_baseMapMetadata.song_file_hint =
                 Config::utf8ToPath(readMMMString(base, "song_file_hint"));
-            if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
-                beatMap.m_baseMapMetadata.song_file_hint =
-                    beatMap.m_baseMapMetadata.main_audio_path;
-            }
-            if ( beatMap.m_baseMapMetadata.main_audio_path.empty() ) {
-                beatMap.m_baseMapMetadata.main_audio_path =
-                    beatMap.m_baseMapMetadata.song_file_hint;
+            if ( formatVersion < 2 ) {
+                beatMap.m_baseMapMetadata.main_audio_path = legacyAudioPath;
+                if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
+                    beatMap.m_baseMapMetadata.song_file_hint = legacyAudioPath;
+                }
+            } else {
+                beatMap.m_baseMapMetadata.main_audio_path.clear();
             }
             beatMap.m_baseMapMetadata.main_cover_path =
                 Config::utf8ToPath(readMMMString(base, "cover"));
@@ -392,6 +392,21 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             Config::pathToUtf8(beatMap.m_baseMapMetadata.song_file_hint);
         beatMap.m_baseMapMetadata.bgm_track_count =
             std::max(1, beatMap.m_baseMapMetadata.bgm_track_count);
+
+        std::filesystem::path originalMalodyPath = path;
+        originalMalodyPath.replace_extension(".mc");
+        std::error_code filesystemError;
+        if ( std::filesystem::is_regular_file(originalMalodyPath,
+                                              filesystemError) &&
+             !filesystemError ) {
+            beatMap.m_loadDiagnostics.push_back(
+                { .m_code = BeatmapLoadDiagnosticCode::
+                      LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
+                  .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
+                  .m_message  = "旧版 MMM 已丢失部分 Malody SOUND "
+                               "信息，建议重新导入同目录的原始 .mc 文件",
+                  .m_relatedPath = std::move(originalMalodyPath) });
+        }
     }
 
     // 4. 玩家物件。

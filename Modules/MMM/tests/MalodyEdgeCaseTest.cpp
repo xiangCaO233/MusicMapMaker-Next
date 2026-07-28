@@ -1211,6 +1211,40 @@ void test_hold_stay_at_head_creates_valid_seg()
     XINFO("PASS: Hold stay produces valid seg with correct beat");
 }
 
+/// @brief 验证 Malody 导出拒绝无法放入 seg 的子节点采样绑定。
+void testPolylineSubnoteSampleBindingRejected()
+{
+    XINFO("=== Test: Polyline sub-note sample binding is rejected ===");
+
+    auto           bm   = makeMinimalBeatMap(7 /*Slide*/, 4);
+    MMM::Polyline& poly = bm.m_noteData.polylines.emplace_back();
+    poly.m_type         = MMM::NoteType::POLYLINE;
+    poly.m_timestamp    = 1000.0;
+    poly.m_track        = 1;
+
+    MMM::Hold& hold  = bm.m_noteData.holds.emplace_back();
+    hold.m_type      = MMM::NoteType::HOLD;
+    hold.m_timestamp = 1000.0;
+    hold.m_track     = 1;
+    hold.m_duration  = 500.0;
+    hold.m_isSubNote = true;
+    hold.setSampleBinding({ "segment.wav", 0.45F });
+    poly.m_subNotes.push_back(hold);
+    poly.m_subHolds.push_back(hold);
+    bm.sync();
+
+    const fs::path  outputPath = std::filesystem::temp_directory_path() /
+                                 "edge_polyline_bound_subnote.mc";
+    std::error_code removeError;
+    std::filesystem::remove(outputPath, removeError);
+
+    TEST_ASSERT(!bm.saveToFile(outputPath),
+                "Malody saver should reject a bound Polyline sub-note");
+    TEST_ASSERT(!std::filesystem::exists(outputPath),
+                "rejected Polyline export should not leave a partial file");
+    XINFO("PASS: Bound Polyline sub-note rejected without partial file");
+}
+
 int main()
 {
     XINFO("========================================");
@@ -1236,6 +1270,7 @@ int main()
     testMetadataOnlyMapLoadsWithDefaults();
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();
+    testPolylineSubnoteSampleBindingRejected();
 
     XINFO("========================================");
     if ( g_failed == 0 ) {

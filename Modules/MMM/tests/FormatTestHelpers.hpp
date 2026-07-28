@@ -522,7 +522,18 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                                           ? static_cast<int>(std::round(
                                                 rhs["x"].get<double>() / 43.0))
                                           : 0);
-                        return lhsTrack < rhsTrack;
+                        if ( lhsTrack != rhsTrack ) {
+                            return lhsTrack < rhsTrack;
+                        }
+                        const std::string lhsSound =
+                            lhs.value("sound", std::string{});
+                        const std::string rhsSound =
+                            rhs.value("sound", std::string{});
+                        if ( lhsSound != rhsSound ) {
+                            return lhsSound < rhsSound;
+                        }
+                        return lhs.value("vol", 100.0) <
+                               rhs.value("vol", 100.0);
                     });
                 return array;
             };
@@ -603,6 +614,15 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                             exported.contains("seg") ) {
                     XERROR(
                         "Playable note mismatch at index {}: seg presence "
+                        "differs",
+                        i);
+                    playableOk = false;
+                } else if ( original.value("sound", std::string{}) !=
+                                exported.value("sound", std::string{}) ||
+                            std::abs(original.value("vol", 100.0) -
+                                     exported.value("vol", 100.0)) > 1e-3 ) {
+                    XERROR(
+                        "Playable note mismatch at index {}: sample binding "
                         "differs",
                         i);
                     playableOk = false;

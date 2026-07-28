@@ -75,6 +75,22 @@ inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2,
                 (int)n2.m_type);
             return false;
         }
+        const auto binding1 = n1.getSampleBinding();
+        const auto binding2 = n2.getSampleBinding();
+        if ( binding1.has_value() != binding2.has_value() ||
+             (binding1 &&
+              (binding1->m_audioResourceId != binding2->m_audioResourceId ||
+               std::abs(binding1->m_volume - binding2->m_volume) > 1e-6F)) ) {
+            XERROR(
+                "Note sample binding mismatch at index {}: ref1={}, vol1={} | "
+                "ref2={}, vol2={}",
+                i,
+                binding1 ? binding1->m_audioResourceId : std::string{},
+                binding1 ? binding1->m_volume : 0.0F,
+                binding2 ? binding2->m_audioResourceId : std::string{},
+                binding2 ? binding2->m_volume : 0.0F);
+            return false;
+        }
         if ( n1.m_type == NoteType::HOLD ) {
             if ( std::abs(static_cast<const Hold&>(n1).m_duration -
                           static_cast<const Hold&>(n2).m_duration) > 0.2 ) {

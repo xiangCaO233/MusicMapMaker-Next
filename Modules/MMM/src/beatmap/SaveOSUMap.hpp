@@ -25,6 +25,50 @@ namespace MMM
 inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     using enum MapMetadataType;
+
+    /// @brief 判断任意玩家物件是否绑定了 osu! 导出器无法表达的采样。
+    const auto hasUnsupportedNoteSampleBinding = [&beatMap]() {
+        const auto containsBinding = [](const auto& notes) {
+            return std::any_of(
+                notes.begin(), notes.end(), [](const auto& note) {
+                    return note.getSampleBinding().has_value();
+                });
+        };
+        if ( containsBinding(beatMap.m_noteData.notes) ||
+             containsBinding(beatMap.m_noteData.holds) ||
+             containsBinding(beatMap.m_noteData.flicks) ||
+             containsBinding(beatMap.m_noteData.polylines) ) {
+            return true;
+        }
+        return std::any_of(
+            beatMap.m_noteData.polylines.begin(),
+            beatMap.m_noteData.polylines.end(),
+            [](const Polyline& polyline) {
+                return std::any_of(
+                    polyline.m_subNotes.begin(),
+                    polyline.m_subNotes.end(),
+                    [](const auto& noteRef) {
+                        return noteRef.get().getSampleBinding().has_value();
+                    });
+            });
+    };
+    if ( hasUnsupportedNoteSampleBinding() ) {
+        XERROR("osu! 导出失败：当前导出器无法无损表达玩家物件采样绑定");
+        return false;
+    }
+
+    const int representableBgmTrackCount =
+        beatMap.m_audioSamples.empty() ? 0 : 1;
+    if ( beatMap.m_baseMapMetadata.bgm_track_count !=
+         representableBgmTrackCount ) {
+        XERROR(
+            "osu! 导出失败：格式只能由单音频隐式表达 {} 条 BGM "
+            "轨，当前谱面显式保存了 {} 条",
+            representableBgmTrackCount,
+            beatMap.m_baseMapMetadata.bgm_track_count);
+        return false;
+    }
+
     auto map_it = beatMap.m_metadata.map_properties.find(OSU);
     std::unordered_map<std::string, std::string, StringHash, std::equal_to<>>
                 empty_props;

@@ -1,4 +1,7 @@
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
+#include "mmm/SafeParse.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -59,12 +62,41 @@ void scaleHoldTime(Hold& hold, double speed)
     hold.m_duration = scaledMilliseconds(hold.m_duration, speed);
 }
 
+/// @brief 同步缩放 Malody time 节点保留的局部 delay。
+/// @param timing 需要修改的时间线事件。
+/// @param speed 倍速倍率。
+void scaleMalodyTimingDelay(Timing& timing, double speed)
+{
+    auto source =
+        timing.m_metadata.timing_properties.find(TimingMetadataType::MALODY);
+    if ( source == timing.m_metadata.timing_properties.end() ) return;
+
+    auto delay = source->second.find("delay");
+    if ( delay == source->second.end() ) return;
+
+    const auto parsed = nlohmann::json::parse(
+        delay->second.begin(), delay->second.end(), nullptr, false);
+    if ( parsed.is_discarded() ) return;
+
+    double delayMs = std::numeric_limits<double>::quiet_NaN();
+    if ( parsed.is_number() ) {
+        delayMs = parsed.get<double>();
+    } else if ( parsed.is_string() ) {
+        delayMs =
+            Internal::safeStod(parsed.get_ref<const std::string&>(), delayMs);
+    }
+    if ( !std::isfinite(delayMs) ) return;
+
+    delay->second = nlohmann::json(scaledMilliseconds(delayMs, speed)).dump();
+}
+
 /// @brief 缩放单个时间线事件。
 /// @param timing 需要修改的时间线事件。
 /// @param speed 倍速倍率。
 void scaleTiming(Timing& timing, double speed)
 {
     timing.m_timestamp = scaledMilliseconds(timing.m_timestamp, speed);
+    scaleMalodyTimingDelay(timing, speed);
     if ( timing.m_timingEffect != TimingEffect::BPM ) {
         return;
     }
@@ -275,9 +307,9 @@ BeatmapSpeedTransformResult BeatmapSpeedTransform::createSpeedVersion(
     if ( !options.version.empty() ) {
         meta.version = options.version;
     }
-    meta.map_path        = options.mapPath;
-    meta.main_audio_path = options.audioPath;
-    meta.song_file_hint  = options.audioPath;
+    meta.map_path = options.mapPath;
+    meta.main_audio_path.clear();
+    meta.song_file_hint = options.audioPath;
     if ( meta.preference_bpm > 0.0 && std::isfinite(meta.preference_bpm) ) {
         meta.preference_bpm *= options.speed;
     }

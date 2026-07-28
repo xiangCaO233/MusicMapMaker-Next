@@ -264,11 +264,10 @@ bool testMMMVersion2AudioSampleRoundTrip(
     loaded.sync();
     ok &= check(loaded.m_baseMapMetadata.bgm_track_count == 3,
                 "MMM v2 should reload BGM track count");
-    ok &= check(loaded.m_baseMapMetadata.main_audio_path ==
-                        std::filesystem::path("display-hint.ogg") &&
+    ok &= check(loaded.m_baseMapMetadata.main_audio_path.empty() &&
                     loaded.m_baseMapMetadata.song_file_hint ==
                         std::filesystem::path("display-hint.ogg"),
-                "MMM v2 should use song file hint as its compatibility path");
+                "MMM v2 should keep song hint separate from legacy audio path");
     ok &= check(loaded.m_audioSamples.size() == 2,
                 "MMM v2 should reload every automatic sample");
     if ( loaded.m_audioSamples.size() == 2 ) {
@@ -312,9 +311,14 @@ bool testMMMVersion2AudioSampleRoundTrip(
 bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
 {
     const auto path = outputDirectory / "legacy_metadata_defaults.mmm";
+    const auto originalMalodyPath =
+        outputDirectory / "legacy_metadata_defaults.mc";
     constexpr std::string_view content =
         R"({"metadata":{"base":{"name":"Legacy","audio":"legacy.ogg","cover":"legacy.png","track_count":4}},"timing":[{"timestamp":250,"bpm":120,"beat_length":500,"effect":"bpm","param":120}],"note":[{"type":"note","timestamp":1000,"track":1,"bound_sound":"legacy-hit.wav"}]})";
-    if ( !writeTextFile(path, content) ) return false;
+    if ( !writeTextFile(path, content) ||
+         !writeTextFile(originalMalodyPath, "{}") ) {
+        return false;
+    }
 
     MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
     const auto&  meta   = loaded.m_baseMapMetadata;
@@ -330,6 +334,17 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
                 "legacy MMM audio should populate both compatibility fields");
     ok &= check(meta.track_count == 4 && meta.bgm_track_count == 1,
                 "legacy MMM audio should create one BGM track");
+    ok &= check(
+        loaded.m_loadDiagnostics.size() == 1 &&
+            loaded.m_loadDiagnostics.front().m_code ==
+                MMM::BeatmapLoadDiagnosticCode::
+                    LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE &&
+            loaded.m_loadDiagnostics.front().m_severity ==
+                MMM::BeatmapLoadDiagnosticSeverity::WARNING &&
+            loaded.m_loadDiagnostics.front().m_relatedPath ==
+                originalMalodyPath,
+        "legacy MMM should expose a structured reimport diagnostic when the "
+        "original Malody file exists");
     ok &= check(loaded.m_audioSamples.size() == 1,
                 "legacy MMM audio should migrate to one automatic sample");
     if ( loaded.m_audioSamples.size() == 1 ) {
@@ -376,6 +391,22 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
                       migrated["note"][0].contains("sample") &&
                       !migrated["note"][0].contains("bound_sound"),
                   "migrated legacy note should emit canonical sample binding");
+    }
+
+    const auto withoutOriginalPath =
+        outputDirectory / "legacy_metadata_without_original.mmm";
+    auto absentOriginalPath = withoutOriginalPath;
+    absentOriginalPath.replace_extension(".mc");
+    std::error_code removeError;
+    std::filesystem::remove(absentOriginalPath, removeError);
+    ok &= check(writeTextFile(withoutOriginalPath, content),
+                "legacy MMM fixture without original Malody should be written");
+    if ( std::filesystem::exists(withoutOriginalPath) ) {
+        const MMM::BeatMap withoutOriginal =
+            MMM::BeatMap::loadFromFile(withoutOriginalPath);
+        ok &= check(withoutOriginal.m_loadDiagnostics.empty(),
+                    "legacy MMM should not emit a reimport diagnostic without "
+                    "a sibling Malody file");
     }
     return ok;
 }
@@ -508,7 +539,8 @@ bool testSingleAudioExporterRejection(
     const std::filesystem::path& outputDirectory)
 {
     MMM::BeatMap timedSource;
-    timedSource.m_baseMapMetadata.track_count = 4;
+    timedSource.m_baseMapMetadata.track_count     = 4;
+    timedSource.m_baseMapMetadata.bgm_track_count = 1;
     MMM::AudioSampleEvent timedSample;
     timedSample.m_timestamp       = 500.0;
     timedSample.m_offsetMs        = -25;
@@ -533,7 +565,8 @@ bool testSingleAudioExporterRejection(
                 "rejected timed exports should not leave partial files");
 
     MMM::BeatMap layeredSource;
-    layeredSource.m_baseMapMetadata.track_count = 4;
+    layeredSource.m_baseMapMetadata.track_count     = 4;
+    layeredSource.m_baseMapMetadata.bgm_track_count = 1;
     MMM::AudioSampleEvent first;
     first.m_track           = 4;
     first.m_audioResourceId = "Layered.ogg";
@@ -556,6 +589,46 @@ bool testSingleAudioExporterRejection(
     ok &= check(!std::filesystem::exists(layeredOSUPath) &&
                     !std::filesystem::exists(layeredIMDPath),
                 "rejected layered exports should not leave partial files");
+
+    MMM::BeatMap boundSource;
+    boundSource.m_baseMapMetadata.track_count = 4;
+    MMM::Note boundNote;
+    boundNote.m_track = 1;
+    boundNote.setSampleBinding({ "hit.wav", 0.6F });
+    boundSource.m_noteData.notes.push_back(boundNote);
+    boundSource.sync();
+
+    const auto boundOSUPath = outputDirectory / "reject_bound_note.osu";
+    const auto boundIMDPath = outputDirectory / "Bound_4k_Note.imd";
+    removeError.clear();
+    std::filesystem::remove(boundOSUPath, removeError);
+    removeError.clear();
+    std::filesystem::remove(boundIMDPath, removeError);
+    ok &= check(!boundSource.saveToFile(boundOSUPath),
+                "osu! should reject playable sample bindings");
+    ok &= check(!boundSource.saveToFile(boundIMDPath),
+                "RM/IMD should reject playable sample bindings");
+    ok &= check(!std::filesystem::exists(boundOSUPath) &&
+                    !std::filesystem::exists(boundIMDPath),
+                "rejected bound-note exports should not leave partial files");
+
+    MMM::BeatMap emptyBgmSource;
+    emptyBgmSource.m_baseMapMetadata.track_count     = 4;
+    emptyBgmSource.m_baseMapMetadata.bgm_track_count = 2;
+
+    const auto emptyBgmOSUPath = outputDirectory / "reject_empty_bgm_lanes.osu";
+    const auto emptyBgmIMDPath = outputDirectory / "Empty_4k_Bgm.imd";
+    removeError.clear();
+    std::filesystem::remove(emptyBgmOSUPath, removeError);
+    removeError.clear();
+    std::filesystem::remove(emptyBgmIMDPath, removeError);
+    ok &= check(!emptyBgmSource.saveToFile(emptyBgmOSUPath),
+                "osu! should reject unrepresentable empty BGM tracks");
+    ok &= check(!emptyBgmSource.saveToFile(emptyBgmIMDPath),
+                "RM/IMD should reject unrepresentable empty BGM tracks");
+    ok &= check(!std::filesystem::exists(emptyBgmOSUPath) &&
+                    !std::filesystem::exists(emptyBgmIMDPath),
+                "rejected empty-BGM exports should not leave partial files");
     return ok;
 }
 

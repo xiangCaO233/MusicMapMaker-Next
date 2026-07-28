@@ -216,6 +216,28 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     const bool saveAsSlideMode = mode == 7;
     meta["mode"]               = mode;
 
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        if ( saveAsKeyMode && !polyline.m_subNotes.empty() &&
+             polyline.getSampleBinding() ) {
+            XERROR(
+                "Malody 导出失败：Key 模式会展开 "
+                "Polyline，无法保留其根节点采样绑定");
+            return false;
+        }
+        const auto boundSubNote = std::find_if(
+            polyline.m_subNotes.begin(),
+            polyline.m_subNotes.end(),
+            [](const auto& noteRef) {
+                return noteRef.get().getSampleBinding().has_value();
+            });
+        if ( boundSubNote != polyline.m_subNotes.end() ) {
+            XERROR(
+                "Malody 导出失败：Polyline 子节点的采样绑定无法由 seg "
+                "字段无损表达");
+            return false;
+        }
+    }
+
     auto& song        = meta["song"];
     song["title"]     = beatMap.m_baseMapMetadata.title;
     song["titleorg"]  = beatMap.m_baseMapMetadata.title_unicode;

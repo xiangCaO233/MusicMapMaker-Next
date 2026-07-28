@@ -1,12 +1,15 @@
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "log/colorful-log.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -111,6 +114,8 @@ MMM::BeatMap makeFixture()
     beatmap.m_baseMapMetadata.video_starttime = 1000;
     beatmap.m_baseMapMetadata.track_count     = 4;
     beatmap.m_baseMapMetadata.bgm_track_count = 2;
+    beatmap.m_baseMapMetadata.main_audio_path = "legacy-source.ogg";
+    beatmap.m_baseMapMetadata.song_file_hint  = "source-hint.ogg";
 
     MMM::Timing bpm;
     bpm.m_timestamp             = 1000.0;
@@ -210,9 +215,8 @@ bool runFixtureCoverage()
         "content end time calculated");
     ok &= check(result.beatmap.m_baseMapMetadata.video_starttime == 667,
                 "video start time scaled");
-    ok &= check(result.beatmap.m_baseMapMetadata.main_audio_path ==
-                    std::filesystem::path("audio_1_5x.wav"),
-                "audio path updated");
+    ok &= check(result.beatmap.m_baseMapMetadata.main_audio_path.empty(),
+                "legacy main audio path cleared");
     ok &= check(result.beatmap.m_baseMapMetadata.song_file_hint ==
                     std::filesystem::path("audio_1_5x.wav"),
                 "song file hint updated");
@@ -305,6 +309,119 @@ bool runFixtureCoverage()
     auto invalidResult =
         MMM::BeatmapSpeedTransform::createSpeedVersion(source, invalidOptions);
     ok &= check(!invalidResult.success, "invalid speed rejected");
+    return ok;
+}
+
+/// @brief 验证 Malody time.delay 在倍速后保持数值语义并可往返。
+/// @param outputRoot 测试输出目录。
+/// @return 通过时返回 true。
+bool runMalodyDelayRoundTrip(const std::filesystem::path& outputRoot)
+{
+    std::error_code createError;
+    std::filesystem::create_directories(outputRoot, createError);
+    if ( createError ) {
+        return check(false, "Malody delay output directory created");
+    }
+
+    const auto     sourcePath = outputRoot / "speed_delay_source.mc";
+    const auto     outputPath = outputRoot / "speed_delay_transformed.mc";
+    nlohmann::json sourceJson{
+        { "meta",
+          { { "creator", "MMM" },
+            { "version", "Delay" },
+            { "mode", 0 },
+            { "mode_ext", { { "column", 4 } } },
+            { "song",
+              { { "title", "Delay" },
+                { "artist", "MMM" },
+                { "file", "source.ogg" },
+                { "bpm", 120.0 } } } } },
+        { "time",
+          nlohmann::json::array(
+              { { { "beat", nlohmann::json::array({ 0, 0, 1 }) },
+                  { "bpm", 120.0 },
+                  { "delay", 300.0 } },
+                { { "beat", nlohmann::json::array({ 4, 0, 1 }) },
+                  { "bpm", 150.0 },
+                  { "delay", -80.0 } } }) },
+        { "note",
+          nlohmann::json::array(
+              { { { "beat", nlohmann::json::array({ 2, 0, 1 }) },
+                  { "column", 1 } } }) }
+    };
+
+    {
+        std::ofstream sourceFile(sourcePath,
+                                 std::ios::binary | std::ios::trunc);
+        if ( !sourceFile ) {
+            return check(false, "Malody delay source opened");
+        }
+        sourceFile << sourceJson.dump();
+    }
+
+    MMM::BeatMap source = MMM::BeatMap::loadFromFile(sourcePath);
+    MMM::BeatmapSpeedTransformOptions options;
+    options.speed     = 2.0;
+    options.mapPath   = outputPath.filename();
+    options.audioPath = "transformed.ogg";
+    options.name      = "Delay 2x";
+    options.version   = "Delay 2x";
+
+    auto result =
+        MMM::BeatmapSpeedTransform::createSpeedVersion(source, options);
+    bool ok = check(result.success, "Malody delay transform succeeds");
+    ok &= check(result.beatmap.m_timings.size() == 2,
+                "Malody delay timing count kept");
+    if ( result.beatmap.m_timings.size() == 2 ) {
+        const auto& firstProperties =
+            result.beatmap.m_timings[0]
+                .m_metadata.timing_properties[MMM::TimingMetadataType::MALODY];
+        const auto& secondProperties =
+            result.beatmap.m_timings[1]
+                .m_metadata.timing_properties[MMM::TimingMetadataType::MALODY];
+        const auto firstDelayIt  = firstProperties.find("delay");
+        const auto secondDelayIt = secondProperties.find("delay");
+        const auto firstDelay =
+            firstDelayIt == firstProperties.end()
+                ? nlohmann::json{}
+                : nlohmann::json::parse(firstDelayIt->second, nullptr, false);
+        const auto secondDelay =
+            secondDelayIt == secondProperties.end()
+                ? nlohmann::json{}
+                : nlohmann::json::parse(secondDelayIt->second, nullptr, false);
+        ok &= check(firstDelayIt != firstProperties.end() &&
+                        firstDelay.is_number() &&
+                        isNearlyEqual(firstDelay.get<double>(), 150.0),
+                    "first Malody delay scaled as a number");
+        ok &= check(secondDelayIt != secondProperties.end() &&
+                        secondDelay.is_number() &&
+                        isNearlyEqual(secondDelay.get<double>(), -40.0),
+                    "second Malody delay scaled as a number");
+    }
+
+    ok &= check(result.beatmap.saveToFile(outputPath),
+                "transformed Malody delay map saved");
+    nlohmann::json savedJson;
+    {
+        std::ifstream outputFile(outputPath);
+        if ( outputFile ) {
+            savedJson = nlohmann::json::parse(outputFile, nullptr, false);
+        }
+    }
+    ok &= check(
+        !savedJson.is_discarded() && savedJson.contains("time") &&
+            savedJson["time"].size() == 2 &&
+            savedJson["time"][0]["delay"].is_number() &&
+            savedJson["time"][1]["delay"].is_number() &&
+            isNearlyEqual(savedJson["time"][0]["delay"].get<double>(), 150.0) &&
+            isNearlyEqual(savedJson["time"][1]["delay"].get<double>(), -40.0),
+        "Malody delay remains numeric in exported mc");
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
+    ok &= check(reloaded.m_timings.size() == 2 &&
+                    isNearlyEqual(reloaded.m_timings[0].m_timestamp, 150.0) &&
+                    isNearlyEqual(reloaded.m_timings[1].m_timestamp, 1110.0),
+                "scaled Malody timing anchors survive mc round trip");
     return ok;
 }
 
@@ -501,6 +618,7 @@ int main(int argc, char* argv[])
 
     bool ok = runFixtureCoverage();
     if ( argc >= 3 ) {
+        ok &= runMalodyDelayRoundTrip(argv[2]);
         ok &= runResourceCoverage(argv[1], argv[2]);
     }
 
