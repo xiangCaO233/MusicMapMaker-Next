@@ -190,14 +190,10 @@ private:
     bool m_leftPressStartedOnEntity{ false };
     /// @brief 当前左键手势是否已经发生拖动。
     bool m_leftPressDragged{ false };
-    /// @brief 当前左键手势是否正在用 Move 工具拖动画布。
-    bool m_isCanvasPanning{ false };
-    /// @brief 拖动画布开始时的当前显示时间，单位秒。
-    double m_canvasPanStartTime{ 0.0 };
-    /// @brief 拖动画布开始时鼠标抓住的显示时间，单位秒。
-    double m_canvasPanAnchorTime{ 0.0 };
-    /// @brief 拖动画布开始时鼠标所在的本地 Y 坐标，单位像素。
-    float m_canvasPanAnchorMouseY{ 0.0f };
+    /// @brief 当前中键手势是否正在二维平移主画布。
+    bool m_isMiddleCanvasPanning{ false };
+    /// @brief 上一次中键平移输入的画布局部逻辑像素坐标。
+    glm::vec2 m_lastMiddlePanMousePosition{ 0.0F, 0.0F };
     /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。

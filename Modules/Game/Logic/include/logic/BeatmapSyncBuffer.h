@@ -314,6 +314,8 @@ struct RenderSnapshot {
     // 播放状态
     bool   isPlaying{ false };
     double currentTime{ 0.0 };
+    /// @brief 当前主画布内容相对基础轨道布局的横向逻辑像素偏移。
+    float canvasHorizontalOffsetX{ 0.0F };
     /// @brief 未包含视觉偏移的原始谱面播放时间，单位秒。
     double playbackTime{ 0.0 };
     double totalTime{ 0.0 };
@@ -483,6 +485,7 @@ struct RenderSnapshot {
         backgroundVideoStartTime     = 0.0;
         isPlaying                    = false;
         currentTime                  = 0.0;
+        canvasHorizontalOffsetX      = 0.0F;
         playbackTime                 = 0.0;
         totalTime                    = 0.0;
         snapshotSysTime              = 0.0;

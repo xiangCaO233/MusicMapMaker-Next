@@ -4,6 +4,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
@@ -390,15 +391,17 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         targetTime = snap.snappedTime;
     }
 
-    float leftX =
-        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-    float rightX =
-        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.right;
-    float trackAreaW   = rightX - leftX;
-    float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
-    int   targetTrack =
-        static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
-    targetTrack = std::clamp(targetTrack, 0, ctx.trackCount - 1);
+    const auto projection = calculatePlayerTrackProjection(
+        it->second.viewportWidth,
+        ctx.trackCount,
+        ctx.lastConfig.visual.trackLayout.left,
+        ctx.lastConfig.visual.trackLayout.right,
+        SessionUtils::isMainCanvasCameraId(cmd.cameraId)
+            ? it->second.horizontalOffsetX
+            : 0.0F);
+    const float leftX        = projection.leftX;
+    const float singleTrackW = projection.singleTrackWidth;
+    int         targetTrack  = projection.trackAt(cmd.mouseX, ctx.trackCount);
 
     // --- 2. 计算参考点的初始位置 ---
     // 以鼠标抓取的那个点作为参考，计算位移增量
@@ -562,13 +565,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW  = (it->second.viewportWidth *
-                              (ctx.lastConfig.visual.trackLayout.right -
-                               ctx.lastConfig.visual.trackLayout.left)) /
-                             static_cast<float>(ctx.trackCount);
-            float lx       = it->second.viewportWidth *
-                             ctx.lastConfig.visual.trackLayout.left;
-            trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
+            trans->m_pos.x = leftX + note->m_trackIndex * singleTrackW;
         }
     } else if ( isMultiDrag ) {
         // 预检查增量限制

@@ -1,5 +1,6 @@
-#include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+
+#include "audio/AudioManager.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
@@ -307,187 +308,6 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
            extension == ".osz" || extension == ".mpk";
 }
 
-/// @brief 用于主画布拖动吸附的 BPM 网格区间。
-struct BpmSnapSpan {
-    /// @brief BPM 段起始时间，单位秒。
-    double time{ 0.0 };
-
-    /// @brief 下一个 BPM 段起始时间，单位秒。
-    double nextTime{ std::numeric_limits<double>::infinity() };
-
-    /// @brief BPM 值。
-    double bpm{ 120.0 };
-};
-
-/// @brief 规整用于分拍吸附的 BPM 值。
-/// @param bpm 原始 BPM。
-/// @param fallbackBpm 快照回退 BPM。
-/// @return 可用于计算分拍间隔的 BPM。
-/// @warning UI 热路径：拖动画布磁吸时调用；只做常量级数值规整。
-double normalizedSnapBpm(double bpm, double fallbackBpm)
-{
-    double result = bpm;
-    if ( result <= 0.0 || !std::isfinite(result) ) {
-        result = fallbackBpm;
-    }
-    if ( result <= 0.0 || !std::isfinite(result) ) {
-        result = 120.0;
-    }
-    return std::min(result, 10000.0);
-}
-
-/// @brief 查找指定时间所在的 BPM 分拍区间。
-/// @param snapshot 当前渲染快照。
-/// @param rawTime 目标显示时间，单位秒。
-/// @param allowBeforeFirstTiming 是否允许在首个 BPM 前反推分拍网格。
-/// @param outSpan 输出 BPM 分拍区间。
-/// @return 找到可用区间时返回 true。
-/// @warning UI 热路径：仅在磁铁开启且拖动画布时调用；线性扫描 Timing
-/// 快照，不访问 ECS 或文件系统。
-bool findBpmSnapSpan(const Logic::RenderSnapshot& snapshot, double rawTime,
-                     bool allowBeforeFirstTiming, BpmSnapSpan& outSpan)
-{
-    constexpr double EPSILON = 1e-6;
-
-    bool   hasAny      = false;
-    bool   hasSelected = false;
-    double firstTime   = 0.0;
-    double firstBpm    = 120.0;
-
-    for ( const auto& segment : snapshot.scrollSegments ) {
-        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
-            continue;
-        }
-
-        const double bpm =
-            normalizedSnapBpm(segment.bpmValue, snapshot.fallbackBpm);
-        if ( !hasAny ) {
-            hasAny    = true;
-            firstTime = segment.time;
-            firstBpm  = bpm;
-        }
-
-        if ( segment.time <= rawTime + EPSILON ) {
-            outSpan.time = segment.time;
-            outSpan.bpm  = bpm;
-            hasSelected  = true;
-            continue;
-        }
-
-        if ( hasSelected ) {
-            outSpan.nextTime = segment.time;
-            return true;
-        }
-
-        break;
-    }
-
-    if ( hasSelected ) {
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        return true;
-    }
-
-    if ( hasAny && rawTime < firstTime && allowBeforeFirstTiming ) {
-        outSpan.time     = firstTime;
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        outSpan.bpm      = firstBpm;
-        for ( const auto& segment : snapshot.scrollSegments ) {
-            if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
-                continue;
-            }
-            if ( std::abs(segment.time - firstTime) <= EPSILON ) {
-                outSpan.bpm =
-                    normalizedSnapBpm(segment.bpmValue, snapshot.fallbackBpm);
-            } else if ( segment.time > firstTime + EPSILON ) {
-                outSpan.nextTime = segment.time;
-                break;
-            }
-        }
-        return true;
-    }
-
-    if ( !hasAny ) {
-        outSpan.time     = 0.0;
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        outSpan.bpm      = normalizedSnapBpm(0.0, snapshot.fallbackBpm);
-        return true;
-    }
-
-    return false;
-}
-
-/// @brief 磁铁开启时将拖动画布目标时间转换为已跨过的分拍线。
-/// @param snapshot 当前渲染快照。
-/// @param rawTargetTime 连续拖动换算出的目标显示时间，单位秒。
-/// @param startTime 拖动开始时的当前显示时间，单位秒。
-/// @param snapToWholeBeat 是否按整拍吸附；为 false 时按当前分拍数吸附。
-/// @param outTime 输出吸附后的显示时间。
-/// @return 成功换算时返回 true。
-/// @warning UI 热路径：Move 工具空白拖动画布时每帧调用；读取当前编辑器配置，
-/// 只扫描 Timing 快照并做常量级数学计算。
-bool snapCanvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
-                             double rawTargetTime, double startTime,
-                             bool snapToWholeBeat, double& outTime)
-{
-    if ( !std::isfinite(rawTargetTime) || !std::isfinite(startTime) ) {
-        return false;
-    }
-
-    const auto& editorConfig =
-        Logic::EditorEngine::instance().getEditorConfig();
-
-    int beatDivisor = editorConfig.settings.beatDivisor;
-    if ( beatDivisor <= 0 ) {
-        beatDivisor = 4;
-    }
-
-    BpmSnapSpan span;
-    if ( !findBpmSnapSpan(snapshot,
-                          rawTargetTime,
-                          editorConfig.visual.drawBeatLinesBeforeFirstTiming,
-                          span) ) {
-        return false;
-    }
-
-    const double beatDuration = 60.0 / span.bpm;
-    const double stepDuration =
-        snapToWholeBeat ? beatDuration
-                        : beatDuration / static_cast<double>(beatDivisor);
-    if ( stepDuration <= 1e-9 || !std::isfinite(stepDuration) ) {
-        return false;
-    }
-
-    constexpr double EPSILON       = 1e-6;
-    const bool       movingLater   = rawTargetTime > startTime + EPSILON;
-    const bool       movingEarlier = rawTargetTime < startTime - EPSILON;
-    if ( !movingLater && !movingEarlier ) {
-        outTime = startTime;
-        return true;
-    }
-
-    const double relativeTime = rawTargetTime - span.time;
-    const double stepCount =
-        movingLater ? std::floor(relativeTime / stepDuration + EPSILON)
-                    : std::ceil(relativeTime / stepDuration - EPSILON);
-    double candidate = span.time + stepCount * stepDuration;
-    if ( candidate > span.nextTime ) {
-        candidate = span.nextTime;
-    }
-    candidate = std::max(0.0, candidate);
-    if ( !std::isfinite(candidate) ) {
-        return false;
-    }
-
-    if ( movingLater && candidate <= startTime + EPSILON ) {
-        outTime = startTime;
-    } else if ( movingEarlier && candidate >= startTime - EPSILON ) {
-        outTime = startTime;
-    } else {
-        outTime = candidate;
-    }
-    return true;
-}
-
 /// @brief 跳转到主画布当前悬浮时间点。
 /// @param snapshot 当前渲染快照，时间字段使用视觉时间域。
 /// @return 成功发送跳转命令时返回 true。
@@ -697,93 +517,6 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
-}
-
-/// @brief 根据画布 Y 坐标计算鼠标下方的显示时间。
-/// @param snapshot 当前渲染快照。
-/// @param viewportHeight 当前画布高度，单位像素。
-/// @param mouseY 当前鼠标 Y 坐标，单位像素。
-/// @return 鼠标下方的显示时间。
-/// @warning UI 热路径：Move 工具空白按下时调用；只读取当前快照。
-double canvasTimeAtMouseY(const Logic::RenderSnapshot& snapshot,
-                          float viewportHeight, float mouseY)
-{
-    if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
-         viewportHeight <= 1.0f ) {
-        return snapshot.currentTime;
-    }
-
-    const auto&  visual = Config::AppConfig::instance().getVisualConfig();
-    const double scale  = std::abs(snapshot.renderScaleY) > 1e-6f
-                              ? static_cast<double>(snapshot.renderScaleY)
-                              : 1.0;
-    const double judgmentLineY = static_cast<double>(viewportHeight) *
-                                 static_cast<double>(visual.judgeline_pos);
-    const double currentAbsY =
-        snapshotAbsYAtTime(snapshot, snapshot.currentTime);
-    return snapshotTimeAtAbsY(
-        snapshot,
-        currentAbsY + (judgmentLineY - static_cast<double>(mouseY)) / scale);
-}
-
-/// @brief 根据拖动画布锚点计算主画布滚动后的显示时间。
-/// @param snapshot 当前渲染快照。
-/// @param viewportHeight 当前画布高度，单位像素。
-/// @param mouseY 当前鼠标 Y 坐标，单位像素。
-/// @param startTime 拖动开始时的当前显示时间，单位秒。
-/// @param anchorTime 拖动开始时鼠标抓住的显示时间。
-/// @param anchorMouseY 拖动开始时鼠标所在的本地 Y 坐标，单位像素。
-/// @param accelerate 是否使用快速拖动倍率。
-/// @return 保持锚点贴合鼠标位置所需的当前显示时间。
-/// @warning UI 热路径：Move 工具空白拖动画布时每帧调用；读取当前编辑器配置，
-/// 只读取快照与做数值换算，不访问 ECS 或文件系统。
-double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
-                           float viewportHeight, float mouseY, double startTime,
-                           double anchorTime, float anchorMouseY,
-                           bool accelerate)
-{
-    if ( !std::isfinite(mouseY) || !std::isfinite(anchorMouseY) ||
-         !std::isfinite(viewportHeight) || viewportHeight <= 1.0f ||
-         !std::isfinite(startTime) || !std::isfinite(anchorTime) ) {
-        return snapshot.currentTime;
-    }
-
-    double multiplier = 1.0;
-    if ( accelerate ) {
-        multiplier = std::max(1.0f,
-                              Logic::EditorEngine::instance()
-                                  .getEditorConfig()
-                                  .settings.scrollSpeedMultiplier);
-    }
-    const double effectiveMouseY =
-        static_cast<double>(anchorMouseY) +
-        (static_cast<double>(mouseY) - static_cast<double>(anchorMouseY)) *
-            multiplier;
-
-    const auto&  visual = Config::AppConfig::instance().getVisualConfig();
-    const double scale  = std::abs(snapshot.renderScaleY) > 1e-6f
-                              ? static_cast<double>(snapshot.renderScaleY)
-                              : 1.0;
-    const double judgmentLineY = static_cast<double>(viewportHeight) *
-                                 static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
-    const double targetCurrentAbsY =
-        anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
-    const double rawTargetTime =
-        snapshotTimeAtAbsY(snapshot, targetCurrentAbsY);
-    const auto& editorConfig =
-        Logic::EditorEngine::instance().getEditorConfig();
-    if ( editorConfig.settings.scrollSnap ) {
-        double snappedTime = rawTargetTime;
-        if ( snapCanvasPanTargetTime(snapshot,
-                                     rawTargetTime,
-                                     startTime,
-                                     accelerate,
-                                     snappedTime) ) {
-            return snappedTime;
-        }
-    }
-    return rawTargetTime;
 }
 
 /// @brief 开始一个固定在当前 ImGui viewport 内的画布悬浮信息窗口。
@@ -1273,7 +1006,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
     auto& appConfig = Config::AppConfig::instance();
     auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
-    float judgmentLinePosition =
+    const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
+    const float worldPointerX = pointerX - cameraOffsetX;
+    float       judgmentLinePosition =
         sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
     const float dpiScale                 = appConfig.getWindowContentScale();
     const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
@@ -1358,7 +1093,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 !hoveredComponent.has_value() ) {
         hoveredHandle = hitTestTrackLayout(layout,
                                            judgmentLinePosition,
-                                           pointerX,
+                                           worldPointerX,
                                            pointerY,
                                            targetWidth,
                                            targetHeight,
@@ -1474,7 +1209,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_trackLayoutDragHandle   = hoveredHandle;
             m_trackLayoutDragStart    = layout;
             m_trackLayoutPointerStart = {
-                pointerX / targetWidth,
+                worldPointerX / targetWidth,
                 pointerY / targetHeight,
             };
         }
@@ -1600,9 +1335,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
 
             const Logic::CanvasComponentBounds trackLayoutBounds{
-                layout.left * targetWidth,
+                layout.left * targetWidth + cameraOffsetX,
                 layout.top * targetHeight,
-                layout.right * targetWidth,
+                layout.right * targetWidth + cameraOffsetX,
                 layout.bottom * targetHeight,
             };
             appendCanvasComponentSnapTargets(trackLayoutBounds,
@@ -1827,7 +1562,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-        const float         normalizedX = pointerX / targetWidth;
+        const float         normalizedX = worldPointerX / targetWidth;
         const float         normalizedY = pointerY / targetHeight;
         Config::TrackLayout candidate   = m_trackLayoutDragStart;
         if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::JudgmentLine ) {
@@ -1886,9 +1621,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 m_canvasComponentSnapTargetsY.push_back(targetHeight * 0.5f);
 
                 const Logic::CanvasComponentBounds candidateBounds{
-                    candidate.left * targetWidth,
+                    candidate.left * targetWidth + cameraOffsetX,
                     candidate.top * targetHeight,
-                    candidate.right * targetWidth,
+                    candidate.right * targetWidth + cameraOffsetX,
                     candidate.bottom * targetHeight,
                 };
                 const auto snap = Logic::snapCanvasComponentBounds(
@@ -1896,15 +1631,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     m_canvasComponentSnapTargetsX,
                     m_canvasComponentSnapTargetsY,
                     componentSnapDistance);
-                candidate = moveTrackLayoutToPixelCenter(candidate,
-                                                         snap.center.x,
-                                                         snap.center.y,
-                                                         targetWidth,
-                                                         targetHeight);
+                candidate =
+                    moveTrackLayoutToPixelCenter(candidate,
+                                                 snap.center.x - cameraOffsetX,
+                                                 snap.center.y,
+                                                 targetWidth,
+                                                 targetHeight);
                 const Logic::CanvasComponentBounds snappedBounds{
-                    candidate.left * targetWidth,
+                    candidate.left * targetWidth + cameraOffsetX,
                     candidate.top * targetHeight,
-                    candidate.right * targetWidth,
+                    candidate.right * targetWidth + cameraOffsetX,
                     candidate.bottom * targetHeight,
                 };
                 if ( snap.snappedX &&
@@ -1952,9 +1688,11 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2 canvasMax{ canvasScreenX + targetWidth,
                             canvasScreenY + targetHeight };
-    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth,
+    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth +
+                                cameraOffsetX,
                             canvasScreenY + layout.top * targetHeight };
-    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth,
+    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth +
+                                cameraOffsetX,
                             canvasScreenY + layout.bottom * targetHeight };
     const ImVec2 layoutCenter{ (layoutMin.x + layoutMax.x) * 0.5f,
                                (layoutMin.y + layoutMax.y) * 0.5f };
@@ -2260,18 +1998,32 @@ void Basic2DCanvasInteraction::handleInteractions(
         hasValidMousePos && targetWidth > 0.0f && targetHeight > 0.0f &&
         localMousePos.x >= 0.0f && localMousePos.x <= targetWidth &&
         localMousePos.y >= 0.0f && localMousePos.y <= targetHeight;
-    bool isHovered  = isInsideCanvas && ImGui::IsWindowHovered();
-    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0);
+    bool       isHovered = isInsideCanvas && ImGui::IsWindowHovered();
+    const bool middlePanStartHovered =
+        isInsideCanvas &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    const bool middleClicked =
+        middlePanStartHovered &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false);
+    if ( middleClicked ) {
+        m_isMiddleCanvasPanning      = true;
+        m_lastMiddlePanMousePosition = { localMousePos.x, localMousePos.y };
+    }
+    const bool isDragging = !m_isMiddleCanvasPanning && hasValidMousePos &&
+                            ImGui::IsMouseDragging(ImGuiMouseButton_Left);
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     const auto& layout = visual.trackLayout;
-    const float normX =
-        targetWidth > 0.0f ? localMousePos.x / targetWidth : 0.0f;
+    const float trackLeftX =
+        targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
+    const float trackRightX =
+        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX;
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
-        isHovered && normX >= layout.left && normX <= layout.right &&
-        normY >= layout.top && normY <= layout.bottom;
+        isHovered && localMousePos.x >= trackLeftX &&
+        localMousePos.x <= trackRightX && normY >= layout.top &&
+        normY <= layout.bottom;
     const bool isLayoutEditing =
         Logic::EditorEngine::instance().getCurrentTool() ==
         Logic::EditTool::Layout;
@@ -2313,6 +2065,71 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.isDragging     = isDragging;
     }
 
+    if ( m_isMiddleCanvasPanning ) {
+        if ( middleClicked ) {
+            // 中键取得当前手势所有权前先结束已存在的左/右键编辑，避免工具状态悬空。
+            if ( m_leftPressStartedOnCanvas &&
+                 currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            } else if ( m_leftPressStartedOnCanvas &&
+                        currentSnapshot->currentTool ==
+                            Logic::EditTool::Draw ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+            } else if ( m_leftPressStartedOnEntity &&
+                        currentSnapshot->currentTool ==
+                            Logic::EditTool::Move ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            }
+            if ( m_rightEraseActive ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            }
+            if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+                 m_noteScaleDragTarget.has_value() ||
+                 m_canvasComponentDragTarget.has_value() ||
+                 m_layoutConfigurationChanged ) {
+                finishLayoutEditing();
+            }
+
+            m_leftPressStartedOnCanvas      = false;
+            m_leftPressStartedInTrackLayout = false;
+            m_leftPressStartedOnEntity      = false;
+            m_leftPressDragged              = false;
+            m_colorStrokeEntities.clear();
+            resetContinuousEditCommands();
+        }
+
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        if ( ImGui::IsMouseDown(ImGuiMouseButton_Middle) && hasValidMousePos ) {
+            const glm::vec2 currentMousePosition{
+                localMousePos.x,
+                localMousePos.y,
+            };
+            const glm::vec2 delta =
+                currentMousePosition - m_lastMiddlePanMousePosition;
+            m_lastMiddlePanMousePosition = currentMousePosition;
+            if ( std::abs(delta.x) > 0.001F || std::abs(delta.y) > 0.001F ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                        .cameraId       = m_cameraId,
+                        .deltaX         = delta.x,
+                        .deltaY         = delta.y,
+                        .viewportWidth  = targetWidth,
+                        .viewportHeight = targetHeight,
+                        .renderScaleY   = currentSnapshot->renderScaleY,
+                    }));
+            }
+        }
+
+        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Middle) ) {
+            m_isMiddleCanvasPanning = false;
+        }
+        return;
+    }
+
     if ( isLayoutEditing ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
@@ -2328,7 +2145,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
         handleLayoutEditing(localMousePos.x,
@@ -2666,9 +2482,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
-        m_canvasPanStartTime            = 0.0;
-        m_canvasPanAnchorMouseY         = 0.0f;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
         publishCanvasHoverSeek(*currentSnapshot);
@@ -2677,7 +2490,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = isMouseInTrackLayout;
         m_leftPressStartedOnEntity      = hoveredEntity != entt::null;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
 
@@ -2705,12 +2517,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
                                                  ImGui::GetIO().KeyCtrl }));
-                } else if ( !currentSnapshot->isPlaying ) {
-                    m_isCanvasPanning       = true;
-                    m_canvasPanStartTime    = currentSnapshot->currentTime;
-                    m_canvasPanAnchorMouseY = localMousePos.y;
-                    m_canvasPanAnchorTime   = canvasTimeAtMouseY(
-                        *currentSnapshot, targetHeight, localMousePos.y);
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -2813,25 +2619,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                                           localMousePos.y,
                                           ImGui::GetIO().KeyCtrl }));
             }
-        } else if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
-                    m_isCanvasPanning && !currentSnapshot->isPlaying &&
-                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            const double targetTime =
-                canvasPanTargetTime(*currentSnapshot,
-                                    targetHeight,
-                                    localMousePos.y,
-                                    m_canvasPanStartTime,
-                                    m_canvasPanAnchorTime,
-                                    m_canvasPanAnchorMouseY,
-                                    ImGui::GetIO().KeyShift);
-            if ( std::isfinite(targetTime) &&
-                 std::abs(targetTime - currentSnapshot->currentTime) > 1e-6 ) {
-                const double visualOffset = Config::AppConfig::instance()
-                                                .getVisualConfig()
-                                                .getEffectiveVisualOffset();
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSeek{ targetTime - visualOffset }));
-            }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -2882,9 +2669,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
-        m_canvasPanStartTime            = 0.0;
-        m_canvasPanAnchorMouseY         = 0.0f;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
     }

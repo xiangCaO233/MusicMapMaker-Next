@@ -6,6 +6,7 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
@@ -191,8 +192,14 @@ void NoteRenderSystem::generateSnapshot(
         // 提前计算轨道参数
         float tempLX = 0, tempRX = 0, tempTY = 0, tempBY = viewportHeight;
         if ( isMainCanvas ) {
-            tempLX = viewportWidth * config.visual.trackLayout.left;
-            tempRX = viewportWidth * config.visual.trackLayout.right;
+            const auto projection = calculatePlayerTrackProjection(
+                viewportWidth,
+                trackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            tempLX = projection.leftX;
+            tempRX = projection.rightX;
             tempTY = viewportHeight * config.visual.trackLayout.top;
             tempBY = viewportHeight * config.visual.trackLayout.bottom;
         } else {
@@ -1013,8 +1020,14 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                          { 1.0f, 1.0f, 1.0f, 0.15f });
     } else {
         // 谱面布局只允许在轨道水平范围内生成基础绘制命令。
-        const float lx = viewportWidth * config.visual.trackLayout.left;
-        const float rx = viewportWidth * config.visual.trackLayout.right;
+        const auto projection =
+            calculatePlayerTrackProjection(viewportWidth,
+                                           trackCount,
+                                           config.visual.trackLayout.left,
+                                           config.visual.trackLayout.right,
+                                           snapshot->canvasHorizontalOffsetX);
+        const float lx = projection.leftX;
+        const float rx = projection.rightX;
         // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量。
         batcher.setScissor(
             lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);

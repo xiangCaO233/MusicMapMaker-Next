@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
@@ -1014,7 +1015,8 @@ bool BeatmapSession::processCommands()
                 else if constexpr ( std::is_same_v<T, CmdSetPlayState> ||
                                     std::is_same_v<T, CmdSeek> ||
                                     std::is_same_v<T, CmdSetPlaybackSpeed> ||
-                                    std::is_same_v<T, CmdScroll> ) {
+                                    std::is_same_v<T, CmdScroll> ||
+                                    std::is_same_v<T, CmdPanCanvas> ) {
                     m_playback->handleCommand(arg);
                 }
                 // --- Interaction 处理的命令 ---
@@ -1085,8 +1087,11 @@ void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
         m_ctx->cameras[cmd.cameraId] =
             CameraInfo{ cmd.cameraId, cmd.width, cmd.height };
     } else {
-        m_ctx->cameras[cmd.cameraId].viewportWidth  = cmd.width;
-        m_ctx->cameras[cmd.cameraId].viewportHeight = cmd.height;
+        auto& camera             = m_ctx->cameras[cmd.cameraId];
+        camera.horizontalOffsetX = resizeCanvasHorizontalOffset(
+            camera.horizontalOffsetX, camera.viewportWidth, cmd.width);
+        camera.viewportWidth  = cmd.width;
+        camera.viewportHeight = cmd.height;
     }
 }
 

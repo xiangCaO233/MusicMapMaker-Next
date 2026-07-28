@@ -395,6 +395,27 @@ struct CmdScroll {
     ScrollCommandIntent intent{ ScrollCommandIntent::MoveTimeline };
 };
 
+/// @brief 按逻辑像素增量二维平移主画布。
+struct CmdPanCanvas {
+    /// @brief 接收平移的主画布 ID。
+    std::string cameraId;
+
+    /// @brief 内容在屏幕上的横向逻辑像素位移。
+    float deltaX{ 0.0F };
+
+    /// @brief 内容在屏幕上的纵向逻辑像素位移。
+    float deltaY{ 0.0F };
+
+    /// @brief 产生本次输入时的视口逻辑宽度。
+    float viewportWidth{ 0.0F };
+
+    /// @brief 产生本次输入时的视口逻辑高度。
+    float viewportHeight{ 0.0F };
+
+    /// @brief 当前画布纵向渲染缩放。
+    float renderScaleY{ 1.0F };
+};
+
 /**
  * @brief 更新时间线事件指令
  */
@@ -573,13 +594,13 @@ using LogicCommand = std::variant<
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdUpdateTimelineEvents,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdCreateTimelineEvents,
-    CmdReplaceBeatmapTimings, CmdReplaceBeatmapData, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap,
-    CmdSaveTemporaryProject>;
+    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
+    CmdRemoveBeatmap, CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

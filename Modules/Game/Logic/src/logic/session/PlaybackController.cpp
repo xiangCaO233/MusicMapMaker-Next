@@ -4,6 +4,8 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
@@ -429,6 +431,86 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     Audio::AudioManager::instance().seek(m_ctx.currentTime);
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
+}
+
+/// @brief 处理主画布中键二维平移。
+/// @param cmd 逻辑像素空间中的平移增量和输入视口尺寸。
+/// @warning 逻辑输入热路径：中键拖动期间每个 update
+/// 调用；只更新单个相机并通过 ScrollCache 执行对数级反向映射。
+void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
+{
+    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
+        return;
+    }
+
+    auto cameraIt = m_ctx.cameras.find(cmd.cameraId);
+    if ( cameraIt == m_ctx.cameras.end() ) {
+        if ( !std::isfinite(cmd.viewportWidth) || cmd.viewportWidth <= 0.0F ||
+             !std::isfinite(cmd.viewportHeight) ||
+             cmd.viewportHeight <= 0.0F ) {
+            return;
+        }
+        cameraIt = m_ctx.cameras
+                       .emplace(cmd.cameraId,
+                                CameraInfo{ cmd.cameraId,
+                                            cmd.viewportWidth,
+                                            cmd.viewportHeight })
+                       .first;
+    }
+
+    auto& camera = cameraIt->second;
+    if ( std::isfinite(cmd.viewportWidth) && cmd.viewportWidth > 0.0F &&
+         std::abs(camera.viewportWidth - cmd.viewportWidth) > 0.01F ) {
+        camera.horizontalOffsetX = resizeCanvasHorizontalOffset(
+            camera.horizontalOffsetX, camera.viewportWidth, cmd.viewportWidth);
+        camera.viewportWidth = cmd.viewportWidth;
+    }
+    if ( std::isfinite(cmd.viewportHeight) && cmd.viewportHeight > 0.0F ) {
+        camera.viewportHeight = cmd.viewportHeight;
+    }
+
+    if ( std::isfinite(cmd.deltaX) ) {
+        camera.horizontalOffsetX += cmd.deltaX;
+        if ( !std::isfinite(camera.horizontalOffsetX) ) {
+            camera.horizontalOffsetX = 0.0F;
+        }
+    }
+
+    if ( !std::isfinite(cmd.deltaY) || std::abs(cmd.deltaY) <= 0.001F ) {
+        return;
+    }
+
+    const double visualOffset =
+        m_ctx.lastConfig.visual.getEffectiveVisualOffset();
+    const double visualTime   = m_ctx.currentTime + visualOffset;
+    double       renderScaleY = static_cast<double>(cmd.renderScaleY);
+    if ( !std::isfinite(renderScaleY) || std::abs(renderScaleY) <= 1e-6 ) {
+        renderScaleY = 1.0;
+    }
+
+    double      targetVisualTime = visualTime;
+    const auto* cache =
+        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( cache ) {
+        const double currentAbsY = cache->getVisualAnchorAbsY(visualTime);
+        targetVisualTime         = cache->getTime(
+            currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+    } else {
+        constexpr double FALLBACK_PIXELS_PER_SECOND = 500.0;
+        targetVisualTime += static_cast<double>(cmd.deltaY) / renderScaleY /
+                            FALLBACK_PIXELS_PER_SECOND;
+    }
+
+    if ( !std::isfinite(targetVisualTime) ) {
+        return;
+    }
+
+    handleCommand(CmdSeek{ targetVisualTime - visualOffset });
+
+    // 直接操作期间不叠加滚动动画，否则视觉内容会落后于中键指针。
+    m_ctx.animateTime                = m_ctx.currentTime + visualOffset;
+    m_ctx.animateTimeTarget          = m_ctx.animateTime;
+    m_ctx.animateTimeAnimationActive = false;
 }
 
 

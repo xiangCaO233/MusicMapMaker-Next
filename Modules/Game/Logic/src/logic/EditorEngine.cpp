@@ -1511,6 +1511,27 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         }
     }
 
+    // 主画布二维平移按 cameraId 精确路由，避免同帧焦点切换把增量发给旧画布。
+    if ( std::holds_alternative<CmdPanCanvas>(cmd) ) {
+        const auto& pan = std::get<CmdPanCanvas>(cmd);
+        if ( SessionUtils::isMainCanvasCameraId(pan.cameraId) ) {
+            std::lock_guard<std::recursive_mutex> lock(
+                m_sessionRegistry.mutex());
+            /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+            auto&         sessions = m_sessionRegistry.entriesUnsafe();
+            const int32_t targetIndex =
+                findSessionIndexByCameraIdUnsafe(sessions, pan.cameraId);
+            if ( targetIndex < 0 ||
+                 targetIndex >= static_cast<int32_t>(sessions.size()) ||
+                 !sessions[static_cast<size_t>(targetIndex)].session ) {
+                return;
+            }
+            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
+                std::move(cmd));
+            return;
+        }
+    }
+
     // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( const auto* palette = std::get_if<CmdSetBrushNotePalette>(&cmd) ) {

@@ -3,6 +3,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -128,10 +129,14 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     if ( itCamera == ctx.cameras.end() ) return;
 
     // 计算轨道边界
-    float leftX =
-        itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-    float rightX = itCamera->second.viewportWidth *
-                   ctx.lastConfig.visual.trackLayout.right;
+    const auto projection =
+        calculatePlayerTrackProjection(itCamera->second.viewportWidth,
+                                       ctx.trackCount,
+                                       ctx.lastConfig.visual.trackLayout.left,
+                                       ctx.lastConfig.visual.trackLayout.right,
+                                       itCamera->second.horizontalOffsetX);
+    float leftX  = projection.leftX;
+    float rightX = projection.rightX;
     if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
         leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
         rightX = itCamera->second.viewportWidth -
@@ -204,9 +209,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         return;
     }
 
-    float trackAreaW   = rightX - leftX;
-    float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
-    int   track =
+    const float singleTrackW =
+        (rightX - leftX) / static_cast<float>(ctx.trackCount);
+    const int track =
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
 
@@ -422,10 +427,14 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     }
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
 
-    float leftX =
-        itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-    float rightX = itCamera->second.viewportWidth *
-                   ctx.lastConfig.visual.trackLayout.right;
+    const auto projection =
+        calculatePlayerTrackProjection(itCamera->second.viewportWidth,
+                                       ctx.trackCount,
+                                       ctx.lastConfig.visual.trackLayout.left,
+                                       ctx.lastConfig.visual.trackLayout.right,
+                                       itCamera->second.horizontalOffsetX);
+    float leftX  = projection.leftX;
+    float rightX = projection.rightX;
     if ( cmd.cameraId == "Preview" ) {
         leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
         rightX = itCamera->second.viewportWidth -

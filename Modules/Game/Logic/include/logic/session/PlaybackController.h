@@ -30,6 +30,12 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdScroll& cmd);
 
+    /// @brief 处理主画布二维平移命令。
+    /// @param cmd 以逻辑像素表达的平移增量。
+    /// @warning 逻辑输入热路径：中键拖动期间每次 update
+    /// 调用；只做相机状态更新与 ScrollCache 对数级坐标换算。
+    void handleCommand(const CmdPanCanvas& cmd);
+
     /// @brief 同步当前的打击索引，用于打击特效和音效判断
     void syncHitIndex();
 

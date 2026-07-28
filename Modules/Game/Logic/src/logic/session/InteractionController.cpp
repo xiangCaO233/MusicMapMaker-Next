@@ -3,6 +3,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/DrawTool.h"
@@ -255,8 +256,14 @@ bool calculateMarqueeTrackLayout(const SessionContext& ctx,
         rightX = camera.viewportWidth -
                  ctx.lastConfig.visual.previewConfig.margin.right;
     } else {
-        leftX  = camera.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-        rightX = camera.viewportWidth * ctx.lastConfig.visual.trackLayout.right;
+        const auto projection = calculatePlayerTrackProjection(
+            camera.viewportWidth,
+            ctx.trackCount,
+            ctx.lastConfig.visual.trackLayout.left,
+            ctx.lastConfig.visual.trackLayout.right,
+            camera.horizontalOffsetX);
+        leftX  = projection.leftX;
+        rightX = projection.rightX;
     }
 
     return rightX > leftX + 1.0f;

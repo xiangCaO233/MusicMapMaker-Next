@@ -1,6 +1,7 @@
+#include "logic/ecs/system/NoteRenderSystem.h"
+
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
-#include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
@@ -63,8 +64,10 @@ void NoteRenderSystem::renderTrackLayout(
         b = t + 0.01f;
     }
 
-    leftX        = viewportWidth * l;
-    rightX       = viewportWidth * r;
+    const float horizontalOffsetX =
+        batcher.snapshot ? batcher.snapshot->canvasHorizontalOffsetX : 0.0F;
+    leftX        = viewportWidth * l + horizontalOffsetX;
+    rightX       = viewportWidth * r + horizontalOffsetX;
     topY         = viewportHeight * t;
     bottomY      = viewportHeight * b;
     trackAreaW   = rightX - leftX;

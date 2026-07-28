@@ -88,6 +88,11 @@ mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
 
+# 主画布相机测试覆盖中键二维平移、逻辑像素投影和 Resize 比例保持。
+mmm_add_test_executable(Logic CanvasCameraTest tests/CanvasCameraTest.cpp)
+target_link_libraries(CanvasCameraTest PRIVATE Logic Log)
+add_test(NAME CanvasCameraTest COMMAND CanvasCameraTest)
+
 mmm_add_test_executable(Logic BackgroundRenderSystemTest
                         tests/BackgroundRenderSystemTest.cpp)
 target_link_libraries(BackgroundRenderSystemTest PRIVATE Logic Log)

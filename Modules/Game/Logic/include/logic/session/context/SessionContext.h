@@ -29,8 +29,10 @@ class BeatmapSyncBuffer;
 /// @brief 相机/视口信息
 struct CameraInfo {
     std::string id;                        ///< 视口唯一标识符
-    float       viewportWidth{ 800.0f };   ///< 视口宽度
-    float       viewportHeight{ 600.0f };  ///< 视口高度
+    float       viewportWidth{ 800.0f };   ///< 视口逻辑宽度
+    float       viewportHeight{ 600.0f };  ///< 视口逻辑高度
+    /// @brief 内容相对基础轨道布局的横向逻辑像素偏移。
+    float horizontalOffsetX{ 0.0F };
 };
 
 /// @brief 矩形框选区域

@@ -1,4 +1,5 @@
 #include "logic/BeatmapSession.h"
+
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -10,6 +11,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -612,6 +614,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         snapshot->asciiFontAtlasMetrics);
         snapshot->isPlaying         = snapshotIsPlaying;
         snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->canvasHorizontalOffsetX =
+            SessionUtils::isMainCanvasCameraId(cameraId)
+                ? camera.horizontalOffsetX
+                : 0.0F;
         snapshot->playbackTime      = m_ctx->currentTime;
         snapshot->totalTime         = snapshotTotalTime;
         snapshot->snapshotSysTime   = snapshotSysTime;
@@ -718,25 +724,32 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 double targetAbsY     = currentAbsY + deltaY;
                 snapshot->hoveredTime = cache->getTime(targetAbsY);
 
-                // 计算轨道
-                float leftX =
-                    camera.viewportWidth * config.visual.trackLayout.left;
-                float rightX =
-                    camera.viewportWidth * config.visual.trackLayout.right;
-
+                // 计算轨道；主画布统一应用相机横向偏移，预览区保持独立布局。
+                CanvasTrackProjection trackProjection;
                 if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
-                    leftX  = config.visual.previewConfig.margin.left;
-                    rightX = camera.viewportWidth -
-                             config.visual.previewConfig.margin.right;
+                    const float leftX = config.visual.previewConfig.margin.left;
+                    const float rightX =
+                        camera.viewportWidth -
+                        config.visual.previewConfig.margin.right;
+                    trackProjection.leftX  = leftX;
+                    trackProjection.rightX = rightX;
+                    trackProjection.singleTrackWidth =
+                        m_ctx->trackCount > 0
+                            ? (rightX - leftX) /
+                                  static_cast<float>(m_ctx->trackCount)
+                            : 0.0F;
+                    trackProjection.valid =
+                        trackProjection.singleTrackWidth > 0.0F;
+                } else {
+                    trackProjection = calculatePlayerTrackProjection(
+                        camera.viewportWidth,
+                        m_ctx->trackCount,
+                        config.visual.trackLayout.left,
+                        config.visual.trackLayout.right,
+                        camera.horizontalOffsetX);
                 }
-                float trackAreaW = rightX - leftX;
-                float singleTrackW =
-                    trackAreaW / static_cast<float>(m_ctx->trackCount);
-
-                int track = static_cast<int>(
-                    std::floor((m_ctx->lastMousePos.x - leftX) / singleTrackW));
-                snapshot->hoveredTrack =
-                    std::clamp(track, 0, m_ctx->trackCount - 1);
+                snapshot->hoveredTrack = trackProjection.trackAt(
+                    m_ctx->lastMousePos.x, m_ctx->trackCount);
 
                 // --- 磁吸拍线时间戳预览 ---
                 auto snap = SessionUtils::getSnapResult(snapshot->hoveredTime,
@@ -750,8 +763,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         snapshotFallbackBpm);
 
                 // 判断是否在轨道框内
-                bool isInsideTrack = (m_ctx->lastMousePos.x >= leftX &&
-                                      m_ctx->lastMousePos.x <= rightX);
+                const bool isInsideTrack =
+                    trackProjection.contains(m_ctx->lastMousePos.x);
 
                 if ( snap.isSnapped ) {
                     if ( cameraId == "Timeline" || isInsideTrack ) {
