@@ -1,8 +1,11 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <string>
 
 using json = nlohmann::json;
 
@@ -18,6 +21,18 @@ static int g_failed = 0;
             return;                  \
         }                            \
     } while ( 0 )
+
+/// @brief 判断 Malody JSON 节点是否为自动采样对象。
+/// @param node 待检查的 note 节点。
+/// @return 数值 1 或兼容字符串 SOUND 时返回 true。
+static bool isSoundNode(const json& node)
+{
+    if ( !node.contains("type") ) return false;
+    if ( node["type"].is_string() ) {
+        return node["type"].get<std::string>() == "SOUND";
+    }
+    return node["type"].is_number_integer() && node["type"].get<int>() == 1;
+}
 
 /// @brief 创建一个最小的可用 BeatMap，含一个 timing 点和基本元数据
 static MMM::BeatMap makeMinimalBeatMap(int mode, int trackCount)
@@ -37,13 +52,20 @@ static MMM::BeatMap makeMinimalBeatMap(int mode, int trackCount)
     bm.m_baseMapMetadata.artist          = "Test";
     bm.m_baseMapMetadata.author          = "Test";
     bm.m_baseMapMetadata.version         = "Test";
-    bm.m_baseMapMetadata.main_audio_path = fs::path("audio.ogg");
+    bm.m_baseMapMetadata.song_file_hint  = fs::path("audio.ogg");
     bm.m_baseMapMetadata.main_cover_path = fs::path("cover.jpg");
     bm.m_baseMapMetadata.map_path        = fs::path("/tmp/test_edge.mc");
+    bm.m_baseMapMetadata.bgm_track_count = 1;
 
     bm.m_metadata.map_properties[MMM::MapMetadataType::MALODY]["mode"] =
         std::to_string(mode);
     bm.m_metadata.map_properties[MMM::MapMetadataType::MALODY]["id"] = "0";
+
+    MMM::AudioSampleEvent sample;
+    sample.m_timestamp       = 0.0;
+    sample.m_track           = static_cast<uint32_t>(trackCount);
+    sample.m_audioResourceId = "audio.ogg";
+    bm.m_audioSamples.push_back(sample);
 
     bm.sync();
     return bm;
@@ -231,9 +253,7 @@ void test_key_mode_hold_uses_endbeat()
 
     auto gameNotes = json::array();
     for ( const auto& n : j["note"] ) {
-        if ( n.contains("type") && n["type"].is_string() &&
-             n["type"].get<std::string>() == "SOUND" )
-            continue;
+        if ( isSoundNode(n) ) continue;
         gameNotes.push_back(n);
     }
     TEST_ASSERT(gameNotes.size() == 1, "should have 1 game note");
@@ -272,9 +292,7 @@ void test_slide_mode_saves_xw()
 
     auto gameNotes = json::array();
     for ( const auto& n2 : j["note"] ) {
-        if ( n2.contains("type") && n2["type"].is_string() &&
-             n2["type"].get<std::string>() == "SOUND" )
-            continue;
+        if ( isSoundNode(n2) ) continue;
         gameNotes.push_back(n2);
     }
     TEST_ASSERT(gameNotes.size() == 1, "should have 1 game note");
@@ -346,9 +364,7 @@ void test_key_mode_polyline_exports_key_fields()
 
     auto gameNotes = json::array();
     for ( const auto& n : j["note"] ) {
-        if ( n.contains("type") && n["type"].is_string() &&
-             n["type"].get<std::string>() == "SOUND" )
-            continue;
+        if ( isSoundNode(n) ) continue;
         gameNotes.push_back(n);
     }
 
@@ -396,9 +412,7 @@ void test_key_mode_flick_exports_single_note()
 
     auto gameNotes = json::array();
     for ( const auto& n : j["note"] ) {
-        if ( n.contains("type") && n["type"].is_string() &&
-             n["type"].get<std::string>() == "SOUND" )
-            continue;
+        if ( isSoundNode(n) ) continue;
         gameNotes.push_back(n);
     }
 
@@ -415,15 +429,16 @@ void test_key_mode_flick_exports_single_note()
     XINFO("PASS: Key mode Flick exports as single Note");
 }
 
-void test_audio_node_type_is_string()
+/// @brief 确认 Malody 自动采样对象使用数值 type=1 和绝对 BGM 轨道。
+void test_audio_node_uses_canonical_fields()
 {
-    XINFO("=== Test: Audio node type is 'SOUND' string ===");
+    XINFO("=== Test: Audio node uses canonical fields ===");
 
-    auto bm = makeMinimalBeatMap(7 /*Slide*/, 4);
+    auto bm = makeMinimalBeatMap(0 /*Key*/, 4);
 
     fs::path outPath =
         std::filesystem::temp_directory_path() / "edge_audio_type.mc";
-    bm.saveToFile(outPath);
+    TEST_ASSERT(bm.saveToFile(outPath), "canonical audio sample should save");
 
     std::ifstream ifs(outPath);
     json          j;
@@ -431,13 +446,31 @@ void test_audio_node_type_is_string()
 
     TEST_ASSERT(j.contains("note") && !j["note"].empty(),
                 "note array should not be empty");
-    const auto& audioNode = j["note"][0];
-    TEST_ASSERT(audioNode.contains("type"), "audio node should have type");
-    TEST_ASSERT(audioNode["type"].is_string(), "type should be a string");
-    TEST_ASSERT(audioNode["type"].get<std::string>() == "SOUND",
-                "type should be 'SOUND'");
+    const json* audioNode = nullptr;
+    for ( const auto& node : j["note"] ) {
+        if ( isSoundNode(node) ) {
+            TEST_ASSERT(audioNode == nullptr,
+                        "minimal map should export exactly one audio sample");
+            audioNode = &node;
+        }
+    }
+    TEST_ASSERT(audioNode != nullptr, "audio sample should be present");
+    TEST_ASSERT((*audioNode)["type"].is_number_integer(),
+                "audio sample type should be numeric");
+    TEST_ASSERT((*audioNode)["type"].get<int>() == 1,
+                "audio sample type should be 1");
+    TEST_ASSERT(audioNode->value("sound", "") == "audio.ogg",
+                "audio sample should keep its resource id");
+    TEST_ASSERT(audioNode->value("x", -1) == 4,
+                "first BGM track should immediately follow four key tracks");
+    TEST_ASSERT(audioNode->value("offset", -1.0) == 0.0,
+                "audio sample should keep zero offset");
+    TEST_ASSERT(audioNode->value("vol", -1.0) == 100.0,
+                "unit volume should serialize as 100");
+    TEST_ASSERT(!audioNode->contains("column"),
+                "audio sample must not use playable column");
 
-    XINFO("PASS: Audio node type is 'SOUND' string");
+    XINFO("PASS: Audio node uses canonical fields");
 }
 
 /// @brief 确认内部兼容 offset 元数据不会导出到 Malody meta。
@@ -447,8 +480,9 @@ void test_internal_offset_metadata_not_exported()
 
     auto  bm    = makeMinimalBeatMap(7 /*Slide*/, 4);
     auto& props = bm.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
-    props["initialDelay"] = "123";
-    props["audioOffset"]  = "456";
+    props["initialDelay"]                = "123";
+    props["audioOffset"]                 = "456";
+    bm.m_audioSamples.front().m_offsetMs = -75;
 
     fs::path outPath =
         std::filesystem::temp_directory_path() / "edge_no_internal_meta.mc";
@@ -464,6 +498,12 @@ void test_internal_offset_metadata_not_exported()
                 "initialDelay should not be exported to Malody meta");
     TEST_ASSERT(!j["meta"].contains("audioOffset"),
                 "audioOffset should not be exported to Malody meta");
+    const auto sampleIt =
+        std::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
+    TEST_ASSERT(sampleIt != j["note"].end(),
+                "explicit audio sample should remain present");
+    TEST_ASSERT(sampleIt->value("offset", 0.0) == -75.0,
+                "per-sample offset should not use legacy global metadata");
 
     XINFO("PASS: Internal offset metadata hidden from Malody meta");
 }
@@ -498,13 +538,13 @@ void test_empty_version_exports_default_metadata()
     XINFO("PASS: Empty Malody version exports default metadata");
 }
 
-/// @brief 确认 BGM/SOUND 物件的 column 不参与 key 数量推断。
-void test_sound_column_does_not_expand_key_count()
+/// @brief 确认 BGM 自动采样对象的 x 不参与玩家 key 数量推断。
+void test_sound_track_does_not_expand_key_count()
 {
-    XINFO("=== Test: SOUND column does not expand key count ===");
+    XINFO("=== Test: SOUND track does not expand key count ===");
 
     fs::path outPath =
-        std::filesystem::temp_directory_path() / "edge_sound_column.mc";
+        std::filesystem::temp_directory_path() / "edge_sound_track.mc";
 
     json  fileData;
     auto& meta         = fileData["meta"];
@@ -540,10 +580,11 @@ void test_sound_column_does_not_expand_key_count()
 
     json soundNote;
     soundNote["beat"]   = json::array({ 0, 0, 1 });
-    soundNote["column"] = 8;
+    soundNote["x"]      = 8;
     soundNote["type"]   = 1;
     soundNote["sound"]  = "audio.ogg";
     soundNote["offset"] = 0;
+    soundNote["vol"]    = 100;
 
     fileData["note"] = json::array({ gameNote, soundNote });
 
@@ -556,11 +597,426 @@ void test_sound_column_does_not_expand_key_count()
     reloaded.sync();
 
     TEST_ASSERT(reloaded.m_baseMapMetadata.track_count == 4,
-                "SOUND column should not expand key count");
+                "SOUND x should not expand key count");
+    TEST_ASSERT(reloaded.m_baseMapMetadata.bgm_track_count == 5,
+                "x=8 after four key tracks should require five BGM tracks");
     TEST_ASSERT(reloaded.m_allNotes.size() == 1,
                 "SOUND object should not become a playable note");
+    TEST_ASSERT(reloaded.m_audioSamples.size() == 1,
+                "SOUND object should become one automatic sample");
+    TEST_ASSERT(reloaded.m_audioSamples.front().m_track == 8,
+                "automatic sample should keep its absolute track");
 
-    XINFO("PASS: SOUND column ignored for key count");
+    XINFO("PASS: SOUND track is separate from key count");
+}
+
+/// @brief 验证多个自动采样对象独立保留轨道、音量和有符号偏移。
+void test_multiple_sound_objects_round_trip_without_global_shift()
+{
+    XINFO("=== Test: Multiple SOUND objects round trip independently ===");
+
+    const fs::path sourcePath =
+        std::filesystem::temp_directory_path() / "edge_multiple_sound.mc";
+    const fs::path exportPath = std::filesystem::temp_directory_path() /
+                                "edge_multiple_sound_export.mc";
+
+    json  fileData;
+    auto& meta         = fileData["meta"];
+    meta["id"]         = 0;
+    meta["creator"]    = "Test";
+    meta["background"] = "";
+    meta["cover"]      = "";
+    meta["version"]    = "4K";
+    meta["preview"]    = 0;
+    meta["mode"]       = 0;
+    meta["aimode"]     = "";
+    meta["mode_ext"]   = { { "column", 4 }, { "bar_begin", 0 } };
+    meta["song"]       = { { "title", "MultipleSound" }, { "artist", "Test" },
+                           { "titleorg", "" },           { "artistorg", "" },
+                           { "file", "stem.ogg" },       { "bpm", 120.0 } };
+    fileData["time"]   = json::array({ { { "beat", json::array({ 0, 0, 1 }) },
+                                         { "bpm", 120.0 },
+                                         { "delay", 0.0 } } });
+
+    json playableNote{ { "beat", json::array({ 4, 0, 1 }) },
+                       { "column", 2 },
+                       { "sound", "hit.wav" },
+                       { "vol", 65 } };
+    json earlyStem{ { "beat", json::array({ 1, 0, 1 }) },
+                    { "type", 1 },
+                    { "sound", "stem.ogg" },
+                    { "offset", -125 },
+                    { "x", 4 },
+                    { "vol", 80 } };
+    json delayedEffect{ { "beat", json::array({ 2, 0, 1 }) },
+                        { "type", "SOUND" },
+                        { "sound", "effect.wav" },
+                        { "offset", 250 },
+                        { "x", 5 },
+                        { "vol", 35 } };
+    json sameBeatLayer{ { "beat", json::array({ 2, 0, 1 }) },
+                        { "type", 1 },
+                        { "sound", "layer.wav" },
+                        { "offset", 0 },
+                        { "x", 5 },
+                        { "vol", 100 } };
+    fileData["note"] =
+        json::array({ playableNote, earlyStem, delayedEffect, sameBeatLayer });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open multiple SOUND input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(loaded.m_timings.size() == 1,
+                "multiple SOUND map should keep its timing");
+    TEST_ASSERT(std::abs(loaded.m_timings.front().m_timestamp) < 1e-6,
+                "sample offset must not shift the timing timeline");
+    TEST_ASSERT(loaded.m_allNotes.size() == 1,
+                "automatic samples must not enter playable note list");
+    TEST_ASSERT(
+        std::abs(loaded.m_allNotes.front().get().m_timestamp - 2000.0) < 1e-6,
+        "sample offset must not shift playable note timestamps");
+    const auto playableBinding =
+        loaded.m_allNotes.front().get().getSampleBinding();
+    TEST_ASSERT(playableBinding.has_value(),
+                "playable note should keep its hit sample binding");
+    TEST_ASSERT(playableBinding->m_audioResourceId == "hit.wav",
+                "playable note should keep its hit sample resource");
+    TEST_ASSERT(std::abs(playableBinding->m_volume - 0.65F) < 1e-6F,
+                "playable note should keep its hit sample volume");
+    TEST_ASSERT(loaded.m_audioSamples.size() == 3,
+                "all automatic samples should load independently");
+    TEST_ASSERT(loaded.m_baseMapMetadata.track_count == 4,
+                "automatic samples must not expand playable track count");
+    TEST_ASSERT(loaded.m_baseMapMetadata.bgm_track_count == 2,
+                "x=4 and x=5 should create two BGM tracks");
+
+    /// @brief 按音频资源标识查找已加载的自动采样对象。
+    auto findSample =
+        [&](const std::string& resourceId) -> const MMM::AudioSampleEvent* {
+        const auto it =
+            std::find_if(loaded.m_audioSamples.begin(),
+                         loaded.m_audioSamples.end(),
+                         [&](const MMM::AudioSampleEvent& sample) {
+                             return sample.m_audioResourceId == resourceId;
+                         });
+        return it == loaded.m_audioSamples.end() ? nullptr : &*it;
+    };
+
+    const MMM::AudioSampleEvent* stem = findSample("stem.ogg");
+    TEST_ASSERT(stem != nullptr, "main stem sample should load");
+    TEST_ASSERT(std::abs(stem->m_timestamp - 500.0) < 1e-6,
+                "main stem beat should remain its anchor timestamp");
+    TEST_ASSERT(stem->m_offsetMs == -125,
+                "negative sample offset should be retained");
+    TEST_ASSERT(std::abs(stem->effectiveTimestamp() - 375.0) < 1e-6,
+                "negative offset should advance only that sample");
+    TEST_ASSERT(stem->m_track == 4,
+                "main stem should remain on first BGM track");
+    TEST_ASSERT(std::abs(stem->m_volume - 0.8F) < 1e-6F,
+                "main stem volume should be normalized");
+
+    const MMM::AudioSampleEvent* effect = findSample("effect.wav");
+    TEST_ASSERT(effect != nullptr, "effect sample should load");
+    TEST_ASSERT(std::abs(effect->m_timestamp - 1000.0) < 1e-6,
+                "effect beat should remain its anchor timestamp");
+    TEST_ASSERT(effect->m_offsetMs == 250,
+                "positive sample offset should be retained");
+    TEST_ASSERT(std::abs(effect->effectiveTimestamp() - 1250.0) < 1e-6,
+                "positive offset should delay only that sample");
+    TEST_ASSERT(effect->m_track == 5,
+                "effect should remain on second BGM track");
+    TEST_ASSERT(std::abs(effect->m_volume - 0.35F) < 1e-6F,
+                "effect volume should be normalized");
+    TEST_ASSERT(findSample("layer.wav") != nullptr,
+                "same-beat sample must not be deduplicated");
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "multiple automatic samples should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+    size_t canonicalSampleCount = 0;
+    for ( const auto& node : exported["note"] ) {
+        if ( !isSoundNode(node) ) continue;
+        ++canonicalSampleCount;
+        TEST_ASSERT(
+            node["type"].is_number_integer() && node["type"].get<int>() == 1,
+            "all exported automatic samples should use numeric type 1");
+        TEST_ASSERT(node.contains("x"),
+                    "all exported automatic samples should keep BGM track x");
+        TEST_ASSERT(!node.contains("column"),
+                    "automatic samples must not use playable column");
+    }
+    TEST_ASSERT(canonicalSampleCount == 3,
+                "export should preserve every automatic sample");
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    TEST_ASSERT(reloaded.m_audioSamples.size() == 3,
+                "canonical Malody output should reload all samples");
+
+    XINFO("PASS: Multiple SOUND objects round trip independently");
+}
+
+/// @brief 验证 time.delay 只延迟对应 Timing 锚点及其后续拍号映射。
+void test_timing_delay_and_sample_offset_round_trip_independently()
+{
+    XINFO("=== Test: Timing delay and sample offset round trip ===");
+
+    const fs::path sourcePath =
+        std::filesystem::temp_directory_path() / "edge_timing_delay_source.mc";
+    const fs::path exportPath =
+        std::filesystem::temp_directory_path() / "edge_timing_delay_export.mc";
+
+    json fileData;
+    fileData["meta"] = { { "id", 0 },
+                         { "creator", "Test" },
+                         { "version", "4K" },
+                         { "mode", 0 },
+                         { "mode_ext",
+                           { { "column", 4 }, { "bar_begin", 0 } } },
+                         { "song",
+                           { { "title", "TimingDelay" },
+                             { "artist", "Test" },
+                             { "file", "stem.ogg" },
+                             { "bpm", 120.0 } } } };
+    fileData["time"] = json::array({ { { "beat", json::array({ 0, 0, 1 }) },
+                                       { "bpm", 120.0 },
+                                       { "delay", 100.0 } },
+                                     { { "beat", json::array({ 4, 0, 1 }) },
+                                       { "bpm", 60.0 },
+                                       { "delay", 200.0 } },
+                                     { { "beat", json::array({ 4, 0, 1 }) },
+                                       { "bpm", 60.0 },
+                                       { "delay", 50.0 } } });
+    fileData["note"] =
+        json::array({ { { "beat", json::array({ 3, 0, 1 }) }, { "column", 0 } },
+                      { { "beat", json::array({ 5, 0, 1 }) }, { "column", 1 } },
+                      { { "beat", json::array({ 5, 0, 1 }) },
+                        { "type", 1 },
+                        { "sound", "effect.wav" },
+                        { "offset", -75 },
+                        { "x", 4 },
+                        { "vol", 80 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open timing delay input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(loaded.m_timings.size() == 3,
+                "timing delay map should keep three BPM timings");
+    TEST_ASSERT(std::abs(loaded.m_timings[0].m_timestamp - 100.0) < 1e-6,
+                "first timing should apply its delay exactly once");
+    TEST_ASSERT(std::abs(loaded.m_timings[1].m_timestamp - 2300.0) < 1e-6,
+                "second timing should apply its 200ms delay once");
+    TEST_ASSERT(std::abs(loaded.m_timings[2].m_timestamp - 2350.0) < 1e-6,
+                "same-beat timings should accumulate delay in source order");
+    TEST_ASSERT(loaded.m_noteData.notes.size() == 2,
+                "timing delay map should keep two playable notes");
+
+    const auto beforeDelay =
+        std::find_if(loaded.m_noteData.notes.begin(),
+                     loaded.m_noteData.notes.end(),
+                     [](const MMM::Note& note) { return note.m_track == 0; });
+    const auto afterDelay =
+        std::find_if(loaded.m_noteData.notes.begin(),
+                     loaded.m_noteData.notes.end(),
+                     [](const MMM::Note& note) { return note.m_track == 1; });
+    TEST_ASSERT(beforeDelay != loaded.m_noteData.notes.end(),
+                "note before delayed timing should load");
+    TEST_ASSERT(afterDelay != loaded.m_noteData.notes.end(),
+                "note after delayed timing should load");
+    TEST_ASSERT(std::abs(beforeDelay->m_timestamp - 1600.0) < 1e-6,
+                "later timing delay must not shift earlier notes");
+    TEST_ASSERT(std::abs(afterDelay->m_timestamp - 3350.0) < 1e-6,
+                "later notes should use the delayed BPM anchor");
+
+    TEST_ASSERT(loaded.m_audioSamples.size() == 1,
+                "timing delay map should keep one automatic sample");
+    const auto& sample = loaded.m_audioSamples.front();
+    TEST_ASSERT(std::abs(sample.m_timestamp - 3350.0) < 1e-6,
+                "sample anchor should follow only the timing delay");
+    TEST_ASSERT(sample.m_offsetMs == -75,
+                "sample should keep its independent signed offset");
+    TEST_ASSERT(std::abs(sample.effectiveTimestamp() - 3275.0) < 1e-6,
+                "sample offset should affect only effective playback time");
+
+    // 强制导出器从内部时间戳重算 beat，覆盖 delay 的逆向换算路径。
+    for ( auto& timing : loaded.m_timings ) {
+        timing.m_metadata.timing_properties[MMM::TimingMetadataType::MALODY]
+            .erase("beat");
+    }
+    for ( auto& note : loaded.m_noteData.notes ) {
+        note.m_metadata.note_properties[MMM::NoteMetadataType::MALODY].erase(
+            "beat");
+    }
+    loaded.m_audioSamples.front()
+        .m_metadata.sample_properties[MMM::SampleMetadataType::MALODY]
+        .erase("beat");
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "timing delay map should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+
+    TEST_ASSERT(exported["time"].size() == 3,
+                "export should keep three BPM timings");
+    TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+                "first delayed timing should convert back to beat 0");
+    TEST_ASSERT(exported["time"][0].value("delay", 0.0) == 100.0,
+                "first timing delay should survive export");
+    TEST_ASSERT(exported["time"][1]["beat"] == json::array({ 4, 0, 1 }),
+                "delayed timing timestamp should convert back to beat 4");
+    TEST_ASSERT(exported["time"][1].value("delay", 0.0) == 200.0,
+                "timing delay should survive export");
+    TEST_ASSERT(exported["time"][2]["beat"] == json::array({ 4, 0, 1 }),
+                "same-beat timing should convert back to beat 4");
+    TEST_ASSERT(exported["time"][2].value("delay", 0.0) == 50.0,
+                "same-beat timing delay should survive export");
+
+    const auto exportedSample = std::find_if(
+        exported["note"].begin(), exported["note"].end(), isSoundNode);
+    TEST_ASSERT(exportedSample != exported["note"].end(),
+                "export should keep the automatic sample");
+    TEST_ASSERT((*exportedSample)["beat"] == json::array({ 5, 0, 1 }),
+                "sample anchor should convert back to beat 5");
+    TEST_ASSERT(exportedSample->value("offset", 0) == -75,
+                "sample offset should survive export independently");
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    reloaded.sync();
+    TEST_ASSERT(reloaded.m_timings.size() == 3,
+                "round trip should keep three timings");
+    TEST_ASSERT(std::abs(reloaded.m_timings[0].m_timestamp - 100.0) < 1e-6,
+                "round trip should apply first timing delay once");
+    TEST_ASSERT(std::abs(reloaded.m_timings[1].m_timestamp - 2300.0) < 1e-6,
+                "round trip should keep delayed timing timestamp");
+    TEST_ASSERT(std::abs(reloaded.m_timings[2].m_timestamp - 2350.0) < 1e-6,
+                "round trip should keep same-beat timing order");
+    TEST_ASSERT(reloaded.m_noteData.notes.size() == 2,
+                "round trip should keep both playable notes");
+    const auto reloadedBeforeDelay =
+        std::find_if(reloaded.m_noteData.notes.begin(),
+                     reloaded.m_noteData.notes.end(),
+                     [](const MMM::Note& note) { return note.m_track == 0; });
+    const auto reloadedAfterDelay =
+        std::find_if(reloaded.m_noteData.notes.begin(),
+                     reloaded.m_noteData.notes.end(),
+                     [](const MMM::Note& note) { return note.m_track == 1; });
+    TEST_ASSERT(reloadedBeforeDelay != reloaded.m_noteData.notes.end() &&
+                    std::abs(reloadedBeforeDelay->m_timestamp - 1600.0) < 1e-6,
+                "round trip must not shift the note before delayed timing");
+    TEST_ASSERT(reloadedAfterDelay != reloaded.m_noteData.notes.end() &&
+                    std::abs(reloadedAfterDelay->m_timestamp - 3350.0) < 1e-6,
+                "round trip should keep the note after delayed timing");
+    TEST_ASSERT(reloaded.m_audioSamples.size() == 1,
+                "round trip should keep one automatic sample");
+    TEST_ASSERT(
+        std::abs(reloaded.m_audioSamples.front().m_timestamp - 3350.0) < 1e-6,
+        "round trip should keep sample anchor separate from its offset");
+    TEST_ASSERT(reloaded.m_audioSamples.front().m_offsetMs == -75,
+                "round trip should keep signed sample offset");
+
+    XINFO("PASS: Timing delay and sample offset round trip independently");
+}
+
+/// @brief 验证非法采样轨道归一化，且 song.file 不夺走同名玩家音效语义。
+void test_invalid_sample_track_and_song_hint_conflict()
+{
+    XINFO("=== Test: Invalid sample x and song hint conflict ===");
+
+    const fs::path sourcePath =
+        std::filesystem::temp_directory_path() / "edge_invalid_sample_track.mc";
+    const fs::path exportPath = std::filesystem::temp_directory_path() /
+                                "edge_invalid_sample_track_export.mc";
+
+    json fileData;
+    fileData["meta"] = { { "id", 0 },
+                         { "creator", "Test" },
+                         { "version", "4K" },
+                         { "mode", 0 },
+                         { "mode_ext",
+                           { { "column", 4 }, { "bar_begin", 0 } } },
+                         { "song",
+                           { { "title", "HintConflict" },
+                             { "artist", "Test" },
+                             { "file", "audio/shared.wav" },
+                             { "bpm", 120.0 } } } };
+    fileData["time"] = json::array(
+        { { { "beat", json::array({ 0, 0, 1 }) }, { "bpm", 120.0 } } });
+    fileData["note"] = json::array({ { { "beat", json::array({ 1, 0, 1 }) },
+                                       { "column", 0 },
+                                       { "type", 0 },
+                                       { "sound", "audio/shared.wav" },
+                                       { "vol", 55 } },
+                                     { { "beat", json::array({ 2, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "effect.wav" },
+                                       { "offset", -20 },
+                                       { "x", 2 },
+                                       { "vol", 90 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open invalid sample input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(
+        loaded.m_baseMapMetadata.song_file_hint == fs::path("audio/shared.wav"),
+        "song.file should remain a non-scheduling hint");
+    TEST_ASSERT(loaded.m_allNotes.size() == 1,
+                "same-name song hint should not consume playable note");
+    const auto binding = loaded.m_allNotes.front().get().getSampleBinding();
+    TEST_ASSERT(binding.has_value() &&
+                    binding->m_audioResourceId == "audio/shared.wav" &&
+                    std::abs(binding->m_volume - 0.55F) < 1e-6F,
+                "same-name playable sound should remain an effect binding");
+    TEST_ASSERT(loaded.m_audioSamples.size() == 1,
+                "song hint must not synthesize an extra automatic sample");
+    const auto& sample = loaded.m_audioSamples.front();
+    TEST_ASSERT(sample.m_track == 4,
+                "invalid x inside key area should use first BGM track");
+    TEST_ASSERT(sample.m_metadata.getValue<std::string>(
+                    MMM::SampleMetadataType::MALODY, "original_x") == "2",
+                "invalid source x should remain available for diagnostics");
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "normalized sample map should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+    TEST_ASSERT(
+        exported["meta"]["song"].value("file", "") == "audio/shared.wav",
+        "explicit song.file hint should retain its relative path");
+
+    size_t soundCount    = 0;
+    size_t playableCount = 0;
+    for ( const auto& node : exported["note"] ) {
+        if ( isSoundNode(node) ) {
+            ++soundCount;
+            TEST_ASSERT(node.value("x", -1) == 4,
+                        "normalized sample should export first BGM track");
+            continue;
+        }
+        ++playableCount;
+        TEST_ASSERT(!node.contains("type"),
+                    "canonical playable Note must not contain type");
+        TEST_ASSERT(node.value("sound", "") == "audio/shared.wav",
+                    "playable effect should survive song hint conflict");
+    }
+    TEST_ASSERT(soundCount == 1 && playableCount == 1,
+                "hint conflict output should keep one sample and one Note");
+
+    XINFO("PASS: Invalid sample x and song hint conflict");
 }
 
 /// @brief 确认近空 Malody 谱面中的字符串 BPM 可以无异常加载。
@@ -743,9 +1199,7 @@ void test_hold_stay_at_head_creates_valid_seg()
 
     auto gameNotes = json::array();
     for ( const auto& n : j["note"] ) {
-        if ( n.contains("type") && n["type"].is_string() &&
-             n["type"].get<std::string>() == "SOUND" )
-            continue;
+        if ( isSoundNode(n) ) continue;
         gameNotes.push_back(n);
     }
     TEST_ASSERT(gameNotes.size() == 1, "should have 1 game note");
@@ -771,10 +1225,13 @@ int main()
     test_unsupported_malody_mode_rejected();
     test_key_mode_polyline_exports_key_fields();
     test_key_mode_flick_exports_single_note();
-    test_audio_node_type_is_string();
+    test_audio_node_uses_canonical_fields();
     test_internal_offset_metadata_not_exported();
     test_empty_version_exports_default_metadata();
-    test_sound_column_does_not_expand_key_count();
+    test_sound_track_does_not_expand_key_count();
+    test_multiple_sound_objects_round_trip_without_global_shift();
+    test_timing_delay_and_sample_offset_round_trip_independently();
+    test_invalid_sample_track_and_song_hint_conflict();
     testStringBpmInNearlyEmptyMapLoads();
     testMetadataOnlyMapLoadsWithDefaults();
     test_original_structure_not_leaked();

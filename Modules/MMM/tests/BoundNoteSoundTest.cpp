@@ -3,6 +3,7 @@
 #include "mmm/note/Hold.h"
 #include "mmm/note/Note.h"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -23,18 +24,19 @@ bool testOsuHitSampleField()
         "64", "192", "1000", "1", "2", "1:2:3:70:custom-note.wav"
     };
     note.from_osu_description(noteDescription, 4);
-    if ( note.m_boundSound != "custom-note.wav" ) {
-        XERROR("osu! Note sampleFile was not loaded into m_boundSound");
+    const auto noteBinding = note.getSampleBinding();
+    if ( !noteBinding || noteBinding->m_audioResourceId != "custom-note.wav" ) {
+        XERROR("osu! Note hit sample binding was not loaded");
         return false;
     }
     if ( !note.to_osu_description(4).ends_with("1:2:3:70:custom-note.wav") ) {
-        XERROR("osu! Note m_boundSound was not saved as sampleFile");
+        XERROR("osu! Note hit sample binding was not saved");
         return false;
     }
 
-    note.m_boundSound.clear();
+    note.clearSampleBinding();
     if ( !note.to_osu_description(4).ends_with("1:2:3:70:") ) {
-        XERROR("Cleared osu! Note sampleFile was restored from metadata");
+        XERROR("Cleared osu! Note sample binding was restored from metadata");
         return false;
     }
 
@@ -43,8 +45,9 @@ bool testOsuHitSampleField()
         "192", "192", "1000", "128", "0", "2000:1:2:3:70:custom-hold.wav"
     };
     hold.from_osu_description(holdDescription, 4);
-    if ( hold.m_boundSound != "custom-hold.wav" ) {
-        XERROR("osu! Hold sampleFile was not loaded into m_boundSound");
+    const auto holdBinding = hold.getSampleBinding();
+    if ( !holdBinding || holdBinding->m_audioResourceId != "custom-hold.wav" ) {
+        XERROR("osu! Hold hit sample binding was not loaded");
         return false;
     }
     if ( !hold.to_osu_description(4).ends_with(
@@ -77,15 +80,18 @@ json makeMalodyMap()
                                   { "delay", 0.0 } } });
     map["note"] = json::array({ { { "beat", json::array({ 1, 0, 1 }) },
                                   { "column", 2 },
-                                  { "sound", "sample.wav" } },
+                                  { "sound", "sample.wav" },
+                                  { "vol", 65 } },
                                 { { "beat", json::array({ 0, 0, 1 }) },
-                                  { "type", "SOUND" },
+                                  { "type", 1 },
                                   { "sound", "audio.ogg" },
-                                  { "offset", 0 } } });
+                                  { "offset", -125 },
+                                  { "x", 4 },
+                                  { "vol", 80 } } });
     return map;
 }
 
-/// @brief 验证 Malody sound 与原生 MMM bound_sound 的往返保存。
+/// @brief 验证玩家命中采样与自动采样在 Malody 和 MMM v2 中独立往返。
 /// @param outputDirectory 测试输出目录。
 /// @return 两种格式均保留通用字段时返回 true。
 bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
@@ -101,9 +107,22 @@ bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
     }
 
     MMM::BeatMap map = MMM::BeatMap::loadFromFile(sourcePath);
-    if ( map.m_noteData.notes.size() != 1 ||
-         map.m_noteData.notes.front().m_boundSound != "sample.wav" ) {
-        XERROR("Malody playable sound was not loaded into m_boundSound");
+    if ( map.m_noteData.notes.size() != 1 ) {
+        XERROR("Malody playable note count differs");
+        return false;
+    }
+    const auto sourceBinding = map.m_noteData.notes.front().getSampleBinding();
+    if ( !sourceBinding || sourceBinding->m_audioResourceId != "sample.wav" ||
+         std::abs(sourceBinding->m_volume - 0.65F) > 1e-6F ) {
+        XERROR("Malody playable hit sample was not loaded");
+        return false;
+    }
+    if ( map.m_audioSamples.size() != 1 ||
+         map.m_audioSamples.front().m_audioResourceId != "audio.ogg" ||
+         map.m_audioSamples.front().m_offsetMs != -125 ||
+         map.m_audioSamples.front().m_track != 4 ||
+         std::abs(map.m_audioSamples.front().m_volume - 0.8F) > 1e-6F ) {
+        XERROR("Malody automatic sample was not loaded independently");
         return false;
     }
 
@@ -113,23 +132,86 @@ bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
         return false;
     }
     MMM::BeatMap malodyReloaded = MMM::BeatMap::loadFromFile(malodyOutput);
-    if ( malodyReloaded.m_noteData.notes.size() != 1 ||
-         malodyReloaded.m_noteData.notes.front().m_boundSound !=
-             "sample.wav" ) {
-        XERROR("Malody bound sound did not survive round trip");
+    if ( malodyReloaded.m_noteData.notes.size() != 1 ) {
+        XERROR("Malody playable note count changed after round trip");
+        return false;
+    }
+    const auto malodyBinding =
+        malodyReloaded.m_noteData.notes.front().getSampleBinding();
+    if ( !malodyBinding || malodyBinding->m_audioResourceId != "sample.wav" ||
+         std::abs(malodyBinding->m_volume - 0.65F) > 1e-6F ||
+         malodyReloaded.m_audioSamples.size() != 1 ||
+         malodyReloaded.m_audioSamples.front().m_audioResourceId !=
+             "audio.ogg" ||
+         malodyReloaded.m_audioSamples.front().m_offsetMs != -125 ||
+         malodyReloaded.m_audioSamples.front().m_track != 4 ||
+         std::abs(malodyReloaded.m_audioSamples.front().m_volume - 0.8F) >
+             1e-6F ) {
+        XERROR("Malody sample bindings did not survive round trip");
         return false;
     }
 
+    map.m_audioSamples.front()
+        .m_metadata
+        .sample_properties[MMM::SampleMetadataType::MMM]["editor_label"] =
+        "stem";
     const fs::path nativeOutput = outputDirectory / "bound_sound_export.mmm";
     if ( !map.saveToFile(nativeOutput) ) {
         XERROR("Failed to save native bound sound test output");
         return false;
     }
+
+    json nativeJson;
+    {
+        std::ifstream input(nativeOutput);
+        if ( !input ) {
+            XERROR("Failed to inspect native sample output");
+            return false;
+        }
+        input >> nativeJson;
+    }
+    if ( nativeJson.value("format_version", 0) != 2 ||
+         !nativeJson.contains("audio_samples") ||
+         nativeJson["audio_samples"].size() != 1 ||
+         nativeJson["audio_samples"][0].value("offset_ms", 0) != -125 ||
+         nativeJson["audio_samples"][0].value("track", 0) != 4 ||
+         nativeJson["audio_samples"][0].value("audio_ref", "") != "audio.ogg" ||
+         std::abs(nativeJson["audio_samples"][0].value("volume", 0.0) - 0.8) >
+             1e-6 ) {
+        XERROR("MMM v2 automatic sample JSON is incomplete");
+        return false;
+    }
+    if ( nativeJson["note"].size() != 1 ||
+         !nativeJson["note"][0].contains("sample") ||
+         nativeJson["note"][0].contains("bound_sound") ||
+         nativeJson["note"][0].contains("bound_volume") ||
+         nativeJson["note"][0]["sample"].value("audio_ref", "") !=
+             "sample.wav" ||
+         std::abs(nativeJson["note"][0]["sample"].value("volume", 0.0) - 0.65) >
+             1e-6 ) {
+        XERROR("MMM v2 playable sample binding is not canonical");
+        return false;
+    }
+
     MMM::BeatMap nativeReloaded = MMM::BeatMap::loadFromFile(nativeOutput);
-    if ( nativeReloaded.m_noteData.notes.size() != 1 ||
-         nativeReloaded.m_noteData.notes.front().m_boundSound !=
-             "sample.wav" ) {
-        XERROR("Native MMM bound sound did not survive round trip");
+    if ( nativeReloaded.m_noteData.notes.size() != 1 ) {
+        XERROR("Native MMM playable note count changed after round trip");
+        return false;
+    }
+    const auto nativeBinding =
+        nativeReloaded.m_noteData.notes.front().getSampleBinding();
+    if ( !nativeBinding || nativeBinding->m_audioResourceId != "sample.wav" ||
+         std::abs(nativeBinding->m_volume - 0.65F) > 1e-6F ||
+         nativeReloaded.m_audioSamples.size() != 1 ||
+         nativeReloaded.m_audioSamples.front().m_audioResourceId !=
+             "audio.ogg" ||
+         nativeReloaded.m_audioSamples.front().m_offsetMs != -125 ||
+         nativeReloaded.m_audioSamples.front().m_track != 4 ||
+         std::abs(nativeReloaded.m_audioSamples.front().m_volume - 0.8F) >
+             1e-6F ||
+         nativeReloaded.m_audioSamples.front().m_metadata.getValue<std::string>(
+             MMM::SampleMetadataType::MMM, "editor_label") != "stem" ) {
+        XERROR("Native MMM sample bindings did not survive round trip");
         return false;
     }
     return true;

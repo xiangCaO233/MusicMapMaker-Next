@@ -8,7 +8,8 @@
 namespace MMM::Test
 {
 
-inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
+inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2,
+                            bool compareAudioSamples = false)
 {
     // 1. 元数据。
     if ( m1.m_baseMapMetadata.track_count !=
@@ -16,6 +17,13 @@ inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
         XERROR("Track count mismatch: {} vs {}",
                m1.m_baseMapMetadata.track_count,
                m2.m_baseMapMetadata.track_count);
+        return false;
+    }
+    if ( compareAudioSamples && m1.m_baseMapMetadata.bgm_track_count !=
+                                    m2.m_baseMapMetadata.bgm_track_count ) {
+        XERROR("BGM track count mismatch: {} vs {}",
+               m1.m_baseMapMetadata.bgm_track_count,
+               m2.m_baseMapMetadata.bgm_track_count);
         return false;
     }
 
@@ -85,6 +93,43 @@ inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
                        static_cast<const Flick&>(n2).m_dtrack);
                 return false;
             }
+        }
+    }
+
+    // 4. 仅对能够无损表达自动采样对象的格式启用比较。
+    if ( !compareAudioSamples ) return true;
+    if ( m1.m_audioSamples.size() != m2.m_audioSamples.size() ) {
+        XERROR("Audio sample count mismatch: {} vs {}",
+               m1.m_audioSamples.size(),
+               m2.m_audioSamples.size());
+        return false;
+    }
+    for ( size_t i = 0; i < m1.m_audioSamples.size(); ++i ) {
+        const AudioSampleEvent& s1 = m1.m_audioSamples[i];
+        const AudioSampleEvent& s2 = m2.m_audioSamples[i];
+        if ( std::abs(s1.m_timestamp - s2.m_timestamp) > 1e-3 ||
+             s1.m_offsetMs != s2.m_offsetMs ||
+             std::abs(s1.effectiveTimestamp() - s2.effectiveTimestamp()) >
+                 1e-3 ||
+             s1.m_track != s2.m_track ||
+             s1.m_audioResourceId != s2.m_audioResourceId ||
+             std::abs(s1.m_volume - s2.m_volume) > 1e-6F ) {
+            XERROR(
+                "Audio sample mismatch at index {}: "
+                "t1={}, off1={}, tr1={}, ref1={}, vol1={} | "
+                "t2={}, off2={}, tr2={}, ref2={}, vol2={}",
+                i,
+                s1.m_timestamp,
+                s1.m_offsetMs,
+                s1.m_track,
+                s1.m_audioResourceId,
+                s1.m_volume,
+                s2.m_timestamp,
+                s2.m_offsetMs,
+                s2.m_track,
+                s2.m_audioResourceId,
+                s2.m_volume);
+            return false;
         }
     }
     return true;

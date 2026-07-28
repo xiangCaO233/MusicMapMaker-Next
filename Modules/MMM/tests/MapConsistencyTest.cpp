@@ -1,5 +1,6 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <vector>
@@ -74,6 +75,52 @@ bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
         }
     }
 
+    // 5. 原生 MMM 必须完整承接来源格式中的自动采样对象。
+    if ( m1.m_audioSamples.size() != m2.m_audioSamples.size() ) {
+        XERROR("Audio sample count mismatch: {} vs {}",
+               m1.m_audioSamples.size(),
+               m2.m_audioSamples.size());
+        return false;
+    }
+    std::vector<const MMM::AudioSampleEvent*> samples1;
+    std::vector<const MMM::AudioSampleEvent*> samples2;
+    for ( const auto& sample : m1.m_audioSamples ) {
+        samples1.push_back(&sample);
+    }
+    for ( const auto& sample : m2.m_audioSamples ) {
+        samples2.push_back(&sample);
+    }
+    auto sortSamples = [](auto& samples) {
+        std::sort(
+            samples.begin(),
+            samples.end(),
+            [](const auto* lhs, const auto* rhs) {
+                if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
+                    return lhs->m_timestamp < rhs->m_timestamp;
+                }
+                if ( lhs->m_track != rhs->m_track ) {
+                    return lhs->m_track < rhs->m_track;
+                }
+                if ( lhs->m_audioResourceId != rhs->m_audioResourceId ) {
+                    return lhs->m_audioResourceId < rhs->m_audioResourceId;
+                }
+                return lhs->m_offsetMs < rhs->m_offsetMs;
+            });
+    };
+    sortSamples(samples1);
+    sortSamples(samples2);
+    for ( std::size_t index = 0; index < samples1.size(); ++index ) {
+        const auto& lhs = *samples1[index];
+        const auto& rhs = *samples2[index];
+        if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-3 ||
+             lhs.m_offsetMs != rhs.m_offsetMs || lhs.m_track != rhs.m_track ||
+             lhs.m_audioResourceId != rhs.m_audioResourceId ||
+             std::abs(lhs.m_volume - rhs.m_volume) > 1e-6F ) {
+            XERROR("Audio sample mismatch at index {}", index);
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -91,7 +138,8 @@ int main(int argc, char* argv[])
 
     // 1. 第一次加载
     MMM::BeatMap map1 = MMM::BeatMap::loadFromFile(inputPath);
-    if ( map1.m_timings.empty() && map1.m_allNotes.empty() ) {
+    if ( map1.m_timings.empty() && map1.m_allNotes.empty() &&
+         map1.m_audioSamples.empty() ) {
         XERROR("Failed to load map1 or map is empty: {}", inputPath.string());
         return 1;
     }
@@ -104,7 +152,8 @@ int main(int argc, char* argv[])
 
     // 3. 第二次加载
     MMM::BeatMap map2 = MMM::BeatMap::loadFromFile(outputPath);
-    if ( map2.m_timings.empty() && map2.m_allNotes.empty() ) {
+    if ( map2.m_timings.empty() && map2.m_allNotes.empty() &&
+         map2.m_audioSamples.empty() ) {
         XERROR("Failed to load map2 (re-imported): {}", outputPath.string());
         return 1;
     }

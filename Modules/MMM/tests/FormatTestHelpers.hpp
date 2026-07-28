@@ -458,147 +458,219 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
         }
     }
 
-    // ---- Section 4: note (物件段) ----
+    // ---- Section 4: note（玩家物件与自动采样对象）----
     {
-        bool hasOrig = orig.contains("note");
-        bool hasExpo = expo.contains("note");
-        bool ok      = false;
+        const bool hasOrig = orig.contains("note");
+        const bool hasExpo = expo.contains("note");
+        bool       ok      = false;
+        size_t     playableCount{ 0 };
+        size_t     sampleCount{ 0 };
         if ( hasOrig && hasExpo ) {
-            /// @brief 判断 note 是否为音效采样（兼容 string "SOUND" 和旧版 int
-            /// 1）
-            auto isSound = [](const json& n) -> bool {
-                if ( n.contains("type") ) {
-                    if ( n["type"].is_string() )
-                        return n["type"].get<std::string>() == "SOUND";
-                    if ( n["type"].is_number_integer() )
-                        return n["type"].get<int>() == 1;
+            /// @brief 判断 Malody note 节点是否为自动采样对象。
+            auto isSound = [](const json& node) -> bool {
+                if ( !node.contains("type") ) return false;
+                if ( node["type"].is_string() ) {
+                    return node["type"].get<std::string>() == "SOUND";
                 }
-                return false;
+                return node["type"].is_number_integer() &&
+                       node["type"].get<int>() == 1;
             };
-            // 过滤掉声音物件
-            auto filterNotes = [&](const json& arr) -> json {
+            /// @brief 把 Malody 拍号数组换算为可比较的小数拍。
+            auto getBeatValue = [](const json& beatArray) {
+                if ( beatArray.is_array() && beatArray.size() == 3 ) {
+                    const double denominator = beatArray[2].get<double>();
+                    if ( std::abs(denominator) > 1e-9 ) {
+                        return beatArray[0].get<double>() +
+                               beatArray[1].get<double>() / denominator;
+                    }
+                }
+                return 0.0;
+            };
+            /// @brief 按节点类别筛选 Malody note 数组。
+            auto filterNodes = [&](const json& array, bool wantSound) {
                 json filtered = json::array();
-                for ( const auto& n : arr ) {
-                    if ( !isSound(n) ) {
-                        filtered.push_back(n);
+                for ( const auto& node : array ) {
+                    if ( isSound(node) == wantSound ) {
+                        filtered.push_back(node);
                     }
                 }
                 return filtered;
             };
-            auto sortNotes = [](json arr) {
+            /// @brief 对玩家物件按拍号和轨道排序。
+            auto sortPlayableNotes = [&](json array) {
                 std::sort(
-                    arr.begin(), arr.end(), [](const json& a, const json& b) {
-                        auto getBeatVal = [](const json& beatArr) {
-                            if ( beatArr.is_array() && beatArr.size() == 3 ) {
-                                return beatArr[0].get<double>() +
-                                       beatArr[1].get<double>() /
-                                           beatArr[2].get<double>();
-                            }
-                            return 0.0;
-                        };
-                        double av = getBeatVal(a.value("beat", json::array()));
-                        double bv = getBeatVal(b.value("beat", json::array()));
-                        if ( std::abs(av - bv) > 1e-5 ) return av < bv;
+                    array.begin(),
+                    array.end(),
+                    [&](const json& lhs, const json& rhs) {
+                        const double lhsBeat =
+                            getBeatValue(lhs.value("beat", json::array()));
+                        const double rhsBeat =
+                            getBeatValue(rhs.value("beat", json::array()));
+                        if ( std::abs(lhsBeat - rhsBeat) > 1e-5 ) {
+                            return lhsBeat < rhsBeat;
+                        }
 
-                        int colA = a.value(
-                            "column",
-                            a.contains("x")
-                                ? (int)std::round(a["x"].get<int>() / 43.0)
-                                : 0);
-                        int colB = b.value(
-                            "column",
-                            b.contains("x")
-                                ? (int)std::round(b["x"].get<int>() / 43.0)
-                                : 0);
-
-                        return colA < colB;
+                        const int lhsTrack =
+                            lhs.value("column",
+                                      lhs.contains("x")
+                                          ? static_cast<int>(std::round(
+                                                lhs["x"].get<double>() / 43.0))
+                                          : 0);
+                        const int rhsTrack =
+                            rhs.value("column",
+                                      rhs.contains("x")
+                                          ? static_cast<int>(std::round(
+                                                rhs["x"].get<double>() / 43.0))
+                                          : 0);
+                        return lhsTrack < rhsTrack;
                     });
-                return arr;
+                return array;
             };
-            json oArr = sortNotes(filterNotes(orig["note"]));
-            json eArr = sortNotes(filterNotes(expo["note"]));
-            if ( oArr.size() == eArr.size() ) {
-                ok = true;
-                for ( size_t i = 0; i < oArr.size(); ++i ) {
-                    const auto& o          = oArr[i];
-                    const auto& e          = eArr[i];
-                    auto        getBeatVal = [](const json& b) {
-                        if ( b.is_array() && b.size() == 3 ) {
-                            return b[0].get<double>() +
-                                   b[1].get<double>() / b[2].get<double>();
+            /// @brief 对自动采样对象按其完整语义字段排序。
+            auto sortSamples = [&](json array) {
+                std::sort(
+                    array.begin(),
+                    array.end(),
+                    [&](const json& lhs, const json& rhs) {
+                        const double lhsBeat =
+                            getBeatValue(lhs.value("beat", json::array()));
+                        const double rhsBeat =
+                            getBeatValue(rhs.value("beat", json::array()));
+                        if ( std::abs(lhsBeat - rhsBeat) > 1e-5 ) {
+                            return lhsBeat < rhsBeat;
                         }
-                        return 0.0;
-                    };
-                    if ( std::abs(getBeatVal(o.value("beat", json::array())) -
-                                  getBeatVal(e.value("beat", json::array()))) >
-                             1e-3 ||
-                         std::abs(
-                             getBeatVal(o.value("endbeat", json::array())) -
-                             getBeatVal(e.value("endbeat", json::array()))) >
-                             1e-3 ) {
-                        XERROR("Mismatch at index {}: beat diff > 1e-3", i);
-                        XERROR("O: {}", o.dump());
-                        XERROR("E: {}", e.dump());
-                        ok = false;
-                        break;
-                    }
-                    if ( o.contains("column") && e.contains("column") &&
-                         o.value("column", 0) != e.value("column", 0) ) {
-                        XERROR("Mismatch at index {}: column mismatch", i);
-                        XERROR("O: {}", o.dump());
-                        XERROR("E: {}", e.dump());
-                        ok = false;
-                        break;
-                    }
-                    if ( o.contains("seg") && e.contains("seg") ) {
-                        if ( o["seg"].size() != e["seg"].size() ) {
-                            XERROR("Mismatch at index {}: seg size mismatch",
-                                   i);
-                            XERROR("O: {}", o.dump());
-                            XERROR("E: {}", e.dump());
-                            ok = false;
-                            break;
+                        const std::string lhsSound =
+                            lhs.value("sound", std::string{});
+                        const std::string rhsSound =
+                            rhs.value("sound", std::string{});
+                        if ( lhsSound != rhsSound ) {
+                            return lhsSound < rhsSound;
                         }
-                    } else if ( o.contains("seg") != e.contains("seg") ) {
-                        XERROR("Mismatch at index {}: seg presence mismatch",
-                               i);
-                        XERROR("O: {}", o.dump());
-                        XERROR("E: {}", e.dump());
-                        ok = false;
-                        break;
-                    }
+                        const int lhsTrack = lhs.value("x", -1);
+                        const int rhsTrack = rhs.value("x", -1);
+                        if ( lhsTrack != rhsTrack ) {
+                            return lhsTrack < rhsTrack;
+                        }
+                        const double lhsOffset = lhs.value("offset", 0.0);
+                        const double rhsOffset = rhs.value("offset", 0.0);
+                        if ( std::abs(lhsOffset - rhsOffset) > 1e-5 ) {
+                            return lhsOffset < rhsOffset;
+                        }
+                        return lhs.value("vol", 100.0) <
+                               rhs.value("vol", 100.0);
+                    });
+                return array;
+            };
+
+            const json originalPlayable =
+                sortPlayableNotes(filterNodes(orig["note"], false));
+            const json exportedPlayable =
+                sortPlayableNotes(filterNodes(expo["note"], false));
+            playableCount = originalPlayable.size();
+            bool playableOk =
+                originalPlayable.size() == exportedPlayable.size();
+            for ( size_t i = 0; playableOk && i < originalPlayable.size();
+                  ++i ) {
+                const auto& original = originalPlayable[i];
+                const auto& exported = exportedPlayable[i];
+                if ( std::abs(
+                         getBeatValue(original.value("beat", json::array())) -
+                         getBeatValue(exported.value("beat", json::array()))) >
+                         1e-3 ||
+                     std::abs(getBeatValue(
+                                  original.value("endbeat", json::array())) -
+                              getBeatValue(exported.value(
+                                  "endbeat", json::array()))) > 1e-3 ) {
+                    XERROR("Playable note mismatch at index {}: beat differs",
+                           i);
+                    playableOk = false;
+                } else if ( original.contains("column") &&
+                            exported.contains("column") &&
+                            original.value("column", 0) !=
+                                exported.value("column", 0) ) {
+                    XERROR("Playable note mismatch at index {}: column differs",
+                           i);
+                    playableOk = false;
+                } else if ( original.contains("seg") &&
+                            exported.contains("seg") &&
+                            original["seg"].size() != exported["seg"].size() ) {
+                    XERROR(
+                        "Playable note mismatch at index {}: seg size "
+                        "differs",
+                        i);
+                    playableOk = false;
+                } else if ( original.contains("seg") !=
+                            exported.contains("seg") ) {
+                    XERROR(
+                        "Playable note mismatch at index {}: seg presence "
+                        "differs",
+                        i);
+                    playableOk = false;
+                }
+                if ( !playableOk ) {
+                    XERROR("O: {}", original.dump());
+                    XERROR("E: {}", exported.dump());
                 }
             }
+
+            const json originalSamples =
+                sortSamples(filterNodes(orig["note"], true));
+            const json exportedSamples =
+                sortSamples(filterNodes(expo["note"], true));
+            sampleCount   = originalSamples.size();
+            bool sampleOk = originalSamples.size() == exportedSamples.size();
+            for ( size_t i = 0; sampleOk && i < originalSamples.size(); ++i ) {
+                const auto& original = originalSamples[i];
+                const auto& exported = exportedSamples[i];
+                const bool  canonicalType =
+                    exported.contains("type") &&
+                    exported["type"].is_number_integer() &&
+                    exported["type"].get<int>() == 1;
+                const bool canonicalTrack =
+                    exported.contains("x") && exported["x"].is_number();
+                const bool matchingExplicitTrack =
+                    !original.contains("x") ||
+                    (exported.contains("x") &&
+                     original.value("x", -1) == exported.value("x", -1));
+                const bool matchingFields =
+                    std::abs(
+                        getBeatValue(original.value("beat", json::array())) -
+                        getBeatValue(exported.value("beat", json::array()))) <=
+                        1e-3 &&
+                    original.value("sound", std::string{}) ==
+                        exported.value("sound", std::string{}) &&
+                    std::abs(original.value("offset", 0.0) -
+                             exported.value("offset", 0.0)) <= 1e-3 &&
+                    std::abs(original.value("vol", 100.0) -
+                             exported.value("vol", 100.0)) <= 1e-3;
+                if ( !canonicalType || !canonicalTrack ||
+                     exported.contains("column") || !matchingExplicitTrack ||
+                     !matchingFields ) {
+                    XERROR("Audio sample mismatch at index {}", i);
+                    XERROR("O: {}", original.dump());
+                    XERROR("E: {}", exported.dump());
+                    sampleOk = false;
+                }
+            }
+            ok = playableOk && sampleOk;
         }
         if ( ok ) {
-            size_t totalCnt = orig.contains("note") ? orig["note"].size() : 0;
-            size_t type1Cnt = 0;
-            if ( orig.contains("note") ) {
-                for ( const auto& n : orig["note"] ) {
-                    bool isSound = false;
-                    if ( n.contains("type") ) {
-                        if ( n["type"].is_string() )
-                            isSound = n["type"].get<std::string>() == "SOUND";
-                        else if ( n["type"].is_number_integer() )
-                            isSound = n["type"].get<int>() == 1;
-                    }
-                    if ( isSound ) ++type1Cnt;
-                }
-            }
             XINFO(
                 "[Malody Section 4 - note] 物件段: PASS "
-                "({} notes, {} sound objects filtered)",
-                totalCnt - type1Cnt,
-                type1Cnt);
+                "({} playable notes, {} audio samples)",
+                playableCount,
+                sampleCount);
             ++passed;
         } else {
-            size_t oCnt = orig.contains("note") ? orig["note"].size() : 0;
-            size_t eCnt = expo.contains("note") ? expo["note"].size() : 0;
+            const size_t originalCount =
+                hasOrig && orig["note"].is_array() ? orig["note"].size() : 0;
+            const size_t exportedCount =
+                hasExpo && expo["note"].is_array() ? expo["note"].size() : 0;
             XERROR(
                 "[Malody Section 4 - note] 物件段: FAIL (orig_cnt={} "
                 "expo_cnt={})",
-                oCnt,
-                eCnt);
+                originalCount,
+                exportedCount);
         }
     }
 

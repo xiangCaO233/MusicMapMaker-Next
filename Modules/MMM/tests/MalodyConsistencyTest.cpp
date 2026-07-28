@@ -30,7 +30,7 @@ int main(int argc, char* argv[])
           TOTAL_MALODY_SECTIONS);
 
     // ── 第二轮：逻辑一致性对比 ──
-    bool logicPassed = MMM::Test::compareBeatMaps(m1, m2);
+    bool logicPassed = MMM::Test::compareBeatMaps(m1, m2, true);
     if ( logicPassed ) {
         XINFO("[Malody Logical Consistency]: PASS");
     } else {
@@ -38,6 +38,9 @@ int main(int argc, char* argv[])
         XERROR("  m1 total notes: {}, m2 total notes: {}",
                m1.m_allNotes.size(),
                m2.m_allNotes.size());
+        XERROR("  m1 audio samples: {}, m2 audio samples: {}",
+               m1.m_audioSamples.size(),
+               m2.m_audioSamples.size());
     }
 
     // ── 汇总 ──
