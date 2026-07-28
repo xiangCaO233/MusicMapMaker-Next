@@ -74,6 +74,11 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 
+mmm_add_test_executable(Logic ProjectAudioReferenceTest
+                        tests/ProjectAudioReferenceTest.cpp)
+target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
+add_test(NAME ProjectAudioReferenceTest COMMAND ProjectAudioReferenceTest)
+
 mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
                         tests/ProjectDirectoryWatcherTest.cpp)
 target_link_libraries(ProjectDirectoryWatcherTest PRIVATE Logic Log)

@@ -56,6 +56,9 @@ public:
         /// @brief 是否成功找到并更新音频资源。
         bool m_updated{ false };
 
+        /// @brief 阻止 Effect 转 Main 的 Note 绑定所在谱面列表。
+        std::vector<std::string> m_blockingBeatmapPaths;
+
         /// @brief 更新后若资源变成音效，则需要由引擎登记。
         std::optional<AudioRegistrationRequest> m_effectRegistration;
 
@@ -67,6 +70,9 @@ public:
     struct RemoveAudioResourceResult {
         /// @brief 是否从项目资源列表中删除了音频资源。
         bool m_removed{ false };
+
+        /// @brief 阻止删除的 Note 或自动采样引用所在谱面列表。
+        std::vector<std::string> m_blockingBeatmapPaths;
 
         /// @brief 被删除资源若为音效，则需要由引擎卸载音效缓存。
         std::optional<std::string> m_effectResourceIdToUnload;

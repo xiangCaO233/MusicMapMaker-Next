@@ -19,6 +19,27 @@ class BeatMap;
 namespace MMM::Logic
 {
 
+/// @brief 谱面中音频资源引用的用途。
+enum class BeatmapAudioReferenceKind {
+    SongFileHint,
+    NoteSampleBinding,
+    AudioSampleEvent,
+};
+
+/// @brief 一个可追溯到具体谱面和字段用途的音频资源引用。
+struct BeatmapAudioReference {
+    /// @brief 引用所在谱面的项目相对路径。
+    std::string m_beatmapPath;
+
+    /// @brief 谱面字段中保存的资源 ID 或路径。
+    std::string m_audioReference;
+
+    /// @brief 引用用途。
+    BeatmapAudioReferenceKind m_kind{
+        BeatmapAudioReferenceKind::AudioSampleEvent
+    };
+};
+
 /// @brief 根据项目目录扫描结果构建并同步项目内的谱面和音频资源列表。
 class ProjectResourceService
 {
@@ -64,6 +85,13 @@ public:
     DirectorySyncResult syncDirectoryResources(
         Project&                                   project,
         const ProjectDirectoryScanner::ScanResult& scanResult) const;
+
+    /// @brief 查找指定项目音频资源在全部谱面中的引用。
+    /// @param project 待扫描的项目。
+    /// @param resource 待匹配的项目音频资源。
+    /// @return 按谱面和用途记录的引用列表。
+    static std::vector<BeatmapAudioReference> findAudioResourceReferences(
+        const Project& project, const AudioResource& resource);
 
 private:
     /// @brief 规范化项目相对路径，用于稳定比较排除列表。
@@ -115,17 +143,34 @@ private:
     static void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
                                                         const Project& project);
 
-    /// @brief 尝试读取谱面主音轨并记录到主音轨路径集合。
+    /// @brief 读取谱面并收集歌曲提示、玩家物件绑定和自动采样引用。
     /// @param project 谱面所属项目。
     /// @param mapPath 需要读取的谱面文件路径。
-    /// @param filename 谱面文件名，用于日志输出。
-    /// @param mainAudioPaths 已识别的主音轨项目相对路径集合。
+    /// @param beatmapPath 谱面用于诊断的项目相对路径。
     /// @param warnOnFailure 读取失败时是否输出警告日志。
-    /// @return 读取到主音轨时返回音轨 ID，否则返回空。
-    static std::optional<std::string> probeMainAudioTrackId(
+    /// @return 谱面中的全部音频引用。
+    static std::vector<BeatmapAudioReference> probeBeatmapAudioReferences(
         const Project& project, const std::filesystem::path& mapPath,
-        const std::string&               filename,
-        std::unordered_set<std::string>& mainAudioPaths, bool warnOnFailure);
+        const std::string& beatmapPath, bool warnOnFailure);
+
+    /// @brief 判断谱面音频引用是否指向指定项目资源。
+    /// @param project 资源所属项目。
+    /// @param reference 待匹配的谱面引用。
+    /// @param resource 候选项目音频资源。
+    /// @return ID、项目相对路径或旧版文件名能够匹配时返回 true。
+    static bool audioReferenceMatchesResource(
+        const Project& project, const BeatmapAudioReference& reference,
+        const AudioResource& resource);
+
+    /// @brief 根据谱面引用推断新发现音频资源的类型。
+    /// @param project 资源所属项目。
+    /// @param references 已收集的全部谱面音频引用。
+    /// @param resource 待推断的项目音频资源。
+    /// @return Note 绑定优先的资源类型；没有类型线索时返回 Effect。
+    static AudioTrackType inferAudioResourceType(
+        const Project&                            project,
+        const std::vector<BeatmapAudioReference>& references,
+        const AudioResource&                      resource);
 
     /// @brief 创建默认音轨配置。
     /// @return 默认音轨配置。
@@ -134,11 +179,11 @@ private:
     /// @brief 创建项目音频资源条目。
     /// @param project 音频资源所属项目。
     /// @param audioPath 音频文件系统路径。
-    /// @param mainAudioPaths 已识别的主音轨项目相对路径集合。
+    /// @param references 已收集的全部谱面音频引用。
     /// @return 填充默认配置后的音频资源条目。
     static AudioResource createAudioResource(
         const Project& project, const std::filesystem::path& audioPath,
-        const std::unordered_set<std::string>& mainAudioPaths);
+        const std::vector<BeatmapAudioReference>& references);
 
     /// @brief 查找已有谱面条目。
     /// @param project 需要查询的项目。
@@ -153,13 +198,6 @@ private:
     /// @return 找到时返回音频资源副本，否则返回空。
     static std::optional<AudioResource> findExistingAudioResource(
         const Project& project, const std::string& relativeAudioPath);
-
-    /// @brief 在没有谱面主音轨引用时，为项目资源设置兜底主音轨。
-    /// @param project 需要设置兜底主音轨的项目。
-    /// @param mainAudioPaths 已识别的主音轨项目相对路径集合。
-    static void applyFallbackMainAudio(
-        Project&                               project,
-        const std::unordered_set<std::string>& mainAudioPaths);
 };
 
 }  // namespace MMM::Logic

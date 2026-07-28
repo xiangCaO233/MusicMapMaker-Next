@@ -113,7 +113,7 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
 
 /// @brief 将已成功保存的谱面基础信息同步到项目谱面入口。
 /// @param metadata 已成功写入谱面文件的基础元数据。
-/// @return 项目入口的名称或主音轨 ID 发生变化时返回 true。
+/// @return 项目入口的名称发生变化时返回 true。
 bool syncSavedMetadataToProjectEntry(const MMM::BaseMapMeta& metadata)
 {
     auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
@@ -130,20 +130,11 @@ bool syncSavedMetadataToProjectEntry(const MMM::BaseMapMeta& metadata)
             !pathError;
         if ( !isSavedEntry ) continue;
 
-        const std::string audioTrackId =
-            MMM::Config::pathToUtf8(metadata.main_audio_path.filename());
-        if ( entry.m_name == metadata.version &&
-             entry.m_audioTrackId == audioTrackId ) {
-            return false;
-        }
+        if ( entry.m_name == metadata.version ) return false;
 
-        entry.m_name         = metadata.version;
-        entry.m_audioTrackId = audioTrackId;
-        XINFO(
-            "BeatmapSession: Synced saved name '{}' and audioTrackId '{}' "
-            "to project entry",
-            entry.m_name,
-            entry.m_audioTrackId);
+        entry.m_name = metadata.version;
+        XINFO("BeatmapSession: Synced saved name '{}' to project entry",
+              entry.m_name);
         return true;
     }
     return false;
