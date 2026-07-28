@@ -67,6 +67,10 @@ public:
         entt::entity                   entity{ entt::null };  ///< 关联实体。
         std::optional<SampleComponent> before;                ///< 变更前数据。
         std::optional<SampleComponent> after;                 ///< 变更后数据。
+        /// @brief 变更前的选中状态；为空时不覆盖交互组件。
+        std::optional<bool> beforeSelected;
+        /// @brief 变更后的选中状态；为空时不覆盖交互组件。
+        std::optional<bool> afterSelected;
     };
 
     /// @brief 构造批量自动采样操作。
@@ -146,6 +150,42 @@ private:
     std::int32_t                   m_beforeTrackCount{ 0 };  ///< 原玩家轨道数。
     std::int32_t                   m_afterTrackCount{ 0 };   ///< 新玩家轨道数。
     std::vector<SampleTrackChange> m_sampleChanges;  ///< 自动采样轨道迁移表。
+};
+
+/// @brief 改变持久化 BGM 轨道数量。
+class BgmTrackCountAction : public IEditorAction
+{
+public:
+    /// @brief 构造 BGM 轨道数量操作。
+    /// @param beforeBgmTrackCount 原持久化 BGM 轨道数量。
+    /// @param afterBgmTrackCount 新持久化 BGM 轨道数量。
+    BgmTrackCountAction(std::int32_t beforeBgmTrackCount,
+                        std::int32_t afterBgmTrackCount)
+        : m_beforeBgmTrackCount(beforeBgmTrackCount)
+        , m_afterBgmTrackCount(afterBgmTrackCount)
+    {
+    }
+
+    /// @brief 应用新 BGM 轨道数量。
+    void execute(SessionContext& ctx) override;
+
+    /// @brief 恢复原 BGM 轨道数量。
+    void undo(SessionContext& ctx) override;
+
+    /// @brief 重新应用新 BGM 轨道数量。
+    void redo(SessionContext& ctx) override;
+
+    /// @brief 获取用户可读操作名称。
+    std::string getName() const override;
+
+private:
+    /// @brief 应用持久化 BGM 轨道数量并同步谱面元数据。
+    /// @param ctx 会话上下文。
+    /// @param bgmTrackCount 目标持久化 BGM 轨道数量。
+    void apply(SessionContext& ctx, std::int32_t bgmTrackCount);
+
+    std::int32_t m_beforeBgmTrackCount{ 0 };  ///< 原持久化 BGM 轨道数量。
+    std::int32_t m_afterBgmTrackCount{ 0 };   ///< 新持久化 BGM 轨道数量。
 };
 
 }  // namespace MMM::Logic

@@ -9,13 +9,24 @@ namespace MMM::Logic
 void EditorClipboard::set(std::vector<ClipboardItem> items,
                           const SessionContext* sourceContext, bool isCut)
 {
+    setChartObjects(std::move(items), {}, sourceContext, isCut);
+}
+
+/// @brief 更新编辑器级混合谱面物件剪贴板内容。
+void EditorClipboard::setChartObjects(std::vector<ClipboardItem>       notes,
+                                      std::vector<SampleClipboardItem> samples,
+                                      const SessionContext* sourceContext,
+                                      bool                  isCut)
+{
     /// @brief 保护本次剪贴板写入的临界区。
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_items = std::move(items);
+    m_items       = std::move(notes);
+    m_sampleItems = std::move(samples);
     m_timelineItems.clear();
-    m_sourceContext     = sourceContext;
-    m_isCut             = isCut && !m_items.empty();
-    m_pendingSystemText = EditorClipboardProtocol::serializeNotes(m_items);
+    m_sourceContext = sourceContext;
+    m_isCut         = isCut && (!m_items.empty() || !m_sampleItems.empty());
+    m_pendingSystemText =
+        EditorClipboardProtocol::serializeChartObjects(m_items, m_sampleItems);
 }
 
 /// @brief 更新编辑器级 Timeline 剪贴板内容。
@@ -26,6 +37,7 @@ void EditorClipboard::setTimelines(std::vector<TimelineClipboardItem> items,
     /// @brief 保护本次 Timeline 剪贴板写入的临界区。
     std::lock_guard<std::mutex> lock(m_mutex);
     m_items.clear();
+    m_sampleItems.clear();
     m_timelineItems = std::move(items);
     m_sourceContext = sourceContext;
     m_isCut         = isCut && !m_timelineItems.empty();
@@ -39,6 +51,14 @@ std::vector<ClipboardItem> EditorClipboard::get() const
     /// @brief 保护本次剪贴板读取的临界区。
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_items;
+}
+
+/// @brief 获取编辑器级自动采样剪贴板内容副本。
+std::vector<SampleClipboardItem> EditorClipboard::getSamples() const
+{
+    /// @brief 保护本次自动采样剪贴板读取的临界区。
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_sampleItems;
 }
 
 /// @brief 获取编辑器级 Timeline 剪贴板内容副本。
@@ -106,6 +126,7 @@ bool EditorClipboard::importSystemText(std::string_view text)
     }
 
     m_items         = std::move(parsed->notes);
+    m_sampleItems   = std::move(parsed->samples);
     m_timelineItems = std::move(parsed->timelines);
     m_sourceContext = nullptr;
     m_isCut         = false;

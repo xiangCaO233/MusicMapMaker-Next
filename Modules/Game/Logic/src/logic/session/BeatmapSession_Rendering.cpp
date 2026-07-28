@@ -538,7 +538,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     const double secondaryCameraSnapshotMinInterval =
         engine.adaptiveRenderSnapshotMinInterval(config, true);
     const bool snapshotIsPlaying =
-        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+        m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
     const double snapshotTotalTime =
         SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
     rebuildPreviewDensitySnapshotIfNeeded(*m_ctx, snapshotTotalTime);

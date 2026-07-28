@@ -7,6 +7,8 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -18,6 +20,9 @@ namespace
 {
 /// @brief 音符剪贴板条目的载荷类型码。
 constexpr std::string_view KIND_NOTES = "N";
+
+/// @brief 混合谱面物件剪贴板条目的载荷类型码。
+constexpr std::string_view KIND_CHART_OBJECTS = "C";
 
 /// @brief 时间线剪贴板条目的载荷类型码。
 constexpr std::string_view KIND_TIMELINES = "T";
@@ -100,6 +105,18 @@ void appendIntField(std::string& text, int value)
     text += fmt::format("{}", value);
 }
 
+/// @brief 追加一个有符号 64 位整数字段。
+void appendInt64Field(std::string& text, std::int64_t value)
+{
+    text += fmt::format("{}", value);
+}
+
+/// @brief 追加一个无符号 32 位整数字段。
+void appendUint32Field(std::string& text, std::uint32_t value)
+{
+    text += fmt::format("{}", value);
+}
+
 /// @brief 以 0 或 1 追加一个布尔字段。
 void appendBoolField(std::string& text, bool value)
 {
@@ -120,6 +137,30 @@ void appendDoubleField(std::string& text, double value)
 std::optional<int> parseIntField(std::string_view field)
 {
     int value = 0;
+    auto [ptr, ec] =
+        std::from_chars(field.data(), field.data() + field.size(), value);
+    if ( ec != std::errc{} || ptr != field.data() + field.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 解析一个有符号 64 位整数字段。
+std::optional<std::int64_t> parseInt64Field(std::string_view field)
+{
+    std::int64_t value = 0;
+    auto [ptr, ec] =
+        std::from_chars(field.data(), field.data() + field.size(), value);
+    if ( ec != std::errc{} || ptr != field.data() + field.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 解析一个无符号 32 位整数字段。
+std::optional<std::uint32_t> parseUint32Field(std::string_view field)
+{
+    std::uint32_t value = 0;
     auto [ptr, ec] =
         std::from_chars(field.data(), field.data() + field.size(), value);
     if ( ec != std::errc{} || ptr != field.data() + field.size() ) {
@@ -274,6 +315,25 @@ std::optional<::MMM::TimingMetadataType> timingMetadataSourceFromCode(
     return std::nullopt;
 }
 
+/// @brief 将自动采样元数据来源转换为紧凑协议码。
+std::string_view sampleMetadataSourceCode(::MMM::SampleMetadataType type)
+{
+    switch ( type ) {
+    case ::MMM::SampleMetadataType::MALODY: return "ma";
+    case ::MMM::SampleMetadataType::MMM: return "m";
+    }
+    return {};
+}
+
+/// @brief 将紧凑协议码转换为自动采样元数据来源。
+std::optional<::MMM::SampleMetadataType> sampleMetadataSourceFromCode(
+    std::string_view code)
+{
+    if ( code == "ma" ) return ::MMM::SampleMetadataType::MALODY;
+    if ( code == "m" ) return ::MMM::SampleMetadataType::MMM;
+    return std::nullopt;
+}
+
 /// @brief 颜色存在时追加一行颜色覆盖。
 void appendColorLine(std::string& text, std::string_view prefix,
                      std::string_view                code,
@@ -398,6 +458,29 @@ void appendTimingMetadataLines(std::string& text, std::string_view prefix,
     }
 }
 
+/// @brief 追加自动采样元数据属性行。
+void appendSampleMetadataLines(std::string& text, std::string_view prefix,
+                               const ::MMM::SampleMetadata& metadata)
+{
+    for ( const auto& [source, properties] : metadata.sample_properties ) {
+        const auto sourceCode = sampleMetadataSourceCode(source);
+        if ( sourceCode.empty() ) {
+            continue;
+        }
+
+        for ( const auto& [key, value] : properties ) {
+            text.append(prefix);
+            appendSeparator(text);
+            text.append(sourceCode);
+            appendSeparator(text);
+            appendEscapedField(text, key);
+            appendSeparator(text);
+            appendEscapedField(text, value);
+            appendLineBreak(text);
+        }
+    }
+}
+
 /// @brief 将一行音符元数据属性解析到元数据容器中。
 void parseNoteMetadataLine(const std::vector<std::string_view>& fields,
                            ::MMM::NoteMetadata&                 metadata)
@@ -430,6 +513,23 @@ void parseTimingMetadataLine(const std::vector<std::string_view>& fields,
         return;
     }
     metadata.timing_properties[*source][*key] = *value;
+}
+
+/// @brief 将一行自动采样元数据属性解析到元数据容器中。
+void parseSampleMetadataLine(const std::vector<std::string_view>& fields,
+                             ::MMM::SampleMetadata&               metadata)
+{
+    if ( fields.size() != 4 ) {
+        return;
+    }
+
+    const auto source = sampleMetadataSourceFromCode(fields[1]);
+    const auto key    = decodeEscapedField(fields[2]);
+    const auto value  = decodeEscapedField(fields[3]);
+    if ( !source || !key || !value ) {
+        return;
+    }
+    metadata.sample_properties[*source][*key] = *value;
 }
 
 /// @brief 追加一个数字列表字段。
@@ -527,10 +627,13 @@ void appendBeatLine(std::string& text, const ClipboardItem& item)
 void appendClipboardItem(std::string& text, const ClipboardItem& item)
 {
     appendMainNoteLine(text, item.note);
-    if ( !item.note.m_boundSound.empty() ) {
+    if ( item.note.m_sampleBinding &&
+         !item.note.m_sampleBinding->m_audioResourceId.empty() ) {
         text.append("NS");
         appendSeparator(text);
-        appendEscapedField(text, item.note.m_boundSound);
+        appendEscapedField(text, item.note.m_sampleBinding->m_audioResourceId);
+        appendSeparator(text);
+        appendDoubleField(text, item.note.m_sampleBinding->m_volume);
         appendLineBreak(text);
     }
     appendBeatLine(text, item);
@@ -539,10 +642,13 @@ void appendClipboardItem(std::string& text, const ClipboardItem& item)
 
     for ( const auto& subNote : item.note.m_subNotes ) {
         appendSubNoteLine(text, subNote);
-        if ( !subNote.boundSound.empty() ) {
+        if ( subNote.sampleBinding &&
+             !subNote.sampleBinding->m_audioResourceId.empty() ) {
             text.append("SS");
             appendSeparator(text);
-            appendEscapedField(text, subNote.boundSound);
+            appendEscapedField(text, subNote.sampleBinding->m_audioResourceId);
+            appendSeparator(text);
+            appendDoubleField(text, subNote.sampleBinding->m_volume);
             appendLineBreak(text);
         }
         appendNoteColorLines(text, "SC", subNote.customColors);
@@ -629,6 +735,63 @@ void parseBeatLine(const std::vector<std::string_view>& fields,
     item.hasBeatPositions = true;
 }
 
+/// @brief 追加一个自动采样剪贴板条目。
+void appendSampleItem(std::string& text, const SampleClipboardItem& item)
+{
+    text.append("A");
+    appendSeparator(text);
+    appendDoubleField(text, item.sample.m_timestamp);
+    appendSeparator(text);
+    appendInt64Field(text, item.sample.m_offsetMs);
+    appendSeparator(text);
+    appendUint32Field(text, item.bgmLane);
+    appendSeparator(text);
+    appendEscapedField(text, item.sample.m_audioResourceId);
+    appendSeparator(text);
+    appendDoubleField(text, item.sample.m_volume);
+    appendSeparator(text);
+    appendDoubleField(text, item.startBeat);
+    appendSeparator(text);
+    appendBoolField(text, item.hasBeatPosition);
+    appendLineBreak(text);
+    appendSampleMetadataLines(text, "AM", item.sample.m_metadata);
+}
+
+/// @brief 解析一行自动采样剪贴板数据。
+std::optional<SampleClipboardItem> parseSampleItemLine(
+    const std::vector<std::string_view>& fields)
+{
+    if ( fields.size() != 8 ) {
+        return std::nullopt;
+    }
+
+    const auto timestamp       = parseDoubleField(fields[1]);
+    const auto offsetMs        = parseInt64Field(fields[2]);
+    const auto bgmLane         = parseUint32Field(fields[3]);
+    auto       audioResourceId = decodeEscapedField(fields[4]);
+    const auto volume          = parseDoubleField(fields[5]);
+    const auto startBeat       = parseDoubleField(fields[6]);
+    const auto hasBeatPosition = parseBoolField(fields[7]);
+    if ( !timestamp || !offsetMs || !bgmLane || !audioResourceId ||
+         audioResourceId->empty() || !volume || !startBeat ||
+         !hasBeatPosition ||
+         std::abs(*volume) >
+             static_cast<double>(std::numeric_limits<float>::max()) ) {
+        return std::nullopt;
+    }
+
+    SampleClipboardItem item;
+    item.sample.m_timestamp       = *timestamp;
+    item.sample.m_offsetMs        = *offsetMs;
+    item.sample.m_track           = *bgmLane;
+    item.sample.m_audioResourceId = std::move(*audioResourceId);
+    item.sample.m_volume          = static_cast<float>(*volume);
+    item.bgmLane                  = *bgmLane;
+    item.startBeat                = *startBeat;
+    item.hasBeatPosition          = *hasBeatPosition;
+    return item;
+}
+
 /// @brief 追加一个时间线剪贴板条目。
 void appendTimelineItem(std::string& text, const TimelineClipboardItem& item)
 {
@@ -696,20 +859,54 @@ std::optional<std::string_view> parseHeader(std::string_view& text)
     }
 
     const auto fields = splitFields(*line);
-    if ( fields.size() != 2 || fields[0] != MAGIC ) {
+    if ( fields.size() != 2 ||
+         (fields[0] != MAGIC && fields[0] != LEGACY_MAGIC_V3 &&
+          fields[0] != LEGACY_MAGIC) ) {
         return std::nullopt;
     }
-    if ( fields[1] != KIND_NOTES && fields[1] != KIND_TIMELINES ) {
+    if ( fields[1] != KIND_NOTES && fields[1] != KIND_CHART_OBJECTS &&
+         fields[1] != KIND_TIMELINES ) {
+        return std::nullopt;
+    }
+    if ( fields[1] == KIND_CHART_OBJECTS && fields[0] != MAGIC ) {
         return std::nullopt;
     }
     return fields[1];
 }
 
-/// @brief 解析音符载荷行。
-ParsedClipboard parseNotePayload(std::string_view text)
+/// @brief 解析 V2、V3 或 V4 的物件采样绑定行。
+/// @param fields 已按制表符拆分的 NS 或 SS 行。
+/// @return 有效资源标识及音量；V2 行默认音量为 1。
+std::optional<::MMM::AudioSampleBinding> parseSampleBindingLine(
+    const std::vector<std::string_view>& fields)
 {
-    ParsedClipboard parsed;
-    ClipboardItem*  currentItem = nullptr;
+    if ( fields.size() != 2 && fields.size() != 3 ) {
+        return std::nullopt;
+    }
+    auto audioResourceId = decodeEscapedField(fields[1]);
+    if ( !audioResourceId || audioResourceId->empty() ) {
+        return std::nullopt;
+    }
+
+    float volume = 1.0F;
+    if ( fields.size() == 3 ) {
+        const auto parsedVolume = parseDoubleField(fields[2]);
+        if ( !parsedVolume ||
+             std::abs(*parsedVolume) >
+                 static_cast<double>(std::numeric_limits<float>::max()) ) {
+            return std::nullopt;
+        }
+        volume = static_cast<float>(*parsedVolume);
+    }
+    return ::MMM::AudioSampleBinding{ std::move(*audioResourceId), volume };
+}
+
+/// @brief 解析音符或混合谱面物件载荷行。
+ParsedClipboard parseChartObjectPayload(std::string_view text)
+{
+    ParsedClipboard      parsed;
+    ClipboardItem*       currentItem       = nullptr;
+    SampleClipboardItem* currentSampleItem = nullptr;
 
     while ( auto line = popLine(text) ) {
         if ( line->empty() ) {
@@ -730,12 +927,26 @@ ParsedClipboard parseNotePayload(std::string_view text)
             ClipboardItem item;
             item.note = std::move(*note);
             parsed.notes.push_back(std::move(item));
-            currentItem = &parsed.notes.back();
+            currentItem       = &parsed.notes.back();
+            currentSampleItem = nullptr;
+        } else if ( fields[0] == "A" ) {
+            auto item = parseSampleItemLine(fields);
+            if ( !item ) {
+                currentItem       = nullptr;
+                currentSampleItem = nullptr;
+                continue;
+            }
+            parsed.samples.push_back(std::move(*item));
+            currentItem       = nullptr;
+            currentSampleItem = &parsed.samples.back();
+        } else if ( fields[0] == "AM" && currentSampleItem ) {
+            parseSampleMetadataLine(fields,
+                                    currentSampleItem->sample.m_metadata);
         } else if ( fields[0] == "NB" && currentItem ) {
             parseBeatLine(fields, *currentItem);
-        } else if ( fields[0] == "NS" && currentItem && fields.size() == 2 ) {
-            if ( auto sound = decodeEscapedField(fields[1]) ) {
-                currentItem->note.m_boundSound = std::move(*sound);
+        } else if ( fields[0] == "NS" && currentItem ) {
+            if ( auto binding = parseSampleBindingLine(fields) ) {
+                currentItem->note.m_sampleBinding = std::move(*binding);
             }
         } else if ( fields[0] == "NC" && currentItem ) {
             if ( auto color = parseColorLine(fields) ) {
@@ -749,11 +960,10 @@ ParsedClipboard parseNotePayload(std::string_view text)
                 currentItem->note.m_subNotes.push_back(std::move(*subNote));
             }
         } else if ( fields[0] == "SS" && currentItem &&
-                    !currentItem->note.m_subNotes.empty() &&
-                    fields.size() == 2 ) {
-            if ( auto sound = decodeEscapedField(fields[1]) ) {
-                currentItem->note.m_subNotes.back().boundSound =
-                    std::move(*sound);
+                    !currentItem->note.m_subNotes.empty() ) {
+            if ( auto binding = parseSampleBindingLine(fields) ) {
+                currentItem->note.m_subNotes.back().sampleBinding =
+                    std::move(*binding);
             }
         } else if ( fields[0] == "SC" && currentItem &&
                     !currentItem->note.m_subNotes.empty() ) {
@@ -815,6 +1025,21 @@ std::string serializeNotes(const std::vector<ClipboardItem>& items)
     return text;
 }
 
+std::string serializeChartObjects(
+    const std::vector<ClipboardItem>&       notes,
+    const std::vector<SampleClipboardItem>& samples)
+{
+    std::string text;
+    appendHeader(text, KIND_CHART_OBJECTS);
+    for ( const auto& item : notes ) {
+        appendClipboardItem(text, item);
+    }
+    for ( const auto& item : samples ) {
+        appendSampleItem(text, item);
+    }
+    return text;
+}
+
 std::string serializeTimelines(const std::vector<TimelineClipboardItem>& items)
 {
     std::string text;
@@ -832,8 +1057,8 @@ std::optional<ParsedClipboard> parse(std::string_view text)
         return std::nullopt;
     }
 
-    if ( *kind == KIND_NOTES ) {
-        return parseNotePayload(text);
+    if ( *kind == KIND_NOTES || *kind == KIND_CHART_OBJECTS ) {
+        return parseChartObjectPayload(text);
     }
     return parseTimelinePayload(text);
 }

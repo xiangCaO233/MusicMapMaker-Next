@@ -23,3 +23,16 @@ target_link_libraries(VideoFrameDecoderTest PRIVATE Common 3rd_ffmpeg)
 add_test(NAME VideoFrameDecoderTest
          COMMAND VideoFrameDecoderTest
                  "${CMAKE_BINARY_DIR}/test_output/video_frame_decoder")
+
+# 音频资源拖拽载荷测试保证跨模块共享的固定布局与长度拒绝规则稳定。
+mmm_add_test_executable(Common AudioResourceDragPayloadTest
+                        tests/AudioResourceDragPayloadTest.cpp)
+target_link_libraries(AudioResourceDragPayloadTest PRIVATE Common)
+add_test(NAME AudioResourceDragPayloadTest COMMAND AudioResourceDragPayloadTest)
+
+# 单文件兼容测试覆盖复合音频时间线的显式拒绝条件。
+mmm_add_test_executable(Common BeatmapAudioTimelineCompatibilityTest
+                        tests/BeatmapAudioTimelineCompatibilityTest.cpp)
+target_link_libraries(BeatmapAudioTimelineCompatibilityTest PRIVATE Common MMM)
+add_test(NAME BeatmapAudioTimelineCompatibilityTest
+         COMMAND BeatmapAudioTimelineCompatibilityTest)

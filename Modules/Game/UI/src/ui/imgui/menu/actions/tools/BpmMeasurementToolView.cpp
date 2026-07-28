@@ -1434,9 +1434,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
         setPlaybackState(false);
         seekPlaybackToCanvasTime(0.0);
         markUserPreferencesChanged(false, true);
-        if ( isPlaybackSynchronizedWithEditor() ) {
-            audio.stop();
-        } else {
+        if ( shouldDirectlyControlBpmAudioTransport(m_playbackRoute) ) {
             audio.stopAudition();
         }
     }
@@ -3031,23 +3029,23 @@ void BpmMeasurementToolView::refreshSelectedAudioIdentity()
         std::clamp<double>(selectedResource->m_config.playbackSpeed, 0.25, 2.0);
     const auto audioPath =
         project->m_projectRoot / Config::utf8ToPath(selectedResource->m_path);
-    m_selectedAudioSyncKey =
-        Logic::EditorEngine::instance().makeMainAudioSyncKeyForPath(audioPath);
+    std::error_code canonicalError;
+    auto            canonicalPath =
+        std::filesystem::weakly_canonical(audioPath, canonicalError);
+    if ( canonicalError ) {
+        canonicalPath = audioPath.lexically_normal();
+    }
+    m_selectedAudioSyncKey               = Config::pathToUtf8(canonicalPath);
     m_selectedAudioIdentityNeedsAnalysis = true;
 }
 
-/// @brief 根据活动谱面主音轨刷新 BPM 工具播放路由。
-/// @warning UI 热路径：每帧调用一次，只读取活动 Session 的缓存同步键。
+/// @brief 将 BPM 工具固定路由到独立试听通道。
+/// @warning UI 热路径：每帧调用一次，只比较本地缓存路由。
 void BpmMeasurementToolView::refreshPlaybackRoute()
 {
     refreshSelectedAudioIdentity();
-    auto&      engine = Logic::EditorEngine::instance();
-    const bool activeTrackMatches =
-        engine.activeMainAudioSyncKeyMatches(m_selectedAudioSyncKey);
-    const BpmPlaybackRoute nextRoute = resolveBpmPlaybackRoute(
-        m_selectedAudioSyncKey,
-        activeTrackMatches ? std::string_view(m_selectedAudioSyncKey)
-                           : std::string_view{});
+    const BpmPlaybackRoute nextRoute =
+        resolveBpmPlaybackRoute(m_selectedAudioSyncKey, std::string_view{});
     if ( nextRoute != m_playbackRoute ) {
         if ( nextRoute != BpmPlaybackRoute::Audition ) {
             Audio::AudioManager::instance().unloadAuditionTrack();
@@ -3121,8 +3119,7 @@ bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
     const std::string pathString = Config::pathToUtf8(*path);
     auto&             audio      = Audio::AudioManager::instance();
     if ( isPlaybackSynchronizedWithEditor() ) {
-        if ( audio.getLoadedBGMSyncKey() != m_selectedAudioSyncKey &&
-             !audio.loadBGM(pathString, resource->m_config) ) {
+        if ( !audio.hasLoadedAudioTimeline() ) {
             m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
             return false;
         }
@@ -3155,7 +3152,7 @@ bool BpmMeasurementToolView::isSelectedTrackLoadedForPlayback() const
 
     const auto& audio = Audio::AudioManager::instance();
     if ( isPlaybackSynchronizedWithEditor() ) {
-        return audio.getLoadedBGMSyncKey() == m_selectedAudioSyncKey;
+        return audio.hasLoadedAudioTimeline();
     }
     return m_playbackRoute == BpmPlaybackRoute::Audition &&
            audio.getLoadedAuditionSyncKey() == m_selectedAudioSyncKey;
@@ -3305,11 +3302,12 @@ void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
 
     const double commandAudioTime =
         std::clamp(audioTime, minTime, std::max(minTime, totalTime));
-    const double hardwareAudioTime =
-        std::clamp(commandAudioTime, 0.0, std::max(0.0, totalTime));
     if ( isPlaybackSynchronizedWithEditor() ) {
-        audio.seek(hardwareAudioTime);
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::CmdSeek{ commandAudioTime });
     } else {
+        const double hardwareAudioTime =
+            std::clamp(commandAudioTime, 0.0, std::max(0.0, totalTime));
         audio.seekAudition(hardwareAudioTime);
     }
 
@@ -3317,11 +3315,6 @@ void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
     m_viewCenter                = std::clamp<double>(
         commandAudioTime + visualOffset, 0.0, std::max(0.0, canvasDuration));
     resetMetronomeScheduler(commandAudioTime);
-
-    if ( isPlaybackSynchronizedWithEditor() ) {
-        Logic::EditorEngine::instance().pushCommand(
-            Logic::CmdSeek{ commandAudioTime });
-    }
 }
 
 /// @brief 跳转到指定 BPM 工具画布时间；仅同轨时同步活动主画布。

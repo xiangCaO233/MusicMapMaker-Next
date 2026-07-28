@@ -6,6 +6,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -48,8 +49,8 @@ public:
         int    trackOffset{ 0 };  // 用于 Flick 等偏移物件
         double duration;
         bool   isSubNote;
-        /// @brief 物件绑定的自定义音效资源标识；为空时使用内置音效。
-        std::string boundSound;
+        /// @brief 物件命中时触发的可选采样绑定；为空时使用内置音效。
+        std::optional<::MMM::AudioSampleBinding> sampleBinding;
 
         bool operator<(const HitEvent& other) const
         {
@@ -97,6 +98,12 @@ public:
     /// @warning 逻辑预测播放热路径：只返回稳定字符串引用，不得分配或访问文件。
     [[nodiscard]] static const std::string& soundEffectKeyForEvent(
         const HitEvent& ev, ::MMM::NoteType effectiveType);
+
+    /// @brief 获取打击事件的物件采样音量倍率。
+    /// @param ev 待解析的打击事件。
+    /// @return 自定义绑定存在时返回物件音量，否则返回 1。
+    /// @warning 逻辑预测播放热路径：只读取事件内存，不得访问 ECS 或分配。
+    [[nodiscard]] static float sampleVolumeForEvent(const HitEvent& ev);
 
     /// @brief 计算固定尺寸或整轨填充打击特效的绘制范围。
     /// @param layoutMode 皮肤指定的布局方式。

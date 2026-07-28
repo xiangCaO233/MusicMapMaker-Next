@@ -104,6 +104,42 @@ struct CmdEndDrag {
     std::string cameraId;
 };
 
+/// @brief 将项目音频资源作为自动采样放入主画布 BGM 轨道区。
+struct CmdCreateAudioSample {
+    /// @brief 项目内稳定音频资源 ID。
+    std::string audioResourceId;
+
+    /// @brief 接收放置操作的主画布 ID。
+    std::string cameraId;
+
+    /// @brief 鼠标相对画布的横坐标。
+    float mouseX{ 0.0F };
+
+    /// @brief 鼠标相对画布的纵坐标。
+    float mouseY{ 0.0F };
+
+    /// @brief 是否临时禁用分拍吸附。
+    bool isCtrlDown{ false };
+};
+
+/// @brief 原子更新一个自动采样的精确属性。
+struct CmdUpdateAudioSampleProperties {
+    /// @brief 自动采样在独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 项目资源 ID 或待兼容解析的已有资源引用。
+    std::string audioResourceId;
+
+    /// @brief 相对玩家轨道区的零基 BGM 轨道索引。
+    std::int32_t bgmLane{ 0 };
+
+    /// @brief 相对锚点的有符号毫秒偏移。
+    std::int64_t offsetMs{ 0 };
+
+    /// @brief 自动采样物件音量。
+    float volume{ 1.0F };
+};
+
 /**
  * @brief 设置鼠标在视口中的位置指令
  */
@@ -211,6 +247,11 @@ struct CmdEndErase {
  */
 struct CmdUpdateTrackCount {
     int32_t trackCount;
+};
+
+/// @brief 更新持久化 BGM 轨道数量指令。
+struct CmdUpdateBgmTrackCount {
+    int32_t bgmTrackCount;  ///< 目标持久化 BGM 轨道数量。
 };
 
 /**
@@ -568,11 +609,24 @@ struct CmdUpdateAudioResource {
     ::MMM::AudioTrackType newType;
 };
 
+/// @brief 更新项目音频资源的完整持久化 DSP 配置。
+struct CmdUpdateAudioResourceConfig {
+    /// @brief 待更新资源的稳定 ID。
+    std::string id;
+
+    /// @brief 替换写入的完整资源配置。
+    ::MMM::AudioTrackConfig config;
+};
+
 /**
  * @brief 移除音轨资源指令
  */
 struct CmdRemoveAudioResource {
+    /// @brief 待删除资源的稳定 ID。
     std::string id;
+
+    /// @brief 是否同时删除项目目录中的源音频文件。
+    bool deleteSourceFile{ false };
 };
 
 /**
@@ -594,9 +648,10 @@ struct CmdSaveTemporaryProject {
 using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
-    CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
-    CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
+    CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
+    CmdUpdateAudioSampleProperties, CmdUpdateTrackCount, CmdUpdateBgmTrackCount,
+    CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo,
+    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
@@ -607,7 +662,7 @@ using LogicCommand = std::variant<
     CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
     CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
     CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
-    CmdRemoveBeatmap, CmdSaveTemporaryProject>;
+    CmdImportAudio, CmdUpdateAudioResource, CmdUpdateAudioResourceConfig,
+    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

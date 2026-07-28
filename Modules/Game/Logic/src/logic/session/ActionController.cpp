@@ -6,6 +6,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
@@ -212,6 +213,8 @@ void NoteAction::execute(SessionContext& ctx)
             XINFO("[Action] Delete Note: Time={:.3f}, Track={}",
                   m_before->m_timestamp,
                   m_before->m_trackIndex);
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::PlayerNote, m_entity);
             reg.destroy(m_entity);
         }
     } else if ( m_type == Type::Update ) {
@@ -241,7 +244,11 @@ void NoteAction::undo(SessionContext& ctx)
     auto& reg = ctx.noteRegistry;
     XINFO("[Undo] NoteAction Type={}", static_cast<int>(m_type));
     if ( m_type == Type::Create ) {
-        if ( reg.valid(m_entity) ) reg.destroy(m_entity);
+        if ( reg.valid(m_entity) ) {
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::PlayerNote, m_entity);
+            reg.destroy(m_entity);
+        }
     } else if ( m_type == Type::Delete ) {
         if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
         reg.emplace_or_replace<NoteComponent>(m_entity, *m_before);
@@ -305,8 +312,18 @@ void BatchNoteAction::execute(SessionContext& ctx)
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
             ensureNoteAuxiliaryComponents(reg, entry.entity);
+            if ( entry.afterSelected ) {
+                setChartObjectSelected(ctx,
+                                       ChartObjectKind::PlayerNote,
+                                       entry.entity,
+                                       *entry.afterSelected);
+            }
         } else if ( entry.before.has_value() ) {
-            if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
+            if ( reg.valid(entry.entity) ) {
+                forgetChartObjectSelection(
+                    ctx, ChartObjectKind::PlayerNote, entry.entity);
+                reg.destroy(entry.entity);
+            }
         }
     }
     ctx.m_needsNotesSync = true;
@@ -337,8 +354,18 @@ void BatchNoteAction::undo(SessionContext& ctx)
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
             ensureNoteAuxiliaryComponents(reg, entry.entity);
+            if ( entry.beforeSelected ) {
+                setChartObjectSelected(ctx,
+                                       ChartObjectKind::PlayerNote,
+                                       entry.entity,
+                                       *entry.beforeSelected);
+            }
         } else if ( entry.after.has_value() ) {
-            if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
+            if ( reg.valid(entry.entity) ) {
+                forgetChartObjectSelection(
+                    ctx, ChartObjectKind::PlayerNote, entry.entity);
+                reg.destroy(entry.entity);
+            }
         }
     }
     ctx.m_needsNotesSync = true;

@@ -53,6 +53,7 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
             1.0f + (ev.trackSpan - 1) *
                        config.settings.sfxConfig.flickWidthVolumeMultiplier;
     }
+    volumeFactor *= sampleVolumeForEvent(ev);
 
     const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
 
@@ -65,14 +66,21 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
 const std::string& HitFXSystem::soundEffectKeyForEvent(
     const HitEvent& ev, ::MMM::NoteType effectiveType)
 {
-    if ( !ev.boundSound.empty() ) {
-        return ev.boundSound;
+    if ( ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty() ) {
+        return ev.sampleBinding->m_audioResourceId;
     }
 
     static const std::string NOTE_SOUND_EFFECT_KEY  = "hiteffect.note";
     static const std::string FLICK_SOUND_EFFECT_KEY = "hiteffect.flick";
     return effectiveType == ::MMM::NoteType::FLICK ? FLICK_SOUND_EFFECT_KEY
                                                    : NOTE_SOUND_EFFECT_KEY;
+}
+
+float HitFXSystem::sampleVolumeForEvent(const HitEvent& ev)
+{
+    return ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty()
+               ? ev.sampleBinding->m_volume
+               : 1.0F;
 }
 
 HitEffectRenderBounds HitFXSystem::calculateRenderBounds(

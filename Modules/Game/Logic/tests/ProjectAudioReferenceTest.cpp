@@ -9,6 +9,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
 #include <string>
 
 namespace
@@ -67,6 +69,19 @@ bool createAudioPlaceholder(const std::filesystem::path& path)
     std::ofstream stream(path, std::ios::binary);
     stream.put('\0');
     return stream.good();
+}
+
+/// @brief 读取测试文本文件并保留全部原始内容。
+/// @param path 待读取文件。
+/// @param output 文件内容。
+/// @return 完整读取成功时返回 true。
+bool readTextFile(const std::filesystem::path& path, std::string& output)
+{
+    std::ifstream stream(path, std::ios::binary);
+    if ( !stream.is_open() ) return false;
+    output.assign(std::istreambuf_iterator<char>(stream),
+                  std::istreambuf_iterator<char>());
+    return stream.good() || stream.eof();
 }
 
 /// @brief 按 ID 查找项目音频资源。
@@ -322,6 +337,414 @@ bool testAudioReferenceMutationGuards()
     return true;
 }
 
+/// @brief 验证打开会话的内存谱面引用会补充磁盘扫描结果。
+/// @return 未落盘的 Note 和自动采样引用都能阻止破坏性操作时返回 true。
+bool testOpenBeatmapReferencesSupplementDiskGuards()
+{
+    MMM::Project project;
+    project.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "live-note",
+                            .m_path = "audio/live-note.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "live-sample",
+                            .m_path = "audio/live-sample.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    MMM::BeatMap openBeatmap;
+    MMM::Note    note;
+    note.setSampleBinding(MMM::AudioSampleBinding{ "live-note", 1.0F });
+    openBeatmap.m_noteData.notes.push_back(std::move(note));
+    openBeatmap.m_audioSamples.push_back(
+        MMM::AudioSampleEvent{ .m_audioResourceId = "live-sample" });
+
+    const auto openReferences =
+        MMM::Logic::ProjectResourceService::collectBeatmapAudioReferences(
+            openBeatmap, "charts/OpenOnly.mmm");
+    MMM::Logic::ProjectCommandService service;
+    const auto                        updateResult =
+        service.updateAudioResource(project,
+                                    MMM::Logic::CmdUpdateAudioResource{
+                                        "live-note",
+                                        MMM::AudioTrackType::Main,
+                                    },
+                                    openReferences);
+    if ( updateResult.m_updated ||
+         updateResult.m_blockingBeatmapPaths !=
+             std::vector<std::string>{ "charts/OpenOnly.mmm" } ) {
+        XERROR("Open-session Note binding did not block Effect-to-Main");
+        return false;
+    }
+
+    const auto removeResult = service.removeAudioResource(
+        project,
+        MMM::Logic::CmdRemoveAudioResource{ "live-sample" },
+        openReferences);
+    if ( removeResult.m_removed ||
+         removeResult.m_blockingBeatmapPaths !=
+             std::vector<std::string>{ "charts/OpenOnly.mmm" } ) {
+        XERROR("Open-session sample did not block resource removal");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证删除源音频时先执行谱面引用和文件系统安全校验。
+/// @return 被引用文件保留、未引用文件原子删除且缺失文件不丢资源时返回 true。
+bool testPhysicalAudioDeletionHonorsReferences()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto usedPath   = directory.path() / "audio" / "used.wav";
+    const auto unusedPath = directory.path() / "audio" / "unused.wav";
+    if ( !createAudioPlaceholder(usedPath) ||
+         !createAudioPlaceholder(unusedPath) ) {
+        return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot    = directory.path();
+    project.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "used-resource",
+                            .m_path = "audio/used.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "unused-resource",
+                            .m_path = "audio/unused.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "missing-resource",
+                            .m_path = "audio/missing.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    const std::vector<MMM::Logic::BeatmapAudioReference> openReferences{
+        MMM::Logic::BeatmapAudioReference{
+            "charts/OpenOnly.mmm",
+            "used-resource",
+            MMM::Logic::BeatmapAudioReferenceKind::AudioSampleEvent,
+        },
+    };
+    MMM::Logic::ProjectCommandService service;
+    const auto blockedResult = service.removeAudioResource(
+        project,
+        MMM::Logic::CmdRemoveAudioResource{ "used-resource", true },
+        openReferences);
+    if ( blockedResult.m_removed ||
+         blockedResult.m_blockingBeatmapPaths !=
+             std::vector<std::string>{ "charts/OpenOnly.mmm" } ||
+         !std::filesystem::exists(usedPath) ||
+         findResource(project, "used-resource") == nullptr ) {
+        XERROR("Referenced source audio was physically deleted");
+        return false;
+    }
+
+    const auto removedResult = service.removeAudioResource(
+        project, MMM::Logic::CmdRemoveAudioResource{ "unused-resource", true });
+    if ( !removedResult.m_removed || !removedResult.m_errorMessage.empty() ||
+         std::filesystem::exists(unusedPath) ||
+         findResource(project, "unused-resource") != nullptr ) {
+        XERROR("Unreferenced source audio was not deleted atomically");
+        return false;
+    }
+
+    const auto missingResult = service.removeAudioResource(
+        project,
+        MMM::Logic::CmdRemoveAudioResource{ "missing-resource", true });
+    if ( missingResult.m_removed || missingResult.m_errorMessage.empty() ||
+         findResource(project, "missing-resource") == nullptr ) {
+        XERROR("Missing source audio removed its project resource entry");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证内存谱面移动引用重映射会报告匹配并稳定改写字段。
+/// @return Note、自动采样和歌曲提示全部按约定更新时返回 true。
+bool testInMemoryAudioReferenceRemapResult()
+{
+    MMM::Project project;
+    project.m_projectRoot = "/tmp/mmm-open-reference-remap";
+
+    const MMM::AudioResource previousResource{
+        .m_id   = "stable-audio-id",
+        .m_path = "old/song.wav",
+        .m_type = MMM::AudioTrackType::Effect,
+    };
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.song_file_hint  = "old/song.wav";
+    beatmap.m_baseMapMetadata.main_audio_path = "old/song.wav";
+    MMM::Note note;
+    note.setSampleBinding(MMM::AudioSampleBinding{ "old/song.wav", 0.75F });
+    beatmap.m_noteData.notes.push_back(std::move(note));
+    beatmap.m_audioSamples.push_back(
+        MMM::AudioSampleEvent{ .m_audioResourceId = "old/song.wav" });
+
+    const auto result = MMM::Logic::ProjectResourceService::
+        remapBeatmapAudioReferencesAfterMove(
+            project, beatmap, "Open.mmm", previousResource, "new/song.wav");
+    if ( result.m_noteBindingReferenceCount != 1U ||
+         result.m_audioSampleReferenceCount != 1U ||
+         result.m_songFileHintReferenceCount != 2U ||
+         result.m_changedReferenceCount != 4U || !result.referencesResource() ||
+         !result.changed() ||
+         beatmap.m_noteData.notes.front()
+                 .getSampleBinding()
+                 ->m_audioResourceId != "stable-audio-id" ||
+         beatmap.m_audioSamples.front().m_audioResourceId !=
+             "stable-audio-id" ||
+         beatmap.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("new/song.wav") ||
+         beatmap.m_baseMapMetadata.main_audio_path !=
+             std::filesystem::path("new/song.wav") ) {
+        XERROR("In-memory moved audio references were not remapped safely");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证保存提示保留有效引用并回退到最早 Main 自动采样。
+/// @return 提示选择不增删采样且旧单音轨字段始终清空时返回 true。
+bool testSongFileHintSaveSemantics()
+{
+    MMM::Project project;
+    project.m_projectRoot    = "/tmp/mmm-song-file-hint";
+    project.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "effect-hint",
+                            .m_path = "audio/effect.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+        MMM::AudioResource{ .m_id   = "main-late",
+                            .m_path = "audio/late.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "main-early",
+                            .m_path = "audio/early.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+    };
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.map_path        = "charts/Hint.mmm";
+    beatmap.m_baseMapMetadata.song_file_hint  = "audio/effect.wav";
+    beatmap.m_baseMapMetadata.main_audio_path = "legacy-main.ogg";
+    beatmap.m_audioSamples                    = {
+        MMM::AudioSampleEvent{ .m_timestamp       = -1000.0,
+                               .m_audioResourceId = "effect-hint" },
+        MMM::AudioSampleEvent{ .m_timestamp       = 1000.0,
+                               .m_offsetMs        = -100,
+                               .m_audioResourceId = "main-late" },
+        MMM::AudioSampleEvent{ .m_timestamp       = 800.0,
+                               .m_offsetMs        = -300,
+                               .m_audioResourceId = "main-early" },
+    };
+    const auto sampleCount = beatmap.m_audioSamples.size();
+
+    auto result =
+        MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+            project, beatmap, beatmap.m_baseMapMetadata.map_path);
+    if ( result.m_source !=
+             MMM::Logic::BeatmapSongFileHintSource::ExistingHint ||
+         result.m_audioResourceId != "effect-hint" ||
+         beatmap.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/effect.wav") ||
+         !beatmap.m_baseMapMetadata.main_audio_path.empty() ||
+         beatmap.m_audioSamples.size() != sampleCount ) {
+        XERROR("Valid song_file_hint was not preserved on save");
+        return false;
+    }
+
+    beatmap.m_baseMapMetadata.song_file_hint  = "audio/missing.ogg";
+    beatmap.m_baseMapMetadata.main_audio_path = "legacy-main.ogg";
+    result = MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+        project, beatmap, beatmap.m_baseMapMetadata.map_path);
+    if ( result.m_source !=
+             MMM::Logic::BeatmapSongFileHintSource::EarliestMainSample ||
+         result.m_audioResourceId != "main-early" ||
+         beatmap.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/early.ogg") ||
+         !beatmap.m_baseMapMetadata.main_audio_path.empty() ||
+         beatmap.m_audioSamples.size() != sampleCount ) {
+        XERROR("Invalid song_file_hint did not select earliest Main sample");
+        return false;
+    }
+
+    for ( auto& resource : project.m_audioResources ) {
+        resource.m_type = MMM::AudioTrackType::Effect;
+    }
+    beatmap.m_baseMapMetadata.song_file_hint = "audio/missing-again.ogg";
+    result = MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+        project, beatmap, beatmap.m_baseMapMetadata.map_path);
+    if ( result.m_source != MMM::Logic::BeatmapSongFileHintSource::None ||
+         !beatmap.m_baseMapMetadata.song_file_hint.empty() ||
+         beatmap.m_audioSamples.size() != sampleCount ) {
+        XERROR("Stale song_file_hint remained without a Main sample fallback");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证模板自动采样按 BGM 相对轨道迁移到不同 Key 数的新谱面。
+/// @return 4K 到 6K 的首轨映射、空轨保留和轨道扩展均正确时返回 true。
+bool testTemplateAudioSampleTrackRemap()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+
+    auto source                           = std::make_shared<MMM::BeatMap>();
+    source->m_baseMapMetadata.track_count = 4;
+    source->m_baseMapMetadata.bgm_track_count = 5;
+    source->m_audioSamples                    = {
+        MMM::AudioSampleEvent{ .m_track = 4, .m_audioResourceId = "first-bgm" },
+        MMM::AudioSampleEvent{ .m_track = 6, .m_audioResourceId = "third-bgm" },
+    };
+    MMM::Note sourceNote;
+    sourceNote.m_track = 3;
+    source->m_noteData.notes.push_back(std::move(sourceNote));
+    source->sync();
+
+    MMM::Logic::CmdCreateBeatmap preserveCommand;
+    preserveCommand.baseMeta.name               = "TemplatePreserve";
+    preserveCommand.baseMeta.version            = "TemplatePreserve";
+    preserveCommand.baseMeta.track_count        = 6;
+    preserveCommand.baseMeta.bgm_track_count    = 1;
+    preserveCommand.templateBeatmap             = source;
+    preserveCommand.templateOptions.copyObjects = true;
+
+    const auto preserveResult =
+        MMM::Logic::ProjectCommandService{}.createBeatmap(project,
+                                                          preserveCommand);
+    if ( !preserveResult.m_created || !preserveResult.m_beatmap ||
+         preserveResult.m_beatmap->m_audioSamples.size() != 2 ||
+         preserveResult.m_beatmap->m_audioSamples[0].m_track != 6 ||
+         preserveResult.m_beatmap->m_audioSamples[1].m_track != 8 ||
+         preserveResult.m_beatmap->m_baseMapMetadata.bgm_track_count != 5 ||
+         preserveResult.m_beatmap->m_noteData.notes.size() != 1 ||
+         preserveResult.m_beatmap->m_noteData.notes.front().m_track != 3 ) {
+        XERROR("Template BGM-relative sample tracks were not preserved");
+        return false;
+    }
+
+    const auto persisted =
+        MMM::BeatMap::loadFromFile(directory.path() / "TemplatePreserve.mmm");
+    if ( persisted.m_audioSamples.size() != 2 ||
+         persisted.m_audioSamples[0].m_track != 6 ||
+         persisted.m_audioSamples[1].m_track != 8 ||
+         persisted.m_baseMapMetadata.bgm_track_count != 5 ) {
+        XERROR("Remapped template sample tracks were not persisted");
+        return false;
+    }
+
+    source->m_baseMapMetadata.bgm_track_count  = 1;
+    MMM::Logic::CmdCreateBeatmap expandCommand = preserveCommand;
+    expandCommand.baseMeta.name                = "TemplateExpand";
+    expandCommand.baseMeta.version             = "TemplateExpand";
+    const auto expandResult = MMM::Logic::ProjectCommandService{}.createBeatmap(
+        project, expandCommand);
+    if ( !expandResult.m_created || !expandResult.m_beatmap ||
+         expandResult.m_beatmap->m_baseMapMetadata.bgm_track_count != 3 ||
+         expandResult.m_beatmap->m_audioSamples.size() != 2 ||
+         expandResult.m_beatmap->m_audioSamples[0].m_track != 6 ||
+         expandResult.m_beatmap->m_audioSamples[1].m_track != 8 ) {
+        XERROR("Template BGM track count did not expand for sparse samples");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证非法模板物件不会产生部分谱面、文件或项目资源。
+/// @return 越界玩家列、落入玩家区的采样和轨道溢出均被原子拒绝时返回 true。
+bool testInvalidTemplateObjectTracksAreRejectedAtomically()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Existing", "Existing.mmm", {} });
+
+    auto playerLaneSource = std::make_shared<MMM::BeatMap>();
+    playerLaneSource->m_baseMapMetadata.track_count     = 4;
+    playerLaneSource->m_baseMapMetadata.bgm_track_count = 1;
+    playerLaneSource->m_audioSamples                    = {
+        MMM::AudioSampleEvent{ .m_track           = 4,
+                               .m_audioResourceId = "valid-first" },
+        MMM::AudioSampleEvent{ .m_track           = 3,
+                               .m_audioResourceId = "invalid-player" },
+    };
+
+    MMM::Logic::CmdCreateBeatmap playerLaneCommand;
+    playerLaneCommand.baseMeta.name               = "RejectedPlayerLane";
+    playerLaneCommand.baseMeta.version            = "RejectedPlayerLane";
+    playerLaneCommand.baseMeta.track_count        = 6;
+    playerLaneCommand.baseMeta.song_file_hint     = "pending-main.ogg";
+    playerLaneCommand.templateBeatmap             = playerLaneSource;
+    playerLaneCommand.templateOptions.copyObjects = true;
+
+    const auto playerLaneResult =
+        MMM::Logic::ProjectCommandService{}.createBeatmap(project,
+                                                          playerLaneCommand);
+    if ( playerLaneResult.m_created || playerLaneResult.m_beatmap ||
+         project.m_beatmaps.size() != 1 || !project.m_audioResources.empty() ||
+         std::filesystem::exists(directory.path() /
+                                 "RejectedPlayerLane.mmm") ) {
+        XERROR("Player-lane template sample was not rejected atomically");
+        return false;
+    }
+
+    auto playerNoteSource = std::make_shared<MMM::BeatMap>();
+    playerNoteSource->m_baseMapMetadata.track_count = 6;
+    MMM::Note outOfRangeNote;
+    outOfRangeNote.m_track = 5;
+    playerNoteSource->m_noteData.notes.push_back(std::move(outOfRangeNote));
+    playerNoteSource->sync();
+
+    MMM::Logic::CmdCreateBeatmap playerNoteCommand;
+    playerNoteCommand.baseMeta.name               = "RejectedPlayerNote";
+    playerNoteCommand.baseMeta.version            = "RejectedPlayerNote";
+    playerNoteCommand.baseMeta.track_count        = 4;
+    playerNoteCommand.templateBeatmap             = playerNoteSource;
+    playerNoteCommand.templateOptions.copyObjects = true;
+
+    const auto playerNoteResult =
+        MMM::Logic::ProjectCommandService{}.createBeatmap(project,
+                                                          playerNoteCommand);
+    if ( playerNoteResult.m_created || playerNoteResult.m_beatmap ||
+         project.m_beatmaps.size() != 1 || !project.m_audioResources.empty() ||
+         std::filesystem::exists(directory.path() /
+                                 "RejectedPlayerNote.mmm") ) {
+        XERROR("Out-of-range template Note was not rejected atomically");
+        return false;
+    }
+
+    auto overflowSource = std::make_shared<MMM::BeatMap>();
+    overflowSource->m_baseMapMetadata.track_count     = 1;
+    overflowSource->m_baseMapMetadata.bgm_track_count = 1;
+    overflowSource->m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_track           = std::numeric_limits<std::uint32_t>::max(),
+        .m_audioResourceId = "overflow",
+    });
+
+    MMM::Logic::CmdCreateBeatmap overflowCommand;
+    overflowCommand.baseMeta.name               = "RejectedOverflow";
+    overflowCommand.baseMeta.version            = "RejectedOverflow";
+    overflowCommand.baseMeta.track_count        = 2;
+    overflowCommand.templateBeatmap             = overflowSource;
+    overflowCommand.templateOptions.copyObjects = true;
+
+    const auto overflowResult =
+        MMM::Logic::ProjectCommandService{}.createBeatmap(project,
+                                                          overflowCommand);
+    if ( overflowResult.m_created || overflowResult.m_beatmap ||
+         project.m_beatmaps.size() != 1 || !project.m_audioResources.empty() ||
+         std::filesystem::exists(directory.path() / "RejectedOverflow.mmm") ) {
+        XERROR("Overflowing template sample was not rejected atomically");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证新建谱面把所选 Main 物化为第一条 BGM 轨的自动采样。
 /// @return 新建谱面行为正确时返回 true。
 bool testCreateBeatmapMaterializesMainSample()
@@ -340,10 +763,10 @@ bool testCreateBeatmapMaterializesMainSample()
                             .m_type = MMM::AudioTrackType::Main });
 
     MMM::Logic::CmdCreateBeatmap command;
-    command.baseMeta.name            = "Created";
-    command.baseMeta.version         = "Created";
-    command.baseMeta.track_count     = 4;
-    command.baseMeta.main_audio_path = "audio/song.ogg";
+    command.baseMeta.name           = "Created";
+    command.baseMeta.version        = "Created";
+    command.baseMeta.track_count    = 4;
+    command.baseMeta.song_file_hint = "audio/song.ogg";
 
     const auto result =
         MMM::Logic::ProjectCommandService{}.createBeatmap(project, command);
@@ -359,7 +782,8 @@ bool testCreateBeatmapMaterializesMainSample()
          sample.m_track != 4 ||
          result.m_beatmap->m_baseMapMetadata.bgm_track_count < 1 ||
          result.m_beatmap->m_baseMapMetadata.song_file_hint !=
-             std::filesystem::path("audio/song.ogg") ) {
+             std::filesystem::path("audio/song.ogg") ||
+         !result.m_beatmap->m_baseMapMetadata.main_audio_path.empty() ) {
         XERROR("Materialized Main sample fields were incorrect");
         return false;
     }
@@ -550,6 +974,319 @@ bool testAudioResourcePathRemap()
     return true;
 }
 
+/// @brief 验证 osu! 移动只原位改写音频字段而不重排或丢失其它文本。
+/// @return 全局音频和 HitSample 引用更新且哨兵文本保留时返回 true。
+bool testOsuAudioReferenceMoveRemap()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto oldDirectory = directory.path() / "old";
+    const auto newDirectory = directory.path() / "new";
+    const auto mainAudio    = oldDirectory / "main.ogg";
+    const auto effectAudio  = oldDirectory / "C:effect.wav";
+    const auto mapPath      = directory.path() / "charts" / "Move.osu";
+    if ( !createAudioPlaceholder(mainAudio) ||
+         !createAudioPlaceholder(effectAudio) ) {
+        return false;
+    }
+
+    std::error_code filesystemError;
+    std::filesystem::create_directories(mapPath.parent_path(), filesystemError);
+    if ( filesystemError ) return false;
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.name            = "Move";
+    beatmap.m_baseMapMetadata.version         = "Move";
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 1;
+    beatmap.m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_track           = 4,
+        .m_audioResourceId = "../old/main.ogg",
+    });
+    MMM::Note note;
+    note.m_timestamp = 1000.0;
+    note.m_track     = 1;
+    note.setSampleBinding(
+        MMM::AudioSampleBinding{ "../old/C:effect.wav", 1.0F });
+    beatmap.m_noteData.notes.push_back(std::move(note));
+    beatmap.sync();
+    if ( !beatmap.saveToFile(mapPath) ) return false;
+
+    {
+        std::ofstream stream(mapPath, std::ios::binary | std::ios::app);
+        stream << "\n// mmm-audio-remap-sentinel\n";
+        if ( !stream.good() ) return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Move", "charts/Move.osu", {} });
+    project.m_audioResources = {
+        MMM::AudioResource{ .m_id   = "stable-main-id",
+                            .m_path = "old/main.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "stable-effect-id",
+                            .m_path = "old/C:effect.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    const auto validation =
+        MMM::Logic::ProjectResourceService::validateAudioResourceMove(
+            project, oldDirectory, newDirectory);
+    if ( !validation.empty() ) {
+        XERROR("Safe osu! audio move was rejected: {}", validation);
+        return false;
+    }
+
+    std::filesystem::rename(oldDirectory, newDirectory, filesystemError);
+    if ( filesystemError ) return false;
+    const auto changed =
+        MMM::Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            project, oldDirectory, newDirectory);
+    if ( changed != 2U ||
+         project.m_audioResources[0].m_path != "new/main.ogg" ||
+         project.m_audioResources[1].m_path != "new/C:effect.wav" ) {
+        XERROR("Moved osu! resources were not updated in the project");
+        return false;
+    }
+
+    std::string remappedText;
+    if ( !readTextFile(mapPath, remappedText) ||
+         remappedText.find("AudioFilename: ../new/main.ogg") ==
+             std::string::npos ||
+         remappedText.find(":../new/C:effect.wav") == std::string::npos ||
+         remappedText.find("// mmm-audio-remap-sentinel") ==
+             std::string::npos ) {
+        XERROR("osu! audio references were not patched in place");
+        return false;
+    }
+
+    const auto loaded = MMM::BeatMap::loadFromFile(mapPath);
+    if ( loaded.m_audioSamples.size() != 1U ||
+         loaded.m_audioSamples.front().m_audioResourceId != "../new/main.ogg" ||
+         loaded.m_noteData.notes.size() != 1U ) {
+        XERROR("Patched osu! references did not round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证只移动 osu! 谱面时会按新目录重算相对音频引用。
+/// @return 资源路径不变且 AudioFilename 指向同一音频文件时返回 true。
+bool testOsuBeatmapOnlyMoveRemap()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto audioPath  = directory.path() / "audio" / "main.ogg";
+    const auto oldMapPath = directory.path() / "charts" / "Move.osu";
+    const auto newMapPath = directory.path() / "nested" / "deeper" / "Move.osu";
+    if ( !createAudioPlaceholder(audioPath) ) return false;
+
+    std::error_code filesystemError;
+    std::filesystem::create_directories(oldMapPath.parent_path(),
+                                        filesystemError);
+    if ( filesystemError ) return false;
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 1;
+    beatmap.m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_track           = 4,
+        .m_audioResourceId = "../audio/main.ogg",
+    });
+    beatmap.sync();
+    if ( !beatmap.saveToFile(oldMapPath) ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Move", "charts/Move.osu", {} });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "stable-main-id",
+                            .m_path = "audio/main.ogg",
+                            .m_type = MMM::AudioTrackType::Main });
+
+    const auto validation =
+        MMM::Logic::ProjectResourceService::validateAudioResourceMove(
+            project, oldMapPath, newMapPath);
+    if ( !validation.empty() ) return false;
+
+    std::filesystem::create_directories(newMapPath.parent_path(),
+                                        filesystemError);
+    if ( filesystemError ) return false;
+    std::filesystem::rename(oldMapPath, newMapPath, filesystemError);
+    if ( filesystemError ) return false;
+
+    std::string errorMessage;
+    const auto  changed =
+        MMM::Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            project, oldMapPath, newMapPath, &errorMessage);
+    if ( changed != 0U || !errorMessage.empty() ||
+         project.m_audioResources.front().m_path != "audio/main.ogg" ) {
+        XERROR("Moving only an osu! beatmap changed its audio resource");
+        return false;
+    }
+
+    std::string remappedText;
+    if ( !readTextFile(newMapPath, remappedText) ||
+         remappedText.find("AudioFilename: ../../audio/main.ogg") ==
+             std::string::npos ) {
+        XERROR("Moved osu! beatmap did not recalculate AudioFilename");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证 osu! 引用写盘失败会恢复谱面并回滚物理音频移动。
+/// @return 错误可上报且项目、文件和谱面均保持旧状态时返回 true。
+bool testOsuMoveWriteFailureRollsBack()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto oldAudio = directory.path() / "old" / "main.ogg";
+    const auto newAudio = directory.path() / "new" / "main.ogg";
+    const auto mapPath  = directory.path() / "charts" / "Rollback.osu";
+    if ( !createAudioPlaceholder(oldAudio) ) return false;
+
+    std::error_code filesystemError;
+    std::filesystem::create_directories(mapPath.parent_path(), filesystemError);
+    if ( filesystemError ) return false;
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 1;
+    beatmap.m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_track           = 4,
+        .m_audioResourceId = "../old/main.ogg",
+    });
+    beatmap.sync();
+    if ( !beatmap.saveToFile(mapPath) ) return false;
+
+    std::string originalText;
+    if ( !readTextFile(mapPath, originalText) ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Rollback", "charts/Rollback.osu", {} });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "stable-main-id",
+                            .m_path = "old/main.ogg",
+                            .m_type = MMM::AudioTrackType::Main });
+
+    const auto validation =
+        MMM::Logic::ProjectResourceService::validateAudioResourceMove(
+            project, oldAudio, newAudio);
+    if ( !validation.empty() ) return false;
+
+    std::filesystem::create_directories(newAudio.parent_path(),
+                                        filesystemError);
+    if ( filesystemError ) return false;
+    std::filesystem::rename(oldAudio, newAudio, filesystemError);
+    if ( filesystemError ) return false;
+
+    auto blockedTemporaryPath = mapPath;
+    blockedTemporaryPath += ".mmm-audio-remap.tmp";
+    std::filesystem::create_directories(blockedTemporaryPath, filesystemError);
+    if ( filesystemError ||
+         !createAudioPlaceholder(blockedTemporaryPath / "blocker") ) {
+        return false;
+    }
+
+    std::string errorMessage;
+    const auto  changed =
+        MMM::Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            project, oldAudio, newAudio, &errorMessage);
+    std::string finalText;
+    if ( changed != 0U || errorMessage.empty() ||
+         !std::filesystem::exists(oldAudio) ||
+         std::filesystem::exists(newAudio) ||
+         project.m_audioResources.front().m_path != "old/main.ogg" ||
+         !readTextFile(mapPath, finalText) || finalText != originalText ) {
+        XERROR("Failed osu! rewrite did not roll back the complete move");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证 RM/IMD 隐式音频关联在移动前被保护。
+/// @return 单独改名被拒绝、保持相对关系的整目录移动被允许时返回 true。
+bool testImdAudioMovePreflight()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto oldDirectory = directory.path() / "old";
+    const auto newDirectory = directory.path() / "new";
+    const auto audioPath    = oldDirectory / "Song.ogg";
+    const auto renamedAudio = oldDirectory / "Renamed.ogg";
+    const auto mapPath      = oldDirectory / "Song_4k_Test.imd";
+    if ( !createAudioPlaceholder(audioPath) ) return false;
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 1;
+    beatmap.m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_track           = 4,
+        .m_audioResourceId = "Song.ogg",
+    });
+    beatmap.sync();
+    if ( !beatmap.saveToFile(mapPath) ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "Song", "old/Song_4k_Test.imd", {} });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "stable-song-id",
+                            .m_path = "old/Song.ogg",
+                            .m_type = MMM::AudioTrackType::Main });
+
+    const auto blocked =
+        MMM::Logic::ProjectResourceService::validateAudioResourceMove(
+            project, audioPath, renamedAudio);
+    if ( blocked.empty() || !std::filesystem::exists(audioPath) ||
+         std::filesystem::exists(renamedAudio) ||
+         project.m_audioResources.front().m_path != "old/Song.ogg" ) {
+        XERROR("Destructive RM/IMD audio rename was not blocked before move");
+        return false;
+    }
+
+    const auto allowed =
+        MMM::Logic::ProjectResourceService::validateAudioResourceMove(
+            project, oldDirectory, newDirectory);
+    if ( !allowed.empty() ) {
+        XERROR("Relationship-preserving RM/IMD directory move was rejected: {}",
+               allowed);
+        return false;
+    }
+
+    std::error_code filesystemError;
+    std::filesystem::rename(oldDirectory, newDirectory, filesystemError);
+    if ( filesystemError ) return false;
+    const auto changed =
+        MMM::Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
+            project, oldDirectory, newDirectory);
+    if ( changed != 1U ||
+         project.m_audioResources.front().m_path != "new/Song.ogg" ) {
+        XERROR("Safe RM/IMD directory move did not update the resource path");
+        return false;
+    }
+
+    const auto loaded =
+        MMM::BeatMap::loadFromFile(newDirectory / mapPath.filename());
+    if ( loaded.m_audioSamples.size() != 1U ||
+         loaded.m_audioSamples.front().m_audioResourceId != "Song.ogg" ) {
+        XERROR("Safe RM/IMD directory move changed its implicit audio");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频引用和资源约束测试。
@@ -559,10 +1296,20 @@ int main()
     return testLegacyBeatmapEntryIsReadOnly() &&
                    testReferenceAwareDirectoryScan() &&
                    testAudioReferenceMutationGuards() &&
+                   testOpenBeatmapReferencesSupplementDiskGuards() &&
+                   testPhysicalAudioDeletionHonorsReferences() &&
+                   testInMemoryAudioReferenceRemapResult() &&
+                   testSongFileHintSaveSemantics() &&
+                   testTemplateAudioSampleTrackRemap() &&
+                   testInvalidTemplateObjectTracksAreRejectedAtomically() &&
                    testCreateBeatmapMaterializesMainSample() &&
                    testDefaultBeatmapAudioResolution() &&
                    testLegacyProjectAudioTrackMigration() &&
-                   testAudioResourcePathRemap()
+                   testAudioResourcePathRemap() &&
+                   testOsuAudioReferenceMoveRemap() &&
+                   testOsuBeatmapOnlyMoveRemap() &&
+                   testOsuMoveWriteFailureRollsBack() &&
+                   testImdAudioMovePreflight()
                ? 0
                : 1;
 }

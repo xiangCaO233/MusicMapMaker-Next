@@ -62,8 +62,8 @@ struct NoteComponent {
     /// @brief 原始元数据备份 (用于导出时保持结构一致性)
     ::MMM::NoteMetadata m_metadata;
 
-    /// @brief 物件绑定的自定义音效资源标识；为空时使用内置打击音效。
-    std::string m_boundSound;
+    /// @brief 物件命中时触发的可选采样绑定；为空时使用内置打击音效。
+    std::optional<::MMM::AudioSampleBinding> m_sampleBinding;
 
     /// @brief 自定义音符配色缓存；保存时同步写入 m_metadata。
     NoteColorOverrides m_customColors;
@@ -76,8 +76,8 @@ struct NoteComponent {
         int                 trackIndex;
         int                 dtrack;
         ::MMM::NoteMetadata metadata;
-        /// @brief 子物件绑定的自定义音效资源标识。
-        std::string boundSound;
+        /// @brief 子物件命中时触发的可选采样绑定。
+        std::optional<::MMM::AudioSampleBinding> sampleBinding;
         /// @brief 子物件自定义颜色缓存；为空时继承皮肤默认色。
         NoteColorOverrides customColors;
     };

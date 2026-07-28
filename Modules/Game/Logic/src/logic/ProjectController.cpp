@@ -1513,22 +1513,30 @@ ProjectController::updateBeatmapFilePath(const std::filesystem::path& oldPath,
 
 /// @brief 更新当前项目的音频资源类型。
 /// @param cmd 更新音频资源命令。
+/// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
 /// @return 更新音频资源的处理结果。
 ProjectCommandService::UpdateAudioResourceResult
-ProjectController::updateAudioResource(const CmdUpdateAudioResource& cmd)
+ProjectController::updateAudioResource(
+    const CmdUpdateAudioResource&             cmd,
+    const std::vector<BeatmapAudioReference>& openBeatmapReferences)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.updateAudioResource(*m_currentProject, cmd);
+    return m_projectCommandService.updateAudioResource(
+        *m_currentProject, cmd, openBeatmapReferences);
 }
 
 /// @brief 从当前项目中删除音频资源。
 /// @param cmd 删除音频资源命令。
+/// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
 /// @return 删除音频资源的处理结果。
 ProjectCommandService::RemoveAudioResourceResult
-ProjectController::removeAudioResource(const CmdRemoveAudioResource& cmd)
+ProjectController::removeAudioResource(
+    const CmdRemoveAudioResource&             cmd,
+    const std::vector<BeatmapAudioReference>& openBeatmapReferences)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.removeAudioResource(*m_currentProject, cmd);
+    return m_projectCommandService.removeAudioResource(
+        *m_currentProject, cmd, openBeatmapReferences);
 }
 
 /// @brief 从当前项目谱面列表中删除谱面。

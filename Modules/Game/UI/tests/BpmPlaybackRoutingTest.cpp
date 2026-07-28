@@ -10,6 +10,7 @@ using MMM::UI::BpmSpaceShortcutDisposition;
 using MMM::UI::isBpmMeasurementToolStableWindowId;
 using MMM::UI::resolveBpmPlaybackRoute;
 using MMM::UI::resolveBpmSpaceShortcutDisposition;
+using MMM::UI::shouldDirectlyControlBpmAudioTransport;
 using MMM::UI::shouldDispatchBpmPlaybackToEditor;
 using MMM::UI::shouldToggleBpmPlaybackFromSpace;
 using MMM::UI::WindowIdUtils::stableWindowId;
@@ -44,6 +45,10 @@ int main()
 
     ok &= shouldDispatchBpmPlaybackToEditor(
         BpmPlaybackRoute::SynchronizedWithEditor);
+    static_assert(!shouldDirectlyControlBpmAudioTransport(
+        BpmPlaybackRoute::SynchronizedWithEditor));
+    static_assert(
+        shouldDirectlyControlBpmAudioTransport(BpmPlaybackRoute::Audition));
     ok &= !shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute::Audition);
     ok &= !shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute::Unavailable);
     ok &= shouldToggleBpmPlaybackFromSpace(false, false);

@@ -1,6 +1,7 @@
 #include "logic/session/SessionUtils.h"
 #include "audio/AudioManager.h"
-#include "config/Utf8Path.h"
+#include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -86,144 +87,202 @@ int calculateBeatIndex(double                                       time,
 
 double getEffectiveTotalTimeSeconds(const SessionContext& ctx)
 {
-    double totalTime = 0.0;
-    if ( ctx.mainAudioTotalTime > 0.0 &&
-         std::isfinite(ctx.mainAudioTotalTime) ) {
-        totalTime = ctx.mainAudioTotalTime;
+    double totalTime = ctx.audioTimelineDescriptor.m_chartEndSeconds;
+    if ( ctx.audioTimelineTotalTime > 0.0 &&
+         std::isfinite(ctx.audioTimelineTotalTime) ) {
+        totalTime = std::max(totalTime, ctx.audioTimelineTotalTime);
     }
 
-    const auto& loadedBgmPath =
-        Audio::AudioManager::instance().getLoadedBGMPath();
-    if ( !ctx.loadedMainAudioPath.empty() &&
-         loadedBgmPath == ctx.loadedMainAudioPath ) {
-        totalTime =
-            std::max(totalTime, Audio::AudioManager::instance().getTotalTime());
-    }
-
-    if ( ctx.currentBeatmap ) {
-        const double mapLengthMs =
-            ctx.currentBeatmap->m_baseMapMetadata.map_length;
-        if ( mapLengthMs > 0.0 && std::isfinite(mapLengthMs) ) {
-            totalTime = std::max(totalTime, mapLengthMs / 1000.0);
-        }
+    const auto& audio = Audio::AudioManager::instance();
+    if ( !ctx.audioTimelineDescriptor.m_fingerprint.empty() &&
+         audio.getLoadedAudioTimelineFingerprint() ==
+             ctx.audioTimelineDescriptor.m_fingerprint ) {
+        totalTime = std::max(totalTime, audio.getTotalTime());
     }
     return std::max(0.0, totalTime);
 }
 
-namespace
+double calculateChartContentEndSeconds(const MMM::BeatMap& beatMap)
 {
-/// @brief 判断路径是否指向可访问的普通文件。
-/// @param path 待检查路径。
-/// @return 路径存在且为普通文件时返回 true。
-bool isRegularFilePath(const std::filesystem::path& path)
-{
-    if ( path.empty() ) return false;
+    double     chartEndMs       = 0.0;
+    const auto includeTimestamp = [&chartEndMs](double timestampMs) {
+        if ( std::isfinite(timestampMs) ) {
+            chartEndMs = std::max(chartEndMs, timestampMs);
+        }
+    };
+    const auto includeDuration = [&chartEndMs](double timestampMs,
+                                               double durationMs) {
+        if ( std::isfinite(timestampMs) && std::isfinite(durationMs) ) {
+            chartEndMs =
+                std::max(chartEndMs, timestampMs + std::max(durationMs, 0.0));
+        }
+    };
 
-    std::error_code filesystemError;
-    const bool      isRegular =
-        std::filesystem::is_regular_file(path, filesystemError);
-    return isRegular && !filesystemError;
-}
-
-/// @brief 将候选路径加入解析列表。
-/// @param candidates 候选路径列表。
-/// @param path 待加入路径。
-void appendAudioPathCandidate(std::vector<std::filesystem::path>& candidates,
-                              const std::filesystem::path&        path)
-{
-    if ( path.empty() ) return;
-    candidates.push_back(path.lexically_normal());
-}
-
-/// @brief 若路径形如 项目目录名/资源文件，则加入去掉项目前缀后的候选。
-/// @param candidates 候选路径列表。
-/// @param projectRoot 项目根目录。
-/// @param audioPath 元数据中的音频路径。
-void appendProjectFolderStrippedCandidate(
-    std::vector<std::filesystem::path>& candidates,
-    const std::filesystem::path&        projectRoot,
-    const std::filesystem::path&        audioPath)
-{
-    if ( projectRoot.empty() || audioPath.empty() || audioPath.is_absolute() ) {
-        return;
+    for ( const auto& timing : beatMap.m_timings ) {
+        includeTimestamp(timing.m_timestamp);
     }
-
-    auto iterator = audioPath.begin();
-    if ( iterator == audioPath.end() || *iterator != projectRoot.filename() ) {
-        return;
+    for ( const auto& note : beatMap.m_noteData.notes ) {
+        includeTimestamp(note.m_timestamp);
     }
-
-    std::filesystem::path stripped;
-    ++iterator;
-    for ( ; iterator != audioPath.end(); ++iterator ) {
-        stripped /= *iterator;
+    for ( const auto& hold : beatMap.m_noteData.holds ) {
+        includeDuration(hold.m_timestamp, hold.m_duration);
     }
-    appendAudioPathCandidate(candidates, projectRoot / stripped);
-}
-}  // namespace
-
-std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
-                                           const ::MMM::Project* project)
-{
-    if ( !ctx.currentBeatmap ) return {};
-
-    const auto& meta      = ctx.currentBeatmap->m_baseMapMetadata;
-    const auto& audioPath = meta.main_audio_path;
-    if ( audioPath.empty() ) return {};
-
-    std::vector<std::filesystem::path> candidates;
-    candidates.reserve(8);
-
-    if ( audioPath.is_absolute() ) {
-        appendAudioPathCandidate(candidates, audioPath);
+    for ( const auto& flick : beatMap.m_noteData.flicks ) {
+        includeTimestamp(flick.m_timestamp);
     }
-
-    std::filesystem::path projectRoot;
-    if ( project && !project->m_projectRoot.empty() ) {
-        projectRoot = project->m_projectRoot.lexically_normal();
-        appendAudioPathCandidate(candidates, projectRoot / audioPath);
-        appendProjectFolderStrippedCandidate(
-            candidates, projectRoot, audioPath);
-
-        const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
-        const std::string genericAudioPathUtf8 =
-            Config::pathToUtf8Generic(audioPath);
-        const std::string audioFileNameUtf8 =
-            Config::pathToUtf8(audioPath.filename());
-        for ( const auto& resource : project->m_audioResources ) {
-            if ( resource.m_path != audioPathUtf8 &&
-                 resource.m_path != genericAudioPathUtf8 &&
-                 resource.m_id != audioFileNameUtf8 ) {
-                continue;
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        includeTimestamp(polyline.m_timestamp);
+        for ( const auto& subNoteReference : polyline.m_subNotes ) {
+            const auto& subNote = subNoteReference.get();
+            if ( subNote.m_type == NoteType::HOLD ) {
+                const auto& subHold = static_cast<const Hold&>(subNote);
+                includeDuration(subHold.m_timestamp, subHold.m_duration);
+            } else {
+                includeTimestamp(subNote.m_timestamp);
             }
-            const auto resourcePath = Config::utf8ToPath(resource.m_path);
-            appendAudioPathCandidate(candidates, projectRoot / resourcePath);
-            appendProjectFolderStrippedCandidate(
-                candidates, projectRoot, resourcePath);
+        }
+    }
+    return std::max(chartEndMs, 0.0) / 1000.0;
+}
+
+bool rebuildAudioTimelineDescriptor(SessionContext&       ctx,
+                                    const ::MMM::Project* project)
+{
+    const std::string previousFingerprint =
+        ctx.audioTimelineDescriptor.m_fingerprint;
+    const bool activationWasPending = ctx.isAudioTimelineActivationPending;
+    if ( !ctx.currentBeatmap ) {
+        ctx.audioTimelineDescriptor                  = {};
+        ctx.audioTimelineTotalTime                   = 0.0;
+        ctx.isAudioTimelineDescriptorDirty           = false;
+        ctx.isAudioTimelineActivationPending         = true;
+        ctx.isAudioTimelineFingerprintPublishPending = true;
+        return !previousFingerprint.empty();
+    }
+
+    Project fallbackProject;
+    if ( !project ) {
+        fallbackProject.m_projectRoot =
+            ctx.currentBeatmap->m_baseMapMetadata.map_path.parent_path();
+    }
+    const Project& descriptorProject = project ? *project : fallbackProject;
+    ctx.audioTimelineDescriptor      = buildAudioTimelineDescriptor(
+        *ctx.currentBeatmap,
+        descriptorProject,
+        ctx.currentBeatmap->m_baseMapMetadata.map_path,
+        calculateChartContentEndSeconds(*ctx.currentBeatmap));
+    ctx.audioTimelineTotalTime = ctx.audioTimelineDescriptor.m_chartEndSeconds;
+    const bool fingerprintChanged =
+        previousFingerprint != ctx.audioTimelineDescriptor.m_fingerprint;
+    ctx.isAudioTimelineDescriptorDirty = false;
+    ctx.isAudioTimelineActivationPending =
+        activationWasPending || fingerprintChanged;
+    ctx.isAudioTimelineFingerprintPublishPending = true;
+
+    for ( const auto& diagnostic : ctx.audioTimelineDescriptor.m_diagnostics ) {
+        XWARN("Audio timeline descriptor: {}", diagnostic.m_message);
+    }
+    return fingerprintChanged;
+}
+
+bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
+{
+    if ( !ctx.isActiveSession ) {
+        return false;
+    }
+
+    if ( ctx.isAudioTimelineDescriptorDirty ) {
+        rebuildAudioTimelineDescriptor(
+            ctx, EditorEngine::instance().getCurrentProject());
+    }
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( !ctx.currentBeatmap ) {
+        audio.unloadAudioTimeline();
+        ctx.audioTimelineTotalTime           = 0.0;
+        ctx.missingAudioTimelineClipCount    = 0U;
+        ctx.isAudioTimelineActivationPending = false;
+        return false;
+    }
+
+    const auto& descriptor = ctx.audioTimelineDescriptor;
+    const bool  needsReload =
+        ctx.isAudioTimelineActivationPending ||
+        !audio.hasLoadedAudioTimeline() ||
+        audio.getLoadedAudioTimelineFingerprint() != descriptor.m_fingerprint;
+    if ( needsReload ) {
+        const auto result =
+            audio.loadAudioTimeline(descriptor.m_events,
+                                    descriptor.m_chartEndSeconds,
+                                    descriptor.m_fingerprint);
+        ctx.isAudioTimelineActivationPending = false;
+        ctx.missingAudioTimelineClipCount    = result.missingClipCount;
+        if ( !result.success ) {
+            ctx.audioTimelineTotalTime = descriptor.m_chartEndSeconds;
+            for ( const auto& diagnostic : result.diagnostics ) {
+                XWARN("Audio timeline load: {}", diagnostic.message);
+            }
+            return false;
+        }
+        for ( const auto& diagnostic : result.diagnostics ) {
+            XWARN("Audio timeline load: {}", diagnostic.message);
         }
     }
 
-    const std::filesystem::path mapDirectory =
-        meta.map_path.parent_path().lexically_normal();
-    if ( !mapDirectory.empty() ) {
-        if ( projectRoot.empty() ) {
-            appendAudioPathCandidate(candidates, mapDirectory / audioPath);
-        } else {
-            appendAudioPathCandidate(candidates,
-                                     projectRoot / mapDirectory / audioPath);
-        }
+    ctx.audioTimelineTotalTime = audio.getTotalTime();
+    audio.seek(ctx.currentTime);
+    if ( shouldPlay ) {
+        audio.play();
+    } else {
+        audio.pause();
+    }
+    return true;
+}
+
+AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
+    std::string_view previousFingerprint, std::string_view targetFingerprint,
+    double previousTime, double targetTime, bool previousWasPlaying,
+    bool stopPlaybackOnScroll, bool synchronizeMatchingTimelines)
+{
+    const bool sameTimeline = !previousFingerprint.empty() &&
+                              previousFingerprint == targetFingerprint;
+    return {
+        .m_targetTime = sameTimeline && synchronizeMatchingTimelines
+                            ? previousTime
+                            : targetTime,
+        .m_resumePlayback =
+            sameTimeline && previousWasPlaying && !stopPlaybackOnScroll,
+    };
+}
+
+bool applyAudioTimelineTransportSnapshot(SessionContext&  ctx,
+                                         std::string_view loadedFingerprint,
+                                         Audio::PlaybackStatus status,
+                                         double                currentTime)
+{
+    const bool readsCurrentTransport =
+        !ctx.audioTimelineDescriptor.m_fingerprint.empty() &&
+        loadedFingerprint == ctx.audioTimelineDescriptor.m_fingerprint;
+    if ( !readsCurrentTransport ) {
+        ctx.isPlaying                   = false;
+        ctx.isAudioTimelineSyncFollower = false;
+        return false;
     }
 
-    for ( const auto& candidate : candidates ) {
-        if ( isRegularFilePath(candidate) ) {
-            return candidate.lexically_normal();
-        }
+    if ( std::isfinite(currentTime) ) {
+        ctx.currentTime = currentTime;
     }
-
-    if ( !candidates.empty() ) {
-        return candidates.front().lexically_normal();
+    if ( ctx.isPlaying && status == Audio::PlaybackStatus::Stopped ) {
+        ctx.restartPlaybackAfterFinishPending = true;
+        ctx.isPlaying                         = false;
+        return false;
     }
-    return audioPath.lexically_normal();
+    if ( ctx.isAudioTimelineSyncFollower &&
+         status != Audio::PlaybackStatus::Playing ) {
+        ctx.isAudioTimelineSyncFollower = false;
+        return false;
+    }
+    return ctx.isPlaying || ctx.isAudioTimelineSyncFollower;
 }
 
 SnapResult getSnapResult(
@@ -412,19 +471,19 @@ void rebuildHitEvents(SessionContext& ctx)
                     span = std::abs(sn.dtrack) + 1;
                 }
 
-                ctx.hitEvents.push_back(
-                    { sn.timestamp,
-                      sn.type,
-                      role,
-                      span,
-                      sn.trackIndex,
-                      sn.dtrack,
-                      sn.duration,
-                      true,
-                      !sn.boundSound.empty()
-                          ? sn.boundSound
-                          : (role == HitRole::Head ? note.m_boundSound
-                                                   : std::string{}) });
+                auto sampleBinding = sn.sampleBinding;
+                if ( !sampleBinding && role == HitRole::Head ) {
+                    sampleBinding = note.m_sampleBinding;
+                }
+                ctx.hitEvents.push_back({ sn.timestamp,
+                                          sn.type,
+                                          role,
+                                          span,
+                                          sn.trackIndex,
+                                          sn.dtrack,
+                                          sn.duration,
+                                          true,
+                                          std::move(sampleBinding) });
 
                 double snEndTime = sn.timestamp + sn.duration;
                 if ( snEndTime > maxEndTime ) {
@@ -445,7 +504,7 @@ void rebuildHitEvents(SessionContext& ctx)
                                       note.m_dtrack,
                                       note.m_duration,
                                       false,
-                                      note.m_boundSound });
+                                      note.m_sampleBinding });
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());

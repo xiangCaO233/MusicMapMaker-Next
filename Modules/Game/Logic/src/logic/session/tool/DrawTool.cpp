@@ -323,7 +323,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 s.trackIndex                    = parentNote.m_trackIndex;
                 s.dtrack                        = parentNote.m_dtrack;
                 s.metadata                      = parentNote.m_metadata;
-                s.boundSound                    = parentNote.m_boundSound;
+                s.sampleBinding                 = parentNote.m_sampleBinding;
                 s.customColors                  = parentNote.m_customColors;
                 ctx.brushState.polylineSegments = { s };
 
@@ -786,14 +786,14 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 【1-1 不同类型】末尾 subHold + 目标 Flick
                             // → 将 Flick 作为最后一个 seg 加入
                             NoteComponent::SubNote flickSeg;
-                            flickSeg.type         = ::MMM::NoteType::FLICK;
-                            flickSeg.timestamp    = tailTime;  // 修复微小时间差
-                            flickSeg.duration     = 0.0;
-                            flickSeg.trackIndex   = tailTrack;
-                            flickSeg.dtrack       = nc.m_dtrack;
-                            flickSeg.metadata     = nc.m_metadata;
-                            flickSeg.boundSound   = nc.m_boundSound;
-                            flickSeg.customColors = nc.m_customColors;
+                            flickSeg.type       = ::MMM::NoteType::FLICK;
+                            flickSeg.timestamp  = tailTime;  // 修复微小时间差
+                            flickSeg.duration   = 0.0;
+                            flickSeg.trackIndex = tailTrack;
+                            flickSeg.dtrack     = nc.m_dtrack;
+                            flickSeg.metadata   = nc.m_metadata;
+                            flickSeg.sampleBinding = nc.m_sampleBinding;
+                            flickSeg.customColors  = nc.m_customColors;
                             segments.push_back(flickSeg);
 
                             mergeDeleteEntries.push_back(
@@ -831,14 +831,14 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 【1-1 不同类型】末尾 subFlick + 目标 Hold
                             // → 将 Hold 作为最后一个 seg 加入
                             NoteComponent::SubNote holdSeg;
-                            holdSeg.type         = ::MMM::NoteType::HOLD;
-                            holdSeg.timestamp    = tailTime;  // 修复微小时间差
-                            holdSeg.duration     = nc.m_duration;
-                            holdSeg.trackIndex   = tailTrack;
-                            holdSeg.dtrack       = 0;
-                            holdSeg.metadata     = nc.m_metadata;
-                            holdSeg.boundSound   = nc.m_boundSound;
-                            holdSeg.customColors = nc.m_customColors;
+                            holdSeg.type          = ::MMM::NoteType::HOLD;
+                            holdSeg.timestamp     = tailTime;  // 修复微小时间差
+                            holdSeg.duration      = nc.m_duration;
+                            holdSeg.trackIndex    = tailTrack;
+                            holdSeg.dtrack        = 0;
+                            holdSeg.metadata      = nc.m_metadata;
+                            holdSeg.sampleBinding = nc.m_sampleBinding;
+                            holdSeg.customColors  = nc.m_customColors;
                             segments.push_back(holdSeg);
 
                             mergeDeleteEntries.push_back(
@@ -1234,73 +1234,81 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                             std::vector<NoteComponent::SubNote> R(
                                 subNotes.begin() + k + 1, subNotes.end());
 
-                            auto processPart = [&](const std::vector<
-                                                       NoteComponent::SubNote>&
-                                                        part,
-                                                   bool inheritsParentSound) {
-                                if ( part.empty() ) return;
-                                if ( part.size() == 1 ) {
-                                    auto          s = part[0];
-                                    NoteComponent nextNC =
-                                        makeNoteComponentFromSubNote(
-                                            s, false, entt::null, -1);
-                                    if ( nextNC.m_boundSound.empty() &&
-                                         inheritsParentSound ) {
-                                        nextNC.m_boundSound = nc.m_boundSound;
-                                    }
-                                    if ( !hasAnyNoteColorOverride(
-                                             nextNC.m_customColors) &&
-                                         hasAnyNoteColorOverride(
-                                             nc.m_customColors) ) {
-                                        nextNC.m_customColors =
-                                            nc.m_customColors;
-                                        writeNoteColorOverridesToMetadata(
-                                            nextNC);
-                                    }
-
-                                    entt::entity newEnt =
-                                        ctx.noteRegistry.create();
-                                    entries.push_back(
-                                        { newEnt, std::nullopt, nextNC });
-                                } else {
-                                    NoteComponent nextNC;
-                                    nextNC.m_type = ::MMM::NoteType::POLYLINE;
-                                    nextNC.m_timestamp = part.front().timestamp;
-                                    nextNC.m_trackIndex =
-                                        part.front().trackIndex;
-                                    nextNC.m_duration = 0.0;
-                                    nextNC.m_dtrack   = 0;
-                                    nextNC.m_metadata = nc.m_metadata;
-                                    if ( inheritsParentSound ) {
-                                        nextNC.m_boundSound = nc.m_boundSound;
-                                    }
-                                    nextNC.m_customColors   = nc.m_customColors;
-                                    nextNC.m_isSubNote      = false;
-                                    nextNC.m_parentPolyline = entt::null;
-                                    nextNC.m_subIndex       = -1;
-                                    nextNC.m_subNotes       = part;
-
-                                    entt::entity parentEnt =
-                                        ctx.noteRegistry.create();
-                                    entries.push_back(
-                                        { parentEnt, std::nullopt, nextNC });
-
-                                    for ( size_t i = 0; i < part.size(); ++i ) {
-                                        const auto&   s = part[i];
-                                        NoteComponent subNC =
+                            auto processPart =
+                                [&](const std::vector<NoteComponent::SubNote>&
+                                         part,
+                                    bool inheritsParentSound) {
+                                    if ( part.empty() ) return;
+                                    if ( part.size() == 1 ) {
+                                        auto          s = part[0];
+                                        NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
-                                                s,
-                                                true,
-                                                parentEnt,
-                                                static_cast<int>(i));
+                                                s, false, entt::null, -1);
+                                        if ( !nextNC.m_sampleBinding &&
+                                             inheritsParentSound ) {
+                                            nextNC.m_sampleBinding =
+                                                nc.m_sampleBinding;
+                                        }
+                                        if ( !hasAnyNoteColorOverride(
+                                                 nextNC.m_customColors) &&
+                                             hasAnyNoteColorOverride(
+                                                 nc.m_customColors) ) {
+                                            nextNC.m_customColors =
+                                                nc.m_customColors;
+                                            writeNoteColorOverridesToMetadata(
+                                                nextNC);
+                                        }
 
-                                        entt::entity subEnt =
+                                        entt::entity newEnt =
                                             ctx.noteRegistry.create();
                                         entries.push_back(
-                                            { subEnt, std::nullopt, subNC });
+                                            { newEnt, std::nullopt, nextNC });
+                                    } else {
+                                        NoteComponent nextNC;
+                                        nextNC.m_type =
+                                            ::MMM::NoteType::POLYLINE;
+                                        nextNC.m_timestamp =
+                                            part.front().timestamp;
+                                        nextNC.m_trackIndex =
+                                            part.front().trackIndex;
+                                        nextNC.m_duration = 0.0;
+                                        nextNC.m_dtrack   = 0;
+                                        nextNC.m_metadata = nc.m_metadata;
+                                        if ( inheritsParentSound ) {
+                                            nextNC.m_sampleBinding =
+                                                nc.m_sampleBinding;
+                                        }
+                                        nextNC.m_customColors =
+                                            nc.m_customColors;
+                                        nextNC.m_isSubNote      = false;
+                                        nextNC.m_parentPolyline = entt::null;
+                                        nextNC.m_subIndex       = -1;
+                                        nextNC.m_subNotes       = part;
+
+                                        entt::entity parentEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back({ parentEnt,
+                                                            std::nullopt,
+                                                            nextNC });
+
+                                        for ( size_t i = 0; i < part.size();
+                                              ++i ) {
+                                            const auto&   s = part[i];
+                                            NoteComponent subNC =
+                                                makeNoteComponentFromSubNote(
+                                                    s,
+                                                    true,
+                                                    parentEnt,
+                                                    static_cast<int>(i));
+
+                                            entt::entity subEnt =
+                                                ctx.noteRegistry.create();
+                                            entries.push_back({ subEnt,
+                                                                std::nullopt,
+                                                                subNC });
+                                        }
                                     }
-                                }
-                            };
+                                };
 
                             processPart(L, true);
                             processPart(R, false);
@@ -1360,10 +1368,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
-                                        if ( nextNC.m_boundSound.empty() &&
+                                        if ( !nextNC.m_sampleBinding &&
                                              inheritsParentSound ) {
-                                            nextNC.m_boundSound =
-                                                nc.m_boundSound;
+                                            nextNC.m_sampleBinding =
+                                                nc.m_sampleBinding;
                                         }
                                         if ( !hasAnyNoteColorOverride(
                                                  nextNC.m_customColors) &&
@@ -1391,8 +1399,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_dtrack   = 0;
                                         nextNC.m_metadata = nc.m_metadata;
                                         if ( inheritsParentSound ) {
-                                            nextNC.m_boundSound =
-                                                nc.m_boundSound;
+                                            nextNC.m_sampleBinding =
+                                                nc.m_sampleBinding;
                                         }
                                         nextNC.m_customColors =
                                             nc.m_customColors;

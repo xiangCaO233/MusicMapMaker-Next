@@ -4,6 +4,7 @@
 
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
+#include "common/AudioResourceDragPayload.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -1316,6 +1317,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGuiSelectableFlags_SpanAllColumns,
                     { 0.0f, rowSelectableHeight });
                 const bool hovered = ImGui::IsItemHovered();
+                const bool isProjectAudioResource =
+                    rowData.m_kind == AudioTableRowKind::MainTrack ||
+                    rowData.m_kind == AudioTableRowKind::ProjectSfx;
+                const bool canDragAudioResource =
+                    isProjectAudioResource &&
+                    Common::canStoreAudioResourceDragId(rowData.m_id);
+                if ( canDragAudioResource &&
+                     ImGui::BeginDragDropSource(ImGuiDragDropFlags_None) ) {
+                    const auto payload = Common::makeAudioResourceDragPayload(
+                        rowData.m_id, rowData.m_type);
+                    if ( payload ) {
+                        ImGui::SetDragDropPayload(
+                            Common::AUDIO_RESOURCE_DRAG_PAYLOAD_TYPE,
+                            &*payload,
+                            sizeof(*payload));
+                        ImGui::TextUnformatted(
+                            TR("ui.audio_manager.drag_to_bgm").data());
+                        ImGui::TextDisabled("%s", rowData.m_id.c_str());
+                    }
+                    ImGui::EndDragDropSource();
+                }
                 if ( clicked ) {
                     const auto controllerType =
                         rowData.m_type == AudioTrackType::Main
@@ -1325,20 +1347,23 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         rowData.m_id, rowData.m_id, controllerType);
                 }
 
-                if ( hovered &&
-                     (rowData.m_kind == AudioTableRowKind::MainTrack ||
-                      rowData.m_kind == AudioTableRowKind::ProjectSfx) &&
+                if ( hovered && isProjectAudioResource &&
                      ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
                     m_manageTrackId   = rowData.m_id;
                     m_manageTrackType = rowData.m_type;
                     m_openManageModal = true;
                 }
                 if ( hovered ) {
-                    const std::string tooltipText =
+                    std::string tooltipText =
                         fmt::format("{}\n{}: {}",
                                     rowData.m_path.c_str(),
                                     TR("ui.audio_manager.column_type").data(),
                                     typeText.c_str());
+                    if ( isProjectAudioResource && !canDragAudioResource ) {
+                        tooltipText += "\n";
+                        tooltipText +=
+                            TR("ui.audio_manager.drag_unavailable").data();
+                    }
                     Utils::renderTooltip(tooltipText.c_str());
                 }
 

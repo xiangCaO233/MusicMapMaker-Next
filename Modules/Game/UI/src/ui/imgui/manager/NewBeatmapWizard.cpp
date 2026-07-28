@@ -268,12 +268,14 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
 {
     const auto& meta = beatmap.m_baseMapMetadata;
 
-    if ( !meta.main_audio_path.empty() ) {
-        if ( m_selectedAudioPath != meta.main_audio_path ) {
+    const auto& audioHint = meta.song_file_hint.empty() ? meta.main_audio_path
+                                                        : meta.song_file_hint;
+    if ( !audioHint.empty() ) {
+        if ( m_selectedAudioPath != audioHint ) {
             m_measuredTimings.clear();
         }
-        m_selectedAudioPath    = meta.main_audio_path;
-        m_selectedAudioTrackId = findAudioTrackIdForPath(meta.main_audio_path);
+        m_selectedAudioPath    = audioHint;
+        m_selectedAudioTrackId = findAudioTrackIdForPath(audioHint);
     }
     if ( !meta.main_cover_path.empty() ) {
         m_selectedCoverPath = meta.main_cover_path;
@@ -364,7 +366,8 @@ void NewBeatmapWizard::syncMetaFromInputs()
             ? m_audioDuration * 1000.0
             : 0.0;
 
-    m_meta.main_audio_path = m_selectedAudioPath;
+    m_meta.main_audio_path.clear();
+    m_meta.song_file_hint  = m_selectedAudioPath;
     m_meta.main_cover_path = m_selectedCoverPath;
     m_meta.cover_path      = m_selectedCoverImgPath;
     if ( !m_selectedCoverPath.empty() ) {

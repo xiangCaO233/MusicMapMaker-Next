@@ -212,7 +212,7 @@ void SessionRegistry::fillIndexedSessionSnapshot(
             sessions.push_back({ index,
                                  entry.session,
                                  entry.isCanvasVisible,
-                                 entry.mainAudioSyncKey,
+                                 entry.audioTimelineFingerprint,
                                  entry.isLogoPlaceholder });
         }
     }
@@ -313,7 +313,7 @@ void SessionRegistry::publishSnapshotUnsafe()
             snapshot->sessions.push_back({ index,
                                            entry.session,
                                            entry.isCanvasVisible,
-                                           entry.mainAudioSyncKey,
+                                           entry.audioTimelineFingerprint,
                                            entry.isLogoPlaceholder });
         }
     }

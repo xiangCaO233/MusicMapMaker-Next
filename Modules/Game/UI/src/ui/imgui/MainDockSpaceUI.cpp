@@ -21,8 +21,10 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <nfd.h>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -75,6 +77,26 @@ struct TemporaryProjectSaveResultPayload {
     std::string errorMessage;
 };
 
+/// @brief 音频资源变更结果的跨线程 UI 载荷。
+struct AudioResourceMutationResultPayload {
+    /// @brief 本次资源操作类型。
+    Event::AudioResourceMutationOperation operation{
+        Event::AudioResourceMutationOperation::UpdateType
+    };
+
+    /// @brief 操作目标的稳定资源 ID。
+    std::string resourceId;
+
+    /// @brief 操作是否成功。
+    bool success{ false };
+
+    /// @brief 阻止操作的全部谱面路径。
+    std::vector<std::string> blockingBeatmapPaths;
+
+    /// @brief 逻辑层返回的失败原因。
+    std::string errorMessage;
+};
+
 /// @brief 获取临时项目只读提示队列。
 moodycamel::ConcurrentQueue<TemporaryProjectPromptPayload>&
 temporaryProjectEditBlockedQueue()
@@ -99,6 +121,51 @@ temporaryProjectSaveResultQueue()
     return queue;
 }
 
+/// @brief 获取音频资源变更结果队列。
+moodycamel::ConcurrentQueue<AudioResourceMutationResultPayload>&
+audioResourceMutationResultQueue()
+{
+    static moodycamel::ConcurrentQueue<AudioResourceMutationResultPayload>
+        queue;
+    return queue;
+}
+
+/// @brief 构建音频资源变更的完整用户提示。
+/// @param result 待展示结果。
+/// @return 包含目标资源及全部阻止谱面的多行提示。
+std::string buildAudioResourceMutationMessage(
+    const AudioResourceMutationResultPayload& result)
+{
+    std::string message;
+    if ( result.success ) {
+        switch ( result.operation ) {
+        case Event::AudioResourceMutationOperation::UpdateType:
+            message = "音频资源类型已更新";
+            break;
+        case Event::AudioResourceMutationOperation::Remove:
+            message = "音频资源已删除";
+            break;
+        case Event::AudioResourceMutationOperation::MovePath:
+            message = "音频资源路径已同步";
+            break;
+        }
+    } else {
+        message = result.errorMessage.empty() ? "音频资源操作失败"
+                                              : result.errorMessage;
+    }
+
+    if ( !result.resourceId.empty() ) {
+        message += fmt::format("\n资源：{}", result.resourceId);
+    }
+    if ( !result.blockingBeatmapPaths.empty() ) {
+        message += "\n阻止操作的谱面：";
+        for ( const auto& beatmapPath : result.blockingBeatmapPaths ) {
+            message += fmt::format("\n- {}", beatmapPath);
+        }
+    }
+    return message;
+}
+
 /// @brief 根据当前临时项目构建提示载荷。
 TemporaryProjectPromptPayload makeCurrentTemporaryProjectPayload()
 {
@@ -110,7 +177,7 @@ TemporaryProjectPromptPayload makeCurrentTemporaryProjectPayload()
     };
 }
 
-/// @brief 订阅临时项目相关事件。
+/// @brief 订阅临时项目及音频资源变更结果事件。
 void ensureTemporaryProjectSubscriptions()
 {
     static bool subscribed = false;
@@ -134,6 +201,17 @@ void ensureTemporaryProjectSubscriptions()
                 TemporaryProjectSaveResultPayload{ event.m_success,
                                                    event.m_savedProjectPath,
                                                    event.m_errorMessage });
+        });
+    eventBus.subscribe<Event::AudioResourceMutationResultEvent>(
+        [](const Event::AudioResourceMutationResultEvent& event) {
+            audioResourceMutationResultQueue().enqueue(
+                AudioResourceMutationResultPayload{
+                    event.m_operation,
+                    event.m_resourceId,
+                    event.m_success,
+                    event.m_blockingBeatmapPaths,
+                    event.m_errorMessage,
+                });
         });
 
     subscribed = true;
@@ -656,7 +734,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     }
 }
 
-/// @brief 处理临时项目提示和保存结果队列。
+/// @brief 处理临时项目提示、保存结果及音频资源变更结果队列。
 void MainDockSpaceUI::consumeTemporaryProjectQueues()
 {
     TemporaryProjectPromptPayload prompt;
@@ -707,6 +785,15 @@ void MainDockSpaceUI::consumeTemporaryProjectQueues()
         }
         m_temporaryProjectAfterSaveAction =
             TemporaryProjectAfterSaveAction::None;
+    }
+
+    AudioResourceMutationResultPayload mutationResult;
+    while ( audioResourceMutationResultQueue().try_dequeue(mutationResult) ) {
+        if ( auto context = Graphic::VKContext::get() ) {
+            context->get().showCenterNotification(
+                buildAudioResourceMutationMessage(mutationResult),
+                mutationResult.success ? 3.0F : 10.0F);
+        }
     }
 }
 

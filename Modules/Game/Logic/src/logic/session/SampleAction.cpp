@@ -1,7 +1,10 @@
 #include "logic/session/SampleAction.h"
 
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 
 #include <algorithm>
@@ -83,6 +86,8 @@ void SampleAction::execute(SessionContext& ctx)
         markSampleOrderDirty(ctx);
     } else if ( m_type == Type::Delete && m_before ) {
         if ( registry.valid(m_entity) ) {
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::AudioSample, m_entity);
             registry.destroy(m_entity);
         }
         markSamplePruneDirty(ctx);
@@ -100,6 +105,8 @@ void SampleAction::undo(SessionContext& ctx)
     auto& registry = ctx.sampleRegistry;
     if ( m_type == Type::Create ) {
         if ( registry.valid(m_entity) ) {
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::AudioSample, m_entity);
             registry.destroy(m_entity);
         }
         markSamplePruneDirty(ctx);
@@ -161,7 +168,15 @@ void BatchSampleAction::execute(SessionContext& ctx)
             registry.emplace_or_replace<SampleComponent>(entry.entity,
                                                          *entry.after);
             ensureSampleAuxiliaryComponents(registry, entry.entity);
+            if ( entry.afterSelected ) {
+                setChartObjectSelected(ctx,
+                                       ChartObjectKind::AudioSample,
+                                       entry.entity,
+                                       *entry.afterSelected);
+            }
         } else if ( entry.before && registry.valid(entry.entity) ) {
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::AudioSample, entry.entity);
             registry.destroy(entry.entity);
         }
     }
@@ -180,7 +195,15 @@ void BatchSampleAction::undo(SessionContext& ctx)
             registry.emplace_or_replace<SampleComponent>(entry.entity,
                                                          *entry.before);
             ensureSampleAuxiliaryComponents(registry, entry.entity);
+            if ( entry.beforeSelected ) {
+                setChartObjectSelected(ctx,
+                                       ChartObjectKind::AudioSample,
+                                       entry.entity,
+                                       *entry.beforeSelected);
+            }
         } else if ( entry.after && registry.valid(entry.entity) ) {
+            forgetChartObjectSelection(
+                ctx, ChartObjectKind::AudioSample, entry.entity);
             registry.destroy(entry.entity);
         }
     }
@@ -216,6 +239,7 @@ void TrackCountAction::apply(SessionContext& ctx, std::int32_t trackCount,
         auto& sample   = ctx.sampleRegistry.get<SampleComponent>(change.entity);
         sample.m_track = useAfterTrack ? change.afterTrack : change.beforeTrack;
     }
+    ctx.isTransformDirty   = true;
     ctx.m_needsSamplesSync = true;
 }
 
@@ -242,6 +266,39 @@ std::string TrackCountAction::getName() const
 {
     return fmt::format(
         "更新玩家轨道数: {} -> {}", m_beforeTrackCount, m_afterTrackCount);
+}
+
+void BgmTrackCountAction::apply(SessionContext& ctx, std::int32_t bgmTrackCount)
+{
+    ctx.bgmTrackCount = std::max(0, bgmTrackCount);
+    if ( ctx.currentBeatmap ) {
+        ctx.currentBeatmap->m_baseMapMetadata.bgm_track_count =
+            ctx.bgmTrackCount;
+    }
+    ctx.isTransformDirty   = true;
+    ctx.m_needsSamplesSync = true;
+}
+
+void BgmTrackCountAction::execute(SessionContext& ctx)
+{
+    apply(ctx, m_afterBgmTrackCount);
+}
+
+void BgmTrackCountAction::undo(SessionContext& ctx)
+{
+    apply(ctx, m_beforeBgmTrackCount);
+}
+
+void BgmTrackCountAction::redo(SessionContext& ctx)
+{
+    apply(ctx, m_afterBgmTrackCount);
+}
+
+std::string BgmTrackCountAction::getName() const
+{
+    return m_afterBgmTrackCount > m_beforeBgmTrackCount
+               ? TR("ui.action.bgm_track.add").pStr
+               : TR("ui.action.bgm_track.remove").pStr;
 }
 
 }  // namespace MMM::Logic

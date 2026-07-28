@@ -1,6 +1,5 @@
 #include "logic/session/SessionUtils.h"
 
-#include "audio/AudioManager.h"
 #include "common/VideoFrameDecoder.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -12,6 +11,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/SelectionState.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <deque>
@@ -67,7 +67,7 @@ void SessionUtils::updateBackgroundSize(SessionContext&         ctx,
     }
 }
 
-/// @brief 将谱面载入会话上下文并加载对应主音轨。
+/// @brief 将谱面载入会话上下文并标记复合音频描述符待构建。
 /// @param ctx 目标会话上下文。
 /// @param beatmap 待载入谱面；为空时清空当前谱面状态。
 /// @warning
@@ -79,8 +79,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     auto& mutex = EditorEngine::instance().getSessionMutex();
     std::lock_guard<std::recursive_mutex> lock(mutex);
 
-    namespace Utf8 = Config;
-
+    clearChartObjectSelectionIndex(ctx, ChartObjectKind::PlayerNote);
+    clearChartObjectSelectionIndex(ctx, ChartObjectKind::AudioSample);
     ctx.noteRegistry.clear();
     ctx.sampleRegistry.clear();
     ctx.timelineRegistry.clear();
@@ -110,16 +110,18 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.dragInitialSample.reset();
     ctx.isDragging = false;
     ctx.eraserState.targetEntities.clear();
-    ctx.eraserState.isActive = false;
-    ctx.loadedMainAudioPath.clear();
-    ctx.mainAudioTotalTime = 0.0;
-    Audio::AudioManager::instance().stop();
+    ctx.eraserState.isActive                     = false;
+    ctx.audioTimelineDescriptor                  = {};
+    ctx.audioTimelineTotalTime                   = 0.0;
+    ctx.missingAudioTimelineClipCount            = 0U;
+    ctx.isAudioTimelineDescriptorDirty           = true;
+    ctx.isAudioTimelineActivationPending         = true;
+    ctx.isAudioTimelineFingerprintPublishPending = true;
 
-    ctx.isPlaying               = false;
-    ctx.isMainAudioSyncFollower = false;
-    ctx.restartPlaybackAfterFinishPending.store(false,
-                                                std::memory_order_relaxed);
-    ctx.currentTime = 0.0;
+    ctx.isPlaying                         = false;
+    ctx.isAudioTimelineSyncFollower       = false;
+    ctx.restartPlaybackAfterFinishPending = false;
+    ctx.currentTime                       = 0.0;
     ctx.animateTime =
         ctx.currentTime + ctx.lastConfig.visual.getEffectiveVisualOffset();
     ctx.animateTimeTarget          = ctx.animateTime;
@@ -146,38 +148,6 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.trackCount = beatmap->m_baseMapMetadata.track_count;
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值
     ctx.bgmTrackCount = std::max(0, beatmap->m_baseMapMetadata.bgm_track_count);
-
-    // 加载音频
-    std::filesystem::path audioPath = resolveMainAudioPath(ctx, project);
-    std::error_code       audioFilesystemError;
-    if ( !beatmap->m_baseMapMetadata.main_audio_path.empty() &&
-         std::filesystem::is_regular_file(audioPath, audioFilesystemError) &&
-         !audioFilesystemError ) {
-        // 查找对应的 AudioResource 配置
-        AudioTrackConfig config;
-        if ( project ) {
-            for ( const auto& res : project->m_audioResources ) {
-                if ( res.m_id ==
-                         Utf8::pathToUtf8(beatmap->m_baseMapMetadata
-                                              .main_audio_path.filename()) ||
-                     res.m_path ==
-                         Utf8::pathToUtf8(
-                             beatmap->m_baseMapMetadata.main_audio_path) ) {
-                    config = res.m_config;
-                    break;
-                }
-            }
-        }
-        const std::string audioPathUtf8 = Utf8::pathToUtf8(audioPath);
-        auto&             audio         = Audio::AudioManager::instance();
-        if ( audio.getLoadedBGMPath() == audioPathUtf8 ) {
-            ctx.loadedMainAudioPath = audioPathUtf8;
-            ctx.mainAudioTotalTime  = audio.getTotalTime();
-        } else if ( audio.loadBGM(audioPathUtf8, config) ) {
-            ctx.loadedMainAudioPath = audioPathUtf8;
-            ctx.mainAudioTotalTime  = audio.getTotalTime();
-        }
-    }
 
     // 清空缓存上下文，以确保重新构建
     if ( auto* cache =
@@ -213,8 +183,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             note.m_timestamp / 1000.0,  // 毫秒转秒
             0.0,
             track);
-        nc.m_metadata   = note.m_metadata;
-        nc.m_boundSound = note.m_boundSound;
+        nc.m_metadata      = note.m_metadata;
+        nc.m_sampleBinding = note.getSampleBinding();
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -236,8 +206,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             hold.m_timestamp / 1000.0,  // 毫秒转秒
             hold.m_duration / 1000.0,   // 毫秒转秒
             track);
-        nc.m_metadata   = hold.m_metadata;
-        nc.m_boundSound = hold.m_boundSound;
+        nc.m_metadata      = hold.m_metadata;
+        nc.m_sampleBinding = hold.getSampleBinding();
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -260,8 +230,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                                     0.0,
                                                     track,
                                                     flick.m_dtrack);
-        nc.m_metadata   = flick.m_metadata;
-        nc.m_boundSound = flick.m_boundSound;
+        nc.m_metadata      = flick.m_metadata;
+        nc.m_sampleBinding = flick.getSampleBinding();
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -278,8 +248,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
         auto& comp = ctx.noteRegistry.emplace<NoteComponent>(
             entity, polyline.m_type, polyline.m_timestamp / 1000.0, 0.0, track);
-        comp.m_metadata   = polyline.m_metadata;
-        comp.m_boundSound = polyline.m_boundSound;
+        comp.m_metadata      = polyline.m_metadata;
+        comp.m_sampleBinding = polyline.getSampleBinding();
         loadNoteColorOverridesFromMetadata(comp);
 
         // 填充子物件并标记它们为 SubNote
@@ -309,8 +279,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 const auto& f = static_cast<const ::MMM::Flick&>(subNote);
                 sn.dtrack     = f.m_dtrack;
             }
-            sn.metadata   = subNote.m_metadata;
-            sn.boundSound = subNote.m_boundSound;
+            sn.metadata      = subNote.m_metadata;
+            sn.sampleBinding = subNote.getSampleBinding();
             loadNoteColorOverridesFromMetadata(sn);
             comp.m_subNotes.push_back(sn);
         }
@@ -366,7 +336,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                   0,
                                   0.0,
                                   false,
-                                  note.m_boundSound });
+                                  note.getSampleBinding() });
     }
     for ( const auto& hold : beatmap->m_noteData.holds ) {
         if ( subNotesSet.find(&hold) != subNotesSet.end() ) continue;
@@ -378,7 +348,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                   0,
                                   hold.m_duration / 1000.0,
                                   false,
-                                  hold.m_boundSound });
+                                  hold.getSampleBinding() });
     }
     for ( const auto& flick : beatmap->m_noteData.flicks ) {
         if ( subNotesSet.find(&flick) != subNotesSet.end() ) continue;
@@ -391,7 +361,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                   flick.m_dtrack,
                                   0.0,
                                   false,
-                                  flick.m_boundSound });
+                                  flick.getSampleBinding() });
     }
     for ( const auto& polyline : beatmap->m_noteData.polylines ) {
         // 对于 Polyline 本身不发声，由子物件发声
@@ -417,19 +387,19 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 duration      = h.m_duration / 1000.0;
             }
 
-            ctx.hitEvents.push_back(
-                { subNote.m_timestamp / 1000.0,
-                  subNote.m_type,
-                  role,
-                  span,
-                  static_cast<int>(subNote.m_track),
-                  trackOffset,
-                  duration,
-                  true,
-                  !subNote.m_boundSound.empty()
-                      ? subNote.m_boundSound
-                      : (role == HitRole::Head ? polyline.m_boundSound
-                                               : std::string{}) });
+            auto sampleBinding = subNote.getSampleBinding();
+            if ( !sampleBinding && role == HitRole::Head ) {
+                sampleBinding = polyline.getSampleBinding();
+            }
+            ctx.hitEvents.push_back({ subNote.m_timestamp / 1000.0,
+                                      subNote.m_type,
+                                      role,
+                                      span,
+                                      static_cast<int>(subNote.m_track),
+                                      trackOffset,
+                                      duration,
+                                      true,
+                                      std::move(sampleBinding) });
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
@@ -520,31 +490,31 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
             if ( nc.m_type == ::MMM::NoteType::NOTE ) {
                 Note n;
-                n.m_type       = ::MMM::NoteType::NOTE;
-                n.m_timestamp  = syncedNote.m_timestamp * 1000.0;
-                n.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                n.m_metadata   = syncedNote.m_metadata;
-                n.m_boundSound = syncedNote.m_boundSound;
+                n.m_type      = ::MMM::NoteType::NOTE;
+                n.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                n.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                n.m_metadata  = syncedNote.m_metadata;
+                n.m_sampleBinding = syncedNote.m_sampleBinding;
                 newNoteData.notes.push_back(std::move(n));
                 newAllNotes.push_back(newNoteData.notes.back());
             } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
                 Hold h;
-                h.m_type       = ::MMM::NoteType::HOLD;
-                h.m_timestamp  = syncedNote.m_timestamp * 1000.0;
-                h.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                h.m_duration   = syncedNote.m_duration * 1000.0;
-                h.m_metadata   = syncedNote.m_metadata;
-                h.m_boundSound = syncedNote.m_boundSound;
+                h.m_type      = ::MMM::NoteType::HOLD;
+                h.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                h.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                h.m_duration  = syncedNote.m_duration * 1000.0;
+                h.m_metadata  = syncedNote.m_metadata;
+                h.m_sampleBinding = syncedNote.m_sampleBinding;
                 newNoteData.holds.push_back(std::move(h));
                 newAllNotes.push_back(newNoteData.holds.back());
             } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
                 Flick f;
-                f.m_type       = ::MMM::NoteType::FLICK;
-                f.m_timestamp  = syncedNote.m_timestamp * 1000.0;
-                f.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                f.m_dtrack     = syncedNote.m_dtrack;
-                f.m_metadata   = syncedNote.m_metadata;
-                f.m_boundSound = syncedNote.m_boundSound;
+                f.m_type      = ::MMM::NoteType::FLICK;
+                f.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                f.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                f.m_dtrack    = syncedNote.m_dtrack;
+                f.m_metadata  = syncedNote.m_metadata;
+                f.m_sampleBinding = syncedNote.m_sampleBinding;
                 newNoteData.flicks.push_back(std::move(f));
                 newAllNotes.push_back(newNoteData.flicks.back());
             }
@@ -560,11 +530,11 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             }
 
             Polyline p;
-            p.m_type       = ::MMM::NoteType::POLYLINE;
-            p.m_timestamp  = syncedPolyline.m_timestamp * 1000.0;
-            p.m_track      = static_cast<uint32_t>(syncedPolyline.m_trackIndex);
-            p.m_metadata   = syncedPolyline.m_metadata;
-            p.m_boundSound = syncedPolyline.m_boundSound;
+            p.m_type      = ::MMM::NoteType::POLYLINE;
+            p.m_timestamp = syncedPolyline.m_timestamp * 1000.0;
+            p.m_track     = static_cast<uint32_t>(syncedPolyline.m_trackIndex);
+            p.m_metadata  = syncedPolyline.m_metadata;
+            p.m_sampleBinding = syncedPolyline.m_sampleBinding;
 
             for ( const auto& sub_note : syncedPolyline.m_subNotes ) {
                 NoteComponent::SubNote syncedSubNote = sub_note;
@@ -577,8 +547,8 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     n.m_type      = ::MMM::NoteType::NOTE;
                     n.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     n.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    n.m_metadata   = syncedSubNote.metadata;
-                    n.m_boundSound = syncedSubNote.boundSound;
+                    n.m_metadata      = syncedSubNote.metadata;
+                    n.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.notes.push_back(std::move(n));
                     auto& ref = newNoteData.notes.back();
                     p.m_subNotes.push_back(ref);
@@ -588,9 +558,9 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     h.m_type      = ::MMM::NoteType::HOLD;
                     h.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     h.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    h.m_duration   = syncedSubNote.duration * 1000.0;
-                    h.m_metadata   = syncedSubNote.metadata;
-                    h.m_boundSound = syncedSubNote.boundSound;
+                    h.m_duration      = syncedSubNote.duration * 1000.0;
+                    h.m_metadata      = syncedSubNote.metadata;
+                    h.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.holds.push_back(std::move(h));
                     auto& ref = newNoteData.holds.back();
                     p.m_subNotes.push_back(ref);
@@ -601,9 +571,9 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     f.m_type      = ::MMM::NoteType::FLICK;
                     f.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     f.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    f.m_dtrack     = syncedSubNote.dtrack;
-                    f.m_metadata   = syncedSubNote.metadata;
-                    f.m_boundSound = syncedSubNote.boundSound;
+                    f.m_dtrack        = syncedSubNote.dtrack;
+                    f.m_metadata      = syncedSubNote.metadata;
+                    f.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.flicks.push_back(std::move(f));
                     auto& ref = newNoteData.flicks.back();
                     p.m_subNotes.push_back(ref);
@@ -673,9 +643,10 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
         }
     }
 
-    ctx.m_needsTimingsSync = false;
-    ctx.m_needsNotesSync   = false;
-    ctx.m_needsSamplesSync = false;
+    ctx.isAudioTimelineDescriptorDirty = true;
+    ctx.m_needsTimingsSync             = false;
+    ctx.m_needsNotesSync               = false;
+    ctx.m_needsSamplesSync             = false;
 }
 
 }  // namespace MMM::Logic

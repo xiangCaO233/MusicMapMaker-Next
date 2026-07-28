@@ -48,6 +48,10 @@ public:
         entt::entity                 entity;  ///< 实体 ID
         std::optional<NoteComponent> before;  ///< 变更前数据 (null 表示新建)
         std::optional<NoteComponent> after;   ///< 变更后数据 (null 表示删除)
+        /// @brief 变更前的选中状态；为空时不覆盖交互组件。
+        std::optional<bool> beforeSelected;
+        /// @brief 变更后的选中状态；为空时不覆盖交互组件。
+        std::optional<bool> afterSelected;
     };
 
     /// @brief 构造函数

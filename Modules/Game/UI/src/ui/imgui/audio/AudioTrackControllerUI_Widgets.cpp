@@ -315,7 +315,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     const float contentWidth =
         cache.labelWidth + widgetWidth + rowDecorations + contentPadding * 2.0f;
     const size_t rowCount = trackType == TrackType::Main ? 8U : 2U;
-    float        contentH = 2.0f * scale + contentPadding * 2.0f +
+    float contentH = 2.0f * scale + contentPadding * 2.0f +
                      rowCount * rowHeight +
                      (rowCount > 0 ? (rowCount - 1) * contentSpacing : 0.0f);
 
@@ -327,7 +327,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
         measureTrackControllerText(trackName.c_str(), font, snapshot.fontSize) +
         snapshot.frameHeight * 2.0f;
     const float minWidth  = std::ceil(std::max(contentWidth, titleWidth) +
-                                     snapshot.windowPadding * 2.0f);
+                                      snapshot.windowPadding * 2.0f);
     const float minHeight = std::ceil(contentH + snapshot.windowPadding * 2.0f +
                                       snapshot.frameHeightWithSpacing);
     cache.minWindowSize   = ImVec2(minWidth, minHeight);
@@ -394,7 +394,7 @@ ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
 {
     const auto& cache = getLayoutMetrics(dpiScale);
     if ( m_type == TrackType::Main &&
-         Audio::AudioManager::instance().isMainTrackEQEnabled() ) {
+         m_currentPreset != Audio::EQPreset::None ) {
         return cache.minWindowSizeWithEq;
     }
     return cache.minWindowSize;
@@ -554,7 +554,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             if ( m_type == TrackType::Main ) {
                 auto         channelMode = audio.getMainMixerChannelMode();
                 const ImVec4 copyModeColor{ 0.45f, 1.0f, 0.48f, 1.0f };
-                auto         drawChannelButton = [&](const char*             id,
+                auto drawChannelButton = [&](const char*             id,
                                              Audio::MixerChannelMode mode,
                                              const char*             tooltip,
                                              const ImVec4& activeColor) {

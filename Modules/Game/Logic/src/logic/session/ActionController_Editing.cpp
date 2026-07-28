@@ -12,6 +12,7 @@
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SampleAction.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -76,6 +78,15 @@ bool isPlaceableCreatedNote(const NoteComponent& note)
     }
 
     return true;
+}
+
+/// @brief 判断新建自动采样锚点是否允许落在谱面时间线上。
+/// @param sample 待创建自动采样。
+/// @return 锚点时间非负且有限、资源 ID 非空时返回 true。
+bool isPlaceableCreatedSample(const SampleComponent& sample)
+{
+    return std::isfinite(sample.m_timestamp) && sample.m_timestamp >= 0.0 &&
+           std::isfinite(sample.m_volume) && !sample.m_audioResourceId.empty();
 }
 
 /// @brief 移除 Malody timing 拍位缓存。
@@ -224,6 +235,19 @@ void populateClipboardBeatPositions(ClipboardItem&               item,
     }
 
     item.hasBeatPositions = true;
+}
+
+/// @brief 为自动采样剪贴板条目记录复制瞬间的 beat 锚点。
+/// @param item 待写入拍位的自动采样条目。
+/// @param timeline 复制来源的连续 BPM 时间线。
+/// @param fallbackBpm BPM 缺失时的默认值。
+void populateSampleClipboardBeatPosition(SampleClipboardItem&         item,
+                                         const ClipboardBeatTimeline& timeline,
+                                         double fallbackBpm)
+{
+    item.startBeat =
+        clipboardTimeToBeat(timeline, item.sample.m_timestamp, fallbackBpm);
+    item.hasBeatPosition = true;
 }
 
 /// @brief 按 beat 偏移将剪贴板条目落到新的粘贴时间。
@@ -505,11 +529,11 @@ std::vector<NoteComponent> collectEditableNoteComponents(SessionContext& ctx)
 NoteComponent makeNoteComponentFromBeatmapNote(const ::MMM::Note& note)
 {
     NoteComponent component;
-    component.m_type       = note.m_type;
-    component.m_timestamp  = note.m_timestamp / 1000.0;
-    component.m_trackIndex = static_cast<int>(note.m_track);
-    component.m_metadata   = note.m_metadata;
-    component.m_boundSound = note.m_boundSound;
+    component.m_type          = note.m_type;
+    component.m_timestamp     = note.m_timestamp / 1000.0;
+    component.m_trackIndex    = static_cast<int>(note.m_track);
+    component.m_metadata      = note.m_metadata;
+    component.m_sampleBinding = note.getSampleBinding();
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         component.m_duration =
@@ -529,13 +553,13 @@ NoteComponent::SubNote makeSubNoteComponentFromBeatmapNote(
     const ::MMM::Note& note)
 {
     NoteComponent::SubNote subNote;
-    subNote.type       = note.m_type;
-    subNote.timestamp  = note.m_timestamp / 1000.0;
-    subNote.duration   = 0.0;
-    subNote.trackIndex = static_cast<int>(note.m_track);
-    subNote.dtrack     = 0;
-    subNote.metadata   = note.m_metadata;
-    subNote.boundSound = note.m_boundSound;
+    subNote.type          = note.m_type;
+    subNote.timestamp     = note.m_timestamp / 1000.0;
+    subNote.duration      = 0.0;
+    subNote.trackIndex    = static_cast<int>(note.m_track);
+    subNote.dtrack        = 0;
+    subNote.metadata      = note.m_metadata;
+    subNote.sampleBinding = note.getSampleBinding();
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         subNote.duration =
@@ -645,6 +669,7 @@ std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
 void replaceNoteComponents(SessionContext&                   ctx,
                            const std::vector<NoteComponent>& notes)
 {
+    clearChartObjectSelectionIndex(ctx, ChartObjectKind::PlayerNote);
     ctx.noteRegistry.clear();
     for ( const auto& note : notes ) {
         auto entity = ctx.noteRegistry.create();
@@ -665,7 +690,7 @@ void replaceNoteComponents(SessionContext&                   ctx,
             subComponent.m_parentPolyline = entity;
             subComponent.m_subIndex       = static_cast<int>(index);
             subComponent.m_metadata       = sub.metadata;
-            subComponent.m_boundSound     = sub.boundSound;
+            subComponent.m_sampleBinding  = sub.sampleBinding;
             subComponent.m_customColors   = sub.customColors;
 
             auto subEntity = ctx.noteRegistry.create();
@@ -719,9 +744,11 @@ BeatmapMetadataSnapshot makeMetadataSnapshot(const ::MMM::BeatMap& beatMap)
 BeatmapMetadataSnapshot makeReplacementMetadataSnapshot(
     const ::MMM::BeatMap& current, const ::MMM::BeatMap& source)
 {
-    auto base            = source.m_baseMapMetadata;
-    base.map_path        = current.m_baseMapMetadata.map_path;
-    base.main_audio_path = current.m_baseMapMetadata.main_audio_path;
+    auto base     = source.m_baseMapMetadata;
+    base.map_path = current.m_baseMapMetadata.map_path;
+    base.main_audio_path.clear();
+    base.song_file_hint  = current.m_baseMapMetadata.song_file_hint;
+    base.bgm_track_count = current.m_baseMapMetadata.bgm_track_count;
     base.main_cover_path = current.m_baseMapMetadata.main_cover_path;
     base.cover_path      = current.m_baseMapMetadata.cover_path;
     base.cover_type      = current.m_baseMapMetadata.cover_type;
@@ -735,7 +762,7 @@ BeatmapMetadataSnapshot makeReplacementMetadataSnapshot(
          osuIt != mapMetadata.map_properties.end() ) {
         // 原始 OSU 属性也必须与保留的资源一致，避免元数据编辑器反向覆盖。
         osuIt->second["General::AudioFilename"] =
-            Config::pathToUtf8(base.main_audio_path);
+            Config::pathToUtf8(base.song_file_hint);
         osuIt->second["Events::background"] =
             base.cover_type == ::MMM::CoverType::VIDEO
                 ? fmt::format("Video,{},\"{}\"",
@@ -762,11 +789,12 @@ void applyMetadataSnapshot(SessionContext&                ctx,
 
     ctx.currentBeatmap->m_baseMapMetadata = snapshot.baseMeta;
     ctx.currentBeatmap->m_metadata        = snapshot.mapMetadata;
-    if ( snapshot.baseMeta.track_count > 0 ) {
-        ctx.trackCount = snapshot.baseMeta.track_count;
-    }
-    ctx.isTransformDirty = true;
-    ctx.isNoteStatsDirty = true;
+    ctx.trackCount    = std::max(1, snapshot.baseMeta.track_count);
+    ctx.bgmTrackCount = std::max(0, snapshot.baseMeta.bgm_track_count);
+    ctx.currentBeatmap->m_baseMapMetadata.track_count     = ctx.trackCount;
+    ctx.currentBeatmap->m_baseMapMetadata.bgm_track_count = ctx.bgmTrackCount;
+    ctx.isTransformDirty                                  = true;
+    ctx.isNoteStatsDirty                                  = true;
 }
 
 /// @brief 从其他谱面替换当前谱面部分数据的可撤销动作。
@@ -774,16 +802,28 @@ class ReplaceBeatmapDataAction : public IEditorAction
 {
 public:
     /// @brief 构造数据替换动作。
-    ReplaceBeatmapDataAction(bool replaceObjects, bool replaceTimelines,
-                             bool                           replaceMetadata,
-                             std::vector<NoteComponent>     beforeNotes,
-                             std::vector<NoteComponent>     afterNotes,
-                             std::vector<TimelineComponent> beforeTimelines,
-                             std::vector<TimelineComponent> afterTimelines,
-                             BeatmapMetadataSnapshot        beforeMetadata,
-                             BeatmapMetadataSnapshot        afterMetadata,
-                             double                         beforePreferenceBpm,
-                             double                         afterPreferenceBpm)
+    /// @param replaceObjects 是否替换玩家物件。
+    /// @param replaceTimelines 是否替换 Timing。
+    /// @param replaceMetadata 是否替换谱面元数据。
+    /// @param beforeNotes 替换前的玩家物件快照。
+    /// @param afterNotes 替换后的玩家物件快照。
+    /// @param beforeTimelines 替换前的 Timeline 快照。
+    /// @param afterTimelines 替换后的 Timeline 快照。
+    /// @param beforeMetadata 替换前的元数据快照。
+    /// @param afterMetadata 替换后的元数据快照。
+    /// @param sampleTrackChanges 玩家轨道数变化对应的自动采样轨道迁移表。
+    /// @param beforePreferenceBpm 替换前的首选 BPM。
+    /// @param afterPreferenceBpm 替换后的首选 BPM。
+    ReplaceBeatmapDataAction(
+        bool replaceObjects, bool replaceTimelines, bool replaceMetadata,
+        std::vector<NoteComponent>                       beforeNotes,
+        std::vector<NoteComponent>                       afterNotes,
+        std::vector<TimelineComponent>                   beforeTimelines,
+        std::vector<TimelineComponent>                   afterTimelines,
+        BeatmapMetadataSnapshot                          beforeMetadata,
+        BeatmapMetadataSnapshot                          afterMetadata,
+        std::vector<TrackCountAction::SampleTrackChange> sampleTrackChanges,
+        double beforePreferenceBpm, double afterPreferenceBpm)
         : m_replaceObjects(replaceObjects)
         , m_replaceTimelines(replaceTimelines)
         , m_replaceMetadata(replaceMetadata)
@@ -793,6 +833,7 @@ public:
         , m_afterTimelines(std::move(afterTimelines))
         , m_beforeMetadata(std::move(beforeMetadata))
         , m_afterMetadata(std::move(afterMetadata))
+        , m_sampleTrackChanges(std::move(sampleTrackChanges))
         , m_beforePreferenceBpm(beforePreferenceBpm)
         , m_afterPreferenceBpm(afterPreferenceBpm)
     {
@@ -833,6 +874,16 @@ private:
         if ( m_replaceMetadata ) {
             applyMetadataSnapshot(ctx,
                                   forward ? m_afterMetadata : m_beforeMetadata);
+            for ( const auto& change : m_sampleTrackChanges ) {
+                if ( !ctx.sampleRegistry.valid(change.entity) ||
+                     !ctx.sampleRegistry.all_of<SampleComponent>(
+                         change.entity) ) {
+                    continue;
+                }
+                ctx.sampleRegistry.get<SampleComponent>(change.entity).m_track =
+                    forward ? change.afterTrack : change.beforeTrack;
+            }
+            ctx.m_needsSamplesSync = true;
         }
     }
 
@@ -862,6 +913,9 @@ private:
 
     /// @brief 替换后元数据。
     BeatmapMetadataSnapshot m_afterMetadata;
+
+    /// @brief 玩家轨道数变化时自动采样绝对轨道的双向迁移表。
+    std::vector<TrackCountAction::SampleTrackChange> m_sampleTrackChanges;
 
     /// @brief 替换前首选 BPM。
     double m_beforePreferenceBpm{ 120.0 };
@@ -950,6 +1004,7 @@ void ActionController::handleCommand(const CmdRedo& cmd)
 void ActionController::handleCommand(const CmdCopy& cmd)
 {
     m_ctx.clipboard.clear();
+    m_ctx.sampleClipboard.clear();
     const double fallbackBpm  = getClipboardFallbackBpm(m_ctx);
     auto         beatTimeline = buildClipboardBeatTimeline(m_ctx, fallbackBpm);
     auto view = m_ctx.noteRegistry.view<NoteComponent, InteractionComponent>();
@@ -963,12 +1018,33 @@ void ActionController::handleCommand(const CmdCopy& cmd)
             m_ctx.clipboard.push_back(std::move(item));
         }
     }
-    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, false);
-    XINFO("Copied {} items to clipboard", m_ctx.clipboard.size());
+    const std::uint32_t playerTrackCount =
+        static_cast<std::uint32_t>(std::max(m_ctx.trackCount, 0));
+    auto sampleView =
+        m_ctx.sampleRegistry.view<SampleComponent, InteractionComponent>();
+    for ( auto entity : sampleView ) {
+        const auto& interaction = sampleView.get<InteractionComponent>(entity);
+        if ( !interaction.isSelected ) continue;
+
+        SampleClipboardItem item;
+        item.sample         = sampleView.get<SampleComponent>(entity);
+        item.bgmLane        = item.sample.m_track >= playerTrackCount
+                                  ? item.sample.m_track - playerTrackCount
+                                  : 0U;
+        item.sample.m_track = item.bgmLane;
+        populateSampleClipboardBeatPosition(item, beatTimeline, fallbackBpm);
+        m_ctx.sampleClipboard.push_back(std::move(item));
+    }
+
+    EditorEngine::instance().setChartObjectClipboard(
+        m_ctx.clipboard, m_ctx.sampleClipboard, &m_ctx, false);
+    const std::size_t itemCount =
+        m_ctx.clipboard.size() + m_ctx.sampleClipboard.size();
+    XINFO("Copied {} chart objects to clipboard", itemCount);
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
                                           TR("ui.status.clipboard.copied"),
-                                          m_ctx.clipboard.size(),
+                                          itemCount,
                                           TR("ui.status.info.items"));
 }
 
@@ -982,11 +1058,22 @@ void ActionController::handleCommand(const CmdCut& cmd)
             ic.isCut = true;
         }
     }
-    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, true);
+    auto sampleView = m_ctx.sampleRegistry.view<InteractionComponent>();
+    for ( auto entity : sampleView ) {
+        auto& interaction =
+            m_ctx.sampleRegistry.get<InteractionComponent>(entity);
+        if ( interaction.isSelected ) {
+            interaction.isCut = true;
+        }
+    }
+    EditorEngine::instance().setChartObjectClipboard(
+        m_ctx.clipboard, m_ctx.sampleClipboard, &m_ctx, true);
+    const std::size_t itemCount =
+        m_ctx.clipboard.size() + m_ctx.sampleClipboard.size();
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
                                           TR("ui.status.clipboard.cut"),
-                                          m_ctx.clipboard.size(),
+                                          itemCount,
                                           TR("ui.status.info.items"));
 }
 
@@ -1237,41 +1324,46 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
 /// @warning 低频编辑路径：用户触发粘贴时执行，可能批量创建实体。
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
-    auto clipboard         = EditorEngine::instance().getClipboard();
+    auto noteClipboard     = EditorEngine::instance().getClipboard();
+    auto sampleClipboard   = EditorEngine::instance().getSampleClipboard();
     auto timelineClipboard = EditorEngine::instance().getTimelineClipboard();
-    if ( clipboard.empty() && timelineClipboard.empty() ) {
-        clipboard = m_ctx.clipboard;
+    if ( noteClipboard.empty() && sampleClipboard.empty() &&
+         timelineClipboard.empty() ) {
+        noteClipboard   = m_ctx.clipboard;
+        sampleClipboard = m_ctx.sampleClipboard;
     }
-    if ( clipboard.empty() && timelineClipboard.empty() ) return;
+    if ( noteClipboard.empty() && sampleClipboard.empty() &&
+         timelineClipboard.empty() ) {
+        return;
+    }
 
     // 先预计算粘贴目标，确保不会在负时间创建新物件。
     double pasteTime = m_ctx.animateTime;
 
-    if ( !clipboard.empty() ) {
-        // 计算基准点 (目前取所有选中音符的最小时间)
-        double minTime = clipboard[0].note.m_timestamp;
-        for ( const auto& item : clipboard ) {
+    if ( !noteClipboard.empty() || !sampleClipboard.empty() ) {
+        // Note 与 Sample 共用同一个最早锚点，保持混合编排的相对时间。
+        double minTime = std::numeric_limits<double>::infinity();
+        double minBeat = std::numeric_limits<double>::infinity();
+        for ( const auto& item : noteClipboard ) {
             minTime = std::min(minTime, item.note.m_timestamp);
+            minBeat = std::min(minBeat, item.startBeat);
         }
-        double minBeat = clipboard[0].startBeat;
-        for ( const auto& item : clipboard ) {
+        for ( const auto& item : sampleClipboard ) {
+            minTime = std::min(minTime, item.sample.m_timestamp);
             minBeat = std::min(minBeat, item.startBeat);
         }
 
-        std::vector<BatchNoteAction::Entry> entries;
-        /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
-        std::vector<entt::entity> pastedEntities;
-        pastedEntities.reserve(clipboard.size());
-        /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
-        const bool selectPastedObjects = cmd.m_selectPastedObjects;
-
-        double     timeOffset = pasteTime - minTime;
-        const bool pasteByBeat =
+        const double timeOffset = pasteTime - minTime;
+        const bool   pasteByBeat =
             m_ctx.lastConfig.settings.copyPasteTimeBasis ==
                 Config::CopyPasteTimeBasis::Beat &&
-            std::all_of(clipboard.begin(),
-                        clipboard.end(),
-                        [](const auto& item) { return item.hasBeatPositions; });
+            std::all_of(
+                noteClipboard.begin(),
+                noteClipboard.end(),
+                [](const auto& item) { return item.hasBeatPositions; }) &&
+            std::all_of(sampleClipboard.begin(),
+                        sampleClipboard.end(),
+                        [](const auto& item) { return item.hasBeatPosition; });
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
@@ -1283,8 +1375,8 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
         int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
         std::vector<NoteComponent> notesToPaste;
-        notesToPaste.reserve(clipboard.size());
-        for ( const auto& item : clipboard ) {
+        notesToPaste.reserve(noteClipboard.size());
+        for ( const auto& item : noteClipboard ) {
             auto newNote = item.note;
             if ( pasteByBeat ) {
                 applyBeatPastePosition(newNote,
@@ -1317,11 +1409,56 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             notesToPaste.push_back(newNote);
         }
 
+        const std::uint32_t playerTrackCount =
+            static_cast<std::uint32_t>(std::max(m_ctx.trackCount, 0));
+        std::vector<SampleComponent> samplesToPaste;
+        samplesToPaste.reserve(sampleClipboard.size());
+        for ( const auto& item : sampleClipboard ) {
+            auto newSample = item.sample;
+            if ( pasteByBeat ) {
+                newSample.m_timestamp =
+                    clipboardBeatToTime(pasteBeatTimeline,
+                                        pasteBeat + item.startBeat - minBeat,
+                                        pasteFallbackBpm);
+            } else {
+                newSample.m_timestamp = item.sample.m_timestamp + timeOffset;
+            }
+
+            const std::uint64_t targetTrack =
+                static_cast<std::uint64_t>(playerTrackCount) + item.bgmLane;
+            if ( targetTrack >
+                 static_cast<std::uint64_t>(
+                     std::numeric_limits<std::uint32_t>::max()) ) {
+                XWARN("Paste blocked: BGM lane {} exceeds track range",
+                      item.bgmLane);
+                return;
+            }
+            newSample.m_track = static_cast<std::uint32_t>(targetTrack);
+            if ( !isPlaceableCreatedSample(newSample) ) {
+                XWARN("Sample paste blocked before 0s: target time={:.3f}",
+                      newSample.m_timestamp);
+                return;
+            }
+            samplesToPaste.push_back(std::move(newSample));
+        }
+
+        std::vector<BatchNoteAction::Entry>   noteEntries;
+        std::vector<BatchSampleAction::Entry> sampleEntries;
+        /// @brief 本次粘贴预先分配的新 Note 实体，用于执行后选中新物件。
+        std::vector<entt::entity> pastedNoteEntities;
+        /// @brief 本次粘贴预先分配的新 Sample 实体，用于执行后选中新物件。
+        std::vector<entt::entity> pastedSampleEntities;
+        pastedNoteEntities.reserve(noteClipboard.size());
+        pastedSampleEntities.reserve(sampleClipboard.size());
+        const bool selectPastedObjects = cmd.m_selectPastedObjects;
+
         // 如果之前有 Cut，需要删除那些 Cut 的物件。
-        auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
+        auto noteView   = m_ctx.noteRegistry.view<InteractionComponent>();
+        auto sampleView = m_ctx.sampleRegistry.view<InteractionComponent>();
         bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
         if ( isLocalCut ) {
-            for ( auto entity : view ) {
+            std::unordered_set<entt::entity> deletedNoteEntities;
+            for ( auto entity : noteView ) {
                 auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
                 if ( ic.isCut ) {
                     if ( !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
@@ -1330,41 +1467,86 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
                     auto oldNote =
                         m_ctx.noteRegistry.get<NoteComponent>(entity);
-                    entries.push_back({ entity, oldNote, std::nullopt });
+                    noteEntries.push_back({
+                        .entity         = entity,
+                        .before         = oldNote,
+                        .after          = std::nullopt,
+                        .beforeSelected = ic.isSelected,
+                    });
+                    deletedNoteEntities.insert(entity);
+                }
+            }
+            appendDeletedPolylineChildren(
+                m_ctx, deletedNoteEntities, noteEntries);
 
-                    // 同时删除 Polyline 的子物件实体
-                    if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
-                         !oldNote.m_subNotes.empty() ) {
-                        for ( auto subEnt :
-                              m_ctx.noteRegistry.view<NoteComponent>() ) {
-                            const auto& subNC =
-                                m_ctx.noteRegistry.get<NoteComponent>(subEnt);
-                            if ( subNC.m_isSubNote &&
-                                 subNC.m_parentPolyline == entity ) {
-                                entries.push_back(
-                                    { subEnt, subNC, std::nullopt });
-                            }
-                        }
-                    }
+            for ( auto entity : sampleView ) {
+                auto& interaction =
+                    m_ctx.sampleRegistry.get<InteractionComponent>(entity);
+                if ( interaction.isCut &&
+                     m_ctx.sampleRegistry.all_of<SampleComponent>(entity) ) {
+                    sampleEntries.push_back({
+                        .entity = entity,
+                        .before =
+                            m_ctx.sampleRegistry.get<SampleComponent>(entity),
+                        .after          = std::nullopt,
+                        .beforeSelected = interaction.isSelected,
+                    });
                 }
             }
         } else {
             EditorEngine::instance().consumeCrossSessionCutClipboard(&m_ctx);
-            for ( auto entity : view ) {
-                m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut =
-                    false;
-            }
         }
 
         for ( const auto& newNote : notesToPaste ) {
             // 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
             entt::entity pastedEntity = m_ctx.noteRegistry.create();
-            pastedEntities.push_back(pastedEntity);
-            entries.push_back({ pastedEntity, std::nullopt, newNote });
+            pastedNoteEntities.push_back(pastedEntity);
+            noteEntries.push_back({
+                .entity        = pastedEntity,
+                .before        = std::nullopt,
+                .after         = newNote,
+                .afterSelected = selectPastedObjects,
+            });
+        }
+        for ( const auto& newSample : samplesToPaste ) {
+            entt::entity pastedEntity = m_ctx.sampleRegistry.create();
+            pastedSampleEntities.push_back(pastedEntity);
+            sampleEntries.push_back({
+                .entity        = pastedEntity,
+                .before        = std::nullopt,
+                .after         = newSample,
+                .afterSelected = selectPastedObjects,
+            });
         }
 
-        auto action = std::make_unique<BatchNoteAction>(
-            std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
+        // 动作执行前清除所有临时剪切标记，避免实体销毁后访问失效 View。
+        for ( auto entity : noteView ) {
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
+        }
+        for ( auto entity : sampleView ) {
+            m_ctx.sampleRegistry.get<InteractionComponent>(entity).isCut =
+                false;
+        }
+
+        std::vector<std::unique_ptr<IEditorAction>> actions;
+        actions.reserve(2);
+        if ( !noteEntries.empty() ) {
+            actions.push_back(std::make_unique<BatchNoteAction>(
+                std::move(noteEntries),
+                cmd.m_mirrored ? "Mirror Paste" : "Paste"));
+        }
+        if ( !sampleEntries.empty() ) {
+            actions.push_back(std::make_unique<BatchSampleAction>(
+                std::move(sampleEntries), "粘贴自动采样"));
+        }
+        std::unique_ptr<IEditorAction> action;
+        if ( actions.size() == 1 ) {
+            action = std::move(actions.front());
+        } else {
+            action = std::make_unique<CompositeEditorAction>(
+                std::move(actions),
+                cmd.m_mirrored ? "镜像粘贴谱面物件" : "粘贴谱面物件");
+        }
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 
         if ( selectPastedObjects ) {
@@ -1373,26 +1555,18 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             m_ctx.marqueeIsAdditive   = false;
             m_ctx.marqueeBoxes.clear();
             // 先清空所有旧选择，再只选中本次粘贴创建出的实体。
-            for ( auto entity :
-                  m_ctx.noteRegistry.view<InteractionComponent>() ) {
-                m_ctx.noteRegistry.get<InteractionComponent>(entity)
-                    .isSelected = false;
+            clearChartObjectSelection(m_ctx);
+
+            for ( auto entity : pastedNoteEntities ) {
+                setChartObjectSelected(
+                    m_ctx, ChartObjectKind::PlayerNote, entity, true);
             }
-
-            for ( auto entity : pastedEntities ) {
-                if ( !m_ctx.noteRegistry.valid(entity) ||
-                     !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) )
-                    continue;
-
-                m_ctx.noteRegistry.get<InteractionComponent>(entity)
-                    .isSelected = true;
+            for ( auto entity : pastedSampleEntities ) {
+                setChartObjectSelected(
+                    m_ctx, ChartObjectKind::AudioSample, entity, true);
             }
         }
 
-        // 清除剪切状态
-        for ( auto entity : view ) {
-            m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
-        }
         if ( isLocalCut ) {
             EditorEngine::instance().markCutClipboardConsumed();
         }
@@ -1654,24 +1828,64 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         makeMetadataSnapshot(*m_ctx.currentBeatmap);
     BeatmapMetadataSnapshot afterMetadata = makeReplacementMetadataSnapshot(
         *m_ctx.currentBeatmap, *cmd.sourceBeatmap);
+    const std::int32_t beforeTrackCount = std::max(1, m_ctx.trackCount);
+    const std::int32_t afterTrackCount =
+        cmd.replaceMetadata
+            ? std::max(1, cmd.sourceBeatmap->m_baseMapMetadata.track_count)
+            : beforeTrackCount;
+    const std::int32_t persistentBgmTrackCount =
+        std::max(0, m_ctx.bgmTrackCount);
+    beforeMetadata.baseMeta.track_count     = beforeTrackCount;
+    beforeMetadata.baseMeta.bgm_track_count = persistentBgmTrackCount;
+    afterMetadata.baseMeta.track_count      = afterTrackCount;
+    afterMetadata.baseMeta.bgm_track_count  = persistentBgmTrackCount;
+
+    std::vector<TrackCountAction::SampleTrackChange> sampleTrackChanges;
+    if ( cmd.replaceMetadata && beforeTrackCount != afterTrackCount ) {
+        const auto sampleView =
+            m_ctx.sampleRegistry.view<const SampleComponent>();
+        sampleTrackChanges.reserve(sampleView.size());
+        for ( const auto entity : sampleView ) {
+            const auto& sample = sampleView.get<const SampleComponent>(entity);
+            const std::uint32_t bgmLane =
+                sample.m_track >= static_cast<std::uint32_t>(beforeTrackCount)
+                    ? sample.m_track -
+                          static_cast<std::uint32_t>(beforeTrackCount)
+                    : 0U;
+            const std::uint64_t afterTrack =
+                static_cast<std::uint64_t>(afterTrackCount) + bgmLane;
+            if ( afterTrack > static_cast<std::uint64_t>(
+                                  std::numeric_limits<std::uint32_t>::max()) ) {
+                m_ctx.lastActionMessage =
+                    "替换谱面元数据会导致自动采样轨道索引溢出";
+                return;
+            }
+            sampleTrackChanges.push_back({
+                .entity      = entity,
+                .beforeTrack = sample.m_track,
+                .afterTrack  = static_cast<std::uint32_t>(afterTrack),
+            });
+        }
+    }
 
     const double beforePreferenceBpm =
         normalizeBpm(m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
     const double afterPreferenceBpm =
         normalizeBpm(cmd.sourceBeatmap->m_baseMapMetadata.preference_bpm);
 
-    auto action =
-        std::make_unique<ReplaceBeatmapDataAction>(cmd.replaceObjects,
-                                                   cmd.replaceTimelines,
-                                                   cmd.replaceMetadata,
-                                                   std::move(beforeNotes),
-                                                   std::move(afterNotes),
-                                                   std::move(beforeTimelines),
-                                                   std::move(afterTimelines),
-                                                   std::move(beforeMetadata),
-                                                   std::move(afterMetadata),
-                                                   beforePreferenceBpm,
-                                                   afterPreferenceBpm);
+    auto action = std::make_unique<ReplaceBeatmapDataAction>(
+        cmd.replaceObjects,
+        cmd.replaceTimelines,
+        cmd.replaceMetadata,
+        std::move(beforeNotes),
+        std::move(afterNotes),
+        std::move(beforeTimelines),
+        std::move(afterTimelines),
+        std::move(beforeMetadata),
+        std::move(afterMetadata),
+        std::move(sampleTrackChanges),
+        beforePreferenceBpm,
+        afterPreferenceBpm);
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 
     m_ctx.lastActionMessage =

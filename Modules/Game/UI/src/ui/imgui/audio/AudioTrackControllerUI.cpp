@@ -97,11 +97,13 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         float pitch  = 0.0f;
         bool  muted  = false;
 
+        AudioTrackConfig  editedConfig;
         AudioTrackConfig* config = nullptr;
         if ( project ) {
-            for ( auto& res : project->m_audioResources ) {
+            for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_id == m_trackId ) {
-                    config = &res.m_config;
+                    editedConfig = res.m_config;
+                    config       = &editedConfig;
                     break;
                 }
             }
@@ -120,10 +122,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             }
         } else {
             if ( m_type == TrackType::Main ) {
-                volume = audio.getMainTrackVolume();
-                speed  = (float)audio.getPlaybackSpeed();
-                pitch  = (float)audio.getPlaybackPitch();
-                muted  = audio.isMainTrackMuted();
+                m_currentPreset = Audio::EQPreset::None;
             } else {
                 volume = audio.getSFXPoolVolume(m_trackId);
                 muted  = audio.getSFXPoolMute(m_trackId);
@@ -179,7 +178,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         // --- EQ 区域使用传统 ImGui 渲染（ImPlot 不适合 Clay） ---
         if ( m_type == TrackType::Main ) {
-            renderEQSection(changed);
+            AudioTrackConfig unavailableConfig;
+            if ( !config ) ImGui::BeginDisabled();
+            renderEQSection(config ? *config : unavailableConfig, changed);
+            if ( !config ) ImGui::EndDisabled();
         }
 
         // --- 应用更改并持久化 ---
@@ -189,32 +191,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 config->muted         = muted;
                 config->playbackSpeed = speed;
                 config->playbackPitch = pitch;
-                if ( m_type == TrackType::Main ) {
-                    config->eqEnabled = audio.isMainTrackEQEnabled();
-                    config->eqPreset =
-                        static_cast<int>(audio.getMainTrackEQPreset());
-                    config->eqBandGains.clear();
-                    config->eqBandQs.clear();
-
-                    const size_t bandCount = audio.getMainTrackEQBandCount();
-                    config->eqBandGains.reserve(bandCount);
-                    config->eqBandQs.reserve(bandCount);
-                    for ( size_t i = 0; i < bandCount; ++i ) {
-                        config->eqBandGains.push_back(
-                            audio.getMainTrackEQBandGain(i));
-                        config->eqBandQs.push_back(
-                            audio.getMainTrackEQBandQ(i));
-                    }
-                }
             }
 
-            if ( m_type == TrackType::Main ) {
-                audio.setMainTrackVolume(volume);
-                audio.setMainTrackMute(muted);
-                engine.pushCommand(
-                    Logic::CmdSetPlaybackSpeed{ static_cast<double>(speed) });
-                audio.setPlaybackPitch(pitch);
-            } else {
+            if ( m_type == TrackType::Effect && !config ) {
                 bool  isPermanent = true;
                 auto& skinData    = Config::SkinManager::instance().getData();
                 if ( skinData.audioPaths.count(m_trackId) == 0 ) {
@@ -224,8 +203,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 audio.setSFXPoolMute(m_trackId, muted, isPermanent);
             }
 
-            if ( project ) {
-                engine.saveProject();
+            if ( config ) {
+                engine.pushCommand(Logic::CmdUpdateAudioResourceConfig{
+                    .id     = m_trackId,
+                    .config = *config,
+                });
             }
         }
     }

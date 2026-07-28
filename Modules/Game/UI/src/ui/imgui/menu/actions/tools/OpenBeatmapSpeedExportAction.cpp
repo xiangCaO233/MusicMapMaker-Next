@@ -1,6 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "audio/AudioManager.h"
 #include "audio/AudioSpeedExportService.h"
+#include "common/BeatmapAudioTimelineCompatibility.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -86,6 +87,12 @@ struct SpeedExportResultPayload {
 
     /// @brief 新谱面显示名。
     std::string displayName;
+
+    /// @brief 新音频资源沿用的项目资源类型。
+    AudioTrackType audioTrackType{ AudioTrackType::Main };
+
+    /// @brief 新音频资源沿用的资源级处理配置。
+    AudioTrackConfig audioTrackConfig;
 };
 
 /// @brief 获取谱面倍速制作进度队列。
@@ -308,18 +315,39 @@ std::filesystem::path makeProjectRelativePath(
     return path.filename();
 }
 
-/// @brief 解析谱面主音频绝对路径。
+/// @brief 解析项目音频资源绝对路径。
 /// @param project 当前项目。
-/// @param beatmap 当前谱面。
-/// @return 主音频绝对路径。
-std::filesystem::path resolveMainAudioPath(const Project& project,
-                                           const BeatMap& beatmap)
+/// @param resource 当前音频时间线引用的项目资源。
+/// @return 音频资源绝对路径。
+std::filesystem::path resolveProjectAudioPath(const Project&       project,
+                                              const AudioResource& resource)
 {
-    const auto& audioPath = beatmap.m_baseMapMetadata.main_audio_path;
+    const auto audioPath = Config::utf8ToPath(resource.m_path);
     if ( audioPath.empty() || audioPath.is_absolute() ) {
         return audioPath.lexically_normal();
     }
     return (project.m_projectRoot / audioPath).lexically_normal();
+}
+
+/// @brief 获取单文件倍速导出无法表示当前音频时间线时的提示。
+/// @param issue 单文件兼容性问题。
+/// @return 面向用户的明确拒绝原因。
+const char* singleAudioTimelineIssueMessage(
+    Common::SingleAudioTimelineIssue issue)
+{
+    switch ( issue ) {
+    case Common::SingleAudioTimelineIssue::MissingSample:
+        return "当前谱面没有可导出的自动采样";
+    case Common::SingleAudioTimelineIssue::CompositeTimeline:
+        return "当前谱面包含多个自动采样，倍速导出暂不支持复合音频时间线";
+    case Common::SingleAudioTimelineIssue::NonZeroStart:
+        return "当前谱面的唯一自动采样并非零点起播，倍速导出暂不支持该音频时间"
+               "线";
+    case Common::SingleAudioTimelineIssue::MissingResource:
+        return "当前谱面的自动采样引用了缺失的项目音频资源";
+    case Common::SingleAudioTimelineIssue::None: break;
+    }
+    return "当前谱面的音频时间线无法由单文件倍速导出表示";
 }
 
 /// @brief 将文本复制到 ImGui 输入缓存。
@@ -399,6 +427,8 @@ private:
         std::filesystem::path    outputAudioPath;
         std::filesystem::path    outputMapPath;
         std::string              displayName;
+        AudioTrackType           sourceAudioTrackType{ AudioTrackType::Main };
+        AudioTrackConfig         sourceAudioTrackConfig;
         const double             speed =
             std::clamp(static_cast<double>(m_factor), 0.1, 4.0);
         const bool preservePitch    = m_preservePitch;
@@ -421,13 +451,25 @@ private:
             }
 
             const auto& sourceBeatmap = *ctx.currentBeatmap;
-            inputAudioPath = resolveMainAudioPath(*project, sourceBeatmap);
+            const auto  timelineSource =
+                Common::resolveSingleZeroPointAudioTimeline(sourceBeatmap,
+                                                            *project);
+            if ( !timelineSource ) {
+                m_status =
+                    singleAudioTimelineIssueMessage(timelineSource.m_issue);
+                return;
+            }
+
+            inputAudioPath =
+                resolveProjectAudioPath(*project, *timelineSource.m_resource);
+            sourceAudioTrackType   = timelineSource.m_resource->m_type;
+            sourceAudioTrackConfig = timelineSource.m_resource->m_config;
             std::error_code filesystemError;
             if ( inputAudioPath.empty() ||
                  !std::filesystem::is_regular_file(inputAudioPath,
                                                    filesystemError) ||
                  filesystemError ) {
-                m_status = "当前谱面的主音频文件不存在";
+                m_status = "当前谱面的自动采样音频文件不存在";
                 return;
             }
 
@@ -472,6 +514,17 @@ private:
 
             outputBeatmap =
                 std::make_shared<BeatMap>(std::move(transformResult.beatmap));
+            if ( outputBeatmap->m_audioSamples.size() != 1U ) {
+                m_status = "倍速副本未能保留唯一自动采样";
+                return;
+            }
+            const auto outputAudioRelativePath = makeProjectRelativePath(
+                project->m_projectRoot, outputAudioPath);
+            outputBeatmap->m_audioSamples.front().m_audioResourceId =
+                Config::pathToUtf8(outputAudioRelativePath.filename());
+            outputBeatmap->m_baseMapMetadata.song_file_hint =
+                outputAudioRelativePath;
+            outputBeatmap->m_baseMapMetadata.main_audio_path.clear();
         }
 
         m_running  = true;
@@ -483,13 +536,17 @@ private:
                      outputMapPath,
                      outputBeatmap,
                      displayName,
+                     sourceAudioTrackType,
+                     sourceAudioTrackConfig,
                      speed,
                      preservePitch]() {
             SpeedExportResultPayload payload;
-            payload.mapPath     = outputMapPath;
-            payload.audioPath   = outputAudioPath;
-            payload.beatmap     = outputBeatmap;
-            payload.displayName = displayName;
+            payload.mapPath          = outputMapPath;
+            payload.audioPath        = outputAudioPath;
+            payload.beatmap          = outputBeatmap;
+            payload.displayName      = displayName;
+            payload.audioTrackType   = sourceAudioTrackType;
+            payload.audioTrackConfig = sourceAudioTrackConfig;
 
             Audio::AudioSpeedExportOptions audioOptions;
             audioOptions.inputPath     = inputAudioPath;
@@ -575,7 +632,45 @@ private:
                     Config::pathToUtf8(result.audioPath));
                 engine.handleImportAudio(
                     Logic::CmdImportAudio{ Config::pathToUtf8(result.audioPath),
-                                           AudioTrackType::Main });
+                                           result.audioTrackType });
+
+                auto* project = engine.getCurrentProject();
+                if ( !project ) {
+                    result.message = "倍速音频已生成，但当前项目已关闭";
+                    m_status       = result.message;
+                    context.statusMessageSink.showStatusMessage(result.message,
+                                                                4.0F);
+                    continue;
+                }
+
+                const std::string relativeAudioPath =
+                    Config::pathToUtf8(makeProjectRelativePath(
+                        project->m_projectRoot, result.audioPath));
+                const std::string outputResourceId =
+                    Config::pathToUtf8(result.audioPath.filename());
+                const auto resource = std::find_if(
+                    project->m_audioResources.begin(),
+                    project->m_audioResources.end(),
+                    [&](const AudioResource& candidate) {
+                        return candidate.m_path == relativeAudioPath ||
+                               candidate.m_id == outputResourceId;
+                    });
+                if ( resource == project->m_audioResources.end() ) {
+                    result.message = "倍速音频已生成，但项目音频资源登记失败";
+                    m_status       = result.message;
+                    context.statusMessageSink.showStatusMessage(result.message,
+                                                                4.0F);
+                    continue;
+                }
+
+                resource->m_config = result.audioTrackConfig;
+                if ( resource->m_type == AudioTrackType::Effect ) {
+                    Audio::AudioManager::instance().registerSoundEffect(
+                        resource->m_id,
+                        Config::pathToUtf8(result.audioPath),
+                        resource->m_config);
+                }
+                engine.saveProject();
                 engine.syncProjectWithFile(result.mapPath);
                 engine.createSession(result.beatmap, result.displayName);
 

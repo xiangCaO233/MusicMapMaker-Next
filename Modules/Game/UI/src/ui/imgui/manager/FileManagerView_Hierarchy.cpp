@@ -10,7 +10,6 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -30,7 +29,6 @@
 #include <ctime>
 #include <fmt/format.h>
 #include <imgui_internal.h>
-#include <mutex>
 #include <optional>
 #include <system_error>
 
@@ -90,22 +88,20 @@ bool isAudioExtension(const std::string& extension)
 /// @brief 文件或目录移动后同步其中音频资源的项目路径。
 /// @param oldPath 移动前路径。
 /// @param newPath 移动后路径。
+/// @return 成功时为空；写盘失败并回滚时返回面向用户的错误。
 /// @warning 低频文件操作路径：只在用户确认移动或重命名后扫描项目音频资源。
-void syncMovedProjectAudioResourcePaths(const std::filesystem::path& oldPath,
-                                        const std::filesystem::path& newPath)
+std::string syncMovedProjectAudioResourcePaths(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
-    auto*                                 project = engine.getCurrentProject();
-    if ( !project ) return;
-
-    const auto changedCount =
-        Logic::ProjectResourceService::remapAudioResourcePathsAfterMove(
-            *project, oldPath, newPath);
-    if ( changedCount == 0 ) return;
+    auto&       engine = Logic::EditorEngine::instance();
+    std::string errorMessage;
+    const auto  changedCount = engine.remapAudioResourcePathsAfterMove(
+        oldPath, newPath, &errorMessage);
+    if ( !errorMessage.empty() ) return errorMessage;
+    if ( changedCount == 0 ) return {};
 
     XINFO("Updated {} project audio resource path(s) after move", changedCount);
-    engine.saveProject();
+    return {};
 }
 
 /// @brief 计算目录直属项目数量。
@@ -436,6 +432,84 @@ bool pathIsInsideOrSame(const std::filesystem::path& root,
         }
     }
     return true;
+}
+
+/// @brief 解析项目音频资源对应的规范化绝对路径。
+/// @param project 音频资源所属项目。
+/// @param resource 待解析的音频资源。
+/// @return 可与文件树条目稳定比较的绝对路径。
+std::filesystem::path resolveProjectAudioResourcePath(
+    const Project& project, const AudioResource& resource)
+{
+    auto storedPath = Config::utf8ToPath(resource.m_path).lexically_normal();
+    if ( storedPath.is_absolute() ) {
+        return comparableFilesystemPath(storedPath);
+    }
+
+    const auto projectRoot = comparableFilesystemPath(project.m_projectRoot);
+    auto       directPath  = projectRoot / storedPath;
+    if ( filesystemPathExists(directPath) ) {
+        return comparableFilesystemPath(directPath);
+    }
+
+    auto iterator = storedPath.begin();
+    if ( iterator != storedPath.end() && *iterator == projectRoot.filename() ) {
+        std::filesystem::path strippedPath;
+        ++iterator;
+        for ( ; iterator != storedPath.end(); ++iterator ) {
+            strippedPath /= *iterator;
+        }
+        if ( !strippedPath.empty() ) {
+            return comparableFilesystemPath(projectRoot / strippedPath);
+        }
+    }
+    return comparableFilesystemPath(directPath);
+}
+
+/// @brief 按文件树绝对路径查找项目音频资源。
+/// @param project 当前项目。
+/// @param path 待匹配的音频文件。
+/// @return 精确路径匹配的资源；未登记时返回空。
+const AudioResource* findProjectAudioResourceAtPath(
+    const Project& project, const std::filesystem::path& path)
+{
+    const auto comparablePath = comparableFilesystemPath(path);
+    const auto iterator =
+        std::find_if(project.m_audioResources.begin(),
+                     project.m_audioResources.end(),
+                     [&](const AudioResource& resource) {
+                         return resolveProjectAudioResourcePath(
+                                    project, resource) == comparablePath;
+                     });
+    return iterator == project.m_audioResources.end() ? nullptr : &*iterator;
+}
+
+/// @brief 检查目录树中是否包含受项目管理的音频文件类型。
+/// @param directory 待检查目录。
+/// @param filesystemError 接收目录遍历错误。
+/// @return 成功时返回是否存在音频文件，失败时返回空。
+/// @warning 低频删除确认路径：会递归扫描用户明确请求删除的单个目录。
+std::optional<bool> directoryContainsAudioFile(
+    const std::filesystem::path& directory, std::error_code& filesystemError)
+{
+    constexpr auto options =
+        std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator iterator(
+        directory, options, filesystemError);
+    if ( filesystemError ) return std::nullopt;
+
+    const std::filesystem::recursive_directory_iterator endIterator;
+    while ( iterator != endIterator ) {
+        const bool isRegularFile = iterator->is_regular_file(filesystemError);
+        if ( filesystemError ) return std::nullopt;
+        if ( isRegularFile && isAudioExtension(Config::pathToUtf8(
+                                  iterator->path().extension())) ) {
+            return true;
+        }
+        iterator.increment(filesystemError);
+        if ( filesystemError ) return std::nullopt;
+    }
+    return false;
 }
 
 /// @brief 判断文件名输入是否包含路径分隔符。
@@ -1201,6 +1275,11 @@ void FileManagerView::pasteFileClipboardInto(
         makeUniqueDestinationPath(m_fileClipboardPath, targetDirectory);
     std::error_code filesystemError;
     if ( m_fileClipboardMode == FileClipboardMode::Cut ) {
+        m_fileOperationError =
+            Logic::EditorEngine::instance().validateAudioResourceMove(
+                m_fileClipboardPath, destination);
+        if ( !m_fileOperationError.empty() ) return;
+
         const auto movedSourcePath = m_fileClipboardPath;
         std::filesystem::rename(
             m_fileClipboardPath, destination, filesystemError);
@@ -1227,7 +1306,9 @@ void FileManagerView::pasteFileClipboardInto(
                    filesystemError.message());
             return;
         }
-        syncMovedProjectAudioResourcePaths(movedSourcePath, destination);
+        m_fileOperationError =
+            syncMovedProjectAudioResourcePaths(movedSourcePath, destination);
+        if ( !m_fileOperationError.empty() ) return;
         m_fileClipboardPath.clear();
         m_fileClipboardMode = FileClipboardMode::None;
     } else {
@@ -1277,6 +1358,11 @@ void FileManagerView::confirmRename()
         return;
     }
 
+    m_fileOperationError =
+        Logic::EditorEngine::instance().validateAudioResourceMove(
+            m_pendingRenamePath, destination);
+    if ( !m_fileOperationError.empty() ) return;
+
     std::error_code filesystemError;
     std::filesystem::rename(m_pendingRenamePath, destination, filesystemError);
     if ( filesystemError ) {
@@ -1289,7 +1375,9 @@ void FileManagerView::confirmRename()
         return;
     }
 
-    syncMovedProjectAudioResourcePaths(m_pendingRenamePath, destination);
+    m_fileOperationError =
+        syncMovedProjectAudioResourcePaths(m_pendingRenamePath, destination);
+    if ( !m_fileOperationError.empty() ) return;
     invalidateDirectoryCache();
     ImGui::CloseCurrentPopup();
 }
@@ -1345,8 +1433,47 @@ void FileManagerView::confirmDelete()
 
     std::error_code filesystemError;
     if ( filesystemPathIsDirectory(m_pendingDeletePath) ) {
+        const auto containsAudio =
+            directoryContainsAudioFile(m_pendingDeletePath, filesystemError);
+        if ( !containsAudio ) {
+            m_fileOperationError = formatFilesystemError(
+                TR("ui.file_manager.operation_delete").data(), filesystemError);
+            return;
+        }
+        if ( *containsAudio ) {
+            m_fileOperationError =
+                TR("ui.file_manager.error_directory_contains_audio").data();
+            return;
+        }
         std::filesystem::remove_all(m_pendingDeletePath, filesystemError);
     } else {
+        const auto extension =
+            Config::pathToUtf8(m_pendingDeletePath.extension());
+        if ( isAudioExtension(extension) ) {
+            auto&       engine   = Logic::EditorEngine::instance();
+            auto*       project  = engine.getCurrentProject();
+            const auto* resource = project ? findProjectAudioResourceAtPath(
+                                                 *project, m_pendingDeletePath)
+                                           : nullptr;
+            if ( !resource ) {
+                m_fileOperationError =
+                    TR("ui.file_manager.error_audio_not_registered").data();
+                return;
+            }
+
+            /// @brief 复制稳定 ID，避免异步命令持有项目资源元素地址。
+            const auto resourceId = resource->m_id;
+            engine.pushCommand(
+                Logic::CmdRemoveAudioResource{ resourceId, true });
+            if ( pathIsInsideOrSame(m_pendingDeletePath,
+                                    m_fileClipboardPath) ) {
+                m_fileClipboardPath.clear();
+                m_fileClipboardMode = FileClipboardMode::None;
+            }
+            invalidateDirectoryCache();
+            ImGui::CloseCurrentPopup();
+            return;
+        }
         std::filesystem::remove(m_pendingDeletePath, filesystemError);
     }
     if ( filesystemError ) {

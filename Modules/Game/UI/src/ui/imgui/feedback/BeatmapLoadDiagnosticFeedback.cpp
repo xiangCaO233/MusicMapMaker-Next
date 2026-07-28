@@ -24,6 +24,9 @@ struct BeatmapLoadDiagnosticPayload {
 
     /// @brief 关联文件路径，使用 UTF-8 字符串。
     std::string relatedPath;
+
+    /// @brief Loader 提供的具体诊断内容。
+    std::string message;
 };
 
 /// @brief 构建谱面加载诊断的用户可见中央提示。
@@ -37,6 +40,13 @@ std::string buildNotificationMessage(
         std::string message = "旧 MMM 已有损，建议重新导入原始 .mc";
         if ( !payload.relatedPath.empty() ) {
             message += "\n原始文件：" + payload.relatedPath;
+        }
+        return message;
+    }
+    case Event::BeatmapLoadDiagnosticKind::AudioSampleTrackRelocated: {
+        std::string message = "自动采样的非法轨道已移到首条可用 BGM 轨";
+        if ( !payload.message.empty() ) {
+            message += "\n" + payload.message;
         }
         return message;
     }
@@ -57,6 +67,7 @@ struct BeatmapLoadDiagnosticFeedback::Impl {
                           queue.enqueue(BeatmapLoadDiagnosticPayload{
                               .kind        = event.m_kind,
                               .relatedPath = event.m_relatedPath,
+                              .message     = event.m_message,
                           });
                       }))
     {

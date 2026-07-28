@@ -76,7 +76,8 @@ enum class HoverPart : uint8_t {
     HoldEnd,
     FlickArrow,
     PolylineNode,
-    SampleAnchor
+    SampleAnchor,
+    SampleOffset
 };
 
 enum class HoverInspectKind : uint8_t {

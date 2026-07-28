@@ -155,10 +155,10 @@ bool hasUnsupportedImdBaseMetadata(const BaseMapMeta& meta)
 {
     return !meta.title.empty() || !meta.title_unicode.empty() ||
            !meta.artist.empty() || !meta.artist_unicode.empty() ||
-           !meta.author.empty() || !meta.main_audio_path.empty() ||
-           !meta.main_cover_path.empty() || !meta.cover_path.empty() ||
-           meta.video_starttime != 0 || meta.bgxoffset != 0 ||
-           meta.bgyoffset != 0;
+           !meta.author.empty() || !meta.song_file_hint.empty() ||
+           !meta.main_audio_path.empty() || !meta.main_cover_path.empty() ||
+           !meta.cover_path.empty() || meta.video_starttime != 0 ||
+           meta.bgxoffset != 0 || meta.bgyoffset != 0;
 }
 
 /// @brief 判断谱面是否包含 RM/IMD 无法保存的谱面扩展元数据。

@@ -40,6 +40,15 @@ public:
     void set(std::vector<ClipboardItem> items,
              const SessionContext* sourceContext, bool isCut);
 
+    /// @brief 更新编辑器级混合谱面物件剪贴板内容。
+    /// @param notes 新的音符剪贴板条目列表。
+    /// @param samples 新的自动采样剪贴板条目列表。
+    /// @param sourceContext 剪贴板来源 Session 上下文，仅用于身份比较。
+    /// @param isCut 当前剪贴板内容是否来自剪切操作。
+    void setChartObjects(std::vector<ClipboardItem>       notes,
+                         std::vector<SampleClipboardItem> samples,
+                         const SessionContext* sourceContext, bool isCut);
+
     /// @brief 更新编辑器级 Timeline 剪贴板内容。
     /// @param items 新的 Timeline 剪贴板条目列表。
     /// @param sourceContext 剪贴板来源 Session
@@ -51,6 +60,10 @@ public:
     /// @brief 获取编辑器级剪贴板内容副本。
     /// @return 当前剪贴板条目列表副本。
     std::vector<ClipboardItem> get() const;
+
+    /// @brief 获取编辑器级自动采样剪贴板内容副本。
+    /// @return 当前自动采样剪贴板条目列表副本。
+    std::vector<SampleClipboardItem> getSamples() const;
 
     /// @brief 获取编辑器级 Timeline 剪贴板内容副本。
     /// @return 当前 Timeline 剪贴板条目列表副本。
@@ -86,6 +99,9 @@ private:
 
     /// @brief 编辑器级共享剪贴板条目列表。
     std::vector<ClipboardItem> m_items;
+
+    /// @brief 编辑器级共享自动采样剪贴板条目列表。
+    std::vector<SampleClipboardItem> m_sampleItems;
 
     /// @brief 编辑器级共享 Timeline 剪贴板条目列表。
     std::vector<TimelineClipboardItem> m_timelineItems;

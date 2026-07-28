@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectResourceService.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/CanvasCamera.h"
@@ -28,6 +29,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
+#include <limits>
 #include <miniz.h>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -75,6 +77,20 @@ std::filesystem::path makeCurrentProjectRelativePath(
     return path.filename();
 }
 
+/// @brief 按当前项目资源刷新 Malody song.file 提示并清除旧单音轨字段。
+/// @param beatMap 保存或导出前需要更新的谱面。
+/// @note 只更新提示字段，不创建或移动任何自动采样。
+void refreshCurrentProjectSongFileHint(MMM::BeatMap& beatMap)
+{
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        beatMap.m_baseMapMetadata.main_audio_path.clear();
+        return;
+    }
+    (void)MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+        *project, beatMap, beatMap.m_baseMapMetadata.map_path);
+}
+
 /// @brief 将长期保存的谱面元数据路径规范化为项目存储路径。
 void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
 {
@@ -85,6 +101,8 @@ void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
         resolveCurrentProjectPath(meta.map_path));
     meta.main_audio_path = makeCurrentProjectRelativePath(
         resolveCurrentProjectPath(meta.main_audio_path));
+    meta.song_file_hint = makeCurrentProjectRelativePath(
+        resolveCurrentProjectPath(meta.song_file_hint));
     meta.main_cover_path = makeCurrentProjectRelativePath(
         resolveCurrentProjectPath(meta.main_cover_path));
     meta.cover_path = makeCurrentProjectRelativePath(
@@ -103,6 +121,7 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
            lhs.artist_unicode == rhs.artist_unicode &&
            lhs.map_path == rhs.map_path &&
            lhs.main_audio_path == rhs.main_audio_path &&
+           lhs.song_file_hint == rhs.song_file_hint &&
            lhs.main_cover_path == rhs.main_cover_path &&
            lhs.cover_path == rhs.cover_path &&
            lhs.cover_type == rhs.cover_type &&
@@ -111,7 +130,62 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
            lhs.version == rhs.version && lhs.author == rhs.author &&
            lhs.preference_bpm == rhs.preference_bpm &&
            lhs.track_count == rhs.track_count &&
+           lhs.bgm_track_count == rhs.bgm_track_count &&
            lhs.map_length == rhs.map_length;
+}
+
+/// @brief 在提交玩家轨道数变化前验证全部自动采样的绝对轨道迁移。
+/// @param ctx 当前会话上下文。
+/// @param oldTrackCount 当前玩家轨道数。
+/// @param newTrackCount 目标玩家轨道数。
+/// @param error 验证失败时写入的用户可读原因。
+/// @return 全部采样都能保持 BGM 相对轨道且目标索引可表示时返回 true。
+bool validateSampleTrackCountMigration(const MMM::Logic::SessionContext& ctx,
+                                       std::int32_t oldTrackCount,
+                                       std::int32_t newTrackCount,
+                                       std::string& error)
+{
+    if ( oldTrackCount <= 0 || newTrackCount <= 0 ) {
+        error =
+            fmt::format("无法将玩家轨道数从 {} 调整为 {}：玩家轨道数必须为正数",
+                        oldTrackCount,
+                        newTrackCount);
+        return false;
+    }
+
+    const auto oldTrackCountUnsigned =
+        static_cast<std::uint32_t>(oldTrackCount);
+    const auto sampleView =
+        ctx.sampleRegistry.view<const MMM::Logic::SampleComponent>();
+    for ( const auto entity : sampleView ) {
+        const auto& sample =
+            sampleView.get<const MMM::Logic::SampleComponent>(entity);
+        if ( sample.m_track < oldTrackCountUnsigned ) {
+            error = fmt::format(
+                "无法将玩家轨道数从 {} 调整为 {}：自动采样轨道 {} "
+                "落入玩家轨道区",
+                oldTrackCount,
+                newTrackCount,
+                sample.m_track);
+            return false;
+        }
+
+        const auto bgmTrack = static_cast<std::uint64_t>(sample.m_track) -
+                              static_cast<std::uint64_t>(oldTrackCountUnsigned);
+        const auto migratedTrack =
+            static_cast<std::uint64_t>(newTrackCount) + bgmTrack;
+        if ( migratedTrack > static_cast<std::uint64_t>(
+                                 std::numeric_limits<std::uint32_t>::max()) ) {
+            error = fmt::format(
+                "无法将玩家轨道数从 {} 调整为 {}：自动采样轨道 {} "
+                "迁移后超出可表示范围",
+                oldTrackCount,
+                newTrackCount,
+                sample.m_track);
+            return false;
+        }
+    }
+    return true;
 }
 
 /// @brief 将已成功保存的谱面基础信息同步到项目谱面入口。
@@ -411,6 +485,7 @@ bool saveBeatmapWithOptionalMalodyStoreModeExt(
     MMM::BeatMap& beatMap, const std::filesystem::path& outputPath,
     bool addStoreModeExtForMalodyExport)
 {
+    refreshCurrentProjectSongFileHint(beatMap);
     if ( !addStoreModeExtForMalodyExport || !isMalodyChartPath(outputPath) ) {
         return beatMap.saveToFile(outputPath);
     }
@@ -994,6 +1069,13 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.category.project"),
                                     TR("ui.status.project.track_count"),
                                     arg.trackCount);
+                } else if constexpr ( std::is_same_v<T,
+                                                     CmdUpdateBgmTrackCount> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {}",
+                                    TR("ui.status.category.project"),
+                                    TR("ui.status.project.bgm_track_count"),
+                                    arg.bgmTrackCount);
                 } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}",
@@ -1027,9 +1109,14 @@ bool BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdStartDrag> ||
                                     std::is_same_v<T, CmdUpdateDrag> ||
                                     std::is_same_v<T, CmdEndDrag> ||
+                                    std::is_same_v<T, CmdCreateAudioSample> ||
+                                    std::is_same_v<
+                                        T,
+                                        CmdUpdateAudioSampleProperties> ||
                                     std::is_same_v<T, CmdChangeTool> ||
                                     std::is_same_v<T, CmdSetMousePosition> ||
                                     std::is_same_v<T, CmdUpdateTrackCount> ||
+                                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
                                     std::is_same_v<T, CmdSetBrushNoteColor> ||
                                     std::is_same_v<T, CmdSetBrushNotePalette> ||
                                     std::is_same_v<T, CmdStartMarquee> ||
@@ -1154,6 +1241,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
         SessionUtils::ensureHitEvents(*m_ctx);
+        refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
 
         bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {
@@ -1224,8 +1312,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 {
-    if ( !EditorEngine::instance().flushPendingMetadataAutoSaves() ) {
-        XERROR("PackBeatmap: pending metadata could not be saved");
+    if ( !EditorEngine::instance().saveDirtyBeatmapsForPackaging() ) {
+        XERROR("PackBeatmap: dirty beatmaps could not be saved");
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
             .path     = cmd.exportPath,
             .success  = false,
@@ -1293,9 +1381,27 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
 
         // 所有元数据编辑入口最终都在此处转入可撤销的原子改键操作，避免 UI
         // 直接覆盖 track_count 后丢失自动采样的 BGM 相对轨道。
-        if ( oldMetadata.track_count != updatedMeta.track_count ) {
+        if ( m_ctx->trackCount != updatedMeta.track_count ) {
+            std::string migrationError;
+            if ( !validateSampleTrackCountMigration(*m_ctx,
+                                                    m_ctx->trackCount,
+                                                    updatedMeta.track_count,
+                                                    migrationError) ) {
+                m_ctx->lastActionMessage = migrationError;
+                XERROR("BeatmapSession: {}", migrationError);
+                return;
+            }
+
             m_interaction->handleCommand(
                 CmdUpdateTrackCount{ updatedMeta.track_count });
+            if ( m_ctx->trackCount != updatedMeta.track_count ) {
+                if ( m_ctx->lastActionMessage.empty() ) {
+                    m_ctx->lastActionMessage =
+                        "玩家轨道数变更未能完成，元数据保持不变";
+                }
+                XERROR("BeatmapSession: {}", m_ctx->lastActionMessage);
+                return;
+            }
         }
 
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
@@ -1304,9 +1410,9 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         m_metadataAutoSaveTimerNeedsReset = true;
         XINFO("BeatmapSession: Metadata updated for {}",
               m_ctx->currentBeatmap->m_baseMapMetadata.name);
-        if ( oldMetadata.map_path != updatedMeta.map_path ||
-             oldMetadata.main_audio_path != updatedMeta.main_audio_path ) {
-            EditorEngine::instance().refreshMainAudioSyncKeys();
+        if ( oldMetadata.map_path != updatedMeta.map_path ) {
+            m_ctx->isAudioTimelineDescriptorDirty   = true;
+            m_ctx->isAudioTimelineActivationPending = true;
         }
 
         // 如果关键渲染参数发生变化，刷新 ScrollCache
@@ -1321,53 +1427,6 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 cache->isDirty = true;
             }
             m_ctx->isBpmEventsDirty = true;
-        }
-
-        // 如果音频路径发生变化，重新加载音频
-        if ( oldMetadata.main_audio_path != updatedMeta.main_audio_path ) {
-            XINFO("BeatmapSession: Audio path changed, reloading...");
-            m_ctx->loadedMainAudioPath.clear();
-            m_ctx->mainAudioTotalTime = 0.0;
-            // 如果当前正在播放，先暂停播放
-            if ( m_ctx->isPlaying ) {
-                m_playback->handleCommand(CmdSetPlayState{ false });
-            }
-            // 复位画布时间为 0.0
-            m_playback->handleCommand(CmdSeek{ 0.0 });
-            auto* project = EditorEngine::instance().getCurrentProject();
-            std::filesystem::path audioPath =
-                SessionUtils::resolveMainAudioPath(*m_ctx, project);
-            std::error_code audioPathError;
-            if ( std::filesystem::exists(audioPath, audioPathError) &&
-                 !audioPathError ) {
-                // 查找对应的 AudioResource 配置
-                AudioTrackConfig config;
-                if ( project ) {
-                    auto fileName = Config::pathToUtf8(
-                        updatedMeta.main_audio_path.filename());
-                    auto fullPathStr =
-                        Config::pathToUtf8(updatedMeta.main_audio_path);
-
-                    for ( const auto& res : project->m_audioResources ) {
-                        if ( res.m_id == fileName ||
-                             res.m_path == fullPathStr ) {
-                            config = res.m_config;
-                            break;
-                        }
-                    }
-                }
-                const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
-                auto&             audio = Audio::AudioManager::instance();
-                if ( audio.loadBGM(audioPathUtf8, config) ) {
-                    m_ctx->loadedMainAudioPath = audioPathUtf8;
-                    m_ctx->mainAudioTotalTime  = audio.getTotalTime();
-                }
-            } else {
-                XERROR(
-                    "BeatmapSession: Audio file does not exist at resolved "
-                    "path: {}",
-                    Config::pathToUtf8(audioPath));
-            }
         }
 
         // 路径或资源类型改变时，按图片/视频分支重新探测尺寸。

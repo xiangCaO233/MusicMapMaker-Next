@@ -7,6 +7,8 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
+#include "logic/session/SamplePropertyEdit.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -21,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -90,6 +93,27 @@ struct OsuMetadataTextEditorState {
     std::optional<MetadataPropertyMap> result;
 };
 
+/// @brief 单个选中自动采样的精确属性编辑状态。
+struct SamplePropertyEditorState {
+    /// @brief 当前编辑的自动采样实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 当前表单是否已从组件初始化。
+    bool initialized{ false };
+
+    /// @brief 待写回的项目音频资源引用。
+    std::string audioResourceId;
+
+    /// @brief 面向用户的一基 BGM 相对轨道编号。
+    std::int32_t bgmLaneOneBased{ 1 };
+
+    /// @brief 待写回的有符号毫秒偏移。
+    std::int64_t offsetMs{ 0 };
+
+    /// @brief 待写回的物件音量。
+    float volume{ 1.0F };
+};
+
 /// @brief 获取元数据 JSON 编辑器的持久状态。
 /// @warning UI 每帧绘制路径：仅保存少量弹窗状态，不进行文件系统操作。
 MetadataJsonEditorState& metadataJsonEditorState()
@@ -103,6 +127,14 @@ MetadataJsonEditorState& metadataJsonEditorState()
 OsuMetadataTextEditorState& osuMetadataTextEditorState()
 {
     static OsuMetadataTextEditorState state;
+    return state;
+}
+
+/// @brief 获取自动采样精确属性编辑器的跨帧状态。
+/// @warning UI 每帧绘制路径：仅保存一个选中物件的表单数据。
+SamplePropertyEditorState& samplePropertyEditorState()
+{
+    static SamplePropertyEditorState state;
     return state;
 }
 
@@ -267,7 +299,10 @@ std::string getOsuMetadataDefaultValue(const BeatMap&     beatmap,
 
     if ( key == "file_format_version" ) return "v14";
     if ( key == "General::AudioFilename" ) {
-        return Config::pathToUtf8(base.main_audio_path);
+        const auto& audioHint = base.song_file_hint.empty()
+                                    ? base.main_audio_path
+                                    : base.song_file_hint;
+        return Config::pathToUtf8(audioHint);
     }
     if ( key == "General::AudioLeadIn" ) return "0";
     if ( key == "General::AudioHash" ) return "";
@@ -359,7 +394,8 @@ void syncOsuMetadataToBase(const MetadataPropertyMap& props, BaseMapMeta& base)
     };
 
     if ( const auto* value = get("General::AudioFilename") ) {
-        base.main_audio_path = Config::utf8ToPath(*value);
+        base.song_file_hint = Config::utf8ToPath(*value);
+        base.main_audio_path.clear();
     }
     if ( const auto* value = get("Metadata::Title") ) base.title = *value;
     if ( const auto* value = get("Metadata::TitleUnicode") ) {
@@ -1801,7 +1837,215 @@ void renderMetadataEditorWindow(bool& showWindow)
     ImGui::PopStyleVar(6);
 }
 
-/// @brief 渲染选中音符元数据编辑窗口。
+/// @brief 从自动采样组件重置精确属性表单。
+/// @param state 待重置表单。
+/// @param entity 当前自动采样实体。
+/// @param sample 当前自动采样组件。
+/// @param playerTrackCount 当前玩家轨道数。
+void resetSamplePropertyEditorState(SamplePropertyEditorState&    state,
+                                    entt::entity                  entity,
+                                    const Logic::SampleComponent& sample,
+                                    std::int32_t playerTrackCount)
+{
+    state.entity          = entity;
+    state.initialized     = true;
+    state.audioResourceId = sample.m_audioResourceId;
+    state.offsetMs        = sample.m_offsetMs;
+    state.volume          = sample.m_volume;
+
+    std::uint32_t relativeLane = 0;
+    if ( playerTrackCount > 0 &&
+         sample.m_track >= static_cast<std::uint32_t>(playerTrackCount) ) {
+        relativeLane =
+            sample.m_track - static_cast<std::uint32_t>(playerTrackCount);
+    }
+    const auto oneBasedLane = std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(relativeLane) + 1U,
+        static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
+    state.bgmLaneOneBased = static_cast<std::int32_t>(oneBasedLane);
+}
+
+/// @brief 获取自动采样属性校验失败对应的本地化键。
+/// @param issue 校验失败原因。
+/// @return 本地化键。
+const char* samplePropertyIssueTranslationKey(
+    Logic::SamplePropertyEditIssue issue)
+{
+    switch ( issue ) {
+    case Logic::SamplePropertyEditIssue::MissingResource:
+    case Logic::SamplePropertyEditIssue::UnsupportedResourceType:
+        return "ui.edit.sample_properties.invalid_resource";
+    case Logic::SamplePropertyEditIssue::InvalidPlayerTrackCount:
+    case Logic::SamplePropertyEditIssue::InvalidBgmLane:
+    case Logic::SamplePropertyEditIssue::AbsoluteTrackOverflow:
+        return "ui.edit.sample_properties.invalid_lane";
+    case Logic::SamplePropertyEditIssue::InvalidVolume:
+        return "ui.edit.sample_properties.invalid_volume";
+    case Logic::SamplePropertyEditIssue::None: break;
+    }
+    return "";
+}
+
+/// @brief 渲染单个选中自动采样的精确属性表单。
+/// @param context 当前会话上下文。
+/// @param engine 编辑器逻辑入口。
+/// @param selectedSamples 选中的自动采样实体。
+/// @param dpiScale 当前 DPI 缩放。
+/// @warning UI 热路径：窗口打开时每帧执行；只遍历项目音频资源和当前选中
+/// 自动采样，不执行文件系统访问或 ECS 全量扫描。
+void renderSelectedSampleProperties(
+    Logic::SessionContext& context, Logic::EditorEngine& engine,
+    const std::vector<entt::entity>& selectedSamples, float dpiScale)
+{
+    if ( selectedSamples.empty() ) return;
+
+    ImGui::TextUnformatted(TR("ui.edit.sample_properties.header").data());
+    ImGui::Separator();
+    if ( selectedSamples.size() != 1U ) {
+        const auto message = TR_FMT("ui.edit.sample_properties.single_only",
+                                    selectedSamples.size());
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%s", message.c_str());
+        ImGui::Spacing();
+        return;
+    }
+
+    const entt::entity entity = selectedSamples.front();
+    if ( !context.sampleRegistry.valid(entity) ||
+         !context.sampleRegistry.all_of<Logic::SampleComponent>(entity) ) {
+        return;
+    }
+
+    const auto& sample =
+        context.sampleRegistry.get<const Logic::SampleComponent>(entity);
+    auto& state = samplePropertyEditorState();
+    if ( !state.initialized || state.entity != entity ) {
+        resetSamplePropertyEditorState(
+            state, entity, sample, context.trackCount);
+    }
+
+    const auto* project = engine.getCurrentProject();
+    const auto  resolveResource =
+        [&](std::string_view reference) -> const ::MMM::AudioResource* {
+        if ( !project || reference.empty() ) return nullptr;
+        const auto iterator =
+            std::find_if(project->m_audioResources.begin(),
+                         project->m_audioResources.end(),
+                         [&](const ::MMM::AudioResource& resource) {
+                             return resource.m_id == reference ||
+                                    resource.m_path == reference;
+                         });
+        return iterator == project->m_audioResources.end()
+                   ? nullptr
+                   : std::addressof(*iterator);
+    };
+
+    const auto*       selectedResource = resolveResource(state.audioResourceId);
+    const std::string resourcePreview =
+        selectedResource
+            ? fmt::format(
+                  "{} [{}]",
+                  selectedResource->m_id,
+                  TR(selectedResource->m_type == ::MMM::AudioTrackType::Main
+                         ? "ui.edit.sample_properties.resource_main"
+                         : "ui.edit.sample_properties.resource_effect")
+                      .data())
+            : state.audioResourceId;
+
+    ImGui::SetNextItemWidth(-1.0F);
+    if ( FeedbackBeginCombo(
+             TR("ui.edit.sample_properties.resource").data(),
+             resourcePreview.empty()
+                 ? TR("ui.edit.sample_properties.select_resource").data()
+                 : resourcePreview.c_str()) ) {
+        if ( project ) {
+            for ( std::size_t index = 0;
+                  index < project->m_audioResources.size();
+                  ++index ) {
+                const auto& resource = project->m_audioResources[index];
+                if ( resource.m_id.empty() ) continue;
+                const bool validType =
+                    resource.m_type == ::MMM::AudioTrackType::Main ||
+                    resource.m_type == ::MMM::AudioTrackType::Effect;
+                if ( !validType ) continue;
+
+                const auto typeText =
+                    TR(resource.m_type == ::MMM::AudioTrackType::Main
+                           ? "ui.edit.sample_properties.resource_main"
+                           : "ui.edit.sample_properties.resource_effect");
+                const auto label = fmt::format("{} [{}]##sample_resource_{}",
+                                               resource.m_id,
+                                               typeText.data(),
+                                               index);
+                const bool selected =
+                    selectedResource == std::addressof(resource);
+                if ( FeedbackSelectable(label.c_str(), selected) ) {
+                    state.audioResourceId = resource.m_id;
+                    selectedResource      = std::addressof(resource);
+                }
+                if ( selected ) ImGui::SetItemDefaultFocus();
+            }
+        }
+        FeedbackEndCombo();
+    }
+
+    ImGui::SetNextItemWidth(180.0F * dpiScale);
+    ImGui::InputScalar(TR("ui.edit.sample_properties.bgm_lane").data(),
+                       ImGuiDataType_S32,
+                       &state.bgmLaneOneBased);
+    ImGui::SetNextItemWidth(180.0F * dpiScale);
+    ImGui::InputScalar(TR("ui.edit.sample_properties.offset_ms").data(),
+                       ImGuiDataType_S64,
+                       &state.offsetMs);
+    ImGui::SetNextItemWidth(180.0F * dpiScale);
+    ImGui::InputFloat(TR("ui.edit.sample_properties.volume").data(),
+                      &state.volume,
+                      0.01F,
+                      0.1F,
+                      "%.6f");
+
+    selectedResource = resolveResource(state.audioResourceId);
+    const std::int32_t zeroBasedLane =
+        state.bgmLaneOneBased > 0 ? state.bgmLaneOneBased - 1 : -1;
+    const auto editResult = Logic::resolveSamplePropertyEdit(sample,
+                                                             context.trackCount,
+                                                             selectedResource,
+                                                             zeroBasedLane,
+                                                             state.offsetMs,
+                                                             state.volume);
+    if ( !editResult.m_sample ) {
+        const char* key = samplePropertyIssueTranslationKey(editResult.m_issue);
+        if ( key[0] != '\0' ) {
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.45F, 0.35F, 1.0F), "%s", TR(key).data());
+        }
+    } else if ( context.isPlaying ) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+            "%s",
+            TR("ui.edit.sample_properties.pause_to_edit").data());
+    }
+
+    ImGui::BeginDisabled(!editResult.m_sample || context.isPlaying);
+    if ( FeedbackButton(TR("ui.edit.sample_properties.apply").data()) ) {
+        engine.pushCommand(Logic::CmdUpdateAudioSampleProperties{
+            .entity          = entity,
+            .audioResourceId = state.audioResourceId,
+            .bgmLane         = zeroBasedLane,
+            .offsetMs        = state.offsetMs,
+            .volume          = state.volume,
+        });
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if ( FeedbackButton(TR("ui.edit.sample_properties.reset").data()) ) {
+        resetSamplePropertyEditorState(
+            state, entity, sample, context.trackCount);
+    }
+    ImGui::Spacing();
+}
+
+/// @brief 渲染选中谱面物件的元数据与自动采样精确属性窗口。
 void renderNoteMetadataEditorWindow(bool& showWindow)
 {
     if ( !showWindow ) return;
@@ -1814,6 +2058,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
     static bool                                         lastShowState = false;
     if ( showWindow && !lastShowState ) {
         inputBuffers.clear();
+        samplePropertyEditorState().initialized = false;
     }
     lastShowState = showWindow;
 
@@ -1871,7 +2116,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 double       timestamp;
             };
             std::vector<SelectedNote> selectedNotes;
-            auto& registry = session->getContextMutable().noteRegistry;
+            auto& sessionContext = session->getContextMutable();
+            auto& registry       = sessionContext.noteRegistry;
 
             auto view = registry.view<const Logic::NoteComponent,
                                       const Logic::InteractionComponent>();
@@ -1884,11 +2130,28 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 }
             }
 
+            std::vector<entt::entity> selectedSamples;
+            const auto                sampleView =
+                sessionContext.sampleRegistry
+                    .view<const Logic::SampleComponent,
+                          const Logic::InteractionComponent>();
+            for ( auto entity : sampleView ) {
+                if ( sampleView.get<const Logic::InteractionComponent>(entity)
+                         .isSelected ) {
+                    selectedSamples.push_back(entity);
+                }
+            }
+
+            renderSelectedSampleProperties(
+                sessionContext, engine, selectedSamples, dpiScale);
+
             if ( selectedNotes.empty() ) {
-                ImGui::TextColored(
-                    ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                    "%s",
-                    TR("ui.edit.note_metadata.no_selection").data());
+                if ( selectedSamples.empty() ) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                        "%s",
+                        TR("ui.edit.note_metadata.no_selection").data());
+                }
             } else {
                 // --- 按元数据指纹分组 ---
                 // 将 note_properties 序列化为字符串作为分组键

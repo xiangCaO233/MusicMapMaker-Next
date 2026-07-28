@@ -1,87 +1,150 @@
-#include "logic/BeatmapSession.h"
-
-#include "event/audio/AudioPlaybackEvent.h"
-#include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "logic/session/PlaybackController.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 
 #include <cmath>
+#include <memory>
 
 namespace
 {
 
 /// @brief 使用小容差比较播放时间。
-/// @param lhs 左值。
-/// @param rhs 右值。
-/// @return 两个时间值足够接近时返回 true。
 bool near(double lhs, double rhs)
 {
     return std::abs(lhs - rhs) < 1e-6;
 }
 
-/// @brief 验证主音轨自然结束会停止会话并标记下一次播放从头开始。
-/// @return 行为符合预期时返回 true。
-bool testNaturalFinishRestartsFromBeginning()
-{
-    MMM::Logic::BeatmapSession session;
-    auto&                      context = session.getContextMutable();
-    context.currentTime                = 37.5;
-    context.isPlaying                  = true;
-
-    MMM::Event::AudioFinishedEvent event;
-    event.isLooping = false;
-    MMM::Event::EventBus::instance().publish(event);
-
-    if ( context.isPlaying || !context.restartPlaybackAfterFinishPending.load(
-                                  std::memory_order_acquire) ) {
-        XERROR("Natural audio finish did not arm playback restart");
-        return false;
-    }
-
-    MMM::Logic::PlaybackController controller(context);
-    controller.handleCommand(MMM::Logic::CmdSetPlayState{ true });
-
-    if ( !context.isPlaying || !near(context.currentTime, 0.0) ||
-         context.restartPlaybackAfterFinishPending.load(
-             std::memory_order_acquire) ) {
-        XERROR(
-            "Playback did not restart from the beginning after natural finish");
-        return false;
-    }
-    return true;
-}
-
-/// @brief 验证普通暂停恢复不会改变当前播放位置。
-/// @return 行为符合预期时返回 true。
-bool testNormalResumeKeepsCurrentTime()
+/// @brief 验证自然结束标志会在下一次播放请求前先回到零点。
+bool testFinishedTimelineRewindsBeforeActivation()
 {
     MMM::Logic::SessionContext     context;
     MMM::Logic::PlaybackController controller(context);
-    context.currentTime = 8.25;
+    context.isActiveSession                   = true;
+    context.currentTime                       = 37.5;
+    context.restartPlaybackAfterFinishPending = true;
 
     controller.handleCommand(MMM::Logic::CmdSetPlayState{ true });
-
-    if ( !context.isPlaying || !near(context.currentTime, 8.25) ) {
-        XERROR("Normal playback resume unexpectedly rewound the timeline");
+    if ( context.isPlaying || !near(context.currentTime, 0.0) ||
+         context.restartPlaybackAfterFinishPending ) {
+        XERROR("Finished timeline did not rewind before activation");
         return false;
     }
     return true;
 }
 
-/// @brief 验证手动跳转会取消自然结束后的自动回到开头。
-/// @return 行为符合预期时返回 true。
+/// @brief 验证零采样与多采样谱面都生成独立稳定描述符。
+bool testZeroAndMultipleSampleDescriptors()
+{
+    MMM::Project project;
+    project.m_projectRoot = "/tmp/mmm-session-timeline-test";
+
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    MMM::Timing timing;
+    timing.m_timestamp = 500.0;
+    context.currentBeatmap->m_timings.push_back(timing);
+    if ( !MMM::Logic::SessionUtils::rebuildAudioTimelineDescriptor(context,
+                                                                   &project) ||
+         !context.audioTimelineDescriptor.m_events.empty() ||
+         context.audioTimelineDescriptor.m_fingerprint.empty() ||
+         !near(context.audioTimelineDescriptor.m_chartEndSeconds, 0.5) ) {
+        XERROR("Zero-sample chart did not build an independent descriptor");
+        return false;
+    }
+
+    const std::string emptyFingerprint =
+        context.audioTimelineDescriptor.m_fingerprint;
+    context.currentBeatmap->m_audioSamples.push_back(
+        { .m_timestamp = 0.0, .m_audioResourceId = "missing-a" });
+    context.currentBeatmap->m_audioSamples.push_back(
+        { .m_timestamp = 250.0, .m_audioResourceId = "missing-b" });
+    context.isAudioTimelineDescriptorDirty = true;
+    if ( !MMM::Logic::SessionUtils::rebuildAudioTimelineDescriptor(context,
+                                                                   &project) ||
+         context.audioTimelineDescriptor.m_events.size() != 2U ||
+         context.audioTimelineDescriptor.m_diagnostics.size() != 2U ||
+         context.audioTimelineDescriptor.m_fingerprint == emptyFingerprint ) {
+        XERROR("Multiple samples were not preserved in the descriptor");
+        return false;
+    }
+
+    const std::string multiSampleFingerprint =
+        context.audioTimelineDescriptor.m_fingerprint;
+    context.isAudioTimelineActivationPending               = false;
+    context.currentBeatmap->m_audioSamples.front().m_track = 128U;
+    context.isAudioTimelineDescriptorDirty                 = true;
+    if ( MMM::Logic::SessionUtils::rebuildAudioTimelineDescriptor(context,
+                                                                  &project) ||
+         context.audioTimelineDescriptor.m_fingerprint !=
+             multiSampleFingerprint ||
+         context.isAudioTimelineActivationPending ) {
+        XERROR("Visual-only BGM lane movement requested an audio reload");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证不同指纹切换不会继承旧时间或播放态。
+bool testTimelineSwitchUsesCompleteFingerprint()
+{
+    const auto different = MMM::Logic::SessionUtils::resolveAudioTimelineSwitch(
+        "timeline-a", "timeline-b", 8.0, 3.0, true, false, true);
+    const auto matching = MMM::Logic::SessionUtils::resolveAudioTimelineSwitch(
+        "timeline-a", "timeline-a", 8.0, 3.0, true, false, true);
+    if ( !near(different.m_targetTime, 3.0) || different.m_resumePlayback ||
+         !near(matching.m_targetTime, 8.0) || !matching.m_resumePlayback ) {
+        XERROR("Timeline switch inherited state across different fingerprints");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证 transport 自然结束快照停止会话并武装下次重播。
+bool testNaturalFinishSnapshotArmsRestart()
+{
+    MMM::Logic::SessionContext context;
+    context.audioTimelineDescriptor.m_fingerprint = "timeline";
+    context.isPlaying                             = true;
+    if ( MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
+             context, "timeline", MMM::Audio::PlaybackStatus::Stopped, 12.0) ||
+         context.isPlaying || !context.restartPlaybackAfterFinishPending ||
+         !near(context.currentTime, 12.0) ) {
+        XERROR("Natural finish snapshot did not arm playback restart");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证后台会话不能启动或替换全局音频时间线。
+bool testBackgroundSessionCannotControlTransport()
+{
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.isActiveSession = false;
+    context.currentTime     = 8.25;
+
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ true });
+    if ( context.isPlaying || !near(context.currentTime, 8.25) ) {
+        XERROR("Background session unexpectedly controlled audio transport");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证手动跳转取消自然结束后的自动回到开头。
 bool testSeekCancelsPendingRestart()
 {
     MMM::Logic::SessionContext     context;
     MMM::Logic::PlaybackController controller(context);
-    context.restartPlaybackAfterFinishPending.store(true,
-                                                    std::memory_order_relaxed);
+    context.audioTimelineDescriptor.m_chartEndSeconds = 20.0;
+    context.restartPlaybackAfterFinishPending         = true;
 
-    controller.handleCommand(MMM::Logic::CmdSeek{ 0.0 });
-
-    if ( context.restartPlaybackAfterFinishPending.load(
-             std::memory_order_acquire) ) {
+    controller.handleCommand(MMM::Logic::CmdSeek{ 8.0 });
+    if ( context.restartPlaybackAfterFinishPending ||
+         !near(context.currentTime, 8.0) ) {
         XERROR("Manual seek did not cancel pending playback restart");
         return false;
     }
@@ -90,12 +153,14 @@ bool testSeekCancelsPendingRestart()
 
 }  // namespace
 
-/// @brief 运行播放自然结束重播策略测试。
-/// @return 全部测试通过时返回 0。
+/// @brief 运行复合时间线播放控制权与重播策略测试。
 int main()
 {
-    return testNaturalFinishRestartsFromBeginning() &&
-                   testNormalResumeKeepsCurrentTime() &&
+    return testZeroAndMultipleSampleDescriptors() &&
+                   testTimelineSwitchUsesCompleteFingerprint() &&
+                   testNaturalFinishSnapshotArmsRestart() &&
+                   testFinishedTimelineRewindsBeforeActivation() &&
+                   testBackgroundSessionCannotControlTransport() &&
                    testSeekCancelsPendingRestart()
                ? 0
                : 1;

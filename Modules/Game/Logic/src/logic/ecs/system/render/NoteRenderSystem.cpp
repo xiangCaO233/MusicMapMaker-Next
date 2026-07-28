@@ -1,6 +1,8 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
@@ -35,6 +37,50 @@ constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
 
 /// @brief Timeline 专业模式轨道数量。
 constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 4;
+
+/// @brief 判断当前拖动中的玩家物件是否已进入 BGM 轨道区。
+/// @param registry 玩家物件注册表。
+/// @param playerTrackCount 玩家轨道数量。
+/// @return 至少一个拖动物件或其 Flick 端点进入 BGM 区时返回 true。
+/// @warning 主画布快照热路径：仅在拖动期间遍历已固定的局部实体列表，
+/// 禁止退化为完整 Registry 扫描。
+bool hasDraggedNoteAcrossPlayerBoundary(entt::registry& registry,
+                                        std::int32_t    playerTrackCount)
+{
+    if ( playerTrackCount <= 0 ) return false;
+    const auto* pinned = registry.ctx().find<DragRenderPinnedEntities>();
+    if ( !pinned || !pinned->entities ) return false;
+
+    const auto crossesBoundary = [playerTrackCount](::MMM::NoteType type,
+                                                    std::int32_t    track,
+                                                    std::int32_t    dtrack) {
+        std::int64_t rightTrack = track;
+        if ( type == ::MMM::NoteType::FLICK ) {
+            rightTrack = std::max<std::int64_t>(
+                rightTrack, static_cast<std::int64_t>(track) + dtrack);
+        }
+        return rightTrack >= playerTrackCount;
+    };
+
+    for ( const auto entity : *pinned->entities ) {
+        const auto* note = registry.try_get<const NoteComponent>(entity);
+        if ( !note ) continue;
+        const auto* interaction =
+            registry.try_get<const InteractionComponent>(entity);
+        if ( !interaction || !interaction->isDragging ) continue;
+        if ( crossesBoundary(
+                 note->m_type, note->m_trackIndex, note->m_dtrack) ) {
+            return true;
+        }
+        for ( const auto& subNote : note->m_subNotes ) {
+            if ( crossesBoundary(
+                     subNote.type, subNote.trackIndex, subNote.dtrack) ) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 /// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
 int professionalTimelineLane(::MMM::TimingEffect effect)
@@ -412,7 +458,21 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
-        batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+        float noteRenderRightX = rightX;
+        if ( isMainCanvas &&
+             hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            noteRenderRightX = laneProjection.bgmRightX;
+            batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+        } else {
+            batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+        }
         NoteRenderSystem::renderNotes(registry,
                                       snapshot,
                                       cameraId,
@@ -422,7 +482,7 @@ void NoteRenderSystem::generateSnapshot(
                                       config,
                                       batcher,
                                       leftX,
-                                      rightX,
+                                      noteRenderRightX,
                                       topY,
                                       bottomY,
                                       singleTrackW,
@@ -1150,6 +1210,7 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
         case HoverPart::SampleAnchor:
             color = { 0.25f, 0.85f, 1.0f, 0.9f };
             break;
+        case HoverPart::SampleOffset: color = { 1.0f, 0.5f, 0.2f, 0.9f }; break;
         case HoverPart::None: color = { 1.0f, 1.0f, 1.0f, 0.45f }; break;
         }
 

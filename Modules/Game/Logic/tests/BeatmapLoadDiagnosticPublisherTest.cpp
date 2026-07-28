@@ -38,6 +38,29 @@ bool testDiagnosticConversionAndDeduplication()
            events.front().m_message == "Loader detail";
 }
 
+/// @brief 验证非法自动采样轨道迁移诊断具有独立且确定的事件类型。
+/// @return 诊断类型、级别和详情均完整转换时返回 true。
+bool testAudioSampleTrackRelocationDiagnostic()
+{
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.map_path = "/project/chart/relocated.mmm";
+    beatmap.m_loadDiagnostics.push_back(MMM::BeatmapLoadDiagnostic{
+        .m_code = MMM::BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED,
+        .m_severity = MMM::BeatmapLoadDiagnosticSeverity::WARNING,
+        .m_message  = "Moved x=2 to x=4",
+    });
+
+    const auto events = MMM::Logic::buildBeatmapLoadDiagnosticEvents(beatmap);
+    return events.size() == 1 &&
+           events.front().m_kind == MMM::Event::BeatmapLoadDiagnosticKind::
+                                        AudioSampleTrackRelocated &&
+           events.front().m_severity ==
+               MMM::Event::BeatmapLoadDiagnosticSeverity::Warning &&
+           events.front().m_beatmapPath == "/project/chart/relocated.mmm" &&
+           events.front().m_relatedPath.empty() &&
+           events.front().m_message == "Moved x=2 to x=4";
+}
+
 /// @brief 验证无 Loader 诊断时不会生成或发布事件。
 /// @return 无事件生成且 EventBus 订阅者未被调用时返回 true。
 bool testNoDiagnosticHasNoBehavior()
@@ -95,6 +118,7 @@ bool testPublisherUsesDeduplicatedEvents()
 int main()
 {
     return testDiagnosticConversionAndDeduplication() &&
+                   testAudioSampleTrackRelocationDiagnostic() &&
                    testNoDiagnosticHasNoBehavior() &&
                    testPublisherUsesDeduplicatedEvents()
                ? 0

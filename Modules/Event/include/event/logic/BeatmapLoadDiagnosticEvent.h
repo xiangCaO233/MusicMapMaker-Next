@@ -13,6 +13,9 @@ namespace MMM::Event
 enum class BeatmapLoadDiagnosticKind : std::uint8_t {
     /// @brief 旧 MMM 旁存在可用于恢复已丢失 SOUND 信息的原始 Malody 文件。
     LegacyMmmOriginalMalodyAvailable,
+
+    /// @brief 自动采样的非法绝对轨道已迁移到首条可用 BGM 轨。
+    AudioSampleTrackRelocated,
 };
 
 /// @brief 谱面加载诊断的用户提示级别。

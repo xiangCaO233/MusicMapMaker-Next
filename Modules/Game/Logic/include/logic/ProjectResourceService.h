@@ -41,6 +41,53 @@ struct BeatmapAudioReference {
     };
 };
 
+/// @brief 单个内存谱面在音频资源移动后的引用重映射结果。
+struct BeatmapAudioReferenceRemapResult {
+    /// @brief 匹配到目标资源的玩家物件绑定数量。
+    std::size_t m_noteBindingReferenceCount{ 0U };
+
+    /// @brief 匹配到目标资源的自动采样数量。
+    std::size_t m_audioSampleReferenceCount{ 0U };
+
+    /// @brief 匹配到目标资源的歌曲路径提示数量。
+    std::size_t m_songFileHintReferenceCount{ 0U };
+
+    /// @brief 实际从旧路径写法改成资源 ID 或新提示路径的字段数量。
+    std::size_t m_changedReferenceCount{ 0U };
+
+    /// @brief 谱面是否以任意受支持字段引用了目标资源。
+    /// @return 至少存在一个匹配引用时返回 true。
+    [[nodiscard]] bool referencesResource() const
+    {
+        return m_noteBindingReferenceCount > 0U ||
+               m_audioSampleReferenceCount > 0U ||
+               m_songFileHintReferenceCount > 0U;
+    }
+
+    /// @brief 谱面字段是否实际发生了重写。
+    /// @return 至少一个字段发生变化时返回 true。
+    [[nodiscard]] bool changed() const { return m_changedReferenceCount > 0U; }
+};
+
+/// @brief 保存前 song_file_hint 的选取来源。
+enum class BeatmapSongFileHintSource {
+    None,
+    ExistingHint,
+    EarliestMainSample,
+};
+
+/// @brief 保存前刷新 song_file_hint 的结果。
+struct BeatmapSongFileHintUpdateResult {
+    /// @brief 最终提示的选取来源。
+    BeatmapSongFileHintSource m_source{ BeatmapSongFileHintSource::None };
+
+    /// @brief 最终提示解析到的稳定资源 ID；没有提示时为空。
+    std::string m_audioResourceId;
+
+    /// @brief song_file_hint 或旧 main_audio_path 是否发生变化。
+    bool m_changed{ false };
+};
+
 /// @brief 根据项目目录扫描结果构建并同步项目内的谱面和音频资源列表。
 class ProjectResourceService
 {
@@ -103,6 +150,45 @@ public:
     static std::vector<BeatmapAudioReference> findAudioResourceReferences(
         const Project& project, const AudioResource& resource);
 
+    /// @brief 从已经载入内存的谱面收集完整音频引用。
+    /// @param beatMap 待读取的内存谱面。
+    /// @param beatmapPath 用于诊断和相对路径解析的具体谱面路径。
+    /// @return 歌曲提示、玩家物件绑定和自动采样引用列表。
+    static std::vector<BeatmapAudioReference> collectBeatmapAudioReferences(
+        const BeatMap& beatMap, const std::string& beatmapPath);
+
+    /// @brief 判断谱面音频引用是否指向指定项目资源。
+    /// @param project 资源所属项目。
+    /// @param reference 待匹配的谱面引用。
+    /// @param resource 候选项目音频资源。
+    /// @return ID、项目相对路径或旧版文件名能够匹配时返回 true。
+    static bool audioReferenceMatchesResource(
+        const Project& project, const BeatmapAudioReference& reference,
+        const AudioResource& resource);
+
+    /// @brief 将内存谱面中指向移动前资源的引用更新为稳定 ID 和新路径提示。
+    /// @param project 资源所属项目。
+    /// @param beatMap 需要原地更新的内存谱面。
+    /// @param beatmapPath 用于相对路径匹配的具体谱面路径。
+    /// @param previousResource 移动前的资源快照。
+    /// @param updatedResourcePath 移动后的项目相对路径。
+    /// @return 匹配和实际重写数量。
+    static BeatmapAudioReferenceRemapResult
+    remapBeatmapAudioReferencesAfterMove(
+        const Project& project, BeatMap& beatMap,
+        const std::string& beatmapPath, const AudioResource& previousResource,
+        const std::string& updatedResourcePath);
+
+    /// @brief 保存前按 Malody 提示语义刷新 song_file_hint。
+    /// @param project 谱面所属项目。
+    /// @param beatMap 需要原地更新提示字段的谱面。
+    /// @param beatmapPath 当前谱面用于解析相对引用的路径。
+    /// @return 保留、回退或清空提示的具体结果。
+    /// @note 该函数只修改提示字段，不新增、删除或移动任何自动采样。
+    static BeatmapSongFileHintUpdateResult refreshSongFileHintForSave(
+        const Project& project, BeatMap& beatMap,
+        const std::filesystem::path& beatmapPath);
+
     /// @brief 按谱面引用解析项目音频资源。
     /// @param project 待查询项目。
     /// @param beatmapPath 引用所在谱面的项目相对或绝对路径。
@@ -128,14 +214,26 @@ public:
     LegacyAudioMigrationResult migrateLegacyBeatmapAudioTracks(
         Project& project, const Project& persistedProject) const;
 
+    /// @brief 在物理移动前验证外部谱面的音频引用仍可无损保持。
+    /// @param project 待检查项目。
+    /// @param oldPath 计划移动的文件或目录路径。
+    /// @param newPath 计划移动到的文件或目录路径。
+    /// @return 允许移动时为空；RM/IMD 隐式音频关联会改变或 osu!
+    /// 引用无法改写时返回面向用户的阻止原因。
+    static std::string validateAudioResourceMove(
+        const Project& project, const std::filesystem::path& oldPath,
+        const std::filesystem::path& newPath);
+
     /// @brief 文件移动或重命名后重映射项目音频资源路径并保持资源 ID 稳定。
     /// @param project 待更新项目。
     /// @param oldPath 移动前的文件或目录路径。
     /// @param newPath 移动后的文件或目录路径。
+    /// @param errorMessage 失败时接收面向用户的错误和回滚状态。
     /// @return 路径发生变化的音频资源数量。
     static std::size_t remapAudioResourcePathsAfterMove(
         Project& project, const std::filesystem::path& oldPath,
-        const std::filesystem::path& newPath);
+        const std::filesystem::path& newPath,
+        std::string*                 errorMessage = nullptr);
 
 private:
     /// @brief 规范化项目相对路径，用于稳定比较排除列表。
@@ -196,15 +294,6 @@ private:
     static std::vector<BeatmapAudioReference> probeBeatmapAudioReferences(
         const Project& project, const std::filesystem::path& mapPath,
         const std::string& beatmapPath, bool warnOnFailure);
-
-    /// @brief 判断谱面音频引用是否指向指定项目资源。
-    /// @param project 资源所属项目。
-    /// @param reference 待匹配的谱面引用。
-    /// @param resource 候选项目音频资源。
-    /// @return ID、项目相对路径或旧版文件名能够匹配时返回 true。
-    static bool audioReferenceMatchesResource(
-        const Project& project, const BeatmapAudioReference& reference,
-        const AudioResource& resource);
 
     /// @brief 根据谱面引用推断新发现音频资源的类型。
     /// @param project 资源所属项目。

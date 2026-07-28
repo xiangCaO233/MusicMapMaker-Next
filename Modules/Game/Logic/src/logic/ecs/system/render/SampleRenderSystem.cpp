@@ -6,6 +6,7 @@
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/context/SessionContext.h"
 
 #include <fmt/format.h>
 
@@ -275,7 +276,6 @@ void SampleRenderSystem::renderSamples(
     }
     const auto visibleLaneRange =
         projection.visibleBgmRange(0.0F, viewportWidth);
-    if ( !visibleLaneRange ) return;
 
     const double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
     const double topAbsY = currentAbsY + (judgmentLineY - topY) /
@@ -285,12 +285,28 @@ void SampleRenderSystem::renderSamples(
         (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
     const auto visibleTimeRanges = cache->getTimeRangesForAbsYWindow(
         std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
-    collectVisibleSamples(registry,
-                          sortedEntities,
-                          maxEndPrefix,
-                          visibleTimeRanges,
-                          snapshot->sampleQueryScratch,
-                          snapshot->sampleQuerySeenScratch);
+    snapshot->sampleQueryScratch.clear();
+    snapshot->sampleQuerySeenScratch.clear();
+    if ( visibleLaneRange ) {
+        collectVisibleSamples(registry,
+                              sortedEntities,
+                              maxEndPrefix,
+                              visibleTimeRanges,
+                              snapshot->sampleQueryScratch,
+                              snapshot->sampleQuerySeenScratch);
+    }
+    if ( const auto* pinned = registry.ctx().find<DragRenderPinnedEntities>();
+         pinned && pinned->entities ) {
+        for ( const auto entity : *pinned->entities ) {
+            if ( !registry.valid(entity) ||
+                 !registry.all_of<SampleComponent>(entity) ||
+                 !snapshot->sampleQuerySeenScratch.insert(entity).second ) {
+                continue;
+            }
+            snapshot->sampleQueryScratch.push_back(entity);
+        }
+    }
+    if ( snapshot->sampleQueryScratch.empty() ) return;
 
     const auto sampleColor =
         bgmColor("bgm_tracks.sample", { 0.36F, 0.72F, 0.92F, 0.96F });
@@ -303,11 +319,7 @@ void SampleRenderSystem::renderSamples(
     const auto textColor =
         bgmColor("bgm_tracks.text", { 0.9F, 0.96F, 1.0F, 0.96F });
 
-    const auto [visibleLaneBegin, visibleLaneEnd] = *visibleLaneRange;
-    const float visibleLeft  = std::max(0.0F, projection.bgmLeftX);
-    const float visibleRight = std::min(viewportWidth, projection.bgmRightX);
-    batcher.setScissor(
-        visibleLeft, topY, visibleRight - visibleLeft, bottomY - topY);
+    batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
 
     for ( const auto entity : snapshot->sampleQueryScratch ) {
         if ( !registry.valid(entity) ||
@@ -317,13 +329,22 @@ void SampleRenderSystem::renderSamples(
         const auto& sample  = registry.get<const SampleComponent>(entity);
         const auto  address = CanvasLaneAddress::fromAbsoluteTrack(
             sample.m_track, projection.playerLaneCount);
-        if ( address.kind != CanvasLaneKind::Bgm ||
-             address.index < visibleLaneBegin ||
-             address.index >= visibleLaneEnd ) {
+        const auto* interaction =
+            registry.try_get<const InteractionComponent>(entity);
+        const bool isDragging = interaction && interaction->isDragging;
+        if ( address.kind == CanvasLaneKind::Player && !isDragging ) {
+            continue;
+        }
+        if ( address.kind == CanvasLaneKind::Bgm &&
+             (!visibleLaneRange || address.index < visibleLaneRange->first ||
+              address.index >= visibleLaneRange->second) ) {
             continue;
         }
         const auto bounds = projection.bounds(address);
-        if ( !bounds ) continue;
+        if ( !bounds || bounds->rightX <= 0.0F ||
+             bounds->leftX >= viewportWidth ) {
+            continue;
+        }
 
         const float anchorY =
             judgmentLineY -
@@ -345,9 +366,12 @@ void SampleRenderSystem::renderSamples(
         const float bodyHeight = std::clamp(laneWidth * 0.24F, 16.0F, 28.0F);
         const float bodyX      = bounds->leftX + (laneWidth - bodyWidth) * 0.5F;
         const float centerX    = bounds->leftX + laneWidth * 0.5F;
+        const float offsetHandleSize =
+            std::clamp(laneWidth * 0.12F, 8.0F, 14.0F);
+        const float offsetHandleCenterX = bounds->leftX + laneWidth * 0.82F;
+        const float offsetHandleX =
+            offsetHandleCenterX - offsetHandleSize * 0.5F;
 
-        const auto* interaction =
-            registry.try_get<const InteractionComponent>(entity);
         glm::vec4 bodyColor = sampleColor;
         if ( interaction && interaction->isSelected ) {
             bodyColor = selectedColor;
@@ -368,12 +392,6 @@ void SampleRenderSystem::renderSamples(
                                  connectorBottom - connectorTop,
                                  offsetColor);
             }
-            batcher.pushQuad(bounds->leftX + laneWidth * 0.18F,
-                             effectiveY + 1.5F,
-                             laneWidth * 0.64F,
-                             3.0F,
-                             offsetColor);
-
             std::array<char, 32> offsetBuffer{};
             const auto offsetResult = fmt::format_to_n(offsetBuffer.data(),
                                                        offsetBuffer.size() - 1,
@@ -391,6 +409,17 @@ void SampleRenderSystem::renderSamples(
                 laneWidth - 8.0F,
                 offsetColor);
         }
+        batcher.pushQuad(bounds->leftX + laneWidth * 0.18F,
+                         effectiveY + 1.5F,
+                         laneWidth * 0.64F,
+                         3.0F,
+                         offsetColor);
+        batcher.pushRoundedQuad(offsetHandleX,
+                                effectiveY + offsetHandleSize * 0.5F,
+                                offsetHandleSize,
+                                offsetHandleSize,
+                                offsetHandleSize * 0.25F,
+                                offsetColor);
 
         batcher.setTexture(TextureID::None);
         batcher.pushRoundedQuad(bodyX,
@@ -441,6 +470,16 @@ void SampleRenderSystem::renderSamples(
                 anchorY - bodyHeight * 0.5F,
                 bodyWidth,
                 bodyHeight,
+                ChartObjectKind::AudioSample,
+            });
+            snapshot->hitboxes.push_back({
+                entity,
+                HoverPart::SampleOffset,
+                -1,
+                offsetHandleX,
+                effectiveY - offsetHandleSize * 0.5F,
+                offsetHandleSize,
+                offsetHandleSize,
                 ChartObjectKind::AudioSample,
             });
         }

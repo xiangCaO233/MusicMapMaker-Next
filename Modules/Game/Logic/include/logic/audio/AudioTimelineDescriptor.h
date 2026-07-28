@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM
@@ -53,6 +54,14 @@ struct AudioTimelineDescriptor {
     /// @brief 非自动采样内容决定的谱面结束时间，单位为秒。
     double m_chartEndSeconds{ 0.0 };
 };
+
+/// @brief 判断已构建描述符是否引用指定项目音频资源。
+/// @param descriptor 待检查的时间线描述符。
+/// @param resourceId 项目音频资源的稳定 ID。
+/// @return 任一加载事件使用该资源时返回 true。
+/// @warning 低频资源配置路径：线性扫描当前谱面的自动采样事件。
+[[nodiscard]] bool audioTimelineDescriptorReferencesResource(
+    const AudioTimelineDescriptor& descriptor, std::string_view resourceId);
 
 /// @brief 从 BeatMap 自动采样和项目资源构建音频加载描述符。
 /// @param beatMap 待读取的谱面；仅遍历 m_audioSamples。

@@ -388,6 +388,43 @@ bool testFingerprintSensitivity()
     return true;
 }
 
+/// @brief 验证资源配置失效筛选只匹配自动采样的规范资源 ID。
+/// @return Main、Effect 和缺失引用可匹配，Note 绑定与别名路径不会误匹配。
+bool testDescriptorResourceReferenceLookup()
+{
+    const auto project    = makeProject();
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        makeBeatMap(false),
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        10.0);
+    if ( !MMM::Logic::audioTimelineDescriptorReferencesResource(descriptor,
+                                                                "main-id") ||
+         !MMM::Logic::audioTimelineDescriptorReferencesResource(descriptor,
+                                                                "effect-id") ||
+         !MMM::Logic::audioTimelineDescriptorReferencesResource(
+             descriptor, "missing.wav") ||
+         MMM::Logic::audioTimelineDescriptorReferencesResource(
+             descriptor, "audio/main.ogg") ||
+         MMM::Logic::audioTimelineDescriptorReferencesResource(descriptor,
+                                                               "") ) {
+        XERROR("Audio timeline resource reference lookup was incorrect");
+        return false;
+    }
+
+    MMM::BeatMap noteOnlyMap;
+    MMM::Note    note;
+    note.setSampleBinding(MMM::AudioSampleBinding{ "effect-id", 1.0F });
+    noteOnlyMap.m_noteData.notes.push_back(std::move(note));
+    const auto noteOnlyDescriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        noteOnlyMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        1.0);
+    return !MMM::Logic::audioTimelineDescriptorReferencesResource(
+        noteOnlyDescriptor, "effect-id");
+}
+
 }  // namespace
 
 /// @brief 运行音频时间线描述符构建测试。
@@ -396,7 +433,8 @@ int main()
 {
     return testCanonicalDescriptor() && testOrderIndependentIdentity() &&
                    testNonAudioFieldsAreExcluded() &&
-                   testFingerprintSensitivity()
+                   testFingerprintSensitivity() &&
+                   testDescriptorResourceReferenceLookup()
                ? 0
                : 1;
 }

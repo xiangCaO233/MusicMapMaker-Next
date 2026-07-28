@@ -104,6 +104,26 @@ public:
     void updateBeatmapFilePathInProject(const std::filesystem::path& oldPath,
                                         const std::filesystem::path& newPath);
 
+    /// @brief 在文件系统操作前验证外部谱面的音频引用可安全保持。
+    /// @param oldPath 计划移动的文件或目录路径。
+    /// @param newPath 计划移动到的文件或目录路径。
+    /// @return 允许移动时为空；否则返回可直接展示的阻止原因。
+    /// @warning 低频文件操作路径：会读取项目中的 osu! 谱面并检查全部
+    /// RM/IMD 隐式音频关联。
+    std::string validateAudioResourceMove(const std::filesystem::path& oldPath,
+                                          const std::filesystem::path& newPath);
+
+    /// @brief 文件或目录移动后同步项目音频路径和已打开会话引用。
+    /// @param oldPath 移动前的文件或目录路径。
+    /// @param newPath 移动后的文件或目录路径。
+    /// @param errorMessage 失败时接收面向用户的错误和回滚状态。
+    /// @return 路径发生变化的项目音频资源数量。
+    /// @warning 低频文件操作路径：会同步全部打开会话并扫描项目谱面文件。
+    std::size_t remapAudioResourcePathsAfterMove(
+        const std::filesystem::path& oldPath,
+        const std::filesystem::path& newPath,
+        std::string*                 errorMessage = nullptr);
+
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
 
@@ -114,6 +134,12 @@ public:
 
     /// @brief 更新音轨资源信息
     void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
+
+    /// @brief 更新音频资源的完整持久化 DSP 配置并使引用它的时间线失效。
+    /// @param cmd 目标资源 ID 与替换配置。
+    /// @warning 低频项目资源路径：会保存项目并标记受影响的已打开谱面。
+    void handleUpdateAudioResourceConfig(
+        const CmdUpdateAudioResourceConfig& cmd);
 
     /// @brief 移除项目音轨资源
     void handleRemoveAudioResource(const CmdRemoveAudioResource& cmd);
@@ -129,12 +155,25 @@ public:
     void setClipboard(std::vector<ClipboardItem> items,
                       const SessionContext* sourceContext, bool isCut);
 
+    /// @brief 更新编辑器级混合谱面物件剪贴板。
+    /// @param notes 音符剪贴板条目。
+    /// @param samples 自动采样剪贴板条目。
+    /// @param sourceContext 来源会话，仅用于身份比较。
+    /// @param isCut 是否为剪切内容。
+    void setChartObjectClipboard(std::vector<ClipboardItem>       notes,
+                                 std::vector<SampleClipboardItem> samples,
+                                 const SessionContext*            sourceContext,
+                                 bool                             isCut);
+
     /// @brief 更新编辑器级 Timeline 剪贴板。
     void setTimelineClipboard(std::vector<TimelineClipboardItem> items,
                               const SessionContext* sourceContext, bool isCut);
 
     /// @brief 获取编辑器级剪贴板副本。
     std::vector<ClipboardItem> getClipboard() const;
+
+    /// @brief 获取编辑器级自动采样剪贴板副本。
+    std::vector<SampleClipboardItem> getSampleClipboard() const;
 
     /// @brief 获取编辑器级 Timeline 剪贴板副本。
     std::vector<TimelineClipboardItem> getTimelineClipboard() const;
@@ -259,21 +298,6 @@ public:
     /// 低频路径：可能访问文件系统解析规范路径，只能在文件选择、打开或打包流程调用。
     std::string makeBeatmapPathKeyForPath(
         const std::filesystem::path& beatmapPath) const;
-
-    /// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
-    /// @param audioPath 待规范化的音频路径。
-    /// @return 规范化绝对路径键；空路径返回空字符串。
-    /// @warning
-    /// 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
-    std::string makeMainAudioSyncKeyForPath(
-        const std::filesystem::path& audioPath) const;
-
-    /// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
-    /// @param audioSyncKey 待比较的规范化音频路径键。
-    /// @return 存在有效活动谱面且主音轨键一致时返回 true。
-    /// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
-    /// SessionRegistry 锁，不复制 Session 或路径字符串。
-    bool activeMainAudioSyncKeyMatches(std::string_view audioSyncKey) const;
 
     /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
     /// @param cameraId 目标主画布 cameraId。
@@ -432,10 +456,9 @@ public:
         return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
     }
 
-    /// @brief 刷新已打开 Session 的主音轨同步路径键。
-    /// @warning 低频路径：谱面元数据或项目路径发生变化时调用；会遍历当前
-    /// Session 列表并执行路径规范化，禁止放入每帧或每 update 调用链。
-    void refreshMainAudioSyncKeys();
+    /// @brief 发布已打开 Session 缓存的复合音频时间线指纹。
+    /// @warning 低频路径：仅在描述符重建或 Session 结构变化后调用。
+    void refreshAudioTimelineFingerprints();
 
     /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
@@ -452,6 +475,13 @@ public:
     /// @warning 低频阻塞路径：仅允许逻辑线程在打包或关闭项目前调用；会持有
     /// Session 注册表锁并可能同步写入多个谱面。
     bool flushPendingMetadataAutoSaves();
+
+    /// @brief 在打包前保存所有已打开会话的完整未落盘谱面修改。
+    /// @return 所有脏会话均成功保存时返回 true。
+    /// @warning
+    /// 低频阻塞路径：仅允许逻辑线程在打包前调用；会持有 Session
+    /// 注册表锁并同步写入多个谱面。
+    bool saveDirtyBeatmapsForPackaging();
 
 private:
     /// @brief 将编辑器级画笔配色恢复到指定会话。
@@ -512,12 +542,18 @@ private:
     /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
     /// @param sourceIndex 源 Session 在注册表中的索引。
     /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
-    /// relaxed，并只同步 mainAudioSyncKey 相同的 Session。
+    /// relaxed，并只同步 audioTimelineFingerprint 相同的 Session。
     void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
-    /// @brief 刷新已打开 Session 的主音轨同步路径键，调用者必须持有注册表锁。
-    /// @warning 低频路径：会遍历当前 Session 列表并执行路径规范化。
-    void refreshMainAudioSyncKeysUnsafe();
+    /// @brief 发布已打开 Session 的复合时间线指纹，调用者必须持有注册表锁。
+    /// @warning 低频路径：只读取各会话已构建的 descriptor。
+    void refreshAudioTimelineFingerprintsUnsafe();
+
+    /// @brief 标记全部或引用指定资源的已打开谱面描述符需要低频重建。
+    /// @param resourceId 为空时标记全部；否则只标记已引用该资源的谱面。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁。
+    void markAudioTimelineDescriptorsDirtyUnsafe(
+        std::string_view resourceId = {});
 
     /// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
     /// @warning 低频路径：只在 Session 增删或主音轨路径变化后调用。

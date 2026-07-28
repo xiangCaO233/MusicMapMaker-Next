@@ -152,7 +152,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Beatmap: {
-        const std::array<const char*, 17> labels{
+        const std::array<const char*, 18> labels{
             TR_CACHE("ui.settings.beatmap.name").data(),
             TR_CACHE("ui.settings.beatmap.title").data(),
             TR_CACHE("ui.settings.beatmap.title_unicode").data(),
@@ -166,6 +166,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.beatmap.bg_offset").data(),
             TR_CACHE("ui.settings.beatmap.bpm").data(),
             TR_CACHE("ui.settings.beatmap.tracks").data(),
+            TR_CACHE("ui.settings.beatmap.bgm_tracks").data(),
             TR_CACHE("ui.settings.beatmap.length").data(),
             TR_CACHE("ui.settings.beatmap.audio").data(),
             TR_CACHE("ui.settings.beatmap.cover").data(),

@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace MMM::Event
 {
@@ -122,6 +123,33 @@ struct TemporaryProjectSaveResultEvent : public ProjectLifecycleEvent {
     std::string m_errorMessage;
 };
 
+/// @brief 音频资源变更操作类型。
+enum class AudioResourceMutationOperation {
+    UpdateType,
+    Remove,
+    MovePath,
+};
+
+/// @brief 音频资源变更完成或被引用保护拦截后的结果事件。
+struct AudioResourceMutationResultEvent : public ProjectLifecycleEvent {
+    /// @brief 本次变更的操作类型。
+    AudioResourceMutationOperation m_operation{
+        AudioResourceMutationOperation::UpdateType
+    };
+
+    /// @brief 操作目标的稳定音频资源 ID。
+    std::string m_resourceId;
+
+    /// @brief 操作是否成功完成。
+    bool m_success{ false };
+
+    /// @brief 阻止操作的具体谱面路径；成功或非引用错误时为空。
+    std::vector<std::string> m_blockingBeatmapPaths;
+
+    /// @brief 失败原因；成功时为空。
+    std::string m_errorMessage;
+};
+
 /// @brief 当前项目描述文件保存完成事件。
 struct ProjectSavedEvent : public ProjectLifecycleEvent {
     /// @brief 保存成功的项目描述文件路径，使用 UTF-8 字符串。
@@ -158,6 +186,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectSaveResultEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::AudioResourceMutationResultEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSavedEvent,
                        MMM::Event::ProjectLifecycleEvent);

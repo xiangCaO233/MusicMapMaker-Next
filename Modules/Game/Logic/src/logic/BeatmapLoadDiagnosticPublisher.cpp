@@ -51,6 +51,9 @@ std::vector<Event::BeatmapLoadDiagnosticEvent> buildBeatmapLoadDiagnosticEvents(
             kind = Event::BeatmapLoadDiagnosticKind::
                 LegacyMmmOriginalMalodyAvailable;
             break;
+        case MMM::BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED:
+            kind = Event::BeatmapLoadDiagnosticKind::AudioSampleTrackRelocated;
+            break;
         }
 
         const std::string relatedPath =

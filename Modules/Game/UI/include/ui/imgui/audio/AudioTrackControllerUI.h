@@ -187,8 +187,10 @@ private:
     void buildSpeedAndPitchSection(CLayVBox& parent, size_t& rowIndex,
                                    float labelWidth, float availWidgetW,
                                    float& speed, float& pitch, bool& changed);
-    /// @brief 渲染 EQ 区域（保持原有 ImGui 直接绘制）
-    void renderEQSection(bool& changed);
+    /// @brief 渲染项目音频资源自身的 EQ 配置。
+    /// @param config 当前项目音频资源配置。
+    /// @param changed 任一持久化字段发生变化时置为 true。
+    void renderEQSection(AudioTrackConfig& config, bool& changed);
     /// @brief 构建音效预览区域的 Clay 布局
     void buildEffectPreviewSection(CLayVBox& parent, size_t& rowIndex,
                                    float labelWidth);

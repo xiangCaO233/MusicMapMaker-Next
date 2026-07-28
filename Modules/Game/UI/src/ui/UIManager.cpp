@@ -217,9 +217,8 @@ bool ensureEffectAudioTrackLoaded(const std::string& trackId)
 
             const auto absolutePath =
                 project->m_projectRoot / Config::utf8ToPath(resource.m_path);
-            audio.registerSoundEffect(trackId,
-                                      Config::pathToUtf8(absolutePath),
-                                      resource.m_config.volume);
+            audio.registerSoundEffect(
+                trackId, Config::pathToUtf8(absolutePath), resource.m_config);
             return audio.ensureSoundEffectLoaded(trackId);
         }
     }

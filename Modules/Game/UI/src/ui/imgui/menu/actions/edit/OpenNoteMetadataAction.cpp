@@ -10,11 +10,11 @@ namespace MMM::UI
 {
 namespace
 {
-/// @brief 打开选中音符元数据编辑器动作。
+/// @brief 打开选中谱面物件属性编辑器动作。
 class OpenNoteMetadataAction final : public IMainMenuItemActionHandler
 {
 public:
-    /// @brief 仅在当前会话存在选中音符时允许打开。
+    /// @brief 仅在当前会话存在选中玩家物件或自动采样时允许打开。
     bool isEnabled(const MainMenuContext& context) const override
     {
         (void)context;
@@ -24,21 +24,36 @@ public:
             engine.getSessionMutex());
         auto session = engine.getActiveSession();
         if ( session ) {
-            auto selView =
+            const auto noteSelection =
                 session->getContext()
                     .noteRegistry.view<const Logic::InteractionComponent>();
-            for ( auto e : selView ) {
-                if ( selView.get<const Logic::InteractionComponent>(e)
+            for ( auto entity : noteSelection ) {
+                if ( noteSelection
+                         .get<const Logic::InteractionComponent>(entity)
                          .isSelected ) {
                     hasSelection = true;
                     break;
+                }
+            }
+            if ( !hasSelection ) {
+                const auto sampleSelection =
+                    session->getContext()
+                        .sampleRegistry
+                        .view<const Logic::InteractionComponent>();
+                for ( auto entity : sampleSelection ) {
+                    if ( sampleSelection
+                             .get<const Logic::InteractionComponent>(entity)
+                             .isSelected ) {
+                        hasSelection = true;
+                        break;
+                    }
                 }
             }
         }
         return hasSelection;
     }
 
-    /// @brief 打开选中音符元数据编辑器窗口。
+    /// @brief 打开选中谱面物件属性编辑器窗口。
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {

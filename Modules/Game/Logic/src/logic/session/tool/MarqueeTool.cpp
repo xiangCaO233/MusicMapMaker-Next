@@ -3,6 +3,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 
@@ -20,11 +21,7 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
     if ( !ctx.marqueeIsAdditive ) {
         ctx.marqueeBoxes.clear();
         ctx.isMarqueeSelectionDirty = false;
-        auto view = ctx.noteRegistry.view<InteractionComponent>();
-        for ( auto entity : view ) {
-            ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
-                false;
-        }
+        clearChartObjectSelection(ctx);
     }
 
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
@@ -185,9 +182,9 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -232,19 +229,11 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                 ctx.hasMarqueeSelection     = false;
                 ctx.marqueeIsAdditive       = false;
                 ctx.isMarqueeSelectionDirty = false;
-                auto view = ctx.noteRegistry.view<InteractionComponent>();
-                for ( auto entity : view ) {
-                    ctx.noteRegistry.get<InteractionComponent>(entity)
-                        .isSelected = false;
-                }
+                clearChartObjectSelection(ctx);
             } else {
                 // 重置追加模式，确保后续选择集合完整重建。
                 ctx.marqueeIsAdditive = false;
-                auto view = ctx.noteRegistry.view<InteractionComponent>();
-                for ( auto entity : view ) {
-                    ctx.noteRegistry.get<InteractionComponent>(entity)
-                        .isSelected = false;
-                }
+                clearChartObjectSelection(ctx);
                 ctx.hasMarqueeSelection     = true;
                 ctx.isMarqueeSelectionDirty = true;
             }

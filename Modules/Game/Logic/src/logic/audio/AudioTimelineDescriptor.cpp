@@ -313,6 +313,18 @@ std::string buildFingerprint(const std::vector<PendingTimelineEvent>& events,
 
 }  // namespace
 
+bool audioTimelineDescriptorReferencesResource(
+    const AudioTimelineDescriptor& descriptor, std::string_view resourceId)
+{
+    if ( resourceId.empty() ) return false;
+    return std::any_of(
+        descriptor.m_events.begin(),
+        descriptor.m_events.end(),
+        [resourceId](const MMM::Audio::AudioTimelineLoadEvent& event) {
+            return event.resourceKey == resourceId;
+        });
+}
+
 /// @brief 从 BeatMap 自动采样和项目资源构建音频加载描述符。
 /// @param beatMap 待读取的谱面；仅遍历 m_audioSamples。
 /// @param project 用于解析音频资源 ID、旧路径和完整音轨配置的项目。

@@ -108,8 +108,8 @@ bool testBoundSoundOverridesDefault()
 {
     using HitFXSystem = MMM::Logic::System::HitFXSystem;
 
-    auto boundEvent       = makeEvent(MMM::NoteType::FLICK, 1, 1);
-    boundEvent.boundSound = "sample.wav";
+    auto boundEvent          = makeEvent(MMM::NoteType::FLICK, 1, 1);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.35F };
     if ( HitFXSystem::soundEffectKeyForEvent(
              boundEvent, MMM::NoteType::FLICK) != "sample.wav" ) {
         XERROR("Bound note sound did not override the built-in Flick sound");
@@ -123,6 +123,24 @@ bool testBoundSoundOverridesDefault()
          HitFXSystem::soundEffectKeyForEvent(
              flickEvent, MMM::NoteType::FLICK) != "hiteffect.flick" ) {
         XERROR("Empty bound sound did not select the built-in hit effect");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证自定义采样的物件音量独立进入打击音效倍率。
+/// @return 有绑定时返回物件音量、无绑定时返回 1。
+bool testBoundSampleVolume()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto boundEvent          = makeEvent(MMM::NoteType::NOTE, 1);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.35F };
+    if ( !near(HitFXSystem::sampleVolumeForEvent(boundEvent), 0.35F) ||
+         !near(HitFXSystem::sampleVolumeForEvent(
+                   makeEvent(MMM::NoteType::NOTE, 1)),
+               1.0F) ) {
+        XERROR("Bound sample volume was not applied independently");
         return false;
     }
     return true;
@@ -188,7 +206,8 @@ int main()
                    testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo() &&
                    testBoundSoundOverridesDefault() &&
-                   testFixedHitEffectBounds() && testTrackFillHitEffectBounds()
+                   testBoundSampleVolume() && testFixedHitEffectBounds() &&
+                   testTrackFillHitEffectBounds()
                ? 0
                : 1;
 }
