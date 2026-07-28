@@ -12,6 +12,7 @@ add_library(
   src/logic/session/SessionUtils.cpp
   src/logic/session/ActionController.cpp
   src/logic/session/EditorAction.cpp
+  src/logic/session/SampleAction.cpp
   src/logic/session/tool/GrabTool.cpp
   src/logic/session/tool/MarqueeTool.cpp
   src/logic/session/tool/DrawTool.cpp
@@ -32,6 +33,7 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Types.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
+  src/logic/ecs/system/render/SampleRenderSystem.cpp
   src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp

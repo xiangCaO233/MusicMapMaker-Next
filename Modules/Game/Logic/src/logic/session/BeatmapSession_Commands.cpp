@@ -19,6 +19,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1282,7 +1283,16 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         auto       updatedMeta = cmd.baseMeta;
         normalizeCurrentProjectMetadataPaths(updatedMeta);
+        updatedMeta.track_count     = std::max(1, updatedMeta.track_count);
+        updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;
         if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) return;
+
+        // 所有元数据编辑入口最终都在此处转入可撤销的原子改键操作，避免 UI
+        // 直接覆盖 track_count 后丢失自动采样的 BGM 相对轨道。
+        if ( oldMetadata.track_count != updatedMeta.track_count ) {
+            m_interaction->handleCommand(
+                CmdUpdateTrackCount{ updatedMeta.track_count });
+        }
 
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
         m_ctx->actionStack.markDirty();
@@ -1294,9 +1304,6 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
              oldMetadata.main_audio_path != updatedMeta.main_audio_path ) {
             EditorEngine::instance().refreshMainAudioSyncKeys();
         }
-
-        // 同步轨道数到上下文，确保渲染实时更新
-        m_ctx->trackCount = updatedMeta.track_count;
 
         // 如果关键渲染参数发生变化，刷新 ScrollCache
         if ( oldMetadata.preference_bpm != updatedMeta.preference_bpm ||

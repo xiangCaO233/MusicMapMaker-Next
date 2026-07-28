@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace MMM::Logic
@@ -74,6 +75,36 @@ private:
 
     /// @brief 是否存在未进入撤销栈且尚未保存的编辑。
     bool m_hasNonUndoableChanges{ false };
+};
+
+/// @brief 将多个领域操作合并为一次原子撤销记录。
+class CompositeEditorAction : public IEditorAction
+{
+public:
+    /// @brief 构造复合操作。
+    /// @param actions 按执行顺序排列的子操作。
+    /// @param name 用户可读操作名称。
+    CompositeEditorAction(std::vector<std::unique_ptr<IEditorAction>> actions,
+                          std::string                                 name)
+        : m_actions(std::move(actions)), m_name(std::move(name))
+    {
+    }
+
+    /// @brief 按顺序执行全部子操作。
+    void execute(SessionContext& ctx) override;
+
+    /// @brief 按逆序撤销全部子操作。
+    void undo(SessionContext& ctx) override;
+
+    /// @brief 按顺序重做全部子操作。
+    void redo(SessionContext& ctx) override;
+
+    /// @brief 获取复合操作名称。
+    std::string getName() const override;
+
+private:
+    std::vector<std::unique_ptr<IEditorAction>> m_actions;  ///< 子操作。
+    std::string                                 m_name;  ///< 用户可读操作名称。
 };
 
 }  // namespace MMM::Logic

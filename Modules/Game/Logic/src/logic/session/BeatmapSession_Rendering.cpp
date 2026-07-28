@@ -7,6 +7,7 @@
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -447,6 +449,66 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         pinnedEntityView.entities = &m_ctx->dragRenderPinnedEntities;
     }
 
+    auto rebuildSamplePrefix = [this]() {
+        m_ctx->sortedSampleMaxEndPrefix.clear();
+        m_ctx->sortedSampleMaxEndPrefix.reserve(
+            m_ctx->sortedSampleEntities.size());
+        double maxEndTime = -std::numeric_limits<double>::infinity();
+        for ( const auto entity : m_ctx->sortedSampleEntities ) {
+            if ( !m_ctx->sampleRegistry.valid(entity) ||
+                 !m_ctx->sampleRegistry.all_of<SampleComponent>(entity) ) {
+                continue;
+            }
+            const auto& sample =
+                m_ctx->sampleRegistry.get<const SampleComponent>(entity);
+            maxEndTime =
+                std::max(maxEndTime,
+                         std::max(sample.m_timestamp, sample.effectiveTime()));
+            m_ctx->sortedSampleMaxEndPrefix.push_back(maxEndTime);
+        }
+    };
+
+    // 自动采样拥有独立的低频可见性索引，普通渲染路径不扫描完整 Registry。
+    if ( m_ctx->isSampleOrderDirty ) {
+        const auto sampleView =
+            m_ctx->sampleRegistry.view<const SampleComponent>();
+        m_ctx->sortedSampleEntities.assign(sampleView.begin(),
+                                           sampleView.end());
+        std::sort(m_ctx->sortedSampleEntities.begin(),
+                  m_ctx->sortedSampleEntities.end(),
+                  [this](entt::entity lhs, entt::entity rhs) {
+                      const auto& left =
+                          m_ctx->sampleRegistry.get<const SampleComponent>(lhs);
+                      const auto& right =
+                          m_ctx->sampleRegistry.get<const SampleComponent>(rhs);
+                      const double leftStart =
+                          std::min(left.m_timestamp, left.effectiveTime());
+                      const double rightStart =
+                          std::min(right.m_timestamp, right.effectiveTime());
+                      if ( leftStart != rightStart )
+                          return leftStart < rightStart;
+                      return entt::to_integral(lhs) < entt::to_integral(rhs);
+                  });
+        rebuildSamplePrefix();
+        ++m_ctx->sampleVisibilityIndexRevision;
+        m_ctx->isSampleOrderDirty = false;
+        m_ctx->isSamplePruneDirty = false;
+    } else if ( m_ctx->isSamplePruneDirty ) {
+        m_ctx->sortedSampleEntities.erase(
+            std::remove_if(
+                m_ctx->sortedSampleEntities.begin(),
+                m_ctx->sortedSampleEntities.end(),
+                [this](entt::entity entity) {
+                    return !m_ctx->sampleRegistry.valid(entity) ||
+                           !m_ctx->sampleRegistry.all_of<SampleComponent>(
+                               entity);
+                }),
+            m_ctx->sortedSampleEntities.end());
+        rebuildSamplePrefix();
+        ++m_ctx->sampleVisibilityIndexRevision;
+        m_ctx->isSamplePruneDirty = false;
+    }
+
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
@@ -612,8 +674,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         snapshot->uvMap,
                                         snapshot->atlasUvRevision,
                                         snapshot->asciiFontAtlasMetrics);
-        snapshot->isPlaying         = snapshotIsPlaying;
-        snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->isPlaying   = snapshotIsPlaying;
+        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
         snapshot->canvasHorizontalOffsetX =
             SessionUtils::isMainCanvasCameraId(cameraId)
                 ? camera.horizontalOffsetX
@@ -670,6 +732,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->acceptsInteraction = isActiveSession;
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
+        snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
         snapshot->isHoveringCanvas   = isActiveSession &&
                                        m_ctx->isMouseInCanvas &&
                                        (m_ctx->mouseCameraId == cameraId);
@@ -902,11 +965,17 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 const entt::entity inspectEntity =
                     (m_ctx->hoveredEntity != entt::null) ? m_ctx->hoveredEntity
                                                          : m_ctx->draggedEntity;
-                const bool useDragState = m_ctx->isDragging &&
-                                          inspectEntity != entt::null &&
-                                          inspectEntity == m_ctx->draggedEntity;
+                const ChartObjectKind inspectObjectKind =
+                    (m_ctx->hoveredEntity != entt::null)
+                        ? m_ctx->hoveredObjectKind
+                        : m_ctx->draggedObjectKind;
+                const bool useDragState =
+                    m_ctx->isDragging && inspectEntity != entt::null &&
+                    inspectEntity == m_ctx->draggedEntity &&
+                    inspectObjectKind == ChartObjectKind::PlayerNote;
                 const auto* inter =
-                    (inspectEntity != entt::null &&
+                    (inspectObjectKind == ChartObjectKind::PlayerNote &&
+                     inspectEntity != entt::null &&
                      m_ctx->noteRegistry.valid(inspectEntity))
                         ? m_ctx->noteRegistry
                               .try_get<const InteractionComponent>(
@@ -1107,6 +1176,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             if ( !m_ctx->eraserState.isShiftDown ) {
                 // 非 Shift：悬停在 Polyline 的任意子物件时，允许局部高亮红色
                 if ( m_ctx->hoveredEntity != entt::null &&
+                     m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
                      m_ctx->noteRegistry.all_of<NoteComponent>(
                          m_ctx->hoveredEntity) ) {
                     const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(
@@ -1126,19 +1196,24 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
         // 使用动画时间 m_ctx->animateTime 进行剔除和位置映射
-        System::NoteRenderSystem::generateSnapshot(m_ctx->noteRegistry,
-                                                   m_ctx->timelineRegistry,
-                                                   bpmEvents,
-                                                   snapshot,
-                                                   cameraId,
-                                                   m_ctx->animateTime,
-                                                   camera.viewportWidth,
-                                                   camera.viewportHeight,
-                                                   judgmentLineY,
-                                                   m_ctx->trackCount,
-                                                   config,
-                                                   finalMainHeight,
-                                                   &m_ctx->hitFXSystem);
+        System::NoteRenderSystem::generateSnapshot(
+            m_ctx->noteRegistry,
+            m_ctx->sampleRegistry,
+            m_ctx->sortedSampleEntities,
+            m_ctx->sortedSampleMaxEndPrefix,
+            m_ctx->timelineRegistry,
+            bpmEvents,
+            snapshot,
+            cameraId,
+            m_ctx->animateTime,
+            camera.viewportWidth,
+            camera.viewportHeight,
+            judgmentLineY,
+            m_ctx->trackCount,
+            m_ctx->bgmTrackCount,
+            config,
+            finalMainHeight,
+            &m_ctx->hitFXSystem);
 
         // 5. 提交专属快照
         syncBuffer->pushWorkingSnapshot();

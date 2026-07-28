@@ -11,6 +11,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SampleAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
@@ -674,10 +675,14 @@ void replaceNoteComponents(SessionContext&                   ctx,
         }
     }
 
-    ctx.hoveredEntity       = entt::null;
-    ctx.draggedEntity       = entt::null;
-    ctx.draggedPart         = HoverPart::None;
-    ctx.draggedSubIndex     = -1;
+    ctx.hoveredEntity     = entt::null;
+    ctx.hoveredObjectKind = ChartObjectKind::PlayerNote;
+    ctx.draggedEntity     = entt::null;
+    ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+    ctx.draggedPart       = HoverPart::None;
+    ctx.draggedSubIndex   = -1;
+    ctx.dragInitialNote.reset();
+    ctx.dragInitialSample.reset();
     ctx.isDragging          = false;
     ctx.isSelecting         = false;
     ctx.hasMarqueeSelection = false;
@@ -987,7 +992,8 @@ void ActionController::handleCommand(const CmdCut& cmd)
 
 void ActionController::handleCommand(const CmdDeleteSelected& cmd)
 {
-    std::vector<BatchNoteAction::Entry> entries;
+    std::vector<BatchNoteAction::Entry>   entries;
+    std::vector<BatchSampleAction::Entry> sampleEntries;
 
     auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : view ) {
@@ -998,14 +1004,38 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
         }
     }
 
+    auto sampleView =
+        m_ctx.sampleRegistry.view<InteractionComponent, SampleComponent>();
+    for ( auto entity : sampleView ) {
+        const auto& interaction = sampleView.get<InteractionComponent>(entity);
+        if ( interaction.isSelected ) {
+            sampleEntries.push_back({
+                entity,
+                sampleView.get<SampleComponent>(entity),
+                std::nullopt,
+            });
+        }
+    }
+
     // 如果没有任何选中的，但有悬停的，也删除悬停的 (符合习惯)
-    if ( entries.empty() && m_ctx.hoveredEntity != entt::null ) {
-        if ( m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
+    if ( entries.empty() && sampleEntries.empty() &&
+         m_ctx.hoveredEntity != entt::null ) {
+        if ( m_ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
+             m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
              m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) ) {
             entries.push_back(
                 { m_ctx.hoveredEntity,
                   m_ctx.noteRegistry.get<NoteComponent>(m_ctx.hoveredEntity),
                   std::nullopt });
+        } else if ( m_ctx.hoveredObjectKind == ChartObjectKind::AudioSample &&
+                    m_ctx.sampleRegistry.valid(m_ctx.hoveredEntity) &&
+                    m_ctx.sampleRegistry.all_of<SampleComponent>(
+                        m_ctx.hoveredEntity) ) {
+            sampleEntries.push_back({
+                m_ctx.hoveredEntity,
+                m_ctx.sampleRegistry.get<SampleComponent>(m_ctx.hoveredEntity),
+                std::nullopt,
+            });
         }
     }
 
@@ -1018,10 +1048,26 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     // 同时删除被删除折线下所有子物件实体，防止孤儿子实体残留
     appendDeletedPolylineChildren(m_ctx, deletedEntities, entries);
 
-    if ( !entries.empty() ) {
-        size_t count  = entries.size();
-        auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Delete Selected");
+    const size_t count = entries.size() + sampleEntries.size();
+    if ( count > 0 ) {
+        std::vector<std::unique_ptr<IEditorAction>> actions;
+        actions.reserve(2);
+        if ( !entries.empty() ) {
+            actions.push_back(std::make_unique<BatchNoteAction>(
+                std::move(entries), "Delete Selected"));
+        }
+        if ( !sampleEntries.empty() ) {
+            actions.push_back(std::make_unique<BatchSampleAction>(
+                std::move(sampleEntries), "删除已选自动采样"));
+        }
+
+        std::unique_ptr<IEditorAction> action;
+        if ( actions.size() == 1 ) {
+            action = std::move(actions.front());
+        } else {
+            action = std::make_unique<CompositeEditorAction>(
+                std::move(actions), "删除已选谱面物件");
+        }
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }

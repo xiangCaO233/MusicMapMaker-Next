@@ -16,7 +16,7 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     action->execute(ctx);
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();
-    if ( ctx.m_needsTimingsSync ) {
+    if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
 }
@@ -30,7 +30,7 @@ void EditorActionStack::undo(SessionContext& ctx)
         "{} {}", TR("ui.status.category.undo").data(), action->getName());
     action->undo(ctx);
     m_redoStack.push_back(std::move(action));
-    if ( ctx.m_needsTimingsSync ) {
+    if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
 }
@@ -44,7 +44,7 @@ void EditorActionStack::redo(SessionContext& ctx)
         "{} {}", TR("ui.status.category.redo").data(), action->getName());
     action->redo(ctx);
     m_undoStack.push_back(std::move(action));
-    if ( ctx.m_needsTimingsSync ) {
+    if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
 }
@@ -71,6 +71,33 @@ void EditorActionStack::markSaved()
 void EditorActionStack::markDirty()
 {
     m_hasNonUndoableChanges = true;
+}
+
+void CompositeEditorAction::execute(SessionContext& ctx)
+{
+    for ( auto& action : m_actions ) {
+        action->execute(ctx);
+    }
+}
+
+void CompositeEditorAction::undo(SessionContext& ctx)
+{
+    for ( auto iterator = m_actions.rbegin(); iterator != m_actions.rend();
+          ++iterator ) {
+        (*iterator)->undo(ctx);
+    }
+}
+
+void CompositeEditorAction::redo(SessionContext& ctx)
+{
+    for ( auto& action : m_actions ) {
+        action->redo(ctx);
+    }
+}
+
+std::string CompositeEditorAction::getName() const
+{
+    return m_name;
 }
 
 }  // namespace MMM::Logic

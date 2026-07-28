@@ -207,7 +207,8 @@ void NoteRenderSystem::drawBeatLines(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
-    float trackAreaW, float renderScaleY, bool revealNearCursor)
+    float trackAreaW, float renderScaleY, bool revealNearCursor,
+    float opacityScale)
 {
     if ( !cache ) return;
     if ( revealNearCursor && !batcher.snapshot->isHoveringCanvas ) return;
@@ -252,9 +253,10 @@ void NoteRenderSystem::drawBeatLines(
         return true;
     };
 
-    auto& skin        = Config::SkinManager::instance();
-    float globalAlpha = config.visual.beatLineAlpha;
-    auto  getBeatLineConfig =
+    auto& skin = Config::SkinManager::instance();
+    float globalAlpha =
+        config.visual.beatLineAlpha * std::clamp(opacityScale, 0.0F, 1.0F);
+    auto getBeatLineConfig =
         [&skin, &config, globalAlpha](
             int denominator) -> std::pair<glm::vec4, float> {
         std::string   key = "beat_lines.beat_" + std::to_string(denominator);

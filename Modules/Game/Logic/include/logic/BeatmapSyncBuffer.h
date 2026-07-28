@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/AsciiFontData.h"
+#include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
@@ -74,7 +75,8 @@ enum class HoverPart : uint8_t {
     HoldBody,
     HoldEnd,
     FlickArrow,
-    PolylineNode
+    PolylineNode,
+    SampleAnchor
 };
 
 enum class HoverInspectKind : uint8_t {
@@ -144,12 +146,14 @@ struct Hitbox {
     entt::entity entity;
     HoverPart    part{ HoverPart::None };
     int          subIndex{
-        -1
+                 -1
     };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
     float x;
     float y;
     float w;
     float h;
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -299,6 +303,12 @@ struct RenderSnapshot {
     /// @brief 逻辑线程可见音符查询去重临时集合，UI 线程不读取。
     std::unordered_set<entt::entity> noteQuerySeenScratch;
 
+    /// @brief 逻辑线程可见自动采样查询临时列表，UI 线程不读取。
+    std::vector<entt::entity> sampleQueryScratch;
+
+    /// @brief 逻辑线程可见自动采样查询去重临时集合，UI 线程不读取。
+    std::unordered_set<entt::entity> sampleQuerySeenScratch;
+
     /// @brief 背景资源绝对 UTF-8 路径。
     std::string backgroundPath;
 
@@ -381,7 +391,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-        0
+            0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -392,7 +402,9 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
-    int32_t trackCount{ 4 };          ///< 谱面轨道数量
+    int32_t trackCount{ 4 };  ///< 谱面轨道数量
+    /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
+    int32_t bgmTrackCount{ 0 };
     float   renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
@@ -479,6 +491,8 @@ struct RenderSnapshot {
         previewDensity.clear();
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();
+        sampleQueryScratch.clear();
+        sampleQuerySeenScratch.clear();
         backgroundPath.clear();
         bgSize                       = glm::vec2(0.0f, 0.0f);
         backgroundIsVideo            = false;
@@ -536,6 +550,7 @@ struct RenderSnapshot {
         visibleTimeEnd     = 0.0;
         noteCount          = 0;
         maxCombo           = 0;
+        bgmTrackCount      = 0;
     }
 };
 

@@ -944,7 +944,8 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
     m_noteLayoutIndexScratch.reserve(currentSnapshot.hitboxes.size());
 
     for ( const auto& hitbox : currentSnapshot.hitboxes ) {
-        if ( hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
+        if ( hitbox.kind != Logic::ChartObjectKind::PlayerNote ||
+             hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
              !std::isfinite(hitbox.y) || !std::isfinite(hitbox.w) ||
              !std::isfinite(hitbox.h) || hitbox.w <= 0.0f ||
              hitbox.h <= 0.0f ) {
@@ -2016,8 +2017,17 @@ void Basic2DCanvasInteraction::handleInteractions(
     const auto& layout = visual.trackLayout;
     const float trackLeftX =
         targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
+    const auto runtimeBgmTrackCount = std::min<std::int64_t>(
+        static_cast<std::int64_t>(std::max(0, currentSnapshot->bgmTrackCount)) +
+            1,
+        std::numeric_limits<std::int32_t>::max());
     const float trackRightX =
-        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX;
+        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX +
+        (currentSnapshot->trackCount > 0
+             ? (targetWidth * (layout.right - layout.left) /
+                static_cast<float>(currentSnapshot->trackCount)) *
+                   static_cast<float>(runtimeBgmTrackCount)
+             : 0.0F);
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
@@ -2135,10 +2145,11 @@ void Basic2DCanvasInteraction::handleInteractions(
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
-            m_hasLastHovered      = true;
-            m_lastHoveredEntity   = entt::null;
-            m_lastHoveredPart     = 0;
-            m_lastHoveredSubIndex = -1;
+            m_hasLastHovered        = true;
+            m_lastHoveredEntity     = entt::null;
+            m_lastHoveredObjectKind = Logic::ChartObjectKind::PlayerNote;
+            m_lastHoveredPart       = 0;
+            m_lastHoveredSubIndex   = -1;
         }
 
         m_leftPressStartedOnCanvas      = false;
@@ -2379,14 +2390,18 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     }
 
-    entt::entity hoveredEntity   = entt::null;
-    uint8_t      hoveredPart     = 0;
-    int          hoveredSubIndex = -1;
+    entt::entity           hoveredEntity = entt::null;
+    Logic::ChartObjectKind hoveredObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
+    uint8_t hoveredPart     = 0;
+    int     hoveredSubIndex = -1;
 
     struct HoverCandidate {
-        entt::entity     entity{ entt::null };
-        Logic::HoverPart part{ Logic::HoverPart::None };
-        int              subIndex{ -1 };
+        entt::entity           entity{ entt::null };
+        Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
+        Logic::HoverPart       part{ Logic::HoverPart::None };
+        int                    subIndex{ -1 };
     };
 
     std::vector<HoverCandidate> candidates;
@@ -2398,10 +2413,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
                  localMousePos.y >= it->y &&
                  localMousePos.y <= it->y + it->h ) {
-                candidates.push_back({ it->entity, it->part, it->subIndex });
+                candidates.push_back(
+                    { it->entity, it->kind, it->part, it->subIndex });
                 layerSignature +=
                     std::to_string(
                         static_cast<uint32_t>(entt::to_integral(it->entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(it->kind)) +
                     ":" + std::to_string(static_cast<uint32_t>(it->part)) +
                     ":" + std::to_string(it->subIndex) + ";";
             }
@@ -2436,26 +2453,34 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         const auto& candidate = candidates[m_hoverLayerIndex];
         hoveredEntity         = candidate.entity;
+        hoveredObjectKind     = candidate.kind;
         hoveredPart           = static_cast<uint8_t>(candidate.part);
         hoveredSubIndex       = candidate.subIndex;
     }
 
     bool shouldSendHover = !m_hasLastHovered ||
                            m_lastHoveredEntity != hoveredEntity ||
+                           m_lastHoveredObjectKind != hoveredObjectKind ||
                            m_lastHoveredPart != hoveredPart ||
                            m_lastHoveredSubIndex != hoveredSubIndex;
     if ( shouldSendHover ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
-                hoveredEntity, hoveredPart, hoveredSubIndex }));
-        m_hasLastHovered      = true;
-        m_lastHoveredEntity   = hoveredEntity;
-        m_lastHoveredPart     = hoveredPart;
-        m_lastHoveredSubIndex = hoveredSubIndex;
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetHoveredEntity{ hoveredEntity,
+                                        hoveredPart,
+                                        hoveredSubIndex,
+                                        hoveredObjectKind }));
+        m_hasLastHovered        = true;
+        m_lastHoveredEntity     = hoveredEntity;
+        m_lastHoveredObjectKind = hoveredObjectKind;
+        m_lastHoveredPart       = hoveredPart;
+        m_lastHoveredSubIndex   = hoveredSubIndex;
     }
 
     auto processColorToolTarget = [&](Logic::EditTool tool) {
-        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ) return;
+        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ||
+             hoveredObjectKind != Logic::ChartObjectKind::PlayerNote ) {
+            return;
+        }
         if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;
 
         if ( tool == Logic::EditTool::ColorBrush ) {
@@ -2497,8 +2522,10 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 if ( hoveredEntity != entt::null ) {
                     Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdSelectEntity{
-                            hoveredEntity, !ImGui::GetIO().KeyCtrl }));
+                        Event::LogicCommandEvent(
+                            Logic::CmdSelectEntity{ hoveredEntity,
+                                                    !ImGui::GetIO().KeyCtrl,
+                                                    hoveredObjectKind }));
                 } else {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
@@ -2516,7 +2543,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                         Event::LogicCommandEvent(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
-                                                 ImGui::GetIO().KeyCtrl }));
+                                                 ImGui::GetIO().KeyCtrl,
+                                                 hoveredObjectKind }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {

@@ -16,6 +16,7 @@ bool testLogoUsesFullViewportScissor()
     constexpr float            VIEWPORT_WIDTH  = 1000.0f;
     constexpr float            VIEWPORT_HEIGHT = 700.0f;
     entt::registry             noteRegistry;
+    entt::registry             sampleRegistry;
     entt::registry             timelineRegistry;
     MMM::Logic::RenderSnapshot snapshot;
     MMM::Config::EditorConfig  config;
@@ -29,6 +30,9 @@ bool testLogoUsesFullViewportScissor()
 
     MMM::Logic::System::NoteRenderSystem::generateSnapshot(
         noteRegistry,
+        sampleRegistry,
+        {},
+        {},
         timelineRegistry,
         {},
         &snapshot,
@@ -38,6 +42,7 @@ bool testLogoUsesFullViewportScissor()
         VIEWPORT_HEIGHT,
         VIEWPORT_HEIGHT * 0.8f,
         4,
+        0,
         config);
 
     for ( const auto& command : snapshot.cmds ) {

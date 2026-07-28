@@ -4,6 +4,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/SampleAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/DrawTool.h"
@@ -88,6 +89,16 @@ struct PreparedMarqueeBox {
 /// @brief 框选候选实体时间范围的保守扩展，覆盖音符纹理高度和特殊 SV 误差。
 constexpr double MARQUEE_CANDIDATE_TIME_PADDING_SECONDS = 2.0;
 
+/// @brief 获取指定谱面物件领域对应的 ECS 注册表。
+/// @param ctx 会话上下文。
+/// @param kind 谱面物件领域。
+/// @return 对应的独立注册表。
+entt::registry& registryForObjectKind(SessionContext& ctx, ChartObjectKind kind)
+{
+    return kind == ChartObjectKind::AudioSample ? ctx.sampleRegistry
+                                                : ctx.noteRegistry;
+}
+
 /// @brief 清空实体选中状态和框选运行状态。
 void clearSelection(SessionContext& ctx)
 {
@@ -100,6 +111,10 @@ void clearSelection(SessionContext& ctx)
     auto view = ctx.noteRegistry.view<InteractionComponent>();
     for ( auto entity : view ) {
         ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = false;
+    }
+    auto sampleView = ctx.sampleRegistry.view<InteractionComponent>();
+    for ( auto entity : sampleView ) {
+        ctx.sampleRegistry.get<InteractionComponent>(entity).isSelected = false;
     }
 }
 
@@ -122,6 +137,10 @@ void clearSelectedEntityFlags(SessionContext& ctx)
     auto view = ctx.noteRegistry.view<InteractionComponent>();
     for ( auto entity : view ) {
         ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = false;
+    }
+    auto sampleView = ctx.sampleRegistry.view<InteractionComponent>();
+    for ( auto entity : sampleView ) {
+        ctx.sampleRegistry.get<InteractionComponent>(entity).isSelected = false;
     }
 }
 
@@ -229,7 +248,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -310,7 +329,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                   std::abs(screen.renderScaleY) > 1e-6f;
+                         std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -359,10 +378,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1        = screen.judgmentLineY -
-                     static_cast<float>(startAbsY - screen.currentAbsY) *
-                         screen.renderScaleY;
-    const float y2 =
+    const float  y1 = screen.judgmentLineY -
+                      static_cast<float>(startAbsY - screen.currentAbsY) *
+                          screen.renderScaleY;
+    const float  y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -399,9 +418,9 @@ void includeCarrierRect(SelectionRect&                target,
                                TextureID::HoldBodyVertical,
                                screen.noteW,
                                screen.noteH);
-        const float x = screen.leftX +
-                        static_cast<float>(trackIndex) * screen.singleTrackW +
-                        (screen.singleTrackW - bodySize.x) * 0.5f;
+        const float x  = screen.leftX +
+                         static_cast<float>(trackIndex) * screen.singleTrackW +
+                         (screen.singleTrackW - bodySize.x) * 0.5f;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
             screen,
@@ -443,9 +462,9 @@ void includePolylineTransitionRect(SelectionRect&                target,
                                   (current.type == ::MMM::NoteType::FLICK
                                        ? static_cast<float>(current.dtrack)
                                        : 0.0f);
-    const float currentX = screen.leftX +
-                           currentEndTrack * screen.singleTrackW +
-                           (screen.singleTrackW - bodySize.x) * 0.5f;
+    const float currentX        = screen.leftX +
+                                  currentEndTrack * screen.singleTrackW +
+                                  (screen.singleTrackW - bodySize.x) * 0.5f;
     const float nextX =
         screen.leftX +
         static_cast<float>(next.trackIndex) * screen.singleTrackW +
@@ -714,13 +733,13 @@ bool collectMarqueeBoxCandidates(SessionContext&                   ctx,
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA          = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedTopY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const double absB = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedBottomY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -791,32 +810,35 @@ InteractionController::InteractionController(SessionContext& ctx) : m_ctx(ctx)
 
 void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
 {
-    if ( m_ctx.hoveredEntity != cmd.entity &&
+    if ( (m_ctx.hoveredEntity != cmd.entity ||
+          m_ctx.hoveredObjectKind != cmd.kind) &&
          m_ctx.hoveredEntity != entt::null ) {
-        if ( m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
-             m_ctx.noteRegistry.all_of<InteractionComponent>(
+        auto& previousRegistry =
+            registryForObjectKind(m_ctx, m_ctx.hoveredObjectKind);
+        if ( previousRegistry.valid(m_ctx.hoveredEntity) &&
+             previousRegistry.all_of<InteractionComponent>(
                  m_ctx.hoveredEntity) ) {
-            m_ctx.noteRegistry.get<InteractionComponent>(m_ctx.hoveredEntity)
+            previousRegistry.get<InteractionComponent>(m_ctx.hoveredEntity)
                 .isHovered = false;
-            m_ctx.noteRegistry.get<InteractionComponent>(m_ctx.hoveredEntity)
+            previousRegistry.get<InteractionComponent>(m_ctx.hoveredEntity)
                 .hoveredPart = static_cast<uint8_t>(HoverPart::None);
         }
     }
 
-    m_ctx.hoveredEntity   = cmd.entity;
+    m_ctx.hoveredEntity = cmd.entity;
+    m_ctx.hoveredObjectKind =
+        cmd.entity == entt::null ? ChartObjectKind::PlayerNote : cmd.kind;
     m_ctx.hoveredPart     = cmd.part;
     m_ctx.hoveredSubIndex = cmd.subIndex;
 
+    auto& registry = registryForObjectKind(m_ctx, m_ctx.hoveredObjectKind);
     if ( m_ctx.hoveredEntity != entt::null &&
-         m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) ) {
-        if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(
-                 m_ctx.hoveredEntity) ) {
-            m_ctx.noteRegistry.emplace<InteractionComponent>(
-                m_ctx.hoveredEntity);
+         registry.valid(m_ctx.hoveredEntity) ) {
+        if ( !registry.all_of<InteractionComponent>(m_ctx.hoveredEntity) ) {
+            registry.emplace<InteractionComponent>(m_ctx.hoveredEntity);
         }
-        auto& ic =
-            m_ctx.noteRegistry.get<InteractionComponent>(m_ctx.hoveredEntity);
-        ic.isHovered       = true;
+        auto& ic     = registry.get<InteractionComponent>(m_ctx.hoveredEntity);
+        ic.isHovered = true;
         ic.hoveredPart     = cmd.part;
         ic.hoveredSubIndex = cmd.subIndex;
     }
@@ -834,10 +856,12 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
     // 只有在框选工具模式下才允许通过点击实体修改选中状态。
     if ( m_ctx.currentTool != EditTool::Marquee ) return;
 
-    if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
-        m_ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
+    auto& registry = registryForObjectKind(m_ctx, cmd.kind);
+    if ( !registry.valid(cmd.entity) ) return;
+    if ( !registry.all_of<InteractionComponent>(cmd.entity) ) {
+        registry.emplace<InteractionComponent>(cmd.entity);
     }
-    auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(cmd.entity);
+    auto& ic          = registry.get<InteractionComponent>(cmd.entity);
     bool  wasSelected = ic.isSelected;
 
     if ( !cmd.clearOthers ) {
@@ -851,10 +875,10 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
     }
 
     clearSelection(m_ctx);
-    if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
-        m_ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
+    if ( !registry.all_of<InteractionComponent>(cmd.entity) ) {
+        registry.emplace<InteractionComponent>(cmd.entity);
     }
-    m_ctx.noteRegistry.get<InteractionComponent>(cmd.entity).isSelected = true;
+    registry.get<InteractionComponent>(cmd.entity).isSelected = true;
 }
 
 void InteractionController::handleCommand(const CmdSelectAll& cmd)
@@ -871,10 +895,21 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
         }
         m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = true;
     }
+    auto sampleView = m_ctx.sampleRegistry.view<SampleComponent>();
+    for ( auto entity : sampleView ) {
+        if ( !m_ctx.sampleRegistry.all_of<InteractionComponent>(entity) ) {
+            m_ctx.sampleRegistry.emplace<InteractionComponent>(entity);
+        }
+        m_ctx.sampleRegistry.get<InteractionComponent>(entity).isSelected =
+            true;
+    }
 }
 
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
+    if ( cmd.kind == ChartObjectKind::AudioSample ) {
+        return;
+    }
     if ( m_tools.count(m_ctx.currentTool) ) {
         m_tools[m_ctx.currentTool]->handleStartDrag(m_ctx, cmd);
     }
@@ -1002,10 +1037,33 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
 
 void InteractionController::handleCommand(const CmdUpdateTrackCount& cmd)
 {
-    m_ctx.trackCount = cmd.trackCount;
-    if ( m_ctx.currentBeatmap ) {
-        m_ctx.currentBeatmap->m_baseMapMetadata.track_count = cmd.trackCount;
+    if ( cmd.trackCount <= 0 || cmd.trackCount == m_ctx.trackCount ) {
+        return;
     }
+
+    const auto oldTrackCount = m_ctx.trackCount;
+    std::vector<TrackCountAction::SampleTrackChange> sampleChanges;
+    const auto sampleView = m_ctx.sampleRegistry.view<const SampleComponent>();
+    sampleChanges.reserve(sampleView.size());
+    for ( auto entity : sampleView ) {
+        const auto& sample = sampleView.get<const SampleComponent>(entity);
+        const std::uint32_t bgmIndex =
+            sample.m_track >= static_cast<std::uint32_t>(oldTrackCount)
+                ? sample.m_track - static_cast<std::uint32_t>(oldTrackCount)
+                : 0;
+        const std::uint64_t afterTrack =
+            static_cast<std::uint64_t>(cmd.trackCount) + bgmIndex;
+        sampleChanges.push_back({
+            .entity      = entity,
+            .beforeTrack = sample.m_track,
+            .afterTrack  = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                afterTrack, std::numeric_limits<std::uint32_t>::max())),
+        });
+    }
+
+    auto action = std::make_unique<TrackCountAction>(
+        oldTrackCount, cmd.trackCount, std::move(sampleChanges));
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 }
 
 void InteractionController::handleCommand(const CmdChangeTool& cmd)

@@ -46,6 +46,20 @@ return {
 		note_node = { 0.0, 0.918, 0.078, 1.0 },
 		note_flick_arrow = { 0.0, 0.918, 0.078, 1.0 },
 
+		-- BGM 轨道与自动采样配色
+		bgm_tracks = {
+			background = { 0.035, 0.035, 0.035, 0.94 },
+			alternate = { 0.075, 0.075, 0.075, 0.94 },
+			border = { 0.40, 0.40, 0.40, 0.72 },
+			separator = { 0.92, 0.08, 0.08, 0.96 },
+			label = { 0.82, 0.82, 0.82, 0.94 },
+			sample = { 0.078, 0.784, 0.769, 1.0 },
+			sample_selected = { 1.0, 0.72, 0.12, 1.0 },
+			sample_hovered = { 0.42, 1.0, 0.96, 1.0 },
+			offset = { 0.92, 0.08, 0.08, 0.92 },
+			text = { 0.94, 0.94, 0.94, 0.96 },
+		},
+
 		beat_lines = {
 			beat_1 = beat_head_red,
 			beat_2 = beat_line_gray,

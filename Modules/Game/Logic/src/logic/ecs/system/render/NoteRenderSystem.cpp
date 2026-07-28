@@ -4,6 +4,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+#include "logic/ecs/system/SampleRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/CanvasCamera.h"
@@ -108,12 +109,16 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
 /// registry 全量无缓存扫描或阻塞同步；Timeline 与活跃主画布 Move
 /// 工具会复制 ScrollSegment 供 UI 精确时间映射。
 void NoteRenderSystem::generateSnapshot(
-    entt::registry& registry, const entt::registry& timelineRegistry,
+    entt::registry& registry, entt::registry& sampleRegistry,
+    const std::vector<entt::entity>&             sortedSampleEntities,
+    const std::vector<double>&                   sortedSampleMaxEndPrefix,
+    const entt::registry&                        timelineRegistry,
     const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Config::EditorConfig& config,
-    float mainViewportHeight, HitFXSystem* hitFXSystem)
+    int32_t trackCount, int32_t bgmTrackCount,
+    const Config::EditorConfig& config, float mainViewportHeight,
+    HitFXSystem* hitFXSystem)
 {
     const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
 
@@ -280,6 +285,7 @@ void NoteRenderSystem::generateSnapshot(
                                                      judgmentLineY,
                                                      trackCount,
                                                      config,
+                                                     bgmTrackCount,
                                                      cache,
                                                      leftX,
                                                      rightX,
@@ -323,6 +329,7 @@ void NoteRenderSystem::generateSnapshot(
     snapshot->renderScaleY = renderScaleY;
 
     if ( cameraId != "Timeline" ) {
+        batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         // 先绘制拍线，使其在物件下方
         const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
                                            Config::BeatLineDisplayMode::Hidden;
@@ -353,7 +360,42 @@ void NoteRenderSystem::generateSnapshot(
                                             bottomY,
                                             trackAreaW,
                                             renderScaleY,
-                                            revealBeatLinesNearCursor);
+                                            revealBeatLinesNearCursor,
+                                            1.0F);
+        }
+
+        if ( isMainCanvas && shouldDrawBeatLines ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            const float visibleLeft = std::max(0.0F, laneProjection.bgmLeftX);
+            const float visibleRight =
+                std::min(viewportWidth, laneProjection.bgmRightX);
+            if ( visibleRight > visibleLeft ) {
+                batcher.setScissor(visibleLeft,
+                                   topY,
+                                   visibleRight - visibleLeft,
+                                   bottomY - topY);
+                NoteRenderSystem::drawBeatLines(batcher,
+                                                viewportHeight,
+                                                judgmentLineY,
+                                                config,
+                                                bpmEvents,
+                                                renderTime,
+                                                cache,
+                                                visibleLeft,
+                                                topY,
+                                                bottomY,
+                                                visibleRight - visibleLeft,
+                                                renderScaleY,
+                                                revealBeatLinesNearCursor,
+                                                0.28F);
+                batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+            }
         }
 
         if ( shouldDrawTimingLines ) {
@@ -385,6 +427,28 @@ void NoteRenderSystem::generateSnapshot(
                                       bottomY,
                                       singleTrackW,
                                       renderScaleY);
+        if ( isMainCanvas ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            SampleRenderSystem::renderSamples(sampleRegistry,
+                                              sortedSampleEntities,
+                                              sortedSampleMaxEndPrefix,
+                                              snapshot,
+                                              batcher,
+                                              laneProjection,
+                                              cache,
+                                              renderTime,
+                                              judgmentLineY,
+                                              viewportWidth,
+                                              topY,
+                                              bottomY,
+                                              renderScaleY);
+        }
         if ( cameraId == "Preview" ) {
             float lx = config.visual.previewConfig.margin.left;
             float rx = viewportWidth - config.visual.previewConfig.margin.right;
@@ -1000,8 +1064,9 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-    float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
+    int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
+    float& rightX, float& topY, float& bottomY, float& trackAreaW,
+    float& singleTrackW, float renderScaleY)
 {
     BackgroundRenderSystem::render(
         batcher, viewportWidth, viewportHeight, config, snapshot);
@@ -1047,6 +1112,19 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                             trackAreaW,
                                             singleTrackW,
                                             renderScaleY);
+        const auto laneProjection =
+            calculateCanvasLaneProjection(viewportWidth,
+                                          trackCount,
+                                          bgmTrackCount,
+                                          config.visual.trackLayout.left,
+                                          config.visual.trackLayout.right,
+                                          snapshot->canvasHorizontalOffsetX);
+        SampleRenderSystem::renderLaneLayout(batcher,
+                                             laneProjection,
+                                             bgmTrackCount,
+                                             viewportWidth,
+                                             topY,
+                                             bottomY);
     }
 }
 
@@ -1067,6 +1145,9 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
         case HoverPart::FlickArrow: color = { 1.0f, 0.25f, 1.0f, 0.85f }; break;
         case HoverPart::PolylineNode:
             color = { 1.0f, 1.0f, 0.15f, 0.85f };
+            break;
+        case HoverPart::SampleAnchor:
+            color = { 0.25f, 0.85f, 1.0f, 0.9f };
             break;
         case HoverPart::None: color = { 1.0f, 1.0f, 1.0f, 0.45f }; break;
         }

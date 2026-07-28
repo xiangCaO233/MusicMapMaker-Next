@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
@@ -61,6 +62,8 @@ struct CmdSetHoveredEntity {
     entt::entity entity;    // 如果为 entt::null 则表示取消悬停
     uint8_t      part;      // 悬停的具体部位 (HoverPart)
     int          subIndex;  // 悬停的具体子索引
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -69,6 +72,8 @@ struct CmdSetHoveredEntity {
 struct CmdSelectEntity {
     entt::entity entity;
     bool         clearOthers;
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -78,6 +83,8 @@ struct CmdStartDrag {
     entt::entity entity;
     std::string  cameraId;
     bool         isCtrlDown{ false };
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**

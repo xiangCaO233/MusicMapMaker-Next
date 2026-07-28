@@ -47,6 +47,17 @@ bool isPlaceableNote(const NoteComponent& note)
     return true;
 }
 
+/// @brief 判断当前悬停对象是否为玩家物件注册表中的有效 Note。
+/// @param ctx 会话上下文。
+/// @return 悬停对象属于玩家物件域且实体有效时返回 true。
+bool isHoveredPlayerNote(const SessionContext& ctx)
+{
+    return ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
+           ctx.hoveredEntity != entt::null &&
+           ctx.noteRegistry.valid(ctx.hoveredEntity) &&
+           ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity);
+}
+
 /// @brief 清理当前绘制笔刷状态。
 /// @param ctx 会话上下文引用。
 void resetBrushState(SessionContext& ctx)
@@ -216,8 +227,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
 
     bool isResuming = false;
-    if ( cmd.isShiftDown && ctx.hoveredEntity != entt::null &&
-         ctx.noteRegistry.valid(ctx.hoveredEntity) ) {
+    if ( cmd.isShiftDown && isHoveredPlayerNote(ctx) ) {
         const auto& note =
             ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
         entt::entity targetEntity = ctx.hoveredEntity;
@@ -1117,11 +1127,10 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
     ctx.eraserState.isActive    = true;
     ctx.eraserState.isShiftDown = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
-    if ( ctx.hoveredEntity != entt::null ) {
+    if ( isHoveredPlayerNote(ctx) ) {
         entt::entity target = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
-        if ( cmd.isShiftDown && ctx.noteRegistry.valid(ctx.hoveredEntity) &&
-             ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
+        if ( cmd.isShiftDown ) {
             const auto& nc =
                 ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
             if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
@@ -1140,11 +1149,10 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
 
     // 每帧只标记当前鼠标正下方的物件，移开就取消
     ctx.eraserState.targetEntities.clear();
-    if ( ctx.hoveredEntity != entt::null ) {
+    if ( isHoveredPlayerNote(ctx) ) {
         entt::entity target = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
-        if ( cmd.isShiftDown && ctx.noteRegistry.valid(ctx.hoveredEntity) &&
-             ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
+        if ( cmd.isShiftDown ) {
             const auto& nc =
                 ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
             if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
@@ -1208,7 +1216,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                      ctx.eraserState.targetEntities.count(entity) &&
                      !ctx.eraserState.isShiftDown ) {
                     int k = ctx.hoveredSubIndex;
-                    if ( entity == ctx.hoveredEntity && k >= 0 &&
+                    if ( isHoveredPlayerNote(ctx) &&
+                         entity == ctx.hoveredEntity && k >= 0 &&
                          k < static_cast<int>(nc.m_subNotes.size()) ) {
 
                         // 1. 收集并删除该 Polyline 的所有旧子物件实体
@@ -1321,7 +1330,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                          !nc.m_subNotes.empty() &&
                          !ctx.eraserState.isShiftDown ) {
                         int k = ctx.hoveredSubIndex;
-                        if ( entity == ctx.hoveredEntity && k >= 0 &&
+                        if ( isHoveredPlayerNote(ctx) &&
+                             entity == ctx.hoveredEntity && k >= 0 &&
                              k < static_cast<int>(nc.m_subNotes.size()) ) {
 
                             // 1. 收集并删除该 Polyline 的所有旧子物件实体

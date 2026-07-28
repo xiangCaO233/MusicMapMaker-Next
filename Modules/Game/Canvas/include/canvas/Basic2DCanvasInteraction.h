@@ -2,6 +2,7 @@
 
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
+#include "common/ChartObjectKind.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "event/core/EventBus.h"
 #include <cstdint>
@@ -176,6 +177,10 @@ private:
     LastMouseCommand m_lastMouseCommand;
     /// @brief 上一次发送给逻辑线程的悬浮实体。
     entt::entity m_lastHoveredEntity{ entt::null };
+    /// @brief 上一次悬停实体所在的独立 ECS 注册表。
+    Logic::ChartObjectKind m_lastHoveredObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
     /// @brief 上一次发送给逻辑线程的悬浮部位。
     uint8_t m_lastHoveredPart{ 0 };
     /// @brief 上一次发送给逻辑线程的悬浮子索引。

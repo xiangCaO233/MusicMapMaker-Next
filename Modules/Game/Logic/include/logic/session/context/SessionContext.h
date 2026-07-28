@@ -1,11 +1,13 @@
 #pragma once
 
+#include "common/ChartObjectKind.h"
 #include "config/EditorConfig.h"
 #include "event/audio/AudioPlaybackEvent.h"
 #include "event/core/EventBus.h"
 #include "logic/PreviewDensity.h"
 #include "logic/SyncClock.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
@@ -80,6 +82,7 @@ struct DragRenderPinnedEntities {
 struct SessionContext {
     // --- 核心状态 ---
     entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
+    entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
 
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
@@ -98,6 +101,8 @@ struct SessionContext {
     /// @brief 是否作为同主音轨后台跟随者进行播放态视觉插值。
     bool    isMainAudioSyncFollower{ false };
     int32_t trackCount{ 12 };  ///< 当前轨道总数
+    /// @brief 用户持久化的 BGM 轨道数量，不包含末尾运行时追加轨。
+    int32_t bgmTrackCount{ 0 };
 
     std::shared_ptr<MMM::BeatMap> currentBeatmap;  ///< 当前载入的谱面对象
     Config::EditorConfig          lastConfig;      ///< 最近一次同步的编辑器配置
@@ -166,6 +171,16 @@ struct SessionContext {
     std::vector<double>
         sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
     std::uint64_t noteVisibilityIndexRevision{ 0 };  ///< 音符可见性索引版本号
+    /// @brief 按可见区间起点排序的自动采样实体缓存。
+    std::vector<entt::entity> sortedSampleEntities;
+    /// @brief 自动采样缓存的前缀最大区间终点。
+    std::vector<double> sortedSampleMaxEndPrefix;
+    /// @brief 自动采样可见性索引版本号。
+    std::uint64_t sampleVisibilityIndexRevision{ 0 };
+    /// @brief 自动采样排序缓存是否需要完整重建。
+    bool isSampleOrderDirty{ true };
+    /// @brief 自动采样排序缓存是否只需剔除失效实体。
+    bool isSamplePruneDirty{ false };
     /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
     std::vector<double> previewDensityObjectTimes;
     /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。
@@ -186,19 +201,25 @@ struct SessionContext {
     std::string  mouseCameraId;                  ///< 鼠标当前所在的视口 ID
     glm::vec2    lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
     entt::entity hoveredEntity{ entt::null };    ///< 当前悬停的实体 ID
-    int32_t      hoveredPart{ 0 };               ///< 悬停的音符部位 (HoverPart)
-    int32_t      hoveredSubIndex{ -1 };          ///< 悬停的子索引 (针对折线)
-    bool         isMouseInCanvas{ false };       ///< 鼠标是否在任何画布内
-    bool         isDragging{ false };            ///< 是否正在执行拖拽操作
-    double       previewHoverTime{ 0.0 };        ///< 预览区当前悬停的时间点
-    double       previewEdgeScrollVelocity{ 0.0 };  ///< 预览区边缘滚动速度
+    /// @brief 当前悬停实体所在的独立 ECS 注册表。
+    ChartObjectKind hoveredObjectKind{ ChartObjectKind::PlayerNote };
+    int32_t         hoveredPart{ 0 };          ///< 悬停的音符部位 (HoverPart)
+    int32_t         hoveredSubIndex{ -1 };     ///< 悬停的子索引 (针对折线)
+    bool            isMouseInCanvas{ false };  ///< 鼠标是否在任何画布内
+    bool            isDragging{ false };       ///< 是否正在执行拖拽操作
+    double          previewHoverTime{ 0.0 };   ///< 预览区当前悬停的时间点
+    double          previewEdgeScrollVelocity{ 0.0 };  ///< 预览区边缘滚动速度
 
-    entt::entity draggedEntity{ entt::null };     ///< 正在拖拽的实体 ID
-    HoverPart    draggedPart{ HoverPart::None };  ///< 正在拖拽的音符部位
-    int          draggedSubIndex{ -1 };           ///< 正在拖拽的子索引
+    entt::entity draggedEntity{ entt::null };  ///< 正在拖拽的实体 ID
+    /// @brief 当前拖拽实体所在的独立 ECS 注册表。
+    ChartObjectKind draggedObjectKind{ ChartObjectKind::PlayerNote };
+    HoverPart       draggedPart{ HoverPart::None };  ///< 正在拖拽的音符部位
+    int             draggedSubIndex{ -1 };           ///< 正在拖拽的子索引
     std::optional<NoteComponent>
         dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
-    std::string dragCameraId;  ///< 发起拖拽的视口 ID
+    /// @brief 拖拽开始时的初始自动采样数据。
+    std::optional<SampleComponent> dragInitialSample;
+    std::string                    dragCameraId;  ///< 发起拖拽的视口 ID
     /// @brief 当前拖动手势中需要补充渲染的实体列表。
     std::vector<entt::entity> dragRenderPinnedEntities;
 
@@ -238,6 +259,7 @@ struct SessionContext {
 
     // --- 同步脏标记 ---
     bool m_needsNotesSync{ false };    ///< 音响实体有变更，需同步到 BeatMap
+    bool m_needsSamplesSync{ false };  ///< 自动采样实体有变更，需同步到 BeatMap
     bool m_needsTimingsSync{ false };  ///< 时间线实体有变更，需同步到 BeatMap
 
     // --- 编辑操作栈 ---
