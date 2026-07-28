@@ -2,6 +2,7 @@
 
 add_library(
   Audio STATIC
+  src/AudioTimelineTransport.cpp
   src/BackgroundSpectrumAnalyzer.cpp
   src/AudioManager.cpp
   src/AudioManager_BGM.cpp
@@ -74,3 +75,9 @@ add_test(
   COMMAND
     BoundSoundConcurrencyTest
     "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
+
+# 音频时间线传输测试不依赖声卡，覆盖 seek、循环和负起点等确定性调度边界。
+mmm_add_test_executable(Audio AudioTimelineTransportTest
+                        tests/AudioTimelineTransportTest.cpp)
+target_link_libraries(AudioTimelineTransportTest PRIVATE Audio)
+add_test(NAME AudioTimelineTransportTest COMMAND AudioTimelineTransportTest)
