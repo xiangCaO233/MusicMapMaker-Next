@@ -59,7 +59,9 @@ bool testEmptyTimelineClock(MMM::Audio::AudioManager& manager)
 {
     const auto result = manager.loadAudioTimeline({}, 0.08, "empty-timeline");
     if ( !result.success || result.loadedClipCount != 0U ||
-         result.missingClipCount != 0U || !manager.hasLoadedAudioTimeline() ||
+         result.missingClipCount != 0U || result.requestedSourceCount != 0U ||
+         result.preparedResourceCount != 0U ||
+         !manager.hasLoadedAudioTimeline() ||
          manager.getLoadedAudioTimelineFingerprint() != "empty-timeline" ||
          std::abs(manager.getTotalTime() - 0.08) > 0.002 ) {
         XERROR("Empty timeline was not constructed as an independent clock");
@@ -108,7 +110,8 @@ bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
                                   0.02,
                                   "single-timeline");
 
-    if ( !result.success || result.loadedClipCount != 1U ||
+    if ( !result.success || result.requestedSourceCount != 1U ||
+         result.preparedResourceCount != 1U || result.loadedClipCount != 1U ||
          result.missingClipCount != 0U || !result.diagnostics.empty() ||
          std::any_of(result.diagnostics.begin(),
                      result.diagnostics.end(),
@@ -171,8 +174,9 @@ bool testIndependentResourceAndGlobalSpeed(MMM::Audio::AudioManager& manager,
     const auto   rawTrack = manager.getBGMTrack();
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    if ( !result.success || result.loadedClipCount != 2U || !rawTrack ||
-         sampleRate <= 0.0 ) {
+    if ( !result.success || result.requestedSourceCount != 1U ||
+         result.preparedResourceCount != 2U || result.loadedClipCount != 2U ||
+         !rawTrack || sampleRate <= 0.0 ) {
         XERROR("Different resource speeds did not load together");
         return false;
     }
@@ -225,8 +229,9 @@ bool testDualUseEffectSharesPreparedAudio(MMM::Audio::AudioManager& manager,
     const auto rawTrack = manager.getBGMTrack();
     const auto sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    if ( !result.success || result.loadedClipCount != 1U || !rawTrack ||
-         sampleRate <= 0.0 ) {
+    if ( !result.success || result.requestedSourceCount != 1U ||
+         result.preparedResourceCount != 1U || result.loadedClipCount != 1U ||
+         !rawTrack || sampleRate <= 0.0 ) {
         XERROR("Dual-use Effect timeline could not be prepared");
         return false;
     }
@@ -359,7 +364,8 @@ bool testCompositePlayback(MMM::Audio::AudioManager& manager,
         0.5,
         "composite-timeline");
 
-    if ( !result.success || result.loadedClipCount != 3U ||
+    if ( !result.success || result.requestedSourceCount != 2U ||
+         result.preparedResourceCount != 1U || result.loadedClipCount != 3U ||
          result.missingClipCount != 1U ||
          manager.getLoadedAudioTimelineClipCount() != 3U ||
          manager.getMissingAudioTimelineClipCount() != 1U ||
@@ -368,7 +374,7 @@ bool testCompositePlayback(MMM::Audio::AudioManager& manager,
              result,
              MMM::Audio::AudioTimelineLoadDiagnosticCode::MissingResource) ||
          manager.getTotalTime() < 0.49 ) {
-        XERROR("Composite timeline load summary is inconsistent");
+        XERROR("Composite timeline phases did not deduplicate sources and DSP");
         return false;
     }
 

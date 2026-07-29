@@ -133,6 +133,12 @@ struct AudioTimelineLoadResult {
     /// @brief 音频图是否已成功替换；即使没有有效片段也可为 true。
     bool success{ false };
 
+    /// @brief 第一阶段提交给解码池的唯一非空文件路径数量。
+    std::size_t requestedSourceCount{ 0U };
+
+    /// @brief 第二阶段成功建立的唯一资源 DSP 结果数量。
+    std::size_t preparedResourceCount{ 0U };
+
     /// @brief 成功载入调度表的采样物件数量。
     std::size_t loadedClipCount{ 0U };
 

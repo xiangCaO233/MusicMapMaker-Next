@@ -178,12 +178,28 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     std::unordered_map<std::string, std::shared_ptr<ice::AudioTrack>>
         tracksByPath;
     tracksByPath.reserve(events.size());
+    std::unordered_map<std::string,
+                       std::shared_ptr<const PreparedTimelineAudio>>
+        preparedAudioByProcessingKey;
+    preparedAudioByProcessingKey.reserve(events.size());
     std::erase_if(m_audioTimelineResourceCache, [](const auto& cacheEntry) {
         return cacheEntry.second.sourceTrack.expired() ||
                cacheEntry.second.preparedAudio.expired();
     });
     std::shared_ptr<ice::AudioTrack> firstLoadedTrack;
 
+    // 先提交全部唯一文件的解码任务，避免逐文件启动后立即等待导致串行化。
+    for ( const auto& event : events ) {
+        if ( event.filePath.empty() || tracksByPath.contains(event.filePath) ) {
+            continue;
+        }
+        auto track =
+            m_audioPool->get_or_load(*m_threadPool, event.filePath).lock();
+        tracksByPath.emplace(event.filePath, std::move(track));
+    }
+    result.requestedSourceCount = tracksByPath.size();
+
+    // 全部解码任务均已提交后，才按事件顺序等待并准备唯一 DSP 结果。
     for ( const auto& event : events ) {
         double startSeconds = event.effectiveStartSeconds;
         if ( !std::isfinite(startSeconds) ) {
@@ -199,13 +215,6 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
             const auto existingTrack = tracksByPath.find(event.filePath);
             if ( existingTrack != tracksByPath.end() ) {
                 track = existingTrack->second;
-            } else {
-                track = m_audioPool->get_or_load(*m_threadPool, event.filePath)
-                            .lock();
-                if ( track && track->num_frames() == 0U ) {
-                    track.reset();
-                }
-                tracksByPath.emplace(event.filePath, track);
             }
         }
 
@@ -218,8 +227,22 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
             continue;
         }
 
-        auto preparedAudio = getOrPrepareAudioTimelineResource(
-            event.filePath, track, event.resourceConfig);
+        const auto processingCacheKey = makeAudioResourceProcessingCacheKey(
+            event.filePath, event.resourceConfig);
+        std::shared_ptr<const PreparedTimelineAudio> preparedAudio;
+        const auto                                   existingPreparedAudio =
+            preparedAudioByProcessingKey.find(processingCacheKey);
+        if ( existingPreparedAudio != preparedAudioByProcessingKey.end() ) {
+            preparedAudio = existingPreparedAudio->second;
+        } else {
+            preparedAudio = getOrPrepareAudioTimelineResource(
+                event.filePath, track, event.resourceConfig);
+            preparedAudioByProcessingKey.emplace(processingCacheKey,
+                                                 preparedAudio);
+            if ( preparedAudio ) {
+                ++result.preparedResourceCount;
+            }
+        }
         if ( !preparedAudio ) {
             ++result.missingClipCount;
             appendTimelineDiagnostic(
@@ -266,7 +289,10 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     result.success         = true;
     result.loadedClipCount = m_audioTimelineClipCount;
     XINFO(
-        "Audio timeline loaded: clips={}, missing={}, end={}s, fingerprint={}",
+        "Audio timeline loaded: sources={}, prepared={}, clips={}, missing={}, "
+        "end={}s, fingerprint={}",
+        result.requestedSourceCount,
+        result.preparedResourceCount,
         result.loadedClipCount,
         result.missingClipCount,
         getTotalTime(),
