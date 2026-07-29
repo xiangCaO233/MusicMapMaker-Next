@@ -3,6 +3,7 @@
 #include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/AsciiFontData.h"
+#include "common/UnicodeFontData.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -206,8 +207,12 @@ private:
 
     /// @brief 当前离屏画布图集中已加载的多档 ASCII 字体度量。
     Common::AsciiFontAtlasMetrics m_asciiFontAtlasMetrics;
+    /// @brief 当前离屏画布图集中按项目资源名加载的 Unicode 字体度量。
+    Common::UnicodeFontMetrics m_unicodeFontMetrics;
     /// @brief 最近一次加载图集时使用的软件 ASCII 字体偏好。
     std::string m_loadedAsciiFontPreference;
+    /// @brief 最近一次加载图集时使用的软件 CJK 字体偏好。
+    std::string m_loadedCjkFontPreference;
 
     ///@brief 全局图集
     std::unique_ptr<Graphic::VKTextureAtlas> m_textureAtlas{ nullptr };

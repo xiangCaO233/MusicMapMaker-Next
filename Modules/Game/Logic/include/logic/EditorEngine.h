@@ -339,10 +339,11 @@ public:
     void setAtlasUVMap(
         const std::string&                             cameraId,
         const std::unordered_map<uint32_t, glm::vec4>& uvMap,
-        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {})
+        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {},
+        const Common::UnicodeFontMetrics&    unicodeFontMetrics    = {})
     {
         m_renderSyncRegistry.setAtlasUVMap(
-            cameraId, uvMap, asciiFontAtlasMetrics);
+            cameraId, uvMap, asciiFontAtlasMetrics, unicodeFontMetrics);
     }
 
     /**
@@ -356,13 +357,15 @@ public:
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
     /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
+    /// @param targetUnicodeFontMetrics 目标快照中的按需 Unicode 字体度量。
     /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
     /// 表，普通路径只做锁内查找和 revision 比较。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
         std::uint64_t&                           targetRevision,
-        Common::AsciiFontAtlasMetrics& targetAsciiFontAtlasMetrics) const;
+        Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
+        Common::UnicodeFontMetrics& targetUnicodeFontMetrics) const;
 
     /**
      * @brief 获取当前编辑器配置

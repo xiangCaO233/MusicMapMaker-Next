@@ -1784,10 +1784,14 @@ void EditorEngine::updateSnapshotAtlasUVMap(
     const std::string&                       cameraId,
     std::unordered_map<uint32_t, glm::vec4>& target,
     std::uint64_t&                           targetRevision,
-    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics) const
+    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
+    Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    m_renderSyncRegistry.updateSnapshotAtlasUVMap(
-        cameraId, target, targetRevision, targetAsciiFontAtlasMetrics);
+    m_renderSyncRegistry.updateSnapshotAtlasUVMap(cameraId,
+                                                  target,
+                                                  targetRevision,
+                                                  targetAsciiFontAtlasMetrics,
+                                                  targetUnicodeFontMetrics);
 }
 
 /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。

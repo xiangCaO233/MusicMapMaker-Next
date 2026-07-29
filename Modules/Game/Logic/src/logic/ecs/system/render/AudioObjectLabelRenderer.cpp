@@ -1,6 +1,7 @@
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 
 #include "common/AsciiFontData.h"
+#include "common/UnicodeFontData.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/system/render/Batcher.h"
@@ -32,37 +33,90 @@ bool isMissingSkinColor(const Config::Color& color)
            color.a == 1.0F;
 }
 
-/// @brief 将可能包含非 ASCII 字节的资源 ID 截断为可安全显示的 ASCII 文本。
+/// @brief 将资源 ID 按完整 UTF-8 序列截断到固定输出缓冲区。
 /// @param output 输出缓冲区。
 /// @param source 原资源 ID。
 /// @warning 主画布热路径：只写入调用方提供的有界栈缓冲区。
 void copyDisplayResourceId(std::span<char> output, std::string_view source)
 {
     if ( output.empty() ) return;
-    const std::size_t count =
-        std::min(source.size(), output.size() - std::size_t{ 1 });
-    for ( std::size_t i = 0; i < count; ++i ) {
-        const auto value = static_cast<unsigned char>(source[i]);
-        output[i]        = value >= Common::ASCII_GLYPH_FIRST &&
-                                   value <= Common::ASCII_GLYPH_LAST
-                               ? static_cast<char>(value)
-                               : '?';
+    std::size_t sourceOffset = 0U;
+    std::size_t outputOffset = 0U;
+    while ( sourceOffset < source.size() &&
+            outputOffset < output.size() - 1U ) {
+        const std::size_t sequenceStart = sourceOffset;
+        const auto        codepoint =
+            Common::decodeNextUtf8Codepoint(source, sourceOffset);
+        const std::size_t sequenceLength = sourceOffset - sequenceStart;
+        const bool        isInvalidSequence =
+            codepoint == Common::UNICODE_REPLACEMENT_CODEPOINT &&
+            sequenceLength == 1U &&
+            static_cast<unsigned char>(source[sequenceStart]) >= 0x80U;
+        if ( isInvalidSequence ) {
+            output[outputOffset++] = '?';
+            continue;
+        }
+        if ( outputOffset + sequenceLength >= output.size() ) break;
+        std::copy_n(source.data() + sequenceStart,
+                    sequenceLength,
+                    output.data() + outputOffset);
+        outputOffset += sequenceLength;
     }
-    output[count] = '\0';
+    output[outputOffset] = '\0';
 }
 
-/// @brief 计算单行 ASCII 文本的横向推进宽度。
+/// @brief 按码点取得当前画布字体字形和纹理 ID。
+/// @param selection 当前 ASCII 字号档位。
+/// @param unicodeFont 当前按需 Unicode 字体。
+/// @param codepoint Unicode 码点。
+/// @param textureId 接收字形纹理 ID。
+/// @return 可用字形度量；缺字时回退到 ASCII 问号。
+/// @warning 主画布热路径：Unicode 路径只执行二分查找，不得分配内存。
+const Common::AsciiGlyphMetrics* resolveCanvasGlyph(
+    const Common::AsciiFontSelection& selection,
+    const Common::UnicodeFontMetrics& unicodeFont, std::uint32_t codepoint,
+    TextureID& textureId)
+{
+    textureId = TextureID::None;
+    if ( codepoint <= Common::ASCII_GLYPH_LAST ) {
+        const char  character = static_cast<char>(codepoint);
+        const auto* glyph     = selection.metrics->glyph(character);
+        if ( glyph && glyph->available ) {
+            textureId = asciiGlyphTextureId(selection.tierIndex, character);
+            return glyph;
+        }
+    } else if ( const auto* glyph = unicodeFont.glyph(codepoint);
+                glyph && glyph->available ) {
+        textureId = unicodeGlyphTextureId(codepoint);
+        return glyph;
+    }
+
+    const auto* fallback = selection.metrics->glyph('?');
+    if ( fallback && fallback->available ) {
+        textureId = asciiGlyphTextureId(selection.tierIndex, '?');
+        return fallback;
+    }
+    return nullptr;
+}
+
+/// @brief 计算单行 UTF-8 文本的横向推进宽度。
 /// @param font 当前字号对应的字体度量。
+/// @param unicodeFont 当前按需 Unicode 字体。
 /// @param text 文本。
 /// @param fontPixelHeight 字体像素高度。
 /// @return 文本完整横向推进宽度。
 /// @warning 主画布热路径：只允许线性扫描有界短文本。
-float measureAsciiTextWidth(const Common::AsciiFontMetrics& font,
-                            std::string_view text, float fontPixelHeight)
+float measureCanvasTextWidth(const Common::AsciiFontSelection& selection,
+                             const Common::UnicodeFontMetrics& unicodeFont,
+                             std::string_view text, float fontPixelHeight)
 {
-    float width = 0.0F;
-    for ( const char character : text ) {
-        const auto* glyph = font.glyph(character);
+    float       width  = 0.0F;
+    std::size_t offset = 0U;
+    while ( offset < text.size() ) {
+        const auto  codepoint = Common::decodeNextUtf8Codepoint(text, offset);
+        TextureID   textureId = TextureID::None;
+        const auto* glyph =
+            resolveCanvasGlyph(selection, unicodeFont, codepoint, textureId);
         if ( glyph && glyph->available ) {
             width += glyph->advanceX * fontPixelHeight;
         }
@@ -70,7 +124,7 @@ float measureAsciiTextWidth(const Common::AsciiFontMetrics& font,
     return width;
 }
 
-/// @brief 在水平裁剪区域内绘制一次 ASCII 文本。
+/// @brief 在水平裁剪区域内绘制一次 UTF-8 文本。
 /// @param batcher 目标批处理器。
 /// @param selection 已选中的字体档位。
 /// @param text 文本。
@@ -81,25 +135,28 @@ float measureAsciiTextWidth(const Common::AsciiFontMetrics& font,
 /// @param clipRight 水平裁剪右边界。
 /// @param color 文字颜色。
 /// @warning 主画布热路径：逐字形裁剪并写入几何，不得分配内存或切换裁剪命令。
-void renderAsciiTextRunAt(Batcher&                          batcher,
-                          const Common::AsciiFontSelection& selection,
-                          std::string_view text, float penX, float y,
-                          float fontPixelHeight, float clipLeft,
-                          float clipRight, glm::vec4 color)
+void renderCanvasTextRunAt(Batcher&                          batcher,
+                           const Common::AsciiFontSelection& selection,
+                           std::string_view text, float penX, float y,
+                           float fontPixelHeight, float clipLeft,
+                           float clipRight, glm::vec4 color)
 {
     if ( !selection || text.empty() || clipRight <= clipLeft ) return;
 
-    const auto& font      = *selection.metrics;
-    const float baselineY = y + font.ascender * fontPixelHeight;
-    for ( const char character : text ) {
-        const auto* glyph = font.glyph(character);
+    const auto& font        = *selection.metrics;
+    const auto& unicodeFont = batcher.snapshot->unicodeFontMetrics;
+    const float baselineY   = y + font.ascender * fontPixelHeight;
+    std::size_t offset      = 0U;
+    while ( offset < text.size() ) {
+        const auto  codepoint = Common::decodeNextUtf8Codepoint(text, offset);
+        TextureID   textureId = TextureID::None;
+        const auto* glyph =
+            resolveCanvasGlyph(selection, unicodeFont, codepoint, textureId);
         if ( !glyph || !glyph->available ) continue;
         const float advance = glyph->advanceX * fontPixelHeight;
         if ( penX >= clipRight ) break;
 
         if ( glyph->hasBitmap ) {
-            const auto textureId =
-                asciiGlyphTextureId(selection.tierIndex, character);
             const auto uvIt = batcher.snapshot->uvMap.find(
                 static_cast<std::uint32_t>(textureId));
             if ( textureId != TextureID::None &&
@@ -130,7 +187,7 @@ void renderAsciiTextRunAt(Batcher&                          batcher,
     }
 }
 
-/// @brief 在空间不足时循环滚动 ASCII 文本，足够时保持居中静止。
+/// @brief 在空间不足时循环滚动 UTF-8 文本，足够时保持居中静止。
 /// @param batcher 目标批处理器。
 /// @param text 文本。
 /// @param x 文本区域左边界。
@@ -141,26 +198,26 @@ void renderAsciiTextRunAt(Batcher&                          batcher,
 /// @param monotonicSeconds 单调时钟秒数。
 /// @warning 主画布热路径：只绘制至多两份有界短文本，不得分配内存或创建
 /// 独立 DrawCall 裁剪区。
-void renderMarqueeAsciiTextAt(Batcher& batcher, std::string_view text, float x,
-                              float y, float fontPixelHeight, float maxWidth,
-                              glm::vec4 color, double monotonicSeconds)
+void renderMarqueeCanvasTextAt(Batcher& batcher, std::string_view text, float x,
+                               float y, float fontPixelHeight, float maxWidth,
+                               glm::vec4 color, double monotonicSeconds)
 {
     const auto selection = Common::selectAsciiFont(
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
     if ( !selection || text.empty() || maxWidth <= 0.0F ) return;
 
-    const float textWidth =
-        measureAsciiTextWidth(*selection.metrics, text, fontPixelHeight);
+    const float textWidth = measureCanvasTextWidth(
+        selection, batcher.snapshot->unicodeFontMetrics, text, fontPixelHeight);
     if ( textWidth <= maxWidth ) {
-        renderAsciiTextRunAt(batcher,
-                             selection,
-                             text,
-                             x + (maxWidth - textWidth) * 0.5F,
-                             y,
-                             fontPixelHeight,
-                             x,
-                             x + maxWidth,
-                             color);
+        renderCanvasTextRunAt(batcher,
+                              selection,
+                              text,
+                              x + (maxWidth - textWidth) * 0.5F,
+                              y,
+                              fontPixelHeight,
+                              x,
+                              x + maxWidth,
+                              color);
         return;
     }
 
@@ -182,26 +239,26 @@ void renderMarqueeAsciiTextAt(Batcher& batcher, std::string_view text, float x,
     const float firstX  = x + offset;
     const float secondX = firstX + static_cast<float>(scrollDistance);
     if ( firstX < x + maxWidth && firstX + textWidth > x ) {
-        renderAsciiTextRunAt(batcher,
-                             selection,
-                             text,
-                             firstX,
-                             y,
-                             fontPixelHeight,
-                             x,
-                             x + maxWidth,
-                             color);
+        renderCanvasTextRunAt(batcher,
+                              selection,
+                              text,
+                              firstX,
+                              y,
+                              fontPixelHeight,
+                              x,
+                              x + maxWidth,
+                              color);
     }
     if ( secondX < x + maxWidth && secondX + textWidth > x ) {
-        renderAsciiTextRunAt(batcher,
-                             selection,
-                             text,
-                             secondX,
-                             y,
-                             fontPixelHeight,
-                             x,
-                             x + maxWidth,
-                             color);
+        renderCanvasTextRunAt(batcher,
+                              selection,
+                              text,
+                              secondX,
+                              y,
+                              fontPixelHeight,
+                              x,
+                              x + maxWidth,
+                              color);
     }
 }
 
@@ -225,20 +282,20 @@ void renderCanvasAsciiText(Batcher& batcher, std::string_view text, float x,
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
     if ( !selection || text.empty() || maxWidth <= 0.0F ) return;
 
-    const float textWidth =
-        measureAsciiTextWidth(*selection.metrics, text, fontPixelHeight);
+    const float textWidth = measureCanvasTextWidth(
+        selection, batcher.snapshot->unicodeFontMetrics, text, fontPixelHeight);
     const float penX = x + (centerHorizontally && textWidth <= maxWidth
                                 ? (maxWidth - textWidth) * 0.5F
                                 : 0.0F);
-    renderAsciiTextRunAt(batcher,
-                         selection,
-                         text,
-                         penX,
-                         y,
-                         fontPixelHeight,
-                         x,
-                         x + maxWidth,
-                         color);
+    renderCanvasTextRunAt(batcher,
+                          selection,
+                          text,
+                          penX,
+                          y,
+                          fontPixelHeight,
+                          x,
+                          x + maxWidth,
+                          color);
 }
 
 void renderAudioObjectLabel(Batcher& batcher, std::string_view audioResourceId,
@@ -270,7 +327,7 @@ void renderAudioObjectLabel(Batcher& batcher, std::string_view audioResourceId,
                                 : 1.0F;
     const float fontPixelHeight =
         std::clamp(laneWidth * 0.18F, 13.0F, 18.0F) * safeScale;
-    renderMarqueeAsciiTextAt(
+    renderMarqueeCanvasTextAt(
         batcher,
         std::string_view(resourceBuffer.data(), resourceLength),
         laneLeftX + 2.0F,

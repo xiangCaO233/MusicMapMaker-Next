@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvas.h"
 
 #include "canvas/BackgroundVideoTiming.h"
+#include "common/UnicodeFontData.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -47,6 +48,51 @@ std::filesystem::path resolveCanvasAsciiFontPath(Config::SkinManager& skin)
         }
     }
     return skin.getFontPath("ascii");
+}
+
+/// @brief 解析软件设置当前选中的 CJK 字体路径。
+/// @param skin 当前皮肤管理器。
+/// @return 首选字体、外部字体或皮肤默认字体路径。
+std::filesystem::path resolveCanvasCjkFontPath(Config::SkinManager& skin)
+{
+    const auto& preference =
+        Config::AppConfig::instance().getEditorSettings().preferredCjkFont;
+    if ( !preference.empty() && preference != "Default" ) {
+        const auto& fonts = skin.getCjkFonts();
+        const auto  iterator =
+            std::find_if(fonts.begin(), fonts.end(), [&](const auto& entry) {
+                return entry.first == preference;
+            });
+        if ( iterator != fonts.end() ) {
+            return iterator->second;
+        }
+
+        const auto      externalPath = Config::utf8ToPath(preference);
+        std::error_code pathError;
+        if ( std::filesystem::is_regular_file(externalPath, pathError) &&
+             !pathError ) {
+            return externalPath;
+        }
+    }
+    return skin.getFontPath("cjk");
+}
+
+/// @brief 收集当前项目音频资源标签实际需要的非 ASCII 码点。
+/// @return 已排序去重的 Unicode 码点。
+/// @warning 低频字体图集重载路径：会遍历项目音频资源，禁止在每帧调用。
+std::vector<std::uint32_t> collectProjectAudioLabelCodepoints()
+{
+    std::vector<std::uint32_t> result;
+    const auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return result;
+
+    result.reserve(project->m_audioResources.size() * 2U);
+    for ( const auto& resource : project->m_audioResources ) {
+        Common::appendNonAsciiCodepoints(result, resource.m_id);
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
 }
 
 }  // namespace
@@ -671,6 +717,7 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                skin.getAssetPath("logo"));
 
     m_asciiFontAtlasMetrics      = {};
+    m_unicodeFontMetrics         = {};
     const auto preferredFontPath = resolveCanvasAsciiFontPath(skin);
     std::array<std::optional<Graphic::RasterizedAsciiFont>,
                Common::ASCII_FONT_RASTER_TIER_COUNT>
@@ -713,6 +760,43 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
                 const auto textureId = Logic::asciiGlyphTextureId(
                     tierIndex, static_cast<char>(code));
+                m_textureAtlas->addTexture(
+                    static_cast<std::uint32_t>(textureId),
+                    glyph.pixels.data(),
+                    glyph.width,
+                    glyph.height);
+            }
+        }
+    }
+
+    const auto unicodeCodepoints = collectProjectAudioLabelCodepoints();
+    std::optional<Graphic::RasterizedUnicodeFont> rasterizedUnicodeFont;
+    if ( !unicodeCodepoints.empty() ) {
+        const auto preferredCjkFontPath = resolveCanvasCjkFontPath(skin);
+        rasterizedUnicodeFont = Graphic::AsciiFontRasterizer::rasterizeUnicode(
+            preferredCjkFontPath, unicodeCodepoints);
+        const auto defaultCjkFontPath = skin.getFontPath("cjk");
+        if ( !rasterizedUnicodeFont &&
+             preferredCjkFontPath != defaultCjkFontPath ) {
+            XWARN("Failed to rasterize preferred CJK font, using skin default");
+            rasterizedUnicodeFont =
+                Graphic::AsciiFontRasterizer::rasterizeUnicode(
+                    defaultCjkFontPath, unicodeCodepoints);
+        }
+        if ( rasterizedUnicodeFont ) {
+            m_unicodeFontMetrics = rasterizedUnicodeFont->metrics;
+            for ( std::size_t index = 0U;
+                  index < rasterizedUnicodeFont->metrics.glyphs.size();
+                  ++index ) {
+                const auto& metrics =
+                    rasterizedUnicodeFont->metrics.glyphs[index];
+                const auto& glyph = rasterizedUnicodeFont->glyphs[index];
+                if ( !metrics.metrics.hasBitmap || glyph.pixels.empty() ) {
+                    continue;
+                }
+                const auto textureId =
+                    Logic::unicodeGlyphTextureId(metrics.codepoint);
+                if ( textureId == Logic::TextureID::None ) continue;
                 m_textureAtlas->addTexture(
                     static_cast<std::uint32_t>(textureId),
                     glyph.pixels.data(),
@@ -769,10 +853,23 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         }
     }
 
+    if ( m_unicodeFontMetrics.valid ) {
+        for ( const auto& glyph : m_unicodeFontMetrics.glyphs ) {
+            if ( !glyph.metrics.hasBitmap ) continue;
+            const auto textureId =
+                Logic::unicodeGlyphTextureId(glyph.codepoint);
+            if ( textureId == Logic::TextureID::None ) continue;
+            m_atlasUVs[static_cast<std::uint32_t>(textureId)] =
+                m_textureAtlas->getUV(static_cast<std::uint32_t>(textureId));
+        }
+    }
+
     Logic::EditorEngine::instance().setAtlasUVMap(
-        m_cameraId, m_atlasUVs, m_asciiFontAtlasMetrics);
+        m_cameraId, m_atlasUVs, m_asciiFontAtlasMetrics, m_unicodeFontMetrics);
     m_loadedAsciiFontPreference =
         Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
+    m_loadedCjkFontPreference =
+        Config::AppConfig::instance().getEditorSettings().preferredCjkFont;
     XINFO("Basic2DCanvas textures reloaded into atlas for camera: " +
           m_cameraId);
 }

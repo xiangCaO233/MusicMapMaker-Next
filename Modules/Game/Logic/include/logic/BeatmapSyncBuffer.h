@@ -4,6 +4,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/UnicodeFontData.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -49,7 +50,10 @@ enum class TextureID : uint32_t {
     EffectStart = 1000,
 
     /// @brief ASCII 字形使用独立高位保留区，避免与皮肤动态特效 ID 冲突。
-    AsciiGlyphStart = 0x00100000U
+    AsciiGlyphStart = 0x00100000U,
+
+    /// @brief 按需 Unicode 字形使用独立高位保留区。
+    UnicodeGlyphStart = 0x00200000U
 };
 
 /// @brief 将 ASCII 字号档位与字符转换为字体图集纹理 ID。
@@ -68,6 +72,20 @@ enum class TextureID : uint32_t {
         static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) +
         tierIndex * Common::ASCII_GLYPH_COUNT + code -
         Common::ASCII_GLYPH_FIRST);
+}
+
+/// @brief 将 Unicode 码点转换为字体图集纹理 ID。
+/// @param codepoint 合法且非 ASCII 的 Unicode 码点。
+/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
+[[nodiscard]] inline constexpr TextureID unicodeGlyphTextureId(
+    std::uint32_t codepoint)
+{
+    if ( codepoint <= Common::ASCII_GLYPH_LAST ||
+         !Common::isValidUnicodeCodepoint(codepoint) ) {
+        return TextureID::None;
+    }
+    return static_cast<TextureID>(
+        static_cast<std::uint32_t>(TextureID::UnicodeGlyphStart) + codepoint);
 }
 
 enum class HoverPart : uint8_t {
@@ -288,6 +306,9 @@ struct RenderSnapshot {
 
     /// @brief 当前主画布 ASCII 字体的多档归一化字形度量。
     Common::AsciiFontAtlasMetrics asciiFontAtlasMetrics;
+
+    /// @brief 当前主画布按项目资源名加载的 Unicode 字形度量。
+    Common::UnicodeFontMetrics unicodeFontMetrics;
 
     /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
     std::vector<entt::entity> noteQueryScratch;

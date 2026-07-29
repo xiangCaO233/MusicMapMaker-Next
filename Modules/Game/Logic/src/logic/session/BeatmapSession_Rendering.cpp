@@ -657,7 +657,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         engine.updateSnapshotAtlasUVMap(cameraId,
                                         snapshot->uvMap,
                                         snapshot->atlasUvRevision,
-                                        snapshot->asciiFontAtlasMetrics);
+                                        snapshot->asciiFontAtlasMetrics,
+                                        snapshot->unicodeFontMetrics);
         snapshot->isPlaying   = snapshotIsPlaying;
         snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
         snapshot->canvasHorizontalOffsetX =

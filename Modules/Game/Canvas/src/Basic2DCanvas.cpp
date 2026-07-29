@@ -410,9 +410,13 @@ void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
 
 bool Basic2DCanvas::needReload()
 {
-    const auto& currentAsciiFont =
-        Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const auto& currentAsciiFont = settings.preferredAsciiFont;
+    const auto& currentCjkFont   = settings.preferredCjkFont;
     if ( currentAsciiFont != m_loadedAsciiFontPreference ) {
+        m_needReload = true;
+    }
+    if ( currentCjkFont != m_loadedCjkFontPreference ) {
         m_needReload = true;
     }
     return std::exchange(m_needReload, false);

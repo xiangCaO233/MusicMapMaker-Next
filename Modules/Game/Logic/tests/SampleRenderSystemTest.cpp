@@ -9,6 +9,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -61,6 +62,37 @@ void configureAsciiFont(MMM::Logic::RenderSnapshot& snapshot)
             snapshot.uvMap.emplace(static_cast<std::uint32_t>(textureId),
                                    glm::vec4{ glyphU, 0.7F, 0.0008F, 0.01F });
         }
+    }
+}
+
+/// @brief 为采样标签测试注入“初音”两个 CJK 字形及其 UV。
+/// @param snapshot 待初始化快照。
+void configureUnicodeFont(MMM::Logic::RenderSnapshot& snapshot)
+{
+    constexpr std::array<std::uint32_t, 2> codepoints{ 0x521DU, 0x97F3U };
+    auto& unicodeFont      = snapshot.unicodeFontMetrics;
+    unicodeFont.valid      = true;
+    unicodeFont.ascender   = 0.88F;
+    unicodeFont.lineHeight = 1.0F;
+    for ( std::size_t index = 0U; index < codepoints.size(); ++index ) {
+        MMM::Common::UnicodeGlyphMetrics entry;
+        entry.codepoint         = codepoints[index];
+        entry.metrics.available = true;
+        entry.metrics.hasBitmap = true;
+        entry.metrics.width     = 0.9F;
+        entry.metrics.height    = 0.9F;
+        entry.metrics.bearingX  = 0.0F;
+        entry.metrics.bearingY  = 0.85F;
+        entry.metrics.advanceX  = 1.0F;
+        const auto textureId =
+            MMM::Logic::unicodeGlyphTextureId(entry.codepoint);
+        snapshot.uvMap.emplace(
+            static_cast<std::uint32_t>(textureId),
+            glm::vec4{ 0.82F + static_cast<float>(index) * 0.01F,
+                       0.84F,
+                       0.008F,
+                       0.012F });
+        unicodeFont.glyphs.push_back(entry);
     }
 }
 
@@ -307,6 +339,28 @@ bool testSampleLabelScaleAndFixedLaneWidth()
     return true;
 }
 
+/// @brief 验证采样标签按 UTF-8 码点使用按需加载的 CJK 字形。
+/// @return “初音”均使用 Unicode 图集纹理且没有被替换成问号时返回 true。
+bool testSampleLabelCjkGlyphs()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    configureUnicodeFont(snapshot);
+    renderSingleSample(snapshot, "初音.wav", 0.0, true);
+
+    bool foundFirst  = false;
+    bool foundSecond = false;
+    for ( std::size_t index = 4U; index < snapshot.vertices.size(); ++index ) {
+        const float u = snapshot.vertices[index].uv.u;
+        foundFirst    = foundFirst || near(u, 0.82F);
+        foundSecond   = foundSecond || near(u, 0.83F);
+    }
+    if ( !foundFirst || !foundSecond ) {
+        XERROR("CJK sample label did not use the Unicode glyph atlas");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行自动采样渲染系统回归测试。
@@ -315,7 +369,8 @@ int main()
 {
     return testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleLabelMarquee() &&
-                   testSampleLabelScaleAndFixedLaneWidth()
+                   testSampleLabelScaleAndFixedLaneWidth() &&
+                   testSampleLabelCjkGlyphs()
                ? 0
                : 1;
 }
