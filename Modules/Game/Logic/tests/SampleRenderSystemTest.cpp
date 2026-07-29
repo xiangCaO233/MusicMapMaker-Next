@@ -347,6 +347,11 @@ bool testSampleLabelCjkGlyphs()
     configureUnicodeFont(snapshot);
     renderSingleSample(snapshot, "初音.wav", 0.0, true);
 
+    if ( snapshot.requestedUnicodeGlyphCount != 0U ) {
+        XERROR("Loaded CJK sample label requested a redundant atlas refresh");
+        return false;
+    }
+
     bool foundFirst  = false;
     bool foundSecond = false;
     for ( std::size_t index = 4U; index < snapshot.vertices.size(); ++index ) {
@@ -361,6 +366,31 @@ bool testSampleLabelCjkGlyphs()
     return true;
 }
 
+/// @brief 验证可见 CJK 标签会回报当前图集缺失的码点。
+/// @return 截图项目的日文资源名各码点只回报一次时返回 true。
+bool testMissingCjkGlyphRequestsAtlasRefresh()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    renderSingleSample(
+        snapshot, "ぴょん (feat. 初音ミク & 重音テト).mp3", 0.0, true);
+    constexpr std::array<std::uint32_t, 10> expectedCodepoints{
+        0x3074U, 0x3087U, 0x3093U, 0x521DU, 0x97F3U,
+        0x30DFU, 0x30AFU, 0x91CDU, 0x30C6U, 0x30C8U
+    };
+    if ( snapshot.requestedUnicodeGlyphCount != expectedCodepoints.size() ) {
+        XERROR("Missing CJK label glyphs were not reported for atlas refresh");
+        return false;
+    }
+    for ( std::size_t index = 0U; index < expectedCodepoints.size(); ++index ) {
+        if ( snapshot.requestedUnicodeGlyphs[index] !=
+             expectedCodepoints[index] ) {
+            XERROR("CJK atlas refresh request lost the screenshot resource ID");
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行自动采样渲染系统回归测试。
@@ -370,7 +400,8 @@ int main()
     return testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleLabelMarquee() &&
                    testSampleLabelScaleAndFixedLaneWidth() &&
-                   testSampleLabelCjkGlyphs()
+                   testSampleLabelCjkGlyphs() &&
+                   testMissingCjkGlyphRequestsAtlasRefresh()
                ? 0
                : 1;
 }

@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
 #include <utility>
@@ -418,6 +419,24 @@ bool Basic2DCanvas::needReload()
     }
     if ( currentCjkFont != m_loadedCjkFontPreference ) {
         m_needReload = true;
+    }
+    if ( m_currentSnapshot ) {
+        // 逻辑线程只回报当前可见标签真正缺失的码点；收到新码点后才触发
+        // 低频图集重建，避免每帧扫描整个项目资源表。
+        for ( std::size_t index = 0U;
+              index < m_currentSnapshot->requestedUnicodeGlyphCount;
+              ++index ) {
+            const auto codepoint =
+                m_currentSnapshot->requestedUnicodeGlyphs[index];
+            if ( m_unicodeFontMetrics.glyph(codepoint) ||
+                 std::find(m_requestedUnicodeCodepoints.begin(),
+                           m_requestedUnicodeCodepoints.end(),
+                           codepoint) != m_requestedUnicodeCodepoints.end() ) {
+                continue;
+            }
+            m_requestedUnicodeCodepoints.push_back(codepoint);
+            m_needReload = true;
+        }
     }
     return std::exchange(m_needReload, false);
 }

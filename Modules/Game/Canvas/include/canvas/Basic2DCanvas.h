@@ -213,6 +213,8 @@ private:
     std::string m_loadedAsciiFontPreference;
     /// @brief 最近一次加载图集时使用的软件 CJK 字体偏好。
     std::string m_loadedCjkFontPreference;
+    /// @brief 可见标签已请求补载的 Unicode 码点，跨图集重建保留。
+    std::vector<std::uint32_t> m_requestedUnicodeCodepoints;
 
     ///@brief 全局图集
     std::unique_ptr<Graphic::VKTextureAtlas> m_textureAtlas{ nullptr };

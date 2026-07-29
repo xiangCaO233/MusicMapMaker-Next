@@ -81,8 +81,9 @@ int main(int argc, char** argv)
         }
     }
 
-    constexpr std::array<std::uint32_t, 4> cjkCodepoints{
-        0x30AFU, 0x30DFU, 0x521DU, 0x97F3U
+    constexpr std::array<std::uint32_t, 10> cjkCodepoints{
+        0x3074U, 0x3087U, 0x3093U, 0x30AFU, 0x30C6U,
+        0x30C8U, 0x30DFU, 0x521DU, 0x91CDU, 0x97F3U
     };
     const auto unicodeFont =
         MMM::Graphic::AsciiFontRasterizer::rasterizeUnicode(

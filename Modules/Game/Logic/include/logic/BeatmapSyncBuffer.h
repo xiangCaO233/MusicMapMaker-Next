@@ -11,6 +11,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <concurrentqueue.h>
 #include <cstdint>
@@ -310,6 +311,35 @@ struct RenderSnapshot {
     /// @brief 当前主画布按项目资源名加载的 Unicode 字形度量。
     Common::UnicodeFontMetrics unicodeFontMetrics;
 
+    /// @brief 单个快照最多回报的缺失 Unicode 字形数量。
+    static constexpr std::size_t MAX_REQUESTED_UNICODE_GLYPHS = 256U;
+
+    /// @brief 本帧可见标签请求补载的 Unicode 码点。
+    std::array<std::uint32_t, MAX_REQUESTED_UNICODE_GLYPHS>
+        requestedUnicodeGlyphs{};
+
+    /// @brief `requestedUnicodeGlyphs` 中的有效元素数量。
+    std::size_t requestedUnicodeGlyphCount{ 0U };
+
+    /// @brief 记录当前字体图集中缺失的 Unicode 字形。
+    /// @param codepoint 待补载码点。
+    /// @warning 逻辑渲染热路径：只扫描固定上限栈内数组，不分配内存。
+    void requestUnicodeGlyph(std::uint32_t codepoint)
+    {
+        if ( codepoint <= Common::ASCII_GLYPH_LAST ||
+             !Common::isValidUnicodeCodepoint(codepoint) ||
+             unicodeFontMetrics.glyph(codepoint) ) {
+            return;
+        }
+        for ( std::size_t index = 0U; index < requestedUnicodeGlyphCount;
+              ++index ) {
+            if ( requestedUnicodeGlyphs[index] == codepoint ) return;
+        }
+        if ( requestedUnicodeGlyphCount < requestedUnicodeGlyphs.size() ) {
+            requestedUnicodeGlyphs[requestedUnicodeGlyphCount++] = codepoint;
+        }
+    }
+
     /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
     std::vector<entt::entity> noteQueryScratch;
 
@@ -554,6 +584,7 @@ struct RenderSnapshot {
         canvasComponentInstances.clear();
         scrollSegments.clear();
         previewDensity.clear();
+        requestedUnicodeGlyphCount = 0U;
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();
         sampleQueryScratch.clear();

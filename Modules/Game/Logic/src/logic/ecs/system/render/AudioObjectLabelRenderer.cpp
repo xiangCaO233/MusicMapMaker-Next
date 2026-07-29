@@ -73,9 +73,8 @@ void copyDisplayResourceId(std::span<char> output, std::string_view source)
 /// @return 可用字形度量；缺字时回退到 ASCII 问号。
 /// @warning 主画布热路径：Unicode 路径只执行二分查找，不得分配内存。
 const Common::AsciiGlyphMetrics* resolveCanvasGlyph(
-    const Common::AsciiFontSelection& selection,
-    const Common::UnicodeFontMetrics& unicodeFont, std::uint32_t codepoint,
-    TextureID& textureId)
+    RenderSnapshot& snapshot, const Common::AsciiFontSelection& selection,
+    std::uint32_t codepoint, TextureID& textureId)
 {
     textureId = TextureID::None;
     if ( codepoint <= Common::ASCII_GLYPH_LAST ) {
@@ -85,10 +84,13 @@ const Common::AsciiGlyphMetrics* resolveCanvasGlyph(
             textureId = asciiGlyphTextureId(selection.tierIndex, character);
             return glyph;
         }
-    } else if ( const auto* glyph = unicodeFont.glyph(codepoint);
+    } else if ( const auto* glyph =
+                    snapshot.unicodeFontMetrics.glyph(codepoint);
                 glyph && glyph->available ) {
         textureId = unicodeGlyphTextureId(codepoint);
         return glyph;
+    } else {
+        snapshot.requestUnicodeGlyph(codepoint);
     }
 
     const auto* fallback = selection.metrics->glyph('?');
@@ -100,15 +102,15 @@ const Common::AsciiGlyphMetrics* resolveCanvasGlyph(
 }
 
 /// @brief 计算单行 UTF-8 文本的横向推进宽度。
-/// @param font 当前字号对应的字体度量。
-/// @param unicodeFont 当前按需 Unicode 字体。
+/// @param selection 当前字号对应的 ASCII 字体档位。
+/// @param snapshot 当前渲染快照，用于读取并回报按需 Unicode 字形。
 /// @param text 文本。
 /// @param fontPixelHeight 字体像素高度。
 /// @return 文本完整横向推进宽度。
 /// @warning 主画布热路径：只允许线性扫描有界短文本。
 float measureCanvasTextWidth(const Common::AsciiFontSelection& selection,
-                             const Common::UnicodeFontMetrics& unicodeFont,
-                             std::string_view text, float fontPixelHeight)
+                             RenderSnapshot& snapshot, std::string_view text,
+                             float fontPixelHeight)
 {
     float       width  = 0.0F;
     std::size_t offset = 0U;
@@ -116,7 +118,7 @@ float measureCanvasTextWidth(const Common::AsciiFontSelection& selection,
         const auto  codepoint = Common::decodeNextUtf8Codepoint(text, offset);
         TextureID   textureId = TextureID::None;
         const auto* glyph =
-            resolveCanvasGlyph(selection, unicodeFont, codepoint, textureId);
+            resolveCanvasGlyph(snapshot, selection, codepoint, textureId);
         if ( glyph && glyph->available ) {
             width += glyph->advanceX * fontPixelHeight;
         }
@@ -143,15 +145,14 @@ void renderCanvasTextRunAt(Batcher&                          batcher,
 {
     if ( !selection || text.empty() || clipRight <= clipLeft ) return;
 
-    const auto& font        = *selection.metrics;
-    const auto& unicodeFont = batcher.snapshot->unicodeFontMetrics;
-    const float baselineY   = y + font.ascender * fontPixelHeight;
-    std::size_t offset      = 0U;
+    const auto& font      = *selection.metrics;
+    const float baselineY = y + font.ascender * fontPixelHeight;
+    std::size_t offset    = 0U;
     while ( offset < text.size() ) {
         const auto  codepoint = Common::decodeNextUtf8Codepoint(text, offset);
         TextureID   textureId = TextureID::None;
-        const auto* glyph =
-            resolveCanvasGlyph(selection, unicodeFont, codepoint, textureId);
+        const auto* glyph     = resolveCanvasGlyph(
+            *batcher.snapshot, selection, codepoint, textureId);
         if ( !glyph || !glyph->available ) continue;
         const float advance = glyph->advanceX * fontPixelHeight;
         if ( penX >= clipRight ) break;
@@ -207,7 +208,7 @@ void renderMarqueeCanvasTextAt(Batcher& batcher, std::string_view text, float x,
     if ( !selection || text.empty() || maxWidth <= 0.0F ) return;
 
     const float textWidth = measureCanvasTextWidth(
-        selection, batcher.snapshot->unicodeFontMetrics, text, fontPixelHeight);
+        selection, *batcher.snapshot, text, fontPixelHeight);
     if ( textWidth <= maxWidth ) {
         renderCanvasTextRunAt(batcher,
                               selection,
@@ -283,7 +284,7 @@ void renderCanvasAsciiText(Batcher& batcher, std::string_view text, float x,
     if ( !selection || text.empty() || maxWidth <= 0.0F ) return;
 
     const float textWidth = measureCanvasTextWidth(
-        selection, batcher.snapshot->unicodeFontMetrics, text, fontPixelHeight);
+        selection, *batcher.snapshot, text, fontPixelHeight);
     const float penX = x + (centerHorizontally && textWidth <= maxWidth
                                 ? (maxWidth - textWidth) * 0.5F
                                 : 0.0F);

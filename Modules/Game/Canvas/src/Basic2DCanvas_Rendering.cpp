@@ -769,7 +769,14 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         }
     }
 
-    const auto unicodeCodepoints = collectProjectAudioLabelCodepoints();
+    auto unicodeCodepoints = collectProjectAudioLabelCodepoints();
+    unicodeCodepoints.insert(unicodeCodepoints.end(),
+                             m_requestedUnicodeCodepoints.begin(),
+                             m_requestedUnicodeCodepoints.end());
+    std::sort(unicodeCodepoints.begin(), unicodeCodepoints.end());
+    unicodeCodepoints.erase(
+        std::unique(unicodeCodepoints.begin(), unicodeCodepoints.end()),
+        unicodeCodepoints.end());
     std::optional<Graphic::RasterizedUnicodeFont> rasterizedUnicodeFont;
     if ( !unicodeCodepoints.empty() ) {
         const auto preferredCjkFontPath = resolveCanvasCjkFontPath(skin);
