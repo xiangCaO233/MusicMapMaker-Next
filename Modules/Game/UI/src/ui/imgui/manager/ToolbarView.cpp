@@ -40,6 +40,29 @@ namespace MMM::UI
 
 namespace
 {
+/// @brief 绘制文本空间不足时自动滚动的工具栏方形按钮。
+/// @param id 不显示的 ImGui ID。
+/// @param text 按钮显示文本。
+/// @param size 按钮尺寸。
+/// @return 本帧按钮被激活时返回 true。
+/// @warning UI 热路径：只复用反馈按钮并追加一次局部裁剪文本绘制。
+bool drawToolbarScrollingButton(const char* id, std::string_view text,
+                                ImVec2 size)
+{
+    const bool   clicked = ::MMM::UI::FeedbackButton(id, size);
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const ImVec2 itemMax = ImGui::GetItemRectMax();
+    const float  padding = std::max(2.0f, ImGui::GetStyle().FramePadding.x);
+    const float  availableWidth =
+        std::max(0.0f, itemMax.x - itemMin.x - padding * 2.0f);
+    Utils::drawScrollingText(text,
+                             ImVec2(itemMin.x + padding, itemMin.y),
+                             availableWidth,
+                             itemMax.y - itemMin.y,
+                             true);
+    return clicked;
+}
+
 /// @brief 将颜色槽位转换为数组索引。
 std::size_t colorSlotIndex(Logic::NoteColorSlot slot)
 {
@@ -831,20 +854,17 @@ void ToolbarView::update(UIManager* sourceManager)
 
                 const double currentSpeed =
                     Audio::AudioManager::instance().getPlaybackSpeed();
-                char speedBuf[64];
+                char speedText[32];
                 if ( hasBeatmap ) {
-                    snprintf(speedBuf,
-                             sizeof(speedBuf),
-                             "%.2g###ToolbarPlaybackSpeed",
-                             currentSpeed);
+                    snprintf(
+                        speedText, sizeof(speedText), "%.2g", currentSpeed);
                 } else {
-                    snprintf(speedBuf,
-                             sizeof(speedBuf),
-                             "--###ToolbarPlaybackSpeed");
+                    snprintf(speedText, sizeof(speedText), "--");
                 }
 
-                if ( ::MMM::UI::FeedbackButton(speedBuf,
-                                               ImVec2(btnSize, btnSize)) ) {
+                if ( drawToolbarScrollingButton("###ToolbarPlaybackSpeed",
+                                                speedText,
+                                                ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
                         m_showKeyPopup      = false;

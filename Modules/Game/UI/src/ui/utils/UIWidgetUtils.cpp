@@ -129,24 +129,34 @@ float calcScrollingTextOffset(float textWidth, float visibleWidth)
 /// @param startPos 绘制起点。
 /// @param availableWidth 可用宽度。
 /// @param targetHeight 可用高度。
+/// @param centerWhenFits 文本完整放得下时是否水平居中。
 /// @warning UI 热路径：只向当前窗口 DrawList 添加文字。
-void drawScrollingText(const std::string& text, ImVec2 startPos,
-                       float availableWidth, float targetHeight)
+void drawScrollingText(std::string_view text, ImVec2 startPos,
+                       float availableWidth, float targetHeight,
+                       bool centerWhenFits)
 {
-    const ImVec2 textSize     = ImGui::CalcTextSize(text.c_str());
+    if ( text.empty() ) return;
+
+    const char*  textBegin    = text.data();
+    const char*  textEnd      = textBegin + text.size();
+    const ImVec2 textSize     = ImGui::CalcTextSize(textBegin, textEnd);
     const float  visibleWidth = std::max(0.0f, availableWidth);
     const float  offset  = calcScrollingTextOffset(textSize.x, visibleWidth);
     const float  textH   = ImGui::GetFontSize();
     const float  offsetY = (targetHeight - textH) * 0.5f;
+    const float  centerOffset = centerWhenFits && textSize.x <= visibleWidth
+                                    ? (visibleWidth - textSize.x) * 0.5f
+                                    : 0.0f;
 
     ImGui::PushClipRect(
         startPos,
         ImVec2(startPos.x + visibleWidth, startPos.y + targetHeight),
         true);
     ImGui::GetWindowDrawList()->AddText(
-        ImVec2(startPos.x - offset, startPos.y + offsetY),
+        ImVec2(startPos.x + centerOffset - offset, startPos.y + offsetY),
         ImGui::GetColorU32(ImGuiCol_Text),
-        text.c_str());
+        textBegin,
+        textEnd);
     ImGui::PopClipRect();
 }
 
