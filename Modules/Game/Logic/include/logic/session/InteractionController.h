@@ -59,6 +59,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdSetBrushNotePalette& cmd);
 
+    /// @brief 处理项目音频工具的画笔资源选择。
+    /// @param cmd 稳定资源 ID 与当前资源类型。
+    void handleCommand(const CmdSetBrushAudioResource& cmd);
+
     /// @brief 处理更新鼠标位置的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetMousePosition& cmd);

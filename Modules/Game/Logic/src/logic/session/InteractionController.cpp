@@ -1451,6 +1451,12 @@ void InteractionController::handleCommand(const CmdSetBrushNotePalette& cmd)
     }
 }
 
+void InteractionController::handleCommand(const CmdSetBrushAudioResource& cmd)
+{
+    m_ctx.brushState.selectedAudioResourceId = cmd.audioResourceId;
+    m_ctx.brushState.selectedAudioTrackType  = cmd.audioTrackType;
+}
+
 void InteractionController::handleCommand(const CmdStartMarquee& cmd)
 {
     if ( m_tools.count(m_ctx.currentTool) ) {

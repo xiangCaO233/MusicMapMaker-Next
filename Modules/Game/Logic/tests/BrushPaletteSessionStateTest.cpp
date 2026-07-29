@@ -74,11 +74,49 @@ bool testPaletteRestoredAfterSessionClose()
     return matches;
 }
 
+/// @brief 验证新会话恢复编辑器级项目音频画笔选择。
+/// @return 稳定资源 ID 与资源类型均跨会话保留时返回 true。
+bool testAudioResourceRestoredAfterSessionClose()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    while ( engine.getSessionCount() > 0 ) {
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+
+    engine.createSession(nullptr, "Audio Source", false);
+    engine.pushCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "main-track",
+        .audioTrackType  = MMM::AudioTrackType::Main,
+    });
+    engine.closeSession(0, false);
+    engine.createSession(nullptr, "Audio Target", true);
+
+    auto session = engine.getActiveSession();
+    if ( !session ) {
+        XERROR("Audio target session was not created");
+        return false;
+    }
+    session->update(0.0, engine.getEditorConfig(), true);
+
+    const auto& brush = session->getContext().brushState;
+    const bool  matches =
+        brush.selectedAudioResourceId == "main-track" &&
+        brush.selectedAudioTrackType == MMM::AudioTrackType::Main;
+    engine.closeSession(0, false);
+    if ( !matches ) {
+        XERROR("New session did not restore the editor audio selection");
+    }
+    return matches;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testPaletteRestoredAfterSessionClose() ? 0 : 1;
+    return testPaletteRestoredAfterSessionClose() &&
+                   testAudioResourceRestoredAfterSessionClose()
+               ? 0
+               : 1;
 }

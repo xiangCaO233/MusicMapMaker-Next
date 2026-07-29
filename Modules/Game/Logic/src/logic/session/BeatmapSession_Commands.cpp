@@ -1119,6 +1119,8 @@ bool BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdUpdateBgmTrackCount> ||
                                     std::is_same_v<T, CmdSetBrushNoteColor> ||
                                     std::is_same_v<T, CmdSetBrushNotePalette> ||
+                                    std::is_same_v<T,
+                                                   CmdSetBrushAudioResource> ||
                                     std::is_same_v<T, CmdStartMarquee> ||
                                     std::is_same_v<T, CmdUpdateMarquee> ||
                                     std::is_same_v<T, CmdEndMarquee> ||

@@ -1188,6 +1188,21 @@ void EditorEngine::finishOpenProject(
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         const auto& workspace = project->m_settings.m_workspace;
+        m_brushAudioResourceId.clear();
+        m_brushAudioTrackType = AudioTrackType::Effect;
+        if ( !workspace.m_projectAudioToolSelectedResourceId.empty() ) {
+            const auto resourceIterator = std::find_if(
+                project->m_audioResources.begin(),
+                project->m_audioResources.end(),
+                [&](const AudioResource& resource) {
+                    return resource.m_id ==
+                           workspace.m_projectAudioToolSelectedResourceId;
+                });
+            if ( resourceIterator != project->m_audioResources.end() ) {
+                m_brushAudioResourceId = resourceIterator->m_id;
+                m_brushAudioTrackType  = resourceIterator->m_type;
+            }
+        }
         m_currentTool.store(workspaceNameToEditTool(workspace.m_activeEditTool),
                             std::memory_order_relaxed);
         if ( workspace.m_toolbarState.m_valid ) {
@@ -1661,6 +1676,30 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         return;
     }
 
+    // 项目音频选择是全局画笔状态，所有画布必须使用同一资源。
+    if ( const auto* audioResource =
+             std::get_if<CmdSetBrushAudioResource>(&cmd) ) {
+        m_brushAudioResourceId = audioResource->audioResourceId;
+        m_brushAudioTrackType  = audioResource->audioTrackType;
+        if ( auto* project = ProjectController::instance().currentProject() ) {
+            project->m_settings.m_workspace
+                .m_projectAudioToolSelectedResourceId = m_brushAudioResourceId;
+        }
+
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( auto& entry : sessions ) {
+            if ( entry.session ) {
+                entry.session->pushCommand(
+                    LogicCommand(CmdSetBrushAudioResource{
+                        m_brushAudioResourceId,
+                        m_brushAudioTrackType,
+                    }));
+            }
+        }
+        return;
+    }
+
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
@@ -1746,6 +1785,15 @@ void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
         session.pushCommand(CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
                                                   m_brushNoteColors[i] });
     }
+}
+
+void EditorEngine::restoreBrushAudioResourceUnsafe(
+    BeatmapSession& session) const
+{
+    session.pushCommand(LogicCommand(CmdSetBrushAudioResource{
+        m_brushAudioResourceId,
+        m_brushAudioTrackType,
+    }));
 }
 
 bool EditorEngine::hasUnsavedChanges() const
@@ -2218,6 +2266,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
                     m_currentTool.load(std::memory_order_relaxed) }));
                 restoreBrushNoteColorsUnsafe(*sessions[i].session);
+                restoreBrushAudioResourceUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
@@ -2266,6 +2315,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
     restoreBrushNoteColorsUnsafe(*newSession);
+    restoreBrushAudioResourceUnsafe(*newSession);
 
     // 如果有谱面，加载它
     if ( beatmap ) {
@@ -2363,6 +2413,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
     restoreBrushNoteColorsUnsafe(*newSession);
+    restoreBrushAudioResourceUnsafe(*newSession);
 
     entry.session     = std::move(newSession);
     entry.displayName = displayName.empty() ? "Welcome" : displayName;
@@ -2427,6 +2478,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     }
 
     restoreBrushNoteColorsUnsafe(*activeSession);
+    restoreBrushAudioResourceUnsafe(*activeSession);
     auto& ctx                       = activeSession->getContextMutable();
     ctx.isActiveSession             = true;
     ctx.isPlaying                   = false;
@@ -2871,6 +2923,26 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
             Config::pathToUtf8(result.m_effectRegistration->m_absolutePath),
             result.m_effectRegistration->m_resource.m_config);
     }
+    if ( m_brushAudioResourceId == cmd.id ) {
+        const auto resourceIterator =
+            std::find_if(project->m_audioResources.begin(),
+                         project->m_audioResources.end(),
+                         [&](const AudioResource& resource) {
+                             return resource.m_id == cmd.id;
+                         });
+        if ( resourceIterator != project->m_audioResources.end() ) {
+            m_brushAudioTrackType = resourceIterator->m_type;
+            for ( auto& entry : sessions ) {
+                if ( entry.session ) {
+                    entry.session->pushCommand(
+                        LogicCommand(CmdSetBrushAudioResource{
+                            m_brushAudioResourceId,
+                            m_brushAudioTrackType,
+                        }));
+                }
+            }
+        }
+    }
     markAudioTimelineDescriptorsDirtyUnsafe();
     saveProject();
     publishAudioResourceMutationResult(
@@ -2955,6 +3027,21 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
     if ( result.m_effectResourceIdToUnload ) {
         Audio::AudioManager::instance().unloadSoundEffect(
             *result.m_effectResourceIdToUnload);
+    }
+    if ( m_brushAudioResourceId == cmd.id ) {
+        m_brushAudioResourceId.clear();
+        m_brushAudioTrackType = AudioTrackType::Effect;
+        project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
+            .clear();
+        for ( auto& entry : sessions ) {
+            if ( entry.session ) {
+                entry.session->pushCommand(
+                    LogicCommand(CmdSetBrushAudioResource{
+                        {},
+                        AudioTrackType::Effect,
+                    }));
+            }
+        }
     }
     markAudioTimelineDescriptorsDirtyUnsafe();
     saveProject();

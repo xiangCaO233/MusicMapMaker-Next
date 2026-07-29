@@ -493,6 +493,12 @@ private:
     /// 重置或切换等低频路径。
     void restoreBrushNoteColorsUnsafe(BeatmapSession& session) const;
 
+    /// @brief 将编辑器级项目音频选择恢复到指定会话。
+    /// @param session 接收当前资源选择的会话。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
+    /// 重置或切换等低频路径。
+    void restoreBrushAudioResourceUnsafe(BeatmapSession& session) const;
+
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
     void captureProjectWorkspaceState();
 
@@ -592,6 +598,12 @@ private:
 
     /// @brief 编辑器是否已经收到过画笔配色命令。
     bool m_brushNoteColorsInitialized{ false };
+
+    /// @brief 当前项目音频工具选中的稳定资源 ID。
+    std::string m_brushAudioResourceId;
+
+    /// @brief 当前项目音频工具选中的资源类型。
+    AudioTrackType m_brushAudioTrackType{ AudioTrackType::Effect };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用

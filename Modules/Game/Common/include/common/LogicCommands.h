@@ -297,6 +297,15 @@ struct CmdSetBrushNotePalette {
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
 };
 
+/// @brief 设置画笔新建物件使用的项目音频资源。
+struct CmdSetBrushAudioResource {
+    /// @brief 项目内稳定音频资源 ID；空字符串表示清除选择。
+    std::string audioResourceId;
+
+    /// @brief 所选资源类型，用于限制玩家物件只能绑定 Effect。
+    ::MMM::AudioTrackType audioTrackType{ ::MMM::AudioTrackType::Effect };
+};
+
 /// @brief 将完整音符调色盘应用到当前选中物件。
 struct CmdApplyNotePaletteToSelection {
     /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
@@ -654,15 +663,16 @@ using LogicCommand = std::variant<
     CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
-    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
-    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdUpdateAudioResourceConfig,
-    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
+    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
+    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides, CmdSaveBeatmap,
+    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdPanCanvas,
+    CmdUpdateTimelineEvent, CmdUpdateTimelineEvents, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
+    CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
+    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
+    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
+    CmdMarkBeatmapMetadataDirty, CmdImportAudio, CmdUpdateAudioResource,
+    CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
+    CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

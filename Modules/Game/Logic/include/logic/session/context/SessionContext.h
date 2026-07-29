@@ -256,6 +256,23 @@ struct SessionContext {
         /// @brief 当前画笔应用到新建物件的自定义颜色。
         NoteColorOverrides customColors;
 
+        /// @brief 当前项目音频工具选中的资源 ID；为空时新建玩家物件不绑定音效。
+        std::string selectedAudioResourceId;
+
+        /// @brief 当前项目音频工具选中的资源类型。
+        ::MMM::AudioTrackType selectedAudioTrackType{
+            ::MMM::AudioTrackType::Effect
+        };
+
+        /// @brief 当前手势是否正在 BGM 区创建自动采样。
+        bool createsAudioSample{ false };
+
+        /// @brief 当前自动采样创建手势锁定的资源 ID。
+        std::string activeAudioResourceId;
+
+        /// @brief 当前玩家物件创建或恢复手势锁定的采样绑定。
+        std::optional<::MMM::AudioSampleBinding> activeSampleBinding;
+
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brushState;

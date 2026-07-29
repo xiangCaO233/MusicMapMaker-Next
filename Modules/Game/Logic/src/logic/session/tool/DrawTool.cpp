@@ -5,6 +5,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SampleAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
@@ -63,10 +64,13 @@ bool isHoveredPlayerNote(const SessionContext& ctx)
 void resetBrushState(SessionContext& ctx)
 {
     ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = -1.0;
-    ctx.brushState.duration      = 0.0;
-    ctx.brushState.dtrack        = 0;
-    ctx.brushState.isActive      = false;
+    ctx.brushState.activeAudioResourceId.clear();
+    ctx.brushState.activeSampleBinding.reset();
+    ctx.brushState.holdStartTime      = -1.0;
+    ctx.brushState.duration           = 0.0;
+    ctx.brushState.dtrack             = 0;
+    ctx.brushState.createsAudioSample = false;
+    ctx.brushState.isActive           = false;
 }
 
 /// @brief 判断批量操作条目中是否已经包含指定实体。
@@ -139,29 +143,75 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     auto itCamera = ctx.cameras.find(cmd.cameraId);
     if ( itCamera == ctx.cameras.end() ) return;
 
-    // 计算轨道边界
-    const auto projection =
+    const bool isPreview =
+        cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas";
+    const auto playerProjection =
         calculatePlayerTrackProjection(itCamera->second.viewportWidth,
                                        ctx.trackCount,
                                        ctx.lastConfig.visual.trackLayout.left,
                                        ctx.lastConfig.visual.trackLayout.right,
                                        itCamera->second.horizontalOffsetX);
-    float leftX  = projection.leftX;
-    float rightX = projection.rightX;
-    if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
+    float                            leftX  = playerProjection.leftX;
+    float                            rightX = playerProjection.rightX;
+    std::optional<CanvasLaneAddress> targetLane;
+    if ( isPreview ) {
         leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
         rightX = itCamera->second.viewportWidth -
                  ctx.lastConfig.visual.previewConfig.margin.right;
+        if ( cmd.mouseX >= leftX && cmd.mouseX <= rightX &&
+             ctx.trackCount > 0 ) {
+            const float laneWidth =
+                (rightX - leftX) / static_cast<float>(ctx.trackCount);
+            const auto laneIndex = static_cast<std::uint32_t>(std::clamp(
+                static_cast<int>(std::floor((cmd.mouseX - leftX) / laneWidth)),
+                0,
+                ctx.trackCount - 1));
+            targetLane = CanvasLaneAddress{ CanvasLaneKind::Player, laneIndex };
+        }
+    } else {
+        const auto laneProjection = calculateCanvasLaneProjection(
+            itCamera->second.viewportWidth,
+            ctx.trackCount,
+            ctx.bgmTrackCount,
+            ctx.lastConfig.visual.trackLayout.left,
+            ctx.lastConfig.visual.trackLayout.right,
+            itCamera->second.horizontalOffsetX,
+            true);
+        targetLane = laneProjection.laneAt(cmd.mouseX);
     }
 
-    // 在轨道外点击，忽略并防止进入绘制状态
-    if ( cmd.mouseX < leftX || cmd.mouseX > rightX ) {
+    if ( !targetLane ) {
+        return;
+    }
+    const bool createsAudioSample = targetLane->kind == CanvasLaneKind::Bgm;
+    if ( createsAudioSample &&
+         ctx.brushState.selectedAudioResourceId.empty() ) {
+        ctx.lastActionMessage = "请先在项目音频工具中选择音频资源";
+        return;
+    }
+    if ( !createsAudioSample &&
+         !ctx.brushState.selectedAudioResourceId.empty() &&
+         ctx.brushState.selectedAudioTrackType ==
+             ::MMM::AudioTrackType::Main ) {
+        ctx.lastActionMessage = "主音轨不能绑定到玩家物件";
         return;
     }
 
-    ctx.brushState.isActive = true;
-    ctx.brushState.duration = 0.0;
-    ctx.brushState.dtrack   = 0;
+    ctx.brushState.isActive           = true;
+    ctx.brushState.createsAudioSample = createsAudioSample;
+    ctx.brushState.duration           = 0.0;
+    ctx.brushState.dtrack             = 0;
+    ctx.brushState.activeAudioResourceId =
+        createsAudioSample ? ctx.brushState.selectedAudioResourceId
+                           : std::string{};
+    ctx.brushState.activeSampleBinding.reset();
+    if ( !createsAudioSample &&
+         !ctx.brushState.selectedAudioResourceId.empty() ) {
+        ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
+            ctx.brushState.selectedAudioResourceId,
+            1.0F,
+        };
+    }
 
     // 获取 BPM 事件供磁吸使用
     SessionUtils::ensureBpmEvents(ctx);
@@ -181,7 +231,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     // 处理预览区缩放
     float renderScaleY = 1.0f;
-    if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
+    if ( isPreview ) {
         const auto* mainCamera =
             SessionUtils::findMainCanvasCamera(ctx.cameras);
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
@@ -220,11 +270,12 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         return;
     }
 
-    const float singleTrackW =
-        (rightX - leftX) / static_cast<float>(ctx.trackCount);
-    const int track =
-        static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
-    ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
+    ctx.brushState.track = static_cast<int>(
+        targetLane->absoluteTrack(static_cast<std::uint32_t>(ctx.trackCount)));
+    if ( createsAudioSample ) {
+        ctx.brushState.type = ::MMM::NoteType::NOTE;
+        return;
+    }
 
     bool isResuming = false;
     if ( cmd.isShiftDown && isHoveredPlayerNote(ctx) ) {
@@ -273,6 +324,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         // 能够平滑接续
                         ctx.brushState.holdStartTime = parentNote.m_timestamp;
                         ctx.brushState.startTrack    = parentNote.m_trackIndex;
+                        ctx.brushState.activeSampleBinding =
+                            parentNote.m_sampleBinding;
 
                         // 计算起始 Y 坐标，用于退化到普通音符时的参考
                         double startAbsY =
@@ -335,8 +388,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         std::max(0.0, snapTime - parentNote.m_timestamp);
                 }
 
-                ctx.brushState.holdStartTime = parentNote.m_timestamp;
-                ctx.brushState.startTrack    = parentNote.m_trackIndex;
+                ctx.brushState.holdStartTime       = parentNote.m_timestamp;
+                ctx.brushState.startTrack          = parentNote.m_trackIndex;
+                ctx.brushState.activeSampleBinding = parentNote.m_sampleBinding;
 
                 double startAbsY = cache->getAbsY(parentNote.m_timestamp);
                 ctx.brushState.startMouseY =
@@ -436,6 +490,27 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         return;
     }
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
+
+    if ( ctx.brushState.createsAudioSample ) {
+        if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
+            return;
+        }
+        const auto laneProjection = calculateCanvasLaneProjection(
+            itCamera->second.viewportWidth,
+            ctx.trackCount,
+            ctx.bgmTrackCount,
+            ctx.lastConfig.visual.trackLayout.left,
+            ctx.lastConfig.visual.trackLayout.right,
+            itCamera->second.horizontalOffsetX,
+            true);
+        const auto lane = laneProjection.laneAt(cmd.mouseX);
+        if ( lane && lane->kind == CanvasLaneKind::Bgm ) {
+            ctx.brushState.track = static_cast<int>(lane->absoluteTrack(
+                static_cast<std::uint32_t>(ctx.trackCount)));
+            ctx.brushState.time  = currentPosTime;
+        }
+        return;
+    }
 
     const auto projection =
         calculatePlayerTrackProjection(itCamera->second.viewportWidth,
@@ -651,13 +726,36 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 {
     if ( !ctx.brushState.isActive ) return;
 
+    if ( ctx.brushState.createsAudioSample ) {
+        if ( !ctx.brushState.activeAudioResourceId.empty() &&
+             isPlaceableNoteTime(ctx.brushState.time) &&
+             ctx.brushState.track >= ctx.trackCount ) {
+            SampleComponent sample{
+                .m_timestamp = ctx.brushState.time,
+                .m_offsetMs  = 0,
+                .m_track     = static_cast<std::uint32_t>(ctx.brushState.track),
+                .m_audioResourceId = ctx.brushState.activeAudioResourceId,
+                .m_volume          = 1.0F,
+            };
+            ctx.actionStack.pushAndExecute(
+                std::make_unique<SampleAction>(SampleAction::Type::Create,
+                                               entt::null,
+                                               std::nullopt,
+                                               std::move(sample)),
+                ctx);
+        }
+        resetBrushState(ctx);
+        return;
+    }
+
     // 创建正式音符
     NoteComponent note;
-    note.m_timestamp  = ctx.brushState.time;
-    note.m_duration   = ctx.brushState.duration;
-    note.m_trackIndex = ctx.brushState.track;
-    note.m_dtrack     = ctx.brushState.dtrack;
-    note.m_type       = ctx.brushState.type;
+    note.m_timestamp     = ctx.brushState.time;
+    note.m_duration      = ctx.brushState.duration;
+    note.m_trackIndex    = ctx.brushState.track;
+    note.m_dtrack        = ctx.brushState.dtrack;
+    note.m_type          = ctx.brushState.type;
+    note.m_sampleBinding = ctx.brushState.activeSampleBinding;
     applyNoteColorOverrides(note, ctx.brushState.customColors);
 
     // 折线尾部结合所需的删除条目列表 (声明在外部以便后续使用)

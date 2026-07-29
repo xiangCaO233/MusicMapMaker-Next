@@ -55,6 +55,110 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
                                 0.0F,
                             });
     context.timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
+    context.timelineRegistry.ctx()
+        .get<MMM::Logic::System::ScrollCache>()
+        .rebuild(context.timelineRegistry,
+                 context.lastConfig,
+                 context.currentBeatmap.get());
+}
+
+/// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
+/// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样时返回
+/// true。
+bool testBrushAudioResourcePlacementRules()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    MMM::Logic::InteractionController controller(context);
+    MMM::Logic::DrawTool              drawTool;
+
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "effect",
+        .audioTrackType  = MMM::AudioTrackType::Effect,
+    });
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 150.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( notes.size() != 1 ) {
+        XERROR("Effect brush selection did not create a player note");
+        return false;
+    }
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    if ( note.m_trackIndex != 0 || !note.m_sampleBinding ||
+         note.m_sampleBinding->m_audioResourceId != "effect" ||
+         !near(note.m_sampleBinding->m_volume, 1.0) ) {
+        XERROR("Effect brush selection did not bind the created note");
+        return false;
+    }
+
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    auto samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 1 ) {
+        XERROR("Effect brush selection did not create an automatic sample");
+        return false;
+    }
+    const auto& effectSample =
+        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
+    if ( effectSample.m_track != 4 ||
+         effectSample.m_audioResourceId != "effect" ||
+         !near(effectSample.m_volume, 1.0) ) {
+        XERROR("Effect automatic sample used the wrong lane or resource");
+        return false;
+    }
+
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "main",
+        .audioTrackType  = MMM::AudioTrackType::Main,
+    });
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 250.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    if ( context.noteRegistry.view<MMM::Logic::NoteComponent>().size() != 1 ||
+         context.lastActionMessage.find("主音轨") == std::string::npos ) {
+        XERROR("Main brush selection was not rejected in the player lanes");
+        return false;
+    }
+
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 650.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 2 || context.bgmTrackCount != 2 ) {
+        XERROR("Main brush selection did not create on the append BGM lane");
+        return false;
+    }
+    bool foundMain = false;
+    for ( const auto entity : samples ) {
+        const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
+        foundMain = foundMain ||
+                    (sample.m_track == 5 && sample.m_audioResourceId == "main");
+    }
+    return foundMain;
 }
 
 /// @brief 验证横向相机偏移被渲染和拾取共用的轨道投影正确应用。
@@ -1338,7 +1442,8 @@ bool testMixedChartObjectLocalCut()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testTrackProjectionUsesCameraOffset() &&
+    return testBrushAudioResourcePlacementRules() &&
+                   testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&

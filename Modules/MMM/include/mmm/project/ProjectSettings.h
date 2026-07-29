@@ -208,6 +208,9 @@ struct ProjectWorkspaceState {
     /// @brief 上次选中的编辑工具。
     std::string m_activeEditTool{ "Move" };
 
+    /// @brief 项目音频工具上次选中的资源 ID。
+    std::string m_projectAudioToolSelectedResourceId;
+
     /// @brief 上次工具栏上的运行时开关状态。
     ProjectWorkspaceToolbarState m_toolbarState;
 
@@ -244,6 +247,8 @@ struct ProjectWorkspaceState {
             { "m_audioSpectrumOpen", workspace.m_audioSpectrumOpen },
             { "m_sidebarActiveTab", workspace.m_sidebarActiveTab },
             { "m_activeEditTool", workspace.m_activeEditTool },
+            { "m_projectAudioToolSelectedResourceId",
+              workspace.m_projectAudioToolSelectedResourceId },
             { "m_toolbarState", workspace.m_toolbarState },
             { "m_bpmMeasurementToolOpen", workspace.m_bpmMeasurementToolOpen },
             { "m_bpmMeasurementAudioTrackId",
@@ -276,6 +281,8 @@ struct ProjectWorkspaceState {
             j.value("m_sidebarActiveTab", std::string{ "FileExplorer" });
         workspace.m_activeEditTool =
             j.value("m_activeEditTool", std::string{ "Move" });
+        workspace.m_projectAudioToolSelectedResourceId =
+            j.value("m_projectAudioToolSelectedResourceId", std::string{});
         workspace.m_toolbarState =
             j.value("m_toolbarState", ProjectWorkspaceToolbarState{});
         workspace.m_bpmMeasurementToolOpen =
