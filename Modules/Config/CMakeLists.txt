@@ -65,3 +65,9 @@ add_test(NAME VisualConfigTest COMMAND VisualConfigTest)
 mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
 target_link_libraries(SfxConfigTest PRIVATE Config Log)
 add_test(NAME SfxConfigTest COMMAND SfxConfigTest)
+
+# 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
+mmm_add_test_executable(Config TranslationConcurrencyTest
+                        tests/TranslationConcurrencyTest.cpp)
+target_link_libraries(TranslationConcurrencyTest PRIVATE Config Log)
+add_test(NAME TranslationConcurrencyTest COMMAND TranslationConcurrencyTest)

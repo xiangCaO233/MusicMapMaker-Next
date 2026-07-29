@@ -1,9 +1,12 @@
 #include "config/skin/translation/Translation.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+
+#include <sol/sol.hpp>
+
 #include <filesystem>
 #include <fstream>
-#include <sol/sol.hpp>
+#include <mutex>
 
 namespace MMM
 {
@@ -65,21 +68,26 @@ void Translator::loadLanguage(const std::string& langLuaFile)
         newDict[keyHash] = valStr;
     }
 
-    m_Dictionarys[langID] = std::move(newDict);
-
-    if ( m_currentDictionary == nullptr ) {
-        switchLang(langID);
+    std::unique_lock lock(m_mutex);
+    auto&            dictionary = m_Dictionarys[langID];
+    const bool       wasCurrent = m_currentDictionary == &dictionary;
+    dictionary                  = std::move(newDict);
+    if ( m_currentDictionary == nullptr || wasCurrent ) {
+        m_currentDictionary = &dictionary;
+        m_pointerCache.clear();
+        m_version.fetch_add(1, std::memory_order_release);
     }
 }
 
 // 切换语言
 bool Translator::switchLang(const std::string& langID)
 {
-    auto it = m_Dictionarys.find(langID);
+    std::unique_lock lock(m_mutex);
+    auto             it = m_Dictionarys.find(langID);
     if ( it != m_Dictionarys.end() ) {
         m_currentDictionary = &(it->second);
-        m_version++;             // 版本号 +1，通知所有宏更新缓存
         m_pointerCache.clear();  // 重要：字典切换，旧的指针缓存必须清空
+        m_version.fetch_add(1, std::memory_order_release);
         return true;
     }
     return false;
@@ -88,30 +96,40 @@ bool Translator::switchLang(const std::string& langID)
 /// @brief 清空已加载语言和指针缓存，用于皮肤热切换。
 void Translator::clear()
 {
+    std::unique_lock lock(m_mutex);
     m_Dictionarys.clear();
     m_currentDictionary = nullptr;
     m_pointerCache.clear();
-    m_stringPool.clear();
-    ++m_version;
+    m_version.fetch_add(1, std::memory_order_release);
 }
 
 // 获取翻译器版本
 uint32_t Translator::getVersion() const
 {
-    return m_version;
+    return m_version.load(std::memory_order_acquire);
 }
 
 // 翻译
 const char* Translator::translate(uint32_t keyHash, const char* fallbackStr)
 {
     // --- 极速路径：指针缓存 (uint32_t 查找) ---
-    auto it_ptr = m_pointerCache.find(keyHash);
-    if ( it_ptr != m_pointerCache.end() ) {
-        return it_ptr->second;
+    {
+        std::shared_lock lock(m_mutex);
+        const auto       pointerIt = m_pointerCache.find(keyHash);
+        if ( pointerIt != m_pointerCache.end() ) {
+            return pointerIt->second;
+        }
+    }
+
+    // 首次出现的键进入独占路径，并在获取锁后再次检查并发填充结果。
+    std::unique_lock lock(m_mutex);
+    const auto       pointerIt = m_pointerCache.find(keyHash);
+    if ( pointerIt != m_pointerCache.end() ) {
+        return pointerIt->second;
     }
 
     // --- 正常路径：字典查找 ---
-    const char* resultStr = fallbackStr;
+    const char* resultStr = fallbackStr ? fallbackStr : "";
     if ( m_currentDictionary ) {
         auto it = m_currentDictionary->find(keyHash);
         if ( it != m_currentDictionary->end() ) {
@@ -121,8 +139,8 @@ const char* Translator::translate(uint32_t keyHash, const char* fallbackStr)
 
     // --- 稳定化处理：池化 ---
     // 只要是在池里的字符串，其地址在程序运行期间就是绝对稳定的。
-    auto [poolIt, success] = m_stringPool.insert(resultStr);
-    const char* stablePtr  = poolIt->c_str();
+    const auto  poolIt    = m_stringPool.insert(resultStr).first;
+    const char* stablePtr = poolIt->c_str();
 
     // 存入加速缓存
     m_pointerCache[keyHash] = stablePtr;

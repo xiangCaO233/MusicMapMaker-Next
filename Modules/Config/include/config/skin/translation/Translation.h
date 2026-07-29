@@ -1,7 +1,10 @@
 #pragma once
 
-#include <cstdint>
 #include <spdlog/fmt/fmt.h>  // 确保引入了 fmt
+
+#include <atomic>
+#include <cstdint>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -35,24 +38,44 @@ public:
     Translator& operator=(const Translator&) = delete;
     ~Translator()                            = default;
 
-    // 载入语言文件
+    /// @brief 载入一个 Lua 语言字典。
+    /// @param langLuaFile 语言文件路径。
+    /// @warning 解析在锁外执行，发布字典时短暂持有独占锁。
     void loadLanguage(const std::string& langLuaFile);
 
-    // 切换语言
+    /// @brief 切换当前语言。
+    /// @param langID 语言文件名对应的稳定标识。
+    /// @return 找到并切换成功时返回 true。
+    /// @warning 低频配置路径：会独占翻译缓存并使版本递增。
     bool switchLang(const std::string& langID);
 
     /// @brief 清空已加载语言和指针缓存，用于皮肤热切换。
+    /// @warning 低频皮肤重载路径：会独占翻译缓存；已返回字符串继续由稳定池
+    /// 保活。
     void clear();
 
-    // 获取翻译器版本
+    /// @brief 获取翻译器版本。
+    /// @return 最近一次语言切换或清空后的版本。
+    /// @warning UI 与逻辑线程热路径会读取该原子版本；写入只发生在低频语言
+    /// 切换路径，使用 acquire/release 保证缓存更新顺序。
     uint32_t getVersion() const;
 
-    // 翻译
+    /// @brief 获取指定键的稳定翻译指针。
+    /// @param keyHash 翻译键哈希。
+    /// @param fallbackStr 缺少翻译时使用的回退文本。
+    /// @return 在 Translator 生命周期内保持有效的 UTF-8 字符串指针。
+    /// @warning UI 与逻辑线程热路径会并发调用；缓存命中只持有共享读锁，
+    /// 未命中才进入独占写锁并池化字符串。
     const char* translate(uint32_t keyHash, const char* fallbackStr);
 
 private:
-    // 翻译器版本
-    uint32_t m_version{ 0 };
+    /// @brief 保护语言字典、当前字典、指针缓存和稳定字符串池。
+    mutable std::shared_mutex m_mutex;
+
+    /// @brief 翻译缓存版本。
+    /// @warning UI 与逻辑线程并发读取，语言加载线程低频写入；原子用于避免
+    /// `TR_CACHE` 版本检查的数据竞争。
+    std::atomic<uint32_t> m_version{ 0 };
 
     // 语言map: [translate_key:result]
     using Dictionary = std::unordered_map<uint32_t, std::string>;
@@ -67,8 +90,8 @@ private:
     // 当语言切换或字典更新时必须清空，用于加速 translate 函数
     std::unordered_map<uint32_t, const char*> m_pointerCache;
 
-    // 字符串池：确保所有返回给 UI 的指针在整个程序运行期间都是稳定的
-    // unordered_set 中的元素地址在插入新元素时不会改变
+    // 字符串池：确保所有返回给 UI 的指针在 Translator 生命周期内稳定。
+    // 语言热切换时不得清空；unordered_set 插入和 rehash 不使元素引用失效。
     std::unordered_set<std::string> m_stringPool;
 };
 
@@ -117,14 +140,15 @@ inline std::string_view format_as(const TRResult& tr)
 // =========================================================
 #define TR_CACHE(key_str)                                                        \
     ([]() -> MMM::Translation::TRResult {                                        \
-        static const char*        cached_ptr     = nullptr;                      \
-        static uint32_t           cached_version = 0xFFFFFFFF;                   \
-        static constexpr uint32_t key_hash       = MMM::Hash::hash_str(key_str); \
-        auto&                     translator =                                   \
+        static thread_local const char* cached_ptr     = nullptr;                \
+        static thread_local uint32_t    cached_version = 0xFFFFFFFF;             \
+        static constexpr uint32_t       key_hash = MMM::Hash::hash_str(key_str); \
+        auto&                           translator =                             \
             MMM::Config::SkinManager::instance().getTranslator();                \
-        if ( cached_version != translator.getVersion() ) {                       \
+        const uint32_t version = translator.getVersion();                        \
+        if ( cached_version != version ) {                                       \
             cached_ptr     = translator.translate(key_hash, key_str);            \
-            cached_version = translator.getVersion();                            \
+            cached_version = version;                                            \
         }                                                                        \
         return MMM::Translation::TRResult(cached_ptr);                           \
     }())
