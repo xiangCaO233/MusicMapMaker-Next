@@ -419,20 +419,16 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
     }
 
     state.visualTime = snapshot->currentTime;
-    state.audioTime  = state.visualTime - state.visualOffset;
+    state.audioTime  = snapshot->playbackTime;
     state.isPlaying  = snapshot->isPlaying;
 
-    if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
-         snapshot->snapshotSysTime > 0.0 ) {
+    if ( !snapshot->isPreviewDragging ) {
         const double now =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch())
                 .count();
-        const double dt = now - snapshot->snapshotSysTime;
-        if ( dt > 0.0 && dt < 0.1 ) {
-            state.visualTime += dt * snapshot->playbackSpeed;
-            state.audioTime += dt * snapshot->playbackSpeed;
-        }
+        state.visualTime = snapshot->resolveCurrentTimeAt(now);
+        state.audioTime  = snapshot->resolvePlaybackTimeAt(now);
     }
 
     return state;

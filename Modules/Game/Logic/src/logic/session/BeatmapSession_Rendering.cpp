@@ -542,10 +542,17 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     const double snapshotTotalTime =
         SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
     rebuildPreviewDensitySnapshotIfNeeded(*m_ctx, snapshotTotalTime);
-    const double snapshotSysTime =
+    const double renderSnapshotNow =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
+    const double visualClockTime =
+        m_ctx->playbackVisualClock.lastResolvedSteadyTime();
+    const double snapshotSysTime =
+        snapshotIsPlaying && std::isfinite(visualClockTime) &&
+                visualClockTime > 0.0
+            ? std::min(visualClockTime, renderSnapshotNow)
+            : renderSnapshotNow;
     const double snapshotPlaybackSpeed =
         Audio::AudioManager::instance().getPlaybackSpeed();
 

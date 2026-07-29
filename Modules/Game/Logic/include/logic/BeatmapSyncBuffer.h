@@ -9,6 +9,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
+#include <algorithm>
 #include <cmath>
 #include <concurrentqueue.h>
 #include <cstdint>
@@ -442,6 +443,59 @@ struct RenderSnapshot {
     /// @brief 动态元素的顶点数量
     /// 用于区分“动态层”之后是否还有“置顶静态层”
     uint32_t dynamicVertexCount{ 0 };
+
+    /// @brief 计算当前 UI 时刻相对快照的有效播放补间时长。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 仅播放中且处于 100ms 新鲜窗口时返回正时长，否则返回零。
+    /// @warning UI 每帧路径：只做常量级数值校验。
+    [[nodiscard]] double playbackInterpolationElapsed(
+        double nowSteadySeconds) const noexcept
+    {
+        if ( !isPlaying || snapshotSysTime <= 0.0 ||
+             !std::isfinite(nowSteadySeconds) ||
+             !std::isfinite(playbackSpeed) || playbackSpeed <= 0.0 ) {
+            return 0.0;
+        }
+        double elapsed = nowSteadySeconds - snapshotSysTime;
+        if ( elapsed <= 0.0 || elapsed >= 0.1 ) {
+            return 0.0;
+        }
+        if ( std::isfinite(playbackTime) && std::isfinite(totalTime) ) {
+            const double remainingTime =
+                (totalTime - playbackTime) / playbackSpeed;
+            if ( remainingTime <= 0.0 ) {
+                return 0.0;
+            }
+            elapsed = std::min(elapsed, remainingTime);
+        }
+        return elapsed;
+    }
+
+    /// @brief 将动画时间解析到当前 UI 壁钟。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 与画布补间同源的动画时间。
+    /// @warning UI 每帧路径：只做常量级时间计算。
+    [[nodiscard]] double resolveCurrentTimeAt(
+        double nowSteadySeconds) const noexcept
+    {
+        const double resolved =
+            currentTime +
+            playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
+        return std::isfinite(resolved) ? resolved : currentTime;
+    }
+
+    /// @brief 将未含视觉偏移的播放时间解析到当前 UI 壁钟。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 与画布补间同源的谱面播放时间。
+    /// @warning UI 每帧路径：只做常量级时间计算。
+    [[nodiscard]] double resolvePlaybackTimeAt(
+        double nowSteadySeconds) const noexcept
+    {
+        const double resolved =
+            playbackTime +
+            playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
+        return std::isfinite(resolved) ? resolved : playbackTime;
+    }
 
     /**
      * @brief [UI 线程专用] 亚帧插值：获取从 currentTime 到 currentTime + dt

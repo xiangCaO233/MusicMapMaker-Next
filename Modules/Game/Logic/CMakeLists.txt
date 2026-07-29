@@ -98,6 +98,12 @@ mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
 
+# 连续播放时钟测试覆盖 block 内推演、校准、暂停、Seek、循环与 UI 补间。
+mmm_add_test_executable(Logic PlaybackVisualClockTest
+                        tests/PlaybackVisualClockTest.cpp)
+target_link_libraries(PlaybackVisualClockTest PRIVATE Logic Log)
+add_test(NAME PlaybackVisualClockTest COMMAND PlaybackVisualClockTest)
+
 # 主画布相机测试覆盖中键二维平移、逻辑像素投影和 Resize 比例保持。
 mmm_add_test_executable(Logic CanvasCameraTest tests/CanvasCameraTest.cpp)
 target_link_libraries(CanvasCameraTest PRIVATE Logic Log)

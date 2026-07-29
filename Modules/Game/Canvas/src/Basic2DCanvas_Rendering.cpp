@@ -160,12 +160,8 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
 
     const double currentSysTime = currentSteadySeconds();
     const double targetTime     = calculateBackgroundVideoTime(
-        m_currentSnapshot->playbackTime,
-        m_currentSnapshot->backgroundVideoStartTime,
-        m_currentSnapshot->isPlaying,
-        m_currentSnapshot->snapshotSysTime,
-        m_currentSnapshot->playbackSpeed,
-        currentSysTime);
+        m_currentSnapshot->resolvePlaybackTimeAt(currentSysTime),
+        m_currentSnapshot->backgroundVideoStartTime);
     if ( !std::isfinite(targetTime) ) {
         m_videoShouldBeVisibleThisFrame = false;
         m_videoFrameVisible             = false;

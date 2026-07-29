@@ -18,25 +18,10 @@ namespace
 /// @warning UI 热路径：每帧状态栏绘制调用；只做常量级时间计算。
 double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
 {
-    double animateTime = snapshot.currentTime;
-    if ( !snapshot.isPlaying || snapshot.snapshotSysTime <= 0.0 ||
-         !std::isfinite(snapshot.playbackSpeed) ) {
-        return animateTime;
-    }
-
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count();
-    const double dt  = now - snapshot.snapshotSysTime;
-    if ( dt <= 0.0 || dt >= 0.1 ) {
-        return animateTime;
-    }
-
-    animateTime += dt * snapshot.playbackSpeed;
-    if ( !std::isfinite(animateTime) ) {
-        return snapshot.currentTime;
-    }
-    return animateTime;
+    return snapshot.resolveCurrentTimeAt(now);
 }
 }  // namespace
 

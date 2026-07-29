@@ -11,39 +11,35 @@ bool near(double value, double expected)
     return std::abs(value - expected) < 1e-9;
 }
 
-/// @brief 验证暂停时不会使用系统时钟外推视频。
+/// @brief 验证调用方解析后的暂停时间按原值映射到视频。
 bool testPausedClock()
 {
-    return near(MMM::Canvas::calculateBackgroundVideoTime(
-                    10.0, 2.0, false, 100.0, 2.0, 100.05),
-                8.0);
+    return near(MMM::Canvas::calculateBackgroundVideoTime(10.0, 2.0), 8.0);
 }
 
-/// @brief 验证播放时按倍速进行短时间亚帧外推。
+/// @brief 验证调用方完成亚帧外推后的时间映射到视频。
 bool testPlayingClock()
 {
-    return near(MMM::Canvas::calculateBackgroundVideoTime(
-                    10.0, 2.0, true, 100.0, 2.0, 100.05),
-                8.1);
+    return near(MMM::Canvas::calculateBackgroundVideoTime(10.1, 2.0), 8.1);
 }
 
-/// @brief 验证过时快照不外推，避免视频时钟过度超前。
+/// @brief 验证调用方拒绝过时外推后的时间按原值映射到视频。
 bool testStaleSnapshot()
 {
-    return near(MMM::Canvas::calculateBackgroundVideoTime(
-                    10.0, 2.0, true, 100.0, 4.0, 100.2),
-                8.0);
+    return near(MMM::Canvas::calculateBackgroundVideoTime(10.0, 2.0), 8.0);
 }
 
 /// @brief 验证正开始偏移与负开始偏移的时间语义。
 bool testStartOffsets()
 {
-    return near(MMM::Canvas::calculateBackgroundVideoTime(
-                    1.0, 2.0, false, 0.0, 1.0, 0.0),
-                -1.0) &&
-           near(MMM::Canvas::calculateBackgroundVideoTime(
-                    1.0, -2.0, false, 0.0, 1.0, 0.0),
-                3.0);
+    return near(MMM::Canvas::calculateBackgroundVideoTime(1.0, 2.0), -1.0) &&
+           near(MMM::Canvas::calculateBackgroundVideoTime(1.0, -2.0), 3.0);
+}
+
+/// @brief 验证调用方钳制的谱面末尾时间按原值映射到视频。
+bool testFinalTailStopsAtTimelineEnd()
+{
+    return near(MMM::Canvas::calculateBackgroundVideoTime(20.0, 2.0), 18.0);
 }
 
 }  // namespace
@@ -53,7 +49,7 @@ bool testStartOffsets()
 int main()
 {
     return testPausedClock() && testPlayingClock() && testStaleSnapshot() &&
-                   testStartOffsets()
+                   testStartOffsets() && testFinalTailStopsAtTimelineEnd()
                ? 0
                : 1;
 }
