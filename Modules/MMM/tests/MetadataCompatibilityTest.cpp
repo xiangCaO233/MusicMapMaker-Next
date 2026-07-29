@@ -342,7 +342,8 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
                 MMM::BeatmapLoadDiagnosticCode::
                     LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE &&
             loaded.m_loadDiagnostics.front().m_severity ==
-                MMM::BeatmapLoadDiagnosticSeverity::WARNING &&
+                MMM::BeatmapLoadDiagnosticSeverity::
+                    BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING &&
             loaded.m_loadDiagnostics.front().m_relatedPath ==
                 originalMalodyPath,
         "legacy MMM should expose a structured reimport diagnostic when the "

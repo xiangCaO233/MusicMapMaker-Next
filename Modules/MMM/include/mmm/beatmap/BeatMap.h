@@ -29,9 +29,9 @@ enum class BeatmapLoadDiagnosticCode {
 
 /// @brief 谱面加载诊断级别。
 enum class BeatmapLoadDiagnosticSeverity {
-    INFO,
-    WARNING,
-    ERROR,
+    BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_INFO,
+    BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+    BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_ERROR,
 };
 
 /// @brief 加载谱面时产生、可由会话或界面消费的结构化诊断。
@@ -43,7 +43,7 @@ struct BeatmapLoadDiagnostic {
 
     /// @brief 诊断级别。
     BeatmapLoadDiagnosticSeverity m_severity{
-        BeatmapLoadDiagnosticSeverity::WARNING
+        BeatmapLoadDiagnosticSeverity::BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING
     };
 
     /// @brief 面向用户的诊断说明。

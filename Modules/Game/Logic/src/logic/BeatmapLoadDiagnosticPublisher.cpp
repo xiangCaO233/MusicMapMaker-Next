@@ -20,11 +20,14 @@ Event::BeatmapLoadDiagnosticSeverity convertSeverity(
     MMM::BeatmapLoadDiagnosticSeverity severity)
 {
     switch ( severity ) {
-    case MMM::BeatmapLoadDiagnosticSeverity::INFO:
+    case MMM::BeatmapLoadDiagnosticSeverity::
+        BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_INFO:
         return Event::BeatmapLoadDiagnosticSeverity::Info;
-    case MMM::BeatmapLoadDiagnosticSeverity::WARNING:
+    case MMM::BeatmapLoadDiagnosticSeverity::
+        BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING:
         return Event::BeatmapLoadDiagnosticSeverity::Warning;
-    case MMM::BeatmapLoadDiagnosticSeverity::ERROR:
+    case MMM::BeatmapLoadDiagnosticSeverity::
+        BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_ERROR:
         return Event::BeatmapLoadDiagnosticSeverity::Error;
     }
     return Event::BeatmapLoadDiagnosticSeverity::Warning;

@@ -20,7 +20,8 @@ bool testDiagnosticConversionAndDeduplication()
     const MMM::BeatmapLoadDiagnostic diagnostic{
         .m_code = MMM::BeatmapLoadDiagnosticCode::
             LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
-        .m_severity    = MMM::BeatmapLoadDiagnosticSeverity::WARNING,
+        .m_severity = MMM::BeatmapLoadDiagnosticSeverity::
+            BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
         .m_message     = "Loader detail",
         .m_relatedPath = "/project/chart/legacy_chart.mc",
     };
@@ -46,8 +47,9 @@ bool testAudioSampleTrackRelocationDiagnostic()
     beatmap.m_baseMapMetadata.map_path = "/project/chart/relocated.mmm";
     beatmap.m_loadDiagnostics.push_back(MMM::BeatmapLoadDiagnostic{
         .m_code = MMM::BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED,
-        .m_severity = MMM::BeatmapLoadDiagnosticSeverity::WARNING,
-        .m_message  = "Moved x=2 to x=4",
+        .m_severity = MMM::BeatmapLoadDiagnosticSeverity::
+            BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+        .m_message = "Moved x=2 to x=4",
     });
 
     const auto events = MMM::Logic::buildBeatmapLoadDiagnosticEvents(beatmap);
@@ -89,7 +91,8 @@ bool testPublisherUsesDeduplicatedEvents()
     const MMM::BeatmapLoadDiagnostic diagnostic{
         .m_code = MMM::BeatmapLoadDiagnosticCode::
             LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
-        .m_severity    = MMM::BeatmapLoadDiagnosticSeverity::WARNING,
+        .m_severity = MMM::BeatmapLoadDiagnosticSeverity::
+            BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
         .m_message     = "Loader detail",
         .m_relatedPath = "/project/chart/legacy.mc",
     };

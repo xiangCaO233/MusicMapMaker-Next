@@ -576,8 +576,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                     beatMap.m_loadDiagnostics.push_back(
                         { .m_code = BeatmapLoadDiagnosticCode::
                               AUDIO_SAMPLE_TRACK_RELOCATED,
-                          .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
-                          .m_message  = fmt::format(
+                          .m_severity = BeatmapLoadDiagnosticSeverity::
+                              BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+                          .m_message = fmt::format(
                               "Malody 自动采样 '{}' 的轨道 x={} 不属于 "
                               "BGM 区，已迁移到首条 BGM 轨 {}",
                               sample.m_audioResourceId,

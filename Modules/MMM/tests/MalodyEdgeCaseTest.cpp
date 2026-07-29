@@ -995,7 +995,8 @@ void test_invalid_sample_track_and_song_hint_conflict()
             return diagnostic.m_code == MMM::BeatmapLoadDiagnosticCode::
                                             AUDIO_SAMPLE_TRACK_RELOCATED &&
                    diagnostic.m_severity ==
-                       MMM::BeatmapLoadDiagnosticSeverity::WARNING;
+                       MMM::BeatmapLoadDiagnosticSeverity::
+                           BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING;
         });
     TEST_ASSERT(relocationDiagnostic != loaded.m_loadDiagnostics.end(),
                 "invalid sample x should emit a non-fatal diagnostic");

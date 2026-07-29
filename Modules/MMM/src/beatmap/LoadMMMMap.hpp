@@ -381,7 +381,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 beatMap.m_loadDiagnostics.push_back(
                     { .m_code = BeatmapLoadDiagnosticCode::
                           AUDIO_SAMPLE_TRACK_RELOCATED,
-                      .m_severity = BeatmapLoadDiagnosticSeverity::WARNING,
+                      .m_severity = BeatmapLoadDiagnosticSeverity::
+                          BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
                       .m_message =
                           fmt::format("MMM 自动采样 '{}' 的轨道 {} 不属于 BGM "
                                       "区，已迁移到首条 BGM 轨 {}",
@@ -426,7 +427,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             beatMap.m_loadDiagnostics.push_back(
                 { .m_code = BeatmapLoadDiagnosticCode::
                       LEGACY_MMM_ORIGINAL_MALODY_AVAILABLE,
-                  .m_severity    = BeatmapLoadDiagnosticSeverity::WARNING,
+                  .m_severity = BeatmapLoadDiagnosticSeverity::
+                      BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
                   .m_message     = "旧版 MMM 已丢失部分 Malody SOUND "
                                    "信息，建议重新导入同目录的原始 .mc 文件",
                   .m_relatedPath = std::move(originalMalodyPath) });
