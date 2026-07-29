@@ -8,6 +8,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -236,6 +237,13 @@ bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
     } else {
         audio.pause();
     }
+    const double activationTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    ctx.playbackVisualClock.reset();
+    ctx.playbackVisualClock.rebase(
+        ctx.currentTime, activationTime, audio.getPlaybackSpeed(), shouldPlay);
     return true;
 }
 
@@ -255,10 +263,10 @@ AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
     };
 }
 
-bool applyAudioTimelineTransportSnapshot(SessionContext&  ctx,
-                                         std::string_view loadedFingerprint,
-                                         Audio::PlaybackStatus status,
-                                         double                currentTime)
+bool applyAudioTimelineTransportSnapshot(
+    SessionContext& ctx, std::string_view loadedFingerprint,
+    const Audio::AudioTimelineClockSnapshot& snapshot, double nowSteadySeconds,
+    const Config::SyncConfig& syncConfig)
 {
     const bool readsCurrentTransport =
         !ctx.audioTimelineDescriptor.m_fingerprint.empty() &&
@@ -266,19 +274,30 @@ bool applyAudioTimelineTransportSnapshot(SessionContext&  ctx,
     if ( !readsCurrentTransport ) {
         ctx.isPlaying                   = false;
         ctx.isAudioTimelineSyncFollower = false;
+        ctx.playbackVisualClock.reset();
         return false;
     }
 
+    const double currentTime =
+        ctx.isAudioTimelineSyncFollower
+            ? (ctx.playbackVisualClock.initialized()
+                   ? ctx.playbackVisualClock.resolveAt(nowSteadySeconds)
+                   : ctx.currentTime)
+            : ctx.playbackVisualClock.update(
+                  snapshot, nowSteadySeconds, syncConfig);
     if ( std::isfinite(currentTime) ) {
-        ctx.currentTime = currentTime;
+        const double totalTime = getEffectiveTotalTimeSeconds(ctx);
+        ctx.currentTime =
+            totalTime > 0.0 ? std::min(currentTime, totalTime) : currentTime;
     }
-    if ( ctx.isPlaying && status == Audio::PlaybackStatus::Stopped ) {
-        ctx.restartPlaybackAfterFinishPending = true;
+    if ( ctx.isPlaying && snapshot.valid &&
+         snapshot.state == Audio::AudioTimelinePlaybackState::Stopped ) {
+        ctx.restartPlaybackAfterFinishPending = snapshot.finished;
         ctx.isPlaying                         = false;
         return false;
     }
-    if ( ctx.isAudioTimelineSyncFollower &&
-         status != Audio::PlaybackStatus::Playing ) {
+    if ( ctx.isAudioTimelineSyncFollower && snapshot.valid &&
+         snapshot.state != Audio::AudioTimelinePlaybackState::Playing ) {
         ctx.isAudioTimelineSyncFollower = false;
         return false;
     }

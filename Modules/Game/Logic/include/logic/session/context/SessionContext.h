@@ -4,6 +4,7 @@
 #include "config/EditorConfig.h"
 #include "logic/PreviewDensity.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
+#include "logic/audio/PlaybackVisualClock.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -143,6 +144,8 @@ struct SessionContext {
     // --- 音频与播放状态 ---
     /// @brief 当前谱面的低频构建复合音频时间线描述符。
     AudioTimelineDescriptor audioTimelineDescriptor;
+    /// @brief 将离散音频 block 快照转换为连续播放时间的会话本地时钟。
+    PlaybackVisualClock playbackVisualClock;
     /// @brief 谱面或资源语义变化后是否需要重建完整描述符。
     bool isAudioTimelineDescriptorDirty{ true };
     /// @brief 当前会话下次成为活动项时是否必须重新提交音频图。

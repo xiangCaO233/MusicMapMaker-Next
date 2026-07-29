@@ -28,6 +28,7 @@ add_library(
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
   src/logic/audio/AudioTimelineDescriptor.cpp
+  src/logic/audio/PlaybackVisualClock.cpp
   src/logic/BeatmapSyncBuffer.cpp
   src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp

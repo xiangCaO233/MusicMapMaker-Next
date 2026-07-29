@@ -408,13 +408,19 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     if ( isPlaybackClockActive ) {
         SessionUtils::ensureHitEvents(*m_ctx);
 
-        auto& audio = Audio::AudioManager::instance();
+        auto&        audio              = Audio::AudioManager::instance();
+        const auto   audioClockSnapshot = audio.getAudioTimelineClockSnapshot();
+        const double playbackClockNow =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
         isPlaybackClockActive =
             SessionUtils::applyAudioTimelineTransportSnapshot(
                 *m_ctx,
                 audio.getLoadedAudioTimelineFingerprint(),
-                audio.getStatus(),
-                audio.getCurrentTime());
+                audioClockSnapshot,
+                playbackClockNow,
+                config.settings.syncConfig);
 
         updateAnimateTime(dt, config, isPlaybackClockActive);
 

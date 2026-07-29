@@ -136,14 +136,15 @@ AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
 /// @brief 将 AudioManager transport 快照应用为会话唯一播放时钟。
 /// @param ctx 接收状态的会话。
 /// @param loadedFingerprint 当前 AudioManager 已加载指纹。
-/// @param status 当前 transport 状态。
-/// @param currentTime 当前 transport 时间。
+/// @param snapshot 位置、状态和发布时间一致的音频时钟快照。
+/// @param nowSteadySeconds 当前逻辑帧的 steady_clock 秒数。
+/// @param syncConfig 音画校准配置。
 /// @return 应继续处理播放态动画和 HitFX 时返回 true。
 /// @warning 逻辑热路径：只比较缓存字符串并更新常量级会话状态。
-bool applyAudioTimelineTransportSnapshot(SessionContext&  ctx,
-                                         std::string_view loadedFingerprint,
-                                         Audio::PlaybackStatus status,
-                                         double                currentTime);
+bool applyAudioTimelineTransportSnapshot(
+    SessionContext& ctx, std::string_view loadedFingerprint,
+    const Audio::AudioTimelineClockSnapshot& snapshot, double nowSteadySeconds,
+    const Config::SyncConfig& syncConfig);
 
 /// @brief 根据当前背景类型探测并更新会话中的背景原始尺寸。
 /// @param ctx 目标会话上下文。

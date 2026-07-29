@@ -68,6 +68,29 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
+/// @brief 将会话播放位置解析到指定 steady_clock 时刻。
+/// @param ctx 待读取的会话状态。
+/// @param nowSteadySeconds 本次低频操作共享的单调时钟秒数。
+/// @return 保留负视觉前置区间并按谱面总时长限制上界的连续播放时间。
+/// @warning 低频工作区保存与标签切换路径：只执行常量级时钟计算。
+[[nodiscard]] double resolveContinuousSessionTime(const SessionContext& ctx,
+                                                  double nowSteadySeconds)
+{
+    double resolvedTime = ctx.currentTime;
+    if ( ctx.playbackVisualClock.initialized() ) {
+        resolvedTime = ctx.playbackVisualClock.currentTimeAt(nowSteadySeconds);
+    }
+    if ( !std::isfinite(resolvedTime) ) {
+        resolvedTime = std::isfinite(ctx.currentTime) ? ctx.currentTime : 0.0;
+    }
+
+    const double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    if ( std::isfinite(totalTime) ) {
+        resolvedTime = std::min(resolvedTime, totalTime);
+    }
+    return resolvedTime;
+}
+
 /// @brief 发布项目或谱面包打开失败事件。
 /// @param path 尝试打开的路径。
 /// @param message 失败原因。
@@ -888,8 +911,11 @@ void EditorEngine::captureProjectWorkspaceState()
 
     /// @brief 保护工作区状态捕获期间的会话列表访问。
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
-    const auto  activeIndex = m_sessionRegistry.activeIndex();
+    const auto&  sessions    = m_sessionRegistry.entriesUnsafe();
+    const auto   activeIndex = m_sessionRegistry.activeIndex();
+    const double workspaceCaptureTime =
+        std::chrono::duration<double>(FrameLimitClock::now().time_since_epoch())
+            .count();
 
     for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
         const auto& entry = sessions[i];
@@ -914,7 +940,7 @@ void EditorEngine::captureProjectWorkspaceState()
         beatmapState.m_playbackTime = ctx.currentTime;
         if ( i == activeIndex && ctx.isPlaying ) {
             beatmapState.m_playbackTime =
-                Audio::AudioManager::instance().getCurrentTime();
+                resolveContinuousSessionTime(ctx, workspaceCaptureTime);
         }
         workspace.m_openBeatmaps.push_back(beatmapState);
 
@@ -2020,6 +2046,23 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             return;
         }
 
+        const double syncSteadyTime =
+            std::chrono::duration<double>(
+                FrameLimitClock::now().time_since_epoch())
+                .count();
+        double sourceClockSteadyTime = syncSteadyTime;
+        if ( sourceCtx.playbackVisualClock.initialized() ) {
+            const double resolvedSteadyTime =
+                sourceCtx.playbackVisualClock.lastResolvedSteadyTime();
+            if ( std::isfinite(resolvedSteadyTime) &&
+                 resolvedSteadyTime > 0.0 &&
+                 resolvedSteadyTime <= syncSteadyTime ) {
+                sourceClockSteadyTime = resolvedSteadyTime;
+            }
+        }
+        const double playbackRate =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+
         for ( const auto& entry : sessions ) {
             if ( entry.index == sourceIndex || !entry.session ||
                  entry.audioTimelineFingerprint != sourceKey ) {
@@ -2066,6 +2109,10 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
                 sourceCtx.animatedTimelineZoomAnimationActive;
             ctx.isPlaying                   = false;
             ctx.isAudioTimelineSyncFollower = sourceCtx.isPlaying;
+            ctx.playbackVisualClock.rebase(sourceCtx.currentTime,
+                                           sourceClockSteadyTime,
+                                           playbackRate,
+                                           sourceCtx.isPlaying);
             if ( shouldClearHitEffects ) {
                 ctx.hitFXSystem.clearActiveEffects();
             }
@@ -2341,11 +2388,14 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         return;
     }
 
-    auto&         audio              = Audio::AudioManager::instance();
-    const int32_t previousIndex      = m_sessionRegistry.activeIndex();
-    double        previousTime       = 0.0;
-    bool          previousWasPlaying = false;
-    std::string   previousFingerprint;
+    auto&         audio         = Audio::AudioManager::instance();
+    const int32_t previousIndex = m_sessionRegistry.activeIndex();
+    const double  sessionSwitchTime =
+        std::chrono::duration<double>(FrameLimitClock::now().time_since_epoch())
+            .count();
+    double      previousTime       = 0.0;
+    bool        previousWasPlaying = false;
+    std::string previousFingerprint;
     if ( previousIndex >= 0 &&
          previousIndex < static_cast<int32_t>(sessions.size()) &&
          sessions[previousIndex].session ) {
@@ -2355,8 +2405,9 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         if ( previousCtx.isPlaying &&
              audio.getLoadedAudioTimelineFingerprint() ==
                  previousFingerprint ) {
-            previousCtx.currentTime = audio.getCurrentTime();
-            previousWasPlaying      = true;
+            previousCtx.currentTime =
+                resolveContinuousSessionTime(previousCtx, sessionSwitchTime);
+            previousWasPlaying = true;
         }
         previousTime                            = previousCtx.currentTime;
         previousCtx.isPlaying                   = false;

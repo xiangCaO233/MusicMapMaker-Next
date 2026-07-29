@@ -6,11 +6,44 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 
 namespace MMM::Logic
 {
 namespace
 {
+/// @brief 获取当前控制手势使用的 steady_clock 秒数。
+[[nodiscard]] double currentSteadySeconds() noexcept
+{
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+/// @brief 在暂停命令提交前冻结会话连续时钟，避免回读离散 block 位置。
+/// @param ctx 当前会话。
+/// @param audio 全局音频管理器。
+/// @warning 低频播放控制路径：只读取本地锚点并提交常量级控制命令。
+void pauseAndFreezeVisualClock(SessionContext& ctx, Audio::AudioManager& audio)
+{
+    const double now         = currentSteadySeconds();
+    double       currentTime = ctx.playbackVisualClock.initialized()
+                                   ? ctx.playbackVisualClock.currentTimeAt(now)
+                                   : ctx.currentTime;
+    const double totalTime   = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    if ( std::isfinite(totalTime) ) {
+        currentTime = std::min(currentTime, totalTime);
+    }
+    if ( !std::isfinite(currentTime) ) {
+        currentTime = 0.0;
+    }
+    audio.pause();
+    ctx.currentTime = currentTime;
+    ctx.playbackVisualClock.rebase(
+        currentTime, now, audio.getPlaybackSpeed(), false);
+}
+
 /// @brief 取消未完成的鼠标编辑状态，防止进入播放后交互预览残留。
 /// @param ctx 当前播放控制器所属的会话上下文。
 /// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
@@ -89,10 +122,11 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
     } else {
         m_ctx.restartPlaybackAfterFinishPending = false;
         auto& audio = Audio::AudioManager::instance();
-        audio.pause();
         if ( audio.getLoadedAudioTimelineFingerprint() ==
              m_ctx.audioTimelineDescriptor.m_fingerprint ) {
-            m_ctx.currentTime = audio.getCurrentTime();
+            pauseAndFreezeVisualClock(m_ctx, audio);
+        } else {
+            audio.pause();
         }
     }
 }
@@ -105,10 +139,11 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
         m_ctx.isPlaying = false;
         if ( m_ctx.isActiveSession ) {
             auto& audio = Audio::AudioManager::instance();
-            audio.pause();
             if ( audio.getLoadedAudioTimelineFingerprint() ==
                  m_ctx.audioTimelineDescriptor.m_fingerprint ) {
-                m_ctx.currentTime = audio.getCurrentTime();
+                pauseAndFreezeVisualClock(m_ctx, audio);
+            } else {
+                audio.pause();
             }
         }
     }
@@ -133,6 +168,10 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
             (void)SessionUtils::activateAudioTimeline(m_ctx, m_ctx.isPlaying);
         } else {
             audio.seek(m_ctx.currentTime);
+            m_ctx.playbackVisualClock.rebase(m_ctx.currentTime,
+                                             currentSteadySeconds(),
+                                             audio.getPlaybackSpeed(),
+                                             m_ctx.isPlaying);
         }
     }
     SessionUtils::syncHitIndex(m_ctx);
@@ -150,8 +189,13 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 
     auto& audio = Audio::AudioManager::instance();
     if ( m_ctx.isPlaying ) {
-        m_ctx.currentTime = audio.getCurrentTime();
+        const double now = currentSteadySeconds();
+        if ( m_ctx.playbackVisualClock.initialized() ) {
+            m_ctx.currentTime = m_ctx.playbackVisualClock.currentTimeAt(now);
+        }
         SessionUtils::syncHitIndex(m_ctx);
+        audio.setPlaybackSpeed(cmd.speed);
+        return;
     }
 
     audio.setPlaybackSpeed(cmd.speed);
@@ -179,10 +223,11 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         m_ctx.isAudioTimelineSyncFollower = false;
         if ( m_ctx.isActiveSession ) {
             auto& audio = Audio::AudioManager::instance();
-            audio.pause();
             if ( audio.getLoadedAudioTimelineFingerprint() ==
                  m_ctx.audioTimelineDescriptor.m_fingerprint ) {
-                m_ctx.currentTime = audio.getCurrentTime();
+                pauseAndFreezeVisualClock(m_ctx, audio);
+            } else {
+                audio.pause();
             }
         }
         // 如果停止了播放，需要同步一下渲染状态 (虽然 seek
@@ -284,6 +329,10 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
             (void)SessionUtils::activateAudioTimeline(m_ctx, m_ctx.isPlaying);
         } else {
             audio.seek(m_ctx.currentTime);
+            m_ctx.playbackVisualClock.rebase(m_ctx.currentTime,
+                                             currentSteadySeconds(),
+                                             audio.getPlaybackSpeed(),
+                                             m_ctx.isPlaying);
         }
     }
     SessionUtils::syncHitIndex(m_ctx);

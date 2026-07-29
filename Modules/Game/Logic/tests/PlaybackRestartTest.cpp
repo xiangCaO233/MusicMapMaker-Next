@@ -35,6 +35,25 @@ bool testFinishedTimelineRewindsBeforeActivation()
     return true;
 }
 
+/// @brief 验证拉伸器尾音期间暂停不会把视觉时间冻结到谱面末尾之外。
+bool testPauseClampsVisualClockToTimelineEnd()
+{
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.isActiveSession                           = true;
+    context.isPlaying                                 = true;
+    context.audioTimelineDescriptor.m_chartEndSeconds = 5.0;
+    context.playbackVisualClock.rebase(8.0, 100.0, 1.0, false);
+
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ false });
+    if ( context.isPlaying || !near(context.currentTime, 5.0) ||
+         !near(context.playbackVisualClock.currentTimeAt(101.0), 5.0) ) {
+        XERROR("Pause preserved a visual time beyond the timeline end");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证零采样与多采样谱面都生成独立稳定描述符。
 bool testZeroAndMultipleSampleDescriptors()
 {
@@ -108,11 +127,93 @@ bool testNaturalFinishSnapshotArmsRestart()
     MMM::Logic::SessionContext context;
     context.audioTimelineDescriptor.m_fingerprint = "timeline";
     context.isPlaying                             = true;
+    const MMM::Audio::AudioTimelineClockSnapshot snapshot{
+        .positionFrame         = 12000,
+        .steadyTimeNanoseconds = 100'000'000'000,
+        .sampleRate            = 1000U,
+        .playbackRate          = 1.0,
+        .state            = MMM::Audio::AudioTimelinePlaybackState::Stopped,
+        .epoch            = 1U,
+        .seekSequence     = 2U,
+        .playbackSequence = 2U,
+        .sequence         = 2U,
+        .finished         = true,
+        .valid            = true,
+    };
     if ( MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
-             context, "timeline", MMM::Audio::PlaybackStatus::Stopped, 12.0) ||
+             context,
+             "timeline",
+             snapshot,
+             100.0,
+             context.lastConfig.settings.syncConfig) ||
          context.isPlaying || !context.restartPlaybackAfterFinishPending ||
          !near(context.currentTime, 12.0) ) {
         XERROR("Natural finish snapshot did not arm playback restart");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证普通 Stopped 快照不会伪装成自然播放结束。
+bool testNonFinishedStopDoesNotArmRestart()
+{
+    MMM::Logic::SessionContext context;
+    context.audioTimelineDescriptor.m_fingerprint = "timeline";
+    context.isPlaying                             = true;
+    const MMM::Audio::AudioTimelineClockSnapshot snapshot{
+        .positionFrame         = 4000,
+        .steadyTimeNanoseconds = 100'000'000'000,
+        .sampleRate            = 1000U,
+        .playbackRate          = 1.0,
+        .state            = MMM::Audio::AudioTimelinePlaybackState::Stopped,
+        .epoch            = 1U,
+        .seekSequence     = 2U,
+        .playbackSequence = 2U,
+        .sequence         = 2U,
+        .finished         = false,
+        .valid            = true,
+    };
+    if ( MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
+             context,
+             "timeline",
+             snapshot,
+             100.0,
+             context.lastConfig.settings.syncConfig) ||
+         context.isPlaying || context.restartPlaybackAfterFinishPending ) {
+        XERROR("Non-finished stop incorrectly armed playback restart");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证同步 follower 只沿用源画布壁钟，不以离散音频 block 重新校准。
+bool testFollowerUsesRebasedSourceClock()
+{
+    MMM::Logic::SessionContext context;
+    context.audioTimelineDescriptor.m_fingerprint = "timeline";
+    context.isAudioTimelineSyncFollower           = true;
+    context.playbackVisualClock.rebase(10.0, 100.0, 1.0, true);
+    const MMM::Audio::AudioTimelineClockSnapshot snapshot{
+        .positionFrame         = 2000,
+        .steadyTimeNanoseconds = 100'000'000'000,
+        .sampleRate            = 1000U,
+        .playbackRate          = 1.0,
+        .state            = MMM::Audio::AudioTimelinePlaybackState::Playing,
+        .epoch            = 99U,
+        .seekSequence     = 12U,
+        .playbackSequence = 12U,
+        .sequence         = 99U,
+        .valid            = true,
+    };
+    if ( !MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
+             context,
+             "timeline",
+             snapshot,
+             100.1,
+             context.lastConfig.settings.syncConfig) ||
+         !near(context.currentTime, 10.1) ||
+         !near(context.playbackVisualClock.lastResolvedSteadyTime(), 100.1) ) {
+        XERROR("Follower clock was overwritten by the discrete audio block");
         return false;
     }
     return true;
@@ -159,7 +260,10 @@ int main()
     return testZeroAndMultipleSampleDescriptors() &&
                    testTimelineSwitchUsesCompleteFingerprint() &&
                    testNaturalFinishSnapshotArmsRestart() &&
+                   testNonFinishedStopDoesNotArmRestart() &&
+                   testFollowerUsesRebasedSourceClock() &&
                    testFinishedTimelineRewindsBeforeActivation() &&
+                   testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&
                    testSeekCancelsPendingRestart()
                ? 0
