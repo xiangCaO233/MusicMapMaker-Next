@@ -120,6 +120,12 @@ target_link_libraries(CanvasComponentRenderSystemTest PRIVATE Logic Log)
 add_test(NAME CanvasComponentRenderSystemTest
          COMMAND CanvasComponentRenderSystemTest)
 
+# 自动采样渲染测试确保 BGM 物件复用当前皮肤的 Note 纹理。
+mmm_add_test_executable(Logic SampleRenderSystemTest
+                        tests/SampleRenderSystemTest.cpp)
+target_link_libraries(SampleRenderSystemTest PRIVATE Logic Log)
+add_test(NAME SampleRenderSystemTest COMMAND SampleRenderSystemTest)
+
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest
                         tests/LogoPlaceholderScissorTest.cpp)

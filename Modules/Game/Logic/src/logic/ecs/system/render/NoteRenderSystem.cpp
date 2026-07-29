@@ -502,6 +502,7 @@ void NoteRenderSystem::generateSnapshot(
                                               batcher,
                                               laneProjection,
                                               cache,
+                                              config,
                                               renderTime,
                                               judgmentLineY,
                                               viewportWidth,

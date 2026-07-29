@@ -1,6 +1,7 @@
 #include "logic/ecs/system/SampleRenderSystem.h"
 
 #include "common/AsciiFontData.h"
+#include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
@@ -267,8 +268,9 @@ void SampleRenderSystem::renderSamples(
     entt::registry& registry, const std::vector<entt::entity>& sortedEntities,
     const std::vector<double>& maxEndPrefix, RenderSnapshot* snapshot,
     Batcher& batcher, const CanvasLaneProjection& projection,
-    const ScrollCache* cache, double currentTime, float judgmentLineY,
-    float viewportWidth, float topY, float bottomY, float renderScaleY)
+    const ScrollCache* cache, const Config::EditorConfig& config,
+    double currentTime, float judgmentLineY, float viewportWidth, float topY,
+    float bottomY, float renderScaleY)
 {
     if ( !snapshot || !cache || !projection.valid ||
          std::abs(renderScaleY) < 1e-6F ) {
@@ -318,6 +320,16 @@ void SampleRenderSystem::renderSamples(
         bgmColor("bgm_tracks.offset", { 0.96F, 0.56F, 0.28F, 0.92F });
     const auto textColor =
         bgmColor("bgm_tracks.text", { 0.9F, 0.96F, 1.0F, 0.96F });
+    const auto noteTextureIt =
+        snapshot->uvMap.find(static_cast<std::uint32_t>(TextureID::Note));
+    const bool  hasNoteTexture = noteTextureIt != snapshot->uvMap.end() &&
+                                 std::isfinite(noteTextureIt->second.z) &&
+                                 std::isfinite(noteTextureIt->second.w) &&
+                                 noteTextureIt->second.z > 1e-6F &&
+                                 noteTextureIt->second.w > 1e-6F;
+    const float noteTextureAspect =
+        hasNoteTexture ? noteTextureIt->second.z / noteTextureIt->second.w
+                       : 1.0F;
 
     batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
 
@@ -421,13 +433,25 @@ void SampleRenderSystem::renderSamples(
                                 offsetHandleSize * 0.25F,
                                 offsetColor);
 
+        if ( hasNoteTexture ) {
+            batcher.setTexture(TextureID::Note);
+            batcher.pushFilledQuad(bodyX,
+                                   anchorY + bodyHeight * 0.5F,
+                                   bodyWidth,
+                                   bodyHeight,
+                                   { noteTextureAspect, 1.0F },
+                                   config.visual.noteFillMode,
+                                   bodyColor);
+        } else {
+            batcher.setTexture(TextureID::None);
+            batcher.pushRoundedQuad(bodyX,
+                                    anchorY + bodyHeight * 0.5F,
+                                    bodyWidth,
+                                    bodyHeight,
+                                    4.0F,
+                                    bodyColor);
+        }
         batcher.setTexture(TextureID::None);
-        batcher.pushRoundedQuad(bodyX,
-                                anchorY + bodyHeight * 0.5F,
-                                bodyWidth,
-                                bodyHeight,
-                                4.0F,
-                                bodyColor);
         batcher.pushRoundedStrokeRect(bodyX,
                                       anchorY + bodyHeight * 0.5F,
                                       bodyWidth,

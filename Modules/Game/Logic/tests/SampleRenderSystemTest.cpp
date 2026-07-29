@@ -1,0 +1,105 @@
+#include "logic/ecs/system/SampleRenderSystem.h"
+
+#include "config/EditorConfig.h"
+#include "log/colorful-log.h"
+#include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
+
+#include <cmath>
+#include <vector>
+
+namespace
+{
+
+/// @brief 使用小容差比较纹理坐标。
+/// @param lhs 左值。
+/// @param rhs 右值。
+/// @return 两个坐标足够接近时返回 true。
+bool near(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 1e-6F;
+}
+
+/// @brief 验证自动采样本体复用当前皮肤的普通 Note 纹理。
+/// @return 采样本体生成 Note 图集 UV 时返回 true。
+bool testSampleBodyUsesNoteTexture()
+{
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        bpmEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 0.0,
+            .m_effect    = MMM::TimingEffect::BPM,
+            .m_value     = 120.0,
+        });
+
+    MMM::Config::EditorConfig       config;
+    MMM::Logic::System::ScrollCache cache;
+    cache.rebuild(timelineRegistry, config, nullptr);
+
+    entt::registry sampleRegistry;
+    const auto     sampleEntity = sampleRegistry.create();
+    sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 0.0,
+            .m_track           = 4,
+            .m_audioResourceId = "sample.wav",
+        });
+    const std::vector<entt::entity> sortedEntities{ sampleEntity };
+    const std::vector<double>       maxEndPrefix{ 0.0 };
+
+    MMM::Logic::RenderSnapshot snapshot;
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::None),
+        glm::vec4{ 0.0F, 0.0F, 0.01F, 0.01F });
+    const glm::vec4 noteUv{ 0.25F, 0.35F, 0.2F, 0.1F };
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::Note), noteUv);
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        800.0F, 4, 1, 0.1F, 0.5F, 0.0F);
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    MMM::Logic::System::SampleRenderSystem::renderSamples(sampleRegistry,
+                                                          sortedEntities,
+                                                          maxEndPrefix,
+                                                          &snapshot,
+                                                          batcher,
+                                                          projection,
+                                                          &cache,
+                                                          config,
+                                                          0.0,
+                                                          300.0F,
+                                                          800.0F,
+                                                          0.0F,
+                                                          600.0F,
+                                                          1.0F);
+    batcher.flush();
+
+    bool foundNoteTopLeft     = false;
+    bool foundNoteBottomRight = false;
+    for ( const auto& vertex : snapshot.vertices ) {
+        foundNoteTopLeft = foundNoteTopLeft || (near(vertex.uv.u, noteUv.x) &&
+                                                near(vertex.uv.v, noteUv.y));
+        foundNoteBottomRight =
+            foundNoteBottomRight || (near(vertex.uv.u, noteUv.x + noteUv.z) &&
+                                     near(vertex.uv.v, noteUv.y + noteUv.w));
+    }
+    if ( !foundNoteTopLeft || !foundNoteBottomRight ) {
+        XERROR("Sample body did not use the configured Note texture UV");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+/// @brief 运行自动采样渲染系统回归测试。
+/// @return 全部测试通过时返回 0。
+int main()
+{
+    return testSampleBodyUsesNoteTexture() ? 0 : 1;
+}

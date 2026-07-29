@@ -6,6 +6,11 @@
 #include <entt/entt.hpp>
 #include <vector>
 
+namespace MMM::Config
+{
+struct EditorConfig;
+}
+
 namespace MMM::Logic::System
 {
 
@@ -38,6 +43,7 @@ public:
     /// @param batcher 画布批处理器。
     /// @param projection 玩家区与 BGM 区统一轨道投影。
     /// @param cache 已构建的滚动坐标缓存。
+    /// @param config 当前物件纹理显示配置。
     /// @param currentTime 当前动画时间。
     /// @param judgmentLineY 判定线纵坐标。
     /// @param viewportWidth 视口宽度。
@@ -51,9 +57,11 @@ public:
                               const std::vector<double>&       maxEndPrefix,
                               RenderSnapshot* snapshot, Batcher& batcher,
                               const CanvasLaneProjection& projection,
-                              const ScrollCache* cache, double currentTime,
-                              float judgmentLineY, float viewportWidth,
-                              float topY, float bottomY, float renderScaleY);
+                              const ScrollCache*          cache,
+                              const Config::EditorConfig& config,
+                              double currentTime, float judgmentLineY,
+                              float viewportWidth, float topY, float bottomY,
+                              float renderScaleY);
 };
 
 }  // namespace MMM::Logic::System
