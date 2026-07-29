@@ -73,10 +73,11 @@ void copyDisplayResourceId(std::span<char> output, std::string_view source)
 /// @param fontPixelHeight 字体像素高度。
 /// @param maxWidth 最大可用宽度。
 /// @param color 文字颜色。
+/// @param centerHorizontally 是否在最大可用宽度内水平居中。
 /// @warning 主画布热路径：只处理有界短文本，不得加载字体或分配 GPU 资源。
 void renderAsciiTextAt(Batcher& batcher, std::string_view text, float x,
                        float y, float fontPixelHeight, float maxWidth,
-                       glm::vec4 color)
+                       glm::vec4 color, bool centerHorizontally = false)
 {
     const auto selection = Common::selectAsciiFont(
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
@@ -84,12 +85,24 @@ void renderAsciiTextAt(Batcher& batcher, std::string_view text, float x,
 
     const auto& font      = *selection.metrics;
     const float baselineY = y + font.ascender * fontPixelHeight;
-    float       penX      = x;
+    float       textWidth = 0.0F;
+    if ( centerHorizontally ) {
+        for ( const char character : text ) {
+            const auto* glyph = font.glyph(character);
+            if ( !glyph || !glyph->available ) continue;
+            const float advance = glyph->advanceX * fontPixelHeight;
+            if ( textWidth + advance > maxWidth ) break;
+            textWidth += advance;
+        }
+    }
+    float penX =
+        x + (centerHorizontally ? (maxWidth - textWidth) * 0.5F : 0.0F);
+    const float textRight = penX + (centerHorizontally ? textWidth : maxWidth);
     for ( const char character : text ) {
         const auto* glyph = font.glyph(character);
         if ( !glyph || !glyph->available ) continue;
         const float advance = glyph->advanceX * fontPixelHeight;
-        if ( penX + advance > x + maxWidth ) break;
+        if ( penX + advance > textRight ) break;
 
         if ( glyph->hasBitmap ) {
             const auto textureId =
@@ -310,7 +323,8 @@ void SampleRenderSystem::renderSamples(
     }
     if ( snapshot->sampleQueryScratch.empty() ) return;
 
-    const auto sampleColor = bgmColor("note_tap", { 1.0F, 1.0F, 1.0F, 1.0F });
+    const auto sampleColor =
+        bgmColor("bgm_tracks.sample", { 0.36F, 0.72F, 0.92F, 0.96F });
     const auto selectedColor =
         bgmColor("bgm_tracks.sample_selected", { 1.0F, 0.78F, 0.24F, 1.0F });
     const auto hoveredColor =
@@ -373,7 +387,7 @@ void SampleRenderSystem::renderSamples(
         const float bodyHeight =
             (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
         const float verticalPadding =
-            std::max(32.0F, bodyHeight * 0.5F + 16.0F);
+            std::max(32.0F, bodyHeight * 0.5F + 24.0F);
         if ( std::max(anchorY, effectiveY) < topY - verticalPadding ||
              std::min(anchorY, effectiveY) > bottomY + verticalPadding ) {
             continue;
@@ -468,7 +482,8 @@ void SampleRenderSystem::renderSamples(
         const auto idLength =
             std::char_traits<char>::length(resourceBuffer.data());
         std::size_t resourceLength = idLength;
-        if ( resourceLength < resourceBuffer.size() - 1 ) {
+        if ( std::abs(sample.m_volume - 1.0F) > 1e-3F &&
+             resourceLength < resourceBuffer.size() - 1 ) {
             auto* const volumeBegin = resourceBuffer.data() + resourceLength;
             const auto  volumeResult =
                 fmt::format_to_n(volumeBegin,
@@ -479,14 +494,17 @@ void SampleRenderSystem::renderSamples(
             resourceLength +=
                 static_cast<std::size_t>(volumeResult.out - volumeBegin);
         }
+        const float labelFontPixelHeight =
+            std::clamp(laneWidth * 0.18F, 13.0F, 18.0F);
         renderAsciiTextAt(
             batcher,
             std::string_view(resourceBuffer.data(), resourceLength),
             bodyX + 2.0F,
-            anchorY - bodyHeight * 0.5F - 13.0F,
-            11.0F,
+            anchorY - bodyHeight * 0.5F - labelFontPixelHeight - 4.0F,
+            labelFontPixelHeight,
             bodyWidth - 4.0F,
-            textColor);
+            textColor,
+            true);
 
         if ( !snapshot->isPlaying && snapshot->acceptsInteraction ) {
             snapshot->hitboxes.push_back({

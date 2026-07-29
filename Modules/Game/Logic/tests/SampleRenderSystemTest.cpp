@@ -116,6 +116,14 @@ bool testSampleBodyMatchesTapTextureAndSize()
         XERROR("Sample body size diverged from the player Tap size");
         return false;
     }
+    const auto& sampleVertex = snapshot.vertices.front();
+    if ( !near(sampleVertex.color.r, 0.36F) ||
+         !near(sampleVertex.color.g, 0.72F) ||
+         !near(sampleVertex.color.b, 0.92F) ||
+         !near(sampleVertex.color.a, 0.96F) ) {
+        XERROR("Sample body lost its distinct BGM object color");
+        return false;
+    }
     return true;
 }
 
