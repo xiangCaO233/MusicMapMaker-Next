@@ -569,7 +569,7 @@ void AudioManager::updateQueuedSoundEffectLoads(
             XERROR("Failed to prepare bound note SFX: {}", result.key);
             continue;
         }
-        XINFO("Prepared bound note SFX: {}", result.key);
+        XDEBUG("Prepared bound note SFX: {}", result.key);
         auto preparedAudio = getOrPrepareAudioTimelineResource(
             registration->second.m_filePath,
             result.track,
