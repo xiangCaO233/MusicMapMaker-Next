@@ -1675,13 +1675,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     footerVBox.renderInCurrent(footerPos,
                                { layoutContext.m_avail.x, controlH });
 
-    // 4. 底部加号按钮 (全宽)
+    // 4. 底部导入与项目音频工具按钮（等宽）
     CLayHBox bottomBtnHBox;
     bottomBtnHBox
         .setPadding(toLayoutPixels(layoutMetrics.rootPadding),
                     toLayoutPixels(layoutMetrics.rootPadding),
                     0,
                     0)
+        .setSpacing(toLayoutPixels(layoutMetrics.rootPadding))
         .setAlignment(Alignment::Center())
         .addElement(
             "Audio_ImportNew",
@@ -1760,6 +1761,50 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.audio_manager.import_audio").data());
+                }
+            })
+        .addElement(
+            "Audio_ProjectTool",
+            Sizing::Grow(),
+            Sizing::Fixed(layoutMetrics.importButtonHeight),
+            [sourceManager, project](Clay_BoundingBox r, bool isHovered) {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text,
+                    project ? ImGui::GetStyle().Colors[ImGuiCol_Text]
+                            : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                      ImVec4(1, 1, 1, 0.1f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                      ImVec4(1, 1, 1, 0.2f));
+                Utils::pushFixedButtonStyleVars();
+
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                ImVec4 background = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+                background.w *= isHovered ? 0.75F : 0.5F;
+                drawList->AddRectFilled(
+                    { r.x, r.y },
+                    { r.x + r.width, r.y + r.height },
+                    ImGui::ColorConvertFloat4ToU32(background),
+                    ImGui::GetStyle().FrameRounding);
+
+                ImGui::BeginDisabled(!project);
+                if ( ::MMM::UI::FeedbackButton(
+                         fmt::format("{}##ProjectAudioTool", ICON_MMM_MUSIC)
+                             .c_str(),
+                         ImVec2(r.width, r.height)) &&
+                     sourceManager ) {
+                    sourceManager->openProjectAudioTool();
+                }
+                ImGui::EndDisabled();
+
+                Utils::popFixedButtonStyleVars();
+                ImGui::PopStyleColor(4);
+                if ( ImGui::IsItemHovered(
+                         ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    Utils::renderTooltip(
+                        TR("ui.audio_manager.open_project_audio_tool").data());
                 }
             });
 
