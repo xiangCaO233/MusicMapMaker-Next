@@ -222,6 +222,7 @@ return {
 	["ui.settings.visual.note"] = "Note Rendering",
 	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",
 	["ui.settings.visual.note_scale_y"] = "Note Vertical Scale",
+	["ui.settings.visual.note_bound_sample_labels"] = "Show Bound Audio Filenames",
 	["ui.settings.visual.note_fill_mode"] = "Hold Texture Fill Mode",
 	["ui.settings.visual.note_palette_default"] = "Default Palette on Project Open",
 	["ui.settings.visual.debug_draw_hitboxes"] = "Draw Hover Hitboxes",

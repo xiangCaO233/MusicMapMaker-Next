@@ -185,7 +185,7 @@ private:
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
-        bool generateHitboxes);
+        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels);
 
     /// @warning
     /// 热路径：悬浮发光层每次快照生成时执行；只扫描当前可见实体列表，禁止完整

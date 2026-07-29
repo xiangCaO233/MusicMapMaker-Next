@@ -225,6 +225,7 @@ return {
 	["ui.settings.visual.note"] = "物件渲染",
 	["ui.settings.visual.note_scale_x"] = "物件横向缩放",
 	["ui.settings.visual.note_scale_y"] = "物件纵向缩放",
+	["ui.settings.visual.note_bound_sample_labels"] = "显示绑定音效文件名",
 	["ui.settings.visual.note_fill_mode"] = "长条纹理填充模式",
 	["ui.settings.visual.note_palette_default"] = "打开项目默认调色方案",
 	["ui.settings.visual.debug_draw_hitboxes"] = "绘制悬浮包围框",

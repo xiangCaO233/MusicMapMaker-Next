@@ -36,6 +36,7 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Types.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
+  src/logic/ecs/system/render/AudioObjectLabelRenderer.cpp
   src/logic/ecs/system/render/SampleRenderSystem.cpp
   src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
@@ -125,6 +126,13 @@ mmm_add_test_executable(Logic SampleRenderSystemTest
                         tests/SampleRenderSystemTest.cpp)
 target_link_libraries(SampleRenderSystemTest PRIVATE Logic Log)
 add_test(NAME SampleRenderSystemTest COMMAND SampleRenderSystemTest)
+
+# 玩家物件标签测试确保绑定音效显示只在主画布启用并复用采样标签滚动。
+mmm_add_test_executable(Logic NoteBoundSampleLabelRenderTest
+                        tests/NoteBoundSampleLabelRenderTest.cpp)
+target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
+add_test(NAME NoteBoundSampleLabelRenderTest
+         COMMAND NoteBoundSampleLabelRenderTest)
 
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest

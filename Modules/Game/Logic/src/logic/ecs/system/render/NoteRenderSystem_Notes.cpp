@@ -6,6 +6,7 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -123,6 +124,43 @@ static double getCarrierEndAnchorTime(const NoteComponent& note,
     return note.m_timestamp + note.m_duration;
 }
 
+/// @brief 在玩家轨道物件锚点上方绘制绑定音效标签。
+/// @warning
+/// 主画布热路径：只处理调用方已剔除的物件锚点，不得访问文件系统或分配堆内存。
+static void renderBoundSampleLabelAt(Batcher& batcher, const ScrollCache* cache,
+                                     double currentAbsY, float noteH,
+                                     const ::MMM::AudioSampleBinding& binding,
+                                     double timestamp, int32_t trackIndex,
+                                     int32_t trackCount, float judgmentLineY,
+                                     float leftX, float topY, float bottomY,
+                                     float singleTrackW, float renderScaleY,
+                                     float noteScaleY, glm::vec4 color)
+{
+    if ( binding.m_audioResourceId.empty() || trackIndex < 0 ||
+         trackIndex >= trackCount ) {
+        return;
+    }
+
+    const float screenY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            timestamp, currentAbsY, timestamp)) *
+                            renderScaleY;
+    if ( screenY + noteH * 0.5F < topY || screenY - noteH * 0.5F > bottomY ) {
+        return;
+    }
+
+    renderAudioObjectLabel(
+        batcher,
+        binding.m_audioResourceId,
+        binding.m_volume,
+        leftX + static_cast<float>(trackIndex) * singleTrackW,
+        screenY - noteH * 0.5F,
+        singleTrackW,
+        noteScaleY,
+        color,
+        batcher.snapshot->snapshotSysTime);
+}
+
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
@@ -176,21 +214,25 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 3. 基础层渲染
-    NoteRenderSystem::renderNoteBaseLayer(registry,
-                                          snapshot,
-                                          ctx,
-                                          config,
-                                          noteEntities,
-                                          batcher,
-                                          (float)currentTime,
-                                          judgmentLineY,
-                                          leftX,
-                                          rightX,
-                                          topY,
-                                          bottomY,
-                                          singleTrackW,
-                                          renderScaleY,
-                                          shouldGenerateHitboxes);
+    NoteRenderSystem::renderNoteBaseLayer(
+        registry,
+        snapshot,
+        ctx,
+        config,
+        noteEntities,
+        batcher,
+        (float)currentTime,
+        judgmentLineY,
+        leftX,
+        rightX,
+        topY,
+        bottomY,
+        singleTrackW,
+        renderScaleY,
+        trackCount,
+        shouldGenerateHitboxes,
+        config.visual.showBoundSampleLabels &&
+            SessionUtils::isMainCanvasCameraId(cameraId));
 
     // 4. 发光层渲染
     NoteRenderSystem::renderNoteGlowLayer(registry,
@@ -897,7 +939,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
     const std::vector<entt::entity>& noteEntities, Batcher& batcher,
     float currentTime, float judgmentLineY, float leftX, float rightX,
     float topY, float bottomY, float singleTrackW, float renderScaleY,
-    bool generateHitboxes)
+    int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels)
 {
     std::vector<entt::entity> visibleEntities;
     for ( auto entity : noteEntities ) {
@@ -1059,6 +1101,63 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              curColorArrow,
                                              entity,
                                              generateHitboxes);
+    }
+
+    if ( showBoundSampleLabels ) {
+        const auto labelColor = audioObjectLabelColor();
+        for ( auto it = visibleEntities.rbegin(); it != visibleEntities.rend();
+              ++it ) {
+            const auto& note = registry.get<const NoteComponent>(
+                static_cast<entt::entity>(*it));
+            if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
+                if ( note.m_sampleBinding ) {
+                    renderBoundSampleLabelAt(batcher,
+                                             ctx.cache,
+                                             ctx.currentAbsY,
+                                             ctx.noteH,
+                                             *note.m_sampleBinding,
+                                             note.m_timestamp,
+                                             note.m_trackIndex,
+                                             trackCount,
+                                             judgmentLineY,
+                                             leftX,
+                                             topY,
+                                             bottomY,
+                                             singleTrackW,
+                                             renderScaleY,
+                                             config.visual.noteScaleY,
+                                             labelColor);
+                }
+                continue;
+            }
+
+            for ( std::size_t subIndex = 0; subIndex < note.m_subNotes.size();
+                  ++subIndex ) {
+                const auto& subNote = note.m_subNotes[subIndex];
+                const auto* binding = subNote.sampleBinding
+                                          ? &*subNote.sampleBinding
+                                      : subIndex == 0 && note.m_sampleBinding
+                                          ? &*note.m_sampleBinding
+                                          : nullptr;
+                if ( !binding ) continue;
+                renderBoundSampleLabelAt(batcher,
+                                         ctx.cache,
+                                         ctx.currentAbsY,
+                                         ctx.noteH,
+                                         *binding,
+                                         subNote.timestamp,
+                                         subNote.trackIndex,
+                                         trackCount,
+                                         judgmentLineY,
+                                         leftX,
+                                         topY,
+                                         bottomY,
+                                         singleTrackW,
+                                         renderScaleY,
+                                         config.visual.noteScaleY,
+                                         labelColor);
+            }
+        }
     }
     batcher.flush();
 }

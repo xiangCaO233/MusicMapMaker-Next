@@ -2841,6 +2841,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
             saveVisualAfterEdit();
 
+            visual = appConfig.getVisualConfig();
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.settings.visual.note_bound_sample_labels").data(),
+                     &visual.showBoundSampleLabels) ) {
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+
             visual                   = appConfig.getVisualConfig();
             int         noteFillMode = static_cast<int>(visual.noteFillMode);
             const char* fillModes[]  = {
