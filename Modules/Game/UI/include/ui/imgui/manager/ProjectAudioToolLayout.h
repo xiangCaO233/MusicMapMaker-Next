@@ -1,0 +1,387 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <optional>
+#include <span>
+#include <vector>
+
+namespace MMM::UI::ProjectAudioToolLayout
+{
+
+/// @brief 项目音频工具画布中的逻辑矩形。
+struct Rect {
+    /// @brief 左边界逻辑坐标。
+    float x{ 0.0F };
+
+    /// @brief 上边界逻辑坐标。
+    float y{ 0.0F };
+
+    /// @brief 逻辑宽度。
+    float width{ 0.0F };
+
+    /// @brief 逻辑高度。
+    float height{ 0.0F };
+
+    /// @brief 获取矩形右边界。
+    [[nodiscard]] float right() const { return x + width; }
+
+    /// @brief 获取矩形下边界。
+    [[nodiscard]] float bottom() const { return y + height; }
+};
+
+/// @brief 一个下层方块及其已有上层遮挡，用于校验新增方块后的可见面积。
+struct VisibilityConstraint {
+    /// @brief 必须保留可见面积的下层方块。
+    Rect base;
+
+    /// @brief 已经位于基础方块上方且不可移动的遮挡。
+    std::vector<Rect> fixedOccluders;
+};
+
+/// @brief 单轴吸附锁；拖过释放阈值前保持落在同一目标位置。
+struct AxisSnapLock {
+    /// @brief 当前锁定的方块左坐标或上坐标。
+    std::optional<float> position;
+};
+
+/// @brief 二维吸附锁。
+struct SnapLocks {
+    /// @brief 水平吸附锁。
+    AxisSnapLock x;
+
+    /// @brief 垂直吸附锁。
+    AxisSnapLock y;
+};
+
+/// @brief 计算矩形面积。
+[[nodiscard]] inline float area(const Rect& rect)
+{
+    return std::max(0.0F, rect.width) * std::max(0.0F, rect.height);
+}
+
+/// @brief 计算两个矩形的交集。
+[[nodiscard]] inline std::optional<Rect> intersection(const Rect& lhs,
+                                                      const Rect& rhs)
+{
+    const float left   = std::max(lhs.x, rhs.x);
+    const float top    = std::max(lhs.y, rhs.y);
+    const float right  = std::min(lhs.right(), rhs.right());
+    const float bottom = std::min(lhs.bottom(), rhs.bottom());
+    if ( right <= left || bottom <= top ) return std::nullopt;
+    return Rect{ left, top, right - left, bottom - top };
+}
+
+/// @brief 计算多个遮挡矩形在基础矩形内的并集面积。
+/// @warning 低频布局路径：仅在拖动或叠层变化时调用；会排序局部交点，
+/// 禁止在未发生布局变化的普通绘制帧中调用。
+[[nodiscard]] inline float coveredArea(const Rect&           base,
+                                       std::span<const Rect> occluders)
+{
+    if ( area(base) <= 0.0F || occluders.empty() ) return 0.0F;
+
+    std::vector<Rect>  clipped;
+    std::vector<float> xCoordinates{ base.x, base.right() };
+    clipped.reserve(occluders.size());
+    xCoordinates.reserve(occluders.size() * 2 + 2);
+    for ( const auto& occluder : occluders ) {
+        const auto clippedRect = intersection(base, occluder);
+        if ( !clippedRect ) continue;
+        clipped.push_back(*clippedRect);
+        xCoordinates.push_back(clippedRect->x);
+        xCoordinates.push_back(clippedRect->right());
+    }
+    if ( clipped.empty() ) return 0.0F;
+
+    std::ranges::sort(xCoordinates);
+    xCoordinates.erase(std::unique(xCoordinates.begin(), xCoordinates.end()),
+                       xCoordinates.end());
+
+    float                                covered = 0.0F;
+    std::vector<std::pair<float, float>> yIntervals;
+    yIntervals.reserve(clipped.size());
+    for ( std::size_t xIndex = 1; xIndex < xCoordinates.size(); ++xIndex ) {
+        const float left  = xCoordinates[xIndex - 1];
+        const float right = xCoordinates[xIndex];
+        if ( right <= left ) continue;
+        const float midpoint = (left + right) * 0.5F;
+
+        yIntervals.clear();
+        for ( const auto& clippedRect : clipped ) {
+            if ( midpoint > clippedRect.x && midpoint < clippedRect.right() ) {
+                yIntervals.emplace_back(clippedRect.y, clippedRect.bottom());
+            }
+        }
+        if ( yIntervals.empty() ) continue;
+
+        std::ranges::sort(yIntervals);
+        float intervalStart = yIntervals.front().first;
+        float intervalEnd   = yIntervals.front().second;
+        float coveredY      = 0.0F;
+        for ( std::size_t i = 1; i < yIntervals.size(); ++i ) {
+            if ( yIntervals[i].first <= intervalEnd ) {
+                intervalEnd = std::max(intervalEnd, yIntervals[i].second);
+            } else {
+                coveredY += intervalEnd - intervalStart;
+                intervalStart = yIntervals[i].first;
+                intervalEnd   = yIntervals[i].second;
+            }
+        }
+        coveredY += intervalEnd - intervalStart;
+        covered += (right - left) * coveredY;
+    }
+    return std::clamp(covered, 0.0F, area(base));
+}
+
+/// @brief 计算基础矩形扣除遮挡并集后的可见比例。
+[[nodiscard]] inline float visibleRatio(const Rect&           base,
+                                        std::span<const Rect> occluders)
+{
+    const float baseArea = area(base);
+    if ( baseArea <= 0.0F ) return 0.0F;
+    return std::clamp(
+        1.0F - coveredArea(base, occluders) / baseArea, 0.0F, 1.0F);
+}
+
+/// @brief 将矩形限制在工具画布边界内。
+[[nodiscard]] inline Rect clampToBounds(Rect rect, const Rect& bounds)
+{
+    rect.x = std::clamp(
+        rect.x, bounds.x, std::max(bounds.x, bounds.right() - rect.width));
+    rect.y = std::clamp(
+        rect.y, bounds.y, std::max(bounds.y, bounds.bottom() - rect.height));
+    return rect;
+}
+
+/// @brief 收集矩形单轴的边缘、中心和 35%/65% 叠层锚点。
+[[nodiscard]] inline std::array<float, 5> horizontalTargets(const Rect& rect)
+{
+    return {
+        rect.x,
+        rect.x + rect.width * 0.35F,
+        rect.x + rect.width * 0.5F,
+        rect.x + rect.width * 0.65F,
+        rect.right(),
+    };
+}
+
+/// @brief 收集矩形单轴的边缘、中心和 35%/65% 叠层锚点。
+[[nodiscard]] inline std::array<float, 5> verticalTargets(const Rect& rect)
+{
+    return {
+        rect.y,
+        rect.y + rect.height * 0.35F,
+        rect.y + rect.height * 0.5F,
+        rect.y + rect.height * 0.65F,
+        rect.bottom(),
+    };
+}
+
+/// @brief 对一个轴执行自身左中右或上中下到目标锚点的吸附。
+[[nodiscard]] inline float snapAxis(float rawPosition, float size,
+                                    std::span<const float> targetAnchors,
+                                    float snapThreshold, float releaseThreshold,
+                                    AxisSnapLock& lock)
+{
+    if ( lock.position ) {
+        if ( std::abs(rawPosition - *lock.position) <= releaseThreshold ) {
+            return *lock.position;
+        }
+        lock.position.reset();
+    }
+
+    constexpr std::array<float, 3> OWN_ANCHOR_RATIOS{ 0.0F, 0.5F, 1.0F };
+    float                          bestPosition = rawPosition;
+    float                          bestDistance = snapThreshold;
+    for ( const float target : targetAnchors ) {
+        for ( const float ratio : OWN_ANCHOR_RATIOS ) {
+            const float candidate = target - size * ratio;
+            const float distance  = std::abs(rawPosition - candidate);
+            if ( distance <= bestDistance ) {
+                bestDistance = distance;
+                bestPosition = candidate;
+            }
+        }
+    }
+    if ( bestPosition != rawPosition ) {
+        lock.position = bestPosition;
+    }
+    return bestPosition;
+}
+
+/// @brief 将拖动方块吸附到其他方块和当前可见工具画布的边缘与中心。
+[[nodiscard]] inline Rect snapRect(Rect rawRect, const Rect& visibleCanvas,
+                                   std::span<const Rect> otherRects,
+                                   float snapThreshold, float releaseThreshold,
+                                   SnapLocks& locks)
+{
+    std::vector<float> xTargets;
+    std::vector<float> yTargets;
+    xTargets.reserve(otherRects.size() * 5 + 3);
+    yTargets.reserve(otherRects.size() * 5 + 3);
+    xTargets.push_back(visibleCanvas.x);
+    xTargets.push_back(visibleCanvas.x + visibleCanvas.width * 0.5F);
+    xTargets.push_back(visibleCanvas.right());
+    yTargets.push_back(visibleCanvas.y);
+    yTargets.push_back(visibleCanvas.y + visibleCanvas.height * 0.5F);
+    yTargets.push_back(visibleCanvas.bottom());
+    for ( const auto& rect : otherRects ) {
+        const auto horizontal = horizontalTargets(rect);
+        const auto vertical   = verticalTargets(rect);
+        xTargets.insert(xTargets.end(), horizontal.begin(), horizontal.end());
+        yTargets.insert(yTargets.end(), vertical.begin(), vertical.end());
+    }
+
+    rawRect.x = snapAxis(rawRect.x,
+                         rawRect.width,
+                         xTargets,
+                         snapThreshold,
+                         releaseThreshold,
+                         locks.x);
+    rawRect.y = snapAxis(rawRect.y,
+                         rawRect.height,
+                         yTargets,
+                         snapThreshold,
+                         releaseThreshold,
+                         locks.y);
+    return rawRect;
+}
+
+/// @brief 计算全部可见比例约束的总缺口。
+[[nodiscard]] inline float visibilityDeficit(
+    const Rect& candidate, std::span<const VisibilityConstraint> constraints,
+    float minimumVisibleRatio)
+{
+    float deficit = 0.0F;
+    for ( const auto& constraint : constraints ) {
+        auto occluders = constraint.fixedOccluders;
+        occluders.push_back(candidate);
+        deficit += std::max(
+            0.0F,
+            minimumVisibleRatio - visibleRatio(constraint.base, occluders));
+    }
+    return deficit;
+}
+
+/// @brief 修正前景方块位置，使所有下层方块至少保留指定可见比例。
+/// @warning 拖动热路径的低频几何分支：仅在方块位置变化时调用，最多执行固定
+/// 轮数的局部约束检查，禁止在静止帧重复执行。
+[[nodiscard]] inline Rect constrainVisibility(
+    Rect candidate, const Rect& canvasBounds,
+    std::span<const VisibilityConstraint> constraints,
+    float                                 minimumVisibleRatio)
+{
+    candidate                = clampToBounds(candidate, canvasBounds);
+    constexpr int MAX_PASSES = 8;
+    for ( int pass = 0; pass < MAX_PASSES; ++pass ) {
+        if ( visibilityDeficit(candidate, constraints, minimumVisibleRatio) <=
+             1e-5F ) {
+            break;
+        }
+
+        Rect  best = candidate;
+        float bestDeficit =
+            visibilityDeficit(candidate, constraints, minimumVisibleRatio);
+        float bestDistance = std::numeric_limits<float>::max();
+        for ( const auto& constraint : constraints ) {
+            auto occluders = constraint.fixedOccluders;
+            occluders.push_back(candidate);
+            if ( visibleRatio(constraint.base, occluders) + 1e-5F >=
+                 minimumVisibleRatio ) {
+                continue;
+            }
+
+            const Rect&               base = constraint.base;
+            const std::array<Rect, 4> alternatives{
+                Rect{ base.x + base.width * minimumVisibleRatio,
+                      candidate.y,
+                      candidate.width,
+                      candidate.height },
+                Rect{ base.right() - base.width * minimumVisibleRatio -
+                          candidate.width,
+                      candidate.y,
+                      candidate.width,
+                      candidate.height },
+                Rect{ candidate.x,
+                      base.y + base.height * minimumVisibleRatio,
+                      candidate.width,
+                      candidate.height },
+                Rect{ candidate.x,
+                      base.bottom() - base.height * minimumVisibleRatio -
+                          candidate.height,
+                      candidate.width,
+                      candidate.height },
+            };
+            for ( auto alternative : alternatives ) {
+                alternative         = clampToBounds(alternative, canvasBounds);
+                const float deficit = visibilityDeficit(
+                    alternative, constraints, minimumVisibleRatio);
+                const float deltaX   = alternative.x - candidate.x;
+                const float deltaY   = alternative.y - candidate.y;
+                const float distance = deltaX * deltaX + deltaY * deltaY;
+                if ( deficit < bestDeficit - 1e-5F ||
+                     (std::abs(deficit - bestDeficit) <= 1e-5F &&
+                      distance < bestDistance) ) {
+                    best         = alternative;
+                    bestDeficit  = deficit;
+                    bestDistance = distance;
+                }
+            }
+        }
+        if ( best.x == candidate.x && best.y == candidate.y ) break;
+        candidate = best;
+    }
+    return candidate;
+}
+
+/// @brief 查找基础方块未被上层方块遮挡的最大网格单元，用于放置文本标签。
+/// @warning 低频布局路径：只在布局或叠层变化时重建标签裁切缓存。
+[[nodiscard]] inline Rect largestVisibleCell(const Rect&           base,
+                                             std::span<const Rect> occluders)
+{
+    std::vector<float> xCoordinates{ base.x, base.right() };
+    std::vector<float> yCoordinates{ base.y, base.bottom() };
+    for ( const auto& occluder : occluders ) {
+        const auto clipped = intersection(base, occluder);
+        if ( !clipped ) continue;
+        xCoordinates.push_back(clipped->x);
+        xCoordinates.push_back(clipped->right());
+        yCoordinates.push_back(clipped->y);
+        yCoordinates.push_back(clipped->bottom());
+    }
+    std::ranges::sort(xCoordinates);
+    std::ranges::sort(yCoordinates);
+    xCoordinates.erase(std::unique(xCoordinates.begin(), xCoordinates.end()),
+                       xCoordinates.end());
+    yCoordinates.erase(std::unique(yCoordinates.begin(), yCoordinates.end()),
+                       yCoordinates.end());
+
+    Rect best{};
+    for ( std::size_t xIndex = 1; xIndex < xCoordinates.size(); ++xIndex ) {
+        for ( std::size_t yIndex = 1; yIndex < yCoordinates.size(); ++yIndex ) {
+            Rect cell{
+                xCoordinates[xIndex - 1],
+                yCoordinates[yIndex - 1],
+                xCoordinates[xIndex] - xCoordinates[xIndex - 1],
+                yCoordinates[yIndex] - yCoordinates[yIndex - 1],
+            };
+            const float midpointX = cell.x + cell.width * 0.5F;
+            const float midpointY = cell.y + cell.height * 0.5F;
+            const bool  covered =
+                std::ranges::any_of(occluders, [&](const Rect& occluder) {
+                    return midpointX > occluder.x &&
+                           midpointX < occluder.right() &&
+                           midpointY > occluder.y &&
+                           midpointY < occluder.bottom();
+                });
+            if ( !covered && area(cell) > area(best) ) {
+                best = cell;
+            }
+        }
+    }
+    return area(best) > 0.0F ? best : base;
+}
+
+}  // namespace MMM::UI::ProjectAudioToolLayout

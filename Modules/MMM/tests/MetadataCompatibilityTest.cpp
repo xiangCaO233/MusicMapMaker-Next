@@ -1,5 +1,6 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/ProjectSettings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,6 +44,43 @@ bool writeTextFile(const std::filesystem::path& path, std::string_view content)
 
     file.write(content.data(), static_cast<std::streamsize>(content.size()));
     return file.good();
+}
+
+/// @brief 验证项目音频工具的打开状态、选择和方块布局可完整往返。
+bool testProjectAudioToolWorkspaceRoundTrip()
+{
+    MMM::ProjectWorkspaceState source;
+    source.m_projectAudioToolOpen               = true;
+    source.m_projectAudioToolSelectedResourceId = "main";
+    source.m_projectAudioToolPlacements         = {
+        MMM::ProjectAudioToolItemPlacement{
+            .m_audioResourceId = "main",
+            .m_x               = 12.5F,
+            .m_y               = 30.0F,
+            .m_zOrder          = 4,
+        },
+        MMM::ProjectAudioToolItemPlacement{
+            .m_audioResourceId = "effect",
+            .m_x               = 80.0F,
+            .m_y               = 50.0F,
+            .m_zOrder          = 5,
+        },
+    };
+
+    const json serialized = source;
+    const auto restored   = serialized.get<MMM::ProjectWorkspaceState>();
+    return check(restored.m_projectAudioToolOpen,
+                 "project audio tool open state should round trip") &&
+           check(restored.m_projectAudioToolSelectedResourceId == "main",
+                 "project audio selection should round trip") &&
+           check(restored.m_projectAudioToolPlacements.size() == 2,
+                 "project audio placements should round trip") &&
+           check(restored.m_projectAudioToolPlacements[1].m_audioResourceId ==
+                         "effect" &&
+                     std::abs(restored.m_projectAudioToolPlacements[1].m_x -
+                              80.0F) < 1e-6F &&
+                     restored.m_projectAudioToolPlacements[1].m_zOrder == 5,
+                 "project audio placement fields should remain intact");
 }
 
 /// @brief 验证 osu! 字符串 Video 事件能够作为唯一背景载入。
@@ -786,6 +824,7 @@ int main(int argc, char* argv[])
     }
 
     bool ok = true;
+    ok &= testProjectAudioToolWorkspaceRoundTrip();
     ok &= testPureStringVideoEvent(outputDirectory);
     ok &= testNumericVideoEventPriority(outputDirectory);
     ok &= testImageEventFallback(outputDirectory);

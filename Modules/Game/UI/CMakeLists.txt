@@ -75,6 +75,7 @@ add_library(
   src/ui/imgui/manager/FileManagerView_Interactions.cpp
   src/ui/imgui/manager/SearchView.cpp
   src/ui/imgui/manager/AudioManagerView.cpp
+  src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
@@ -166,3 +167,10 @@ mmm_add_test_executable(UI ProjectUiLifecycleStateTest
 target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
+
+# 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
+mmm_add_test_executable(UI ProjectAudioToolLayoutTest
+                        tests/ProjectAudioToolLayoutTest.cpp)
+target_include_directories(ProjectAudioToolLayoutTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectAudioToolLayoutTest COMMAND ProjectAudioToolLayoutTest)

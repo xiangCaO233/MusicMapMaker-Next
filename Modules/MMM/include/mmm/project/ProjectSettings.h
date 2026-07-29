@@ -1,6 +1,7 @@
 #pragma once
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -81,6 +82,44 @@ struct ProjectWorkspaceAudioControllerState {
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(ProjectWorkspaceAudioControllerState,
                                    m_trackId, m_trackName, m_trackType)
+};
+
+/// @brief 项目音频工具中一个资源方块的持久化布局。
+struct ProjectAudioToolItemPlacement {
+    /// @brief 音频资源稳定 ID。
+    std::string m_audioResourceId;
+
+    /// @brief 方块左上角相对工具画布的逻辑 X 坐标。
+    float m_x{ 0.0F };
+
+    /// @brief 方块左上角相对工具画布的逻辑 Y 坐标。
+    float m_y{ 0.0F };
+
+    /// @brief 方块叠层顺序，数值越大越靠上。
+    std::int32_t m_zOrder{ 0 };
+
+    /// @brief 序列化项目音频工具方块布局。
+    friend void to_json(nlohmann::json&                      json,
+                        const ProjectAudioToolItemPlacement& placement)
+    {
+        json = nlohmann::json{
+            { "m_audioResourceId", placement.m_audioResourceId },
+            { "m_x", placement.m_x },
+            { "m_y", placement.m_y },
+            { "m_zOrder", placement.m_zOrder },
+        };
+    }
+
+    /// @brief 反序列化项目音频工具方块布局并兼容缺失字段。
+    friend void from_json(const nlohmann::json&          json,
+                          ProjectAudioToolItemPlacement& placement)
+    {
+        placement.m_audioResourceId =
+            json.value("m_audioResourceId", std::string{});
+        placement.m_x      = json.value("m_x", 0.0F);
+        placement.m_y      = json.value("m_y", 0.0F);
+        placement.m_zOrder = json.value("m_zOrder", 0);
+    }
 };
 
 /// @brief 项目工作区中的工具栏运行时开关状态。
@@ -211,6 +250,12 @@ struct ProjectWorkspaceState {
     /// @brief 项目音频工具上次选中的资源 ID。
     std::string m_projectAudioToolSelectedResourceId;
 
+    /// @brief 上次是否打开了项目音频工具窗口。
+    bool m_projectAudioToolOpen{ false };
+
+    /// @brief 项目音频工具资源方块的持久化布局。
+    std::vector<ProjectAudioToolItemPlacement> m_projectAudioToolPlacements;
+
     /// @brief 上次工具栏上的运行时开关状态。
     ProjectWorkspaceToolbarState m_toolbarState;
 
@@ -249,6 +294,9 @@ struct ProjectWorkspaceState {
             { "m_activeEditTool", workspace.m_activeEditTool },
             { "m_projectAudioToolSelectedResourceId",
               workspace.m_projectAudioToolSelectedResourceId },
+            { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
+            { "m_projectAudioToolPlacements",
+              workspace.m_projectAudioToolPlacements },
             { "m_toolbarState", workspace.m_toolbarState },
             { "m_bpmMeasurementToolOpen", workspace.m_bpmMeasurementToolOpen },
             { "m_bpmMeasurementAudioTrackId",
@@ -283,6 +331,11 @@ struct ProjectWorkspaceState {
             j.value("m_activeEditTool", std::string{ "Move" });
         workspace.m_projectAudioToolSelectedResourceId =
             j.value("m_projectAudioToolSelectedResourceId", std::string{});
+        workspace.m_projectAudioToolOpen =
+            j.value("m_projectAudioToolOpen", false);
+        workspace.m_projectAudioToolPlacements =
+            j.value("m_projectAudioToolPlacements",
+                    std::vector<ProjectAudioToolItemPlacement>{});
         workspace.m_toolbarState =
             j.value("m_toolbarState", ProjectWorkspaceToolbarState{});
         workspace.m_bpmMeasurementToolOpen =
