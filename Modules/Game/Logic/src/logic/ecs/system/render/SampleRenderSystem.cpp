@@ -310,8 +310,7 @@ void SampleRenderSystem::renderSamples(
     }
     if ( snapshot->sampleQueryScratch.empty() ) return;
 
-    const auto sampleColor =
-        bgmColor("bgm_tracks.sample", { 0.36F, 0.72F, 0.92F, 0.96F });
+    const auto sampleColor = bgmColor("note_tap", { 1.0F, 1.0F, 1.0F, 1.0F });
     const auto selectedColor =
         bgmColor("bgm_tracks.sample_selected", { 1.0F, 0.78F, 0.24F, 1.0F });
     const auto hoveredColor =
@@ -368,21 +367,30 @@ void SampleRenderSystem::renderSamples(
             judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                                 effectiveTime, currentAbsY, effectiveTime)) *
                                 renderScaleY;
-        if ( std::max(anchorY, effectiveY) < topY - 32.0F ||
-             std::min(anchorY, effectiveY) > bottomY + 32.0F ) {
+
+        const float laneWidth = projection.player.singleTrackWidth;
+        const float bodyWidth = laneWidth * config.visual.noteScaleX;
+        const float bodyHeight =
+            (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
+        const float verticalPadding =
+            std::max(32.0F, bodyHeight * 0.5F + 16.0F);
+        if ( std::max(anchorY, effectiveY) < topY - verticalPadding ||
+             std::min(anchorY, effectiveY) > bottomY + verticalPadding ) {
             continue;
         }
 
-        const float laneWidth  = projection.player.singleTrackWidth;
-        const float bodyWidth  = std::max(12.0F, laneWidth * 0.78F);
-        const float bodyHeight = std::clamp(laneWidth * 0.24F, 16.0F, 28.0F);
-        const float bodyX      = bounds->leftX + (laneWidth - bodyWidth) * 0.5F;
-        const float centerX    = bounds->leftX + laneWidth * 0.5F;
+        const float bodyX   = bounds->leftX + (laneWidth - bodyWidth) * 0.5F;
+        const float centerX = bounds->leftX + laneWidth * 0.5F;
         const float offsetHandleSize =
             std::clamp(laneWidth * 0.12F, 8.0F, 14.0F);
-        const float offsetHandleCenterX = bounds->leftX + laneWidth * 0.82F;
+        const float offsetHandleCenterX =
+            bodyX + bodyWidth - offsetHandleSize * 0.5F;
         const float offsetHandleX =
             offsetHandleCenterX - offsetHandleSize * 0.5F;
+        const bool showOffsetHandle =
+            sample.m_offsetMs != 0 ||
+            (interaction &&
+             (interaction->isSelected || interaction->isHovered));
 
         glm::vec4 bodyColor = sampleColor;
         if ( interaction && interaction->isSelected ) {
@@ -391,8 +399,8 @@ void SampleRenderSystem::renderSamples(
             bodyColor = hoveredColor;
         }
 
-        batcher.setTexture(TextureID::None);
         if ( sample.m_offsetMs != 0 ) {
+            batcher.setTexture(TextureID::None);
             const float connectorTop =
                 std::max(topY, std::min(anchorY, effectiveY));
             const float connectorBottom =
@@ -420,18 +428,21 @@ void SampleRenderSystem::renderSamples(
                 11.0F,
                 laneWidth - 8.0F,
                 offsetColor);
+            batcher.pushQuad(bounds->leftX + laneWidth * 0.18F,
+                             effectiveY + 1.5F,
+                             laneWidth * 0.64F,
+                             3.0F,
+                             offsetColor);
         }
-        batcher.pushQuad(bounds->leftX + laneWidth * 0.18F,
-                         effectiveY + 1.5F,
-                         laneWidth * 0.64F,
-                         3.0F,
-                         offsetColor);
-        batcher.pushRoundedQuad(offsetHandleX,
-                                effectiveY + offsetHandleSize * 0.5F,
-                                offsetHandleSize,
-                                offsetHandleSize,
-                                offsetHandleSize * 0.25F,
-                                offsetColor);
+        if ( showOffsetHandle ) {
+            batcher.setTexture(TextureID::None);
+            batcher.pushRoundedQuad(offsetHandleX,
+                                    effectiveY + offsetHandleSize * 0.5F,
+                                    offsetHandleSize,
+                                    offsetHandleSize,
+                                    offsetHandleSize * 0.25F,
+                                    offsetColor);
+        }
 
         if ( hasNoteTexture ) {
             batcher.setTexture(TextureID::Note);
@@ -451,14 +462,6 @@ void SampleRenderSystem::renderSamples(
                                     4.0F,
                                     bodyColor);
         }
-        batcher.setTexture(TextureID::None);
-        batcher.pushRoundedStrokeRect(bodyX,
-                                      anchorY + bodyHeight * 0.5F,
-                                      bodyWidth,
-                                      bodyHeight,
-                                      4.0F,
-                                      1.5F,
-                                      { 0.9F, 0.96F, 1.0F, 0.9F });
 
         std::array<char, 72> resourceBuffer{};
         copyDisplayResourceId(resourceBuffer, sample.m_audioResourceId);
@@ -479,10 +482,10 @@ void SampleRenderSystem::renderSamples(
         renderAsciiTextAt(
             batcher,
             std::string_view(resourceBuffer.data(), resourceLength),
-            bodyX + 4.0F,
-            anchorY - 6.0F,
+            bodyX + 2.0F,
+            anchorY - bodyHeight * 0.5F - 13.0F,
             11.0F,
-            bodyWidth - 8.0F,
+            bodyWidth - 4.0F,
             textColor);
 
         if ( !snapshot->isPlaying && snapshot->acceptsInteraction ) {
@@ -496,16 +499,18 @@ void SampleRenderSystem::renderSamples(
                 bodyHeight,
                 ChartObjectKind::AudioSample,
             });
-            snapshot->hitboxes.push_back({
-                entity,
-                HoverPart::SampleOffset,
-                -1,
-                offsetHandleX,
-                effectiveY - offsetHandleSize * 0.5F,
-                offsetHandleSize,
-                offsetHandleSize,
-                ChartObjectKind::AudioSample,
-            });
+            if ( showOffsetHandle ) {
+                snapshot->hitboxes.push_back({
+                    entity,
+                    HoverPart::SampleOffset,
+                    -1,
+                    offsetHandleX,
+                    effectiveY - offsetHandleSize * 0.5F,
+                    offsetHandleSize,
+                    offsetHandleSize,
+                    ChartObjectKind::AudioSample,
+                });
+            }
         }
     }
 }
