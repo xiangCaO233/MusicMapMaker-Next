@@ -466,6 +466,10 @@ void SampleRenderSystem::renderSamples(
     const float noteTextureAspect =
         hasNoteTexture ? noteTextureIt->second.z / noteTextureIt->second.w
                        : 1.0F;
+    const float sampleTextScale = std::isfinite(config.visual.noteScaleY) &&
+                                          config.visual.noteScaleY > 0.0F
+                                      ? config.visual.noteScaleY
+                                      : 1.0F;
 
     batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
 
@@ -562,7 +566,7 @@ void SampleRenderSystem::renderSamples(
                                                           offsetBuffer.data())),
                 bounds->leftX + 4.0F,
                 effectiveY + 4.0F,
-                11.0F,
+                11.0F * sampleTextScale,
                 laneWidth - 8.0F,
                 offsetColor);
             batcher.pushQuad(bounds->leftX + laneWidth * 0.18F,
@@ -618,14 +622,14 @@ void SampleRenderSystem::renderSamples(
                 static_cast<std::size_t>(volumeResult.out - volumeBegin);
         }
         const float labelFontPixelHeight =
-            std::clamp(laneWidth * 0.18F, 13.0F, 18.0F);
+            std::clamp(laneWidth * 0.18F, 13.0F, 18.0F) * sampleTextScale;
         renderMarqueeAsciiTextAt(
             batcher,
             std::string_view(resourceBuffer.data(), resourceLength),
-            bodyX + 2.0F,
+            bounds->leftX + 2.0F,
             anchorY - bodyHeight * 0.5F - labelFontPixelHeight - 4.0F,
             labelFontPixelHeight,
-            bodyWidth - 4.0F,
+            laneWidth - 4.0F,
             textColor,
             snapshot->snapshotSysTime);
 

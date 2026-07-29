@@ -69,9 +69,12 @@ void configureAsciiFont(MMM::Logic::RenderSnapshot& snapshot)
 /// @param resourceId 音频资源 ID。
 /// @param snapshotSysTime 单调时钟秒数。
 /// @param withAsciiFont 是否注入标签字体。
+/// @param noteScaleX 物件横向缩放。
+/// @param noteScaleY 物件纵向缩放。
 void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
                         std::string_view resourceId, double snapshotSysTime,
-                        bool withAsciiFont)
+                        bool withAsciiFont, float noteScaleX = 1.2F,
+                        float noteScaleY = 1.2F)
 {
     entt::registry timelineRegistry;
     const auto     bpmEntity = timelineRegistry.create();
@@ -83,7 +86,9 @@ void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
             .m_value     = 120.0,
         });
 
-    MMM::Config::EditorConfig       config;
+    MMM::Config::EditorConfig config;
+    config.visual.noteScaleX = noteScaleX;
+    config.visual.noteScaleY = noteScaleY;
     MMM::Logic::System::ScrollCache cache;
     cache.rebuild(timelineRegistry, config, nullptr);
 
@@ -206,7 +211,22 @@ bool labelGeometryEqual(const MMM::Logic::RenderSnapshot& lhs,
     return true;
 }
 
-/// @brief 验证短标签保持居中静止，长标签在物件宽度内循环滚动。
+/// @brief 计算忽略物件本体后的标签字形几何高度。
+/// @param snapshot 待检查快照。
+/// @return 标签字形覆盖高度；没有标签几何时返回零。
+float labelGlyphHeight(const MMM::Logic::RenderSnapshot& snapshot)
+{
+    if ( snapshot.vertices.size() <= 4U ) return 0.0F;
+    float minY = snapshot.vertices[4U].pos.y;
+    float maxY = minY;
+    for ( std::size_t index = 5U; index < snapshot.vertices.size(); ++index ) {
+        minY = std::min(minY, snapshot.vertices[index].pos.y);
+        maxY = std::max(maxY, snapshot.vertices[index].pos.y);
+    }
+    return maxY - minY;
+}
+
+/// @brief 验证短标签保持居中静止，长标签在轨道宽度内循环滚动。
 /// @return 标签静止、滚动和 CPU 侧水平裁剪均符合预期时返回 true。
 bool testSampleLabelMarquee()
 {
@@ -231,17 +251,58 @@ bool testSampleLabelMarquee()
         return false;
     }
 
-    constexpr float labelLeft  = 394.0F;
-    constexpr float labelRight = 486.0F;
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        800.0F, 4, 1, 0.1F, 0.5F, 0.0F);
+    const auto laneBounds =
+        projection.bounds({ MMM::Logic::CanvasLaneKind::Bgm, 0U });
+    if ( !laneBounds ) {
+        XERROR("Unable to resolve the first BGM lane bounds");
+        return false;
+    }
+    const float labelLeft  = laneBounds->leftX + 2.0F;
+    const float labelRight = laneBounds->rightX - 2.0F;
     for ( const auto* snapshot : { &longStart, &longLater } ) {
         for ( std::size_t index = 4U; index < snapshot->vertices.size();
               ++index ) {
             const float x = snapshot->vertices[index].pos.x;
             if ( x < labelLeft - 1e-4F || x > labelRight + 1e-4F ) {
-                XERROR("Scrolling sample label escaped its object width");
+                XERROR("Scrolling sample label escaped its lane width");
                 return false;
             }
         }
+    }
+    return true;
+}
+
+/// @brief 验证标签字号跟随纵向物件缩放，裁剪范围不跟随横向缩放。
+/// @return 字号比例和固定轨道宽度裁剪均符合预期时返回 true。
+bool testSampleLabelScaleAndFixedLaneWidth()
+{
+    MMM::Logic::RenderSnapshot narrowBody;
+    MMM::Logic::RenderSnapshot wideBody;
+    renderSingleSample(narrowBody,
+                       "very_long_sample_resource_name.wav",
+                       2.25,
+                       true,
+                       0.5F,
+                       1.0F);
+    renderSingleSample(
+        wideBody, "very_long_sample_resource_name.wav", 2.25, true, 3.0F, 1.0F);
+    if ( !labelGeometryEqual(narrowBody, wideBody) ) {
+        XERROR("Sample label bounds changed with horizontal object scale");
+        return false;
+    }
+
+    MMM::Logic::RenderSnapshot shortBody;
+    MMM::Logic::RenderSnapshot tallBody;
+    renderSingleSample(shortBody, "fx.wav", 0.0, true, 1.0F, 0.5F);
+    renderSingleSample(tallBody, "fx.wav", 0.0, true, 1.0F, 2.0F);
+    const float shortGlyphHeight = labelGlyphHeight(shortBody);
+    const float tallGlyphHeight  = labelGlyphHeight(tallBody);
+    if ( shortGlyphHeight <= 0.0F ||
+         !near(tallGlyphHeight / shortGlyphHeight, 4.0F) ) {
+        XERROR("Sample label font size did not follow vertical object scale");
+        return false;
     }
     return true;
 }
@@ -252,7 +313,9 @@ bool testSampleLabelMarquee()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testSampleBodyMatchesTapTextureAndSize() && testSampleLabelMarquee()
+    return testSampleBodyMatchesTapTextureAndSize() &&
+                   testSampleLabelMarquee() &&
+                   testSampleLabelScaleAndFixedLaneWidth()
                ? 0
                : 1;
 }
