@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/AudioTimelineClock.h"
 #include "audio/AudioTimelineTransport.h"
 
 #include <atomic>
@@ -215,6 +216,12 @@ public:
     /// @return 下一 block 起始的有符号时间线帧。
     [[nodiscard]] AudioTimelineFrame positionFrame() const noexcept;
 
+    /// @brief 获取位置、时间戳、状态与纪元来自同一发布点的时间线时钟快照。
+    /// @return 读取竞争过于激烈时返回 valid=false，调用方应继续推演上一锚点。
+    /// @warning
+    /// 逻辑热路径：只执行有界序列锁读取；禁止改成阻塞等待或无界自旋。
+    [[nodiscard]] AudioTimelineClockSnapshot clockSnapshot() const noexcept;
+
     /// @brief 获取当前音频 block 开始时的时间线位置。
     /// @return 主时间线节点开始生成最近 block 时的位置。
     ///
@@ -287,14 +294,18 @@ private:
         /// @param preparedClips 已完成过滤和排序的片段。
         /// @param requestedTimelineEndFrame 谱面物件决定的排除结束帧。
         /// @param maximumProcessFrames 单次缓存读取最大帧数。
+        /// @param scheduleGeneration 当前调度在节点内的单调代次。
         ScheduleState(std::vector<PreparedTimelineClip> preparedClips,
                       AudioTimelineFrame requestedTimelineEndFrame,
-                      std::size_t        maximumProcessFrames);
+                      std::size_t        maximumProcessFrames,
+                      std::uint64_t      scheduleGeneration);
 
         /// @brief 有效且已排序的预备片段。
         std::vector<PreparedTimelineClip> clips;
         /// @brief 只由音频回调线程推进的确定性传输核心。
         AudioTimelineTransport transport;
+        /// @brief 当前调度在同一 Mixer 节点内的单调代次。
+        std::uint64_t generation{ 0U };
         /// @brief 谱面和采样共同决定的排除结束帧。
         AudioTimelineFrame timelineEndFrame{ 0 };
         /// @brief 单次缓存读取允许的最大帧数。
@@ -342,8 +353,24 @@ private:
     /// @warning 音频热路径；仅执行有界原子读取和常数时间状态修改。
     void applyPendingControls() noexcept;
 
+    /// @brief 捕获控制应用完成且尚未处理循环边界时的传输纪元。
+    /// @warning 音频热路径；只读取当前音频线程私有传输状态。
+    void captureControlEpoch() noexcept;
+
+    /// @brief 稳定读取当前请求的循环邮箱。
+    /// @param enabled 返回循环是否启用。
+    /// @param startFrame 返回循环包含起点。
+    /// @param endFrame 返回循环排除终点。
+    /// @return 邮箱没有并发写入且读取完整时返回 true。
+    /// @warning 逻辑热路径；只执行一次有界序列锁读取。
+    [[nodiscard]] bool tryReadRequestedLoop(
+        bool& enabled, AudioTimelineFrame& startFrame,
+        AudioTimelineFrame& endFrame) const noexcept;
+
     /// @brief 发布回调线程的最新传输快照。
-    /// @warning 音频热路径；仅执行 relaxed 原子写入。
+    /// @warning
+    /// 音频热路径；只执行固定数量 lock-free 序列锁原子操作，禁止加入锁、
+    /// 分配或无界重试。
     void publishTransportSnapshot() noexcept;
 
     /// @brief 混合当前位置起始且不跨越循环或结束边界的一段输出。
@@ -364,6 +391,12 @@ private:
 
     /// @brief 当前只由音频线程访问的调度状态。
     ScheduleState* m_scheduleState{ nullptr };
+    /// @brief 下一个由控制线程分配的调度代次。
+    ///
+    /// @warning 只允许单个非实时控制线程调用 replaceSchedule 并递增。
+    std::uint64_t m_nextScheduleGeneration{ 1U };
+    /// @brief 当前 block 应用控制后、处理循环边界前的传输纪元。
+    std::uint64_t m_controlEpoch{ 0U };
     /// @brief prepareInputBoundary 已为紧随其后的 process 固定输入区间。
     ///
     /// @warning
@@ -399,8 +432,16 @@ private:
     std::atomic<PlaybackCommand> m_requestedPlaybackCommand{
         PlaybackCommand::Stop
     };
+    /// @brief 播放命令提交时的 steady_clock 纳秒时间戳。
+    ///
+    /// @warning 受 m_playbackCommandSequence 序列锁保护。
+    std::atomic<std::int64_t> m_requestedPlaybackSteadyTimeNanoseconds{ 0 };
     /// @brief 音频线程最后应用的播放命令版本。
     std::uint64_t m_appliedPlaybackCommandSequence{ 0U };
+    /// @brief 最近一致发布快照已应用的播放命令版本。
+    ///
+    /// @warning 音频线程写、逻辑线程在时钟序列锁内读取。
+    std::atomic<std::uint64_t> m_publishedAppliedPlaybackCommandSequence{ 0U };
 
     /// @brief Seek 命令序列锁版本。
     ///
@@ -411,6 +452,10 @@ private:
     ///
     /// @warning 受 m_seekSequence 序列锁保护。
     std::atomic<AudioTimelineFrame> m_requestedSeekFrame{ 0 };
+    /// @brief Seek 命令提交时的 steady_clock 纳秒时间戳。
+    ///
+    /// @warning 受 m_seekSequence 序列锁保护。
+    std::atomic<std::int64_t> m_requestedSeekSteadyTimeNanoseconds{ 0 };
     /// @brief 音频线程最后应用的 Seek 版本。
     std::uint64_t m_appliedSeekSequence{ 0U };
     /// @brief 最近一次已完成 block 应用的 Seek 版本。
@@ -463,11 +508,33 @@ private:
     /// @warning
     /// 音频线程写入、逻辑线程读取；relaxed 顺序足以提供独立状态快照。
     std::atomic<std::uint64_t> m_publishedEpoch{ 0U };
+    /// @brief 最近一致快照中控制应用完成时的传输纪元。
+    ///
+    /// @warning 只允许在 m_clockSnapshotSequence 保护下读取。
+    std::atomic<std::uint64_t> m_publishedControlEpoch{ 0U };
+    /// @brief 最近一致快照中的调度代次。
+    ///
+    /// @warning 只允许在 m_clockSnapshotSequence 保护下读取。
+    std::atomic<std::uint64_t> m_publishedScheduleGeneration{ 0U };
     /// @brief 回调发布给逻辑线程的自然结束标记。
     ///
     /// @warning
     /// 音频线程写入、逻辑线程读取；relaxed 顺序足以提供独立状态快照。
     std::atomic<bool> m_publishedFinished{ false };
+
+    /// @brief 一致时钟快照的序列锁版本。
+    ///
+    /// @warning
+    /// 音频线程单写、逻辑线程多读；写入奇数表示发布中，偶数表示完整快照。
+    std::atomic<std::uint64_t> m_clockSnapshotSequence{ 0U };
+    /// @brief 最近一致快照发布时的 steady_clock 纳秒时间戳。
+    ///
+    /// @warning 只允许在 m_clockSnapshotSequence 保护下读取。
+    std::atomic<std::int64_t> m_publishedSteadyTimeNanoseconds{ 0 };
+    /// @brief 最近一致快照中的自然结束标记。
+    ///
+    /// @warning 只允许在 m_clockSnapshotSequence 保护下读取。
+    std::atomic<bool> m_clockPublishedFinished{ false };
 
     /// @brief 逐事件音量之后应用的复合时间线主增益。
     ///

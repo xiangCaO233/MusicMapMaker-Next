@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/AudioTimelineClock.h"
 #include "audio/StereoGainEnvelope.h"
 #include "config/EditorSettings.h"
 #include "mmm/project/AudioResource.h"
@@ -276,6 +277,12 @@ public:
 
     /// @brief 获取当前播放时间 (秒)
     double getCurrentTime() const;
+
+    /// @brief 获取供逻辑层连续推演使用的一致时间线时钟快照。
+    /// @return 未加载时间线或读取竞争时 valid=false。
+    /// @warning 逻辑热路径：只读取固定数量 lock-free 原子与拉伸器状态。
+    [[nodiscard]] AudioTimelineClockSnapshot
+    getAudioTimelineClockSnapshot() const noexcept;
 
     /// @brief 获取总时长 (秒)
     double getTotalTime() const;

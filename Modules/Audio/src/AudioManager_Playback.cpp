@@ -110,40 +110,79 @@ void AudioManager::seek(double seconds)
 /// @return 当前播放状态。
 PlaybackStatus AudioManager::getStatus() const
 {
-    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) {
-        return PlaybackStatus::Stopped;
-    }
-    const auto requestedState = m_audioTimelineNode->requestedState();
-    if ( m_stretcher && m_stretcher->is_paused() ) {
-        return requestedState == AudioTimelinePlaybackState::Paused
-                   ? PlaybackStatus::Paused
-                   : PlaybackStatus::Stopped;
-    }
-    if ( m_audioTimelineNode->finished() ) {
-        if ( m_stretcher && !m_stretcher->is_final_input_drained() ) {
+    const auto snapshot = getAudioTimelineClockSnapshot();
+    if ( !snapshot.valid ) {
+        if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) {
+            return PlaybackStatus::Stopped;
+        }
+        const auto requestedState = m_audioTimelineNode->requestedState();
+        if ( m_stretcher && m_stretcher->is_paused() ) {
+            return requestedState == AudioTimelinePlaybackState::Paused
+                       ? PlaybackStatus::Paused
+                       : PlaybackStatus::Stopped;
+        }
+        if ( m_audioTimelineNode->finished() ) {
+            return m_stretcher && !m_stretcher->is_final_input_drained()
+                       ? PlaybackStatus::Playing
+                       : PlaybackStatus::Stopped;
+        }
+        switch ( requestedState ) {
+        case AudioTimelinePlaybackState::Stopped:
+            return PlaybackStatus::Stopped;
+        case AudioTimelinePlaybackState::Paused: return PlaybackStatus::Paused;
+        case AudioTimelinePlaybackState::Playing:
             return PlaybackStatus::Playing;
         }
         return PlaybackStatus::Stopped;
     }
-    switch ( requestedState ) {
+    switch ( snapshot.state ) {
     case AudioTimelinePlaybackState::Stopped: return PlaybackStatus::Stopped;
     case AudioTimelinePlaybackState::Paused: return PlaybackStatus::Paused;
-    case AudioTimelinePlaybackState::Playing: break;
+    case AudioTimelinePlaybackState::Playing: return PlaybackStatus::Playing;
     }
-    return PlaybackStatus::Playing;
+    return PlaybackStatus::Stopped;
 }
 
 /// @brief 获取复合音频时间线当前播放时间。
 /// @return 当前播放时间，单位为秒。
 double AudioManager::getCurrentTime() const
 {
+    const auto snapshot = getAudioTimelineClockSnapshot();
+    if ( snapshot.valid ) return snapshot.positionSeconds();
     if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return 0.0;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( sampleRate <= 0.0 ) return 0.0;
-
     return static_cast<double>(m_audioTimelineNode->positionFrame()) /
            sampleRate;
+}
+
+AudioTimelineClockSnapshot
+AudioManager::getAudioTimelineClockSnapshot() const noexcept
+{
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return {};
+
+    auto snapshot = m_audioTimelineNode->clockSnapshot();
+    snapshot.sampleRate =
+        static_cast<std::uint32_t>(ice::ICEConfig::internal_format.samplerate);
+    snapshot.playbackRate = m_speed;
+    snapshot.valid        = snapshot.valid && snapshot.sampleRate > 0U &&
+                            std::isfinite(snapshot.playbackRate) &&
+                            snapshot.playbackRate > 0.0;
+    if ( !snapshot.valid ) return {};
+
+    if ( m_stretcher && m_stretcher->is_paused() ) {
+        snapshot.state = snapshot.state == AudioTimelinePlaybackState::Paused
+                             ? AudioTimelinePlaybackState::Paused
+                             : AudioTimelinePlaybackState::Stopped;
+        return snapshot;
+    }
+    if ( snapshot.finished ) {
+        snapshot.state = m_stretcher && !m_stretcher->is_final_input_drained()
+                             ? AudioTimelinePlaybackState::Playing
+                             : AudioTimelinePlaybackState::Stopped;
+    }
+    return snapshot;
 }
 
 /// @brief 获取谱面内容与所有自动采样共同决定的复合时长。

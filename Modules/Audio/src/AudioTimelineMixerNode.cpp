@@ -1,6 +1,7 @@
 #include "audio/AudioTimelineMixerNode.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <ice/manage/AudioTrack.hpp>
@@ -51,6 +52,42 @@ namespace
                                    std::uint64_t appliedSequence) noexcept
 {
     return sequence != appliedSequence && (sequence & 1U) == 0U;
+}
+
+/// @brief 在读取 relaxed payload 后验证 seqcount 版本仍未变化。
+/// @param sequence 被验证的序列计数器。
+/// @param expected 首次 acquire 读取到的偶数版本。
+/// @return payload 读取期间没有并发 writer 时返回 true。
+///
+/// acquire fence 是 ARM 等弱内存序平台所需的读取屏障，阻止前面的 payload
+/// 读取跨越末次 relaxed 版本验证；本函数不包含锁、循环或分配。
+[[nodiscard]] bool sequenceStillStable(
+    const std::atomic<std::uint64_t>& sequence, std::uint64_t expected) noexcept
+{
+    std::atomic_thread_fence(std::memory_order_acquire);
+    return sequence.load(std::memory_order_relaxed) == expected;
+}
+
+/// @brief 按 Transport 规则将待应用 Seek 目标限制到循环起点。
+/// @param requestedFrame 原始 Seek 目标。
+/// @param loopEnabled 当前请求是否启用循环。
+/// @param loopStartFrame 循环包含起点。
+/// @param loopEndFrame 循环排除终点。
+/// @return 启用循环且目标不小于排除终点时返回循环起点，否则返回原目标。
+[[nodiscard]] AudioTimelineFrame normalizeRequestedSeekFrame(
+    AudioTimelineFrame requestedFrame, bool loopEnabled,
+    AudioTimelineFrame loopStartFrame, AudioTimelineFrame loopEndFrame) noexcept
+{
+    return loopEnabled && requestedFrame >= loopEndFrame ? loopStartFrame
+                                                         : requestedFrame;
+}
+
+/// @brief 获取可跨线程比较的 steady_clock 纳秒时间戳。
+[[nodiscard]] std::int64_t steadyNowNanoseconds() noexcept
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
 }  // namespace
@@ -177,15 +214,20 @@ AudioTimelineMixerNode::AudioTimelineMixerNode(
     std::size_t                       maximumProcessFrames)
 {
     static_assert(std::atomic<ScheduleState*>::is_always_lock_free);
+    static_assert(std::atomic<AudioTimelineFrame>::is_always_lock_free);
+    static_assert(std::atomic<std::int64_t>::is_always_lock_free);
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
     auto initialState =
         std::make_unique<ScheduleState>(prepareClips(std::move(clips)),
                                         requestedTimelineEndFrame,
-                                        maximumProcessFrames);
+                                        maximumProcessFrames,
+                                        m_nextScheduleGeneration++);
     m_publishedTimelineEndFrame.store(initialState->timelineEndFrame,
                                       std::memory_order_relaxed);
     m_publishedClipCount.store(initialState->clips.size(),
                                std::memory_order_relaxed);
     m_scheduleState = initialState.release();
+    captureControlEpoch();
     publishTransportSnapshot();
 }
 
@@ -201,9 +243,10 @@ AudioTimelineMixerNode::~AudioTimelineMixerNode()
 AudioTimelineMixerNode::ScheduleState::ScheduleState(
     std::vector<PreparedTimelineClip> preparedClips,
     AudioTimelineFrame                requestedTimelineEndFrame,
-    std::size_t                       requestedMaximumProcessFrames)
+    std::size_t requestedMaximumProcessFrames, std::uint64_t scheduleGeneration)
     : clips(std::move(preparedClips))
     , transport(AudioTimelineMixerNode::buildClipSpecs(clips))
+    , generation(scheduleGeneration)
     , timelineEndFrame(AudioTimelineMixerNode::calculateTimelineEndFrame(
           clips, requestedTimelineEndFrame))
     , maximumProcessFrames(
@@ -222,7 +265,8 @@ void AudioTimelineMixerNode::replaceSchedule(
     auto replacement =
         std::make_unique<ScheduleState>(prepareClips(std::move(clips)),
                                         requestedTimelineEndFrame,
-                                        maximumProcessFrames);
+                                        maximumProcessFrames,
+                                        m_nextScheduleGeneration++);
     m_publishedTimelineEndFrame.store(replacement->timelineEndFrame,
                                       std::memory_order_relaxed);
     m_publishedClipCount.store(replacement->clips.size(),
@@ -272,6 +316,8 @@ void AudioTimelineMixerNode::stop() noexcept
 {
     m_seekSequence.fetch_add(1U, std::memory_order_acq_rel);
     m_requestedSeekFrame.store(0, std::memory_order_relaxed);
+    m_requestedSeekSteadyTimeNanoseconds.store(steadyNowNanoseconds(),
+                                               std::memory_order_relaxed);
     m_seekSequence.fetch_add(1U, std::memory_order_release);
     requestPlaybackCommand(PlaybackCommand::Stop);
 }
@@ -283,6 +329,8 @@ void AudioTimelineMixerNode::seek(AudioTimelineFrame frame) noexcept
     }
     m_seekSequence.fetch_add(1U, std::memory_order_acq_rel);
     m_requestedSeekFrame.store(frame, std::memory_order_relaxed);
+    m_requestedSeekSteadyTimeNanoseconds.store(steadyNowNanoseconds(),
+                                               std::memory_order_relaxed);
     m_seekSequence.fetch_add(1U, std::memory_order_release);
 }
 
@@ -314,8 +362,14 @@ AudioTimelineFrame AudioTimelineMixerNode::positionFrame() const noexcept
              m_publishedAppliedSeekSequence.load(std::memory_order_acquire) ) {
         const auto requestedFrame =
             m_requestedSeekFrame.load(std::memory_order_relaxed);
-        if ( m_seekSequence.load(std::memory_order_acquire) == seekSequence ) {
-            return requestedFrame;
+        if ( sequenceStillStable(m_seekSequence, seekSequence) ) {
+            bool               loopEnabled = false;
+            AudioTimelineFrame loopStart   = 0;
+            AudioTimelineFrame loopEnd     = 0;
+            if ( tryReadRequestedLoop(loopEnabled, loopStart, loopEnd) ) {
+                return normalizeRequestedSeekFrame(
+                    requestedFrame, loopEnabled, loopStart, loopEnd);
+            }
         }
     }
     if ( m_requestedPlaybackCommand.load(std::memory_order_relaxed) ==
@@ -323,6 +377,106 @@ AudioTimelineFrame AudioTimelineMixerNode::positionFrame() const noexcept
         return 0;
     }
     return m_publishedPositionFrame.load(std::memory_order_relaxed);
+}
+
+AudioTimelineClockSnapshot
+AudioTimelineMixerNode::clockSnapshot() const noexcept
+{
+    constexpr std::size_t      MAX_READ_ATTEMPTS = 4U;
+    AudioTimelineClockSnapshot snapshot;
+
+    for ( std::size_t attempt = 0U; attempt < MAX_READ_ATTEMPTS; ++attempt ) {
+        const auto sequence =
+            m_clockSnapshotSequence.load(std::memory_order_acquire);
+        if ( (sequence & 1U) != 0U ) continue;
+
+        snapshot.positionFrame =
+            m_publishedPositionFrame.load(std::memory_order_relaxed);
+        snapshot.steadyTimeNanoseconds =
+            m_publishedSteadyTimeNanoseconds.load(std::memory_order_relaxed);
+        snapshot.state = m_publishedState.load(std::memory_order_relaxed);
+        snapshot.epoch = m_publishedEpoch.load(std::memory_order_relaxed);
+        snapshot.controlEpoch =
+            m_publishedControlEpoch.load(std::memory_order_relaxed);
+        snapshot.scheduleGeneration =
+            m_publishedScheduleGeneration.load(std::memory_order_relaxed);
+        snapshot.finished =
+            m_clockPublishedFinished.load(std::memory_order_relaxed);
+        snapshot.appliedSeekSequence =
+            m_publishedAppliedSeekSequence.load(std::memory_order_relaxed);
+        snapshot.appliedPlaybackSequence =
+            m_publishedAppliedPlaybackCommandSequence.load(
+                std::memory_order_relaxed);
+
+        if ( !sequenceStillStable(m_clockSnapshotSequence, sequence) ) {
+            continue;
+        }
+
+        snapshot.sequence = sequence;
+        snapshot.valid    = true;
+
+        const auto seekSequence =
+            m_seekSequence.load(std::memory_order_acquire);
+        if ( (seekSequence & 1U) != 0U ) return {};
+        const auto requestedFrame =
+            m_requestedSeekFrame.load(std::memory_order_relaxed);
+        const auto requestedSeekTime =
+            m_requestedSeekSteadyTimeNanoseconds.load(
+                std::memory_order_relaxed);
+        if ( !sequenceStillStable(m_seekSequence, seekSequence) ) {
+            return {};
+        }
+        snapshot.seekSequence = seekSequence;
+        if ( seekSequence != snapshot.appliedSeekSequence ) {
+            bool               loopEnabled = false;
+            AudioTimelineFrame loopStart   = 0;
+            AudioTimelineFrame loopEnd     = 0;
+            if ( !tryReadRequestedLoop(loopEnabled, loopStart, loopEnd) ) {
+                return {};
+            }
+            snapshot.positionFrame = normalizeRequestedSeekFrame(
+                requestedFrame, loopEnabled, loopStart, loopEnd);
+            snapshot.steadyTimeNanoseconds = requestedSeekTime;
+            snapshot.finished              = false;
+        }
+
+        const auto playbackSequence =
+            m_playbackCommandSequence.load(std::memory_order_acquire);
+        if ( (playbackSequence & 1U) != 0U ) return {};
+        const auto command =
+            m_requestedPlaybackCommand.load(std::memory_order_relaxed);
+        const auto requestedPlaybackTime =
+            m_requestedPlaybackSteadyTimeNanoseconds.load(
+                std::memory_order_relaxed);
+        if ( !sequenceStillStable(m_playbackCommandSequence,
+                                  playbackSequence) ) {
+            return {};
+        }
+        snapshot.playbackSequence = playbackSequence;
+        if ( playbackSequence != snapshot.appliedPlaybackSequence ) {
+            snapshot.steadyTimeNanoseconds = requestedPlaybackTime;
+            switch ( command ) {
+            case PlaybackCommand::Stop:
+                snapshot.positionFrame = 0;
+                snapshot.state         = AudioTimelinePlaybackState::Stopped;
+                snapshot.finished      = false;
+                break;
+            case PlaybackCommand::Play:
+                if ( snapshot.finished ) {
+                    snapshot.positionFrame = 0;
+                }
+                snapshot.state    = AudioTimelinePlaybackState::Playing;
+                snapshot.finished = false;
+                break;
+            case PlaybackCommand::Pause:
+                snapshot.state = AudioTimelinePlaybackState::Paused;
+                break;
+            }
+        }
+        return snapshot;
+    }
+
+    return {};
 }
 
 AudioTimelineFrame AudioTimelineMixerNode::blockStartFrame() const noexcept
@@ -337,6 +491,7 @@ AudioTimelineInputBoundary AudioTimelineMixerNode::prepareInputBoundary(
     m_preparedInputFrameCount  = 0U;
     applyPendingSchedule();
     applyPendingControls();
+    captureControlEpoch();
     if ( !m_scheduleState || maximumFrames == 0U ||
          m_scheduleState->transport.state() !=
              AudioTimelinePlaybackState::Playing ) {
@@ -452,6 +607,7 @@ void AudioTimelineMixerNode::process(ice::AudioBuffer& buffer)
     if ( !consumePreparedBoundary ) {
         applyPendingSchedule();
         applyPendingControls();
+        captureControlEpoch();
     }
     m_publishedBlockStartFrame.store(
         m_scheduleState ? m_scheduleState->transport.positionFrame() : 0,
@@ -609,7 +765,7 @@ void AudioTimelineMixerNode::initializeReplacementTransport(
             m_requestedLoopStartFrame.load(std::memory_order_relaxed);
         const auto endFrame =
             m_requestedLoopEndFrame.load(std::memory_order_relaxed);
-        if ( m_loopSequence.load(std::memory_order_acquire) == loopSequence ) {
+        if ( sequenceStillStable(m_loopSequence, loopSequence) ) {
             if ( enabled ) {
                 static_cast<void>(
                     state.transport.setLoop({ startFrame, endFrame }));
@@ -624,7 +780,7 @@ void AudioTimelineMixerNode::initializeReplacementTransport(
     if ( hasStableUpdate(seekSequence, m_appliedSeekSequence) ) {
         const auto requestedPosition =
             m_requestedSeekFrame.load(std::memory_order_relaxed);
-        if ( m_seekSequence.load(std::memory_order_acquire) == seekSequence ) {
+        if ( sequenceStillStable(m_seekSequence, seekSequence) ) {
             replacementPosition   = requestedPosition;
             m_appliedSeekSequence = seekSequence;
         }
@@ -636,8 +792,7 @@ void AudioTimelineMixerNode::initializeReplacementTransport(
     if ( (playbackSequence & 1U) != 0U ) return;
     const auto command =
         m_requestedPlaybackCommand.load(std::memory_order_relaxed);
-    if ( m_playbackCommandSequence.load(std::memory_order_acquire) !=
-         playbackSequence ) {
+    if ( !sequenceStillStable(m_playbackCommandSequence, playbackSequence) ) {
         return;
     }
 
@@ -686,7 +841,7 @@ void AudioTimelineMixerNode::applyPendingControls() noexcept
             m_requestedLoopStartFrame.load(std::memory_order_relaxed);
         const auto endFrame =
             m_requestedLoopEndFrame.load(std::memory_order_relaxed);
-        if ( m_loopSequence.load(std::memory_order_acquire) == loopSequence ) {
+        if ( sequenceStillStable(m_loopSequence, loopSequence) ) {
             if ( enabled ) {
                 static_cast<void>(transport.setLoop({ startFrame, endFrame }));
             } else {
@@ -699,7 +854,7 @@ void AudioTimelineMixerNode::applyPendingControls() noexcept
     const auto seekSequence = m_seekSequence.load(std::memory_order_acquire);
     if ( hasStableUpdate(seekSequence, m_appliedSeekSequence) ) {
         const auto frame = m_requestedSeekFrame.load(std::memory_order_relaxed);
-        if ( m_seekSequence.load(std::memory_order_acquire) == seekSequence ) {
+        if ( sequenceStillStable(m_seekSequence, seekSequence) ) {
             transport.seek(frame);
             if ( m_requestedPlaybackCommand.load(std::memory_order_relaxed) ==
                  PlaybackCommand::Play ) {
@@ -719,8 +874,7 @@ void AudioTimelineMixerNode::applyPendingControls() noexcept
 
     const auto command =
         m_requestedPlaybackCommand.load(std::memory_order_relaxed);
-    if ( m_playbackCommandSequence.load(std::memory_order_acquire) !=
-         playbackSequence ) {
+    if ( !sequenceStillStable(m_playbackCommandSequence, playbackSequence) ) {
         return;
     }
 
@@ -742,22 +896,58 @@ void AudioTimelineMixerNode::applyPendingControls() noexcept
     m_appliedPlaybackCommandSequence = playbackSequence;
 }
 
+void AudioTimelineMixerNode::captureControlEpoch() noexcept
+{
+    m_controlEpoch = m_scheduleState ? m_scheduleState->transport.epoch() : 0U;
+}
+
+bool AudioTimelineMixerNode::tryReadRequestedLoop(
+    bool& enabled, AudioTimelineFrame& startFrame,
+    AudioTimelineFrame& endFrame) const noexcept
+{
+    const auto sequence = m_loopSequence.load(std::memory_order_acquire);
+    if ( (sequence & 1U) != 0U ) return false;
+
+    enabled    = m_requestedLoopEnabled.load(std::memory_order_relaxed);
+    startFrame = m_requestedLoopStartFrame.load(std::memory_order_relaxed);
+    endFrame   = m_requestedLoopEndFrame.load(std::memory_order_relaxed);
+    return sequenceStillStable(m_loopSequence, sequence);
+}
+
 void AudioTimelineMixerNode::publishTransportSnapshot() noexcept
 {
+    const auto steadyTimeNanoseconds = steadyNowNanoseconds();
+    m_clockSnapshotSequence.fetch_add(1U, std::memory_order_acq_rel);
     if ( !m_scheduleState ) {
         m_publishedPositionFrame.store(0, std::memory_order_relaxed);
         m_publishedState.store(AudioTimelinePlaybackState::Stopped,
                                std::memory_order_relaxed);
-        return;
+        m_publishedEpoch.store(0U, std::memory_order_relaxed);
+        m_publishedControlEpoch.store(0U, std::memory_order_relaxed);
+        m_publishedScheduleGeneration.store(0U, std::memory_order_relaxed);
+    } else {
+        m_publishedPositionFrame.store(
+            m_scheduleState->transport.positionFrame(),
+            std::memory_order_relaxed);
+        m_publishedState.store(m_scheduleState->transport.state(),
+                               std::memory_order_relaxed);
+        m_publishedEpoch.store(m_scheduleState->transport.epoch(),
+                               std::memory_order_relaxed);
+        m_publishedControlEpoch.store(m_controlEpoch,
+                                      std::memory_order_relaxed);
+        m_publishedScheduleGeneration.store(m_scheduleState->generation,
+                                            std::memory_order_relaxed);
     }
-    m_publishedPositionFrame.store(m_scheduleState->transport.positionFrame(),
-                                   std::memory_order_relaxed);
-    m_publishedState.store(m_scheduleState->transport.state(),
-                           std::memory_order_relaxed);
-    m_publishedEpoch.store(m_scheduleState->transport.epoch(),
-                           std::memory_order_relaxed);
+    m_publishedSteadyTimeNanoseconds.store(steadyTimeNanoseconds,
+                                           std::memory_order_relaxed);
+    m_clockPublishedFinished.store(
+        m_publishedFinished.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     m_publishedAppliedSeekSequence.store(m_appliedSeekSequence,
-                                         std::memory_order_release);
+                                         std::memory_order_relaxed);
+    m_publishedAppliedPlaybackCommandSequence.store(
+        m_appliedPlaybackCommandSequence, std::memory_order_relaxed);
+    m_clockSnapshotSequence.fetch_add(1U, std::memory_order_release);
 }
 
 void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
@@ -836,6 +1026,8 @@ void AudioTimelineMixerNode::requestPlaybackCommand(
 {
     m_playbackCommandSequence.fetch_add(1U, std::memory_order_acq_rel);
     m_requestedPlaybackCommand.store(command, std::memory_order_relaxed);
+    m_requestedPlaybackSteadyTimeNanoseconds.store(steadyNowNanoseconds(),
+                                                   std::memory_order_relaxed);
     m_playbackCommandSequence.fetch_add(1U, std::memory_order_release);
 }
 

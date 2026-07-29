@@ -330,9 +330,11 @@ bool testInputBoundaryAndFinishedReplacement()
 
     ice::AudioBuffer loopOutput(ice::ICEConfig::internal_format, 4U);
     node.process(loopOutput);
+    const auto loopSnapshot = node.clockSnapshot();
     return !node.finished() && node.positionFrame() == 2 &&
            node.state() == AudioTimelinePlaybackState::Playing &&
-           finalNotificationCount == 1U;
+           finalNotificationCount == 1U && loopSnapshot.valid &&
+           loopSnapshot.epoch != loopSnapshot.controlEpoch;
 }
 
 /// @brief 验证 Stop 与紧随其后的 Play 仍会从零点开启新纪元。
@@ -354,6 +356,168 @@ bool testImmediateStopThenPlay()
     if ( node.positionFrame() != 1 ||
          node.state() != MMM::Audio::AudioTimelinePlaybackState::Playing ) {
         XERROR("Immediate stop-then-play did not restart the timeline at zero");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证逻辑线程取得的位置、状态、时间戳和控制序列来自一致快照。
+bool testCoherentTimelineClockSnapshot()
+{
+    using MMM::Audio::AudioTimelineMixerNode;
+    using MMM::Audio::AudioTimelinePlaybackState;
+
+    AudioTimelineMixerNode node({}, 32, 8U);
+    const auto             initial = node.clockSnapshot();
+    if ( !initial.valid || (initial.sequence & 1U) != 0U ||
+         initial.steadyTimeNanoseconds <= 0 ||
+         initial.state != AudioTimelinePlaybackState::Stopped ||
+         initial.controlEpoch != initial.epoch ||
+         initial.scheduleGeneration == 0U ||
+         initial.appliedSeekSequence != initial.seekSequence ||
+         initial.appliedPlaybackSequence != initial.playbackSequence ) {
+        XERROR("Timeline clock did not publish a coherent initial snapshot");
+        return false;
+    }
+
+    node.play();
+    const auto pendingPlay = node.clockSnapshot();
+    if ( !pendingPlay.valid ||
+         pendingPlay.state != AudioTimelinePlaybackState::Playing ||
+         pendingPlay.playbackSequence == initial.playbackSequence ||
+         pendingPlay.appliedPlaybackSequence !=
+             initial.appliedPlaybackSequence ) {
+        XERROR("Timeline clock did not expose a stable pending Play command");
+        return false;
+    }
+
+    ice::AudioBuffer block(ice::ICEConfig::internal_format, 4U);
+    node.process(block);
+    const auto advanced = node.clockSnapshot();
+    if ( !advanced.valid || advanced.sequence <= initial.sequence ||
+         advanced.positionFrame != 4 ||
+         advanced.state != AudioTimelinePlaybackState::Playing ||
+         advanced.controlEpoch != advanced.epoch ||
+         advanced.scheduleGeneration != initial.scheduleGeneration ||
+         advanced.appliedPlaybackSequence != advanced.playbackSequence ) {
+        XERROR("Timeline clock position did not advance with its publication");
+        return false;
+    }
+
+    node.seek(10);
+    const auto pendingSeek = node.clockSnapshot();
+    if ( !pendingSeek.valid || pendingSeek.positionFrame != 10 ||
+         pendingSeek.seekSequence == advanced.seekSequence ||
+         pendingSeek.appliedSeekSequence != advanced.appliedSeekSequence ||
+         pendingSeek.steadyTimeNanoseconds < advanced.steadyTimeNanoseconds ) {
+        XERROR("Timeline clock did not expose a stable pending Seek command");
+        return false;
+    }
+
+    node.process(block);
+    const auto appliedSeek = node.clockSnapshot();
+    if ( !appliedSeek.valid || appliedSeek.positionFrame != 14 ||
+         appliedSeek.epoch == advanced.epoch ||
+         appliedSeek.controlEpoch != appliedSeek.epoch ||
+         appliedSeek.appliedSeekSequence != appliedSeek.seekSequence ) {
+        XERROR("Timeline clock did not publish the applied Seek epoch");
+        return false;
+    }
+
+    node.pause();
+    const auto pendingPause = node.clockSnapshot();
+    if ( !pendingPause.valid ||
+         pendingPause.state != AudioTimelinePlaybackState::Paused ) {
+        XERROR("Timeline clock did not expose a stable pending Pause command");
+        return false;
+    }
+
+    AudioTimelineMixerNode finishedNode({}, 4, 4U);
+    finishedNode.play();
+    finishedNode.process(block);
+    const auto finished = finishedNode.clockSnapshot();
+    if ( !finished.valid || !finished.finished ) return false;
+    finishedNode.play();
+    const auto restarted = finishedNode.clockSnapshot();
+    if ( !restarted.valid || restarted.positionFrame != 0 ||
+         restarted.finished ||
+         restarted.state != AudioTimelinePlaybackState::Playing ||
+         restarted.appliedPlaybackSequence == restarted.playbackSequence ) {
+        XERROR("Finished timeline clock did not expose pending Play at zero");
+        return false;
+    }
+
+    ice::AudioBuffer restartFrame(ice::ICEConfig::internal_format, 1U);
+    finishedNode.process(restartFrame);
+    const auto appliedRestart = finishedNode.clockSnapshot();
+    if ( !appliedRestart.valid || appliedRestart.positionFrame != 1 ||
+         appliedRestart.controlEpoch != appliedRestart.epoch ||
+         appliedRestart.appliedPlaybackSequence !=
+             appliedRestart.playbackSequence ) {
+        XERROR("Finished Play acknowledgement fields were inconsistent");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证循环规范化、同 block 回绕和调度换代快照字段保持一致。
+bool testClockSnapshotLoopAndScheduleGeneration()
+{
+    using MMM::Audio::AudioTimelineMixerNode;
+    using MMM::Audio::AudioTimelinePlaybackState;
+
+    AudioTimelineMixerNode node({}, 64, 8U);
+    const auto             initial = node.clockSnapshot();
+    if ( !node.setLoop({ 4, 8 }) ) return false;
+    node.seek(6);
+    node.play();
+
+    ice::AudioBuffer loopBlock(ice::ICEConfig::internal_format, 4U);
+    node.process(loopBlock);
+    const auto looped = node.clockSnapshot();
+    if ( !looped.valid || looped.positionFrame != 6 ||
+         looped.state != AudioTimelinePlaybackState::Playing ||
+         looped.epoch == looped.controlEpoch ||
+         looped.scheduleGeneration != initial.scheduleGeneration ||
+         looped.appliedSeekSequence != looped.seekSequence ||
+         looped.appliedPlaybackSequence != looped.playbackSequence ) {
+        XERROR("Loop block clock fields did not preserve the control boundary");
+        return false;
+    }
+
+    node.seek(20);
+    const auto pendingNormalizedSeek = node.clockSnapshot();
+    if ( !pendingNormalizedSeek.valid ||
+         pendingNormalizedSeek.positionFrame != 4 ||
+         node.positionFrame() != 4 ||
+         pendingNormalizedSeek.appliedSeekSequence ==
+             pendingNormalizedSeek.seekSequence ) {
+        XERROR("Pending looped Seek was not normalized to the loop start");
+        return false;
+    }
+
+    ice::AudioBuffer afterSeekBlock(ice::ICEConfig::internal_format, 2U);
+    node.process(afterSeekBlock);
+    const auto appliedNormalizedSeek = node.clockSnapshot();
+    if ( !appliedNormalizedSeek.valid ||
+         appliedNormalizedSeek.positionFrame != 6 ||
+         appliedNormalizedSeek.controlEpoch != appliedNormalizedSeek.epoch ||
+         appliedNormalizedSeek.appliedSeekSequence !=
+             appliedNormalizedSeek.seekSequence ) {
+        XERROR("Normalized Seek acknowledgement fields were inconsistent");
+        return false;
+    }
+
+    node.clearLoop();
+    node.replaceSchedule({}, 64, 8U);
+    node.process(afterSeekBlock);
+    const auto replacement = node.clockSnapshot();
+    if ( !replacement.valid ||
+         replacement.scheduleGeneration == looped.scheduleGeneration ||
+         replacement.controlEpoch != replacement.epoch ||
+         replacement.appliedSeekSequence != replacement.seekSequence ||
+         replacement.appliedPlaybackSequence != replacement.playbackSequence ) {
+        XERROR("Replacement schedule clock fields were inconsistent");
         return false;
     }
     return true;
@@ -382,7 +546,10 @@ bool testPreparedBoundarySealsNextPull()
     if ( afterSeek.frameCount != 4U ) return false;
     ice::AudioBuffer secondPull(ice::ICEConfig::internal_format, 4U);
     node.process(secondPull);
-    return node.blockStartFrame() == 10 && node.positionFrame() == 14;
+    const auto appliedSeek = node.clockSnapshot();
+    return node.blockStartFrame() == 10 && node.positionFrame() == 14 &&
+           appliedSeek.controlEpoch == appliedSeek.epoch &&
+           appliedSeek.appliedSeekSequence == appliedSeek.seekSequence;
 }
 
 /// @brief 验证连续调度提交只在 block 起点启用最后一份完整状态。
@@ -526,7 +693,9 @@ int main(int argc, char** argv)
         testOverlapNegativeStartAndSeek(track, audio) &&
         testHalfOpenLoop(track) && testMissingResourceAndFinish() &&
         testInputBoundaryAndFinishedReplacement() &&
-        testImmediateStopThenPlay() && testPreparedBoundarySealsNextPull() &&
+        testImmediateStopThenPlay() && testCoherentTimelineClockSnapshot() &&
+        testClockSnapshotLoopAndScheduleGeneration() &&
+        testPreparedBoundarySealsNextPull() &&
         testAtomicScheduleReplacement(track, audio) &&
         testRetiredScheduleReclamation(track);
     return passed ? 0 : 1;
