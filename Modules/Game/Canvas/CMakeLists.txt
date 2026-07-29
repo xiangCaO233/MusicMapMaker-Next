@@ -45,3 +45,9 @@ target_include_directories(LayoutEditingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(LayoutEditingTest PRIVATE Common Config)
 add_test(NAME LayoutEditingTest COMMAND LayoutEditingTest)
+
+# 画布标签测试覆盖长标题省略时仍固定显示前置脏标志。
+mmm_add_test_executable(Canvas CanvasTabTitleTest tests/CanvasTabTitleTest.cpp)
+target_include_directories(CanvasTabTitleTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)

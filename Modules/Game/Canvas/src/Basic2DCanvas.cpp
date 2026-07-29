@@ -1,5 +1,6 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/CanvasTabTitle.h"
 #include "config/AppConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
@@ -126,14 +127,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    std::string title = TR("canvas.editor").pStr;
-    if ( m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
-         !m_currentSnapshot->beatmapName.empty() ) {
-        title = m_currentSnapshot->beatmapName;
-        if ( m_currentSnapshot->isDirty ) {
-            title += " *";
-        }
-    }
+    const std::string title = makeCanvasTabTitle(
+        TR("canvas.editor").pStr,
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap,
+        m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
+        m_currentSnapshot && m_currentSnapshot->isDirty);
 
     bool    showClose = false;
     int32_t myIndex   = findSessionIndex();
