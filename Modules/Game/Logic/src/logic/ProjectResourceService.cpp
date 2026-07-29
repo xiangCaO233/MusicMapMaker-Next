@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -131,6 +132,452 @@ std::string normalizeStoredProjectPath(const Project&     project,
         relativePath = Config::utf8ToPath(path).lexically_normal();
     }
     return Config::pathToUtf8(relativePath.lexically_normal());
+}
+
+/// @brief 谱面引用用途的紧凑位掩码。
+using AudioReferenceKindMask = std::uint8_t;
+
+/// @brief 歌曲文件提示引用位。
+constexpr AudioReferenceKindMask SONG_FILE_HINT_MASK = 1U << 0U;
+
+/// @brief 玩家物件采样绑定引用位。
+constexpr AudioReferenceKindMask NOTE_SAMPLE_BINDING_MASK = 1U << 1U;
+
+/// @brief 自动采样物件引用位。
+constexpr AudioReferenceKindMask AUDIO_SAMPLE_EVENT_MASK = 1U << 2U;
+
+/// @brief 将引用用途转换为索引位。
+/// @param kind 引用用途。
+/// @return 对应的单一索引位。
+AudioReferenceKindMask audioReferenceKindMask(BeatmapAudioReferenceKind kind)
+{
+    switch ( kind ) {
+    case BeatmapAudioReferenceKind::SongFileHint: return SONG_FILE_HINT_MASK;
+    case BeatmapAudioReferenceKind::NoteSampleBinding:
+        return NOTE_SAMPLE_BINDING_MASK;
+    case BeatmapAudioReferenceKind::AudioSampleEvent:
+        return AUDIO_SAMPLE_EVENT_MASK;
+    }
+    return 0U;
+}
+
+/// @brief 项目路径索引共享的根目录上下文。
+struct ProjectPathLookupContext {
+    /// @brief 一次性弱规范化后的项目根目录。
+    std::filesystem::path m_projectRoot;
+};
+
+/// @brief 创建一次性项目路径查找上下文。
+/// @param project 当前项目。
+/// @return 缓存项目根目录后的上下文。
+ProjectPathLookupContext makeProjectPathLookupContext(const Project& project)
+{
+    return ProjectPathLookupContext{ weaklyCanonicalAbsolutePath(
+        project.m_projectRoot) };
+}
+
+/// @brief 将路径文本中的 Windows 分隔符转换为当前平台可解析形式。
+/// @param pathText 待转换的 UTF-8 路径文本。
+/// @return 分隔符统一后的文本。
+std::string normalizePathSeparators(std::string pathText)
+{
+    std::replace(pathText.begin(), pathText.end(), '\\', '/');
+    return pathText;
+}
+
+/// @brief 生成项目路径索引键。
+/// @param context 已缓存的项目根目录。
+/// @param pathText 项目相对路径、绝对路径或旧版带项目目录前缀路径。
+/// @return 可用于哈希比较的 UTF-8 路径键。
+/// @note 相对路径只做词法规范化；仅绝对旧路径需要弱规范化。
+std::string makeProjectPathLookupKey(const ProjectPathLookupContext& context,
+                                     const std::string&              pathText)
+{
+    if ( pathText.empty() ) return {};
+
+    auto path = Config::utf8ToPath(normalizePathSeparators(pathText))
+                    .lexically_normal();
+    if ( path.is_absolute() ) {
+        const auto absolutePath = weaklyCanonicalAbsolutePath(path);
+        const auto relativePath =
+            absolutePath.lexically_relative(context.m_projectRoot);
+        if ( isRelativePathInsideRoot(relativePath) ) {
+            return Config::pathToUtf8(relativePath.lexically_normal());
+        }
+        return Config::pathToUtf8(absolutePath.lexically_normal());
+    }
+
+    const auto stripped = stripProjectFolderPrefix(context.m_projectRoot, path);
+    if ( isRelativePathInsideRoot(stripped) ) {
+        path = stripped.lexically_normal();
+    }
+    return Config::pathToUtf8(path);
+}
+
+/// @brief 判断谱面相对候选是否越出项目根并需要旧 filename 回退。
+/// @param mapRelativePath 尚未转换为项目键的谱面相对候选。
+/// @param mapRelativePathKey 已转换后的项目路径键。
+/// @return 旧 makeProjectRelativePath 会退回 filename 时返回 true。
+bool requiresMapRelativeFilenameFallback(
+    const std::filesystem::path& mapRelativePath,
+    const std::string&           mapRelativePathKey)
+{
+    return (mapRelativePath.is_relative() &&
+            !isRelativePathInsideRoot(mapRelativePath)) ||
+           Config::utf8ToPath(mapRelativePathKey).is_absolute();
+}
+
+/// @brief 预先汇总全部谱面引用的不可变哈希索引。
+///
+/// 构建成本与引用数量线性相关。后续任意资源查询仅计算资源自身路径，
+/// 不再执行 resource×reference 的路径存在性检查或弱规范化。
+struct AudioReferenceLookupIndex {
+    /// @brief 单个候选资源预计算后的 ID 与项目路径键。
+    struct ResourceLookupKey {
+        /// @brief 稳定资源 ID。
+        std::string m_resourceId;
+
+        /// @brief 规范化项目路径键。
+        std::string m_projectPath;
+    };
+
+    /// @brief 仅创建共享路径上下文，不预先加入引用。
+    /// @param project 引用所属项目。
+    explicit AudioReferenceLookupIndex(const Project& project)
+        : m_pathContext(makeProjectPathLookupContext(project))
+    {
+    }
+
+    /// @brief 从完整谱面引用列表构建索引。
+    /// @param project 引用所属项目。
+    /// @param references 已汇总的谱面引用。
+    AudioReferenceLookupIndex(
+        const Project&                            project,
+        const std::vector<BeatmapAudioReference>& references)
+        : m_pathContext(makeProjectPathLookupContext(project))
+    {
+        m_resourceIdKinds.reserve(references.size() * 2U);
+        m_projectPathKinds.reserve(references.size() * 2U);
+        for ( const auto& reference : references ) {
+            addReference(reference);
+        }
+    }
+
+    /// @brief 查询资源匹配到的全部引用用途。
+    /// @param resource 待查询项目资源。
+    /// @return 匹配用途的位掩码；资源 ID 为空时返回零。
+    [[nodiscard]] AudioReferenceKindMask matchingKinds(
+        const AudioResource& resource) const
+    {
+        if ( resource.m_id.empty() ) return 0U;
+
+        AudioReferenceKindMask result = 0U;
+        const auto idIterator         = m_resourceIdKinds.find(resource.m_id);
+        if ( idIterator != m_resourceIdKinds.end() ) {
+            result |= idIterator->second;
+        }
+
+        const auto resourcePathKey = projectPathKey(resource.m_path);
+        if ( !resourcePathKey.empty() ) {
+            const auto pathIterator = m_projectPathKinds.find(resourcePathKey);
+            if ( pathIterator != m_projectPathKinds.end() ) {
+                result |= pathIterator->second;
+            }
+        }
+        return result;
+    }
+
+    /// @brief 预计算单个资源的查找键。
+    /// @param resource 待转换项目资源。
+    /// @return 可跨多个引用复用的资源键。
+    [[nodiscard]] ResourceLookupKey makeResourceLookupKey(
+        const AudioResource& resource) const
+    {
+        return ResourceLookupKey{
+            resource.m_id,
+            projectPathKey(resource.m_path),
+        };
+    }
+
+    /// @brief 判断一个引用是否匹配预计算资源键。
+    /// @param reference 待判断谱面引用。
+    /// @param resourceKey 候选项目资源的预计算键。
+    /// @return 稳定 ID、项目路径、旧 basename 或谱面相对路径匹配时返回
+    /// true。
+    [[nodiscard]] bool referenceMatchesResource(
+        const BeatmapAudioReference& reference,
+        const ResourceLookupKey&     resourceKey) const
+    {
+        if ( reference.m_audioReference.empty() ||
+             resourceKey.m_resourceId.empty() ) {
+            return false;
+        }
+        if ( reference.m_audioReference == resourceKey.m_resourceId ) {
+            return true;
+        }
+
+        const auto normalizedReferenceText =
+            normalizePathSeparators(reference.m_audioReference);
+        const auto referencePath = Config::utf8ToPath(normalizedReferenceText);
+        if ( Config::pathToUtf8(referencePath.filename()) ==
+             resourceKey.m_resourceId ) {
+            return true;
+        }
+
+        if ( resourceKey.m_projectPath.empty() ) return false;
+        if ( projectPathKey(normalizedReferenceText) ==
+             resourceKey.m_projectPath ) {
+            return true;
+        }
+
+        if ( reference.m_beatmapPath.empty() || referencePath.is_absolute() ) {
+            return false;
+        }
+
+        const auto beatmapPathKey = projectPathKey(reference.m_beatmapPath);
+        if ( beatmapPathKey.empty() ) return false;
+        const auto mapRelativePath =
+            (Config::utf8ToPath(beatmapPathKey).parent_path() / referencePath)
+                .lexically_normal();
+        const auto mapRelativePathKey =
+            projectPathKey(Config::pathToUtf8(mapRelativePath));
+        if ( mapRelativePathKey == resourceKey.m_projectPath ) return true;
+        if ( !requiresMapRelativeFilenameFallback(mapRelativePath,
+                                                  mapRelativePathKey) ) {
+            return false;
+        }
+        return projectPathKey(Config::pathToUtf8(mapRelativePath.filename())) ==
+               resourceKey.m_projectPath;
+    }
+
+    /// @brief 判断一个引用是否匹配指定资源。
+    /// @param reference 待判断谱面引用。
+    /// @param resource 候选项目资源。
+    /// @return 任一兼容引用形式匹配时返回 true。
+    [[nodiscard]] bool referenceMatchesResource(
+        const BeatmapAudioReference& reference,
+        const AudioResource&         resource) const
+    {
+        return referenceMatchesResource(reference,
+                                        makeResourceLookupKey(resource));
+    }
+
+    /// @brief 生成与该索引一致的项目路径键。
+    /// @param pathText 待规范化的项目路径文本。
+    /// @return 可用于现有资源哈希表的 UTF-8 键。
+    [[nodiscard]] std::string projectPathKey(const std::string& pathText) const
+    {
+        return makeProjectPathLookupKey(m_pathContext, pathText);
+    }
+
+private:
+    /// @brief 将单个谱面引用加入 ID、项目路径和谱面相对路径索引。
+    /// @param reference 待加入的谱面引用。
+    void addReference(const BeatmapAudioReference& reference)
+    {
+        if ( reference.m_audioReference.empty() ) return;
+
+        const auto kindMask = audioReferenceKindMask(reference.m_kind);
+        m_resourceIdKinds[reference.m_audioReference] |= kindMask;
+
+        const auto normalizedReferenceText =
+            normalizePathSeparators(reference.m_audioReference);
+        const auto referencePath = Config::utf8ToPath(normalizedReferenceText);
+        const auto filename      = Config::pathToUtf8(referencePath.filename());
+        if ( !filename.empty() ) {
+            m_resourceIdKinds[filename] |= kindMask;
+        }
+
+        const auto directPathKey = projectPathKey(normalizedReferenceText);
+        if ( !directPathKey.empty() ) {
+            m_projectPathKinds[directPathKey] |= kindMask;
+        }
+
+        if ( reference.m_beatmapPath.empty() || referencePath.is_absolute() ) {
+            return;
+        }
+
+        const auto beatmapPathKey = projectPathKey(reference.m_beatmapPath);
+        if ( beatmapPathKey.empty() ) return;
+
+        const auto mapRelativePath =
+            (Config::utf8ToPath(beatmapPathKey).parent_path() / referencePath)
+                .lexically_normal();
+        const auto mapRelativePathKey =
+            projectPathKey(Config::pathToUtf8(mapRelativePath));
+        if ( !mapRelativePathKey.empty() ) {
+            m_projectPathKinds[mapRelativePathKey] |= kindMask;
+        }
+        if ( requiresMapRelativeFilenameFallback(mapRelativePath,
+                                                 mapRelativePathKey) ) {
+            const auto filenamePathKey =
+                projectPathKey(Config::pathToUtf8(mapRelativePath.filename()));
+            if ( !filenamePathKey.empty() ) {
+                m_projectPathKinds[filenamePathKey] |= kindMask;
+            }
+        }
+    }
+
+    /// @brief 缓存项目根目录，避免逐次资源查询访问文件系统。
+    ProjectPathLookupContext m_pathContext;
+
+    /// @brief 按稳定 ID、原始引用和旧版 basename 汇总的用途。
+    std::unordered_map<std::string, AudioReferenceKindMask> m_resourceIdKinds;
+
+    /// @brief 按项目相对路径和谱面相对路径汇总的用途。
+    std::unordered_map<std::string, AudioReferenceKindMask> m_projectPathKinds;
+};
+
+/// @brief 项目资源按兼容引用键建立的首次匹配解析索引。
+///
+/// 每个候选保留资源在项目列表中的原始序号。单个引用同时命中 ID、路径或
+/// basename 时选择序号最小者，保持旧版逐资源扫描的首次匹配语义。
+struct AudioResourceResolutionIndex {
+    /// @brief 一个哈希键对应的最早项目资源。
+    struct Candidate {
+        /// @brief 候选资源地址。
+        const AudioResource* m_resource{ nullptr };
+
+        /// @brief 资源在项目列表中的原始序号。
+        std::size_t m_resourceIndex{ 0U };
+    };
+
+    /// @brief 一批引用共享的谱面目录解析状态。
+    struct BeatmapDirectory {
+        /// @brief 调用方是否提供了有效谱面路径。
+        bool m_available{ false };
+
+        /// @brief 规范化后的谱面目录；项目根目录谱面时允许为空。
+        std::filesystem::path m_path;
+    };
+
+    /// @brief 从项目全部音频资源构建解析索引。
+    /// @param project 待索引项目。
+    explicit AudioResourceResolutionIndex(const Project& project)
+        : m_pathContext(makeProjectPathLookupContext(project))
+    {
+        m_resourcesById.reserve(project.m_audioResources.size());
+        m_resourcesByPath.reserve(project.m_audioResources.size());
+        for ( std::size_t index = 0U; index < project.m_audioResources.size();
+              ++index ) {
+            const auto& resource = project.m_audioResources[index];
+            if ( resource.m_id.empty() ) continue;
+
+            const Candidate candidate{ &resource, index };
+            m_resourcesById.try_emplace(resource.m_id, candidate);
+
+            const auto pathKey =
+                makeProjectPathLookupKey(m_pathContext, resource.m_path);
+            if ( !pathKey.empty() ) {
+                m_resourcesByPath.try_emplace(pathKey, candidate);
+            }
+        }
+    }
+
+    /// @brief 预计算同一批引用共享的谱面目录键。
+    /// @param beatmapPath 谱面的项目相对或绝对路径。
+    /// @return 可与相对音频引用拼接的目录状态。
+    [[nodiscard]] BeatmapDirectory beatmapDirectoryKey(
+        const std::filesystem::path& beatmapPath) const
+    {
+        if ( beatmapPath.empty() ) return {};
+        const auto beatmapKey = makeProjectPathLookupKey(
+            m_pathContext, Config::pathToUtf8(beatmapPath));
+        return BeatmapDirectory{
+            true,
+            Config::utf8ToPath(beatmapKey).parent_path(),
+        };
+    }
+
+    /// @brief 解析单个 ID 或旧路径引用。
+    /// @param audioReference 谱面保存的引用文本。
+    /// @param beatmapDirectory 已预计算的谱面目录键。
+    /// @return 所有兼容匹配方式中项目序号最小的资源。
+    [[nodiscard]] const AudioResource* resolve(
+        const std::string&      audioReference,
+        const BeatmapDirectory& beatmapDirectory) const
+    {
+        if ( audioReference.empty() ) return nullptr;
+
+        const Candidate* bestCandidate = nullptr;
+        /// @brief 合并一个候选并保留项目列表中最早的资源。
+        const auto considerCandidate = [&](const Candidate* candidate) {
+            if ( !candidate ) return;
+            if ( !bestCandidate ||
+                 candidate->m_resourceIndex < bestCandidate->m_resourceIndex ) {
+                bestCandidate = candidate;
+            }
+        };
+        /// @brief 按指定键查询候选哈希表。
+        const auto considerByKey = [&](const auto&        candidates,
+                                       const std::string& key) {
+            if ( key.empty() ) return;
+            const auto iterator = candidates.find(key);
+            if ( iterator != candidates.end() ) {
+                considerCandidate(&iterator->second);
+            }
+        };
+
+        considerByKey(m_resourcesById, audioReference);
+
+        const auto normalizedReferenceText =
+            normalizePathSeparators(audioReference);
+        const auto referencePath = Config::utf8ToPath(normalizedReferenceText);
+        considerByKey(m_resourcesById,
+                      Config::pathToUtf8(referencePath.filename()));
+        considerByKey(
+            m_resourcesByPath,
+            makeProjectPathLookupKey(m_pathContext, normalizedReferenceText));
+
+        if ( beatmapDirectory.m_available && !referencePath.is_absolute() ) {
+            const auto mapRelativePath =
+                (beatmapDirectory.m_path / referencePath).lexically_normal();
+            const auto mapRelativePathKey = makeProjectPathLookupKey(
+                m_pathContext, Config::pathToUtf8(mapRelativePath));
+            considerByKey(m_resourcesByPath, mapRelativePathKey);
+
+            if ( requiresMapRelativeFilenameFallback(mapRelativePath,
+                                                     mapRelativePathKey) ) {
+                considerByKey(m_resourcesByPath,
+                              Config::pathToUtf8(mapRelativePath.filename()));
+            }
+        }
+        return bestCandidate ? bestCandidate->m_resource : nullptr;
+    }
+
+private:
+    /// @brief 本批资源共享的项目根目录。
+    ProjectPathLookupContext m_pathContext;
+
+    /// @brief 按稳定 ID 和旧 basename 建立的首次资源表。
+    std::unordered_map<std::string, Candidate> m_resourcesById;
+
+    /// @brief 按规范化项目路径建立的首次资源表。
+    std::unordered_map<std::string, Candidate> m_resourcesByPath;
+};
+
+/// @brief 使用预构建索引推断音频资源类型。
+/// @param referenceIndex 全部谱面引用的哈希索引。
+/// @param resource 待推断资源。
+/// @return Note 绑定优先的资源类型；没有类型线索时返回 Effect。
+AudioTrackType inferIndexedAudioResourceType(
+    const AudioReferenceLookupIndex& referenceIndex,
+    const AudioResource&             resource)
+{
+    const auto matchingKinds   = referenceIndex.matchingKinds(resource);
+    const bool hasSongFileHint = (matchingKinds & SONG_FILE_HINT_MASK) != 0U;
+    const bool hasNoteBinding =
+        (matchingKinds & NOTE_SAMPLE_BINDING_MASK) != 0U;
+
+    if ( hasSongFileHint && hasNoteBinding ) {
+        XWARN(
+            "Audio resource '{}' is both song_file_hint and Note sample; "
+            "classifying it as Effect to preserve Note playback",
+            resource.m_id);
+    }
+    if ( hasNoteBinding ) return AudioTrackType::Effect;
+    if ( hasSongFileHint ) return AudioTrackType::Main;
+    return AudioTrackType::Effect;
 }
 
 /// @brief 判断绝对路径是否等于移动源或位于移动源目录内。
@@ -756,10 +1203,16 @@ void ProjectResourceService::buildInitialResources(
         XINFO("Found beatmap: {}", filename);
     }
 
+    /// @brief 一次性构建的谱面音频引用哈希索引。
+    const AudioReferenceLookupIndex referenceIndex(project, audioReferences);
     for ( const auto& audioPath : scanResult.m_audioFiles ) {
+        /// @brief 音频文件相对于项目根目录的 UTF-8 路径。
+        const auto relativeAudioPath =
+            makeProjectRelativeUtf8(project, audioPath);
         /// @brief 新建的项目音频资源条目。
-        auto resource =
-            createAudioResource(project, audioPath, audioReferences);
+        auto resource = createAudioResource(audioPath, relativeAudioPath);
+        resource.m_type =
+            inferIndexedAudioResourceType(referenceIndex, resource);
 
         project.m_audioResources.push_back(resource);
         XINFO("Found {} audio resource: {}",
@@ -834,24 +1287,32 @@ void ProjectResourceService::mergePersistedAudioResources(
     Project& project, const Project& persistedProject,
     const std::unordered_set<std::string>& legacyAudioResourceKeys) const
 {
+    /// @brief 按精确持久化路径建立的首次出现资源索引。
+    std::unordered_map<std::string, const AudioResource*> persistedByPath;
+    /// @brief 按稳定 ID 建立的首次出现资源索引。
+    std::unordered_map<std::string, const AudioResource*> persistedById;
+    persistedByPath.reserve(persistedProject.m_audioResources.size());
+    persistedById.reserve(persistedProject.m_audioResources.size());
+    for ( const auto& persistedResource : persistedProject.m_audioResources ) {
+        if ( !persistedResource.m_path.empty() ) {
+            persistedByPath.try_emplace(persistedResource.m_path,
+                                        &persistedResource);
+        }
+        persistedById.try_emplace(persistedResource.m_id, &persistedResource);
+    }
+
     for ( auto& resource : project.m_audioResources ) {
         const AudioResource* matchedPersistedResource = nullptr;
-        for ( const auto& persistedResource :
-              persistedProject.m_audioResources ) {
-            if ( !resource.m_path.empty() &&
-                 !persistedResource.m_path.empty() &&
-                 resource.m_path == persistedResource.m_path ) {
-                matchedPersistedResource = &persistedResource;
-                break;
+        if ( !resource.m_path.empty() ) {
+            const auto pathIterator = persistedByPath.find(resource.m_path);
+            if ( pathIterator != persistedByPath.end() ) {
+                matchedPersistedResource = pathIterator->second;
             }
         }
         if ( !matchedPersistedResource ) {
-            for ( const auto& persistedResource :
-                  persistedProject.m_audioResources ) {
-                if ( resource.m_id == persistedResource.m_id ) {
-                    matchedPersistedResource = &persistedResource;
-                    break;
-                }
+            const auto idIterator = persistedById.find(resource.m_id);
+            if ( idIterator != persistedById.end() ) {
+                matchedPersistedResource = idIterator->second;
             }
         }
         if ( !matchedPersistedResource ) continue;
@@ -879,16 +1340,11 @@ void ProjectResourceService::mergePersistedAudioResources(
                                std::make_move_iterator(references.begin()),
                                std::make_move_iterator(references.end()));
     }
+    /// @brief 合并校验共享的谱面音频引用哈希索引。
+    const AudioReferenceLookupIndex referenceIndex(project, audioReferences);
     for ( auto& resource : project.m_audioResources ) {
-        const bool boundToNote = std::any_of(
-            audioReferences.begin(),
-            audioReferences.end(),
-            [&](const BeatmapAudioReference& reference) {
-                return reference.m_kind ==
-                           BeatmapAudioReferenceKind::NoteSampleBinding &&
-                       audioReferenceMatchesResource(
-                           project, reference, resource);
-            });
+        const bool boundToNote = (referenceIndex.matchingKinds(resource) &
+                                  NOTE_SAMPLE_BINDING_MASK) != 0U;
         if ( !boundToNote || resource.m_type == AudioTrackType::Effect ) {
             continue;
         }
@@ -915,6 +1371,13 @@ ProjectResourceService::syncDirectoryResources(
     std::vector<Project::BeatmapEntry> newBeatmaps;
     /// @brief 扫描谱面后汇总的全部音频引用。
     std::vector<BeatmapAudioReference> audioReferences;
+    /// @brief 按精确项目路径建立的现有谱面索引。
+    std::unordered_map<std::string, const Project::BeatmapEntry*>
+        existingBeatmapsByPath;
+    existingBeatmapsByPath.reserve(project.m_beatmaps.size());
+    for ( const auto& entry : project.m_beatmaps ) {
+        existingBeatmapsByPath.try_emplace(entry.m_filePath, &entry);
+    }
 
     for ( const auto& mapPath : scanResult.m_beatmapFiles ) {
         /// @brief 谱面文件相对于项目根目录的 UTF-8 路径。
@@ -927,12 +1390,11 @@ ProjectResourceService::syncDirectoryResources(
             continue;
         }
 
-        /// @brief 查找到的已有谱面条目。
-        auto existingEntry = findExistingBeatmapEntry(project, relativeMapPath);
         /// @brief 本次同步要写入的新谱面条目。
         Project::BeatmapEntry mapEntry;
-        if ( existingEntry ) {
-            mapEntry = *existingEntry;
+        const auto existingEntry = existingBeatmapsByPath.find(relativeMapPath);
+        if ( existingEntry != existingBeatmapsByPath.end() ) {
+            mapEntry = *existingEntry->second;
         } else {
             mapEntry.m_name     = filename;
             mapEntry.m_filePath = relativeMapPath;
@@ -956,6 +1418,19 @@ ProjectResourceService::syncDirectoryResources(
     }
     project.m_beatmaps = std::move(newBeatmaps);
 
+    /// @brief 本轮同步共享的谱面音频引用哈希索引。
+    const AudioReferenceLookupIndex referenceIndex(project, audioReferences);
+    /// @brief 按规范化项目路径建立的现有音频资源索引。
+    std::unordered_map<std::string, const AudioResource*>
+        existingAudioResourcesByPath;
+    existingAudioResourcesByPath.reserve(project.m_audioResources.size());
+    for ( const auto& resource : project.m_audioResources ) {
+        const auto pathKey = referenceIndex.projectPathKey(resource.m_path);
+        if ( !pathKey.empty() ) {
+            existingAudioResourcesByPath.try_emplace(pathKey, &resource);
+        }
+    }
+
     /// @brief 同步后新的音频资源列表。
     std::vector<AudioResource> newAudioResources;
     for ( const auto& audioPath : scanResult.m_audioFiles ) {
@@ -970,23 +1445,20 @@ ProjectResourceService::syncDirectoryResources(
         }
 
         /// @brief 查找到的已有音频资源。
-        auto existingResource =
-            findExistingAudioResource(project, relativeAudioPath);
         /// @brief 本次同步要写入的新音频资源。
         AudioResource resource;
-        if ( existingResource ) {
-            resource = *existingResource;
+        const auto    relativeAudioPathKey =
+            referenceIndex.projectPathKey(relativeAudioPath);
+        const auto existingResource =
+            existingAudioResourcesByPath.find(relativeAudioPathKey);
+        if ( existingResource != existingAudioResourcesByPath.end() ) {
+            resource = *existingResource->second;
             const auto inferredType =
-                inferAudioResourceType(project, audioReferences, resource);
-            const bool hasTypeReference = std::any_of(
-                audioReferences.begin(),
-                audioReferences.end(),
-                [&](const BeatmapAudioReference& reference) {
-                    return reference.m_kind !=
-                               BeatmapAudioReferenceKind::AudioSampleEvent &&
-                           audioReferenceMatchesResource(
-                               project, reference, resource);
-                });
+                inferIndexedAudioResourceType(referenceIndex, resource);
+            const auto matchingKinds = referenceIndex.matchingKinds(resource);
+            const bool hasTypeReference =
+                (matchingKinds &
+                 (SONG_FILE_HINT_MASK | NOTE_SAMPLE_BINDING_MASK)) != 0U;
             if ( hasTypeReference && resource.m_type != inferredType ) {
                 resource.m_type  = inferredType;
                 result.m_changed = true;
@@ -995,7 +1467,9 @@ ProjectResourceService::syncDirectoryResources(
                 }
             }
         } else {
-            resource = createAudioResource(project, audioPath, audioReferences);
+            resource = createAudioResource(audioPath, relativeAudioPath);
+            resource.m_type =
+                inferIndexedAudioResourceType(referenceIndex, resource);
             if ( resource.m_type == AudioTrackType::Effect ) {
                 result.m_effectResourcesToRegister.push_back(resource);
             }
@@ -1274,40 +1748,8 @@ bool ProjectResourceService::audioReferenceMatchesResource(
     const Project& project, const BeatmapAudioReference& reference,
     const AudioResource& resource)
 {
-    if ( reference.m_audioReference.empty() || resource.m_id.empty() ) {
-        return false;
-    }
-    if ( reference.m_audioReference == resource.m_id ) return true;
-
-    /// @brief 将旧版反斜杠路径统一为当前平台可比较的形式。
-    auto normalizedReferenceText = reference.m_audioReference;
-    std::replace(normalizedReferenceText.begin(),
-                 normalizedReferenceText.end(),
-                 '\\',
-                 '/');
-
-    const auto normalizedReference =
-        normalizeStoredProjectPath(project, normalizedReferenceText);
-    const auto normalizedResourcePath =
-        normalizeStoredProjectPath(project, resource.m_path);
-    if ( normalizedReference == normalizedResourcePath ) return true;
-
-    const auto referencePath = Config::utf8ToPath(normalizedReferenceText);
-    if ( Config::pathToUtf8(referencePath.filename()) == resource.m_id ) {
-        return true;
-    }
-
-    if ( reference.m_beatmapPath.empty() || referencePath.is_absolute() ) {
-        return false;
-    }
-
-    const auto absoluteMapPath = resolveProjectPath(
-        project, Config::utf8ToPath(reference.m_beatmapPath));
-    const auto mapRelativeCandidate = makeProjectRelativePath(
-        project, absoluteMapPath.parent_path() / referencePath);
-    return normalizeStoredProjectPath(
-               project, Config::pathToUtf8(mapRelativeCandidate)) ==
-           normalizedResourcePath;
+    const AudioReferenceLookupIndex referenceIndex(project);
+    return referenceIndex.referenceMatchesResource(reference, resource);
 }
 
 /// @brief 将内存谱面中指向移动前资源的引用更新为稳定 ID 和新路径提示。
@@ -1324,17 +1766,22 @@ ProjectResourceService::remapBeatmapAudioReferencesAfterMove(
     const std::string&   updatedResourcePath)
 {
     BeatmapAudioReferenceRemapResult result;
+    /// @brief 本次重映射共享的路径查找上下文。
+    const AudioReferenceLookupIndex referenceIndex(project);
+    /// @brief 移动前资源预计算后的查找键。
+    const auto previousResourceKey =
+        referenceIndex.makeResourceLookupKey(previousResource);
 
     /// @brief 判断字段是否仍指向移动前的资源。
     const auto matchesPreviousResource = [&](const std::string& audioReference,
                                              BeatmapAudioReferenceKind kind) {
-        return audioReferenceMatchesResource(project,
-                                             BeatmapAudioReference{
-                                                 beatmapPath,
-                                                 audioReference,
-                                                 kind,
-                                             },
-                                             previousResource);
+        return referenceIndex.referenceMatchesResource(
+            BeatmapAudioReference{
+                beatmapPath,
+                audioReference,
+                kind,
+            },
+            previousResourceKey);
     };
 
     /// @brief 将歌曲路径提示改成移动后的项目相对路径。
@@ -1461,39 +1908,6 @@ ProjectResourceService::refreshSongFileHintForSave(
     return result;
 }
 
-/// @brief 根据谱面引用推断新发现音频资源的类型。
-/// @param project 资源所属项目。
-/// @param references 已收集的全部谱面音频引用。
-/// @param resource 待推断的项目音频资源。
-/// @return Note 绑定优先的资源类型；没有类型线索时返回 Effect。
-AudioTrackType ProjectResourceService::inferAudioResourceType(
-    const Project&                            project,
-    const std::vector<BeatmapAudioReference>& references,
-    const AudioResource&                      resource)
-{
-    bool hasSongFileHint = false;
-    bool hasNoteBinding  = false;
-    for ( const auto& reference : references ) {
-        if ( !audioReferenceMatchesResource(project, reference, resource) ) {
-            continue;
-        }
-        hasSongFileHint |=
-            reference.m_kind == BeatmapAudioReferenceKind::SongFileHint;
-        hasNoteBinding |=
-            reference.m_kind == BeatmapAudioReferenceKind::NoteSampleBinding;
-    }
-
-    if ( hasSongFileHint && hasNoteBinding ) {
-        XWARN(
-            "Audio resource '{}' is both song_file_hint and Note sample; "
-            "classifying it as Effect to preserve Note playback",
-            resource.m_id);
-    }
-    if ( hasNoteBinding ) return AudioTrackType::Effect;
-    if ( hasSongFileHint ) return AudioTrackType::Main;
-    return AudioTrackType::Effect;
-}
-
 /// @brief 查找指定项目音频资源在全部谱面中的引用。
 /// @param project 待扫描的项目。
 /// @param resource 待匹配的项目音频资源。
@@ -1503,13 +1917,18 @@ ProjectResourceService::findAudioResourceReferences(
     const Project& project, const AudioResource& resource)
 {
     std::vector<BeatmapAudioReference> result;
+    /// @brief 全部谱面引用匹配共享的路径查找上下文。
+    const AudioReferenceLookupIndex referenceIndex(project);
+    /// @brief 待查资源预计算后的查找键。
+    const auto resourceKey = referenceIndex.makeResourceLookupKey(resource);
     for ( const auto& entry : project.m_beatmaps ) {
         const auto mapPath =
             resolveProjectPath(project, Config::utf8ToPath(entry.m_filePath));
         auto references = probeBeatmapAudioReferences(
             project, mapPath, entry.m_filePath, true);
         for ( auto& reference : references ) {
-            if ( audioReferenceMatchesResource(project, reference, resource) ) {
+            if ( referenceIndex.referenceMatchesResource(reference,
+                                                         resourceKey) ) {
                 result.push_back(std::move(reference));
             }
         }
@@ -1528,17 +1947,45 @@ const AudioResource* ProjectResourceService::findAudioResourceForReference(
 {
     if ( audioReference.empty() ) return nullptr;
 
-    const BeatmapAudioReference reference{
-        Config::pathToUtf8(beatmapPath),
-        audioReference,
-        BeatmapAudioReferenceKind::AudioSampleEvent,
-    };
-    for ( const auto& resource : project.m_audioResources ) {
-        if ( audioReferenceMatchesResource(project, reference, resource) ) {
-            return &resource;
+    const AudioResourceResolutionIndex resolutionIndex(project);
+    return resolutionIndex.resolve(
+        audioReference, resolutionIndex.beatmapDirectoryKey(beatmapPath));
+}
+
+/// @brief 批量解析同一谱面的项目音频资源引用。
+/// @param project 待查询项目。
+/// @param beatmapPath 引用所在谱面的项目相对或绝对路径。
+/// @param audioReferences 谱面保存的资源 ID 或旧路径视图。
+/// @return 与输入顺序一一对应的资源地址；未解析项为空。
+/// @warning 低频加载路径：一次构建资源解析索引并线性处理全部引用。
+std::vector<const AudioResource*>
+ProjectResourceService::resolveAudioResourceReferences(
+    const Project& project, const std::filesystem::path& beatmapPath,
+    const std::vector<std::string_view>& audioReferences)
+{
+    const AudioResourceResolutionIndex resolutionIndex(project);
+    const auto                         beatmapDirectory =
+        resolutionIndex.beatmapDirectoryKey(beatmapPath);
+
+    std::vector<const AudioResource*> result;
+    result.reserve(audioReferences.size());
+    /// @brief 同一谱面内按引用内容缓存的首次解析结果。
+    std::unordered_map<std::string, const AudioResource*> resolvedByReference;
+    resolvedByReference.reserve(audioReferences.size());
+    for ( const auto audioReference : audioReferences ) {
+        const std::string referenceKey(audioReference);
+        const auto cachedIterator = resolvedByReference.find(referenceKey);
+        if ( cachedIterator != resolvedByReference.end() ) {
+            result.push_back(cachedIterator->second);
+            continue;
         }
+
+        const auto* resource =
+            resolutionIndex.resolve(referenceKey, beatmapDirectory);
+        resolvedByReference.emplace(referenceKey, resource);
+        result.push_back(resource);
     }
-    return nullptr;
+    return result;
 }
 
 /// @brief 为谱面选择适合预览或 BPM 测量的默认音频资源。
@@ -1952,16 +2399,13 @@ AudioTrackConfig ProjectResourceService::makeDefaultAudioConfig()
 }
 
 /// @brief 创建项目音频资源条目。
-/// @param project 音频资源所属项目。
 /// @param audioPath 音频文件系统路径。
-/// @param references 已收集的全部谱面音频引用。
+/// @param relativeAudioPath 已完成一次规范化的项目相对路径。
 /// @return 填充默认配置后的音频资源条目。
 AudioResource ProjectResourceService::createAudioResource(
-    const Project& project, const std::filesystem::path& audioPath,
-    const std::vector<BeatmapAudioReference>& references)
+    const std::filesystem::path& audioPath,
+    const std::string&           relativeAudioPath)
 {
-    /// @brief 音频文件相对于项目根目录的 UTF-8 路径。
-    auto relativeAudioPath = makeProjectRelativeUtf8(project, audioPath);
     /// @brief 音频文件名，用作资源 ID。
     auto filename = Config::pathToUtf8(audioPath.filename());
 
@@ -1969,43 +2413,9 @@ AudioResource ProjectResourceService::createAudioResource(
     AudioResource resource;
     resource.m_id     = filename;
     resource.m_path   = relativeAudioPath;
-    resource.m_type   = inferAudioResourceType(project, references, resource);
+    resource.m_type   = AudioTrackType::Effect;
     resource.m_config = makeDefaultAudioConfig();
     return resource;
-}
-
-/// @brief 查找已有谱面条目。
-/// @param project 需要查询的项目。
-/// @param relativeMapPath UTF-8 编码的谱面项目相对路径。
-/// @return 找到时返回谱面条目副本，否则返回空。
-std::optional<Project::BeatmapEntry>
-ProjectResourceService::findExistingBeatmapEntry(
-    const Project& project, const std::string& relativeMapPath)
-{
-    for ( const auto& entry : project.m_beatmaps ) {
-        if ( entry.m_filePath == relativeMapPath ) {
-            return entry;
-        }
-    }
-    return std::nullopt;
-}
-
-/// @brief 查找已有音频资源条目。
-/// @param project 需要查询的项目。
-/// @param relativeAudioPath UTF-8 编码的音频项目相对路径。
-/// @return 找到时返回音频资源副本，否则返回空。
-std::optional<AudioResource> ProjectResourceService::findExistingAudioResource(
-    const Project& project, const std::string& relativeAudioPath)
-{
-    const std::string normalizedRelativePath =
-        normalizeStoredProjectPath(project, relativeAudioPath);
-    for ( const auto& resource : project.m_audioResources ) {
-        if ( normalizeStoredProjectPath(project, resource.m_path) ==
-             normalizedRelativePath ) {
-            return resource;
-        }
-    }
-    return std::nullopt;
 }
 
 }  // namespace MMM::Logic

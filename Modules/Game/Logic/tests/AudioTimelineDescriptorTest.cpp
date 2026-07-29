@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -425,6 +426,227 @@ bool testDescriptorResourceReferenceLookup()
         noteOnlyDescriptor, "effect-id");
 }
 
+/// @brief 验证大量重复 v2 ID 事件复用首次出现的资源索引结果。
+///
+/// 资源和事件数量同时扩大，使测试输入能够暴露逐事件线性扫描退化；
+/// 断言不依赖机器耗时，只验证首次同 ID 资源及全部事件解析结果。
+/// @return 全部事件均解析到首次同 ID 资源时返回 true。
+bool testBulkStableIdResolutionUsesFirstResource()
+{
+    constexpr std::size_t FILLER_RESOURCE_COUNT = 256U;
+    constexpr std::size_t EVENT_COUNT           = 512U;
+
+    auto project = makeProject();
+    project.m_audioResources.clear();
+    project.m_audioResources.reserve(FILLER_RESOURCE_COUNT + 2U);
+    for ( std::size_t index = 0U; index < FILLER_RESOURCE_COUNT; ++index ) {
+        project.m_audioResources.push_back(MMM::AudioResource{
+            .m_id   = "filler-" + std::to_string(index),
+            .m_path = "audio/filler-" + std::to_string(index) + ".wav",
+            .m_type = MMM::AudioTrackType::Effect,
+        });
+    }
+
+    MMM::AudioTrackConfig firstConfig;
+    firstConfig.volume        = 0.37F;
+    firstConfig.playbackSpeed = 1.25F;
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id     = "repeated-id",
+        .m_path   = "audio/repeated-first.wav",
+        .m_type   = MMM::AudioTrackType::Effect,
+        .m_config = firstConfig,
+    });
+
+    MMM::AudioTrackConfig duplicateConfig;
+    duplicateConfig.volume = 0.91F;
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id     = "repeated-id",
+        .m_path   = "audio/repeated-second.wav",
+        .m_type   = MMM::AudioTrackType::Main,
+        .m_config = duplicateConfig,
+    });
+
+    MMM::BeatMap beatMap;
+    for ( std::size_t index = 0U; index < EVENT_COUNT; ++index ) {
+        beatMap.m_audioSamples.push_back(
+            makeSample(static_cast<double>(index), 0, 4, "repeated-id", 1.0F));
+    }
+
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        1.0);
+    if ( descriptor.m_events.size() != EVENT_COUNT ||
+         !descriptor.m_diagnostics.empty() ) {
+        XERROR("Bulk stable ID events were not all resolved");
+        return false;
+    }
+
+    const auto expectedFilename =
+        MMM::Config::utf8ToPath("audio/repeated-first.wav").filename();
+    const auto invalidEvent = std::find_if(
+        descriptor.m_events.begin(),
+        descriptor.m_events.end(),
+        [&](const MMM::Audio::AudioTimelineLoadEvent& event) {
+            return event.resourceKey != "repeated-id" ||
+                   MMM::Config::utf8ToPath(event.filePath).filename() !=
+                       expectedFilename ||
+                   !sameConfig(event.resourceConfig, firstConfig);
+        });
+    if ( invalidEvent != descriptor.m_events.end() ) {
+        XERROR("Repeated stable ID did not retain first-resource semantics");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证不同匹配方式冲突时仍按项目资源顺序选择首项。
+///
+/// 同一引用对前项是路径和 basename 匹配，对后项是精确 ID 匹配；
+/// 旧实现逐资源扫描时必须选择前项，统一索引也必须保持该语义。
+/// @return 描述符解析到项目列表前项时返回 true。
+bool testCrossModeConflictPreservesResourceOrder()
+{
+    auto project = makeProject();
+    project.m_audioResources.clear();
+
+    MMM::AudioTrackConfig firstConfig;
+    firstConfig.volume = 0.23F;
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id     = "foo.wav",
+        .m_path   = "audio/foo.wav",
+        .m_type   = MMM::AudioTrackType::Effect,
+        .m_config = firstConfig,
+    });
+
+    MMM::AudioTrackConfig exactIdConfig;
+    exactIdConfig.volume = 0.87F;
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id     = "audio/foo.wav",
+        .m_path   = "audio/exact-id.wav",
+        .m_type   = MMM::AudioTrackType::Main,
+        .m_config = exactIdConfig,
+    });
+
+    MMM::BeatMap beatMap;
+    beatMap.m_audioSamples.push_back(
+        makeSample(0.0, 0, 4, "audio/foo.wav", 1.0F));
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        1.0);
+    if ( descriptor.m_events.size() != 1U ||
+         !descriptor.m_diagnostics.empty() ) {
+        return false;
+    }
+
+    const auto& event = descriptor.m_events.front();
+    if ( event.resourceKey != "foo.wav" ||
+         MMM::Config::utf8ToPath(event.filePath).filename() != "foo.wav" ||
+         !sameConfig(event.resourceConfig, firstConfig) ) {
+        XERROR("Cross-mode audio reference conflict changed first-match order");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证大量不同谱面相对旧路径在一次资源索引中完整解析。
+///
+/// 每个事件引用不同路径且资源使用不同稳定 ID，使输入能够暴露
+/// unique-reference×resource 的重复扫描退化。
+/// @return 所有不同旧路径均解析为对应稳定资源 ID 时返回 true。
+bool testBulkDistinctLegacyPathResolution()
+{
+    constexpr std::size_t RESOURCE_COUNT = 384U;
+
+    auto project = makeProject();
+    project.m_audioResources.clear();
+    project.m_audioResources.reserve(RESOURCE_COUNT);
+
+    MMM::BeatMap beatMap;
+    for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
+        const auto filename = "legacy-" + std::to_string(index) + ".wav";
+        project.m_audioResources.push_back(MMM::AudioResource{
+            .m_id   = "stable-legacy-" + std::to_string(index),
+            .m_path = "audio/" + filename,
+            .m_type = MMM::AudioTrackType::Effect,
+        });
+        beatMap.m_audioSamples.push_back(makeSample(
+            static_cast<double>(index), 0, 4, "../audio/" + filename, 1.0F));
+    }
+
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        1.0);
+    if ( descriptor.m_events.size() != RESOURCE_COUNT ||
+         !descriptor.m_diagnostics.empty() ) {
+        XERROR("Bulk distinct legacy references were not all resolved");
+        return false;
+    }
+
+    std::unordered_set<std::string> resolvedIds;
+    resolvedIds.reserve(descriptor.m_events.size());
+    for ( const auto& event : descriptor.m_events ) {
+        resolvedIds.insert(event.resourceKey);
+    }
+    for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
+        if ( !resolvedIds.contains("stable-legacy-" + std::to_string(index)) ) {
+            XERROR("Distinct legacy reference missed resource {}", index);
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证重复绝对旧路径在批量解析中共享同一缓存结果。
+///
+/// 大量事件使用相同绝对引用，确保描述符只需按唯一引用和唯一资源执行
+/// 文件系统规范化，同时仍保留每个自动采样事件。
+/// @return 全部重复事件均解析到同一稳定资源时返回 true。
+bool testRepeatedAbsoluteLegacyReferenceResolution()
+{
+    constexpr std::size_t EVENT_COUNT = 512U;
+
+    auto       project = makeProject();
+    const auto absolutePath =
+        project.m_projectRoot / "outside" / "repeated-absolute.wav";
+    project.m_audioResources = {
+        MMM::AudioResource{
+            .m_id   = "stable-absolute",
+            .m_path = MMM::Config::pathToUtf8(absolutePath),
+            .m_type = MMM::AudioTrackType::Effect,
+        },
+    };
+
+    MMM::BeatMap beatMap;
+    const auto   absoluteReference = MMM::Config::pathToUtf8(absolutePath);
+    for ( std::size_t index = 0U; index < EVENT_COUNT; ++index ) {
+        beatMap.m_audioSamples.push_back(makeSample(
+            static_cast<double>(index), 0, 4, absoluteReference, 1.0F));
+    }
+
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        1.0);
+    if ( descriptor.m_events.size() != EVENT_COUNT ||
+         !descriptor.m_diagnostics.empty() ||
+         std::any_of(descriptor.m_events.begin(),
+                     descriptor.m_events.end(),
+                     [](const MMM::Audio::AudioTimelineLoadEvent& event) {
+                         return event.resourceKey != "stable-absolute";
+                     }) ) {
+        XERROR("Repeated absolute legacy references were not fully resolved");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行音频时间线描述符构建测试。
@@ -434,7 +656,11 @@ int main()
     return testCanonicalDescriptor() && testOrderIndependentIdentity() &&
                    testNonAudioFieldsAreExcluded() &&
                    testFingerprintSensitivity() &&
-                   testDescriptorResourceReferenceLookup()
+                   testDescriptorResourceReferenceLookup() &&
+                   testBulkStableIdResolutionUsesFirstResource() &&
+                   testCrossModeConflictPreservesResourceOrder() &&
+                   testBulkDistinctLegacyPathResolution() &&
+                   testRepeatedAbsoluteLegacyReferenceResolution()
                ? 0
                : 1;
 }

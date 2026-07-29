@@ -12,6 +12,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -223,6 +224,267 @@ bool testReferenceAwareDirectoryScan()
     return noMainProject.m_audioResources.size() == 1 &&
            noMainProject.m_audioResources.front().m_type ==
                MMM::AudioTrackType::Effect;
+}
+
+/// @brief 验证单项和批量资源解析均保留跨匹配方式的首项语义。
+/// @return 路径匹配前项优先于后续精确 ID 项时返回 true。
+bool testAudioResolutionPreservesCrossModeFirstMatch()
+{
+    MMM::Project project;
+    project.m_projectRoot    = "/tmp/mmm-audio-resolution-order";
+    project.m_audioResources = {
+        MMM::AudioResource{
+            .m_id   = "foo.wav",
+            .m_path = "audio/foo.wav",
+            .m_type = MMM::AudioTrackType::Effect,
+        },
+        MMM::AudioResource{
+            .m_id   = "audio/foo.wav",
+            .m_path = "audio/exact-id.wav",
+            .m_type = MMM::AudioTrackType::Main,
+        },
+    };
+
+    const auto* single =
+        MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+            project, "charts/test.mmm", "audio/foo.wav");
+    const std::vector<std::string_view> references{
+        "audio/foo.wav",
+        "../audio/foo.wav",
+    };
+    const auto batch =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, "charts/test.mmm", references);
+    if ( single != &project.m_audioResources.front() || batch.size() != 2U ||
+         batch[0] != &project.m_audioResources.front() ||
+         batch[1] != &project.m_audioResources.front() ) {
+        XERROR("Audio resolution changed cross-mode first-match semantics");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证项目根谱面的越根旧路径仍回退到资源文件名。
+/// @return 自定义 ID 资源能够通过旧版 map-relative filename 回退解析。
+bool testRootBeatmapEscapedLegacyReferenceFallback()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto mapPath   = directory.path() / "chart.mmm";
+    const auto audioPath = directory.path() / "foo.wav";
+    if ( !createAudioPlaceholder(audioPath) ||
+         !saveReferenceBeatmap(mapPath, {}, "../foo.wav", "") ) {
+        return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps.push_back(
+        MMM::Project::BeatmapEntry{ "chart", "chart.mmm", {} });
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "custom-resource-id",
+        .m_path = "foo.wav",
+        .m_type = MMM::AudioTrackType::Main,
+    });
+
+    const MMM::Logic::BeatmapAudioReference escapedReference{
+        "chart.mmm",
+        "../foo.wav",
+        MMM::Logic::BeatmapAudioReferenceKind::NoteSampleBinding,
+    };
+    const auto* single =
+        MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+            project, "chart.mmm", "../foo.wav");
+    const std::vector<std::string_view> references{ "../foo.wav" };
+    const auto                          batch =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, "chart.mmm", references);
+    if ( !MMM::Logic::ProjectResourceService::audioReferenceMatchesResource(
+             project, escapedReference, project.m_audioResources.front()) ||
+         single != &project.m_audioResources.front() || batch.size() != 1U ||
+         batch.front() != &project.m_audioResources.front() ) {
+        XERROR("Root beatmap escaped legacy reference fallback was lost");
+        return false;
+    }
+
+    MMM::Logic::ProjectDirectoryScanner::ScanResult scanResult;
+    scanResult.m_success      = true;
+    scanResult.m_beatmapFiles = { mapPath };
+    scanResult.m_audioFiles   = { audioPath };
+    const auto syncResult =
+        MMM::Logic::ProjectResourceService{}.syncDirectoryResources(project,
+                                                                    scanResult);
+    if ( !syncResult.m_changed || project.m_audioResources.front().m_type !=
+                                      MMM::AudioTrackType::Effect ) {
+        XERROR("Escaped Note reference was absent from the type index");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证大批量资源仅通过一次性引用索引恢复 Note 绑定类型。
+///
+/// 该用例同时覆盖稳定 ID、项目相对路径、谱面相对路径、Windows 分隔符
+/// 和旧版 basename。资源与引用数量相同，防止实现退化为逐资源完整扫描。
+/// @return 全部资源均按对应 Note 引用恢复为 Effect 时返回 true。
+bool testBulkReferenceIndexPreservesCompatibility()
+{
+    constexpr std::size_t RESOURCE_COUNT = 256U;
+
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto      mapPath = directory.path() / "maps" / "BulkReferences.mmm";
+    std::error_code filesystemError;
+    std::filesystem::create_directories(mapPath.parent_path(), filesystemError);
+    if ( filesystemError ) return false;
+
+    MMM::BeatMap beatmap;
+    beatmap.m_baseMapMetadata.name            = "BulkReferences";
+    beatmap.m_baseMapMetadata.version         = "BulkReferences";
+    beatmap.m_baseMapMetadata.track_count     = 4;
+    beatmap.m_baseMapMetadata.bgm_track_count = 1;
+
+    MMM::Project scannedProject;
+    scannedProject.m_projectRoot = directory.path();
+    scannedProject.m_beatmaps.push_back(MMM::Project::BeatmapEntry{
+        "BulkReferences",
+        "maps/BulkReferences.mmm",
+        {},
+    });
+    MMM::Logic::ProjectDirectoryScanner::ScanResult scanResult;
+    scanResult.m_success = true;
+    scanResult.m_beatmapFiles.push_back(mapPath);
+    scanResult.m_audioFiles.reserve(RESOURCE_COUNT);
+
+    for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
+        const auto filename     = "sample-" + std::to_string(index) + ".wav";
+        const auto relativePath = "audio/" + filename;
+        const auto audioPath    = directory.path() / relativePath;
+        if ( !createAudioPlaceholder(audioPath) ) {
+            return false;
+        }
+        scanResult.m_audioFiles.push_back(audioPath);
+
+        const bool useLegacyBasename = index % 5U == 3U;
+        const auto resourceId = useLegacyBasename
+                                    ? filename
+                                    : "stable-sample-" + std::to_string(index);
+
+        std::string reference;
+        switch ( index % 5U ) {
+        case 0U: reference = resourceId; break;
+        case 1U: reference = relativePath; break;
+        case 2U: reference = "../audio/" + filename; break;
+        case 3U: reference = "legacy/draft/" + filename; break;
+        default: reference = "audio\\" + filename; break;
+        }
+
+        MMM::Note note;
+        note.setSampleBinding(
+            MMM::AudioSampleBinding{ std::move(reference), 1.0F });
+        beatmap.m_noteData.notes.push_back(std::move(note));
+
+        scannedProject.m_audioResources.push_back(MMM::AudioResource{
+            .m_id   = resourceId,
+            .m_path = relativePath,
+            .m_type = MMM::AudioTrackType::Main,
+        });
+    }
+
+    beatmap.sync();
+    if ( !beatmap.saveToFile(mapPath) ) return false;
+
+    const auto result =
+        MMM::Logic::ProjectResourceService{}.syncDirectoryResources(
+            scannedProject, scanResult);
+    if ( !result.m_changed ||
+         result.m_effectResourcesToRegister.size() != RESOURCE_COUNT ||
+         scannedProject.m_audioResources.size() != RESOURCE_COUNT ) {
+        return false;
+    }
+    const auto invalidResource =
+        std::find_if(scannedProject.m_audioResources.begin(),
+                     scannedProject.m_audioResources.end(),
+                     [](const MMM::AudioResource& resource) {
+                         return resource.m_type != MMM::AudioTrackType::Effect;
+                     });
+    if ( invalidResource != scannedProject.m_audioResources.end() ) {
+        XERROR("Bulk audio reference index missed resource: {}",
+               invalidResource->m_id);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证大批量目录同步通过一次性路径索引复用已有资源。
+///
+/// 输入混合当前相对路径、旧项目目录前缀、绝对路径和词法冗余路径，
+/// 使资源数量扩大时仍只能进行线性建表与查询。
+/// @return 全部资源配置和稳定 ID 均被复用且同步无需写回时返回 true。
+bool testBulkDirectorySyncReusesNormalizedResources()
+{
+    constexpr std::size_t RESOURCE_COUNT = 256U;
+
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    MMM::Logic::ProjectDirectoryScanner::ScanResult scanResult;
+    scanResult.m_success = true;
+    scanResult.m_audioFiles.reserve(RESOURCE_COUNT);
+    project.m_audioResources.reserve(RESOURCE_COUNT);
+
+    const auto projectFolder =
+        MMM::Config::pathToUtf8(directory.path().filename());
+    for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
+        const auto filename  = "sync-" + std::to_string(index) + ".wav";
+        const auto audioPath = directory.path() / "audio" / filename;
+        if ( !createAudioPlaceholder(audioPath) ) return false;
+        scanResult.m_audioFiles.push_back(audioPath);
+
+        std::string storedPath;
+        switch ( index % 4U ) {
+        case 0U: storedPath = "audio/" + filename; break;
+        case 1U: storedPath = projectFolder + "/audio/" + filename; break;
+        case 2U: storedPath = MMM::Config::pathToUtf8(audioPath); break;
+        default: storedPath = "audio/drafts/../" + filename; break;
+        }
+
+        MMM::AudioTrackConfig config;
+        config.volume = static_cast<float>(index + 1U) /
+                        static_cast<float>(RESOURCE_COUNT + 1U);
+        project.m_audioResources.push_back(MMM::AudioResource{
+            .m_id     = "stable-sync-" + std::to_string(index),
+            .m_path   = std::move(storedPath),
+            .m_type   = MMM::AudioTrackType::Effect,
+            .m_config = std::move(config),
+        });
+    }
+
+    const auto result =
+        MMM::Logic::ProjectResourceService{}.syncDirectoryResources(project,
+                                                                    scanResult);
+    if ( result.m_changed || !result.m_effectResourcesToRegister.empty() ||
+         project.m_audioResources.size() != RESOURCE_COUNT ) {
+        XERROR("Bulk directory sync recreated existing audio resources");
+        return false;
+    }
+
+    for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
+        const auto& resource       = project.m_audioResources[index];
+        const auto  expectedVolume = static_cast<float>(index + 1U) /
+                                     static_cast<float>(RESOURCE_COUNT + 1U);
+        if ( resource.m_id != "stable-sync-" + std::to_string(index) ||
+             resource.m_config.volume != expectedVolume ) {
+            XERROR("Bulk directory sync lost resource configuration at {}",
+                   index);
+            return false;
+        }
+    }
+    return true;
 }
 
 /// @brief 验证资源改类型和删除时不会破坏谱面引用。
@@ -1295,6 +1557,10 @@ int main()
 {
     return testLegacyBeatmapEntryIsReadOnly() &&
                    testReferenceAwareDirectoryScan() &&
+                   testAudioResolutionPreservesCrossModeFirstMatch() &&
+                   testRootBeatmapEscapedLegacyReferenceFallback() &&
+                   testBulkReferenceIndexPreservesCompatibility() &&
+                   testBulkDirectorySyncReusesNormalizedResources() &&
                    testAudioReferenceMutationGuards() &&
                    testOpenBeatmapReferencesSupplementDiskGuards() &&
                    testPhysicalAudioDeletionHonorsReferences() &&

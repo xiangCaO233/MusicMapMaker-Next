@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -338,10 +339,26 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
 {
     std::vector<PendingTimelineEvent> pendingEvents;
     pendingEvents.reserve(beatMap.m_audioSamples.size());
+
+    /// @brief 与自动采样顺序一致的资源引用视图。
+    std::vector<std::string_view> audioReferences;
+    audioReferences.reserve(beatMap.m_audioSamples.size());
     for ( const auto& sample : beatMap.m_audioSamples ) {
-        const auto* resource =
-            ProjectResourceService::findAudioResourceForReference(
-                project, beatmapPath, sample.m_audioResourceId);
+        audioReferences.emplace_back(sample.m_audioResourceId);
+    }
+    /// @brief 一次建表后批量解析的项目资源结果。
+    const auto resolvedResources =
+        ProjectResourceService::resolveAudioResourceReferences(
+            project, beatmapPath, audioReferences);
+
+    /// @brief 每个资源只解析一次规范绝对文件路径。
+    std::unordered_map<const AudioResource*, std::string>
+        absolutePathsByResource;
+    absolutePathsByResource.reserve(project.m_audioResources.size());
+
+    std::size_t sampleIndex = 0U;
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        const auto* resource = resolvedResources[sampleIndex++];
 
         MMM::Audio::AudioTimelineLoadEvent event;
         event.resourceKey =
@@ -351,8 +368,14 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
             1000.0;
         event.eventVolume = sample.m_volume;
         if ( resource ) {
-            event.filePath = Config::pathToUtf8(resolveAbsoluteResourcePath(
-                project, beatmapPath, resource->m_path));
+            auto [pathIterator, inserted] =
+                absolutePathsByResource.try_emplace(resource);
+            if ( inserted ) {
+                pathIterator->second =
+                    Config::pathToUtf8(resolveAbsoluteResourcePath(
+                        project, beatmapPath, resource->m_path));
+            }
+            event.filePath       = pathIterator->second;
             event.resourceConfig = resource->m_config;
         }
 

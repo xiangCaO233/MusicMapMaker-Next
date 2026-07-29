@@ -7,8 +7,8 @@
 
 #include <cstddef>
 #include <filesystem>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -198,6 +198,16 @@ public:
         const Project& project, const std::filesystem::path& beatmapPath,
         const std::string& audioReference);
 
+    /// @brief 批量解析同一谱面的项目音频资源引用。
+    /// @param project 待查询项目。
+    /// @param beatmapPath 引用所在谱面的项目相对或绝对路径。
+    /// @param audioReferences 谱面保存的资源 ID 或旧路径视图。
+    /// @return 与输入顺序一一对应的资源地址；未解析项为空。
+    /// @warning 低频加载路径：一次构建资源解析索引并线性处理全部引用。
+    static std::vector<const AudioResource*> resolveAudioResourceReferences(
+        const Project& project, const std::filesystem::path& beatmapPath,
+        const std::vector<std::string_view>& audioReferences);
+
     /// @brief 为谱面选择适合预览或 BPM 测量的默认音频资源。
     /// @param project 谱面所属项目。
     /// @param beatMap 待解析的谱面。
@@ -295,42 +305,17 @@ private:
         const Project& project, const std::filesystem::path& mapPath,
         const std::string& beatmapPath, bool warnOnFailure);
 
-    /// @brief 根据谱面引用推断新发现音频资源的类型。
-    /// @param project 资源所属项目。
-    /// @param references 已收集的全部谱面音频引用。
-    /// @param resource 待推断的项目音频资源。
-    /// @return Note 绑定优先的资源类型；没有类型线索时返回 Effect。
-    static AudioTrackType inferAudioResourceType(
-        const Project&                            project,
-        const std::vector<BeatmapAudioReference>& references,
-        const AudioResource&                      resource);
-
     /// @brief 创建默认音轨配置。
     /// @return 默认音轨配置。
     static AudioTrackConfig makeDefaultAudioConfig();
 
     /// @brief 创建项目音频资源条目。
-    /// @param project 音频资源所属项目。
     /// @param audioPath 音频文件系统路径。
-    /// @param references 已收集的全部谱面音频引用。
+    /// @param relativeAudioPath 已完成一次规范化的项目相对路径。
     /// @return 填充默认配置后的音频资源条目。
     static AudioResource createAudioResource(
-        const Project& project, const std::filesystem::path& audioPath,
-        const std::vector<BeatmapAudioReference>& references);
-
-    /// @brief 查找已有谱面条目。
-    /// @param project 需要查询的项目。
-    /// @param relativeMapPath UTF-8 编码的谱面项目相对路径。
-    /// @return 找到时返回谱面条目副本，否则返回空。
-    static std::optional<Project::BeatmapEntry> findExistingBeatmapEntry(
-        const Project& project, const std::string& relativeMapPath);
-
-    /// @brief 查找已有音频资源条目。
-    /// @param project 需要查询的项目。
-    /// @param relativeAudioPath UTF-8 编码的音频项目相对路径。
-    /// @return 找到时返回音频资源副本，否则返回空。
-    static std::optional<AudioResource> findExistingAudioResource(
-        const Project& project, const std::string& relativeAudioPath);
+        const std::filesystem::path& audioPath,
+        const std::string&           relativeAudioPath);
 };
 
 }  // namespace MMM::Logic
