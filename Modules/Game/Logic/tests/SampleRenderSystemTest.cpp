@@ -106,7 +106,7 @@ void configureUnicodeFont(MMM::Logic::RenderSnapshot& snapshot)
 void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
                         std::string_view resourceId, double snapshotSysTime,
                         bool withAsciiFont, float noteScaleX = 1.2F,
-                        float noteScaleY = 1.2F)
+                        float noteScaleY = 1.2F, bool erasing = false)
 {
     entt::registry timelineRegistry;
     const auto     bpmEntity = timelineRegistry.create();
@@ -135,6 +135,10 @@ void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
         });
     const std::vector<entt::entity> sortedEntities{ sampleEntity };
     const std::vector<double>       maxEndPrefix{ 0.0 };
+    if ( erasing ) {
+        snapshot.erasingObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+        snapshot.erasingEntities.insert(sampleEntity);
+    }
 
     snapshot.snapshotSysTime = snapshotSysTime;
     snapshot.uvMap.emplace(
@@ -150,6 +154,56 @@ void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
     MMM::Logic::System::SampleRenderSystem::renderSamples(sampleRegistry,
                                                           sortedEntities,
                                                           maxEndPrefix,
+                                                          &snapshot,
+                                                          batcher,
+                                                          projection,
+                                                          &cache,
+                                                          config,
+                                                          0.0,
+                                                          300.0F,
+                                                          800.0F,
+                                                          0.0F,
+                                                          600.0F,
+                                                          1.0F);
+    batcher.flush();
+}
+
+/// @brief 为 BGM 区画笔预览生成不含正式采样的快照。
+/// @param snapshot 输出快照。
+void renderSampleBrushPreview(MMM::Logic::RenderSnapshot& snapshot)
+{
+    entt::registry timelineRegistry;
+    const auto     bpmEntity = timelineRegistry.create();
+    timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        bpmEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 0.0,
+            .m_effect    = MMM::TimingEffect::BPM,
+            .m_value     = 120.0,
+        });
+
+    MMM::Config::EditorConfig       config;
+    MMM::Logic::System::ScrollCache cache;
+    cache.rebuild(timelineRegistry, config, nullptr);
+
+    entt::registry sampleRegistry;
+    snapshot.brush.isActive           = true;
+    snapshot.brush.createsAudioSample = true;
+    snapshot.brush.time               = 0.0;
+    snapshot.brush.track              = 4;
+    snapshot.brush.audioResourceId    = "preview.wav";
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::None),
+        glm::vec4{ 0.0F, 0.0F, 0.01F, 0.01F });
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::Note), NOTE_UV);
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        800.0F, 4, 1, 0.1F, 0.5F, 0.0F);
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    MMM::Logic::System::SampleRenderSystem::renderSamples(sampleRegistry,
+                                                          {},
+                                                          {},
                                                           &snapshot,
                                                           batcher,
                                                           projection,
@@ -216,6 +270,56 @@ bool testSampleBodyMatchesTapTextureAndSize()
          !near(sampleVertex.color.b, 0.92F) ||
          !near(sampleVertex.color.a, 0.96F) ) {
         XERROR("Sample body lost its distinct BGM object color");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证 BGM 画笔按下后立即绘制半透明自动采样并跟随笔刷位置。
+/// @return 预览使用采样颜色、Note 纹理且不生成可拾取正式实体时返回 true。
+bool testSampleBrushPreview()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    renderSampleBrushPreview(snapshot);
+    if ( snapshot.vertices.size() != 4U || snapshot.indices.size() != 6U ||
+         !snapshot.hitboxes.empty() ) {
+        XERROR("Sample brush preview did not render as one transient object");
+        return false;
+    }
+    const auto& vertex = snapshot.vertices.front();
+    if ( !near(vertex.color.r, 0.36F) || !near(vertex.color.g, 0.72F) ||
+         !near(vertex.color.b, 0.92F) || !near(vertex.color.a, 0.48F) ||
+         !near(vertex.uv.u, NOTE_UV.x) ||
+         (!near(vertex.uv.v, NOTE_UV.y) &&
+          !near(vertex.uv.v, NOTE_UV.y + NOTE_UV.w)) ) {
+        XERROR(
+            "Sample brush preview lost styling: color=({:.3f},{:.3f},{:.3f},"
+            "{:.3f}) uv=({:.3f},{:.3f})",
+            vertex.color.r,
+            vertex.color.g,
+            vertex.color.b,
+            vertex.color.a,
+            vertex.uv.u,
+            vertex.uv.v);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证右键按住自动采样时显示红色半透明待删除效果。
+/// @return 采样本体切换为红色半透明且不影响纹理时返回 true。
+bool testSampleErasePreview()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    renderSingleSample(snapshot, "erase.wav", 0.0, false, 1.2F, 1.2F, true);
+    if ( snapshot.vertices.size() != 4U ) {
+        XERROR("Sample erase preview rendered unexpected decorations");
+        return false;
+    }
+    const auto& vertex = snapshot.vertices.front();
+    if ( !near(vertex.color.r, 1.0F) || !near(vertex.color.g, 0.2F) ||
+         !near(vertex.color.b, 0.2F) || !near(vertex.color.a, 0.5F) ) {
+        XERROR("Sample erase preview was not red and translucent");
         return false;
     }
     return true;
@@ -398,6 +502,7 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
 int main()
 {
     return testSampleBodyMatchesTapTextureAndSize() &&
+                   testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleLabelMarquee() &&
                    testSampleLabelScaleAndFixedLaneWidth() &&
                    testSampleLabelCjkGlyphs() &&

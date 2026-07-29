@@ -281,6 +281,8 @@ struct SessionContext {
     struct EraserState {
         bool isActive{ false };
         bool isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
+        /// @brief 当前擦除目标所在的独立 ECS 注册表。
+        ChartObjectKind targetObjectKind{ ChartObjectKind::PlayerNote };
         std::unordered_set<entt::entity> targetEntities;
     } eraserState;
 

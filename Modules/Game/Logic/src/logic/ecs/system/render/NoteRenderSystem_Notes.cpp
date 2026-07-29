@@ -250,7 +250,7 @@ void NoteRenderSystem::renderNotes(
                                           renderScaleY);
 
     // 5. 笔刷预览渲染
-    if ( snapshot->brush.isActive ) {
+    if ( snapshot->brush.isActive && !snapshot->brush.createsAudioSample ) {
         NoteRenderSystem::renderBrushPreview(snapshot,
                                              ctx,
                                              config,
@@ -376,7 +376,7 @@ static void forEachNoteVisibilitySampleTime(const NoteComponent& note,
     }
 
     const auto& segments = cache->getSegments();
-    auto        it       = std::lower_bound(segments.begin(),
+    auto it = std::lower_bound(segments.begin(),
                                segments.end(),
                                minTime,
                                [](const ScrollSegment& segment, double value) {
@@ -402,7 +402,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto         it      = std::upper_bound(segments.begin(),
+    auto it = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -1002,7 +1002,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX = leftX + note.m_trackIndex * singleTrackW;
+        float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -1018,8 +1018,10 @@ void NoteRenderSystem::renderNoteBaseLayer(
         glm::vec4 curColorArrow =
             resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
-        bool isFullErasing = snapshot->erasingEntities.count(entity) &&
-                             (snapshot->erasingSubIndex == -1);
+        bool isFullErasing =
+            snapshot->erasingObjectKind == ChartObjectKind::PlayerNote &&
+            snapshot->erasingEntities.count(entity) &&
+            snapshot->erasingSubIndex == -1;
         if ( isFullErasing ) {
             curColorNote     = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorHead     = { 1.0f, 0.2f, 0.2f, 1.0f };
@@ -1199,11 +1201,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
+                                 note.m_timestamp + note.m_duration,
+                                 ctx.cache->getAbsY(note.m_timestamp),
+                                 note.m_timestamp)) *
+                             renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1549,9 +1551,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                              (singleTrackW - ctx.noteW) * 0.5f;
-                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h = std::abs(y0 - y1) + ctx.noteH;
+                               (singleTrackW - ctx.noteW) * 0.5f;
+                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h  = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1590,9 +1592,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                              (singleTrackW - w) * 0.5f;
-                    float y = std::min(y0, y1) - h0 * 0.5f;
-                    float h = std::abs(y0 - y1) + h0;
+                               (singleTrackW - w) * 0.5f;
+                    float y  = std::min(y0, y1) - h0 * 0.5f;
+                    float h  = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1631,7 +1633,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                      (singleTrackW - verticalBodySize.x) * 0.5f;
+                       (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1700,7 +1702,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                      singleTrackW * 0.5f;
+                       singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;

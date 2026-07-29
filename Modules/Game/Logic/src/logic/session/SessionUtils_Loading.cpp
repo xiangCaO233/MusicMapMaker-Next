@@ -111,6 +111,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isDragging = false;
     ctx.eraserState.targetEntities.clear();
     ctx.eraserState.isActive                     = false;
+    ctx.eraserState.targetObjectKind             = ChartObjectKind::PlayerNote;
     ctx.audioTimelineDescriptor                  = {};
     ctx.audioTimelineTotalTime                   = 0.0;
     ctx.missingAudioTimelineClipCount            = 0U;

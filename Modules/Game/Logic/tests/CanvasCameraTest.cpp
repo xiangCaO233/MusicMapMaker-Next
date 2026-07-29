@@ -1,6 +1,7 @@
 #include "logic/session/CanvasCamera.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -54,12 +55,15 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
                                 600.0F,
                                 0.0F,
                             });
-    context.timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
-    context.timelineRegistry.ctx()
-        .get<MMM::Logic::System::ScrollCache>()
-        .rebuild(context.timelineRegistry,
-                 context.lastConfig,
-                 context.currentBeatmap.get());
+    auto* cache =
+        context.timelineRegistry.ctx().find<MMM::Logic::System::ScrollCache>();
+    if ( !cache ) {
+        cache = &context.timelineRegistry.ctx()
+                     .emplace<MMM::Logic::System::ScrollCache>();
+    }
+    cache->rebuild(context.timelineRegistry,
+                   context.lastConfig,
+                   context.currentBeatmap.get());
 }
 
 /// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
@@ -159,6 +163,58 @@ bool testBrushAudioResourcePlacementRules()
                     (sample.m_track == 5 && sample.m_audioResourceId == "main");
     }
     return foundMain;
+}
+
+/// @brief 验证 BGM 画笔按住期间持续更新半透明采样预览的轨道与时间。
+/// @return 拖到追加轨后预览和最终 Sample 均跟随指针位置时返回 true。
+bool testSampleBrushFollowsPointerBeforeCommit()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    MMM::Logic::InteractionController controller(context);
+    MMM::Logic::DrawTool              drawTool;
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "effect",
+        .audioTrackType  = MMM::AudioTrackType::Effect,
+    });
+
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    const double startTime = context.brushState.time;
+    if ( !context.brushState.isActive ||
+         !context.brushState.createsAudioSample ||
+         context.brushState.track != 4 ||
+         context.brushState.activeAudioResourceId != "effect" ) {
+        XERROR("Sample brush did not expose its pressed preview state");
+        return false;
+    }
+
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId   = "Basic2DCanvas",
+                                   .mouseX     = 650.0F,
+                                   .mouseY     = 250.0F,
+                                   .isCtrlDown = true,
+                               });
+    if ( context.brushState.track != 5 ||
+         near(context.brushState.time, startTime) ) {
+        XERROR("Sample brush preview did not follow the held pointer");
+        return false;
+    }
+    const double draggedTime = context.brushState.time;
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    const auto samples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 1 || context.bgmTrackCount != 2 ) return false;
+    const auto& sample =
+        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
+    return sample.m_track == 5 && near(sample.m_timestamp, draggedTime);
 }
 
 /// @brief 验证横向相机偏移被渲染和拾取共用的轨道投影正确应用。
@@ -922,14 +978,20 @@ bool testNoteSampleBindingRoundTrip()
 }
 
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
-/// @return 悬停自动采样时橡皮擦未将同 ID 的玩家物件加入目标时返回 true。
-bool testSampleHoverDoesNotTargetOverlappingNote()
+/// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
+bool testSampleEraseTargetsTypedRegistry()
 {
     MMM::Logic::SessionContext context;
     const auto                 noteEntity = context.noteRegistry.create();
     context.noteRegistry.emplace<MMM::Logic::NoteComponent>(noteEntity);
     const auto sampleEntity = context.sampleRegistry.create();
-    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(sampleEntity);
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "effect.wav",
+        });
     if ( noteEntity != sampleEntity ) {
         XERROR("Regression setup did not create overlapping ECS entity IDs");
         return false;
@@ -944,8 +1006,70 @@ bool testSampleHoverDoesNotTargetOverlappingNote()
     drawTool.handleEndErase(context, MMM::Logic::CmdEndErase{});
 
     if ( !context.noteRegistry.valid(noteEntity) ||
+         context.sampleRegistry.valid(sampleEntity) ||
+         context.actionStack.getUndoStackSize() != 1 ||
          !context.eraserState.targetEntities.empty() ) {
-        XERROR("Sample hover leaked into the player-note eraser domain");
+        XERROR("Sample eraser did not delete only the typed sample target");
+        return false;
+    }
+    context.actionStack.undo(context);
+    return context.noteRegistry.valid(noteEntity) &&
+           context.sampleRegistry.valid(sampleEntity) &&
+           context.sampleRegistry.get<MMM::Logic::SampleComponent>(sampleEntity)
+                   .m_audioResourceId == "effect.wav";
+}
+
+/// @brief 验证自动采样悬浮检视包含锚点、实际触发点和音频字段。
+/// @return offset handle 检视快照完整保留资源、音量、偏移与两类时间点时返回
+/// true。
+bool testSampleHoverInspectDetails()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    const auto entity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        entity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.25,
+            .m_offsetMs        = -125,
+            .m_track           = 4,
+            .m_audioResourceId = "detail-effect.wav",
+            .m_volume          = 0.35F,
+        });
+    context.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+        entity,
+        MMM::Logic::InteractionComponent{
+            .isHovered = true,
+            .hoveredPart =
+                static_cast<std::uint8_t>(MMM::Logic::HoverPart::SampleOffset),
+        });
+    context.hoveredEntity     = entity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleOffset);
+    context.mouseCameraId   = "Basic2DCanvas";
+    context.isMouseInCanvas = true;
+    context.lastMousePos    = { 550.0F, 300.0F };
+
+    const auto config = context.lastConfig;
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Sample hover inspect did not publish a main-canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot ) return false;
+    const auto& inspect = snapshot->hoverInspect;
+    if ( !inspect.show ||
+         inspect.kind != MMM::Logic::HoverInspectKind::AudioSampleTrigger ||
+         !inspect.showAudioSample || !inspect.head.show || !inspect.end.show ||
+         !inspect.showTrack || inspect.audioResourceId != "detail-effect.wav" ||
+         !near(inspect.volume, 0.35) || inspect.offsetMs != -125 ||
+         inspect.track != 4 || !near(inspect.head.time, 1.25) ||
+         !near(inspect.end.time, 1.125) ) {
+        XERROR("Sample hover inspect omitted audio or effective-time details");
         return false;
     }
     return true;
@@ -1443,6 +1567,7 @@ bool testMixedChartObjectLocalCut()
 int main()
 {
     return testBrushAudioResourcePlacementRules() &&
+                   testSampleBrushFollowsPointerBeforeCommit() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
                    testResizePreservesNormalizedOffset() &&
@@ -1457,7 +1582,8 @@ int main()
                    testSamplePropertyEditValidationAndAction() &&
                    testSampleRegistryLoadAndSync() &&
                    testNoteSampleBindingRoundTrip() &&
-                   testSampleHoverDoesNotTargetOverlappingNote() &&
+                   testSampleEraseTargetsTypedRegistry() &&
+                   testSampleHoverInspectDetails() &&
                    testSampleAnchorDragUsesSingleAction() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&
                    testSampleOffsetHandleDrag() &&

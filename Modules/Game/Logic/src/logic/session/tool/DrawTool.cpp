@@ -3,6 +3,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SampleAction.h"
@@ -57,6 +58,17 @@ bool isHoveredPlayerNote(const SessionContext& ctx)
            ctx.hoveredEntity != entt::null &&
            ctx.noteRegistry.valid(ctx.hoveredEntity) &&
            ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity);
+}
+
+/// @brief 判断当前悬停对象是否为自动采样注册表中的有效物件。
+/// @param ctx 会话上下文。
+/// @return 悬停对象属于自动采样域且实体有效时返回 true。
+bool isHoveredAudioSample(const SessionContext& ctx)
+{
+    return ctx.hoveredObjectKind == ChartObjectKind::AudioSample &&
+           ctx.hoveredEntity != entt::null &&
+           ctx.sampleRegistry.valid(ctx.hoveredEntity) &&
+           ctx.sampleRegistry.all_of<SampleComponent>(ctx.hoveredEntity);
 }
 
 /// @brief 清理当前绘制笔刷状态。
@@ -1226,7 +1238,8 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
     ctx.eraserState.isShiftDown = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        entt::entity target = ctx.hoveredEntity;
+        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
             const auto& nc =
@@ -1236,6 +1249,9 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
             }
         }
         ctx.eraserState.targetEntities.insert(target);
+    } else if ( isHoveredAudioSample(ctx) ) {
+        ctx.eraserState.targetObjectKind = ChartObjectKind::AudioSample;
+        ctx.eraserState.targetEntities.insert(ctx.hoveredEntity);
     }
 }
 
@@ -1248,7 +1264,8 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
     // 每帧只标记当前鼠标正下方的物件，移开就取消
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        entt::entity target = ctx.hoveredEntity;
+        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
             const auto& nc =
@@ -1258,12 +1275,76 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
             }
         }
         ctx.eraserState.targetEntities.insert(target);
+    } else if ( isHoveredAudioSample(ctx) ) {
+        ctx.eraserState.targetObjectKind = ChartObjectKind::AudioSample;
+        ctx.eraserState.targetEntities.insert(ctx.hoveredEntity);
     }
 }
 
 void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
 {
     if ( !ctx.eraserState.isActive ) return;
+
+    if ( ctx.eraserState.targetObjectKind == ChartObjectKind::AudioSample ) {
+        std::vector<BatchSampleAction::Entry> entries;
+        bool                                  targetIsSelected = false;
+        for ( const auto entity : ctx.eraserState.targetEntities ) {
+            const auto* interaction =
+                ctx.sampleRegistry.try_get<const InteractionComponent>(entity);
+            if ( interaction && interaction->isSelected ) {
+                targetIsSelected = true;
+                break;
+            }
+        }
+
+        std::unordered_set<entt::entity> toDelete;
+        if ( targetIsSelected ) {
+            const auto selectedView =
+                ctx.sampleRegistry
+                    .view<InteractionComponent, SampleComponent>();
+            for ( const auto entity : selectedView ) {
+                if ( selectedView.get<InteractionComponent>(entity)
+                         .isSelected ) {
+                    toDelete.insert(entity);
+                }
+            }
+        }
+        for ( const auto entity : ctx.eraserState.targetEntities ) {
+            if ( ctx.sampleRegistry.valid(entity) &&
+                 ctx.sampleRegistry.all_of<SampleComponent>(entity) ) {
+                toDelete.insert(entity);
+            }
+        }
+
+        entries.reserve(toDelete.size());
+        for ( const auto entity : toDelete ) {
+            const auto* sample =
+                ctx.sampleRegistry.try_get<const SampleComponent>(entity);
+            if ( !sample ) continue;
+            const auto* interaction =
+                ctx.sampleRegistry.try_get<const InteractionComponent>(entity);
+            entries.push_back({
+                .entity = entity,
+                .before = *sample,
+                .after  = std::nullopt,
+                .beforeSelected =
+                    interaction ? std::optional<bool>{ interaction->isSelected }
+                                : std::nullopt,
+            });
+        }
+        if ( !entries.empty() ) {
+            ctx.actionStack.pushAndExecute(
+                std::make_unique<BatchSampleAction>(std::move(entries),
+                                                    "橡皮擦删除自动采样"),
+                ctx);
+        }
+
+        ctx.eraserState.isActive         = false;
+        ctx.eraserState.isShiftDown      = false;
+        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        ctx.eraserState.targetEntities.clear();
+        return;
+    }
 
     if ( !ctx.eraserState.targetEntities.empty() ) {
         std::vector<BatchNoteAction::Entry> entries;
@@ -1566,8 +1647,9 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
         }
     }
 
-    ctx.eraserState.isActive    = false;
-    ctx.eraserState.isShiftDown = false;
+    ctx.eraserState.isActive         = false;
+    ctx.eraserState.isShiftDown      = false;
+    ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
     ctx.eraserState.targetEntities.clear();
 }
 

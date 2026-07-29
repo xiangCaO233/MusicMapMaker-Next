@@ -114,7 +114,9 @@ enum class HoverInspectKind : uint8_t {
     PolylineHoldBody,
     PolylineHoldEnd,
     PolylineFlickBody,
-    PolylineFlickEnd
+    PolylineFlickEnd,
+    AudioSampleAnchor,
+    AudioSampleTrigger
 };
 
 struct HoverBeatPoint {
@@ -155,6 +157,15 @@ struct HoverInspectInfo {
     bool showTrack{ false };
     /// @brief 当前部位轨道位置
     int32_t track{ 0 };
+
+    /// @brief 是否显示自动采样资源信息。
+    bool showAudioSample{ false };
+    /// @brief 自动采样引用的项目音频资源 ID。
+    std::string audioResourceId;
+    /// @brief 自动采样物件音量。
+    float volume{ 1.0F };
+    /// @brief 自动采样相对锚点的有符号播放偏移，单位毫秒。
+    std::int64_t offsetMs{ 0 };
 
     /// @brief 当前悬浮位置按重叠检测规则命中的物件数量。
     int overlapCount{ 1 };
@@ -456,7 +467,9 @@ struct RenderSnapshot {
 
     // 笔刷预览状态
     struct BrushSnapshot {
-        bool            isActive{ false };              ///< 是否激活
+        bool isActive{ false };  ///< 是否激活
+        /// @brief 当前手势是否创建 BGM 区自动采样。
+        bool            createsAudioSample{ false };
         double          time{ 0.0 };                    ///< 位置/起始时间
         double          duration{ 0.0 };                ///< 持续时间 (Hold)
         int             track{ 0 };                     ///< 轨道
@@ -466,13 +479,18 @@ struct RenderSnapshot {
         /// @brief 笔刷预览使用的自定义颜色。
         NoteColorOverrides customColors;
 
+        /// @brief 自动采样预览引用的项目音频资源 ID。
+        std::string audioResourceId;
+
         // Polyline 子物件预览
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brush;
 
     // 橡皮擦预览状态
     std::unordered_set<entt::entity> erasingEntities;
-    int                              erasingSubIndex{ -1 };
+    /// @brief 橡皮擦目标所在的独立 ECS 注册表。
+    ChartObjectKind erasingObjectKind{ ChartObjectKind::PlayerNote };
+    int             erasingSubIndex{ -1 };
 
     // 是否已加载谱面
     bool hasBeatmap{ false };
@@ -613,28 +631,31 @@ struct RenderSnapshot {
         isSelecting                  = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
-        hoveredTime            = 0.0;
-        snappedTime            = 0.0;
-        isSnapped              = false;
-        snappedNumerator       = 0;
-        snappedDenominator     = 1;
-        currentBeatDivisor     = 4;
-        hoveredTrack           = 0;
-        hoveredNoteNumerator   = 0;
-        hoveredNoteDenominator = 1;
-        hoveredBeatIndex       = 0;
-        hoveredNoteBeatIndex   = 0;
-        hoveredNoteTime        = 0.0;
-        hoveredNoteTrack       = 0;
-        hoverInspect           = HoverInspectInfo{};
-        isPreviewHovered       = false;
-        previewHoverY          = 0.0f;
-        previewHoverTime       = 0.0;
-        isPreviewDragging      = false;
-        brush.isActive         = false;
+        hoveredTime              = 0.0;
+        snappedTime              = 0.0;
+        isSnapped                = false;
+        snappedNumerator         = 0;
+        snappedDenominator       = 1;
+        currentBeatDivisor       = 4;
+        hoveredTrack             = 0;
+        hoveredNoteNumerator     = 0;
+        hoveredNoteDenominator   = 1;
+        hoveredBeatIndex         = 0;
+        hoveredNoteBeatIndex     = 0;
+        hoveredNoteTime          = 0.0;
+        hoveredNoteTrack         = 0;
+        hoverInspect             = HoverInspectInfo{};
+        isPreviewHovered         = false;
+        previewHoverY            = 0.0f;
+        previewHoverTime         = 0.0;
+        isPreviewDragging        = false;
+        brush.isActive           = false;
+        brush.createsAudioSample = false;
+        brush.audioResourceId.clear();
         erasingEntities.clear();
-        erasingSubIndex = -1;
-        hasBeatmap      = false;
+        erasingObjectKind = ChartObjectKind::PlayerNote;
+        erasingSubIndex   = -1;
+        hasBeatmap        = false;
         beatmapPathKey.clear();
         beatmapName.clear();
         isDirty = false;

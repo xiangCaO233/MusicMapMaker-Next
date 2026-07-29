@@ -2329,12 +2329,23 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                TR("ui.canvas.note_time").data(),
                                                timeText.c_str());
                             if ( showTrack ) {
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %d",
-                                    label.data(),
-                                    TR("ui.canvas.track").data(),
-                                    point.track + 1);
+                                if ( point.track >=
+                                     currentSnapshot->trackCount ) {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
+                                        label.data(),
+                                        TR("ui.canvas.bgm_track").data(),
+                                        point.track -
+                                            currentSnapshot->trackCount + 1);
+                                } else {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
+                                        label.data(),
+                                        TR("ui.canvas.track").data(),
+                                        point.track + 1);
+                                }
                             }
                         };
 
@@ -2379,6 +2390,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                                       inspect.body,
                                       inspect.showTrack);
                             break;
+                        case Logic::HoverInspectKind::AudioSampleAnchor:
+                        case Logic::HoverInspectKind::AudioSampleTrigger:
+                            drawPoint("ui.canvas.hover.sample_anchor",
+                                      inspect.head,
+                                      inspect.showTrack);
+                            drawPoint("ui.canvas.hover.sample_trigger",
+                                      inspect.end,
+                                      inspect.showTrack);
+                            break;
                         case Logic::HoverInspectKind::HoldBody:
                         case Logic::HoverInspectKind::PolylineHoldBody:
                         case Logic::HoverInspectKind::None: break;
@@ -2409,6 +2429,22 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                "%s: %d",
                                                TR("ui.canvas.track").data(),
                                                inspect.track + 1);
+                        }
+                        if ( inspect.showAudioSample ) {
+                            ImGui::TextWrapped(
+                                "%s: %s",
+                                TR("ui.canvas.hover.audio_resource").data(),
+                                inspect.audioResourceId.c_str());
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %.1f%%",
+                                TR("ui.canvas.hover.volume").data(),
+                                inspect.volume * 100.0F);
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %+lld ms",
+                                TR("ui.canvas.hover.offset").data(),
+                                static_cast<long long>(inspect.offsetMs));
                         }
 
                         // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
@@ -2481,9 +2517,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     currentSnapshot->hoveredBeatIndex);
                     }
 
-                    ImGui::Text("%s: %d",
-                                TR("ui.canvas.track").data(),
-                                currentSnapshot->hoveredTrack + 1);
+                    if ( currentSnapshot->hoveredTrack >=
+                         currentSnapshot->trackCount ) {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.bgm_track").data(),
+                                    currentSnapshot->hoveredTrack -
+                                        currentSnapshot->trackCount + 1);
+                    } else {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.track").data(),
+                                    currentSnapshot->hoveredTrack + 1);
+                    }
 
                     ImGui::Spacing();
                     ImGui::Separator();

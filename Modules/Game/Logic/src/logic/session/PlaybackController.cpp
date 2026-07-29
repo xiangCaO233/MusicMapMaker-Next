@@ -86,8 +86,9 @@ void cancelActiveEditingState(SessionContext& ctx)
         ctx.brushState.dtrack        = 0;
     }
 
-    ctx.eraserState.isActive    = false;
-    ctx.eraserState.isShiftDown = false;
+    ctx.eraserState.isActive         = false;
+    ctx.eraserState.isShiftDown      = false;
+    ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
     ctx.eraserState.targetEntities.clear();
 }
 }  // namespace

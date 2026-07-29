@@ -953,15 +953,20 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     (m_ctx->hoveredEntity != entt::null)
                         ? m_ctx->hoveredObjectKind
                         : m_ctx->draggedObjectKind;
-                const bool useDragState =
-                    m_ctx->isDragging && inspectEntity != entt::null &&
-                    inspectEntity == m_ctx->draggedEntity &&
-                    inspectObjectKind == ChartObjectKind::PlayerNote;
+                const bool useDragState = m_ctx->isDragging &&
+                                          inspectEntity != entt::null &&
+                                          inspectEntity == m_ctx->draggedEntity;
                 const auto* inter =
                     (inspectObjectKind == ChartObjectKind::PlayerNote &&
                      inspectEntity != entt::null &&
                      m_ctx->noteRegistry.valid(inspectEntity))
                         ? m_ctx->noteRegistry
+                              .try_get<const InteractionComponent>(
+                                  inspectEntity)
+                    : (inspectObjectKind == ChartObjectKind::AudioSample &&
+                       inspectEntity != entt::null &&
+                       m_ctx->sampleRegistry.valid(inspectEntity))
+                        ? m_ctx->sampleRegistry
                               .try_get<const InteractionComponent>(
                                   inspectEntity)
                         : nullptr;
@@ -1095,6 +1100,49 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     } else if ( inspect.end.show ) {
                         setLegacyPoint(inspect.end);
                     }
+                } else if ( inspectObjectKind == ChartObjectKind::AudioSample &&
+                            shouldInspect ) {
+                    const auto* sample =
+                        m_ctx->sampleRegistry.try_get<const SampleComponent>(
+                            inspectEntity);
+                    if ( sample ) {
+                        const auto hoveredPart =
+                            useDragState
+                                ? m_ctx->draggedPart
+                                : static_cast<HoverPart>(inter->hoveredPart);
+                        HoverInspectInfo inspect;
+                        inspect.show = true;
+                        inspect.kind =
+                            hoveredPart == HoverPart::SampleOffset
+                                ? HoverInspectKind::AudioSampleTrigger
+                                : HoverInspectKind::AudioSampleAnchor;
+                        inspect.head =
+                            makeBeatPoint(sample->m_timestamp, sample->m_track);
+                        if ( sample->m_offsetMs != 0 ||
+                             hoveredPart == HoverPart::SampleOffset ) {
+                            inspect.end = makeBeatPoint(sample->effectiveTime(),
+                                                        sample->m_track);
+                        }
+                        inspect.showTrack       = true;
+                        inspect.track           = sample->m_track;
+                        inspect.showAudioSample = true;
+                        inspect.audioResourceId = sample->m_audioResourceId;
+                        inspect.volume          = sample->m_volume;
+                        inspect.offsetMs        = sample->m_offsetMs;
+                        snapshot->hoverInspect  = std::move(inspect);
+
+                        const auto& legacyPoint =
+                            hoveredPart == HoverPart::SampleOffset &&
+                                    snapshot->hoverInspect.end.show
+                                ? snapshot->hoverInspect.end
+                                : snapshot->hoverInspect.head;
+                        snapshot->hoveredNoteNumerator = legacyPoint.numerator;
+                        snapshot->hoveredNoteDenominator =
+                            legacyPoint.denominator;
+                        snapshot->hoveredNoteBeatIndex = legacyPoint.beatIndex;
+                        snapshot->hoveredNoteTime      = legacyPoint.time;
+                        snapshot->hoveredNoteTrack     = legacyPoint.track;
+                    }
                 }
             }
         }
@@ -1140,21 +1188,26 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // --- 注入画笔预览状态 ---
         if ( isActiveSession && m_ctx->brushState.isActive ) {
-            snapshot->brush.isActive     = true;
+            snapshot->brush.isActive = true;
+            snapshot->brush.createsAudioSample =
+                m_ctx->brushState.createsAudioSample;
             snapshot->brush.time         = m_ctx->brushState.time;
             snapshot->brush.duration     = m_ctx->brushState.duration;
             snapshot->brush.track        = m_ctx->brushState.track;
             snapshot->brush.dtrack       = m_ctx->brushState.dtrack;
             snapshot->brush.type         = m_ctx->brushState.type;
             snapshot->brush.customColors = m_ctx->brushState.customColors;
+            snapshot->brush.audioResourceId =
+                m_ctx->brushState.activeAudioResourceId;
             snapshot->brush.polylineSegments =
                 m_ctx->brushState.polylineSegments;
         }
 
         // --- 注入橡皮擦预览状态 ---
         if ( isActiveSession && m_ctx->eraserState.isActive ) {
-            snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
-            snapshot->erasingSubIndex = -1;
+            snapshot->erasingEntities   = m_ctx->eraserState.targetEntities;
+            snapshot->erasingObjectKind = m_ctx->eraserState.targetObjectKind;
+            snapshot->erasingSubIndex   = -1;
 
             // Shift 模式下保持 erasingSubIndex = -1，使整个 Polyline 标红
             if ( !m_ctx->eraserState.isShiftDown ) {
