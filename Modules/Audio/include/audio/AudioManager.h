@@ -643,6 +643,10 @@ public:
     /// @brief 恢复指定 key 的音效播放
     void resumeSoundEffect(const std::string& key);
 
+    /// @brief 停止指定 key 的全部播放实例并将进度复位到开头。
+    /// @param key 音效池标识符。
+    void stopSoundEffect(const std::string& key);
+
     /// @brief 在指定时间播放音效（预测系统使用）
     /// @param key 标识符
     /// @param targetTime 目标播放时间 (秒)

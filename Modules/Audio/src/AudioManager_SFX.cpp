@@ -760,6 +760,16 @@ void AudioManager::resumeSoundEffect(const std::string& key)
     }
 }
 
+/// @brief 停止指定音效池的全部实例并复位播放进度。
+/// @param key 音效池标识符。
+void AudioManager::stopSoundEffect(const std::string& key)
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        it->second->stopAll();
+    }
+}
+
 /// @brief 按主音轨时间计划播放指定音效。
 /// @param key 音效池标识。
 /// @param targetTime 目标有效出声时间，单位为秒。

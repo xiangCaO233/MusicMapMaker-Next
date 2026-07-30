@@ -6,6 +6,7 @@
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -109,6 +110,55 @@ ProjectAudioToolLayout::Rect toScreenRect(
         origin.y + rect.y * dpiScale,
         rect.width * dpiScale,
         rect.height * dpiScale,
+    };
+}
+
+/// @brief 单个音频方块内常驻试听按钮的屏幕布局。
+struct ItemAudioControlLayout {
+    /// @brief 播放按钮左上角。
+    ImVec2 topLeft;
+
+    /// @brief 单个方形按钮边长。
+    float buttonSize{ 0.0F };
+
+    /// @brief 相邻按钮间距。
+    float spacing{ 0.0F };
+
+    /// @brief 文件名文本可使用区域的屏幕底边。
+    float labelBottom{ 0.0F };
+};
+
+/// @brief 计算方块可见单元内的播放、暂停和停止按钮布局。
+/// @param labelRect 方块未被上层方块遮挡的最大屏幕区域。
+/// @return 适应当前可见宽高的按钮布局。
+ItemAudioControlLayout calculateItemAudioControlLayout(
+    const ProjectAudioToolLayout::Rect& labelRect)
+{
+    const auto& style             = ImGui::GetStyle();
+    const float horizontalPadding = std::max(1.0F, style.FramePadding.x);
+    const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
+    const float spacing =
+        std::max(1.0F, std::min(style.ItemInnerSpacing.x, 4.0F));
+    const float widthLimit = std::max(
+        1.0F,
+        (labelRect.width - horizontalPadding * 2.0F - spacing * 2.0F) / 3.0F);
+    const float heightLimit = std::max(1.0F, labelRect.height * 0.34F);
+    const float buttonSize =
+        std::min({ ImGui::GetFrameHeight(), widthLimit, heightLimit });
+    const float totalWidth = buttonSize * 3.0F + spacing * 2.0F;
+    const float top        = labelRect.bottom() - verticalPadding - buttonSize;
+    return {
+        .topLeft =
+            {
+                labelRect.x +
+                    std::max(horizontalPadding,
+                             (labelRect.width - totalWidth) * 0.5F),
+                top,
+            },
+        .buttonSize = buttonSize,
+        .spacing    = spacing,
+        .labelBottom =
+            std::max(labelRect.y, top - std::max(1.0F, style.ItemSpacing.y)),
     };
 }
 
@@ -817,18 +867,20 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
     }
 
     const auto labelRect = toScreenRect(item.labelRect, canvasOrigin, dpiScale);
-    const float  horizontalPadding = std::max(1.0F, style.FramePadding.x);
-    const float  verticalPadding   = std::max(1.0F, style.FramePadding.y);
+    const auto audioControlLayout = calculateItemAudioControlLayout(labelRect);
+    const float horizontalPadding = std::max(1.0F, style.FramePadding.x);
+    const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
+    const float labelHeight =
+        std::max(1.0F, audioControlLayout.labelBottom - labelRect.y);
     const ImVec2 labelStart{
         labelRect.x + horizontalPadding,
         labelRect.y +
-            std::max(0.0F,
-                     (labelRect.height - ImGui::GetTextLineHeight()) * 0.5F),
+            std::max(0.0F, (labelHeight - ImGui::GetTextLineHeight()) * 0.5F),
     };
     const float labelWidth =
         std::max(1.0F, labelRect.width - horizontalPadding * 2.0F);
     drawList.PushClipRect({ labelRect.x, labelRect.y },
-                          { labelRect.right(), labelRect.bottom() },
+                          { labelRect.right(), audioControlLayout.labelBottom },
                           true);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.06F, 0.08F, 0.11F, 1.0F));
     Utils::drawScrollingText(
@@ -1039,10 +1091,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     const ImVec2 canvasOrigin = canvasCursor;
     const ImVec2 contentLogical =
         calculateContentSize(visibleWidth, visibleHeight);
-    ImGui::InvisibleButton(
-        "ProjectAudioToolCanvasSurface",
-        { contentLogical.x * dpiScale, contentLogical.y * dpiScale },
-        ImGuiButtonFlags_MouseButtonLeft);
+    ImGui::Dummy({ contentLogical.x * dpiScale, contentLogical.y * dpiScale });
 
     if ( !m_searchFocusRequestId.empty() ) {
         const auto requestedItem =
@@ -1090,15 +1139,60 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             }
         }
     }
-    if ( hoveredItem && !m_draggingItem && !m_resizingItem &&
-         !m_batchDragging && !m_marqueeSelecting &&
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        const auto& item = m_items[index];
+        if ( isVisible(item.rect, visibleCanvas) ) {
+            drawItem(item,
+                     canvasOrigin,
+                     dpiScale,
+                     hoveredItem == index,
+                     (m_draggingItem == index || m_resizingItem == index ||
+                      (m_batchDragging && item.batchSelected)) &&
+                         ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                     *drawList);
+        }
+    }
+
+    bool       audioControlsHovered = false;
+    const bool audioControlsEnabled = !m_draggingItem && !m_resizingItem &&
+                                      !m_batchDragging && !m_marqueeSelecting;
+    if ( !audioControlsEnabled ) {
+        ImGui::BeginDisabled();
+    }
+    for ( const auto& item : m_items ) {
+        if ( !isVisible(item.rect, visibleCanvas) ) continue;
+
+        const auto labelRect =
+            toScreenRect(item.labelRect, canvasOrigin, dpiScale);
+        const auto controls = calculateItemAudioControlLayout(labelRect);
+        const auto result =
+            renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
+                                              *project,
+                                              item.audioResourceId,
+                                              1.0F,
+                                              controls.topLeft,
+                                              controls.buttonSize,
+                                              controls.spacing);
+        if ( audioControlsEnabled ) {
+            audioControlsHovered = audioControlsHovered || result.hovered;
+        }
+    }
+    if ( !audioControlsEnabled ) {
+        ImGui::EndDisabled();
+    }
+
+    if ( hoveredItem && !audioControlsHovered && !m_draggingItem &&
+         !m_resizingItem && !m_batchDragging && !m_marqueeSelecting &&
          ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
         requestItemRename(*hoveredItem);
     }
     ResizeHandle hoveredResizeHandle = ResizeHandle::None;
     if ( m_resizingItem ) {
         hoveredResizeHandle = m_resizeHandle;
-    } else if ( hoveredItem && !m_items[*hoveredItem].batchSelected ) {
+    } else if ( hoveredItem && !audioControlsHovered &&
+                !m_items[*hoveredItem].batchSelected ) {
         hoveredResizeHandle =
             hitTestResizeHandle(m_items[*hoveredItem], mouseLogical);
     }
@@ -1120,21 +1214,6 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW);
         break;
     case ResizeHandle::None: break;
-    }
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
-        const auto& item = m_items[index];
-        if ( isVisible(item.rect, visibleCanvas) ) {
-            drawItem(item,
-                     canvasOrigin,
-                     dpiScale,
-                     hoveredItem == index,
-                     (m_draggingItem == index || m_resizingItem == index ||
-                      (m_batchDragging && item.batchSelected)) &&
-                         ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                     *drawList);
-        }
     }
 
     const auto refreshMarqueeSelection = [&]() {
@@ -1159,8 +1238,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         }
     };
 
-    if ( canvasHovered && !m_draggingItem && !m_resizingItem &&
-         !m_batchDragging && !m_marqueeSelecting &&
+    if ( canvasHovered && !audioControlsHovered && !m_draggingItem &&
+         !m_resizingItem && !m_batchDragging && !m_marqueeSelecting &&
          ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
         if ( hoveredItem ) {
             if ( m_items[*hoveredItem].batchSelected ) {
