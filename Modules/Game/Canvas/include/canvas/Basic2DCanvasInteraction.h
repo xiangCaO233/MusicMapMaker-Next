@@ -202,6 +202,10 @@ private:
         std::string previewPoolKey;
         /// @brief 物件自身音量倍率。
         float volume{ 1.0F };
+        /// @brief 玩家 Polyline 子物件索引；负值表示物件本体或自动采样。
+        std::int32_t sampleBindingSubIndex{ -1 };
+        /// @brief 音量编辑弹窗是否保持打开，用于跨帧锁定当前物件。
+        bool volumeEditorOpen{ false };
         /// @brief 当前锚定拾取盒左边界。
         float left{ 0.0F };
         /// @brief 当前锚定拾取盒上边界。

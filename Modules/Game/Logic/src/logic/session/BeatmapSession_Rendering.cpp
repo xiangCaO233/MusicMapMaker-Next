@@ -1112,6 +1112,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         inspect.audioResourceId =
                             sampleBinding->m_audioResourceId;
                         inspect.volume = sampleBinding->m_volume;
+                        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+                            inspect.sampleBindingSubIndex = hoveredSubIndex;
+                        }
                     }
 
                     snapshot->hoverInspect = inspect;

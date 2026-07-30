@@ -47,6 +47,10 @@ public:
     /// @param cmd 实体与资源、BGM 相对轨、偏移和音量。
     void handleCommand(const CmdUpdateAudioSampleProperties& cmd);
 
+    /// @brief 更新单个玩家绑定或自动采样的物件音量。
+    /// @param cmd 带类型的实体、可选子物件索引与音量倍率。
+    void handleCommand(const CmdUpdateObjectSampleVolume& cmd);
+
     /// @brief 处理切换工具的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdChangeTool& cmd);

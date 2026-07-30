@@ -170,6 +170,8 @@ struct HoverInspectInfo {
     std::string audioResourceId;
     /// @brief 自动采样物件音量。
     float volume{ 1.0F };
+    /// @brief 当前试听绑定所属的 Polyline 子物件索引；负值表示物件本体。
+    std::int32_t sampleBindingSubIndex{ -1 };
     /// @brief 自动采样相对锚点的有符号播放偏移，单位毫秒。
     std::int64_t offsetMs{ 0 };
 

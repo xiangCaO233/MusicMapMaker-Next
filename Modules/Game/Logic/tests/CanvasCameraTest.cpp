@@ -982,6 +982,108 @@ bool testNoteSampleBindingRoundTrip()
     return true;
 }
 
+/// @brief 验证主画布音量指令原子更新玩家绑定、Polyline 子绑定和自动采样。
+/// @return 三类目标均支持 Undo/Redo，非法音量不写入时返回 true。
+bool testObjectSampleVolumeCommand()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.trackCount     = 4;
+    context.bgmTrackCount  = 1;
+    MMM::Logic::InteractionController controller(context);
+
+    MMM::Logic::NoteComponent note;
+    note.m_sampleBinding = MMM::AudioSampleBinding{ "head.wav", 0.5F };
+    note.m_type          = MMM::NoteType::POLYLINE;
+    note.m_subNotes.push_back(MMM::Logic::NoteComponent::SubNote{
+        .type          = MMM::NoteType::NOTE,
+        .timestamp     = 1.0,
+        .duration      = 0.0,
+        .trackIndex    = 0,
+        .dtrack        = 0,
+        .sampleBinding = MMM::AudioSampleBinding{ "node.wav", 0.4F },
+    });
+    const auto noteEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(noteEntity, note);
+
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "sample.wav",
+            .m_volume          = 0.6F,
+        });
+
+    controller.handleCommand(MMM::Logic::CmdUpdateObjectSampleVolume{
+        .entity = noteEntity,
+        .kind   = MMM::Logic::ChartObjectKind::PlayerNote,
+        .volume = 0.75F,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateObjectSampleVolume{
+        .entity   = noteEntity,
+        .kind     = MMM::Logic::ChartObjectKind::PlayerNote,
+        .subIndex = 0,
+        .volume   = 1.25F,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateObjectSampleVolume{
+        .entity = sampleEntity,
+        .kind   = MMM::Logic::ChartObjectKind::AudioSample,
+        .volume = 0.25F,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateObjectSampleVolume{
+        .entity = sampleEntity,
+        .kind   = MMM::Logic::ChartObjectKind::AudioSample,
+        .volume = -0.25F,
+    });
+
+    const auto& editedNote =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    const auto& editedSample =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(sampleEntity);
+    if ( !editedNote.m_sampleBinding ||
+         !near(editedNote.m_sampleBinding->m_volume, 0.75) ||
+         !editedNote.m_subNotes.front().sampleBinding ||
+         !near(editedNote.m_subNotes.front().sampleBinding->m_volume, 1.25) ||
+         !near(editedSample.m_volume, 0.25) ||
+         context.actionStack.getUndoStackSize() != 3 ) {
+        XERROR("Object sample volume command did not update typed targets");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    context.actionStack.undo(context);
+    context.actionStack.undo(context);
+    const auto& restoredNote =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    const auto& restoredSample =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(sampleEntity);
+    if ( !restoredNote.m_sampleBinding ||
+         !near(restoredNote.m_sampleBinding->m_volume, 0.5) ||
+         !restoredNote.m_subNotes.front().sampleBinding ||
+         !near(restoredNote.m_subNotes.front().sampleBinding->m_volume, 0.4) ||
+         !near(restoredSample.m_volume, 0.6) ) {
+        XERROR("Object sample volume undo did not restore all typed targets");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    context.actionStack.redo(context);
+    context.actionStack.redo(context);
+    return near(context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity)
+                    .m_sampleBinding->m_volume,
+                0.75) &&
+           near(context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity)
+                    .m_subNotes.front()
+                    .sampleBinding->m_volume,
+                1.25) &&
+           near(context.sampleRegistry
+                    .get<MMM::Logic::SampleComponent>(sampleEntity)
+                    .m_volume,
+                0.25);
+}
+
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
 /// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
 bool testSampleEraseTargetsTypedRegistry()
@@ -1672,6 +1774,7 @@ int main()
                    testSamplePropertyEditValidationAndAction() &&
                    testSampleRegistryLoadAndSync() &&
                    testNoteSampleBindingRoundTrip() &&
+                   testObjectSampleVolumeCommand() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
                    testBoundNoteHoverInspectAudioPreview() &&

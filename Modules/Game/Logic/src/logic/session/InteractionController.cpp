@@ -8,6 +8,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/NoteAction.h"
 #include "logic/session/SampleAction.h"
 #include "logic/session/SamplePropertyEdit.h"
 #include "logic/session/SelectionState.h"
@@ -1249,6 +1250,65 @@ void InteractionController::handleCommand(
                                        cmd.entity,
                                        before,
                                        std::move(*result.m_sample)),
+        m_ctx);
+    m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
+}
+
+/// @brief 以单个撤销步骤更新玩家绑定或自动采样的物件音量。
+/// @param cmd 带类型的实体、可选 Polyline 子物件索引与音量倍率。
+void InteractionController::handleCommand(
+    const CmdUpdateObjectSampleVolume& cmd)
+{
+    if ( cmd.entity == entt::null || !std::isfinite(cmd.volume) ||
+         cmd.volume < 0.0F ) {
+        m_ctx.lastActionMessage =
+            TR("ui.edit.sample_properties.invalid_volume").pStr;
+        return;
+    }
+
+    if ( cmd.kind == ChartObjectKind::AudioSample ) {
+        if ( !m_ctx.sampleRegistry.valid(cmd.entity) ||
+             !m_ctx.sampleRegistry.all_of<SampleComponent>(cmd.entity) ) {
+            return;
+        }
+
+        const auto before =
+            m_ctx.sampleRegistry.get<const SampleComponent>(cmd.entity);
+        if ( before.m_volume == cmd.volume ) return;
+        auto after     = before;
+        after.m_volume = cmd.volume;
+        m_ctx.actionStack.pushAndExecute(
+            std::make_unique<SampleAction>(SampleAction::Type::Update,
+                                           cmd.entity,
+                                           before,
+                                           std::move(after)),
+            m_ctx);
+        m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
+        return;
+    }
+
+    if ( !m_ctx.noteRegistry.valid(cmd.entity) ||
+         !m_ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+        return;
+    }
+
+    const auto before = m_ctx.noteRegistry.get<const NoteComponent>(cmd.entity);
+    auto       after  = before;
+    std::optional<::MMM::AudioSampleBinding>* binding = &after.m_sampleBinding;
+    if ( cmd.subIndex >= 0 ) {
+        if ( after.m_type != ::MMM::NoteType::POLYLINE ||
+             cmd.subIndex >=
+                 static_cast<std::int32_t>(after.m_subNotes.size()) ) {
+            return;
+        }
+        binding = &after.m_subNotes[static_cast<std::size_t>(cmd.subIndex)]
+                       .sampleBinding;
+    }
+    if ( !*binding || (*binding)->m_volume == cmd.volume ) return;
+    (*binding)->m_volume = cmd.volume;
+    m_ctx.actionStack.pushAndExecute(
+        std::make_unique<NoteAction>(
+            NoteAction::Type::Update, cmd.entity, before, std::move(after)),
         m_ctx);
     m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
 }

@@ -701,18 +701,19 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const float retentionPadding = std::max(6.0F, style.ItemSpacing.x * 0.5F);
     const bool  pointerInsideLockedRetention =
         m_audioPreviewOverlay.valid &&
-        pointerX >= std::min(m_audioPreviewOverlay.left,
-                             m_audioPreviewOverlay.controlsLeft) -
-                        retentionPadding &&
-        pointerX <= std::max(m_audioPreviewOverlay.right,
-                             m_audioPreviewOverlay.controlsRight) +
-                        retentionPadding &&
-        pointerY >= std::min(m_audioPreviewOverlay.top,
-                             m_audioPreviewOverlay.controlsTop) -
-                        retentionPadding &&
-        pointerY <= std::max(m_audioPreviewOverlay.bottom,
-                             m_audioPreviewOverlay.controlsBottom) +
-                        retentionPadding;
+        (m_audioPreviewOverlay.volumeEditorOpen ||
+         (pointerX >= std::min(m_audioPreviewOverlay.left,
+                               m_audioPreviewOverlay.controlsLeft) -
+                          retentionPadding &&
+          pointerX <= std::max(m_audioPreviewOverlay.right,
+                               m_audioPreviewOverlay.controlsRight) +
+                          retentionPadding &&
+          pointerY >= std::min(m_audioPreviewOverlay.top,
+                               m_audioPreviewOverlay.controlsTop) -
+                          retentionPadding &&
+          pointerY <= std::max(m_audioPreviewOverlay.bottom,
+                               m_audioPreviewOverlay.controlsBottom) +
+                          retentionPadding));
 
     entt::entity           targetEntity{ entt::null };
     Logic::ChartObjectKind targetObjectKind{
@@ -720,18 +721,22 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     };
     std::string_view targetAudioResourceId;
     float            targetVolume{ 1.0F };
+    std::int32_t     targetSampleBindingSubIndex{ -1 };
     if ( pointerInsideLockedRetention ) {
         targetEntity          = m_audioPreviewOverlay.entity;
         targetObjectKind      = m_audioPreviewOverlay.objectKind;
         targetAudioResourceId = m_audioPreviewOverlay.audioResourceId;
         targetVolume          = m_audioPreviewOverlay.volume;
+        targetSampleBindingSubIndex =
+            m_audioPreviewOverlay.sampleBindingSubIndex;
     } else if ( inspect.show && inspect.showAudioPreview &&
                 inspect.entity != entt::null &&
                 !inspect.audioResourceId.empty() ) {
-        targetEntity          = inspect.entity;
-        targetObjectKind      = inspect.objectKind;
-        targetAudioResourceId = inspect.audioResourceId;
-        targetVolume          = inspect.volume;
+        targetEntity                = inspect.entity;
+        targetObjectKind            = inspect.objectKind;
+        targetAudioResourceId       = inspect.audioResourceId;
+        targetVolume                = inspect.volume;
+        targetSampleBindingSubIndex = inspect.sampleBindingSubIndex;
     } else {
         m_audioPreviewOverlay = {};
         return false;
@@ -741,7 +746,9 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         m_audioPreviewOverlay.valid &&
         m_audioPreviewOverlay.entity == targetEntity &&
         m_audioPreviewOverlay.objectKind == targetObjectKind &&
-        m_audioPreviewOverlay.audioResourceId == targetAudioResourceId;
+        m_audioPreviewOverlay.audioResourceId == targetAudioResourceId &&
+        m_audioPreviewOverlay.sampleBindingSubIndex ==
+            targetSampleBindingSubIndex;
     const float previousCenterX =
         (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right) * 0.5F;
     const float previousCenterY =
@@ -782,13 +789,16 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     if ( !pointerInsideLockedRetention ) {
         m_audioPreviewOverlay.audioResourceId = targetAudioResourceId;
         m_audioPreviewOverlay.volume          = targetVolume;
+        m_audioPreviewOverlay.sampleBindingSubIndex =
+            targetSampleBindingSubIndex;
     }
     if ( !sameObject ) {
         const std::string previewInstanceId =
             "canvas/" + m_cameraId + "/" +
             std::to_string(static_cast<std::uint32_t>(targetObjectKind)) + "/" +
             std::to_string(
-                static_cast<std::uint32_t>(entt::to_integral(targetEntity)));
+                static_cast<std::uint32_t>(entt::to_integral(targetEntity))) +
+            "/" + std::to_string(targetSampleBindingSubIndex);
         m_audioPreviewOverlay.previewPoolKey =
             UI::makeProjectAudioPreviewPoolKey(previewInstanceId);
     }
@@ -804,7 +814,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const float progressHeight = std::clamp(buttonSize * 0.16F, 4.0F, 7.0F);
     const float progressSpacing =
         std::max(2.0F, std::min(style.ItemInnerSpacing.y, 4.0F));
-    const float rowWidth    = buttonSize * 3.0F + spacing * 2.0F;
+    const float rowWidth    = buttonSize * 4.0F + spacing * 3.0F;
     const float panelHeight = progressHeight + progressSpacing + buttonSize;
     const float gap         = std::max(6.0F, style.ItemSpacing.y * 0.5F);
 
@@ -828,7 +838,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         m_audioPreviewOverlay.audioResourceId,
         m_audioPreviewOverlay.previewPoolKey,
         m_audioPreviewOverlay.volume,
-        nullptr,
+        &m_audioPreviewOverlay.volume,
         UI::ProjectAudioPreviewControlsLayout{
             .topLeft = { canvasScreenX + controlsX, canvasScreenY + controlsY },
             .width   = rowWidth,
@@ -837,6 +847,16 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
             .progressHeight  = progressHeight,
             .progressSpacing = progressSpacing,
         });
+    m_audioPreviewOverlay.volumeEditorOpen = result.volumeEditorOpen;
+    if ( result.volumeChanged ) {
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::LogicCommand(Logic::CmdUpdateObjectSampleVolume{
+                .entity   = m_audioPreviewOverlay.entity,
+                .kind     = m_audioPreviewOverlay.objectKind,
+                .subIndex = m_audioPreviewOverlay.sampleBindingSubIndex,
+                .volume   = m_audioPreviewOverlay.volume,
+            }));
+    }
 
     const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
                                       pointerX <= m_audioPreviewOverlay.right &&
@@ -856,7 +876,8 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const bool pointerInsideBridge =
         pointerX >= bridgeLeft && pointerX <= bridgeRight &&
         pointerY >= bridgeTop && pointerY <= bridgeBottom;
-    return result.hovered || (pointerInsideBridge && !pointerInsideObject);
+    return result.hovered || result.volumeEditorOpen ||
+           (pointerInsideBridge && !pointerInsideObject);
 }
 
 void Basic2DCanvasInteraction::update(

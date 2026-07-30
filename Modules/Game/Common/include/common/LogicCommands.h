@@ -140,6 +140,21 @@ struct CmdUpdateAudioSampleProperties {
     float volume{ 1.0F };
 };
 
+/// @brief 更新主画布单个玩家绑定或自动采样的物件音量。
+struct CmdUpdateObjectSampleVolume {
+    /// @brief 目标物件在对应独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 目标物件所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+
+    /// @brief Polyline 子物件索引；负值表示玩家物件本体或自动采样。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 要写入物件的非负音量倍率。
+    float volume{ 1.0F };
+};
+
 /**
  * @brief 设置鼠标在视口中的位置指令
  */
@@ -670,21 +685,22 @@ using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdUpdateTrackCount, CmdUpdateBgmTrackCount,
-    CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo,
-    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
-    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
-    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
-    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
-    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides, CmdSaveBeatmap,
-    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdPanCanvas,
-    CmdUpdateTimelineEvent, CmdUpdateTimelineEvents, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
-    CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
-    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
-    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
-    CmdMarkBeatmapMetadataDirty, CmdImportAudio, CmdUpdateAudioResource,
-    CmdRenameAudioResource, CmdUpdateAudioResourceConfig,
-    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
+    CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
+    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
+    CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
+    CmdCut, CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
+    CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
+    CmdSetBrushNotePalette, CmdSetBrushAudioResource,
+    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
+    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
+    CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic
