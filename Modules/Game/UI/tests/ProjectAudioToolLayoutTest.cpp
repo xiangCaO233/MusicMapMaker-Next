@@ -41,7 +41,9 @@ bool testEdgeAndCenterSnapping()
         6.0F,
         12.0F,
         locks);
-    if ( !near(snapped.x, 200.0F) || !near(snapped.y, 130.0F) ) {
+    if ( !near(snapped.x, 200.0F) || !near(snapped.y, 130.0F) ||
+         !locks.x.targetLine || !near(*locks.x.targetLine, 200.0F) ||
+         !locks.y.targetLine || !near(*locks.y.targetLine, 130.0F) ) {
         return false;
     }
 
@@ -111,7 +113,9 @@ bool testResizeSnapping()
         6.0F,
         12.0F,
         locks);
-    if ( !near(resized.right(), 200.0F) || !near(resized.bottom(), 200.0F) ) {
+    if ( !near(resized.right(), 200.0F) || !near(resized.bottom(), 200.0F) ||
+         !locks.x.targetLine || !near(*locks.x.targetLine, 200.0F) ||
+         !locks.y.targetLine || !near(*locks.y.targetLine, 200.0F) ) {
         return false;
     }
 

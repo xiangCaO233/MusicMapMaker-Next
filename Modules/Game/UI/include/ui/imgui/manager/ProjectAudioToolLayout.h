@@ -54,6 +54,9 @@ struct VisibilityConstraint {
 struct AxisSnapLock {
     /// @brief 当前锁定的方块左坐标或上坐标。
     std::optional<float> position;
+
+    /// @brief 当前命中的目标参考线逻辑坐标。
+    std::optional<float> targetLine;
 };
 
 /// @brief 二维吸附锁。
@@ -347,11 +350,13 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
             return *lock.position;
         }
         lock.position.reset();
+        lock.targetLine.reset();
     }
 
     constexpr std::array<float, 3> OWN_ANCHOR_RATIOS{ 0.0F, 0.5F, 1.0F };
     float                          bestPosition = rawPosition;
     float                          bestDistance = snapThreshold;
+    std::optional<float>           bestTarget;
     for ( const float target : targetAnchors ) {
         for ( const float ratio : OWN_ANCHOR_RATIOS ) {
             const float candidate = target - size * ratio;
@@ -359,11 +364,13 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
             if ( distance <= bestDistance ) {
                 bestDistance = distance;
                 bestPosition = candidate;
+                bestTarget   = target;
             }
         }
     }
     if ( bestPosition != rawPosition ) {
-        lock.position = bestPosition;
+        lock.position   = bestPosition;
+        lock.targetLine = bestTarget;
     }
     return bestPosition;
 }
@@ -441,6 +448,7 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
 {
     if ( edge == ResizeEdge::None ) {
         lock.position.reset();
+        lock.targetLine.reset();
         return edge == ResizeEdge::Minimum ? rawMinimum : rawMaximum;
     }
 
@@ -450,11 +458,13 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
             return *lock.position;
         }
         lock.position.reset();
+        lock.targetLine.reset();
     }
 
     constexpr std::array<float, 3> OWN_ANCHOR_RATIOS{ 0.0F, 0.5F, 1.0F };
     float                          bestEdge     = rawEdge;
     float                          bestDistance = snapThreshold;
+    std::optional<float>           bestTarget;
     for ( const float target : targetAnchors ) {
         for ( const float ratio : OWN_ANCHOR_RATIOS ) {
             float candidate = rawEdge;
@@ -471,11 +481,13 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
             if ( distance <= bestDistance ) {
                 bestDistance = distance;
                 bestEdge     = candidate;
+                bestTarget   = target;
             }
         }
     }
     if ( bestEdge != rawEdge ) {
-        lock.position = bestEdge;
+        lock.position   = bestEdge;
+        lock.targetLine = bestTarget;
     }
     return bestEdge;
 }

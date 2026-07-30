@@ -116,6 +116,47 @@ bool contains(const ProjectAudioToolLayout::Rect& rect, ImVec2 point)
            point.y <= rect.bottom();
 }
 
+/// @brief 判断矩形指定轴上的边缘或中心是否与目标参考线重合。
+bool alignsWithTargetLine(const ProjectAudioToolLayout::Rect& rect,
+                          float targetLine, bool horizontal)
+{
+    constexpr float EPSILON = 0.25F;
+    if ( horizontal ) {
+        return std::abs(rect.x - targetLine) <= EPSILON ||
+               std::abs(rect.x + rect.width * 0.5F - targetLine) <= EPSILON ||
+               std::abs(rect.right() - targetLine) <= EPSILON;
+    }
+    return std::abs(rect.y - targetLine) <= EPSILON ||
+           std::abs(rect.y + rect.height * 0.5F - targetLine) <= EPSILON ||
+           std::abs(rect.bottom() - targetLine) <= EPSILON;
+}
+
+/// @brief 绘制一条与主画布布局调整一致的半透明虚线吸附参考线。
+/// @warning UI 拖动热路径：仅吸附生效时调用，按可见画布单轴生成短线段。
+void drawSnapGuide(ImDrawList& drawList, const ImVec2& start, const ImVec2& end,
+                   ImU32 color, float thickness, float dashLength,
+                   float gapLength)
+{
+    const float deltaX = end.x - start.x;
+    const float deltaY = end.y - start.y;
+    const float length = std::sqrt(deltaX * deltaX + deltaY * deltaY);
+    if ( length <= 0.0F ) return;
+
+    dashLength       = std::max(1.0F, dashLength);
+    gapLength        = std::max(1.0F, gapLength);
+    const float dx   = deltaX / length;
+    const float dy   = deltaY / length;
+    const float step = dashLength + gapLength;
+    for ( float distance = 0.0F; distance < length; distance += step ) {
+        const float segmentEnd = std::min(distance + dashLength, length);
+        drawList.AddLine(
+            { start.x + dx * distance, start.y + dy * distance },
+            { start.x + dx * segmentEnd, start.y + dy * segmentEnd },
+            color,
+            thickness);
+    }
+}
+
 }  // namespace
 
 ProjectAudioToolView::ProjectAudioToolView(const std::string& name)
@@ -819,6 +860,49 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};
+        }
+    }
+
+    const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
+    if ( activeItem && *activeItem < m_items.size() ) {
+        const auto&  item = m_items[*activeItem];
+        const ImVec2 visibleMinimum{
+            canvasOrigin.x + visibleCanvas.x * dpiScale,
+            canvasOrigin.y + visibleCanvas.y * dpiScale,
+        };
+        const ImVec2 visibleMaximum{
+            canvasOrigin.x + visibleCanvas.right() * dpiScale,
+            canvasOrigin.y + visibleCanvas.bottom() * dpiScale,
+        };
+        constexpr ImU32 SNAP_GUIDE_COLOR   = IM_COL32(255, 218, 96, 150);
+        const float     snapGuideThickness = std::max(1.0F, 1.25F * dpiScale);
+        const float     snapGuideDash      = std::max(4.0F, 6.0F * dpiScale);
+        const float     snapGuideGap       = std::max(3.0F, 4.0F * dpiScale);
+        if ( m_snapLocks.x.targetLine &&
+             alignsWithTargetLine(
+                 item.rect, *m_snapLocks.x.targetLine, true) ) {
+            const float guideX =
+                canvasOrigin.x + *m_snapLocks.x.targetLine * dpiScale;
+            drawSnapGuide(*drawList,
+                          { guideX, visibleMinimum.y },
+                          { guideX, visibleMaximum.y },
+                          SNAP_GUIDE_COLOR,
+                          snapGuideThickness,
+                          snapGuideDash,
+                          snapGuideGap);
+        }
+        if ( m_snapLocks.y.targetLine &&
+             alignsWithTargetLine(
+                 item.rect, *m_snapLocks.y.targetLine, false) ) {
+            const float guideY =
+                canvasOrigin.y + *m_snapLocks.y.targetLine * dpiScale;
+            drawSnapGuide(*drawList,
+                          { visibleMinimum.x, guideY },
+                          { visibleMaximum.x, guideY },
+                          SNAP_GUIDE_COLOR,
+                          snapGuideThickness,
+                          snapGuideDash,
+                          snapGuideGap);
         }
     }
 
