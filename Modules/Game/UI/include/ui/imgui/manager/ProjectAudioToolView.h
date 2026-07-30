@@ -295,6 +295,9 @@ private:
     /// @brief 当前选中资源创建新物件时写入的物件音量倍率。
     float m_brushAudioVolume{ 1.0F };
 
+    /// @brief 当前保持音量编辑弹窗的资源 ID。
+    std::string m_openVolumeEditorResourceId;
+
     /// @brief 方块缓存对应的项目根目录 UTF-8 键。
     std::string m_cachedProjectRoot;
 

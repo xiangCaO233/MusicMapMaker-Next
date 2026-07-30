@@ -57,6 +57,9 @@ constexpr float SNAP_RELEASE_THRESHOLD = 16.0F;
 /// @brief 最远方块之后保留的可滚动画布空间。
 constexpr float CONTENT_END_PADDING = 80.0F;
 
+/// @brief 鼠标在方块外触发试听控件显示的最大逻辑距离。
+constexpr float AUDIO_CONTROLS_PROXIMITY = 14.0F;
+
 /// @brief 获取当前主题下固定试听控件行所需的逻辑宽度。
 float controlMinimumWidth(float dpiScale)
 {
@@ -138,7 +141,7 @@ ProjectAudioToolLayout::Rect toScreenRect(
     };
 }
 
-/// @brief 单个音频方块内常驻试听按钮的屏幕布局。
+/// @brief 单个音频方块内按需试听按钮的屏幕布局。
 struct ItemAudioControlLayout {
     /// @brief 可直接传给通用试听控件的屏幕布局。
     ProjectAudioPreviewControlsLayout controls;
@@ -210,6 +213,20 @@ bool contains(const ProjectAudioToolLayout::Rect& rect, ImVec2 point)
 {
     return point.x >= rect.x && point.x <= rect.right() && point.y >= rect.y &&
            point.y <= rect.bottom();
+}
+
+/// @brief 计算逻辑点到矩形的平方距离；矩形内部距离为零。
+/// @warning UI 热路径：每帧仅对可见方块执行常数次浮点运算。
+float squaredDistanceToRect(const ProjectAudioToolLayout::Rect& rect,
+                            ImVec2                              point)
+{
+    const float deltaX = point.x < rect.x         ? rect.x - point.x
+                         : point.x > rect.right() ? point.x - rect.right()
+                                                  : 0.0F;
+    const float deltaY = point.y < rect.y          ? rect.y - point.y
+                         : point.y > rect.bottom() ? point.y - rect.bottom()
+                                                   : 0.0F;
+    return deltaX * deltaX + deltaY * deltaY;
 }
 
 /// @brief 由两个逻辑画布点构造方向无关的矩形。
@@ -326,6 +343,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         m_renameBuffer.fill('\0');
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
+        m_openVolumeEditorResourceId.clear();
         m_cachedProjectRoot.clear();
         m_cachedDpiScale     = 0.0F;
         m_batchDragging      = false;
@@ -355,6 +373,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     m_batchDragEntries.clear();
     m_batchDragUnionCells.clear();
     m_marqueeBaseSelection.clear();
+    m_openVolumeEditorResourceId.clear();
     m_resizeHandle = ResizeHandle::None;
     m_snapLocks    = {};
 
@@ -1271,29 +1290,41 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
 
     ImDrawList* drawList             = ImGui::GetWindowDrawList();
-    bool        audioControlsHovered = false;
     const bool  audioControlsEnabled = !m_draggingItem && !m_resizingItem &&
                                        !m_batchDragging && !m_marqueeSelecting;
-    std::optional<std::size_t> hoveredAudioControls;
-    if ( audioControlsEnabled ) {
+    std::optional<std::size_t> audioControlsItem;
+    if ( audioControlsEnabled && !m_openVolumeEditorResourceId.empty() ) {
+        const auto openVolumeItem = std::ranges::find(
+            m_items, m_openVolumeEditorResourceId, &Item::audioResourceId);
+        if ( openVolumeItem != m_items.end() &&
+             isVisible(openVolumeItem->rect, visibleCanvas) ) {
+            audioControlsItem = static_cast<std::size_t>(
+                std::distance(m_items.begin(), openVolumeItem));
+        } else {
+            m_openVolumeEditorResourceId.clear();
+        }
+    }
+    if ( audioControlsEnabled && !audioControlsItem && canvasHovered ) {
+        audioControlsItem = hoveredItem;
+    }
+    if ( audioControlsEnabled && !audioControlsItem && canvasHovered ) {
+        const float maximumDistanceSquared =
+            AUDIO_CONTROLS_PROXIMITY * AUDIO_CONTROLS_PROXIMITY;
+        float nearestDistanceSquared = maximumDistanceSquared;
         for ( std::size_t reverse = m_items.size(); reverse > 0; --reverse ) {
             const std::size_t index = reverse - 1U;
             if ( !isVisible(m_items[index].rect, visibleCanvas) ) continue;
-            const auto screenRect =
-                toScreenRect(m_items[index].rect, canvasOrigin, dpiScale);
-            const auto layout = calculateItemAudioControlLayout(screenRect);
-            if ( containsItemAudioControls(layout.controls,
-                                           ImGui::GetIO().MousePos) ) {
-                hoveredAudioControls = index;
-                audioControlsHovered = true;
-                break;
+            const float distanceSquared =
+                squaredDistanceToRect(m_items[index].rect, mouseLogical);
+            if ( distanceSquared < nearestDistanceSquared ) {
+                nearestDistanceSquared = distanceSquared;
+                audioControlsItem      = index;
             }
         }
     }
-    std::string volumeEditorResourceId;
-    bool        brushVolumeChanged = false;
+
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
-        auto& item = m_items[index];
+        const auto& item = m_items[index];
         if ( !isVisible(item.rect, visibleCanvas) ) continue;
 
         drawItem(item,
@@ -1304,7 +1335,13 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                   (m_batchDragging && item.batchSelected)) &&
                      ImGui::IsMouseDown(ImGuiMouseButton_Left),
                  *drawList);
+    }
 
+    bool        audioControlsHovered = false;
+    std::string volumeEditorResourceId;
+    bool        brushVolumeChanged = false;
+    if ( audioControlsItem && *audioControlsItem < m_items.size() ) {
+        auto& item = m_items[*audioControlsItem];
         if ( item.previewPoolKey.empty() ) {
             item.previewPoolKey =
                 makeProjectAudioPreviewPoolKey("tool/" + item.audioResourceId);
@@ -1312,11 +1349,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const auto itemScreenRect =
             toScreenRect(item.rect, canvasOrigin, dpiScale);
         const auto controls = calculateItemAudioControlLayout(itemScreenRect);
-        const bool controlsPointerInside =
-            hoveredAudioControls && *hoveredAudioControls == index;
-        if ( !audioControlsEnabled ) {
-            ImGui::BeginDisabled();
-        }
+        const bool controlsPointerInside = containsItemAudioControls(
+            controls.controls, ImGui::GetIO().MousePos);
         const auto result =
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
@@ -1326,16 +1360,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                               &m_brushAudioVolume,
                                               controls.controls,
                                               controlsPointerInside);
-        if ( !audioControlsEnabled ) {
-            ImGui::EndDisabled();
-        }
-        if ( audioControlsEnabled ) {
-            audioControlsHovered = audioControlsHovered || result.hovered ||
-                                   result.volumeEditorOpen;
-        }
+        audioControlsHovered =
+            controlsPointerInside || result.hovered || result.volumeEditorOpen;
         if ( result.volumeEditorOpen ) {
-            volumeEditorResourceId = item.audioResourceId;
-            brushVolumeChanged     = brushVolumeChanged || result.volumeChanged;
+            m_openVolumeEditorResourceId = item.audioResourceId;
+            volumeEditorResourceId       = item.audioResourceId;
+            brushVolumeChanged = brushVolumeChanged || result.volumeChanged;
+        } else if ( m_openVolumeEditorResourceId == item.audioResourceId ) {
+            m_openVolumeEditorResourceId.clear();
         }
     }
 
