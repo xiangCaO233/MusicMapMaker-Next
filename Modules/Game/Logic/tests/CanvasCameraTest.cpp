@@ -39,7 +39,9 @@ bool near(double lhs, double rhs)
 /// @param context 待配置会话。
 void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
 {
-    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    if ( !context.currentBeatmap ) {
+        context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    }
     context.currentBeatmap->m_baseMapMetadata.track_count = 4;
     context.trackCount                                    = 4;
     context.bgmTrackCount                                 = 1;
@@ -1024,26 +1026,51 @@ bool testSampleEraseTargetsTypedRegistry()
 /// true。
 bool testSampleHoverInspectDetails()
 {
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 4;
+    beatmap->m_baseMapMetadata.bgm_track_count = 1;
+    MMM::Note note;
+    note.m_timestamp = 1250.0;
+    note.m_track     = 0;
+    note.setSampleBinding({ "wrong-note-effect.wav", 0.9F });
+    beatmap->m_noteData.notes.push_back(std::move(note));
+    beatmap->m_audioSamples.push_back({
+        .m_timestamp       = 1250.0,
+        .m_offsetMs        = -125,
+        .m_track           = 4,
+        .m_audioResourceId = "detail-effect.wav",
+        .m_volume          = 0.35F,
+    });
+
     MMM::Logic::BeatmapSession session;
     auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
     configureObjectEditingCanvas(context);
-    const auto entity = context.sampleRegistry.create();
-    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
-        entity,
-        MMM::Logic::SampleComponent{
-            .m_timestamp       = 1.25,
-            .m_offsetMs        = -125,
-            .m_track           = 4,
-            .m_audioResourceId = "detail-effect.wav",
-            .m_volume          = 0.35F,
-        });
-    context.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
-        entity,
-        MMM::Logic::InteractionComponent{
-            .isHovered = true,
-            .hoveredPart =
-                static_cast<std::uint8_t>(MMM::Logic::HoverPart::SampleOffset),
-        });
+    const auto sampleView =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    const auto noteView =
+        context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( sampleView.size() != 1 || noteView.size() != 1 ) {
+        XERROR("Sample hover inspect setup did not load overlapping objects");
+        return false;
+    }
+    const auto entity     = *sampleView.begin();
+    const auto noteEntity = *noteView.begin();
+    if ( entity != noteEntity ) {
+        XERROR("Sample hover inspect setup did not overlap ECS entity IDs");
+        return false;
+    }
+    auto* interaction =
+        context.sampleRegistry.try_get<MMM::Logic::InteractionComponent>(
+            entity);
+    if ( !interaction ) {
+        interaction =
+            &context.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+                entity);
+    }
+    interaction->isHovered = true;
+    interaction->hoveredPart =
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::SampleOffset);
     context.hoveredEntity     = entity;
     context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
     context.hoveredPart =
@@ -1064,12 +1091,72 @@ bool testSampleHoverInspectDetails()
     const auto& inspect = snapshot->hoverInspect;
     if ( !inspect.show ||
          inspect.kind != MMM::Logic::HoverInspectKind::AudioSampleTrigger ||
-         !inspect.showAudioSample || !inspect.head.show || !inspect.end.show ||
-         !inspect.showTrack || inspect.audioResourceId != "detail-effect.wav" ||
+         !inspect.showAudioSample || !inspect.showAudioPreview ||
+         inspect.entity != entity ||
+         inspect.objectKind != MMM::Logic::ChartObjectKind::AudioSample ||
+         !inspect.head.show || !inspect.end.show || !inspect.showTrack ||
+         inspect.audioResourceId != "detail-effect.wav" ||
          !near(inspect.volume, 0.35) || inspect.offsetMs != -125 ||
          inspect.track != 4 || !near(inspect.head.time, 1.25) ||
          !near(inspect.end.time, 1.125) ) {
         XERROR("Sample hover inspect omitted audio or effective-time details");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证绑定采样的玩家物件会向主画布公开独立试听字段。
+/// @return 悬浮信息保留实体类型、资源 ID 和物件音量时返回 true。
+bool testBoundNoteHoverInspectAudioPreview()
+{
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 4;
+    MMM::Note note;
+    note.m_timestamp = 1500.0;
+    note.m_track     = 2;
+    note.setSampleBinding({ "bound-effect.wav", 0.45F });
+    beatmap->m_noteData.notes.push_back(std::move(note));
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+    configureObjectEditingCanvas(context);
+    const auto view = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( view.size() != 1 ) {
+        XERROR("Bound Note hover inspect setup did not load one player note");
+        return false;
+    }
+    const auto entity = *view.begin();
+    auto&      interaction =
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    interaction.isHovered = true;
+    interaction.hoveredPart =
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head);
+    context.hoveredEntity     = entity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+    context.mouseCameraId   = "Basic2DCanvas";
+    context.isMouseInCanvas = true;
+    context.lastMousePos    = { 375.0F, 300.0F };
+
+    const auto config = context.lastConfig;
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR(
+            "Bound Note hover inspect did not publish a main-canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot ) return false;
+    const auto& inspect = snapshot->hoverInspect;
+    if ( !inspect.show || !inspect.showAudioPreview ||
+         inspect.showAudioSample || inspect.entity != entity ||
+         inspect.objectKind != MMM::Logic::ChartObjectKind::PlayerNote ||
+         inspect.audioResourceId != "bound-effect.wav" ||
+         !near(inspect.volume, 0.45) ) {
+        XERROR("Bound Note hover inspect omitted audio preview details");
         return false;
     }
     return true;
@@ -1584,6 +1671,7 @@ int main()
                    testNoteSampleBindingRoundTrip() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
+                   testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&
                    testSampleOffsetHandleDrag() &&

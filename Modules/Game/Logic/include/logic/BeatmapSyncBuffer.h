@@ -137,6 +137,10 @@ struct HoverBeatPoint {
 struct HoverInspectInfo {
     /// @brief 是否显示结构化悬浮检视信息
     bool show{ false };
+    /// @brief 当前检视物件实体。
+    entt::entity entity{ entt::null };
+    /// @brief 当前检视物件所在的独立 ECS 注册表。
+    ChartObjectKind objectKind{ ChartObjectKind::PlayerNote };
     /// @brief 当前悬浮部位类型
     HoverInspectKind kind{ HoverInspectKind::None };
     /// @brief Head 部位信息
@@ -160,6 +164,8 @@ struct HoverInspectInfo {
 
     /// @brief 是否显示自动采样资源信息。
     bool showAudioSample{ false };
+    /// @brief 当前物件是否存在可独立试听的项目音频引用。
+    bool showAudioPreview{ false };
     /// @brief 自动采样引用的项目音频资源 ID。
     std::string audioResourceId;
     /// @brief 自动采样物件音量。

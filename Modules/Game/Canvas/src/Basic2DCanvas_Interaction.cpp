@@ -23,6 +23,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -678,6 +679,132 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
     m_lastMoveUpdateCommand.valid    = false;
     m_lastEraseUpdateCommand.valid   = false;
     m_rightEraseActive               = false;
+}
+
+/// @brief 在移动工具下绘制悬浮物件的项目音频试听按钮。
+bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+    float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
+    float pointerY)
+{
+    const auto& inspect = currentSnapshot.hoverInspect;
+    auto*       project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( currentSnapshot.currentTool != Logic::EditTool::Move ||
+         !inspect.show || !inspect.showAudioPreview ||
+         inspect.entity == entt::null || inspect.audioResourceId.empty() ||
+         m_leftPressStartedOnCanvas || m_leftPressStartedOnEntity ||
+         m_rightEraseActive || !project || targetWidth <= 0.0F ||
+         targetHeight <= 0.0F ) {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
+    const bool sameObject =
+        m_audioPreviewOverlay.valid &&
+        m_audioPreviewOverlay.entity == inspect.entity &&
+        m_audioPreviewOverlay.objectKind == inspect.objectKind;
+    const float previousCenterX =
+        (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right) * 0.5F;
+    const float previousCenterY =
+        (m_audioPreviewOverlay.top + m_audioPreviewOverlay.bottom) * 0.5F;
+
+    const Logic::Hitbox* anchor    = nullptr;
+    float                bestScore = std::numeric_limits<float>::max();
+    for ( const auto& hitbox : currentSnapshot.hitboxes ) {
+        if ( hitbox.entity != inspect.entity ||
+             hitbox.kind != inspect.objectKind || hitbox.w <= 0.0F ||
+             hitbox.h <= 0.0F ) {
+            continue;
+        }
+
+        const bool pointerInside =
+            pointerX >= hitbox.x && pointerX <= hitbox.x + hitbox.w &&
+            pointerY >= hitbox.y && pointerY <= hitbox.y + hitbox.h;
+        const float centerX = hitbox.x + hitbox.w * 0.5F;
+        const float centerY = hitbox.y + hitbox.h * 0.5F;
+        const float targetX = sameObject ? previousCenterX : pointerX;
+        const float targetY = sameObject ? previousCenterY : pointerY;
+        const float deltaX  = centerX - targetX;
+        const float deltaY  = centerY - targetY;
+        const float score =
+            pointerInside ? -1.0F : deltaX * deltaX + deltaY * deltaY;
+        if ( score < bestScore ) {
+            bestScore = score;
+            anchor    = &hitbox;
+        }
+    }
+    if ( !anchor ) {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
+    m_audioPreviewOverlay.valid           = true;
+    m_audioPreviewOverlay.entity          = inspect.entity;
+    m_audioPreviewOverlay.objectKind      = inspect.objectKind;
+    m_audioPreviewOverlay.audioResourceId = inspect.audioResourceId;
+    m_audioPreviewOverlay.volume          = inspect.volume;
+    if ( !sameObject ) {
+        m_audioPreviewOverlay.previewInstanceId =
+            "canvas/" + m_cameraId + "/" +
+            std::to_string(static_cast<std::uint32_t>(inspect.objectKind)) +
+            "/" +
+            std::to_string(
+                static_cast<std::uint32_t>(entt::to_integral(inspect.entity)));
+    }
+    m_audioPreviewOverlay.left   = anchor->x;
+    m_audioPreviewOverlay.top    = anchor->y;
+    m_audioPreviewOverlay.right  = anchor->x + anchor->w;
+    m_audioPreviewOverlay.bottom = anchor->y + anchor->h;
+
+    const auto& style = ImGui::GetStyle();
+    const float buttonSize =
+        std::ceil(std::max(20.0F, ImGui::GetFrameHeight()));
+    const float spacing =
+        std::max(2.0F, std::min(style.ItemInnerSpacing.x, 5.0F));
+    const float rowWidth = buttonSize * 3.0F + spacing * 2.0F;
+    const float gap      = std::max(4.0F, style.ItemSpacing.x * 0.5F);
+
+    float controlsX = m_audioPreviewOverlay.right + gap;
+    if ( controlsX + rowWidth > targetWidth ) {
+        controlsX = m_audioPreviewOverlay.left - gap - rowWidth;
+    }
+    controlsX =
+        std::clamp(controlsX, 0.0F, std::max(0.0F, targetWidth - rowWidth));
+    float controlsY = (m_audioPreviewOverlay.top +
+                       m_audioPreviewOverlay.bottom - buttonSize) *
+                      0.5F;
+    controlsY =
+        std::clamp(controlsY, 0.0F, std::max(0.0F, targetHeight - buttonSize));
+
+    const auto result = UI::renderProjectAudioPreviewControls(
+        "CanvasObjectAudioPreview",
+        *project,
+        m_audioPreviewOverlay.audioResourceId,
+        m_audioPreviewOverlay.previewInstanceId,
+        m_audioPreviewOverlay.volume,
+        { canvasScreenX + controlsX, canvasScreenY + controlsY },
+        buttonSize,
+        spacing);
+
+    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                      pointerX <= m_audioPreviewOverlay.right &&
+                                      pointerY >= m_audioPreviewOverlay.top &&
+                                      pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding       = std::max(4.0F, gap);
+    const float bridgeLeft =
+        std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
+    const float bridgeTop =
+        std::min(m_audioPreviewOverlay.top, controlsY) - bridgePadding;
+    const float bridgeRight =
+        std::max(m_audioPreviewOverlay.right, controlsX + rowWidth) +
+        bridgePadding;
+    const float bridgeBottom =
+        std::max(m_audioPreviewOverlay.bottom, controlsY + buttonSize) +
+        bridgePadding;
+    const bool pointerInsideBridge =
+        pointerX >= bridgeLeft && pointerX <= bridgeRight &&
+        pointerY >= bridgeTop && pointerY <= bridgeBottom;
+    return result.hovered || (pointerInsideBridge && !pointerInsideObject);
 }
 
 void Basic2DCanvasInteraction::update(
@@ -2289,9 +2416,18 @@ void Basic2DCanvasInteraction::handleInteractions(
         return;
     }
 
+    const bool audioPreviewOverlayBlocksCanvas =
+        renderObjectAudioPreviewControls(*currentSnapshot,
+                                         windowPos.x,
+                                         windowPos.y,
+                                         targetWidth,
+                                         targetHeight,
+                                         localMousePos.x,
+                                         localMousePos.y);
+
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( isHovered && currentSnapshot->isHoveringCanvas &&
-         !currentSnapshot->isPlaying ) {
+    if ( !audioPreviewOverlayBlocksCanvas && isHovered &&
+         currentSnapshot->isHoveringCanvas && !currentSnapshot->isPlaying ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
@@ -2430,7 +2566,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                TR("ui.canvas.track").data(),
                                                inspect.track + 1);
                         }
-                        if ( inspect.showAudioSample ) {
+                        if ( inspect.showAudioPreview ) {
                             ImGui::TextWrapped(
                                 "%s: %s",
                                 TR("ui.canvas.hover.audio_resource").data(),
@@ -2440,6 +2576,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 "%s: %.1f%%",
                                 TR("ui.canvas.hover.volume").data(),
                                 inspect.volume * 100.0F);
+                        }
+                        if ( inspect.showAudioSample ) {
                             ImGui::TextColored(
                                 ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                 "%s: %+lld ms",
@@ -2552,6 +2690,10 @@ void Basic2DCanvasInteraction::handleInteractions(
                 ImGui::PopStyleVar(2);
             }
         }
+    }
+
+    if ( audioPreviewOverlayBlocksCanvas ) {
+        return;
     }
 
     entt::entity           hoveredEntity = entt::null;

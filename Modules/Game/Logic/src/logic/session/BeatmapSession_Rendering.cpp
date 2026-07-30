@@ -974,7 +974,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     useDragState ||
                     (inter && (inter->isHovered || inter->isDragging));
                 const auto* inspectNote =
-                    shouldInspect
+                    shouldInspect &&
+                            inspectObjectKind == ChartObjectKind::PlayerNote
                         ? m_ctx->noteRegistry.try_get<const NoteComponent>(
                               inspectEntity)
                         : nullptr;
@@ -989,7 +990,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                      : inter->hoveredSubIndex;
 
                     HoverInspectInfo inspect;
-                    inspect.show = true;
+                    inspect.show       = true;
+                    inspect.entity     = inspectEntity;
+                    inspect.objectKind = ChartObjectKind::PlayerNote;
 
                     auto setLegacyPoint = [&](const HoverBeatPoint& point) {
                         if ( !point.show ) return;
@@ -1092,6 +1095,25 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         inspect.showTrack = true;
                     }
 
+                    const ::MMM::AudioSampleBinding* sampleBinding =
+                        note.m_sampleBinding ? &*note.m_sampleBinding : nullptr;
+                    if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                         hoveredSubIndex >= 0 &&
+                         hoveredSubIndex <
+                             static_cast<int>(note.m_subNotes.size()) ) {
+                        const auto& subNote = note.m_subNotes[hoveredSubIndex];
+                        sampleBinding       = subNote.sampleBinding
+                                                  ? &*subNote.sampleBinding
+                                                  : nullptr;
+                    }
+                    if ( sampleBinding &&
+                         !sampleBinding->m_audioResourceId.empty() ) {
+                        inspect.showAudioPreview = true;
+                        inspect.audioResourceId =
+                            sampleBinding->m_audioResourceId;
+                        inspect.volume = sampleBinding->m_volume;
+                    }
+
                     snapshot->hoverInspect = inspect;
                     if ( inspect.head.show ) {
                         setLegacyPoint(inspect.head);
@@ -1111,7 +1133,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                 ? m_ctx->draggedPart
                                 : static_cast<HoverPart>(inter->hoveredPart);
                         HoverInspectInfo inspect;
-                        inspect.show = true;
+                        inspect.show       = true;
+                        inspect.entity     = inspectEntity;
+                        inspect.objectKind = ChartObjectKind::AudioSample;
                         inspect.kind =
                             hoveredPart == HoverPart::SampleOffset
                                 ? HoverInspectKind::AudioSampleTrigger
@@ -1123,13 +1147,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.end = makeBeatPoint(sample->effectiveTime(),
                                                         sample->m_track);
                         }
-                        inspect.showTrack       = true;
-                        inspect.track           = sample->m_track;
-                        inspect.showAudioSample = true;
-                        inspect.audioResourceId = sample->m_audioResourceId;
-                        inspect.volume          = sample->m_volume;
-                        inspect.offsetMs        = sample->m_offsetMs;
-                        snapshot->hoverInspect  = std::move(inspect);
+                        inspect.showTrack        = true;
+                        inspect.track            = sample->m_track;
+                        inspect.showAudioSample  = true;
+                        inspect.showAudioPreview = true;
+                        inspect.audioResourceId  = sample->m_audioResourceId;
+                        inspect.volume           = sample->m_volume;
+                        inspect.offsetMs         = sample->m_offsetMs;
+                        snapshot->hoverInspect   = std::move(inspect);
 
                         const auto& legacyPoint =
                             hoveredPart == HoverPart::SampleOffset &&

@@ -1171,6 +1171,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
                                               item.audioResourceId,
+                                              item.audioResourceId,
                                               1.0F,
                                               controls.topLeft,
                                               controls.buttonSize,

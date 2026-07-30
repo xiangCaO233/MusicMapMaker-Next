@@ -116,11 +116,16 @@ public:
             view->m_brush.clear();
         }
 
-        /// @brief 绘制当前帧离屏纹理并结束对应 ImGui 窗口。
-        /// @warning UI 热路径：每帧只提交一个 Image 或加载提示并恢复样式栈。
-        ~RenderContext()
+        /// @brief 立即提交当前帧离屏纹理，并保留画布左上角游标供覆盖层使用。
+        /// @warning UI 热路径：每帧至多提交一个 Image 或加载提示，不执行资源
+        /// 加载；重复调用会直接返回。
+        void renderSurface()
         {
-            const ImVec2 size = m_renderSize;
+            if ( m_surfaceRendered ) return;
+            m_surfaceRendered = true;
+
+            const ImVec2 previousCursor = ImGui::GetCursorScreenPos();
+            const ImVec2 size           = m_renderSize;
             if ( size.x > 0 && size.y > 0 ) {
                 vk::DescriptorSet texID = m_view->getDescriptorSet();
                 // 增加判空，防止在重构瞬间崩溃
@@ -130,6 +135,14 @@ public:
                     ImGui::Text("%s", TR("Loading Surface...").data());
                 }
             }
+            ImGui::SetCursorScreenPos(previousCursor);
+        }
+
+        /// @brief 确保绘制当前帧离屏纹理并结束对应 ImGui 窗口。
+        /// @warning UI 热路径：每帧只提交一个 Image 或加载提示并恢复样式栈。
+        ~RenderContext()
+        {
+            renderSurface();
             ImGui::End();
             ImGui::PopStyleVar();
         };
@@ -148,6 +161,8 @@ public:
         IRenderableView* m_view;
         int              m_width;
         int              m_height;
+        /// @brief 当前帧离屏表面是否已经提交到 ImGui。
+        bool m_surfaceRendered{ false };
         /// @brief 当前帧扣除辅助栏后的画布逻辑尺寸。
         ImVec2 m_renderSize{ 0.0f, 0.0f };
         /// @brief 当前帧实际预留的右侧辅助栏宽度。

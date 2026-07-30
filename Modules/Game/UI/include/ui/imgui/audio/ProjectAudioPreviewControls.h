@@ -31,20 +31,22 @@ struct ProjectAudioPreviewControlsResult {
 /// @brief 控制项目内单个音频资源的独立试听池。
 /// @param project 当前项目。
 /// @param audioResourceId 项目音频资源 ID。
+/// @param previewInstanceId 独立试听实例 ID；同一资源的不同物件必须不同。
 /// @param action 播放、暂停或停止动作。
 /// @param volumeFactor 物件自身叠加到资源音量之上的倍率。
 /// @return 找到资源且动作已成功提交时返回 true。
 /// @warning 低频按钮动作路径：Play 首次触发时可能同步解码文件并执行资源
 /// DSP；只能由明确的用户操作调用，禁止放入每帧路径。
-[[nodiscard]] bool controlProjectAudioPreview(const Project&   project,
-                                              std::string_view audioResourceId,
-                                              ProjectAudioPreviewAction action,
-                                              float volumeFactor = 1.0F);
+[[nodiscard]] bool controlProjectAudioPreview(
+    const Project& project, std::string_view audioResourceId,
+    std::string_view previewInstanceId, ProjectAudioPreviewAction action,
+    float volumeFactor = 1.0F);
 
 /// @brief 绘制项目音频播放、暂停和停止按钮。
 /// @param idScope 按钮组稳定 ImGui ID。
 /// @param project 当前项目。
 /// @param audioResourceId 项目音频资源 ID。
+/// @param previewInstanceId 独立试听实例 ID；同一资源的不同物件必须不同。
 /// @param volumeFactor 物件自身试听音量倍率。
 /// @param topLeft 按钮组左上角屏幕坐标。
 /// @param buttonSize 单个方形按钮边长。
@@ -54,6 +56,7 @@ struct ProjectAudioPreviewControlsResult {
 [[nodiscard]] ProjectAudioPreviewControlsResult
 renderProjectAudioPreviewControls(const char* idScope, const Project& project,
                                   std::string_view audioResourceId,
+                                  std::string_view previewInstanceId,
                                   float volumeFactor, ImVec2 topLeft,
                                   float buttonSize, float spacing);
 

@@ -196,6 +196,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             }
         }
 
+        // 先提交离屏纹理，后续主画布物件控制按钮才能位于纹理之上并接收输入。
+        rctx.renderSurface();
+
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
         bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
         if ( !isActiveCanvas && isModifierWheelOverCurrentWindowContent() ) {

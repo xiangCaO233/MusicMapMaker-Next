@@ -124,6 +124,21 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
+    /// @brief 在移动工具下绘制当前悬浮物件的独立音频试听按钮。
+    /// @param currentSnapshot 当前主画布渲染快照。
+    /// @param canvasScreenX 画布左上角屏幕横坐标。
+    /// @param canvasScreenY 画布左上角屏幕纵坐标。
+    /// @param targetWidth 画布宽度。
+    /// @param targetHeight 画布高度。
+    /// @param pointerX 指针相对画布左侧的像素坐标。
+    /// @param pointerY 指针相对画布顶部的像素坐标。
+    /// @return 指针位于试听按钮或物件到按钮的过渡热区时返回 true。
+    /// @warning UI 热路径：移动工具下每帧只扫描当前可见拾取盒并提交三个
+    /// ImGui 按钮；音频资源查找与加载仅在点击后发生。
+    bool renderObjectAudioPreviewControls(
+        const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+        float canvasScreenY, float targetWidth, float targetHeight,
+        float pointerX, float pointerY);
     /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
@@ -173,6 +188,32 @@ private:
     int m_hoverLayerIndex{ 0 };
     /// @brief 当前鼠标下可切换的悬浮候选层数量。
     int m_hoverLayerCount{ 0 };
+    /// @brief 当前悬浮物件试听按钮的跨帧锚点。
+    struct AudioPreviewOverlayState {
+        /// @brief 是否持有有效物件与屏幕边界。
+        bool valid{ false };
+        /// @brief 试听物件实体。
+        entt::entity entity{ entt::null };
+        /// @brief 试听物件所在 ECS 注册表。
+        Logic::ChartObjectKind objectKind{ Logic::ChartObjectKind::PlayerNote };
+        /// @brief 试听引用的项目音频资源 ID。
+        std::string audioResourceId;
+        /// @brief 只属于当前物件的独立试听实例 ID。
+        std::string previewInstanceId;
+        /// @brief 物件自身音量倍率。
+        float volume{ 1.0F };
+        /// @brief 当前锚定拾取盒左边界。
+        float left{ 0.0F };
+        /// @brief 当前锚定拾取盒上边界。
+        float top{ 0.0F };
+        /// @brief 当前锚定拾取盒右边界。
+        float right{ 0.0F };
+        /// @brief 当前锚定拾取盒下边界。
+        float bottom{ 0.0F };
+    };
+
+    /// @brief 允许指针从物件移动到按钮而不使按钮消失的试听覆盖层状态。
+    AudioPreviewOverlayState m_audioPreviewOverlay;
     /// @brief 上一次发送给逻辑线程的鼠标状态。
     LastMouseCommand m_lastMouseCommand;
     /// @brief 上一次发送给逻辑线程的悬浮实体。

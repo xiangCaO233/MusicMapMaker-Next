@@ -30,6 +30,16 @@ const AudioResource* findAudioResource(const Project&   project,
     return resource == project.m_audioResources.end() ? nullptr : &*resource;
 }
 
+/// @brief 构造不会与项目资源、皮肤音效或 HitEffect 冲突的试听池标识。
+/// @param previewInstanceId 独立试听实例 ID。
+/// @return AudioManager 专用试听池标识。
+std::string makePreviewPoolKey(std::string_view previewInstanceId)
+{
+    std::string key{ "__mmm_project_audio_preview__/" };
+    key.append(previewInstanceId);
+    return key;
+}
+
 /// @brief 累积最后一个 ImGui 控件的悬浮和激活状态。
 /// @param result 待更新的按钮组结果。
 void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
@@ -42,49 +52,51 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
 
 bool controlProjectAudioPreview(const Project&            project,
                                 std::string_view          audioResourceId,
+                                std::string_view          previewInstanceId,
                                 ProjectAudioPreviewAction action,
                                 float                     volumeFactor)
 {
-    if ( audioResourceId.empty() ) return false;
+    if ( audioResourceId.empty() || previewInstanceId.empty() ) return false;
 
     const auto* resource = findAudioResource(project, audioResourceId);
     if ( !resource ) return false;
 
-    auto&             audio = Audio::AudioManager::instance();
-    const std::string resourceId(audioResourceId);
+    auto&             audio          = Audio::AudioManager::instance();
+    const std::string previewPoolKey = makePreviewPoolKey(previewInstanceId);
     if ( action == ProjectAudioPreviewAction::Pause ) {
-        audio.pauseSoundEffect(resourceId);
+        audio.pauseSoundEffect(previewPoolKey);
         return true;
     }
     if ( action == ProjectAudioPreviewAction::Stop ) {
-        audio.stopSoundEffect(resourceId);
+        audio.stopSoundEffect(previewPoolKey);
         return true;
     }
 
     const auto absolutePath =
         project.m_projectRoot / Config::utf8ToPath(resource->m_path);
     audio.registerSoundEffect(
-        resourceId, Config::pathToUtf8(absolutePath), resource->m_config);
-    if ( audio.isSFXPaused(resourceId) ) {
-        audio.resumeSoundEffect(resourceId);
+        previewPoolKey, Config::pathToUtf8(absolutePath), resource->m_config);
+    if ( audio.isSFXPaused(previewPoolKey) ) {
+        audio.resumeSoundEffect(previewPoolKey);
         return true;
     }
-    if ( !audio.ensureSoundEffectLoaded(resourceId) ) return false;
+    if ( !audio.ensureSoundEffectLoaded(previewPoolKey) ) return false;
 
-    audio.stopSoundEffect(resourceId);
+    audio.stopSoundEffect(previewPoolKey);
     audio.playSoundEffect(
-        resourceId,
+        previewPoolKey,
         std::isfinite(volumeFactor) ? std::max(0.0F, volumeFactor) : 1.0F);
     return true;
 }
 
 ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
-    std::string_view audioResourceId, float volumeFactor, ImVec2 topLeft,
-    float buttonSize, float spacing)
+    std::string_view audioResourceId, std::string_view previewInstanceId,
+    float volumeFactor, ImVec2 topLeft, float buttonSize, float spacing)
 {
     ProjectAudioPreviewControlsResult result;
-    if ( !idScope || audioResourceId.empty() || buttonSize <= 0.0F ) {
+    if ( !idScope || audioResourceId.empty() || previewInstanceId.empty() ||
+         buttonSize <= 0.0F ) {
         return result;
     }
 
@@ -102,10 +114,12 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
               topLeft.y });
         const std::string label = std::string(icon) + hiddenId;
         if ( FeedbackButton(label.c_str(), buttonExtent) ) {
-            result.activated =
-                controlProjectAudioPreview(
-                    project, audioResourceId, action, volumeFactor) ||
-                result.activated;
+            result.activated = controlProjectAudioPreview(project,
+                                                          audioResourceId,
+                                                          previewInstanceId,
+                                                          action,
+                                                          volumeFactor) ||
+                               result.activated;
         }
         accumulateLastItemState(result);
         if ( ImGui::IsItemHovered() ) {
