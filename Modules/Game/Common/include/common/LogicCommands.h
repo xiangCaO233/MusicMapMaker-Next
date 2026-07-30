@@ -618,6 +618,15 @@ struct CmdUpdateAudioResource {
     ::MMM::AudioTrackType newType;
 };
 
+/// @brief 同时重命名项目音频资源的逻辑轨道 ID 与物理文件名。
+struct CmdRenameAudioResource {
+    /// @brief 重命名前的稳定资源 ID。
+    std::string id;
+
+    /// @brief 不含目录的目标文件名；扩展名必须与源文件一致。
+    std::string newFileName;
+};
+
 /// @brief 更新项目音频资源的完整持久化 DSP 配置。
 struct CmdUpdateAudioResourceConfig {
     /// @brief 待更新资源的稳定 ID。
@@ -672,7 +681,7 @@ using LogicCommand = std::variant<
     CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
     CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
     CmdMarkBeatmapMetadataDirty, CmdImportAudio, CmdUpdateAudioResource,
-    CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
-    CmdSaveTemporaryProject>;
+    CmdRenameAudioResource, CmdUpdateAudioResourceConfig,
+    CmdRemoveAudioResource, CmdRemoveBeatmap, CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

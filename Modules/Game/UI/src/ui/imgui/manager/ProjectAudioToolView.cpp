@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <string_view>
@@ -227,6 +228,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         m_searchBuffer.fill('\0');
         m_searchResults.clear();
         m_searchFocusRequestId.clear();
+        m_renameAudioResourceId.clear();
+        m_renameBuffer.fill('\0');
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
         m_cachedProjectRoot.clear();
@@ -558,6 +561,71 @@ void ProjectAudioToolView::requestSearchResultFocus(
     const std::string& audioResourceId)
 {
     m_searchFocusRequestId = audioResourceId;
+}
+
+void ProjectAudioToolView::requestItemRename(std::size_t itemIndex)
+{
+    if ( itemIndex >= m_items.size() ) return;
+    const auto& item         = m_items[itemIndex];
+    m_renameAudioResourceId  = item.audioResourceId;
+    m_shouldOpenRenamePopup  = true;
+    m_shouldFocusRenameInput = true;
+    const std::size_t copySize =
+        std::min(item.label.size(), m_renameBuffer.size() - 1U);
+    m_renameBuffer.fill('\0');
+    std::memcpy(m_renameBuffer.data(), item.label.data(), copySize);
+    m_renameBuffer[copySize] = '\0';
+}
+
+void ProjectAudioToolView::renderRenamePopup(float dpiScale)
+{
+    const std::string popupTitle =
+        std::string(TR("ui.file_manager.rename_title")) +
+        "###ProjectAudioToolRenamePopup";
+    if ( m_shouldOpenRenamePopup ) {
+        FeedbackOpenPopup(popupTitle.c_str());
+        m_shouldOpenRenamePopup = false;
+    }
+
+    bool                           open = true;
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( !modalScope.begin(popupTitle.c_str(),
+                           &open,
+                           ImGuiWindowFlags_NoCollapse,
+                           { 380.0F * dpiScale, 0.0F }) ) {
+        return;
+    }
+
+    ImGui::TextUnformatted(TR("ui.file_manager.rename_label").data());
+    if ( m_shouldFocusRenameInput ) {
+        ImGui::SetKeyboardFocusHere();
+        m_shouldFocusRenameInput = false;
+    }
+    const bool enterPressed =
+        ImGui::InputText("##ProjectAudioToolRenameInput",
+                         m_renameBuffer.data(),
+                         m_renameBuffer.size(),
+                         ImGuiInputTextFlags_EnterReturnsTrue |
+                             ImGuiInputTextFlags_AutoSelectAll);
+    const ImVec2 buttonSize{ 132.0F * dpiScale, 0.0F };
+    const bool   confirmClicked =
+        FeedbackButton(TR("ui.file_manager.context.rename").data(), buttonSize);
+    if ( (enterPressed || confirmClicked) &&
+         !m_renameAudioResourceId.empty() ) {
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::LogicCommand(Logic::CmdRenameAudioResource{
+                .id          = m_renameAudioResourceId,
+                .newFileName = m_renameBuffer.data(),
+            }));
+        m_renameAudioResourceId.clear();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if ( FeedbackButton(TR("ui.common.cancel").data(), buttonSize) ) {
+        m_renameAudioResourceId.clear();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void ProjectAudioToolView::beginBatchDrag(std::size_t itemIndex,
@@ -1022,6 +1090,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             }
         }
     }
+    if ( hoveredItem && !m_draggingItem && !m_resizingItem &&
+         !m_batchDragging && !m_marqueeSelecting &&
+         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+        requestItemRename(*hoveredItem);
+    }
     ResizeHandle hoveredResizeHandle = ResizeHandle::None;
     if ( m_resizingItem ) {
         hoveredResizeHandle = m_resizeHandle;
@@ -1382,6 +1455,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
 
     ImGui::EndChild();
+    renderRenamePopup(dpiScale);
     ImGui::Separator();
     if ( m_selectedAudioResourceId.empty() ) {
         ImGui::TextUnformatted(TR("ui.project_audio_tool.status_none").data());

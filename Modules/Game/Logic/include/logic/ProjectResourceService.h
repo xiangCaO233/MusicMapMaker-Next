@@ -69,6 +69,18 @@ struct BeatmapAudioReferenceRemapResult {
     [[nodiscard]] bool changed() const { return m_changedReferenceCount > 0U; }
 };
 
+/// @brief 项目谱面中的音频资源 ID 事务重写结果。
+struct ProjectBeatmapAudioIdRemapResult {
+    /// @brief 全部相关谱面均完成提交。
+    bool m_success{ false };
+
+    /// @brief 实际改写过引用的谱面数量。
+    std::size_t m_changedBeatmapCount{ 0U };
+
+    /// @brief 失败时可直接展示的原因。
+    std::string m_errorMessage;
+};
+
 /// @brief 保存前 song_file_hint 的选取来源。
 enum class BeatmapSongFileHintSource {
     None,
@@ -178,6 +190,26 @@ public:
         const Project& project, BeatMap& beatMap,
         const std::string& beatmapPath, const AudioResource& previousResource,
         const std::string& updatedResourcePath);
+
+    /// @brief 将内存谱面的玩家绑定和自动采样资源 ID 精确重命名。
+    /// @param beatMap 需要原地更新的谱面。
+    /// @param oldResourceId 旧资源 ID。
+    /// @param newResourceId 新资源 ID。
+    /// @return 实际改写的引用字段数量。
+    static std::size_t remapBeatmapAudioResourceId(
+        BeatMap& beatMap, std::string_view oldResourceId,
+        std::string_view newResourceId);
+
+    /// @brief 以全有或全无方式重写项目内 MMM/Malody 谱面的资源引用。
+    /// @param project 待扫描项目。
+    /// @param previousResource 重命名前的资源 ID 与路径快照。
+    /// @param updatedResourcePath 重命名后的项目相对路径。
+    /// @param newResourceId 新资源 ID。
+    /// @return 事务结果和实际变更谱面数量。
+    /// @warning 低频显式重命名路径：会读取并重新序列化相关谱面。
+    static ProjectBeatmapAudioIdRemapResult remapProjectBeatmapAudioResourceId(
+        const Project& project, const AudioResource& previousResource,
+        std::string_view updatedResourcePath, std::string_view newResourceId);
 
     /// @brief 保存前按 Malody 提示语义刷新 song_file_hint。
     /// @param project 谱面所属项目。

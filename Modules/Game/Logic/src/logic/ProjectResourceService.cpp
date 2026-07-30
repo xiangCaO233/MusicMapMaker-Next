@@ -1841,6 +1841,158 @@ ProjectResourceService::remapBeatmapAudioReferencesAfterMove(
     return result;
 }
 
+/// @brief 将内存谱面的玩家绑定和自动采样资源 ID 精确重命名。
+/// @param beatMap 需要原地更新的谱面。
+/// @param oldResourceId 旧资源 ID。
+/// @param newResourceId 新资源 ID。
+/// @return 实际改写的引用字段数量。
+std::size_t ProjectResourceService::remapBeatmapAudioResourceId(
+    BeatMap& beatMap, std::string_view oldResourceId,
+    std::string_view newResourceId)
+{
+    if ( oldResourceId.empty() || newResourceId.empty() ||
+         oldResourceId == newResourceId ) {
+        return 0U;
+    }
+
+    std::size_t changedCount = 0U;
+    /// @brief 精确改写一个玩家物件的采样绑定。
+    const auto remapNoteBinding = [&](Note& note) {
+        auto binding = note.getSampleBinding();
+        if ( !binding || binding->m_audioResourceId != oldResourceId ) return;
+        binding->m_audioResourceId = newResourceId;
+        note.setSampleBinding(std::move(*binding));
+        ++changedCount;
+    };
+    for ( auto& note : beatMap.m_noteData.notes ) {
+        remapNoteBinding(note);
+    }
+    for ( auto& hold : beatMap.m_noteData.holds ) {
+        remapNoteBinding(hold);
+    }
+    for ( auto& flick : beatMap.m_noteData.flicks ) {
+        remapNoteBinding(flick);
+    }
+    for ( auto& polyline : beatMap.m_noteData.polylines ) {
+        remapNoteBinding(polyline);
+    }
+    for ( auto& sample : beatMap.m_audioSamples ) {
+        if ( sample.m_audioResourceId != oldResourceId ) continue;
+        sample.m_audioResourceId = newResourceId;
+        ++changedCount;
+    }
+    return changedCount;
+}
+
+/// @brief 以全有或全无方式重写项目内 MMM/Malody 谱面的资源引用。
+/// @param project 待扫描项目。
+/// @param previousResource 重命名前的资源 ID 与路径快照。
+/// @param updatedResourcePath 重命名后的项目相对路径。
+/// @param newResourceId 新资源 ID。
+/// @return 事务结果和实际变更谱面数量。
+/// @warning 低频显式重命名路径：会读取并重新序列化相关谱面。
+ProjectBeatmapAudioIdRemapResult
+ProjectResourceService::remapProjectBeatmapAudioResourceId(
+    const Project& project, const AudioResource& previousResource,
+    std::string_view updatedResourcePath, std::string_view newResourceId)
+{
+    ProjectBeatmapAudioIdRemapResult result;
+    if ( previousResource.m_id.empty() || newResourceId.empty() ) {
+        result.m_errorMessage = "音频资源 ID 不能为空";
+        return result;
+    }
+    if ( previousResource.m_id == newResourceId &&
+         previousResource.m_path == updatedResourcePath ) {
+        result.m_success = true;
+        return result;
+    }
+
+    std::vector<PendingTextFileReplacement> pendingReplacements;
+    for ( const auto& entry : project.m_beatmaps ) {
+        const auto mapPath = resolveStoredProjectPath(
+            project, Config::utf8ToPath(entry.m_filePath));
+        auto extension = Config::pathToUtf8(mapPath.extension());
+        std::transform(extension.begin(),
+                       extension.end(),
+                       extension.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if ( extension != ".mmm" && extension != ".mc" ) continue;
+
+        auto beatMap = BeatMap::loadFromFile(mapPath);
+        if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
+            cleanupTextFileReplacements(pendingReplacements);
+            result.m_errorMessage = "无法读取谱面 '" + entry.m_filePath +
+                                    "'，已取消音频资源 ID 重命名";
+            return result;
+        }
+        const auto pathRemap = remapBeatmapAudioReferencesAfterMove(
+            project,
+            beatMap,
+            entry.m_filePath,
+            previousResource,
+            std::string(updatedResourcePath));
+        const auto idRemap = remapBeatmapAudioResourceId(
+            beatMap, previousResource.m_id, newResourceId);
+        if ( !pathRemap.changed() && idRemap == 0U ) {
+            continue;
+        }
+
+        auto serializedPath = mapPath;
+        serializedPath += ".mmm-audio-id-remap";
+        serializedPath += mapPath.extension();
+        std::error_code filesystemError;
+        if ( std::filesystem::exists(serializedPath, filesystemError) ||
+             filesystemError ) {
+            cleanupTextFileReplacements(pendingReplacements);
+            result.m_errorMessage =
+                "谱面 '" + entry.m_filePath + "' 的音频重命名临时文件已存在";
+            return result;
+        }
+        if ( !beatMap.saveToFile(serializedPath) ) {
+            filesystemError.clear();
+            std::filesystem::remove(serializedPath, filesystemError);
+            cleanupTextFileReplacements(pendingReplacements);
+            result.m_errorMessage =
+                "无法序列化谱面 '" + entry.m_filePath + "' 的音频资源 ID";
+            return result;
+        }
+
+        std::string serializedContent;
+        const bool  readSucceeded =
+            readBinaryTextFile(serializedPath, serializedContent);
+        filesystemError.clear();
+        std::filesystem::remove(serializedPath, filesystemError);
+        if ( !readSucceeded || filesystemError ) {
+            cleanupTextFileReplacements(pendingReplacements);
+            result.m_errorMessage = "无法读取或清理谱面 '" + entry.m_filePath +
+                                    "' 的音频重命名临时文件";
+            return result;
+        }
+
+        PendingTextFileReplacement replacement;
+        if ( !stageTextFileReplacement(
+                 mapPath, serializedContent, replacement) ) {
+            cleanupTextFileReplacements(pendingReplacements);
+            result.m_errorMessage =
+                "无法暂存谱面 '" + entry.m_filePath + "' 的音频资源 ID";
+            return result;
+        }
+        pendingReplacements.push_back(std::move(replacement));
+        ++result.m_changedBeatmapCount;
+    }
+
+    if ( !commitTextFileReplacements(pendingReplacements) ) {
+        result.m_changedBeatmapCount = 0U;
+        result.m_errorMessage =
+            "提交谱面音频资源 ID 事务失败，原谱面内容已恢复";
+        return result;
+    }
+    result.m_success = true;
+    return result;
+}
+
 /// @brief 保存前按 Malody 提示语义刷新 song_file_hint。
 /// @param project 谱面所属项目。
 /// @param beatMap 需要原地更新提示字段的谱面。

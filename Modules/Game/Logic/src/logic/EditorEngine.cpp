@@ -68,6 +68,16 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
+/// @brief 判断显式音频重命名输入是否为单个有效文件名。
+/// @param filename UTF-8 文件名。
+/// @return 非空、非点目录且不含任一平台路径分隔符时返回 true。
+bool isValidAudioResourceFileName(std::string_view filename)
+{
+    return !filename.empty() && filename != "." && filename != ".." &&
+           filename.find('/') == std::string_view::npos &&
+           filename.find('\\') == std::string_view::npos;
+}
+
 /// @brief 将会话播放位置解析到指定 steady_clock 时刻。
 /// @param ctx 待读取的会话状态。
 /// @param nowSteadySeconds 本次低频操作共享的单调时钟秒数。
@@ -524,6 +534,42 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
     return result;
 }
 
+/// @brief 精确重命名打开会话 ECS 中的玩家绑定和自动采样资源 ID。
+/// @param ctx 待更新会话。
+/// @param oldResourceId 旧资源 ID。
+/// @param newResourceId 新资源 ID。
+/// @return 实际改写的 ECS 字段数量。
+SessionAudioReferenceRemapResult remapSessionEcsAudioResourceId(
+    SessionContext& ctx, std::string_view oldResourceId,
+    std::string_view newResourceId)
+{
+    SessionAudioReferenceRemapResult result;
+    const auto remapBinding = [&](std::optional<AudioSampleBinding>& binding) {
+        if ( !binding || binding->m_audioResourceId != oldResourceId ) return;
+        binding->m_audioResourceId = newResourceId;
+        ++result.m_changedNoteBindingCount;
+    };
+
+    auto noteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : noteView ) {
+        auto& note = noteView.get<NoteComponent>(entity);
+        remapBinding(note.m_sampleBinding);
+        for ( auto& subNote : note.m_subNotes ) {
+            remapBinding(subNote.sampleBinding);
+        }
+    }
+
+    auto sampleView = ctx.sampleRegistry.view<SampleComponent>();
+    for ( auto entity : sampleView ) {
+        auto& sample = sampleView.get<SampleComponent>(entity);
+        if ( sample.m_audioResourceId != oldResourceId ) continue;
+        ++result.m_audioSampleReferenceCount;
+        sample.m_audioResourceId = newResourceId;
+        ++result.m_changedAudioSampleCount;
+    }
+    return result;
+}
+
 /// @brief 在写入项目前解析元数据资源路径。
 std::filesystem::path resolveMetadataResourcePath(
     const Project& project, const std::filesystem::path& mapDirectory,
@@ -753,6 +799,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdMarkBeatmapMetadataDirty>(cmd) ||
          std::holds_alternative<CmdImportAudio>(cmd) ||
          std::holds_alternative<CmdUpdateAudioResource>(cmd) ||
+         std::holds_alternative<CmdRenameAudioResource>(cmd) ||
          std::holds_alternative<CmdUpdateAudioResourceConfig>(cmd) ||
          std::holds_alternative<CmdRemoveAudioResource>(cmd) ||
          std::holds_alternative<CmdRemoveBeatmap>(cmd) ) {
@@ -1634,6 +1681,10 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 拦截项目资源管理指令
     if ( std::holds_alternative<CmdUpdateAudioResource>(cmd) ) {
         handleUpdateAudioResource(std::get<CmdUpdateAudioResource>(cmd));
+        return;
+    }
+    if ( std::holds_alternative<CmdRenameAudioResource>(cmd) ) {
+        handleRenameAudioResource(std::get<CmdRenameAudioResource>(cmd));
         return;
     }
     if ( std::holds_alternative<CmdUpdateAudioResourceConfig>(cmd) ) {
@@ -2948,6 +2999,276 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
     publishAudioResourceMutationResult(
         Event::AudioResourceMutationOperation::UpdateType,
         cmd.id,
+        true,
+        {},
+        {});
+}
+
+/// @brief 增量重命名项目音频文件、资源 ID 和全部内存引用。
+/// @param cmd 旧资源 ID 与新文件名。
+/// @warning 低频项目资源路径：执行文件系统改名、谱面引用事务写回和
+/// 已打开会话增量同步，禁止从每帧热路径调用。
+void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    auto* project = ProjectController::instance().currentProject();
+    if ( !project ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "当前没有可重命名音频资源的项目");
+        return;
+    }
+
+    const auto resourceIterator = std::find_if(
+        project->m_audioResources.begin(),
+        project->m_audioResources.end(),
+        [&](const AudioResource& resource) { return resource.m_id == cmd.id; });
+    if ( resourceIterator == project->m_audioResources.end() ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "未找到要重命名的音频资源");
+        return;
+    }
+    if ( !isValidAudioResourceFileName(cmd.newFileName) ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "文件名不能为空、点目录或包含路径分隔符");
+        return;
+    }
+
+    const AudioResource previousResource = *resourceIterator;
+    const auto storedPath = Config::utf8ToPath(resourceIterator->m_path);
+    const auto oldPath =
+        (storedPath.is_absolute() ? storedPath
+                                  : project->m_projectRoot / storedPath)
+            .lexically_normal();
+    auto requestedFileName = Config::utf8ToPath(cmd.newFileName);
+    if ( requestedFileName.extension().empty() ) {
+        requestedFileName += oldPath.extension();
+    }
+    if ( requestedFileName.extension() != oldPath.extension() ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "重命名不能改变音频文件扩展名");
+        return;
+    }
+
+    const std::string newResourceId =
+        Config::pathToUtf8(requestedFileName.filename());
+    if ( !isValidAudioResourceFileName(newResourceId) ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "目标音频文件名无效");
+        return;
+    }
+    if ( newResourceId == cmd.id && requestedFileName == oldPath.filename() ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            newResourceId,
+            true,
+            {},
+            {});
+        return;
+    }
+    if ( std::ranges::any_of(project->m_audioResources,
+                             [&](const AudioResource& candidate) {
+                                 return &candidate != &*resourceIterator &&
+                                        candidate.m_id == newResourceId;
+                             }) ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "项目中已存在同名音频轨道");
+        return;
+    }
+
+    const auto newPath =
+        (oldPath.parent_path() / requestedFileName).lexically_normal();
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(oldPath, filesystemError) ||
+         filesystemError ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "源音频文件不存在或不可访问");
+        return;
+    }
+    filesystemError.clear();
+    if ( std::filesystem::exists(newPath, filesystemError) ||
+         filesystemError ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "目标音频文件已存在");
+        return;
+    }
+
+    const auto validationError =
+        ProjectResourceService::validateAudioResourceMove(
+            *project, oldPath, newPath);
+    if ( !validationError.empty() ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            validationError);
+        return;
+    }
+
+    std::filesystem::rename(oldPath, newPath, filesystemError);
+    if ( filesystemError ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "重命名音频文件失败：" + filesystemError.message());
+        return;
+    }
+
+    std::string pathRemapError;
+    if ( remapAudioResourcePathsAfterMove(oldPath, newPath, &pathRemapError) !=
+         1U ) {
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            pathRemapError.empty() ? "音频路径增量同步失败" : pathRemapError);
+        return;
+    }
+
+    const auto beatmapIdRemap =
+        ProjectResourceService::remapProjectBeatmapAudioResourceId(
+            *project,
+            previousResource,
+            resourceIterator->m_path,
+            newResourceId);
+    if ( !beatmapIdRemap.m_success ) {
+        filesystemError.clear();
+        std::filesystem::rename(newPath, oldPath, filesystemError);
+        std::string rollbackError;
+        if ( !filesystemError ) {
+            (void)remapAudioResourcePathsAfterMove(
+                newPath, oldPath, &rollbackError);
+        }
+        std::string errorMessage = beatmapIdRemap.m_errorMessage;
+        if ( filesystemError ) {
+            errorMessage +=
+                "；文件名自动回滚失败：" + filesystemError.message();
+        } else if ( !rollbackError.empty() ) {
+            errorMessage += "；路径状态回滚失败：" + rollbackError;
+        } else {
+            errorMessage += "；文件名与路径状态已回滚";
+        }
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            errorMessage);
+        return;
+    }
+
+    const AudioTrackType renamedType   = resourceIterator->m_type;
+    const auto           renamedConfig = resourceIterator->m_config;
+    resourceIterator->m_id             = newResourceId;
+
+    for ( auto& beatmapEntry : project->m_beatmaps ) {
+        if ( beatmapEntry.m_audioTrackId == cmd.id ) {
+            beatmapEntry.m_audioTrackId = newResourceId;
+        }
+    }
+    auto& workspace = project->m_settings.m_workspace;
+    if ( workspace.m_projectAudioToolSelectedResourceId == cmd.id ) {
+        workspace.m_projectAudioToolSelectedResourceId = newResourceId;
+    }
+    if ( workspace.m_bpmMeasurementAudioTrackId == cmd.id ) {
+        workspace.m_bpmMeasurementAudioTrackId = newResourceId;
+    }
+    for ( auto& controller : workspace.m_audioControllers ) {
+        if ( controller.m_trackId != cmd.id ) continue;
+        controller.m_trackId   = newResourceId;
+        controller.m_trackName = newResourceId;
+    }
+    for ( auto& placement : workspace.m_projectAudioToolPlacements ) {
+        if ( placement.m_audioResourceId == cmd.id ) {
+            placement.m_audioResourceId = newResourceId;
+        }
+    }
+
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( entry.isLogoPlaceholder || !entry.session ) continue;
+        auto& ctx = entry.session->getContextMutable();
+        if ( !ctx.currentBeatmap ) continue;
+
+        const auto domainChanged =
+            ProjectResourceService::remapBeatmapAudioResourceId(
+                *ctx.currentBeatmap, cmd.id, newResourceId);
+        const auto ecsChanged =
+            remapSessionEcsAudioResourceId(ctx, cmd.id, newResourceId);
+        if ( ecsChanged.m_changedNoteBindingCount > 0U ) {
+            ctx.m_needsNotesSync = true;
+            SessionUtils::markHitEventsDirty(ctx);
+        }
+        if ( ecsChanged.m_changedAudioSampleCount > 0U ) {
+            ctx.m_needsSamplesSync = true;
+        }
+        if ( ecsChanged.m_changedNoteBindingCount > 0U ||
+             ecsChanged.m_changedAudioSampleCount > 0U ) {
+            SessionUtils::syncBeatmap(ctx);
+        }
+        if ( domainChanged > 0U ||
+             ecsChanged.m_audioSampleReferenceCount > 0U ) {
+            ctx.isAudioTimelineDescriptorDirty   = true;
+            ctx.isAudioTimelineActivationPending = true;
+        }
+    }
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( renamedType == AudioTrackType::Effect ) {
+        audio.unloadSoundEffect(cmd.id);
+        audio.registerSoundEffect(
+            newResourceId, Config::pathToUtf8(newPath), renamedConfig);
+    }
+    if ( m_brushAudioResourceId == cmd.id ) {
+        m_brushAudioResourceId = newResourceId;
+        for ( auto& entry : sessions ) {
+            if ( !entry.session ) continue;
+            entry.session->pushCommand(LogicCommand(CmdSetBrushAudioResource{
+                newResourceId,
+                renamedType,
+            }));
+        }
+    }
+    markAudioTimelineDescriptorsDirtyUnsafe();
+    saveProject();
+    publishAudioResourceMutationResult(
+        Event::AudioResourceMutationOperation::Rename,
+        newResourceId,
         true,
         {},
         {});

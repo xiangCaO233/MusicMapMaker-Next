@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1236,6 +1237,129 @@ bool testAudioResourcePathRemap()
     return true;
 }
 
+/// @brief 验证显式音频重命名会事务更新 MMM 与 Malody 资源 ID。
+/// @return 两种内部可表达格式均完整改名且音量保持时返回 true。
+bool testAudioResourceIdRenameTransaction()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto mmmPath = directory.path() / "Rename.mmm";
+    const auto mcPath  = directory.path() / "Rename.mc";
+    if ( !saveReferenceBeatmap(
+             mmmPath, "audio/old.wav", "audio/old.wav", "audio/old.wav") ||
+         !saveReferenceBeatmap(
+             mcPath, "audio/old.wav", "audio/old.wav", "audio/old.wav") ) {
+        return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps    = {
+        MMM::Project::BeatmapEntry{ "MMM", "Rename.mmm", {} },
+        MMM::Project::BeatmapEntry{ "Malody", "Rename.mc", {} },
+    };
+    const MMM::AudioResource previousResource{
+        .m_id   = "stable-old-id",
+        .m_path = "audio/old.wav",
+        .m_type = MMM::AudioTrackType::Effect,
+    };
+
+    const auto result =
+        MMM::Logic::ProjectResourceService::remapProjectBeatmapAudioResourceId(
+            project, previousResource, "audio/renamed.wav", "renamed.wav");
+    if ( !result.m_success || result.m_changedBeatmapCount != 2U ) {
+        XERROR("MMM/Malody audio ID rename transaction failed: {}",
+               result.m_errorMessage);
+        return false;
+    }
+
+    for ( const auto& path : { mmmPath, mcPath } ) {
+        const auto beatmap = MMM::BeatMap::loadFromFile(path);
+        if ( beatmap.m_noteData.notes.size() != 1U ||
+             !beatmap.m_noteData.notes.front().getSampleBinding() ||
+             beatmap.m_noteData.notes.front()
+                     .getSampleBinding()
+                     ->m_audioResourceId != "renamed.wav" ||
+             std::abs(
+                 beatmap.m_noteData.notes.front().getSampleBinding()->m_volume -
+                 0.75F) > 1e-6F ||
+             beatmap.m_audioSamples.size() != 1U ||
+             beatmap.m_audioSamples.front().m_audioResourceId !=
+                 "renamed.wav" ) {
+            XERROR("Renamed audio ID did not round trip: {}",
+                   MMM::Config::pathToUtf8(path));
+            return false;
+        }
+        if ( beatmap.m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/renamed.wav") ) {
+            XERROR("Renamed song_file_hint did not round trip: {}",
+                   MMM::Config::pathToUtf8(path));
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证任一谱面无法暂存时不会提交其它谱面的音频 ID。
+/// @return 事务失败后全部谱面仍保留旧 ID 时返回 true。
+bool testAudioResourceIdRenameTransactionRollback()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto firstPath  = directory.path() / "First.mmm";
+    const auto secondPath = directory.path() / "Second.mmm";
+    if ( !saveReferenceBeatmap(firstPath, {}, "old.wav", "old.wav") ||
+         !saveReferenceBeatmap(secondPath, {}, "old.wav", "old.wav") ) {
+        return false;
+    }
+
+    auto blockedTemporaryPath = secondPath;
+    blockedTemporaryPath += ".mmm-audio-remap.tmp";
+    std::error_code filesystemError;
+    std::filesystem::create_directories(blockedTemporaryPath, filesystemError);
+    if ( filesystemError ||
+         !createAudioPlaceholder(blockedTemporaryPath / "blocker") ) {
+        return false;
+    }
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    project.m_beatmaps    = {
+        MMM::Project::BeatmapEntry{ "First", "First.mmm", {} },
+        MMM::Project::BeatmapEntry{ "Second", "Second.mmm", {} },
+    };
+    const MMM::AudioResource previousResource{
+        .m_id   = "old.wav",
+        .m_path = "old.wav",
+        .m_type = MMM::AudioTrackType::Effect,
+    };
+    const auto result =
+        MMM::Logic::ProjectResourceService::remapProjectBeatmapAudioResourceId(
+            project, previousResource, "renamed.wav", "renamed.wav");
+    if ( result.m_success || result.m_errorMessage.empty() ) {
+        XERROR("Blocked audio ID transaction unexpectedly succeeded");
+        return false;
+    }
+
+    for ( const auto& path : { firstPath, secondPath } ) {
+        const auto beatmap = MMM::BeatMap::loadFromFile(path);
+        if ( beatmap.m_noteData.notes.size() != 1U ||
+             !beatmap.m_noteData.notes.front().getSampleBinding() ||
+             beatmap.m_noteData.notes.front()
+                     .getSampleBinding()
+                     ->m_audioResourceId != "old.wav" ||
+             beatmap.m_audioSamples.size() != 1U ||
+             beatmap.m_audioSamples.front().m_audioResourceId != "old.wav" ) {
+            XERROR("Failed audio ID transaction partially changed {}",
+                   MMM::Config::pathToUtf8(path));
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证 osu! 移动只原位改写音频字段而不重排或丢失其它文本。
 /// @return 全局音频和 HitSample 引用更新且哨兵文本保留时返回 true。
 bool testOsuAudioReferenceMoveRemap()
@@ -1572,6 +1696,8 @@ int main()
                    testDefaultBeatmapAudioResolution() &&
                    testLegacyProjectAudioTrackMigration() &&
                    testAudioResourcePathRemap() &&
+                   testAudioResourceIdRenameTransaction() &&
+                   testAudioResourceIdRenameTransactionRollback() &&
                    testOsuAudioReferenceMoveRemap() &&
                    testOsuBeatmapOnlyMoveRemap() &&
                    testOsuMoveWriteFailureRollsBack() &&

@@ -151,6 +151,14 @@ private:
     /// @brief 请求下一次画布更新时定位并选中指定搜索结果。
     void requestSearchResultFocus(const std::string& audioResourceId);
 
+    /// @brief 打开指定音频方块的重命名弹窗并预填当前文件名。
+    /// @param itemIndex 右键命中的方块下标。
+    void requestItemRename(std::size_t itemIndex);
+
+    /// @brief 绘制项目音频文件名与逻辑轨道 ID 同步重命名弹窗。
+    /// @param dpiScale 当前内容缩放。
+    void renderRenamePopup(float dpiScale);
+
     /// @brief 根据鼠标位置检测方块边缘或四角的缩放热区。
     [[nodiscard]] ResizeHandle hitTestResizeHandle(const Item& item,
                                                    ImVec2 mousePosition) const;
@@ -248,6 +256,18 @@ private:
 
     /// @brief 等待画布创建后执行定位的音频资源 ID。
     std::string m_searchFocusRequestId;
+
+    /// @brief 重命名弹窗当前目标资源 ID。
+    std::string m_renameAudioResourceId;
+
+    /// @brief 重命名弹窗文件名输入。
+    std::array<char, 512> m_renameBuffer{};
+
+    /// @brief 下一帧需要打开重命名弹窗。
+    bool m_shouldOpenRenamePopup{ false };
+
+    /// @brief 弹窗打开后需要把键盘焦点放入文件名输入框。
+    bool m_shouldFocusRenameInput{ false };
 
     /// @brief 当前选中项目音频资源 ID。
     std::string m_selectedAudioResourceId;

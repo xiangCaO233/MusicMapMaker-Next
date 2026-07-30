@@ -135,6 +135,12 @@ public:
     /// @brief 更新音轨资源信息
     void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
 
+    /// @brief 增量重命名项目音频文件、资源 ID 和全部内存引用。
+    /// @param cmd 旧资源 ID 与新文件名。
+    /// @warning 低频项目资源路径：执行文件系统改名、谱面引用事务写回和
+    /// 已打开会话增量同步，禁止从每帧热路径调用。
+    void handleRenameAudioResource(const CmdRenameAudioResource& cmd);
+
     /// @brief 更新音频资源的完整持久化 DSP 配置并使引用它的时间线失效。
     /// @param cmd 目标资源 ID 与替换配置。
     /// @warning 低频项目资源路径：会保存项目并标记受影响的已打开谱面。

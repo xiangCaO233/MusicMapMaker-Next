@@ -142,6 +142,9 @@ std::string buildAudioResourceMutationMessage(
         case Event::AudioResourceMutationOperation::UpdateType:
             message = "音频资源类型已更新";
             break;
+        case Event::AudioResourceMutationOperation::Rename:
+            message = "音频轨道与文件名已重命名";
+            break;
         case Event::AudioResourceMutationOperation::Remove:
             message = "音频资源已删除";
             break;

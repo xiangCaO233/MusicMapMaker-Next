@@ -126,6 +126,7 @@ struct TemporaryProjectSaveResultEvent : public ProjectLifecycleEvent {
 /// @brief 音频资源变更操作类型。
 enum class AudioResourceMutationOperation {
     UpdateType,
+    Rename,
     Remove,
     MovePath,
 };
