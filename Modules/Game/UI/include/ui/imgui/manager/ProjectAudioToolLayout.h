@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <optional>
 #include <span>
@@ -82,6 +83,27 @@ enum class ResizeEdge {
 {
     return std::ceil(
         std::max(minimumWidth, textWidth + horizontalPadding * 2.0F + 2.0F));
+}
+
+/// @brief 根据固定按钮行计算不会压缩控件的最小方块宽度。
+[[nodiscard]] inline float calculateControlMinimumWidth(float buttonSize,
+                                                        float buttonSpacing,
+                                                        float horizontalPadding,
+                                                        std::size_t buttonCount)
+{
+    if ( buttonCount == 0 ) return horizontalPadding * 2.0F;
+    return horizontalPadding * 2.0F +
+           buttonSize * static_cast<float>(buttonCount) +
+           buttonSpacing * static_cast<float>(buttonCount - 1U);
+}
+
+/// @brief 根据类型、文件名、进度条和按钮行计算最小方块高度。
+[[nodiscard]] inline float calculateControlMinimumHeight(
+    float textLineHeight, float progressHeight, float progressSpacing,
+    float buttonSize, float verticalPadding, float itemSpacing)
+{
+    return verticalPadding * 2.0F + textLineHeight * 2.0F + itemSpacing * 2.0F +
+           progressHeight + progressSpacing + buttonSize;
 }
 
 /// @brief 计算矩形面积。

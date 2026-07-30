@@ -38,6 +38,21 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
         result.hovered || ImGui::IsItemHovered() || ImGui::IsItemActive();
 }
 
+/// @brief 使用当前子窗口裁剪域检测绝对定位控件。
+/// @param minimum 控件左上角屏幕坐标。
+/// @param extent 控件屏幕尺寸。
+/// @return 鼠标位于当前可交互窗口中的控件矩形时返回 true。
+/// @warning 每个可见试听按钮每帧调用，不得引入分配或阻塞操作。
+bool isPreviewControlHovered(ImVec2 minimum, ImVec2 extent)
+{
+    if ( !ImGui::IsWindowHovered(
+             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ) {
+        return false;
+    }
+    return ImGui::IsMouseHoveringRect(
+        minimum, { minimum.x + extent.x, minimum.y + extent.y }, true);
+}
+
 /// @brief 保留主题色相并确保方块内控件具有足够的不透明度。
 /// @param color 当前主题颜色。
 /// @param minimumAlpha 最低不透明度。
@@ -218,7 +233,10 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     ImGui::SetCursorScreenPos(layout.topLeft);
     ImGui::InvisibleButton("##ProjectAudioPreviewProgress", progressExtent);
     accumulateLastItemState(result);
-    const bool progressHovered = ImGui::IsItemHovered();
+    const bool progressHovered =
+        ImGui::IsItemHovered() ||
+        isPreviewControlHovered(layout.topLeft, progressExtent);
+    result.hovered = result.hovered || progressHovered;
     drawPreviewProgress(layout.topLeft, progressExtent, progress);
     if ( progressHovered ) {
         ImGui::SetTooltip("%.2f / %.2f s", playbackTime, duration);
@@ -242,16 +260,24 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                                   ProjectAudioPreviewAction action,
                                   std::size_t               index,
                                   bool triggerPreview = true) {
-        ImGui::SetCursorScreenPos(
-            { buttonStartX + static_cast<float>(index) *
-                                 (layout.buttonSize + layout.buttonSpacing),
-              buttonY });
+        const ImVec2 buttonPosition{
+            buttonStartX + static_cast<float>(index) *
+                               (layout.buttonSize + layout.buttonSpacing),
+            buttonY,
+        };
+        ImGui::SetCursorScreenPos(buttonPosition);
         const std::string label = std::string(icon) + hiddenId;
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
-        const bool clicked = FeedbackButton(label.c_str(), buttonExtent);
+        const bool feedbackClicked =
+            FeedbackButton(label.c_str(), buttonExtent);
+        const bool manualHovered =
+            isPreviewControlHovered(buttonPosition, buttonExtent);
+        const bool clicked =
+            feedbackClicked ||
+            (manualHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left));
         if ( clicked && triggerPreview ) {
             if ( !previewPoolKey.empty() ) {
                 result.activated = controlProjectAudioPreview(project,
@@ -263,17 +289,13 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
             }
         }
         ImGui::PopStyleColor(4);
-        const bool hovered = ImGui::IsItemHovered();
-        const bool active  = ImGui::IsItemActive();
+        const bool hovered = ImGui::IsItemHovered() || manualHovered;
+        const bool active =
+            ImGui::IsItemActive() ||
+            (manualHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left));
         accumulateLastItemState(result);
-        drawPreviewButton(
-            { buttonStartX + static_cast<float>(index) *
-                                 (layout.buttonSize + layout.buttonSpacing),
-              buttonY },
-            buttonExtent,
-            icon,
-            hovered,
-            active);
+        result.hovered = result.hovered || hovered || active;
+        drawPreviewButton(buttonPosition, buttonExtent, icon, hovered, active);
         if ( hovered ) {
             ImGui::SetTooltip("%s", tooltip);
         }

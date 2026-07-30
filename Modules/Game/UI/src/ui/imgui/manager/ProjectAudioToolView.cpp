@@ -33,12 +33,6 @@ constexpr float DEFAULT_MAIN_WIDTH = 202.0F;
 /// @brief Main 方块的默认逻辑高度。
 constexpr float DEFAULT_MAIN_HEIGHT = 92.0F;
 
-/// @brief Effect 方块允许用户缩小到的最小逻辑宽度。
-constexpr float MINIMUM_EFFECT_WIDTH = 48.0F;
-
-/// @brief 所有方块允许用户缩小到的最小逻辑高度。
-constexpr float MINIMUM_ITEM_HEIGHT = 48.0F;
-
 /// @brief 方块边缘缩放热区的逻辑厚度。
 constexpr float RESIZE_HIT_THICKNESS = 8.0F;
 
@@ -63,11 +57,44 @@ constexpr float SNAP_RELEASE_THRESHOLD = 16.0F;
 /// @brief 最远方块之后保留的可滚动画布空间。
 constexpr float CONTENT_END_PADDING = 80.0F;
 
-/// @brief 获取指定音频类型允许的最小逻辑宽度。
-float minimumItemWidth(AudioTrackType type)
+/// @brief 获取当前主题下固定试听控件行所需的逻辑宽度。
+float controlMinimumWidth(float dpiScale)
 {
-    return type == AudioTrackType::Main ? DEFAULT_MAIN_WIDTH
-                                        : MINIMUM_EFFECT_WIDTH;
+    const auto& style     = ImGui::GetStyle();
+    const float safeScale = std::max(0.01F, dpiScale);
+    const float spacing =
+        std::max(1.0F, std::min(style.ItemInnerSpacing.x, 4.0F));
+    return std::ceil(
+        ProjectAudioToolLayout::calculateControlMinimumWidth(
+            ImGui::GetFrameHeight(), spacing, style.FramePadding.x, 4U) /
+        safeScale);
+}
+
+/// @brief 获取指定音频类型允许的最小逻辑宽度。
+float minimumItemWidth(AudioTrackType type, float dpiScale)
+{
+    const float typeMinimum =
+        type == AudioTrackType::Main ? DEFAULT_MAIN_WIDTH : DEFAULT_EFFECT_SIZE;
+    return std::max(typeMinimum, controlMinimumWidth(dpiScale));
+}
+
+/// @brief 获取类型、文件名、进度条和固定按钮行所需的最小逻辑高度。
+float minimumItemHeight(float dpiScale)
+{
+    const auto& style     = ImGui::GetStyle();
+    const float safeScale = std::max(0.01F, dpiScale);
+    const float progressHeight =
+        std::clamp(ImGui::GetFontSize() * 0.18F, 3.0F, 7.0F);
+    const float progressSpacing =
+        std::max(1.0F, std::min(style.ItemInnerSpacing.y, 3.0F));
+    return std::ceil(ProjectAudioToolLayout::calculateControlMinimumHeight(
+                         ImGui::GetTextLineHeight(),
+                         progressHeight,
+                         progressSpacing,
+                         ImGui::GetFrameHeight(),
+                         style.FramePadding.y,
+                         style.ItemSpacing.y) /
+                     safeScale);
 }
 
 /// @brief 按当前字体测量结果计算可完整显示文件名的默认逻辑宽度。
@@ -80,10 +107,8 @@ float defaultItemWidth(std::string_view label, AudioTrackType type,
         safeScale;
     const float horizontalPadding =
         ImGui::GetStyle().FramePadding.x / safeScale;
-    const float defaultMinimum =
-        type == AudioTrackType::Main ? DEFAULT_MAIN_WIDTH : DEFAULT_EFFECT_SIZE;
     return ProjectAudioToolLayout::calculateDefaultWidth(
-        textWidth, horizontalPadding, defaultMinimum);
+        textWidth, horizontalPadding, minimumItemWidth(type, dpiScale));
 }
 
 /// @brief 将项目音频资源路径转换为方块显示标签。
@@ -122,40 +147,34 @@ struct ItemAudioControlLayout {
     float labelBottom{ 0.0F };
 };
 
-/// @brief 计算方块可见单元内的播放、暂停、停止和音量按钮布局。
-/// @param labelRect 方块未被上层方块遮挡的最大屏幕区域。
-/// @return 适应当前可见宽高的按钮布局。
+/// @brief 计算方块内固定尺寸的播放、暂停、停止和音量按钮布局。
+/// @param itemRect 方块完整屏幕区域。
+/// @return 由主题控件尺寸决定的统一按钮布局。
+/// @warning 每个可见音频方块每帧调用，不得引入分配或阻塞操作。
 ItemAudioControlLayout calculateItemAudioControlLayout(
-    const ProjectAudioToolLayout::Rect& labelRect)
+    const ProjectAudioToolLayout::Rect& itemRect)
 {
     const auto& style             = ImGui::GetStyle();
     const float horizontalPadding = std::max(1.0F, style.FramePadding.x);
     const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
     const float spacing =
         std::max(1.0F, std::min(style.ItemInnerSpacing.x, 4.0F));
-    const float widthLimit = std::max(
-        1.0F,
-        (labelRect.width - horizontalPadding * 2.0F - spacing * 3.0F) / 4.0F);
     const float progressHeight =
-        std::clamp(labelRect.height * 0.055F, 3.0F, 7.0F);
+        std::clamp(ImGui::GetFontSize() * 0.18F, 3.0F, 7.0F);
     const float progressSpacing =
         std::max(1.0F, std::min(style.ItemInnerSpacing.y, 3.0F));
-    const float controlsHeight = std::max(1.0F, labelRect.height * 0.42F);
-    const float heightLimit =
-        std::max(1.0F, controlsHeight - progressHeight - progressSpacing);
-    const float buttonSize =
-        std::min({ ImGui::GetFrameHeight(), widthLimit, heightLimit });
+    const float buttonSize  = ImGui::GetFrameHeight();
     const float totalWidth  = buttonSize * 4.0F + spacing * 3.0F;
     const float totalHeight = progressHeight + progressSpacing + buttonSize;
-    const float top = labelRect.bottom() - verticalPadding - totalHeight;
+    const float top         = itemRect.bottom() - verticalPadding - totalHeight;
     return {
         .controls =
             ProjectAudioPreviewControlsLayout{
                 .topLeft =
                     {
-                        labelRect.x +
+                        itemRect.x +
                             std::max(horizontalPadding,
-                                     (labelRect.width - totalWidth) * 0.5F),
+                                     (itemRect.width - totalWidth) * 0.5F),
                         top,
                     },
                 .width           = totalWidth,
@@ -165,7 +184,7 @@ ItemAudioControlLayout calculateItemAudioControlLayout(
                 .progressSpacing = progressSpacing,
             },
         .labelBottom =
-            std::max(labelRect.y,
+            std::max(itemRect.y,
                      top - std::max(1.0F, style.ItemSpacing.y)),
     };
 }
@@ -358,9 +377,10 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         item.type          = resource.m_type;
         item.batchSelected = batchSelectedResourceIds.contains(resource.m_id);
         item.rect.width    = defaultItemWidth(item.label, item.type, dpiScale);
-        item.rect.height   = resource.m_type == AudioTrackType::Main
-                                 ? DEFAULT_MAIN_HEIGHT
-                                 : DEFAULT_EFFECT_SIZE;
+        const float defaultHeight = resource.m_type == AudioTrackType::Main
+                                        ? DEFAULT_MAIN_HEIGHT
+                                        : DEFAULT_EFFECT_SIZE;
+        item.rect.height = std::max(defaultHeight, minimumItemHeight(dpiScale));
 
         const auto saved = savedPlacements.find(resource.m_id);
         if ( saved != savedPlacements.end() ) {
@@ -371,12 +391,13 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
             item.widthCustomized      = hasSavedWidth;
             item.heightCustomized     = hasSavedHeight;
             if ( hasSavedWidth ) {
-                item.rect.width = std::max(minimumItemWidth(item.type),
-                                           saved->second.m_width);
+                item.rect.width =
+                    std::max(minimumItemWidth(item.type, dpiScale),
+                             saved->second.m_width);
             }
             if ( hasSavedHeight ) {
-                item.rect.height =
-                    std::max(MINIMUM_ITEM_HEIGHT, saved->second.m_height);
+                item.rect.height = std::max(minimumItemHeight(dpiScale),
+                                            saved->second.m_height);
             }
         }
         if ( saved != savedPlacements.end() &&
@@ -958,24 +979,24 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
     }
 
     const auto labelRect = toScreenRect(item.labelRect, canvasOrigin, dpiScale);
-    const auto audioControlLayout = calculateItemAudioControlLayout(labelRect);
+    const auto audioControlLayout = calculateItemAudioControlLayout(screenRect);
     const float horizontalPadding = std::max(1.0F, style.FramePadding.x);
     const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
-    const float labelHeight =
-        std::max(1.0F, audioControlLayout.labelBottom - labelRect.y);
+    const float labelBottom =
+        audioControlLayout.labelBottom > labelRect.y
+            ? std::min(labelRect.bottom(), audioControlLayout.labelBottom)
+            : labelRect.bottom();
+    const float labelHeight = std::max(1.0F, labelBottom - labelRect.y);
     const float filenameHeight =
         std::min(ImGui::GetTextLineHeight(), labelHeight);
     const ImVec2 labelStart{
         labelRect.x + horizontalPadding,
-        std::max(
-            labelRect.y,
-            audioControlLayout.labelBottom - verticalPadding - filenameHeight),
+        std::max(labelRect.y, labelBottom - verticalPadding - filenameHeight),
     };
     const float labelWidth =
         std::max(1.0F, labelRect.width - horizontalPadding * 2.0F);
-    drawList.PushClipRect({ labelRect.x, labelRect.y },
-                          { labelRect.right(), audioControlLayout.labelBottom },
-                          true);
+    drawList.PushClipRect(
+        { labelRect.x, labelRect.y }, { labelRect.right(), labelBottom }, true);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.06F, 0.08F, 0.11F, 1.0F));
     Utils::drawScrollingText(
         item.label, labelStart, labelWidth, filenameHeight);
@@ -1256,9 +1277,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             item.previewPoolKey =
                 makeProjectAudioPreviewPoolKey("tool/" + item.audioResourceId);
         }
-        const auto labelRect =
-            toScreenRect(item.labelRect, canvasOrigin, dpiScale);
-        const auto controls = calculateItemAudioControlLayout(labelRect);
+        const auto itemScreenRect =
+            toScreenRect(item.rect, canvasOrigin, dpiScale);
+        const auto controls = calculateItemAudioControlLayout(itemScreenRect);
         if ( !audioControlsEnabled ) {
             ImGui::BeginDisabled();
         }
@@ -1530,7 +1551,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             default: break;
             }
 
-            const float minimumWidth             = minimumItemWidth(item.type);
+            const float minimumWidth  = minimumItemWidth(item.type, dpiScale);
+            const float minimumHeight = minimumItemHeight(dpiScale);
             ProjectAudioToolLayout::Rect rawRect = m_resizeStartRect;
             if ( horizontalEdge == ResizeEdge::Minimum ) {
                 const float right = m_resizeStartRect.right();
@@ -1548,11 +1570,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 const float bottom = m_resizeStartRect.bottom();
                 rawRect.y = std::clamp(mouseLogical.y - m_resizePointerOffset.y,
                                        0.0F,
-                                       bottom - MINIMUM_ITEM_HEIGHT);
+                                       bottom - minimumHeight);
                 rawRect.height = bottom - rawRect.y;
             } else if ( verticalEdge == ResizeEdge::Maximum ) {
                 rawRect.height =
-                    std::max(MINIMUM_ITEM_HEIGHT,
+                    std::max(minimumHeight,
                              mouseLogical.y - m_resizePointerOffset.y -
                                  m_resizeStartRect.y);
             }
@@ -1563,7 +1585,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                                        visibleCanvas,
                                                        m_dragSnapTargets,
                                                        minimumWidth,
-                                                       MINIMUM_ITEM_HEIGHT,
+                                                       minimumHeight,
                                                        SNAP_THRESHOLD,
                                                        SNAP_RELEASE_THRESHOLD,
                                                        m_snapLocks);

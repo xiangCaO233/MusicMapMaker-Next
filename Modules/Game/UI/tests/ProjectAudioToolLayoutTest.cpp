@@ -25,6 +25,17 @@ bool testDefaultWidth()
                 202.0F);
 }
 
+/// @brief 验证方块尺寸下限完整容纳统一按钮行、进度条和两行标签。
+bool testControlDrivenMinimumSize()
+{
+    return near(MMM::UI::ProjectAudioToolLayout::calculateControlMinimumWidth(
+                    28.0F, 4.0F, 6.0F, 4U),
+                136.0F) &&
+           near(MMM::UI::ProjectAudioToolLayout::calculateControlMinimumHeight(
+                    20.0F, 5.0F, 3.0F, 28.0F, 4.0F, 6.0F),
+                96.0F);
+}
+
 /// @brief 验证自身边缘和中心可吸附到方块及可见画布的对应锚点。
 bool testEdgeAndCenterSnapping()
 {
@@ -296,15 +307,16 @@ bool testBatchMoveVisibilityConstraint()
 int main()
 {
     if ( !testDefaultWidth() ) return 1;
-    if ( !testEdgeAndCenterSnapping() ) return 2;
-    if ( !testStackingSnapAndHysteresis() ) return 3;
-    if ( !testResizeSnapping() ) return 4;
-    if ( !testMinimumVisibleRatio() ) return 5;
-    if ( !testVisibleLabelCell() ) return 6;
-    if ( !testIncrementalVisibleLabelCell() ) return 7;
-    if ( !testResizeVisibilityConstraint() ) return 8;
-    if ( !testPreparedVisibilityConstraint() ) return 9;
-    if ( !testExistingVisibilityDeficitIsBaseline() ) return 10;
-    if ( !testBatchMoveVisibilityConstraint() ) return 11;
+    if ( !testControlDrivenMinimumSize() ) return 2;
+    if ( !testEdgeAndCenterSnapping() ) return 3;
+    if ( !testStackingSnapAndHysteresis() ) return 4;
+    if ( !testResizeSnapping() ) return 5;
+    if ( !testMinimumVisibleRatio() ) return 6;
+    if ( !testVisibleLabelCell() ) return 7;
+    if ( !testIncrementalVisibleLabelCell() ) return 8;
+    if ( !testResizeVisibilityConstraint() ) return 9;
+    if ( !testPreparedVisibilityConstraint() ) return 10;
+    if ( !testExistingVisibilityDeficitIsBaseline() ) return 11;
+    if ( !testBatchMoveVisibilityConstraint() ) return 12;
     return 0;
 }
