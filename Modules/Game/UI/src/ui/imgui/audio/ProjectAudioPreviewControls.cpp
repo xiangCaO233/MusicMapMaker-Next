@@ -41,11 +41,14 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
 /// @brief 使用当前子窗口裁剪域检测绝对定位控件。
 /// @param minimum 控件左上角屏幕坐标。
 /// @param extent 控件屏幕尺寸。
+/// @param acceptExplicitPointerHit 是否由调用方保证当前控件位于最上层对象。
 /// @return 鼠标位于当前可交互窗口中的控件矩形时返回 true。
 /// @warning 每个可见试听按钮每帧调用，不得引入分配或阻塞操作。
-bool isPreviewControlHovered(ImVec2 minimum, ImVec2 extent)
+bool isPreviewControlHovered(ImVec2 minimum, ImVec2 extent,
+                             bool acceptExplicitPointerHit)
 {
-    if ( !ImGui::IsWindowHovered(
+    if ( !acceptExplicitPointerHit &&
+         !ImGui::IsWindowHovered(
              ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ) {
         return false;
     }
@@ -190,7 +193,8 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
     std::string_view audioResourceId, const std::string& previewPoolKey,
     float volumeFactor, float* editableVolume,
-    const ProjectAudioPreviewControlsLayout& layout)
+    const ProjectAudioPreviewControlsLayout& layout,
+    bool                                     acceptExplicitPointerHit)
 {
     ProjectAudioPreviewControlsResult result;
     if ( !idScope || audioResourceId.empty() || layout.width <= 0.0F ||
@@ -235,7 +239,8 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     accumulateLastItemState(result);
     const bool progressHovered =
         ImGui::IsItemHovered() ||
-        isPreviewControlHovered(layout.topLeft, progressExtent);
+        isPreviewControlHovered(
+            layout.topLeft, progressExtent, acceptExplicitPointerHit);
     result.hovered = result.hovered || progressHovered;
     drawPreviewProgress(layout.topLeft, progressExtent, progress);
     if ( progressHovered ) {
@@ -273,8 +278,8 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
         const bool feedbackClicked =
             FeedbackButton(label.c_str(), buttonExtent);
-        const bool manualHovered =
-            isPreviewControlHovered(buttonPosition, buttonExtent);
+        const bool manualHovered = isPreviewControlHovered(
+            buttonPosition, buttonExtent, acceptExplicitPointerHit);
         const bool clicked =
             feedbackClicked ||
             (manualHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left));

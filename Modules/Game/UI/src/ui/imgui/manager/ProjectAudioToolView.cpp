@@ -189,6 +189,22 @@ ItemAudioControlLayout calculateItemAudioControlLayout(
     };
 }
 
+/// @brief 判断屏幕坐标是否位于试听进度条或按钮行组成的完整控件区。
+/// @param layout 试听控件的绝对屏幕布局。
+/// @param point 待检查的屏幕坐标。
+/// @return 坐标位于控件区时返回 true。
+/// @warning 每个可见音频方块每帧调用，不得引入分配或阻塞操作。
+bool containsItemAudioControls(const ProjectAudioPreviewControlsLayout& layout,
+                               ImVec2                                   point)
+{
+    const float controlsHeight =
+        layout.progressHeight + layout.progressSpacing + layout.buttonSize;
+    return point.x >= layout.topLeft.x &&
+           point.x <= layout.topLeft.x + layout.width &&
+           point.y >= layout.topLeft.y &&
+           point.y <= layout.topLeft.y + controlsHeight;
+}
+
 /// @brief 判断逻辑点是否位于矩形内。
 bool contains(const ProjectAudioToolLayout::Rect& rect, ImVec2 point)
 {
@@ -1280,6 +1296,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const auto itemScreenRect =
             toScreenRect(item.rect, canvasOrigin, dpiScale);
         const auto controls = calculateItemAudioControlLayout(itemScreenRect);
+        const bool controlsPointerInside =
+            audioControlsEnabled && hoveredItem == index &&
+            containsItemAudioControls(controls.controls,
+                                      ImGui::GetIO().MousePos);
+        audioControlsHovered = audioControlsHovered || controlsPointerInside;
         if ( !audioControlsEnabled ) {
             ImGui::BeginDisabled();
         }
@@ -1290,7 +1311,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                               item.previewPoolKey,
                                               m_brushAudioVolume,
                                               &m_brushAudioVolume,
-                                              controls.controls);
+                                              controls.controls,
+                                              controlsPointerInside);
         if ( !audioControlsEnabled ) {
             ImGui::EndDisabled();
         }

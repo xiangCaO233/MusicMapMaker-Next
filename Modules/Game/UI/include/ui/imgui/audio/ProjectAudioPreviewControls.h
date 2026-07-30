@@ -85,6 +85,8 @@ struct ProjectAudioPreviewControlsLayout {
 /// @param volumeFactor 物件自身试听音量倍率。
 /// @param editableVolume 非空时显示音量按钮，并直接编辑指向的倍率。
 /// @param layout 进度条与按钮行的绝对屏幕布局。
+/// @param acceptExplicitPointerHit 调用方已确认控件位于当前最上层对象时，
+/// 允许绕过 ImGui 窗口悬浮推断并直接使用控件矩形命中。
 /// @return 本帧按钮组悬浮和动作状态。
 /// @warning UI 热路径：每帧仅查询已缓存试听池并提交一个进度条和三个绝对
 /// 定位按钮，不分配池标识；音量弹窗仅在用户明确打开后提交控件。为遵守
@@ -96,6 +98,7 @@ renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
     std::string_view audioResourceId, const std::string& previewPoolKey,
     float volumeFactor, float* editableVolume,
-    const ProjectAudioPreviewControlsLayout& layout);
+    const ProjectAudioPreviewControlsLayout& layout,
+    bool                                     acceptExplicitPointerHit = false);
 
 }  // namespace MMM::UI
