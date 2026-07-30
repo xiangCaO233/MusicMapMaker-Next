@@ -2,8 +2,10 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 
@@ -927,6 +929,100 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     XINFO("PASS: Timing delay and sample offset round trip independently");
 }
 
+/// @brief 验证缺少 x 的旧版自动采样按 Malody Pro Editor 规则展开。
+void test_legacy_samples_without_x_use_pro_editor_tracks()
+{
+    XINFO("=== Test: Legacy samples without x use Pro Editor tracks ===");
+
+    const fs::path sourcePath =
+        std::filesystem::temp_directory_path() / "edge_legacy_sample_tracks.mc";
+    const fs::path exportPath = std::filesystem::temp_directory_path() /
+                                "edge_legacy_sample_tracks_export.mc";
+
+    json fileData;
+    fileData["meta"] = { { "id", 0 },
+                         { "creator", "Test" },
+                         { "version", "4K" },
+                         { "mode", 0 },
+                         { "mode_ext",
+                           { { "column", 4 }, { "bar_begin", 0 } } },
+                         { "song",
+                           { { "title", "LegacySamples" },
+                             { "artist", "Test" },
+                             { "bpm", 120.0 } } } };
+    fileData["time"] = json::array(
+        { { { "beat", json::array({ 0, 0, 1 }) }, { "bpm", 120.0 } } });
+    fileData["note"] = json::array({ { { "beat", json::array({ 1, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "first.wav" } },
+                                     { { "beat", json::array({ 1, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "second.wav" } },
+                                     { { "beat", json::array({ 2, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "third.wav" } },
+                                     { { "beat", json::array({ 2, 0, 1 }) },
+                                       { "type", 1 },
+                                       { "sound", "explicit.wav" },
+                                       { "x", 7 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open legacy sample input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(loaded.m_baseMapMetadata.track_count == 4,
+                "automatic samples must not change playable key count");
+    TEST_ASSERT(loaded.m_audioSamples.size() == 4,
+                "all legacy samples should load");
+    TEST_ASSERT(loaded.m_audioSamples[0].m_track == 10 &&
+                    loaded.m_audioSamples[1].m_track == 11,
+                "simultaneous legacy samples should expand from track 10");
+    TEST_ASSERT(loaded.m_audioSamples[2].m_track == 10,
+                "a new trigger time should reuse legacy track 10");
+    TEST_ASSERT(loaded.m_audioSamples[3].m_track == 7,
+                "an explicit valid x should remain unchanged");
+    TEST_ASSERT(loaded.m_baseMapMetadata.bgm_track_count == 8,
+                "absolute track 11 after four keys should retain eight BGM "
+                "tracks including the gap");
+
+    const auto relocationCount = std::count_if(
+        loaded.m_loadDiagnostics.begin(),
+        loaded.m_loadDiagnostics.end(),
+        [](const MMM::BeatmapLoadDiagnostic& diagnostic) {
+            return diagnostic.m_code ==
+                   MMM::BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED;
+        });
+    TEST_ASSERT(relocationCount == 1,
+                "legacy auto-layout should emit one aggregate diagnostic");
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "legacy auto-layout map should export");
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    reloaded.sync();
+    const auto trackForSound = [&](const std::string& sound) {
+        const auto sample =
+            std::find_if(reloaded.m_audioSamples.begin(),
+                         reloaded.m_audioSamples.end(),
+                         [&](const MMM::AudioSampleEvent& candidate) {
+                             return candidate.m_audioResourceId == sound;
+                         });
+        return sample == reloaded.m_audioSamples.end()
+                   ? std::numeric_limits<std::uint32_t>::max()
+                   : sample->m_track;
+    };
+    TEST_ASSERT(reloaded.m_audioSamples.size() == 4 &&
+                    trackForSound("first.wav") == 10 &&
+                    trackForSound("second.wav") == 11 &&
+                    trackForSound("third.wav") == 10 &&
+                    trackForSound("explicit.wav") == 7,
+                "canonical x values should preserve the inferred layout");
+
+    XINFO("PASS: Legacy samples without x use Pro Editor tracks");
+}
+
 /// @brief 验证非法采样轨道归一化，且 song.file 不夺走同名玩家音效语义。
 void test_invalid_sample_track_and_song_hint_conflict()
 {
@@ -1340,6 +1436,7 @@ int main()
     test_sound_track_does_not_expand_key_count();
     test_multiple_sound_objects_round_trip_without_global_shift();
     test_timing_delay_and_sample_offset_round_trip_independently();
+    test_legacy_samples_without_x_use_pro_editor_tracks();
     test_invalid_sample_track_and_song_hint_conflict();
     testEditedSampleTimestampOverridesImportedBeat();
     testStringBpmInNearlyEmptyMapLoads();

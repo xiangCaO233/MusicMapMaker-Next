@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -521,6 +522,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     // 5. 处理物件 (Notes)
+    constexpr std::uint32_t     MALODY_LEGACY_SAMPLE_TRACK_BEGIN = 10U;
+    std::optional<std::int64_t> legacySampleEffectiveTimestampMs;
+    std::uint32_t               nextLegacySampleTrack =
+        std::max(MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                 static_cast<std::uint32_t>(std::max(0, finalK)));
+    std::size_t legacyAutoPositionedSampleCount = 0;
+
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
             if ( !n.contains("beat") ) continue;
@@ -567,7 +575,26 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                     roundedX >= static_cast<double>(finalK) &&
                     roundedX <=
                         static_cast<double>(std::numeric_limits<int>::max());
-                if ( validBgmTrack ) {
+                if ( xIt == n.end() ) {
+                    const std::int64_t effectiveTimestampMs =
+                        static_cast<std::int64_t>(
+                            std::llround(sample.effectiveTimestamp()));
+                    if ( !legacySampleEffectiveTimestampMs.has_value() ||
+                         *legacySampleEffectiveTimestampMs !=
+                             effectiveTimestampMs ) {
+                        legacySampleEffectiveTimestampMs = effectiveTimestampMs;
+                        nextLegacySampleTrack            = std::max(
+                            MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                            static_cast<std::uint32_t>(std::max(0, finalK)));
+                    }
+                    sample.m_track = nextLegacySampleTrack;
+                    if ( nextLegacySampleTrack <
+                         std::numeric_limits<std::uint32_t>::max() ) {
+                        ++nextLegacySampleTrack;
+                    }
+                    props["original_x"] = "null";
+                    ++legacyAutoPositionedSampleCount;
+                } else if ( validBgmTrack ) {
                     sample.m_track =
                         static_cast<uint32_t>(static_cast<int>(roundedX));
                 } else {
@@ -805,6 +832,27 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
             }
         }
+    }
+
+    if ( legacyAutoPositionedSampleCount > 0 ) {
+        const auto legacyTrackBegin =
+            std::max(MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                     static_cast<std::uint32_t>(std::max(0, finalK)));
+        beatMap.m_loadDiagnostics.push_back(
+            { .m_code = BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED,
+              .m_severity = BeatmapLoadDiagnosticSeverity::
+                  BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+              .m_message = fmt::format(
+                  "{} 个缺少 x 的旧版 Malody 自动采样已从绝对轨道 {} "
+                  "开始自动分轨；同一实际触发时刻的采样会依次展开",
+                  legacyAutoPositionedSampleCount,
+                  legacyTrackBegin),
+              .m_relatedPath = basemeta.map_path });
+        XINFO(
+            "已按 Malody Pro Editor 规则为 {} 个缺少 x 的自动采样分轨，"
+            "起始绝对轨道为 {}",
+            legacyAutoPositionedSampleCount,
+            legacyTrackBegin);
     }
 
     // 更新谱面元数据
