@@ -1102,7 +1102,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         return;
     }
 
-    ImGui::TextUnformatted(TR("ui.project_audio_tool.hint").data());
+    ImGui::TextWrapped("%s", TR("ui.project_audio_tool.hint").data());
 
     ImGui::SetNextItemWidth(-1.0F);
     const bool searchSubmitted =
