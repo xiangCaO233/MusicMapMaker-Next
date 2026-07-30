@@ -88,17 +88,18 @@ bool controlProjectAudioPreview(const Project&            project,
 ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
     std::string_view audioResourceId, const std::string& previewPoolKey,
-    float volumeFactor, const ProjectAudioPreviewControlsLayout& layout)
+    float volumeFactor, float* editableVolume,
+    const ProjectAudioPreviewControlsLayout& layout)
 {
     ProjectAudioPreviewControlsResult result;
-    if ( !idScope || audioResourceId.empty() || previewPoolKey.empty() ||
-         layout.width <= 0.0F || layout.buttonSize <= 0.0F ||
-         layout.progressHeight <= 0.0F ) {
+    if ( !idScope || audioResourceId.empty() || layout.width <= 0.0F ||
+         layout.buttonSize <= 0.0F || layout.progressHeight <= 0.0F ) {
         return result;
     }
 
-    auto&        audio    = Audio::AudioManager::instance();
-    const bool   loaded   = audio.isSoundEffectLoaded(previewPoolKey);
+    auto&      audio = Audio::AudioManager::instance();
+    const bool loaded =
+        !previewPoolKey.empty() && audio.isSoundEffectLoaded(previewPoolKey);
     const double duration = loaded ? audio.getSFXDuration(previewPoolKey) : 0.0;
     const double playbackTime =
         loaded ? audio.getSFXPlaybackTime(previewPoolKey) : 0.0;
@@ -108,14 +109,17 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                   static_cast<float>(playbackTime / duration), 0.0F, 1.0F)
             : 0.0F;
 
-    const auto& style      = ImGui::GetStyle();
-    const float widestIcon = std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).x,
-                                        ImGui::CalcTextSize(ICON_MMM_PAUSE).x,
-                                        ImGui::CalcTextSize(ICON_MMM_STOP).x });
+    const auto& style = ImGui::GetStyle();
+    const float widestIcon =
+        std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).x,
+                   ImGui::CalcTextSize(ICON_MMM_PAUSE).x,
+                   ImGui::CalcTextSize(ICON_MMM_STOP).x,
+                   ImGui::CalcTextSize(ICON_MMM_VOLUME_HIGH).x });
     const float tallestIcon =
         std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).y,
                    ImGui::CalcTextSize(ICON_MMM_PAUSE).y,
-                   ImGui::CalcTextSize(ICON_MMM_STOP).y });
+                   ImGui::CalcTextSize(ICON_MMM_STOP).y,
+                   ImGui::CalcTextSize(ICON_MMM_VOLUME_HIGH).y });
     const ImVec2 adaptivePadding{
         std::min(style.FramePadding.x,
                  std::max(0.0F, (layout.buttonSize - widestIcon) * 0.5F)),
@@ -130,8 +134,10 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         ImGui::SetTooltip("%.2f / %.2f s", playbackTime, duration);
     }
 
-    const float buttonRowWidth =
-        layout.buttonSize * 3.0F + layout.buttonSpacing * 2.0F;
+    const std::size_t buttonCount = editableVolume ? 4U : 3U;
+    const float       buttonRowWidth =
+        layout.buttonSize * static_cast<float>(buttonCount) +
+        layout.buttonSpacing * static_cast<float>(buttonCount - 1U);
     const float buttonStartX =
         layout.topLeft.x +
         std::max(0.0F, (layout.width - buttonRowWidth) * 0.5F);
@@ -152,12 +158,14 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
               buttonY });
         const std::string label = std::string(icon) + hiddenId;
         if ( FeedbackButton(label.c_str(), buttonExtent) ) {
-            result.activated = controlProjectAudioPreview(project,
-                                                          audioResourceId,
-                                                          previewPoolKey,
-                                                          action,
-                                                          volumeFactor) ||
-                               result.activated;
+            if ( !previewPoolKey.empty() ) {
+                result.activated = controlProjectAudioPreview(project,
+                                                              audioResourceId,
+                                                              previewPoolKey,
+                                                              action,
+                                                              volumeFactor) ||
+                                   result.activated;
+            }
         }
         accumulateLastItemState(result);
         if ( ImGui::IsItemHovered() ) {
@@ -180,6 +188,58 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                  TR("ui.tools.bpm_measure.stop").data(),
                  ProjectAudioPreviewAction::Stop,
                  2U);
+
+    if ( editableVolume ) {
+        ImGui::SetCursorScreenPos(
+            { buttonStartX + 3.0F * (layout.buttonSize + layout.buttonSpacing),
+              buttonY });
+        if ( FeedbackButton((std::string(ICON_MMM_VOLUME_HIGH) +
+                             "##ProjectAudioPreviewVolume")
+                                .c_str(),
+                            buttonExtent) ) {
+            ImGui::OpenPopup("##ProjectAudioPreviewVolumePopup");
+        }
+        accumulateLastItemState(result);
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s",
+                              TR("ui.edit.sample_properties.volume").data());
+        }
+
+        if ( ImGui::BeginPopup("##ProjectAudioPreviewVolumePopup") ) {
+            result.volumeEditorOpen = true;
+            result.hovered = result.hovered || ImGui::IsWindowHovered();
+
+            ImGui::TextUnformatted(
+                TR("ui.edit.sample_properties.volume").data());
+            if ( FeedbackButton("-25%##ProjectAudioPreviewVolumeDecrease") ) {
+                *editableVolume      = std::max(0.0F, *editableVolume - 0.25F);
+                result.volumeChanged = true;
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(
+                std::max(72.0F, ImGui::GetFontSize() * 5.5F));
+            if ( ImGui::InputFloat("##ProjectAudioPreviewVolumeValue",
+                                   editableVolume,
+                                   0.0F,
+                                   0.0F,
+                                   "%.2f") ) {
+                if ( std::isfinite(*editableVolume) ) {
+                    *editableVolume = std::max(0.0F, *editableVolume);
+                } else {
+                    *editableVolume = 1.0F;
+                }
+            }
+            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                result.volumeChanged = true;
+            }
+            ImGui::SameLine();
+            if ( FeedbackButton("+25%##ProjectAudioPreviewVolumeIncrease") ) {
+                *editableVolume      = std::max(0.0F, *editableVolume + 0.25F);
+                result.volumeChanged = true;
+            }
+            ImGui::EndPopup();
+        }
+    }
 
     ImGui::PopID();
     ImGui::PopStyleVar();

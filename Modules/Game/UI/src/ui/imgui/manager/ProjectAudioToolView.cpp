@@ -122,7 +122,7 @@ struct ItemAudioControlLayout {
     float labelBottom{ 0.0F };
 };
 
-/// @brief 计算方块可见单元内的播放、暂停和停止按钮布局。
+/// @brief 计算方块可见单元内的播放、暂停、停止和音量按钮布局。
 /// @param labelRect 方块未被上层方块遮挡的最大屏幕区域。
 /// @return 适应当前可见宽高的按钮布局。
 ItemAudioControlLayout calculateItemAudioControlLayout(
@@ -135,7 +135,7 @@ ItemAudioControlLayout calculateItemAudioControlLayout(
         std::max(1.0F, std::min(style.ItemInnerSpacing.x, 4.0F));
     const float widthLimit = std::max(
         1.0F,
-        (labelRect.width - horizontalPadding * 2.0F - spacing * 2.0F) / 3.0F);
+        (labelRect.width - horizontalPadding * 2.0F - spacing * 3.0F) / 4.0F);
     const float progressHeight =
         std::clamp(labelRect.height * 0.055F, 3.0F, 7.0F);
     const float progressSpacing =
@@ -145,7 +145,7 @@ ItemAudioControlLayout calculateItemAudioControlLayout(
         std::max(1.0F, controlsHeight - progressHeight - progressSpacing);
     const float buttonSize =
         std::min({ ImGui::GetFrameHeight(), widthLimit, heightLimit });
-    const float totalWidth  = buttonSize * 3.0F + spacing * 2.0F;
+    const float totalWidth  = buttonSize * 4.0F + spacing * 3.0F;
     const float totalHeight = progressHeight + progressSpacing + buttonSize;
     const float top = labelRect.bottom() - verticalPadding - totalHeight;
     return {
@@ -326,6 +326,10 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     m_cachedDpiScale          = dpiScale;
     auto& workspace           = project->m_settings.m_workspace;
     m_selectedAudioResourceId = workspace.m_projectAudioToolSelectedResourceId;
+    m_brushAudioVolume =
+        std::isfinite(workspace.m_projectAudioToolBrushVolume)
+            ? std::max(0.0F, workspace.m_projectAudioToolBrushVolume)
+            : 1.0F;
 
     std::unordered_map<std::string, ProjectAudioToolItemPlacement>
         savedPlacements;
@@ -463,6 +467,7 @@ void ProjectAudioToolView::persistWorkspace()
 
     auto& workspace = project->m_settings.m_workspace;
     workspace.m_projectAudioToolSelectedResourceId = m_selectedAudioResourceId;
+    workspace.m_projectAudioToolBrushVolume        = m_brushAudioVolume;
     workspace.m_projectAudioToolPlacements.clear();
     workspace.m_projectAudioToolPlacements.reserve(m_items.size());
     for ( const auto& item : m_items ) {
@@ -502,6 +507,7 @@ std::optional<std::size_t> ProjectAudioToolView::activateItem(
         Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
             item.audioResourceId,
             item.type,
+            m_brushAudioVolume,
         }));
     return activeIndex;
 }
@@ -1174,9 +1180,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     if ( !audioControlsEnabled ) {
         ImGui::BeginDisabled();
     }
-    for ( const auto& item : m_items ) {
+    std::string volumeEditorResourceId;
+    bool        brushVolumeChanged = false;
+    for ( auto& item : m_items ) {
         if ( !isVisible(item.rect, visibleCanvas) ) continue;
 
+        if ( item.previewPoolKey.empty() ) {
+            item.previewPoolKey =
+                makeProjectAudioPreviewPoolKey("tool/" + item.audioResourceId);
+        }
         const auto labelRect =
             toScreenRect(item.labelRect, canvasOrigin, dpiScale);
         const auto controls = calculateItemAudioControlLayout(labelRect);
@@ -1185,14 +1197,43 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                               *project,
                                               item.audioResourceId,
                                               item.previewPoolKey,
-                                              1.0F,
+                                              m_brushAudioVolume,
+                                              &m_brushAudioVolume,
                                               controls.controls);
         if ( audioControlsEnabled ) {
-            audioControlsHovered = audioControlsHovered || result.hovered;
+            audioControlsHovered = audioControlsHovered || result.hovered ||
+                                   result.volumeEditorOpen;
+        }
+        if ( result.volumeEditorOpen ) {
+            volumeEditorResourceId = item.audioResourceId;
+            brushVolumeChanged     = brushVolumeChanged || result.volumeChanged;
         }
     }
     if ( !audioControlsEnabled ) {
         ImGui::EndDisabled();
+    }
+
+    if ( !volumeEditorResourceId.empty() ) {
+        const auto volumeItem = std::ranges::find(
+            m_items, volumeEditorResourceId, &Item::audioResourceId);
+        const bool resourceChanged =
+            m_selectedAudioResourceId != volumeEditorResourceId;
+        if ( resourceChanged && volumeItem != m_items.end() ) {
+            if ( activateItem(static_cast<std::size_t>(
+                     std::distance(m_items.begin(), volumeItem))) ) {
+                rebuildLabelRects();
+            }
+        } else if ( brushVolumeChanged ) {
+            Logic::EditorEngine::instance().pushCommand(
+                Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
+                    m_selectedAudioResourceId,
+                    m_selectedAudioTrackType,
+                    m_brushAudioVolume,
+                }));
+        }
+        if ( resourceChanged || brushVolumeChanged ) {
+            persistWorkspace();
+        }
     }
 
     if ( hoveredItem && !audioControlsHovered && !m_draggingItem &&

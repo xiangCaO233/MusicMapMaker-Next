@@ -304,6 +304,9 @@ struct CmdSetBrushAudioResource {
 
     /// @brief 所选资源类型，用于限制玩家物件只能绑定 Effect。
     ::MMM::AudioTrackType audioTrackType{ ::MMM::AudioTrackType::Effect };
+
+    /// @brief 新建玩家物件绑定或自动采样使用的物件音量倍率。
+    float volume{ 1.0F };
 };
 
 /// @brief 将完整音符调色盘应用到当前选中物件。

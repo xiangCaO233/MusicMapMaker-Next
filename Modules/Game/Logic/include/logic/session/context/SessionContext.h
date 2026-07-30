@@ -264,6 +264,9 @@ struct SessionContext {
             ::MMM::AudioTrackType::Effect
         };
 
+        /// @brief 当前项目音频工具为新建物件设置的音量倍率。
+        float selectedAudioVolume{ 1.0F };
+
         /// @brief 当前手势是否正在 BGM 区创建自动采样。
         bool createsAudioSample{ false };
 

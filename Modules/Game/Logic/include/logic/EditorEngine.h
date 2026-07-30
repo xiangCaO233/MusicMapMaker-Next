@@ -611,6 +611,9 @@ private:
     /// @brief 当前项目音频工具选中的资源类型。
     AudioTrackType m_brushAudioTrackType{ AudioTrackType::Effect };
 
+    /// @brief 当前项目音频工具为新建物件设置的音量倍率。
+    float m_brushAudioVolume{ 1.0F };
+
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用
     /// relaxed 降低栅栏成本。

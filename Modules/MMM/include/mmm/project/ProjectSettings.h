@@ -1,6 +1,8 @@
 #pragma once
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -260,6 +262,9 @@ struct ProjectWorkspaceState {
     /// @brief 项目音频工具上次选中的资源 ID。
     std::string m_projectAudioToolSelectedResourceId;
 
+    /// @brief 项目音频工具为后续新建物件设置的音量倍率。
+    float m_projectAudioToolBrushVolume{ 1.0F };
+
     /// @brief 上次是否打开了项目音频工具窗口。
     bool m_projectAudioToolOpen{ false };
 
@@ -304,6 +309,8 @@ struct ProjectWorkspaceState {
             { "m_activeEditTool", workspace.m_activeEditTool },
             { "m_projectAudioToolSelectedResourceId",
               workspace.m_projectAudioToolSelectedResourceId },
+            { "m_projectAudioToolBrushVolume",
+              workspace.m_projectAudioToolBrushVolume },
             { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
             { "m_projectAudioToolPlacements",
               workspace.m_projectAudioToolPlacements },
@@ -341,6 +348,13 @@ struct ProjectWorkspaceState {
             j.value("m_activeEditTool", std::string{ "Move" });
         workspace.m_projectAudioToolSelectedResourceId =
             j.value("m_projectAudioToolSelectedResourceId", std::string{});
+        workspace.m_projectAudioToolBrushVolume =
+            j.value("m_projectAudioToolBrushVolume", 1.0F);
+        if ( !std::isfinite(workspace.m_projectAudioToolBrushVolume) ) {
+            workspace.m_projectAudioToolBrushVolume = 1.0F;
+        }
+        workspace.m_projectAudioToolBrushVolume =
+            std::max(0.0F, workspace.m_projectAudioToolBrushVolume);
         workspace.m_projectAudioToolOpen =
             j.value("m_projectAudioToolOpen", false);
         workspace.m_projectAudioToolPlacements =

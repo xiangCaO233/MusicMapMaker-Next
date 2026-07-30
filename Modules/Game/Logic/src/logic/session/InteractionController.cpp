@@ -1455,6 +1455,8 @@ void InteractionController::handleCommand(const CmdSetBrushAudioResource& cmd)
 {
     m_ctx.brushState.selectedAudioResourceId = cmd.audioResourceId;
     m_ctx.brushState.selectedAudioTrackType  = cmd.audioTrackType;
+    m_ctx.brushState.selectedAudioVolume =
+        std::isfinite(cmd.volume) ? std::max(0.0F, cmd.volume) : 1.0F;
 }
 
 void InteractionController::handleCommand(const CmdStartMarquee& cmd)

@@ -81,6 +81,7 @@ bool testBrushAudioResourcePlacementRules()
     controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
         .audioResourceId = "effect",
         .audioTrackType  = MMM::AudioTrackType::Effect,
+        .volume          = 0.4F,
     });
     drawTool.handleStartBrush(context,
                               MMM::Logic::CmdStartBrush{
@@ -99,7 +100,7 @@ bool testBrushAudioResourcePlacementRules()
     const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
     if ( note.m_trackIndex != 0 || !note.m_sampleBinding ||
          note.m_sampleBinding->m_audioResourceId != "effect" ||
-         !near(note.m_sampleBinding->m_volume, 1.0) ) {
+         !near(note.m_sampleBinding->m_volume, 0.4) ) {
         XERROR("Effect brush selection did not bind the created note");
         return false;
     }
@@ -122,7 +123,7 @@ bool testBrushAudioResourcePlacementRules()
         samples.get<MMM::Logic::SampleComponent>(*samples.begin());
     if ( effectSample.m_track != 4 ||
          effectSample.m_audioResourceId != "effect" ||
-         !near(effectSample.m_volume, 1.0) ) {
+         !near(effectSample.m_volume, 0.4) ) {
         XERROR("Effect automatic sample used the wrong lane or resource");
         return false;
     }
@@ -130,6 +131,7 @@ bool testBrushAudioResourcePlacementRules()
     controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
         .audioResourceId = "main",
         .audioTrackType  = MMM::AudioTrackType::Main,
+        .volume          = 0.7F,
     });
     drawTool.handleStartBrush(context,
                               MMM::Logic::CmdStartBrush{
@@ -161,8 +163,9 @@ bool testBrushAudioResourcePlacementRules()
     bool foundMain = false;
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
-        foundMain = foundMain ||
-                    (sample.m_track == 5 && sample.m_audioResourceId == "main");
+        foundMain          = foundMain || (sample.m_track == 5 &&
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     return foundMain;
 }

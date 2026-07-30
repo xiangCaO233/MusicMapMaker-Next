@@ -1237,6 +1237,10 @@ void EditorEngine::finishOpenProject(
         const auto& workspace = project->m_settings.m_workspace;
         m_brushAudioResourceId.clear();
         m_brushAudioTrackType = AudioTrackType::Effect;
+        m_brushAudioVolume =
+            std::isfinite(workspace.m_projectAudioToolBrushVolume)
+                ? std::max(0.0F, workspace.m_projectAudioToolBrushVolume)
+                : 1.0F;
         if ( !workspace.m_projectAudioToolSelectedResourceId.empty() ) {
             const auto resourceIterator = std::find_if(
                 project->m_audioResources.begin(),
@@ -1732,9 +1736,14 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
              std::get_if<CmdSetBrushAudioResource>(&cmd) ) {
         m_brushAudioResourceId = audioResource->audioResourceId;
         m_brushAudioTrackType  = audioResource->audioTrackType;
+        m_brushAudioVolume     = std::isfinite(audioResource->volume)
+                                     ? std::max(0.0F, audioResource->volume)
+                                     : 1.0F;
         if ( auto* project = ProjectController::instance().currentProject() ) {
-            project->m_settings.m_workspace
-                .m_projectAudioToolSelectedResourceId = m_brushAudioResourceId;
+            auto& workspace = project->m_settings.m_workspace;
+            workspace.m_projectAudioToolSelectedResourceId =
+                m_brushAudioResourceId;
+            workspace.m_projectAudioToolBrushVolume = m_brushAudioVolume;
         }
 
         std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1745,6 +1754,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                     LogicCommand(CmdSetBrushAudioResource{
                         m_brushAudioResourceId,
                         m_brushAudioTrackType,
+                        m_brushAudioVolume,
                     }));
             }
         }
@@ -1844,6 +1854,7 @@ void EditorEngine::restoreBrushAudioResourceUnsafe(
     session.pushCommand(LogicCommand(CmdSetBrushAudioResource{
         m_brushAudioResourceId,
         m_brushAudioTrackType,
+        m_brushAudioVolume,
     }));
 }
 
@@ -2989,6 +3000,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
                         LogicCommand(CmdSetBrushAudioResource{
                             m_brushAudioResourceId,
                             m_brushAudioTrackType,
+                            m_brushAudioVolume,
                         }));
                 }
             }
@@ -3261,6 +3273,7 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd)
             entry.session->pushCommand(LogicCommand(CmdSetBrushAudioResource{
                 newResourceId,
                 renamedType,
+                m_brushAudioVolume,
             }));
         }
     }
@@ -3352,6 +3365,7 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
     if ( m_brushAudioResourceId == cmd.id ) {
         m_brushAudioResourceId.clear();
         m_brushAudioTrackType = AudioTrackType::Effect;
+        m_brushAudioVolume    = 1.0F;
         project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
             .clear();
         for ( auto& entry : sessions ) {
@@ -3360,6 +3374,7 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
                     LogicCommand(CmdSetBrushAudioResource{
                         {},
                         AudioTrackType::Effect,
+                        1.0F,
                     }));
             }
         }

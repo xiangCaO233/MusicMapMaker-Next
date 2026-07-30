@@ -828,6 +828,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         m_audioPreviewOverlay.audioResourceId,
         m_audioPreviewOverlay.previewPoolKey,
         m_audioPreviewOverlay.volume,
+        nullptr,
         UI::ProjectAudioPreviewControlsLayout{
             .topLeft = { canvasScreenX + controlsX, canvasScreenY + controlsY },
             .width   = rowWidth,

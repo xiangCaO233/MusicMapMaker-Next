@@ -27,6 +27,12 @@ struct ProjectAudioPreviewControlsResult {
 
     /// @brief 本帧是否触发了任一试听动作。
     bool activated{ false };
+
+    /// @brief 音量弹窗本帧是否保持打开。
+    bool volumeEditorOpen{ false };
+
+    /// @brief 音量值是否已经由输入框提交或由 25% 步长按钮修改。
+    bool volumeChanged{ false };
 };
 
 /// @brief 单资源试听控制条的绝对屏幕布局。
@@ -71,22 +77,25 @@ struct ProjectAudioPreviewControlsLayout {
                                               ProjectAudioPreviewAction action,
                                               float volumeFactor = 1.0F);
 
-/// @brief 绘制项目音频播放、暂停和停止按钮。
+/// @brief 绘制项目音频播放、暂停、停止和音量按钮。
 /// @param idScope 按钮组稳定 ImGui ID。
 /// @param project 当前项目。
 /// @param audioResourceId 项目音频资源 ID。
 /// @param previewPoolKey 由 makeProjectAudioPreviewPoolKey 构造的独立池标识。
 /// @param volumeFactor 物件自身试听音量倍率。
+/// @param editableVolume 非空时显示音量按钮，并直接编辑指向的倍率。
 /// @param layout 进度条与按钮行的绝对屏幕布局。
 /// @return 本帧按钮组悬浮和动作状态。
 /// @warning UI 热路径：每帧仅查询已缓存试听池并提交一个进度条和三个绝对
-/// 定位按钮，不分配池标识；为遵守 ImGui 边界约束，返回后游标停留在最后
+/// 定位按钮，不分配池标识；音量弹窗仅在用户明确打开后提交控件。为遵守
+/// ImGui 边界约束，返回后游标停留在最后
 /// 一个按钮之后，调用方不得依赖原流式布局游标。资源查找和加载只在点击后
 /// 发生。
 [[nodiscard]] ProjectAudioPreviewControlsResult
 renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
     std::string_view audioResourceId, const std::string& previewPoolKey,
-    float volumeFactor, const ProjectAudioPreviewControlsLayout& layout);
+    float volumeFactor, float* editableVolume,
+    const ProjectAudioPreviewControlsLayout& layout);
 
 }  // namespace MMM::UI

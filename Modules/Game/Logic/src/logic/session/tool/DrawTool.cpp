@@ -221,7 +221,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
          !ctx.brushState.selectedAudioResourceId.empty() ) {
         ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
             ctx.brushState.selectedAudioResourceId,
-            1.0F,
+            ctx.brushState.selectedAudioVolume,
         };
     }
 
@@ -747,7 +747,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                 .m_offsetMs  = 0,
                 .m_track     = static_cast<std::uint32_t>(ctx.brushState.track),
                 .m_audioResourceId = ctx.brushState.activeAudioResourceId,
-                .m_volume          = 1.0F,
+                .m_volume          = ctx.brushState.selectedAudioVolume,
             };
             ctx.actionStack.pushAndExecute(
                 std::make_unique<SampleAction>(SampleAction::Type::Create,

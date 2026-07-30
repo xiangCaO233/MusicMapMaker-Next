@@ -52,6 +52,7 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     MMM::ProjectWorkspaceState source;
     source.m_projectAudioToolOpen               = true;
     source.m_projectAudioToolSelectedResourceId = "main";
+    source.m_projectAudioToolBrushVolume        = 0.75F;
     source.m_projectAudioToolPlacements         = {
         MMM::ProjectAudioToolItemPlacement{
             .m_audioResourceId = "main",
@@ -83,6 +84,9 @@ bool testProjectAudioToolWorkspaceRoundTrip()
                  "project audio tool open state should round trip") &&
            check(restored.m_projectAudioToolSelectedResourceId == "main",
                  "project audio selection should round trip") &&
+           check(
+               std::abs(restored.m_projectAudioToolBrushVolume - 0.75F) < 1e-6F,
+               "project audio brush volume should round trip") &&
            check(restored.m_projectAudioToolPlacements.size() == 2,
                  "project audio placements should round trip") &&
            check(
