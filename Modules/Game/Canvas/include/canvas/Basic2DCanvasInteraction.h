@@ -198,8 +198,8 @@ private:
         Logic::ChartObjectKind objectKind{ Logic::ChartObjectKind::PlayerNote };
         /// @brief 试听引用的项目音频资源 ID。
         std::string audioResourceId;
-        /// @brief 只属于当前物件的独立试听实例 ID。
-        std::string previewInstanceId;
+        /// @brief 只属于当前物件的 AudioManager 试听池标识。
+        std::string previewPoolKey;
         /// @brief 物件自身音量倍率。
         float volume{ 1.0F };
         /// @brief 当前锚定拾取盒左边界。

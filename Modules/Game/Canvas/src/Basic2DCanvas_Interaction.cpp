@@ -744,12 +744,14 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     m_audioPreviewOverlay.audioResourceId = inspect.audioResourceId;
     m_audioPreviewOverlay.volume          = inspect.volume;
     if ( !sameObject ) {
-        m_audioPreviewOverlay.previewInstanceId =
+        const std::string previewInstanceId =
             "canvas/" + m_cameraId + "/" +
             std::to_string(static_cast<std::uint32_t>(inspect.objectKind)) +
             "/" +
             std::to_string(
                 static_cast<std::uint32_t>(entt::to_integral(inspect.entity)));
+        m_audioPreviewOverlay.previewPoolKey =
+            UI::makeProjectAudioPreviewPoolKey(previewInstanceId);
     }
     m_audioPreviewOverlay.left   = anchor->x;
     m_audioPreviewOverlay.top    = anchor->y;
@@ -761,8 +763,12 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         std::ceil(std::max(20.0F, ImGui::GetFrameHeight()));
     const float spacing =
         std::max(2.0F, std::min(style.ItemInnerSpacing.x, 5.0F));
-    const float rowWidth = buttonSize * 3.0F + spacing * 2.0F;
-    const float gap      = std::max(4.0F, style.ItemSpacing.x * 0.5F);
+    const float progressHeight = std::clamp(buttonSize * 0.16F, 4.0F, 7.0F);
+    const float progressSpacing =
+        std::max(2.0F, std::min(style.ItemInnerSpacing.y, 4.0F));
+    const float rowWidth    = buttonSize * 3.0F + spacing * 2.0F;
+    const float panelHeight = progressHeight + progressSpacing + buttonSize;
+    const float gap         = std::max(4.0F, style.ItemSpacing.x * 0.5F);
 
     float controlsX = m_audioPreviewOverlay.right + gap;
     if ( controlsX + rowWidth > targetWidth ) {
@@ -771,20 +777,25 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     controlsX =
         std::clamp(controlsX, 0.0F, std::max(0.0F, targetWidth - rowWidth));
     float controlsY = (m_audioPreviewOverlay.top +
-                       m_audioPreviewOverlay.bottom - buttonSize) *
+                       m_audioPreviewOverlay.bottom - panelHeight) *
                       0.5F;
     controlsY =
-        std::clamp(controlsY, 0.0F, std::max(0.0F, targetHeight - buttonSize));
+        std::clamp(controlsY, 0.0F, std::max(0.0F, targetHeight - panelHeight));
 
     const auto result = UI::renderProjectAudioPreviewControls(
         "CanvasObjectAudioPreview",
         *project,
         m_audioPreviewOverlay.audioResourceId,
-        m_audioPreviewOverlay.previewInstanceId,
+        m_audioPreviewOverlay.previewPoolKey,
         m_audioPreviewOverlay.volume,
-        { canvasScreenX + controlsX, canvasScreenY + controlsY },
-        buttonSize,
-        spacing);
+        UI::ProjectAudioPreviewControlsLayout{
+            .topLeft = { canvasScreenX + controlsX, canvasScreenY + controlsY },
+            .width   = rowWidth,
+            .buttonSize      = buttonSize,
+            .buttonSpacing   = spacing,
+            .progressHeight  = progressHeight,
+            .progressSpacing = progressSpacing,
+        });
 
     const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
                                       pointerX <= m_audioPreviewOverlay.right &&
@@ -799,7 +810,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         std::max(m_audioPreviewOverlay.right, controlsX + rowWidth) +
         bridgePadding;
     const float bridgeBottom =
-        std::max(m_audioPreviewOverlay.bottom, controlsY + buttonSize) +
+        std::max(m_audioPreviewOverlay.bottom, controlsY + panelHeight) +
         bridgePadding;
     const bool pointerInsideBridge =
         pointerX >= bridgeLeft && pointerX <= bridgeRight &&

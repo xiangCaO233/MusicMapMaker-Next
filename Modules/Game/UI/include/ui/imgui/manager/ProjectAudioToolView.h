@@ -57,6 +57,9 @@ private:
         /// @brief 项目音频资源稳定 ID。
         std::string audioResourceId;
 
+        /// @brief 该方块独立试听实例的 AudioManager 池标识。
+        std::string previewPoolKey;
+
         /// @brief 方块中显示的音频文件名。
         std::string label;
 

@@ -115,14 +115,8 @@ ProjectAudioToolLayout::Rect toScreenRect(
 
 /// @brief 单个音频方块内常驻试听按钮的屏幕布局。
 struct ItemAudioControlLayout {
-    /// @brief 播放按钮左上角。
-    ImVec2 topLeft;
-
-    /// @brief 单个方形按钮边长。
-    float buttonSize{ 0.0F };
-
-    /// @brief 相邻按钮间距。
-    float spacing{ 0.0F };
+    /// @brief 可直接传给通用试听控件的屏幕布局。
+    ProjectAudioPreviewControlsLayout controls;
 
     /// @brief 文件名文本可使用区域的屏幕底边。
     float labelBottom{ 0.0F };
@@ -142,23 +136,37 @@ ItemAudioControlLayout calculateItemAudioControlLayout(
     const float widthLimit = std::max(
         1.0F,
         (labelRect.width - horizontalPadding * 2.0F - spacing * 2.0F) / 3.0F);
-    const float heightLimit = std::max(1.0F, labelRect.height * 0.34F);
+    const float progressHeight =
+        std::clamp(labelRect.height * 0.055F, 3.0F, 7.0F);
+    const float progressSpacing =
+        std::max(1.0F, std::min(style.ItemInnerSpacing.y, 3.0F));
+    const float controlsHeight = std::max(1.0F, labelRect.height * 0.42F);
+    const float heightLimit =
+        std::max(1.0F, controlsHeight - progressHeight - progressSpacing);
     const float buttonSize =
         std::min({ ImGui::GetFrameHeight(), widthLimit, heightLimit });
-    const float totalWidth = buttonSize * 3.0F + spacing * 2.0F;
-    const float top        = labelRect.bottom() - verticalPadding - buttonSize;
+    const float totalWidth  = buttonSize * 3.0F + spacing * 2.0F;
+    const float totalHeight = progressHeight + progressSpacing + buttonSize;
+    const float top = labelRect.bottom() - verticalPadding - totalHeight;
     return {
-        .topLeft =
-            {
-                labelRect.x +
-                    std::max(horizontalPadding,
-                             (labelRect.width - totalWidth) * 0.5F),
-                top,
+        .controls =
+            ProjectAudioPreviewControlsLayout{
+                .topLeft =
+                    {
+                        labelRect.x +
+                            std::max(horizontalPadding,
+                                     (labelRect.width - totalWidth) * 0.5F),
+                        top,
+                    },
+                .width           = totalWidth,
+                .buttonSize      = buttonSize,
+                .buttonSpacing   = spacing,
+                .progressHeight  = progressHeight,
+                .progressSpacing = progressSpacing,
             },
-        .buttonSize = buttonSize,
-        .spacing    = spacing,
         .labelBottom =
-            std::max(labelRect.y, top - std::max(1.0F, style.ItemSpacing.y)),
+            std::max(labelRect.y,
+                     top - std::max(1.0F, style.ItemSpacing.y)),
     };
 }
 
@@ -338,13 +346,15 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     for ( const auto& resource : project->m_audioResources ) {
         Item item;
         item.audioResourceId = resource.m_id;
-        item.label           = audioResourceLabel(resource);
-        item.type            = resource.m_type;
-        item.batchSelected   = batchSelectedResourceIds.contains(resource.m_id);
-        item.rect.width  = defaultItemWidth(item.label, item.type, dpiScale);
-        item.rect.height = resource.m_type == AudioTrackType::Main
-                               ? DEFAULT_MAIN_HEIGHT
-                               : DEFAULT_EFFECT_SIZE;
+        item.previewPoolKey =
+            makeProjectAudioPreviewPoolKey("tool/" + resource.m_id);
+        item.label         = audioResourceLabel(resource);
+        item.type          = resource.m_type;
+        item.batchSelected = batchSelectedResourceIds.contains(resource.m_id);
+        item.rect.width    = defaultItemWidth(item.label, item.type, dpiScale);
+        item.rect.height   = resource.m_type == AudioTrackType::Main
+                                 ? DEFAULT_MAIN_HEIGHT
+                                 : DEFAULT_EFFECT_SIZE;
 
         const auto saved = savedPlacements.find(resource.m_id);
         if ( saved != savedPlacements.end() ) {
@@ -1174,11 +1184,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
                                               item.audioResourceId,
-                                              item.audioResourceId,
+                                              item.previewPoolKey,
                                               1.0F,
-                                              controls.topLeft,
-                                              controls.buttonSize,
-                                              controls.spacing);
+                                              controls.controls);
         if ( audioControlsEnabled ) {
             audioControlsHovered = audioControlsHovered || result.hovered;
         }

@@ -30,16 +30,6 @@ const AudioResource* findAudioResource(const Project&   project,
     return resource == project.m_audioResources.end() ? nullptr : &*resource;
 }
 
-/// @brief 构造不会与项目资源、皮肤音效或 HitEffect 冲突的试听池标识。
-/// @param previewInstanceId 独立试听实例 ID。
-/// @return AudioManager 专用试听池标识。
-std::string makePreviewPoolKey(std::string_view previewInstanceId)
-{
-    std::string key{ "__mmm_project_audio_preview__/" };
-    key.append(previewInstanceId);
-    return key;
-}
-
 /// @brief 累积最后一个 ImGui 控件的悬浮和激活状态。
 /// @param result 待更新的按钮组结果。
 void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
@@ -50,19 +40,25 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
 
 }  // namespace
 
+std::string makeProjectAudioPreviewPoolKey(std::string_view previewInstanceId)
+{
+    std::string key{ "__mmm_project_audio_preview__/" };
+    key.append(previewInstanceId);
+    return key;
+}
+
 bool controlProjectAudioPreview(const Project&            project,
                                 std::string_view          audioResourceId,
-                                std::string_view          previewInstanceId,
+                                const std::string&        previewPoolKey,
                                 ProjectAudioPreviewAction action,
                                 float                     volumeFactor)
 {
-    if ( audioResourceId.empty() || previewInstanceId.empty() ) return false;
+    if ( audioResourceId.empty() || previewPoolKey.empty() ) return false;
 
     const auto* resource = findAudioResource(project, audioResourceId);
     if ( !resource ) return false;
 
-    auto&             audio          = Audio::AudioManager::instance();
-    const std::string previewPoolKey = makePreviewPoolKey(previewInstanceId);
+    auto& audio = Audio::AudioManager::instance();
     if ( action == ProjectAudioPreviewAction::Pause ) {
         audio.pauseSoundEffect(previewPoolKey);
         return true;
@@ -91,14 +87,26 @@ bool controlProjectAudioPreview(const Project&            project,
 
 ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
     const char* idScope, const Project& project,
-    std::string_view audioResourceId, std::string_view previewInstanceId,
-    float volumeFactor, ImVec2 topLeft, float buttonSize, float spacing)
+    std::string_view audioResourceId, const std::string& previewPoolKey,
+    float volumeFactor, const ProjectAudioPreviewControlsLayout& layout)
 {
     ProjectAudioPreviewControlsResult result;
-    if ( !idScope || audioResourceId.empty() || previewInstanceId.empty() ||
-         buttonSize <= 0.0F ) {
+    if ( !idScope || audioResourceId.empty() || previewPoolKey.empty() ||
+         layout.width <= 0.0F || layout.buttonSize <= 0.0F ||
+         layout.progressHeight <= 0.0F ) {
         return result;
     }
+
+    auto&        audio    = Audio::AudioManager::instance();
+    const bool   loaded   = audio.isSoundEffectLoaded(previewPoolKey);
+    const double duration = loaded ? audio.getSFXDuration(previewPoolKey) : 0.0;
+    const double playbackTime =
+        loaded ? audio.getSFXPlaybackTime(previewPoolKey) : 0.0;
+    const float progress =
+        duration > 0.0
+            ? std::clamp(
+                  static_cast<float>(playbackTime / duration), 0.0F, 1.0F)
+            : 0.0F;
 
     const auto& style      = ImGui::GetStyle();
     const float widestIcon = std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).x,
@@ -110,12 +118,26 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                    ImGui::CalcTextSize(ICON_MMM_STOP).y });
     const ImVec2 adaptivePadding{
         std::min(style.FramePadding.x,
-                 std::max(0.0F, (buttonSize - widestIcon) * 0.5F)),
+                 std::max(0.0F, (layout.buttonSize - widestIcon) * 0.5F)),
         std::min(style.FramePadding.y,
-                 std::max(0.0F, (buttonSize - tallestIcon) * 0.5F)),
+                 std::max(0.0F, (layout.buttonSize - tallestIcon) * 0.5F)),
     };
 
-    const ImVec2 buttonExtent{ buttonSize, buttonSize };
+    ImGui::SetCursorScreenPos(layout.topLeft);
+    ImGui::ProgressBar(progress, { layout.width, layout.progressHeight }, "");
+    accumulateLastItemState(result);
+    if ( ImGui::IsItemHovered() ) {
+        ImGui::SetTooltip("%.2f / %.2f s", playbackTime, duration);
+    }
+
+    const float buttonRowWidth =
+        layout.buttonSize * 3.0F + layout.buttonSpacing * 2.0F;
+    const float buttonStartX =
+        layout.topLeft.x +
+        std::max(0.0F, (layout.width - buttonRowWidth) * 0.5F);
+    const float buttonY =
+        layout.topLeft.y + layout.progressHeight + layout.progressSpacing;
+    const ImVec2 buttonExtent{ layout.buttonSize, layout.buttonSize };
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, adaptivePadding);
     ImGui::PushID(idScope);
 
@@ -125,13 +147,14 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                                   ProjectAudioPreviewAction action,
                                   std::size_t               index) {
         ImGui::SetCursorScreenPos(
-            { topLeft.x + static_cast<float>(index) * (buttonSize + spacing),
-              topLeft.y });
+            { buttonStartX + static_cast<float>(index) *
+                                 (layout.buttonSize + layout.buttonSpacing),
+              buttonY });
         const std::string label = std::string(icon) + hiddenId;
         if ( FeedbackButton(label.c_str(), buttonExtent) ) {
             result.activated = controlProjectAudioPreview(project,
                                                           audioResourceId,
-                                                          previewInstanceId,
+                                                          previewPoolKey,
                                                           action,
                                                           volumeFactor) ||
                                result.activated;
