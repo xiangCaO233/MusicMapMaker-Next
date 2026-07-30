@@ -23,6 +23,7 @@ add_library(
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
   src/logic/ProjectDirectoryWatcher.cpp
+  src/logic/ProjectStorage.cpp
   src/logic/ProjectResourceService.cpp
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
@@ -79,6 +80,11 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
                         tests/ProjectCompatibilityTest.cpp)
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
+
+# 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。
+mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
+target_link_libraries(ProjectStorageTest PRIVATE Logic Log)
+add_test(NAME ProjectStorageTest COMMAND ProjectStorageTest)
 
 mmm_add_test_executable(Logic ProjectAudioReferenceTest
                         tests/ProjectAudioReferenceTest.cpp)
