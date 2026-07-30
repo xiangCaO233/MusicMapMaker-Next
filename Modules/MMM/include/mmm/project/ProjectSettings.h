@@ -95,6 +95,12 @@ struct ProjectAudioToolItemPlacement {
     /// @brief 方块左上角相对工具画布的逻辑 Y 坐标。
     float m_y{ 0.0F };
 
+    /// @brief 用户自定义逻辑宽度；零表示继续按文件名自动计算。
+    float m_width{ 0.0F };
+
+    /// @brief 用户自定义逻辑高度；零表示继续使用类型默认高度。
+    float m_height{ 0.0F };
+
     /// @brief 方块叠层顺序，数值越大越靠上。
     std::int32_t m_zOrder{ 0 };
 
@@ -106,6 +112,8 @@ struct ProjectAudioToolItemPlacement {
             { "m_audioResourceId", placement.m_audioResourceId },
             { "m_x", placement.m_x },
             { "m_y", placement.m_y },
+            { "m_width", placement.m_width },
+            { "m_height", placement.m_height },
             { "m_zOrder", placement.m_zOrder },
         };
     }
@@ -118,6 +126,8 @@ struct ProjectAudioToolItemPlacement {
             json.value("m_audioResourceId", std::string{});
         placement.m_x      = json.value("m_x", 0.0F);
         placement.m_y      = json.value("m_y", 0.0F);
+        placement.m_width  = json.value("m_width", 0.0F);
+        placement.m_height = json.value("m_height", 0.0F);
         placement.m_zOrder = json.value("m_zOrder", 0);
     }
 };

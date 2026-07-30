@@ -56,6 +56,22 @@ struct SnapLocks {
     AxisSnapLock y;
 };
 
+/// @brief 单轴缩放方向。
+enum class ResizeEdge {
+    None,
+    Minimum,
+    Maximum,
+};
+
+/// @brief 根据文字宽度、按钮内边距和类型下限计算默认方块宽度。
+[[nodiscard]] inline float calculateDefaultWidth(float textWidth,
+                                                 float horizontalPadding,
+                                                 float minimumWidth)
+{
+    return std::ceil(
+        std::max(minimumWidth, textWidth + horizontalPadding * 2.0F + 2.0F));
+}
+
 /// @brief 计算矩形面积。
 [[nodiscard]] inline float area(const Rect& rect)
 {
@@ -249,6 +265,123 @@ struct SnapLocks {
     return rawRect;
 }
 
+/// @brief 收集当前画布和其它方块在一个轴上的全部吸附锚点。
+[[nodiscard]] inline std::vector<float> collectAxisTargets(
+    bool horizontal, const Rect& visibleCanvas,
+    std::span<const Rect> otherRects)
+{
+    std::vector<float> targets;
+    targets.reserve(otherRects.size() * 5 + 3);
+    if ( horizontal ) {
+        targets.push_back(visibleCanvas.x);
+        targets.push_back(visibleCanvas.x + visibleCanvas.width * 0.5F);
+        targets.push_back(visibleCanvas.right());
+        for ( const auto& rect : otherRects ) {
+            const auto anchors = horizontalTargets(rect);
+            targets.insert(targets.end(), anchors.begin(), anchors.end());
+        }
+    } else {
+        targets.push_back(visibleCanvas.y);
+        targets.push_back(visibleCanvas.y + visibleCanvas.height * 0.5F);
+        targets.push_back(visibleCanvas.bottom());
+        for ( const auto& rect : otherRects ) {
+            const auto anchors = verticalTargets(rect);
+            targets.insert(targets.end(), anchors.begin(), anchors.end());
+        }
+    }
+    return targets;
+}
+
+/// @brief 对正在缩放的单轴执行自身边缘或中心到目标锚点的吸附。
+[[nodiscard]] inline float snapResizeAxis(
+    float rawMinimum, float rawMaximum, ResizeEdge edge,
+    std::span<const float> targetAnchors, float minimumSize,
+    float snapThreshold, float releaseThreshold, AxisSnapLock& lock)
+{
+    if ( edge == ResizeEdge::None ) {
+        lock.position.reset();
+        return edge == ResizeEdge::Minimum ? rawMinimum : rawMaximum;
+    }
+
+    const float rawEdge = edge == ResizeEdge::Minimum ? rawMinimum : rawMaximum;
+    if ( lock.position ) {
+        if ( std::abs(rawEdge - *lock.position) <= releaseThreshold ) {
+            return *lock.position;
+        }
+        lock.position.reset();
+    }
+
+    constexpr std::array<float, 3> OWN_ANCHOR_RATIOS{ 0.0F, 0.5F, 1.0F };
+    float                          bestEdge     = rawEdge;
+    float                          bestDistance = snapThreshold;
+    for ( const float target : targetAnchors ) {
+        for ( const float ratio : OWN_ANCHOR_RATIOS ) {
+            float candidate = rawEdge;
+            if ( edge == ResizeEdge::Minimum ) {
+                if ( ratio >= 1.0F ) continue;
+                candidate = (target - ratio * rawMaximum) / (1.0F - ratio);
+                if ( rawMaximum - candidate < minimumSize ) continue;
+            } else {
+                if ( ratio <= 0.0F ) continue;
+                candidate = (target - (1.0F - ratio) * rawMinimum) / ratio;
+                if ( candidate - rawMinimum < minimumSize ) continue;
+            }
+            const float distance = std::abs(rawEdge - candidate);
+            if ( distance <= bestDistance ) {
+                bestDistance = distance;
+                bestEdge     = candidate;
+            }
+        }
+    }
+    if ( bestEdge != rawEdge ) {
+        lock.position = bestEdge;
+    }
+    return bestEdge;
+}
+
+/// @brief 将缩放中的活动边吸附到方块及可见画布的边缘、中心和叠层锚点。
+[[nodiscard]] inline Rect snapResizeRect(
+    Rect rawRect, ResizeEdge horizontalEdge, ResizeEdge verticalEdge,
+    const Rect& visibleCanvas, std::span<const Rect> otherRects,
+    float minimumWidth, float minimumHeight, float snapThreshold,
+    float releaseThreshold, SnapLocks& locks)
+{
+    const auto xTargets = collectAxisTargets(true, visibleCanvas, otherRects);
+    const auto yTargets = collectAxisTargets(false, visibleCanvas, otherRects);
+
+    const float rawRight          = rawRect.right();
+    const float rawBottom         = rawRect.bottom();
+    const float snappedHorizontal = snapResizeAxis(rawRect.x,
+                                                   rawRight,
+                                                   horizontalEdge,
+                                                   xTargets,
+                                                   minimumWidth,
+                                                   snapThreshold,
+                                                   releaseThreshold,
+                                                   locks.x);
+    const float snappedVertical   = snapResizeAxis(rawRect.y,
+                                                   rawBottom,
+                                                   verticalEdge,
+                                                   yTargets,
+                                                   minimumHeight,
+                                                   snapThreshold,
+                                                   releaseThreshold,
+                                                   locks.y);
+    if ( horizontalEdge == ResizeEdge::Minimum ) {
+        rawRect.x     = snappedHorizontal;
+        rawRect.width = rawRight - snappedHorizontal;
+    } else if ( horizontalEdge == ResizeEdge::Maximum ) {
+        rawRect.width = snappedHorizontal - rawRect.x;
+    }
+    if ( verticalEdge == ResizeEdge::Minimum ) {
+        rawRect.y      = snappedVertical;
+        rawRect.height = rawBottom - snappedVertical;
+    } else if ( verticalEdge == ResizeEdge::Maximum ) {
+        rawRect.height = snappedVertical - rawRect.y;
+    }
+    return rawRect;
+}
+
 /// @brief 计算全部可见比例约束的总缺口。
 [[nodiscard]] inline float visibilityDeficit(
     const Rect& candidate, std::span<const VisibilityConstraint> constraints,
@@ -334,6 +467,49 @@ struct SnapLocks {
         candidate = best;
     }
     return candidate;
+}
+
+/// @brief 沿当前缩放轨迹限制候选矩形，使下层方块始终保留最小可见比例。
+/// @warning 缩放交互路径：只在尺寸变化时执行固定轮数二分，禁止在静止帧调用。
+[[nodiscard]] inline Rect constrainResizeVisibility(
+    const Rect& previous, const Rect& candidate,
+    std::span<const VisibilityConstraint> constraints,
+    float                                 minimumVisibleRatio)
+{
+    const float previousDeficit =
+        visibilityDeficit(previous, constraints, minimumVisibleRatio);
+    const float candidateDeficit =
+        visibilityDeficit(candidate, constraints, minimumVisibleRatio);
+    if ( candidateDeficit <= 1e-5F ||
+         (previousDeficit > 1e-5F &&
+          candidateDeficit < previousDeficit - 1e-5F) ) {
+        return candidate;
+    }
+
+    float         validAmount          = 0.0F;
+    float         invalidAmount        = 1.0F;
+    constexpr int BINARY_SEARCH_PASSES = 12;
+    for ( int pass = 0; pass < BINARY_SEARCH_PASSES; ++pass ) {
+        const float amount = (validAmount + invalidAmount) * 0.5F;
+        const Rect  trial{
+            previous.x + (candidate.x - previous.x) * amount,
+            previous.y + (candidate.y - previous.y) * amount,
+            previous.width + (candidate.width - previous.width) * amount,
+            previous.height + (candidate.height - previous.height) * amount,
+        };
+        if ( visibilityDeficit(trial, constraints, minimumVisibleRatio) <=
+             1e-5F ) {
+            validAmount = amount;
+        } else {
+            invalidAmount = amount;
+        }
+    }
+    return {
+        previous.x + (candidate.x - previous.x) * validAmount,
+        previous.y + (candidate.y - previous.y) * validAmount,
+        previous.width + (candidate.width - previous.width) * validAmount,
+        previous.height + (candidate.height - previous.height) * validAmount,
+    };
 }
 
 /// @brief 查找基础方块未被上层方块遮挡的最大网格单元，用于放置文本标签。

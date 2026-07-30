@@ -37,6 +37,19 @@ public:
     void requestFocus();
 
 private:
+    /// @brief 方块缩放时被拖动的边或角。
+    enum class ResizeHandle {
+        None,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    };
+
     /// @brief 工具画布中的单个项目音频方块。
     struct Item {
         /// @brief 项目音频资源稳定 ID。
@@ -56,11 +69,18 @@ private:
 
         /// @brief 方块叠层顺序。
         std::int32_t zOrder{ 0 };
+
+        /// @brief 宽度是否已经由用户手动调整。
+        bool widthCustomized{ false };
+
+        /// @brief 高度是否已经由用户手动调整。
+        bool heightCustomized{ false };
     };
 
     /// @brief 从当前项目资源和工作区布局低频重建方块缓存。
     /// @param visibleWidth 当前可见画布的逻辑宽度。
-    void rebuildItems(float visibleWidth);
+    /// @param dpiScale 当前内容缩放。
+    void rebuildItems(float visibleWidth, float dpiScale);
 
     /// @brief 重建叠层后各方块的可见文本区域。
     /// @warning 低频布局路径：会按叠层检查相交方块，只在打开、资源刷新或拖动
@@ -75,8 +95,24 @@ private:
     /// @param mousePosition 鼠标在逻辑画布中的坐标。
     void beginItemDrag(std::size_t itemIndex, ImVec2 mousePosition);
 
-    /// @brief 构建当前拖动所需的吸附目标和下层可见性约束。
-    void rebuildDragConstraints();
+    /// @brief 选择方块、提升叠层并同步当前画笔音频。
+    /// @return 提升后的方块下标；输入无效时返回空。
+    [[nodiscard]] std::optional<std::size_t> activateItem(
+        std::size_t itemIndex);
+
+    /// @brief 从指定边或角开始缩放方块。
+    /// @param itemIndex 方块缓存下标。
+    /// @param handle 被拖动的边或角。
+    /// @param mousePosition 鼠标在逻辑画布中的坐标。
+    void beginItemResize(std::size_t itemIndex, ResizeHandle handle,
+                         ImVec2 mousePosition);
+
+    /// @brief 根据鼠标位置检测方块边缘或四角的缩放热区。
+    [[nodiscard]] ResizeHandle hitTestResizeHandle(const Item& item,
+                                                   ImVec2 mousePosition) const;
+
+    /// @brief 构建当前移动或缩放所需的吸附目标和下层可见性约束。
+    void rebuildInteractionConstraints();
 
     /// @brief 绘制一个方块和位于其可见区域内的滚动文本。
     /// @param item 方块缓存。
@@ -103,10 +139,22 @@ private:
     /// @brief 当前拖动方块在 m_items 中的下标。
     std::optional<std::size_t> m_draggingItem;
 
+    /// @brief 当前缩放方块在 m_items 中的下标。
+    std::optional<std::size_t> m_resizingItem;
+
+    /// @brief 当前缩放所操作的边或角。
+    ResizeHandle m_resizeHandle{ ResizeHandle::None };
+
+    /// @brief 开始缩放时的方块矩形，用于固定未拖动的对边。
+    ProjectAudioToolLayout::Rect m_resizeStartRect;
+
+    /// @brief 鼠标按下点相对活动边的逻辑偏移，避免开始缩放时跳变。
+    ImVec2 m_resizePointerOffset{ 0.0F, 0.0F };
+
     /// @brief 鼠标按下点相对方块左上角的逻辑偏移。
     ImVec2 m_dragOffset{ 0.0F, 0.0F };
 
-    /// @brief 当前拖动的水平和垂直吸附滞回状态。
+    /// @brief 当前移动或缩放的水平和垂直吸附滞回状态。
     ProjectAudioToolLayout::SnapLocks m_snapLocks;
 
     /// @brief 当前选中项目音频资源 ID。
@@ -120,6 +168,9 @@ private:
 
     /// @brief 方块缓存对应的项目根目录 UTF-8 键。
     std::string m_cachedProjectRoot;
+
+    /// @brief 方块默认尺寸上次测量时的内容缩放。
+    float m_cachedDpiScale{ 0.0F };
 
     /// @brief 是否在下一帧聚焦窗口。
     bool m_requestFocus{ false };

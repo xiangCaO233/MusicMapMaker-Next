@@ -14,6 +14,17 @@ bool near(float lhs, float rhs)
     return std::abs(lhs - rhs) < 1e-4F;
 }
 
+/// @brief 验证默认宽度能完整容纳文件名且尊重不同类型的宽度下限。
+bool testDefaultWidth()
+{
+    return near(MMM::UI::ProjectAudioToolLayout::calculateDefaultWidth(
+                    120.0F, 6.0F, 92.0F),
+                134.0F) &&
+           near(MMM::UI::ProjectAudioToolLayout::calculateDefaultWidth(
+                    60.0F, 6.0F, 202.0F),
+                202.0F);
+}
+
 /// @brief 验证自身边缘和中心可吸附到方块及可见画布的对应锚点。
 bool testEdgeAndCenterSnapping()
 {
@@ -81,6 +92,44 @@ bool testStackingSnapAndHysteresis()
     return !near(snapped.x, 135.0F);
 }
 
+/// @brief 验证缩放活动边可通过自身边缘或中心吸附到目标锚点。
+bool testResizeSnapping()
+{
+    const Rect              canvas{ 0.0F, 0.0F, 400.0F, 300.0F };
+    const std::vector<Rect> targets{
+        Rect{ 200.0F, 100.0F, 100.0F, 100.0F },
+    };
+    MMM::UI::ProjectAudioToolLayout::SnapLocks locks;
+    auto resized = MMM::UI::ProjectAudioToolLayout::snapResizeRect(
+        Rect{ 100.0F, 50.0F, 97.0F, 147.0F },
+        MMM::UI::ProjectAudioToolLayout::ResizeEdge::Maximum,
+        MMM::UI::ProjectAudioToolLayout::ResizeEdge::Maximum,
+        canvas,
+        targets,
+        48.0F,
+        48.0F,
+        6.0F,
+        12.0F,
+        locks);
+    if ( !near(resized.right(), 200.0F) || !near(resized.bottom(), 200.0F) ) {
+        return false;
+    }
+
+    locks   = {};
+    resized = MMM::UI::ProjectAudioToolLayout::snapResizeRect(
+        Rect{ 103.0F, 50.0F, 197.0F, 150.0F },
+        MMM::UI::ProjectAudioToolLayout::ResizeEdge::Minimum,
+        MMM::UI::ProjectAudioToolLayout::ResizeEdge::None,
+        canvas,
+        targets,
+        48.0F,
+        48.0F,
+        6.0F,
+        12.0F,
+        locks);
+    return near(resized.x, 100.0F) && near(resized.right(), 300.0F);
+}
+
 /// @brief 验证前景方块不能把任一下层方块遮挡到不足 35%。
 bool testMinimumVisibleRatio()
 {
@@ -112,14 +161,37 @@ bool testVisibleLabelCell()
            near(visible.height, 100.0F);
 }
 
+/// @brief 验证扩大前景方块时会停在下层方块的 35% 可见边界。
+bool testResizeVisibilityConstraint()
+{
+    const Rect base{ 100.0F, 100.0F, 100.0F, 100.0F };
+    const MMM::UI::ProjectAudioToolLayout::VisibilityConstraint constraint{
+        .base = base,
+    };
+    const std::vector constraints{ constraint };
+    const Rect        result =
+        MMM::UI::ProjectAudioToolLayout::constrainResizeVisibility(
+            Rect{ 100.0F, 100.0F, 50.0F, 100.0F },
+            Rect{ 100.0F, 100.0F, 100.0F, 100.0F },
+            constraints,
+            0.35F);
+    const std::vector occluders{ result };
+    return MMM::UI::ProjectAudioToolLayout::visibleRatio(base, occluders) >=
+               0.35F - 1e-4F &&
+           result.width > 64.9F && result.width < 65.1F;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频工具几何布局测试。
 int main()
 {
-    if ( !testEdgeAndCenterSnapping() ) return 1;
-    if ( !testStackingSnapAndHysteresis() ) return 2;
-    if ( !testMinimumVisibleRatio() ) return 3;
-    if ( !testVisibleLabelCell() ) return 4;
+    if ( !testDefaultWidth() ) return 1;
+    if ( !testEdgeAndCenterSnapping() ) return 2;
+    if ( !testStackingSnapAndHysteresis() ) return 3;
+    if ( !testResizeSnapping() ) return 4;
+    if ( !testMinimumVisibleRatio() ) return 5;
+    if ( !testVisibleLabelCell() ) return 6;
+    if ( !testResizeVisibilityConstraint() ) return 7;
     return 0;
 }

@@ -57,6 +57,8 @@ bool testProjectAudioToolWorkspaceRoundTrip()
             .m_audioResourceId = "main",
             .m_x               = 12.5F,
             .m_y               = 30.0F,
+            .m_width           = 260.0F,
+            .m_height          = 120.0F,
             .m_zOrder          = 4,
         },
         MMM::ProjectAudioToolItemPlacement{
@@ -69,18 +71,34 @@ bool testProjectAudioToolWorkspaceRoundTrip()
 
     const json serialized = source;
     const auto restored   = serialized.get<MMM::ProjectWorkspaceState>();
+    const auto legacyPlacement =
+        json{
+            { "m_audioResourceId", "legacy" },
+            { "m_x", 4.0F },
+            { "m_y", 8.0F },
+            { "m_zOrder", 1 },
+        }
+            .get<MMM::ProjectAudioToolItemPlacement>();
     return check(restored.m_projectAudioToolOpen,
                  "project audio tool open state should round trip") &&
            check(restored.m_projectAudioToolSelectedResourceId == "main",
                  "project audio selection should round trip") &&
            check(restored.m_projectAudioToolPlacements.size() == 2,
                  "project audio placements should round trip") &&
-           check(restored.m_projectAudioToolPlacements[1].m_audioResourceId ==
-                         "effect" &&
-                     std::abs(restored.m_projectAudioToolPlacements[1].m_x -
-                              80.0F) < 1e-6F &&
-                     restored.m_projectAudioToolPlacements[1].m_zOrder == 5,
-                 "project audio placement fields should remain intact");
+           check(
+               restored.m_projectAudioToolPlacements[1].m_audioResourceId ==
+                       "effect" &&
+                   std::abs(restored.m_projectAudioToolPlacements[1].m_x -
+                            80.0F) < 1e-6F &&
+                   std::abs(restored.m_projectAudioToolPlacements[0].m_width -
+                            260.0F) < 1e-6F &&
+                   std::abs(restored.m_projectAudioToolPlacements[0].m_height -
+                            120.0F) < 1e-6F &&
+                   restored.m_projectAudioToolPlacements[1].m_zOrder == 5,
+               "project audio placement fields should remain intact") &&
+           check(legacyPlacement.m_width == 0.0F &&
+                     legacyPlacement.m_height == 0.0F,
+                 "legacy project audio placements should keep automatic size");
 }
 
 /// @brief 验证 osu! 字符串 Video 事件能够作为唯一背景载入。

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <string_view>
 #include <unordered_map>
 
 namespace MMM::UI
@@ -19,14 +20,26 @@ namespace MMM::UI
 namespace
 {
 
-/// @brief Effect 方块的逻辑边长。
-constexpr float EFFECT_SIZE = 92.0F;
+/// @brief Effect 方块的默认逻辑边长。
+constexpr float DEFAULT_EFFECT_SIZE = 92.0F;
 
-/// @brief Main 方块的逻辑宽度。
-constexpr float MAIN_WIDTH = 202.0F;
+/// @brief Main 方块的默认和最小逻辑宽度。
+constexpr float DEFAULT_MAIN_WIDTH = 202.0F;
 
-/// @brief Main 方块的逻辑高度。
-constexpr float MAIN_HEIGHT = 92.0F;
+/// @brief Main 方块的默认逻辑高度。
+constexpr float DEFAULT_MAIN_HEIGHT = 92.0F;
+
+/// @brief Effect 方块允许用户缩小到的最小逻辑宽度。
+constexpr float MINIMUM_EFFECT_WIDTH = 48.0F;
+
+/// @brief 所有方块允许用户缩小到的最小逻辑高度。
+constexpr float MINIMUM_ITEM_HEIGHT = 48.0F;
+
+/// @brief 方块边缘缩放热区的逻辑厚度。
+constexpr float RESIZE_HIT_THICKNESS = 8.0F;
+
+/// @brief 选中方块缩放控制点的逻辑边长。
+constexpr float RESIZE_HANDLE_SIZE = 7.0F;
 
 /// @brief 默认方块布局间距。
 constexpr float ITEM_GAP = 18.0F;
@@ -45,6 +58,29 @@ constexpr float SNAP_RELEASE_THRESHOLD = 16.0F;
 
 /// @brief 最远方块之后保留的可滚动画布空间。
 constexpr float CONTENT_END_PADDING = 80.0F;
+
+/// @brief 获取指定音频类型允许的最小逻辑宽度。
+float minimumItemWidth(AudioTrackType type)
+{
+    return type == AudioTrackType::Main ? DEFAULT_MAIN_WIDTH
+                                        : MINIMUM_EFFECT_WIDTH;
+}
+
+/// @brief 按当前字体测量结果计算可完整显示文件名的默认逻辑宽度。
+float defaultItemWidth(std::string_view label, AudioTrackType type,
+                       float dpiScale)
+{
+    const float safeScale = std::max(0.01F, dpiScale);
+    const float textWidth =
+        ImGui::CalcTextSize(label.data(), label.data() + label.size()).x /
+        safeScale;
+    const float horizontalPadding =
+        ImGui::GetStyle().FramePadding.x / safeScale;
+    const float defaultMinimum =
+        type == AudioTrackType::Main ? DEFAULT_MAIN_WIDTH : DEFAULT_EFFECT_SIZE;
+    return ProjectAudioToolLayout::calculateDefaultWidth(
+        textWidth, horizontalPadding, defaultMinimum);
+}
 
 /// @brief 将项目音频资源路径转换为方块显示标签。
 std::string audioResourceLabel(const AudioResource& resource)
@@ -116,7 +152,7 @@ void ProjectAudioToolView::requestFocus()
     m_requestFocus = true;
 }
 
-void ProjectAudioToolView::rebuildItems(float visibleWidth)
+void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
 {
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
@@ -124,10 +160,17 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth)
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
         m_cachedProjectRoot.clear();
+        m_cachedDpiScale = 0.0F;
         return;
     }
 
+    m_draggingItem.reset();
+    m_resizingItem.reset();
+    m_resizeHandle = ResizeHandle::None;
+    m_snapLocks    = {};
+
     m_cachedProjectRoot       = Config::pathToUtf8(project->m_projectRoot);
+    m_cachedDpiScale          = dpiScale;
     auto& workspace           = project->m_settings.m_workspace;
     m_selectedAudioResourceId = workspace.m_projectAudioToolSelectedResourceId;
 
@@ -143,26 +186,37 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth)
 
     m_items.clear();
     m_items.reserve(project->m_audioResources.size());
-    const float usableWidth =
-        std::max(EFFECT_SIZE, visibleWidth - CANVAS_PADDING * 2.0F);
-    const int effectColumns =
-        std::max(1,
-                 static_cast<int>(std::floor((usableWidth + ITEM_GAP) /
-                                             (EFFECT_SIZE + ITEM_GAP))));
-    int          mainIndex   = 0;
-    int          effectIndex = 0;
-    std::int32_t nextZOrder  = 0;
+    float        defaultCursorX = CANVAS_PADDING;
+    float        defaultCursorY = CANVAS_PADDING;
+    float        defaultRowHeight{ 0.0F };
+    std::int32_t nextZOrder = 0;
     for ( const auto& resource : project->m_audioResources ) {
         Item item;
         item.audioResourceId = resource.m_id;
         item.label           = audioResourceLabel(resource);
         item.type            = resource.m_type;
-        item.rect.width =
-            resource.m_type == AudioTrackType::Main ? MAIN_WIDTH : EFFECT_SIZE;
-        item.rect.height =
-            resource.m_type == AudioTrackType::Main ? MAIN_HEIGHT : EFFECT_SIZE;
+        item.rect.width  = defaultItemWidth(item.label, item.type, dpiScale);
+        item.rect.height = resource.m_type == AudioTrackType::Main
+                               ? DEFAULT_MAIN_HEIGHT
+                               : DEFAULT_EFFECT_SIZE;
 
         const auto saved = savedPlacements.find(resource.m_id);
+        if ( saved != savedPlacements.end() ) {
+            const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
+                                        saved->second.m_width > 0.0F;
+            const bool hasSavedHeight = std::isfinite(saved->second.m_height) &&
+                                        saved->second.m_height > 0.0F;
+            item.widthCustomized      = hasSavedWidth;
+            item.heightCustomized     = hasSavedHeight;
+            if ( hasSavedWidth ) {
+                item.rect.width = std::max(minimumItemWidth(item.type),
+                                           saved->second.m_width);
+            }
+            if ( hasSavedHeight ) {
+                item.rect.height =
+                    std::max(MINIMUM_ITEM_HEIGHT, saved->second.m_height);
+            }
+        }
         if ( saved != savedPlacements.end() &&
              std::isfinite(saved->second.m_x) &&
              std::isfinite(saved->second.m_y) ) {
@@ -170,23 +224,30 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth)
             item.rect.y = std::max(0.0F, saved->second.m_y);
             item.zOrder = saved->second.m_zOrder;
         } else if ( resource.m_type == AudioTrackType::Main ) {
-            item.rect.x = CANVAS_PADDING;
-            item.rect.y = CANVAS_PADDING + static_cast<float>(mainIndex) *
-                                               (MAIN_HEIGHT + ITEM_GAP);
+            if ( defaultCursorX > CANVAS_PADDING ) {
+                defaultCursorY += defaultRowHeight + ITEM_GAP;
+                defaultCursorX   = CANVAS_PADDING;
+                defaultRowHeight = 0.0F;
+            }
+            item.rect.x = defaultCursorX;
+            item.rect.y = defaultCursorY;
             item.zOrder = nextZOrder;
-            ++mainIndex;
+            defaultCursorY += item.rect.height + ITEM_GAP;
         } else {
-            const float effectTop =
-                CANVAS_PADDING +
-                static_cast<float>(mainIndex) * (MAIN_HEIGHT + ITEM_GAP);
-            item.rect.x = CANVAS_PADDING +
-                          static_cast<float>(effectIndex % effectColumns) *
-                              (EFFECT_SIZE + ITEM_GAP);
-            item.rect.y =
-                effectTop + static_cast<float>(effectIndex / effectColumns) *
-                                (EFFECT_SIZE + ITEM_GAP);
+            const float defaultRight =
+                std::max(CANVAS_PADDING + item.rect.width,
+                         visibleWidth - CANVAS_PADDING);
+            if ( defaultCursorX > CANVAS_PADDING &&
+                 defaultCursorX + item.rect.width > defaultRight ) {
+                defaultCursorY += defaultRowHeight + ITEM_GAP;
+                defaultCursorX   = CANVAS_PADDING;
+                defaultRowHeight = 0.0F;
+            }
+            item.rect.x = defaultCursorX;
+            item.rect.y = defaultCursorY;
             item.zOrder = nextZOrder;
-            ++effectIndex;
+            defaultCursorX += item.rect.width + ITEM_GAP;
+            defaultRowHeight = std::max(defaultRowHeight, item.rect.height);
         }
         nextZOrder = std::max(nextZOrder, item.zOrder + 1);
         m_items.push_back(std::move(item));
@@ -253,16 +314,18 @@ void ProjectAudioToolView::persistWorkspace()
                 .m_audioResourceId = item.audioResourceId,
                 .m_x               = item.rect.x,
                 .m_y               = item.rect.y,
-                .m_zOrder          = item.zOrder,
+                .m_width  = item.widthCustomized ? item.rect.width : 0.0F,
+                .m_height = item.heightCustomized ? item.rect.height : 0.0F,
+                .m_zOrder = item.zOrder,
             });
     }
     engine.saveProject();
 }
 
-void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
-                                         ImVec2      mousePosition)
+std::optional<std::size_t> ProjectAudioToolView::activateItem(
+    std::size_t itemIndex)
 {
-    if ( itemIndex >= m_items.size() ) return;
+    if ( itemIndex >= m_items.size() ) return std::nullopt;
 
     Item selected = std::move(m_items[itemIndex]);
     m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(itemIndex));
@@ -271,34 +334,108 @@ void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
         m_items[index].zOrder = static_cast<std::int32_t>(index);
     }
 
-    m_draggingItem = m_items.empty()
-                         ? std::optional<std::size_t>{}
-                         : std::optional<std::size_t>{ m_items.size() - 1 };
-    if ( !m_draggingItem ) return;
-    const auto& item = m_items[*m_draggingItem];
-    m_dragOffset     = {
-        mousePosition.x - item.rect.x,
-        mousePosition.y - item.rect.y,
-    };
-    m_selectedAudioResourceId = item.audioResourceId;
-    m_selectedAudioLabel      = item.label;
-    m_selectedAudioTrackType  = item.type;
+    if ( m_items.empty() ) return std::nullopt;
+    const std::size_t activeIndex = m_items.size() - 1;
+    auto&             item        = m_items[activeIndex];
+    item.labelRect                = item.rect;
+    m_selectedAudioResourceId     = item.audioResourceId;
+    m_selectedAudioLabel          = item.label;
+    m_selectedAudioTrackType      = item.type;
     Logic::EditorEngine::instance().pushCommand(
         Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
             item.audioResourceId,
             item.type,
         }));
-    m_snapLocks = {};
-    rebuildDragConstraints();
+    return activeIndex;
 }
 
-void ProjectAudioToolView::rebuildDragConstraints()
+void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
+                                         ImVec2      mousePosition)
+{
+    const auto activeIndex = activateItem(itemIndex);
+    if ( !activeIndex ) return;
+
+    m_draggingItem   = *activeIndex;
+    const auto& item = m_items[*activeIndex];
+    m_dragOffset     = {
+        mousePosition.x - item.rect.x,
+        mousePosition.y - item.rect.y,
+    };
+    m_snapLocks = {};
+    rebuildInteractionConstraints();
+}
+
+void ProjectAudioToolView::beginItemResize(std::size_t  itemIndex,
+                                           ResizeHandle handle,
+                                           ImVec2       mousePosition)
+{
+    const auto activeIndex = activateItem(itemIndex);
+    if ( !activeIndex || handle == ResizeHandle::None ) return;
+
+    m_resizingItem        = *activeIndex;
+    m_resizeHandle        = handle;
+    m_resizeStartRect     = m_items[*activeIndex].rect;
+    m_resizePointerOffset = {};
+    switch ( handle ) {
+    case ResizeHandle::Left:
+    case ResizeHandle::TopLeft:
+    case ResizeHandle::BottomLeft:
+        m_resizePointerOffset.x = mousePosition.x - m_resizeStartRect.x;
+        break;
+    case ResizeHandle::Right:
+    case ResizeHandle::TopRight:
+    case ResizeHandle::BottomRight:
+        m_resizePointerOffset.x = mousePosition.x - m_resizeStartRect.right();
+        break;
+    default: break;
+    }
+    switch ( handle ) {
+    case ResizeHandle::Top:
+    case ResizeHandle::TopLeft:
+    case ResizeHandle::TopRight:
+        m_resizePointerOffset.y = mousePosition.y - m_resizeStartRect.y;
+        break;
+    case ResizeHandle::Bottom:
+    case ResizeHandle::BottomLeft:
+    case ResizeHandle::BottomRight:
+        m_resizePointerOffset.y = mousePosition.y - m_resizeStartRect.bottom();
+        break;
+    default: break;
+    }
+    m_snapLocks = {};
+    rebuildInteractionConstraints();
+}
+
+ProjectAudioToolView::ResizeHandle ProjectAudioToolView::hitTestResizeHandle(
+    const Item& item, ImVec2 mousePosition) const
+{
+    const bool nearLeft =
+        std::abs(mousePosition.x - item.rect.x) <= RESIZE_HIT_THICKNESS;
+    const bool nearRight =
+        std::abs(mousePosition.x - item.rect.right()) <= RESIZE_HIT_THICKNESS;
+    const bool nearTop =
+        std::abs(mousePosition.y - item.rect.y) <= RESIZE_HIT_THICKNESS;
+    const bool nearBottom =
+        std::abs(mousePosition.y - item.rect.bottom()) <= RESIZE_HIT_THICKNESS;
+    if ( nearLeft && nearTop ) return ResizeHandle::TopLeft;
+    if ( nearRight && nearTop ) return ResizeHandle::TopRight;
+    if ( nearLeft && nearBottom ) return ResizeHandle::BottomLeft;
+    if ( nearRight && nearBottom ) return ResizeHandle::BottomRight;
+    if ( nearLeft ) return ResizeHandle::Left;
+    if ( nearRight ) return ResizeHandle::Right;
+    if ( nearTop ) return ResizeHandle::Top;
+    if ( nearBottom ) return ResizeHandle::Bottom;
+    return ResizeHandle::None;
+}
+
+void ProjectAudioToolView::rebuildInteractionConstraints()
 {
     m_dragSnapTargets.clear();
     m_dragVisibilityConstraints.clear();
-    if ( !m_draggingItem || *m_draggingItem >= m_items.size() ) return;
+    const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
+    if ( !activeItem || *activeItem >= m_items.size() ) return;
 
-    const std::size_t movingIndex = *m_draggingItem;
+    const std::size_t movingIndex = *activeItem;
     m_dragSnapTargets.reserve(m_items.size() - 1);
     m_dragVisibilityConstraints.reserve(m_items.size() - 1);
     for ( std::size_t baseIndex = 0; baseIndex < m_items.size(); ++baseIndex ) {
@@ -376,6 +513,34 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
         { minimum.x + horizontalPadding, minimum.y + verticalPadding },
         ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 0.78F)),
         typeLabel);
+
+    if ( selected ) {
+        const float halfHandle = RESIZE_HANDLE_SIZE * dpiScale * 0.5F;
+        const std::array<ImVec2, 8> handleCenters{
+            ImVec2{ minimum.x, minimum.y },
+            ImVec2{ (minimum.x + maximum.x) * 0.5F, minimum.y },
+            ImVec2{ maximum.x, minimum.y },
+            ImVec2{ minimum.x, (minimum.y + maximum.y) * 0.5F },
+            ImVec2{ maximum.x, (minimum.y + maximum.y) * 0.5F },
+            ImVec2{ minimum.x, maximum.y },
+            ImVec2{ (minimum.x + maximum.x) * 0.5F, maximum.y },
+            ImVec2{ maximum.x, maximum.y },
+        };
+        for ( const auto center : handleCenters ) {
+            const ImVec2 handleMinimum{ center.x - halfHandle,
+                                        center.y - halfHandle };
+            const ImVec2 handleMaximum{ center.x + halfHandle,
+                                        center.y + halfHandle };
+            drawList.AddRectFilled(handleMinimum,
+                                   handleMaximum,
+                                   ImGui::GetColorU32(ImGuiCol_Text),
+                                   std::min(rounding, halfHandle));
+            drawList.AddRect(handleMinimum,
+                             handleMaximum,
+                             ImGui::GetColorU32(ImGuiCol_WindowBg),
+                             std::min(rounding, halfHandle));
+        }
+    }
 }
 
 ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
@@ -431,8 +596,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     const float  visibleHeight = std::max(1.0F, visibleSizePixels.y / dpiScale);
     const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
     if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
-         projectRoot != m_cachedProjectRoot ) {
-        rebuildItems(visibleWidth);
+         projectRoot != m_cachedProjectRoot ||
+         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
+        rebuildItems(visibleWidth, dpiScale);
     }
 
     const ImVec2 canvasCursor = ImGui::GetCursorScreenPos();
@@ -467,6 +633,32 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             }
         }
     }
+    ResizeHandle hoveredResizeHandle = ResizeHandle::None;
+    if ( m_resizingItem ) {
+        hoveredResizeHandle = m_resizeHandle;
+    } else if ( hoveredItem ) {
+        hoveredResizeHandle =
+            hitTestResizeHandle(m_items[*hoveredItem], mouseLogical);
+    }
+    switch ( hoveredResizeHandle ) {
+    case ResizeHandle::Left:
+    case ResizeHandle::Right:
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        break;
+    case ResizeHandle::Top:
+    case ResizeHandle::Bottom:
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        break;
+    case ResizeHandle::TopLeft:
+    case ResizeHandle::BottomRight:
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+        break;
+    case ResizeHandle::TopRight:
+    case ResizeHandle::BottomLeft:
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW);
+        break;
+    case ResizeHandle::None: break;
+    }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
@@ -476,15 +668,21 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                      canvasOrigin,
                      dpiScale,
                      hoveredItem == index,
-                     m_draggingItem == index &&
+                     (m_draggingItem == index || m_resizingItem == index) &&
                          ImGui::IsMouseDown(ImGuiMouseButton_Left),
                      *drawList);
         }
     }
 
-    if ( canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+    if ( canvasHovered && !m_draggingItem && !m_resizingItem &&
+         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
         if ( hoveredItem ) {
-            beginItemDrag(*hoveredItem, mouseLogical);
+            if ( hoveredResizeHandle != ResizeHandle::None ) {
+                beginItemResize(
+                    *hoveredItem, hoveredResizeHandle, mouseLogical);
+            } else {
+                beginItemDrag(*hoveredItem, mouseLogical);
+            }
         }
     }
 
@@ -513,10 +711,107 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 },
                 m_dragVisibilityConstraints,
                 MINIMUM_VISIBLE_RATIO);
+            item.labelRect = item.rect;
         } else {
             rebuildLabelRects();
             persistWorkspace();
             m_draggingItem.reset();
+            m_dragSnapTargets.clear();
+            m_dragVisibilityConstraints.clear();
+            m_snapLocks = {};
+        }
+    }
+
+    if ( m_resizingItem && *m_resizingItem < m_items.size() ) {
+        auto& item = m_items[*m_resizingItem];
+        if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            using ProjectAudioToolLayout::ResizeEdge;
+            ResizeEdge horizontalEdge = ResizeEdge::None;
+            ResizeEdge verticalEdge   = ResizeEdge::None;
+            switch ( m_resizeHandle ) {
+            case ResizeHandle::Left:
+            case ResizeHandle::TopLeft:
+            case ResizeHandle::BottomLeft:
+                horizontalEdge = ResizeEdge::Minimum;
+                break;
+            case ResizeHandle::Right:
+            case ResizeHandle::TopRight:
+            case ResizeHandle::BottomRight:
+                horizontalEdge = ResizeEdge::Maximum;
+                break;
+            default: break;
+            }
+            switch ( m_resizeHandle ) {
+            case ResizeHandle::Top:
+            case ResizeHandle::TopLeft:
+            case ResizeHandle::TopRight:
+                verticalEdge = ResizeEdge::Minimum;
+                break;
+            case ResizeHandle::Bottom:
+            case ResizeHandle::BottomLeft:
+            case ResizeHandle::BottomRight:
+                verticalEdge = ResizeEdge::Maximum;
+                break;
+            default: break;
+            }
+
+            const float minimumWidth             = minimumItemWidth(item.type);
+            ProjectAudioToolLayout::Rect rawRect = m_resizeStartRect;
+            if ( horizontalEdge == ResizeEdge::Minimum ) {
+                const float right = m_resizeStartRect.right();
+                rawRect.x = std::clamp(mouseLogical.x - m_resizePointerOffset.x,
+                                       0.0F,
+                                       right - minimumWidth);
+                rawRect.width = right - rawRect.x;
+            } else if ( horizontalEdge == ResizeEdge::Maximum ) {
+                rawRect.width =
+                    std::max(minimumWidth,
+                             mouseLogical.x - m_resizePointerOffset.x -
+                                 m_resizeStartRect.x);
+            }
+            if ( verticalEdge == ResizeEdge::Minimum ) {
+                const float bottom = m_resizeStartRect.bottom();
+                rawRect.y = std::clamp(mouseLogical.y - m_resizePointerOffset.y,
+                                       0.0F,
+                                       bottom - MINIMUM_ITEM_HEIGHT);
+                rawRect.height = bottom - rawRect.y;
+            } else if ( verticalEdge == ResizeEdge::Maximum ) {
+                rawRect.height =
+                    std::max(MINIMUM_ITEM_HEIGHT,
+                             mouseLogical.y - m_resizePointerOffset.y -
+                                 m_resizeStartRect.y);
+            }
+            rawRect =
+                ProjectAudioToolLayout::snapResizeRect(rawRect,
+                                                       horizontalEdge,
+                                                       verticalEdge,
+                                                       visibleCanvas,
+                                                       m_dragSnapTargets,
+                                                       minimumWidth,
+                                                       MINIMUM_ITEM_HEIGHT,
+                                                       SNAP_THRESHOLD,
+                                                       SNAP_RELEASE_THRESHOLD,
+                                                       m_snapLocks);
+            item.rect = ProjectAudioToolLayout::constrainResizeVisibility(
+                item.rect,
+                rawRect,
+                m_dragVisibilityConstraints,
+                MINIMUM_VISIBLE_RATIO);
+            item.labelRect = item.rect;
+            if ( horizontalEdge != ResizeEdge::None &&
+                 std::abs(item.rect.width - m_resizeStartRect.width) > 1e-4F ) {
+                item.widthCustomized = true;
+            }
+            if ( verticalEdge != ResizeEdge::None &&
+                 std::abs(item.rect.height - m_resizeStartRect.height) >
+                     1e-4F ) {
+                item.heightCustomized = true;
+            }
+        } else {
+            rebuildLabelRects();
+            persistWorkspace();
+            m_resizingItem.reset();
+            m_resizeHandle = ResizeHandle::None;
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};
