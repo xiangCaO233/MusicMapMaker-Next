@@ -786,15 +786,33 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.settings.stopPlaybackOnScroll;
                          });
 
-        drawToggleButton(ICON_MMM_HIT_SFX,
-                         editorCfg.settings.sfxConfig.enableHitSfx,
-                         TR("ui.toolbar.hit_sfx").data(),
-                         TR("ui.toolbar.short.hit_sfx").data(),
-                         shortcutConfig.toggleHitSfx,
-                         [](Config::EditorConfig& config) {
-                             config.settings.sfxConfig.enableHitSfx =
-                                 !config.settings.sfxConfig.enableHitSfx;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("KeySoundTool");
+        if ( drawIconButton(ICON_MMM_HIT_SFX,
+                            "##ToolbarKeySoundTool",
+                            TR("ui.toolbar.short.key_sound_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showKeySoundTool = !m_showKeySoundTool;
+        }
+        ImGui::PopID();
+        {
+            std::string tooltipText = TR("ui.toolbar.key_sound_tool").data();
+            const auto  shortcutText =
+                ShortcutUtils::formatShortcut(shortcutConfig.toggleHitSfx);
+            if ( !shortcutText.empty() ) {
+                tooltipText += "\n";
+                tooltipText +=
+                    TR("ui.toolbar.key_sound_tool_shortcut_hint").data();
+                tooltipText += " (";
+                tooltipText += shortcutText;
+                tooltipText += ")";
+            }
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
                          editorCfg.visual.enableHitEffects,
@@ -1024,6 +1042,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderPaletteImportFileDialog(dpiScale);
     renderLayoutPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
+    renderKeySoundTool(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1363,6 +1382,164 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImGui::PopStyleVar(4);
     }
+}
+
+/// @brief 绘制玩家区与 BGM 区的 Key 音逐轨控制工具。
+/// @param dpiScale 当前 DPI 缩放。
+/// @warning UI 热路径：窗口打开时每帧执行，仅绘制 ImGui 可见轨道行。
+void ToolbarView::renderKeySoundTool(float dpiScale)
+{
+    if ( !m_showKeySoundTool ) return;
+
+    auto& engine = Logic::EditorEngine::instance();
+    bool  hasBeatmap{ false };
+    int   playerTrackCount{ 0 };
+    int   bgmTrackCount{ 0 };
+    {
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        const auto session = engine.getActiveSession();
+        if ( session && session->getContext().currentBeatmap ) {
+            const auto& metadata =
+                session->getContext().currentBeatmap->m_baseMapMetadata;
+            hasBeatmap       = true;
+            playerTrackCount = std::max(0, metadata.track_count);
+            bgmTrackCount    = std::max(0, metadata.bgm_track_count);
+        }
+    }
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2   defaultSize(std::floor(360.0F * dpiScale),
+                               std::floor(500.0F * dpiScale));
+    ImGui::SetNextWindowSize(defaultSize, ImGuiCond_FirstUseEver);
+    if ( const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar") ) {
+        const float  gap = std::floor(8.0F * dpiScale);
+        const ImVec2 defaultPosition(
+            std::max(viewport->Pos.x + gap,
+                     toolbarWindow->Pos.x - defaultSize.x - gap),
+            std::max(viewport->Pos.y + gap, toolbarWindow->Pos.y));
+        ImGui::SetNextWindowPos(defaultPosition, ImGuiCond_Appearing);
+    }
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    std::string title = TR("ui.key_sound_tool.title").data();
+    title += "###KeySoundTool";
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
+    if ( !ImGui::Begin(title.c_str(), &m_showKeySoundTool, flags) ) {
+        ImGui::End();
+        return;
+    }
+
+    if ( !hasBeatmap ) {
+        ImGui::TextDisabled("%s", TR("ui.key_sound_tool.no_beatmap").data());
+        ImGui::End();
+        return;
+    }
+
+    auto&       audio            = Audio::AudioManager::instance();
+    const float stateButtonWidth = std::floor(92.0F * dpiScale);
+    const float rowHeight =
+        std::max(ImGui::GetFrameHeight(),
+                 std::floor(ImGui::GetTextLineHeightWithSpacing()));
+
+    const auto drawMuteStateButton =
+        [&](const char* id, bool muted, const auto& applyChange) {
+            ImGui::PushID(id);
+            const auto color =
+                muted ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive)
+                      : ImGui::GetStyleColorVec4(ImGuiCol_Button);
+            ImGui::PushStyleColor(ImGuiCol_Button, color);
+            const char* label = muted ? TR("ui.key_sound_tool.muted").data()
+                                      : TR("ui.key_sound_tool.playing").data();
+            std::string buttonLabel = label;
+            buttonLabel += "###MuteState";
+            const bool clicked = ::MMM::UI::FeedbackButton(
+                buttonLabel.c_str(),
+                ImVec2(stateButtonWidth, ImGui::GetFrameHeight()));
+            ImGui::PopStyleColor();
+            ImGui::PopID();
+            if ( clicked ) applyChange(!muted);
+        };
+
+    const auto alignStateButton = [&]() {
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(
+            std::max(ImGui::GetCursorPosX(),
+                     ImGui::GetWindowContentRegionMax().x - stateButtonWidth));
+    };
+
+    const bool playerAreaMuted =
+        !engine.getEditorConfig().settings.sfxConfig.enableHitSfx;
+    ImGui::SeparatorText(TR("ui.key_sound_tool.player_area").data());
+    ImGui::TextUnformatted(TR("ui.key_sound_tool.area_master").data());
+    alignStateButton();
+    drawMuteStateButton("PlayerArea", playerAreaMuted, [&engine](bool muted) {
+        auto config                            = engine.getEditorConfig();
+        config.settings.sfxConfig.enableHitSfx = !muted;
+        engine.setEditorConfig(config);
+    });
+
+    ImGuiListClipper playerClipper;
+    playerClipper.Begin(playerTrackCount, rowHeight);
+    while ( playerClipper.Step() ) {
+        for ( int track = playerClipper.DisplayStart;
+              track < playerClipper.DisplayEnd;
+              ++track ) {
+            ImGui::PushID(track);
+            ImGui::Text(TR("ui.key_sound_tool.player_track").data(), track + 1);
+            alignStateButton();
+            const bool muted = audio.isPlayerKeySoundTrackMuted(
+                static_cast<std::uint32_t>(track));
+            drawMuteStateButton(
+                "PlayerTrack", muted, [&engine, track](bool nextMuted) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
+                        .area       = Logic::KeySoundTrackArea::Player,
+                        .trackIndex = static_cast<std::uint32_t>(track),
+                        .muted      = nextMuted,
+                    });
+                });
+            ImGui::PopID();
+        }
+    }
+
+    const bool bgmAreaMuted = audio.isBgmKeySoundAreaMuted();
+    ImGui::SeparatorText(TR("ui.key_sound_tool.bgm_area").data());
+    ImGui::TextUnformatted(TR("ui.key_sound_tool.area_master").data());
+    alignStateButton();
+    drawMuteStateButton("BgmArea", bgmAreaMuted, [&engine](bool muted) {
+        engine.pushCommand(Logic::CmdSetBgmKeySoundAreaMute{ .muted = muted });
+    });
+
+    if ( bgmTrackCount == 0 ) {
+        ImGui::TextDisabled("%s", TR("ui.key_sound_tool.no_bgm_tracks").data());
+    } else {
+        ImGuiListClipper bgmClipper;
+        bgmClipper.Begin(bgmTrackCount, rowHeight);
+        while ( bgmClipper.Step() ) {
+            for ( int track = bgmClipper.DisplayStart;
+                  track < bgmClipper.DisplayEnd;
+                  ++track ) {
+                ImGui::PushID(track);
+                ImGui::Text(TR("ui.key_sound_tool.bgm_track").data(),
+                            track + 1);
+                alignStateButton();
+                const bool muted = audio.isBgmKeySoundTrackMuted(
+                    static_cast<std::uint32_t>(track));
+                drawMuteStateButton(
+                    "BgmTrack", muted, [&engine, track](bool nextMuted) {
+                        engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
+                            .area       = Logic::KeySoundTrackArea::Bgm,
+                            .trackIndex = static_cast<std::uint32_t>(track),
+                            .muted      = nextMuted,
+                        });
+                    });
+                ImGui::PopID();
+            }
+        }
+    }
+
+    ImGui::End();
 }
 
 void ToolbarView::initializeColorPalette()

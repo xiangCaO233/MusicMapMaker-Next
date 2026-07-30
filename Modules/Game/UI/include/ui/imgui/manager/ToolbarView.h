@@ -91,6 +91,8 @@ private:
     float m_speedPopupWidth{ 160.0f };
     /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
     float m_speedPopupHeight{ 120.0f };
+    /// @brief 是否显示 Key 音分区与逐轨控制工具。
+    bool m_showKeySoundTool{ false };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
     /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -184,6 +186,11 @@ private:
     /// @param dpiScale 当前 DPI 缩放。
     /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
     void renderBeatLinePopup(float dpiScale);
+
+    /// @brief 绘制玩家区与 BGM 区的 Key 音逐轨控制工具。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：窗口打开时每帧执行，仅绘制可见轨道行并提交命令。
+    void renderKeySoundTool(float dpiScale);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。
