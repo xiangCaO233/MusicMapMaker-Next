@@ -402,6 +402,12 @@ bool Basic2DCanvas::shouldKeepOpenForLastSessionReset() const
     return entry && entry->cameraId == m_cameraId && !entry->isLogoPlaceholder;
 }
 
+float Basic2DCanvas::currentFontRasterScale()
+{
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    return std::isfinite(scale) && scale > 0.0F ? scale : 1.0F;
+}
+
 void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
                                uint32_t h) const
 {
@@ -421,6 +427,10 @@ bool Basic2DCanvas::needReload()
         m_needReload = true;
     }
     if ( currentCjkFont != m_loadedCjkFontPreference ) {
+        m_needReload = true;
+    }
+    if ( std::abs(currentFontRasterScale() - m_loadedFontRasterScale) >
+         1e-3F ) {
         m_needReload = true;
     }
     if ( m_currentSnapshot ) {

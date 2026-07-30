@@ -66,7 +66,9 @@ bool asciiFontMetricsEqual(const Common::AsciiFontMetrics& lhs,
 bool asciiFontAtlasMetricsEqual(const Common::AsciiFontAtlasMetrics& lhs,
                                 const Common::AsciiFontAtlasMetrics& rhs)
 {
-    if ( lhs.valid != rhs.valid ) return false;
+    if ( lhs.valid != rhs.valid || lhs.rasterScale != rhs.rasterScale ) {
+        return false;
+    }
     for ( std::size_t tierIndex = 0U; tierIndex < lhs.tiers.size();
           ++tierIndex ) {
         if ( !asciiFontMetricsEqual(lhs.tiers[tierIndex],

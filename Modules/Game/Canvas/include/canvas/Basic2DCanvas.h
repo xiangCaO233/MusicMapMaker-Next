@@ -181,6 +181,10 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
+    /// @return 有效窗口内容缩放；无效配置回退为 1。
+    [[nodiscard]] static float currentFontRasterScale();
+
     /// @brief 画布名称
     std::string m_canvasName;
 
@@ -213,6 +217,8 @@ private:
     std::string m_loadedAsciiFontPreference;
     /// @brief 最近一次加载图集时使用的软件 CJK 字体偏好。
     std::string m_loadedCjkFontPreference;
+    /// @brief 最近一次发布字体图集时使用的 DPI 栅格倍率。
+    float m_loadedFontRasterScale{ 0.0F };
     /// @brief 可见标签已请求补载的 Unicode 码点，跨图集重建保留。
     std::vector<std::uint32_t> m_requestedUnicodeCodepoints;
 

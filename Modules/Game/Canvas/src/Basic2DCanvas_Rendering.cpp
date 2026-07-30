@@ -716,9 +716,11 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
                                skin.getAssetPath("logo"));
 
-    m_asciiFontAtlasMetrics      = {};
-    m_unicodeFontMetrics         = {};
-    const auto preferredFontPath = resolveCanvasAsciiFontPath(skin);
+    const float fontRasterScale         = currentFontRasterScale();
+    m_asciiFontAtlasMetrics             = {};
+    m_asciiFontAtlasMetrics.rasterScale = fontRasterScale;
+    m_unicodeFontMetrics                = {};
+    const auto preferredFontPath        = resolveCanvasAsciiFontPath(skin);
     std::array<std::optional<Graphic::RasterizedAsciiFont>,
                Common::ASCII_FONT_RASTER_TIER_COUNT>
          rasterizedFonts;
@@ -781,14 +783,26 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     if ( !unicodeCodepoints.empty() ) {
         const auto preferredCjkFontPath = resolveCanvasCjkFontPath(skin);
         rasterizedUnicodeFont = Graphic::AsciiFontRasterizer::rasterizeUnicode(
-            preferredCjkFontPath, unicodeCodepoints);
+            preferredCjkFontPath,
+            unicodeCodepoints,
+            std::max(
+                1U,
+                static_cast<std::uint32_t>(std::lround(
+                    static_cast<float>(Common::UNICODE_FONT_RASTER_HEIGHT) *
+                    fontRasterScale))));
         const auto defaultCjkFontPath = skin.getFontPath("cjk");
         if ( !rasterizedUnicodeFont &&
              preferredCjkFontPath != defaultCjkFontPath ) {
             XWARN("Failed to rasterize preferred CJK font, using skin default");
             rasterizedUnicodeFont =
                 Graphic::AsciiFontRasterizer::rasterizeUnicode(
-                    defaultCjkFontPath, unicodeCodepoints);
+                    defaultCjkFontPath,
+                    unicodeCodepoints,
+                    std::max(1U,
+                             static_cast<std::uint32_t>(std::lround(
+                                 static_cast<float>(
+                                     Common::UNICODE_FONT_RASTER_HEIGHT) *
+                                 fontRasterScale))));
         }
         if ( rasterizedUnicodeFont ) {
             m_unicodeFontMetrics = rasterizedUnicodeFont->metrics;
@@ -877,6 +891,7 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
     m_loadedCjkFontPreference =
         Config::AppConfig::instance().getEditorSettings().preferredCjkFont;
+    m_loadedFontRasterScale = fontRasterScale;
     XINFO("Basic2DCanvas textures reloaded into atlas for camera: " +
           m_cameraId);
 }

@@ -72,6 +72,8 @@ struct AsciiFontMetrics {
 struct AsciiFontAtlasMetrics {
     /// @brief 是否至少有一个字号档位可用。
     bool valid{ false };
+    /// @brief 逻辑像素字号转换为字体图集物理栅格字号的倍率。
+    float rasterScale{ 1.0F };
     /// @brief 与 `ASCII_FONT_RASTER_HEIGHTS` 一一对应的字体度量。
     std::array<AsciiFontMetrics, ASCII_FONT_RASTER_TIER_COUNT> tiers{};
 };
@@ -88,9 +90,9 @@ struct AsciiFontSelection {
     [[nodiscard]] explicit operator bool() const { return metrics != nullptr; }
 };
 
-/// @brief 为目标像素字号选择最接近的 FreeType 提示档位。
+/// @brief 为目标逻辑像素字号选择最接近的 FreeType 物理栅格档位。
 /// @param atlas 多档 ASCII 字体度量。
-/// @param fontPixelHeight 目标字号像素高度。
+/// @param fontPixelHeight 目标字号逻辑像素高度。
 /// @return 最接近且有效的字体档位。
 /// @warning 热路径：组件绘制和布局命中时调用；只遍历固定十一个档位。
 [[nodiscard]] inline AsciiFontSelection selectAsciiFont(
@@ -103,13 +105,18 @@ struct AsciiFontSelection {
 
     AsciiFontSelection selection;
     float              bestDistance = std::numeric_limits<float>::max();
+    const float        rasterScale =
+        std::isfinite(atlas.rasterScale) && atlas.rasterScale > 0.0F
+            ? atlas.rasterScale
+            : 1.0F;
+    const float targetRasterHeight = fontPixelHeight * rasterScale;
     for ( std::size_t tierIndex = 0U; tierIndex < ASCII_FONT_RASTER_TIER_COUNT;
           ++tierIndex ) {
         const auto& metrics = atlas.tiers[tierIndex];
         if ( !metrics.valid ) continue;
 
         const float distance =
-            std::abs(fontPixelHeight -
+            std::abs(targetRasterHeight -
                      static_cast<float>(ASCII_FONT_RASTER_HEIGHTS[tierIndex]));
         if ( distance < bestDistance ) {
             bestDistance        = distance;
