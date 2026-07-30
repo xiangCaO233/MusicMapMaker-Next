@@ -165,6 +165,28 @@ bool testVisibleLabelCell()
            near(visible.height, 100.0F);
 }
 
+/// @brief 验证移动遮挡的增量标签区域会立即转移到仍可见的最大一侧。
+bool testIncrementalVisibleLabelCell()
+{
+    const Rect base{ 0.0F, 0.0F, 100.0F, 100.0F };
+    const Rect occluder{ 0.0F, 0.0F, 65.0F, 100.0F };
+    const Rect visible =
+        MMM::UI::ProjectAudioToolLayout::largestVisibleCellWithOneOccluder(
+            base, occluder);
+    if ( !near(visible.x, 65.0F) || !near(visible.width, 35.0F) ||
+         !near(visible.height, 100.0F) ) {
+        return false;
+    }
+
+    const Rect movedAway{ 150.0F, 0.0F, 65.0F, 100.0F };
+    const Rect restored =
+        MMM::UI::ProjectAudioToolLayout::largestVisibleCellWithOneOccluder(
+            base, movedAway);
+    return near(restored.x, base.x) && near(restored.y, base.y) &&
+           near(restored.width, base.width) &&
+           near(restored.height, base.height);
+}
+
 /// @brief 验证扩大前景方块时会停在下层方块的 35% 可见边界。
 bool testResizeVisibilityConstraint()
 {
@@ -279,9 +301,10 @@ int main()
     if ( !testResizeSnapping() ) return 4;
     if ( !testMinimumVisibleRatio() ) return 5;
     if ( !testVisibleLabelCell() ) return 6;
-    if ( !testResizeVisibilityConstraint() ) return 7;
-    if ( !testPreparedVisibilityConstraint() ) return 8;
-    if ( !testExistingVisibilityDeficitIsBaseline() ) return 9;
-    if ( !testBatchMoveVisibilityConstraint() ) return 10;
+    if ( !testIncrementalVisibleLabelCell() ) return 7;
+    if ( !testResizeVisibilityConstraint() ) return 8;
+    if ( !testPreparedVisibilityConstraint() ) return 9;
+    if ( !testExistingVisibilityDeficitIsBaseline() ) return 10;
+    if ( !testBatchMoveVisibilityConstraint() ) return 11;
     return 0;
 }

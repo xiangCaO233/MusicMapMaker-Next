@@ -116,6 +116,14 @@ private:
     /// 结束时调用。
     void rebuildLabelRects();
 
+    /// @brief 从已缓存的可见性约束建立固定标签区域基线。
+    /// @warning 低频交互起点：只读取交互约束，只在开始拖动或缩放时调用。
+    void prepareInteractionLabelRects();
+
+    /// @brief 按当前移动对象位置增量刷新所有标签与控件区域。
+    /// @warning 拖动热路径：只遍历缓存方块和活动对象，不分配、不排序。
+    void refreshInteractionLabelRects();
+
     /// @brief 把当前方块位置、叠层和选择写回项目工作区。
     void persistWorkspace();
 
@@ -186,6 +194,9 @@ private:
 
     /// @brief 按叠层从低到高排序的方块缓存。
     std::vector<Item> m_items;
+
+    /// @brief 排除当前移动对象后，各方块可用于增量裁切的标签区域基线。
+    std::vector<ProjectAudioToolLayout::Rect> m_interactionBaseLabelRects;
 
     /// @brief 当前拖动方块可吸附的其它方块矩形。
     std::vector<ProjectAudioToolLayout::Rect> m_dragSnapTargets;

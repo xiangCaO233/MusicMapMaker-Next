@@ -280,6 +280,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
         m_items.clear();
+        m_interactionBaseLabelRects.clear();
         m_batchDragEntries.clear();
         m_batchDragUnionCells.clear();
         m_marqueeBaseSelection.clear();
@@ -342,6 +343,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     }
 
     m_items.clear();
+    m_interactionBaseLabelRects.clear();
     m_items.reserve(project->m_audioResources.size());
     float        defaultCursorX = CANVAS_PADDING;
     float        defaultCursorY = CANVAS_PADDING;
@@ -459,6 +461,76 @@ void ProjectAudioToolView::rebuildLabelRects()
     }
 }
 
+void ProjectAudioToolView::prepareInteractionLabelRects()
+{
+    m_interactionBaseLabelRects.resize(m_items.size());
+    const auto isMovingItem = [this](std::size_t index) {
+        if ( m_batchDragging ) return m_items[index].batchSelected;
+        const auto activeItem =
+            m_draggingItem ? m_draggingItem : m_resizingItem;
+        return activeItem && *activeItem == index;
+    };
+
+    std::size_t fixedConstraintIndex = 0;
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        if ( isMovingItem(index) ) {
+            m_interactionBaseLabelRects[index] = m_items[index].rect;
+            continue;
+        }
+
+        ProjectAudioToolLayout::Rect visibleRect{};
+        if ( fixedConstraintIndex < m_dragVisibilityConstraints.size() ) {
+            const auto& fixedVisibleCells =
+                m_dragVisibilityConstraints[fixedConstraintIndex]
+                    .fixedVisibleCells;
+            for ( const auto& cell : fixedVisibleCells ) {
+                if ( ProjectAudioToolLayout::area(cell) >
+                     ProjectAudioToolLayout::area(visibleRect) ) {
+                    visibleRect = cell;
+                }
+            }
+        }
+        if ( ProjectAudioToolLayout::area(visibleRect) <= 0.0F ) {
+            visibleRect = m_items[index].rect;
+        }
+        m_interactionBaseLabelRects[index] = visibleRect;
+        ++fixedConstraintIndex;
+    }
+    refreshInteractionLabelRects();
+}
+
+void ProjectAudioToolView::refreshInteractionLabelRects()
+{
+    if ( m_interactionBaseLabelRects.size() != m_items.size() ) return;
+
+    const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        const bool movingItem = m_batchDragging
+                                    ? m_items[index].batchSelected
+                                    : activeItem && *activeItem == index;
+        auto visibleRect      = movingItem ? m_items[index].rect
+                                           : m_interactionBaseLabelRects[index];
+
+        if ( m_batchDragging ) {
+            for ( const auto& entry : m_batchDragEntries ) {
+                if ( entry.itemIndex <= index ||
+                     entry.itemIndex >= m_items.size() ) {
+                    continue;
+                }
+                visibleRect =
+                    ProjectAudioToolLayout::largestVisibleCellWithOneOccluder(
+                        visibleRect, m_items[entry.itemIndex].rect);
+            }
+        } else if ( activeItem && *activeItem > index &&
+                    *activeItem < m_items.size() ) {
+            visibleRect =
+                ProjectAudioToolLayout::largestVisibleCellWithOneOccluder(
+                    visibleRect, m_items[*activeItem].rect);
+        }
+        m_items[index].labelRect = visibleRect;
+    }
+}
+
 void ProjectAudioToolView::persistWorkspace()
 {
     auto& engine  = Logic::EditorEngine::instance();
@@ -526,6 +598,7 @@ void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
     };
     m_snapLocks = {};
     rebuildInteractionConstraints();
+    prepareInteractionLabelRects();
 }
 
 void ProjectAudioToolView::beginItemResize(std::size_t  itemIndex,
@@ -567,6 +640,7 @@ void ProjectAudioToolView::beginItemResize(std::size_t  itemIndex,
     }
     m_snapLocks = {};
     rebuildInteractionConstraints();
+    prepareInteractionLabelRects();
 }
 
 void ProjectAudioToolView::clearBatchSelection()
@@ -761,6 +835,7 @@ void ProjectAudioToolView::beginBatchDrag(std::size_t itemIndex,
     m_batchDragging = true;
     m_snapLocks     = {};
     rebuildBatchDragConstraints();
+    prepareInteractionLabelRects();
 }
 
 ProjectAudioToolView::ResizeHandle ProjectAudioToolView::hitTestResizeHandle(
@@ -1110,7 +1185,6 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     const ImVec2 canvasOrigin = canvasCursor;
     const ImVec2 contentLogical =
         calculateContentSize(visibleWidth, visibleHeight);
-    ImGui::Dummy({ contentLogical.x * dpiScale, contentLogical.y * dpiScale });
 
     if ( !m_searchFocusRequestId.empty() ) {
         const auto requestedItem =
@@ -1159,31 +1233,24 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         }
     }
 
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
-        const auto& item = m_items[index];
-        if ( isVisible(item.rect, visibleCanvas) ) {
-            drawItem(item,
-                     canvasOrigin,
-                     dpiScale,
-                     hoveredItem == index,
-                     (m_draggingItem == index || m_resizingItem == index ||
-                      (m_batchDragging && item.batchSelected)) &&
-                         ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                     *drawList);
-        }
-    }
-
-    bool       audioControlsHovered = false;
-    const bool audioControlsEnabled = !m_draggingItem && !m_resizingItem &&
-                                      !m_batchDragging && !m_marqueeSelecting;
-    if ( !audioControlsEnabled ) {
-        ImGui::BeginDisabled();
-    }
+    ImDrawList* drawList             = ImGui::GetWindowDrawList();
+    bool        audioControlsHovered = false;
+    const bool  audioControlsEnabled = !m_draggingItem && !m_resizingItem &&
+                                       !m_batchDragging && !m_marqueeSelecting;
     std::string volumeEditorResourceId;
     bool        brushVolumeChanged = false;
-    for ( auto& item : m_items ) {
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        auto& item = m_items[index];
         if ( !isVisible(item.rect, visibleCanvas) ) continue;
+
+        drawItem(item,
+                 canvasOrigin,
+                 dpiScale,
+                 hoveredItem == index,
+                 (m_draggingItem == index || m_resizingItem == index ||
+                  (m_batchDragging && item.batchSelected)) &&
+                     ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                 *drawList);
 
         if ( item.previewPoolKey.empty() ) {
             item.previewPoolKey =
@@ -1192,6 +1259,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const auto labelRect =
             toScreenRect(item.labelRect, canvasOrigin, dpiScale);
         const auto controls = calculateItemAudioControlLayout(labelRect);
+        if ( !audioControlsEnabled ) {
+            ImGui::BeginDisabled();
+        }
         const auto result =
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
@@ -1200,6 +1270,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                               m_brushAudioVolume,
                                               &m_brushAudioVolume,
                                               controls.controls);
+        if ( !audioControlsEnabled ) {
+            ImGui::EndDisabled();
+        }
         if ( audioControlsEnabled ) {
             audioControlsHovered = audioControlsHovered || result.hovered ||
                                    result.volumeEditorOpen;
@@ -1208,9 +1281,6 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             volumeEditorResourceId = item.audioResourceId;
             brushVolumeChanged     = brushVolumeChanged || result.volumeChanged;
         }
-    }
-    if ( !audioControlsEnabled ) {
-        ImGui::EndDisabled();
     }
 
     if ( !volumeEditorResourceId.empty() ) {
@@ -1358,8 +1428,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 m_dragVisibilityConstraints,
                 MINIMUM_VISIBLE_RATIO);
             item.labelRect = item.rect;
+            refreshInteractionLabelRects();
         } else {
             rebuildLabelRects();
+            m_interactionBaseLabelRects.clear();
             persistWorkspace();
             m_draggingItem.reset();
             m_dragSnapTargets.clear();
@@ -1411,8 +1483,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 };
                 item.labelRect = item.rect;
             }
+            refreshInteractionLabelRects();
         } else {
             rebuildLabelRects();
+            m_interactionBaseLabelRects.clear();
             persistWorkspace();
             m_batchDragging = false;
             m_batchDragEntries.clear();
@@ -1499,6 +1573,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 m_dragVisibilityConstraints,
                 MINIMUM_VISIBLE_RATIO);
             item.labelRect = item.rect;
+            refreshInteractionLabelRects();
             if ( horizontalEdge != ResizeEdge::None &&
                  std::abs(item.rect.width - m_resizeStartRect.width) > 1e-4F ) {
                 item.widthCustomized = true;
@@ -1510,6 +1585,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             }
         } else {
             rebuildLabelRects();
+            m_interactionBaseLabelRects.clear();
             persistWorkspace();
             m_resizingItem.reset();
             m_resizeHandle = ResizeHandle::None;
@@ -1586,6 +1662,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                           std::max(1.5F, 1.5F * dpiScale));
     }
 
+    // 绝对定位控件全部提交完成后再声明画布内容边界。提前提交覆盖整张画布的
+    // Dummy 会让后续回退到方块坐标的 ImGui Item 落入非流式布局状态，在
+    // 新版 ImGui 中可能被裁成残片；末尾 Dummy 同时满足滚动范围和边界检查。
+    ImGui::SetCursorScreenPos(canvasCursor);
+    ImGui::Dummy({ contentLogical.x * dpiScale, contentLogical.y * dpiScale });
     ImGui::EndChild();
     renderRenamePopup(dpiScale);
     ImGui::Separator();

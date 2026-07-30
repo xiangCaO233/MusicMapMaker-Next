@@ -858,4 +858,33 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     return area(best) > 0.0F ? best : base;
 }
 
+/// @brief 从基础可见区域中扣除一个移动遮挡并选取最大标签矩形。
+/// @warning 拖动热路径：固定执行至多四次面积比较，不分配、不排序。
+[[nodiscard]] inline Rect largestVisibleCellWithOneOccluder(
+    const Rect& base, const Rect& occluder)
+{
+    const auto clipped = intersection(base, occluder);
+    if ( !clipped ) return base;
+
+    const std::array candidates{
+        Rect{ base.x, base.y, base.width, clipped->y - base.y },
+        Rect{ base.x,
+              clipped->bottom(),
+              base.width,
+              base.bottom() - clipped->bottom() },
+        Rect{ base.x, clipped->y, clipped->x - base.x, clipped->height },
+        Rect{ clipped->right(),
+              clipped->y,
+              base.right() - clipped->right(),
+              clipped->height },
+    };
+    Rect best{};
+    for ( const auto& candidate : candidates ) {
+        if ( area(candidate) > area(best) ) {
+            best = candidate;
+        }
+    }
+    return area(best) > 0.0F ? best : base;
+}
+
 }  // namespace MMM::UI::ProjectAudioToolLayout
