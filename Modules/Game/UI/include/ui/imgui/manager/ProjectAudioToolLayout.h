@@ -210,6 +210,33 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     }
 }
 
+/// @brief 将可能重叠的矩形预处理成互不重叠的并集单元。
+/// @warning 批量拖动开始时的低频路径：允许分配和矩形裁切，禁止每帧调用。
+[[nodiscard]] inline std::vector<Rect> buildUnionCells(
+    std::span<const Rect> rects)
+{
+    std::vector<Rect> unionCells;
+    std::vector<Rect> remainingCells;
+    std::vector<Rect> nextRemainingCells;
+    for ( const auto& rect : rects ) {
+        if ( area(rect) <= 0.0F ) continue;
+        remainingCells.clear();
+        remainingCells.push_back(rect);
+        for ( const auto& existing : unionCells ) {
+            nextRemainingCells.clear();
+            nextRemainingCells.reserve(remainingCells.size() * 2 + 2);
+            for ( const auto& remaining : remainingCells ) {
+                appendSubtractedRect(remaining, existing, nextRemainingCells);
+            }
+            remainingCells.swap(nextRemainingCells);
+            if ( remainingCells.empty() ) break;
+        }
+        unionCells.insert(
+            unionCells.end(), remainingCells.begin(), remainingCells.end());
+    }
+    return unionCells;
+}
+
 /// @brief 预处理一个下层方块的固定遮挡，过滤不相交方块并缓存并集面积。
 /// @warning 拖动开始时的低频路径：允许分配和并集计算，禁止每帧重建。
 [[nodiscard]] inline VisibilityConstraint prepareVisibilityConstraint(
@@ -303,6 +330,78 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
         std::min(minimumVisibleRatio, fixedVisibleRatio(constraint));
     return std::max(
         0.0F, requiredRatio - visibleRatioWithCandidate(constraint, candidate));
+}
+
+/// @brief 计算一组已去重矩形平移后对下层方块造成的可见比例。
+/// @warning 批量拖动热路径：候选单元与固定可见单元均已缓存，禁止分配。
+[[nodiscard]] inline float visibleRatioWithTranslatedCandidates(
+    const VisibilityConstraint& constraint,
+    std::span<const Rect> candidateUnionCells, float deltaX, float deltaY)
+{
+    const float baseArea = area(constraint.base);
+    if ( baseArea <= 0.0F ) return 0.0F;
+
+    float      newlyCoveredArea      = 0.0F;
+    const auto accumulateCoveredArea = [&](const Rect& visibleCell) {
+        for ( const auto& candidateCell : candidateUnionCells ) {
+            const Rect translated{
+                candidateCell.x + deltaX,
+                candidateCell.y + deltaY,
+                candidateCell.width,
+                candidateCell.height,
+            };
+            const auto newlyCovered = intersection(visibleCell, translated);
+            if ( newlyCovered ) {
+                newlyCoveredArea += area(*newlyCovered);
+            }
+        }
+    };
+
+    float baselineVisibleArea = constraint.fixedVisibleArea;
+    if ( constraint.fixedVisibleCells.empty() &&
+         constraint.fixedOccluders.empty() ) {
+        baselineVisibleArea = baseArea;
+        accumulateCoveredArea(constraint.base);
+    } else {
+        for ( const auto& visibleCell : constraint.fixedVisibleCells ) {
+            accumulateCoveredArea(visibleCell);
+        }
+    }
+    return std::clamp(
+        (baselineVisibleArea - newlyCoveredArea) / baseArea, 0.0F, 1.0F);
+}
+
+/// @brief 计算批量候选相对既有布局新增的可见比例缺口。
+/// @warning 批量拖动热路径：只允许调用无分配的缓存查询。
+[[nodiscard]] inline float translatedVisibilityDeficit(
+    const VisibilityConstraint& constraint,
+    std::span<const Rect> candidateUnionCells, float deltaX, float deltaY,
+    float minimumVisibleRatio)
+{
+    const float requiredRatio =
+        std::min(minimumVisibleRatio, fixedVisibleRatio(constraint));
+    return std::max(
+        0.0F,
+        requiredRatio - visibleRatioWithTranslatedCandidates(
+                            constraint, candidateUnionCells, deltaX, deltaY));
+}
+
+/// @brief 计算批量候选对全部下层方块造成的总可见比例缺口。
+/// @warning 批量拖动热路径：每帧遍历缓存，不得复制或重建候选矩形。
+[[nodiscard]] inline float translatedVisibilityDeficit(
+    std::span<const VisibilityConstraint> constraints,
+    std::span<const Rect> candidateUnionCells, float deltaX, float deltaY,
+    float minimumVisibleRatio)
+{
+    float deficit = 0.0F;
+    for ( const auto& constraint : constraints ) {
+        deficit += translatedVisibilityDeficit(constraint,
+                                               candidateUnionCells,
+                                               deltaX,
+                                               deltaY,
+                                               minimumVisibleRatio);
+    }
+    return deficit;
 }
 
 /// @brief 将矩形限制在工具画布边界内。
@@ -658,6 +757,56 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
         previous.y + (candidate.y - previous.y) * validAmount,
         previous.width + (candidate.width - previous.width) * validAmount,
         previous.height + (candidate.height - previous.height) * validAmount,
+    };
+}
+
+/// @brief 沿批量移动轨迹限制组合外框，避免选中方块遮住固定下层方块。
+/// @warning 批量拖动热路径：仅候选位置无效时执行固定轮数二分，不得分配。
+[[nodiscard]] inline Rect constrainTranslatedVisibility(
+    const Rect& previousBounds, Rect candidateBounds, const Rect& initialBounds,
+    std::span<const Rect> candidateUnionCells, const Rect& canvasBounds,
+    std::span<const VisibilityConstraint> constraints,
+    float                                 minimumVisibleRatio)
+{
+    candidateBounds      = clampToBounds(candidateBounds, canvasBounds);
+    const auto deficitAt = [&](const Rect& bounds) {
+        return translatedVisibilityDeficit(constraints,
+                                           candidateUnionCells,
+                                           bounds.x - initialBounds.x,
+                                           bounds.y - initialBounds.y,
+                                           minimumVisibleRatio);
+    };
+
+    const float previousDeficit  = deficitAt(previousBounds);
+    const float candidateDeficit = deficitAt(candidateBounds);
+    if ( candidateDeficit <= 1e-5F ||
+         (previousDeficit > 1e-5F &&
+          candidateDeficit < previousDeficit - 1e-5F) ) {
+        return candidateBounds;
+    }
+
+    float         validAmount          = 0.0F;
+    float         invalidAmount        = 1.0F;
+    constexpr int BINARY_SEARCH_PASSES = 12;
+    for ( int pass = 0; pass < BINARY_SEARCH_PASSES; ++pass ) {
+        const float amount = (validAmount + invalidAmount) * 0.5F;
+        const Rect  trial{
+            previousBounds.x + (candidateBounds.x - previousBounds.x) * amount,
+            previousBounds.y + (candidateBounds.y - previousBounds.y) * amount,
+            previousBounds.width,
+            previousBounds.height,
+        };
+        if ( deficitAt(trial) <= 1e-5F ) {
+            validAmount = amount;
+        } else {
+            invalidAmount = amount;
+        }
+    }
+    return {
+        previousBounds.x + (candidateBounds.x - previousBounds.x) * validAmount,
+        previousBounds.y + (candidateBounds.y - previousBounds.y) * validAmount,
+        previousBounds.width,
+        previousBounds.height,
     };
 }
 

@@ -6,6 +6,7 @@
 #include "ui/imgui/manager/ProjectAudioToolLayout.h"
 
 #include <atomic>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -75,6 +76,18 @@ private:
 
         /// @brief 高度是否已经由用户手动调整。
         bool heightCustomized{ false };
+
+        /// @brief 是否属于仅供批量布局移动使用的临时选区。
+        bool batchSelected{ false };
+    };
+
+    /// @brief 批量拖动中一个方块的稳定下标和起始矩形。
+    struct BatchDragEntry {
+        /// @brief 方块提升到顶层后的缓存下标。
+        std::size_t itemIndex{ 0 };
+
+        /// @brief 批量拖动开始时的方块矩形。
+        ProjectAudioToolLayout::Rect startRect;
     };
 
     /// @brief 从当前项目资源和工作区布局低频重建方块缓存。
@@ -107,12 +120,26 @@ private:
     void beginItemResize(std::size_t itemIndex, ResizeHandle handle,
                          ImVec2 mousePosition);
 
+    /// @brief 开始移动当前批量布局选区且不修改画笔音频。
+    /// @param itemIndex 鼠标按下的批量选中方块。
+    /// @param mousePosition 鼠标在逻辑画布中的坐标。
+    void beginBatchDrag(std::size_t itemIndex, ImVec2 mousePosition);
+
+    /// @brief 清空仅供批量布局移动使用的临时选区。
+    void clearBatchSelection();
+
+    /// @brief 统计当前批量布局选区中的方块数量。
+    [[nodiscard]] std::size_t batchSelectionCount() const;
+
     /// @brief 根据鼠标位置检测方块边缘或四角的缩放热区。
     [[nodiscard]] ResizeHandle hitTestResizeHandle(const Item& item,
                                                    ImVec2 mousePosition) const;
 
     /// @brief 构建当前移动或缩放所需的吸附目标和下层可见性约束。
     void rebuildInteractionConstraints();
+
+    /// @brief 构建批量移动所需的固定方块吸附目标与可见性约束。
+    void rebuildBatchDragConstraints();
 
     /// @brief 绘制一个方块和位于其可见区域内的滚动文本。
     /// @param item 方块缓存。
@@ -139,6 +166,24 @@ private:
     /// @brief 当前拖动方块在 m_items 中的下标。
     std::optional<std::size_t> m_draggingItem;
 
+    /// @brief 当前是否正在整体移动批量布局选区。
+    bool m_batchDragging{ false };
+
+    /// @brief 批量移动方块及其起始矩形缓存。
+    std::vector<BatchDragEntry> m_batchDragEntries;
+
+    /// @brief 批量选区开始移动时的组合外框。
+    ProjectAudioToolLayout::Rect m_batchDragInitialBounds;
+
+    /// @brief 批量选区上一帧通过约束后的组合外框。
+    ProjectAudioToolLayout::Rect m_batchDragCurrentBounds;
+
+    /// @brief 批量选区起始形态的无重叠并集单元。
+    std::vector<ProjectAudioToolLayout::Rect> m_batchDragUnionCells;
+
+    /// @brief 鼠标按下点相对批量选区组合外框左上角的偏移。
+    ImVec2 m_batchDragOffset{ 0.0F, 0.0F };
+
     /// @brief 当前缩放方块在 m_items 中的下标。
     std::optional<std::size_t> m_resizingItem;
 
@@ -156,6 +201,18 @@ private:
 
     /// @brief 当前移动或缩放的水平和垂直吸附滞回状态。
     ProjectAudioToolLayout::SnapLocks m_snapLocks;
+
+    /// @brief 是否正在从空白画布拖出批量布局选框。
+    bool m_marqueeSelecting{ false };
+
+    /// @brief 批量布局选框在逻辑画布中的起点。
+    ImVec2 m_marqueeStart{ 0.0F, 0.0F };
+
+    /// @brief 批量布局选框在逻辑画布中的当前终点。
+    ImVec2 m_marqueeEnd{ 0.0F, 0.0F };
+
+    /// @brief 追加框选开始前每个方块的批量选中状态。
+    std::vector<std::uint8_t> m_marqueeBaseSelection;
 
     /// @brief 当前选中项目音频资源 ID。
     std::string m_selectedAudioResourceId;

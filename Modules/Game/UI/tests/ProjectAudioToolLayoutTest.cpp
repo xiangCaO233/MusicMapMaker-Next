@@ -230,6 +230,44 @@ bool testExistingVisibilityDeficitIsBaseline()
                constraint, worseningCandidate, 0.35F) > 0.0F;
 }
 
+/// @brief 验证批量方块并集去重并在整体平移时共同遵守下层可见率。
+bool testBatchMoveVisibilityConstraint()
+{
+    const std::vector selectedRects{
+        Rect{ 0.0F, 0.0F, 100.0F, 100.0F },
+        Rect{ 50.0F, 0.0F, 100.0F, 100.0F },
+    };
+    const auto unionCells =
+        MMM::UI::ProjectAudioToolLayout::buildUnionCells(selectedRects);
+    float unionArea = 0.0F;
+    for ( const auto& cell : unionCells ) {
+        unionArea += MMM::UI::ProjectAudioToolLayout::area(cell);
+    }
+    if ( !near(unionArea, 15000.0F) ) return false;
+
+    const auto fixedConstraint =
+        MMM::UI::ProjectAudioToolLayout::prepareVisibilityConstraint(
+            Rect{ 200.0F, 0.0F, 100.0F, 100.0F }, std::vector<Rect>{});
+    const std::vector constraints{ fixedConstraint };
+    const Rect        initialBounds{ 0.0F, 0.0F, 150.0F, 100.0F };
+    const Rect        result =
+        MMM::UI::ProjectAudioToolLayout::constrainTranslatedVisibility(
+            initialBounds,
+            Rect{ 200.0F, 0.0F, 150.0F, 100.0F },
+            initialBounds,
+            unionCells,
+            Rect{ 0.0F, 0.0F, 500.0F, 500.0F },
+            constraints,
+            0.35F);
+    return result.x < 200.0F &&
+           MMM::UI::ProjectAudioToolLayout::translatedVisibilityDeficit(
+               constraints,
+               unionCells,
+               result.x - initialBounds.x,
+               result.y - initialBounds.y,
+               0.35F) <= 1e-4F;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频工具几何布局测试。
@@ -244,5 +282,6 @@ int main()
     if ( !testResizeVisibilityConstraint() ) return 7;
     if ( !testPreparedVisibilityConstraint() ) return 8;
     if ( !testExistingVisibilityDeficitIsBaseline() ) return 9;
+    if ( !testBatchMoveVisibilityConstraint() ) return 10;
     return 0;
 }

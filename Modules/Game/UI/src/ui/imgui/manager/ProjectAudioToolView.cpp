@@ -14,6 +14,7 @@
 #include <limits>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MMM::UI
 {
@@ -116,6 +117,27 @@ bool contains(const ProjectAudioToolLayout::Rect& rect, ImVec2 point)
            point.y <= rect.bottom();
 }
 
+/// @brief 由两个逻辑画布点构造方向无关的矩形。
+ProjectAudioToolLayout::Rect rectFromPoints(ImVec2 first, ImVec2 second)
+{
+    const float left   = std::min(first.x, second.x);
+    const float top    = std::min(first.y, second.y);
+    const float right  = std::max(first.x, second.x);
+    const float bottom = std::max(first.y, second.y);
+    return { left, top, right - left, bottom - top };
+}
+
+/// @brief 判断外层矩形是否完整包含内层矩形。
+bool containsRect(const ProjectAudioToolLayout::Rect& outer,
+                  const ProjectAudioToolLayout::Rect& inner)
+{
+    constexpr float EPSILON = 0.5F;
+    return inner.x >= outer.x - EPSILON &&
+           inner.right() <= outer.right() + EPSILON &&
+           inner.y >= outer.y - EPSILON &&
+           inner.bottom() <= outer.bottom() + EPSILON;
+}
+
 /// @brief 判断矩形指定轴上的边缘或中心是否与目标参考线重合。
 bool alignsWithTargetLine(const ProjectAudioToolLayout::Rect& rect,
                           float targetLine, bool horizontal)
@@ -198,19 +220,39 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
         m_items.clear();
+        m_batchDragEntries.clear();
+        m_batchDragUnionCells.clear();
+        m_marqueeBaseSelection.clear();
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
         m_cachedProjectRoot.clear();
-        m_cachedDpiScale = 0.0F;
+        m_cachedDpiScale   = 0.0F;
+        m_batchDragging    = false;
+        m_marqueeSelecting = false;
         return;
+    }
+
+    const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
+    std::unordered_set<std::string> batchSelectedResourceIds;
+    if ( projectRoot == m_cachedProjectRoot ) {
+        for ( const auto& item : m_items ) {
+            if ( item.batchSelected ) {
+                batchSelectedResourceIds.insert(item.audioResourceId);
+            }
+        }
     }
 
     m_draggingItem.reset();
     m_resizingItem.reset();
+    m_batchDragging    = false;
+    m_marqueeSelecting = false;
+    m_batchDragEntries.clear();
+    m_batchDragUnionCells.clear();
+    m_marqueeBaseSelection.clear();
     m_resizeHandle = ResizeHandle::None;
     m_snapLocks    = {};
 
-    m_cachedProjectRoot       = Config::pathToUtf8(project->m_projectRoot);
+    m_cachedProjectRoot       = projectRoot;
     m_cachedDpiScale          = dpiScale;
     auto& workspace           = project->m_settings.m_workspace;
     m_selectedAudioResourceId = workspace.m_projectAudioToolSelectedResourceId;
@@ -236,6 +278,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         item.audioResourceId = resource.m_id;
         item.label           = audioResourceLabel(resource);
         item.type            = resource.m_type;
+        item.batchSelected   = batchSelectedResourceIds.contains(resource.m_id);
         item.rect.width  = defaultItemWidth(item.label, item.type, dpiScale);
         item.rect.height = resource.m_type == AudioTrackType::Main
                                ? DEFAULT_MAIN_HEIGHT
@@ -447,6 +490,88 @@ void ProjectAudioToolView::beginItemResize(std::size_t  itemIndex,
     rebuildInteractionConstraints();
 }
 
+void ProjectAudioToolView::clearBatchSelection()
+{
+    for ( auto& item : m_items ) {
+        item.batchSelected = false;
+    }
+}
+
+std::size_t ProjectAudioToolView::batchSelectionCount() const
+{
+    return static_cast<std::size_t>(std::ranges::count_if(
+        m_items, [](const Item& item) { return item.batchSelected; }));
+}
+
+void ProjectAudioToolView::beginBatchDrag(std::size_t itemIndex,
+                                          ImVec2      mousePosition)
+{
+    if ( itemIndex >= m_items.size() || !m_items[itemIndex].batchSelected ) {
+        return;
+    }
+
+    std::vector<Item> reorderedItems;
+    reorderedItems.reserve(m_items.size());
+    for ( auto& item : m_items ) {
+        if ( !item.batchSelected ) {
+            reorderedItems.push_back(std::move(item));
+        }
+    }
+    for ( auto& item : m_items ) {
+        if ( item.batchSelected ) {
+            reorderedItems.push_back(std::move(item));
+        }
+    }
+    m_items = std::move(reorderedItems);
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        m_items[index].zOrder = static_cast<std::int32_t>(index);
+    }
+
+    m_batchDragEntries.clear();
+    std::vector<ProjectAudioToolLayout::Rect> selectedRects;
+    selectedRects.reserve(batchSelectionCount());
+    bool hasBounds = false;
+    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+        auto& item = m_items[index];
+        if ( !item.batchSelected ) continue;
+
+        m_batchDragEntries.push_back(BatchDragEntry{
+            .itemIndex = index,
+            .startRect = item.rect,
+        });
+        selectedRects.push_back(item.rect);
+        item.labelRect = item.rect;
+        if ( !hasBounds ) {
+            m_batchDragInitialBounds = item.rect;
+            hasBounds                = true;
+        } else {
+            const float right =
+                std::max(m_batchDragInitialBounds.right(), item.rect.right());
+            const float bottom =
+                std::max(m_batchDragInitialBounds.bottom(), item.rect.bottom());
+            m_batchDragInitialBounds.x =
+                std::min(m_batchDragInitialBounds.x, item.rect.x);
+            m_batchDragInitialBounds.y =
+                std::min(m_batchDragInitialBounds.y, item.rect.y);
+            m_batchDragInitialBounds.width = right - m_batchDragInitialBounds.x;
+            m_batchDragInitialBounds.height =
+                bottom - m_batchDragInitialBounds.y;
+        }
+    }
+    if ( !hasBounds ) return;
+
+    m_batchDragCurrentBounds = m_batchDragInitialBounds;
+    m_batchDragUnionCells =
+        ProjectAudioToolLayout::buildUnionCells(selectedRects);
+    m_batchDragOffset = {
+        mousePosition.x - m_batchDragInitialBounds.x,
+        mousePosition.y - m_batchDragInitialBounds.y,
+    };
+    m_batchDragging = true;
+    m_snapLocks     = {};
+    rebuildBatchDragConstraints();
+}
+
 ProjectAudioToolView::ResizeHandle ProjectAudioToolView::hitTestResizeHandle(
     const Item& item, ImVec2 mousePosition) const
 {
@@ -498,6 +623,34 @@ void ProjectAudioToolView::rebuildInteractionConstraints()
     }
 }
 
+void ProjectAudioToolView::rebuildBatchDragConstraints()
+{
+    m_dragSnapTargets.clear();
+    m_dragVisibilityConstraints.clear();
+    if ( !m_batchDragging || m_batchDragEntries.empty() ) return;
+
+    const std::size_t fixedItemCount =
+        m_items.size() - m_batchDragEntries.size();
+    m_dragSnapTargets.reserve(fixedItemCount);
+    m_dragVisibilityConstraints.reserve(fixedItemCount);
+    for ( std::size_t baseIndex = 0; baseIndex < fixedItemCount; ++baseIndex ) {
+        m_dragSnapTargets.push_back(m_items[baseIndex].rect);
+
+        std::vector<ProjectAudioToolLayout::Rect> fixedOccluders;
+        for ( std::size_t higherIndex = baseIndex + 1;
+              higherIndex < fixedItemCount;
+              ++higherIndex ) {
+            if ( ProjectAudioToolLayout::intersection(
+                     m_items[baseIndex].rect, m_items[higherIndex].rect) ) {
+                fixedOccluders.push_back(m_items[higherIndex].rect);
+            }
+        }
+        m_dragVisibilityConstraints.push_back(
+            ProjectAudioToolLayout::prepareVisibilityConstraint(
+                m_items[baseIndex].rect, fixedOccluders));
+    }
+}
+
 void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
                                     float dpiScale, bool hovered, bool pressed,
                                     ImDrawList& drawList) const
@@ -532,6 +685,11 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
         0,
         selected ? std::max(3.0F * dpiScale, style.FrameBorderSize)
                  : std::max(1.0F, style.FrameBorderSize));
+    if ( item.batchSelected ) {
+        constexpr ImU32 BATCH_SELECTION_FILL = IM_COL32(76, 255, 190, 38);
+        drawList.AddRectFilled(
+            minimum, maximum, BATCH_SELECTION_FILL, rounding);
+    }
 
     const auto labelRect = toScreenRect(item.labelRect, canvasOrigin, dpiScale);
     const float  horizontalPadding = std::max(1.0F, style.FramePadding.x);
@@ -559,7 +717,18 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
         ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 0.78F)),
         typeLabel);
 
-    if ( selected ) {
+    if ( item.batchSelected ) {
+        constexpr ImU32 BATCH_SELECTION_BORDER = IM_COL32(76, 255, 190, 235);
+        const float     inset = std::max(2.0F, 3.0F * dpiScale);
+        drawList.AddRect({ minimum.x + inset, minimum.y + inset },
+                         { maximum.x - inset, maximum.y - inset },
+                         BATCH_SELECTION_BORDER,
+                         std::max(0.0F, rounding - inset),
+                         0,
+                         std::max(2.0F, 2.25F * dpiScale));
+    }
+
+    if ( selected && !item.batchSelected ) {
         const float halfHandle = RESIZE_HANDLE_SIZE * dpiScale * 0.5F;
         const std::array<ImVec2, 8> handleCenters{
             ImVec2{ minimum.x, minimum.y },
@@ -681,7 +850,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     ResizeHandle hoveredResizeHandle = ResizeHandle::None;
     if ( m_resizingItem ) {
         hoveredResizeHandle = m_resizeHandle;
-    } else if ( hoveredItem ) {
+    } else if ( hoveredItem && !m_items[*hoveredItem].batchSelected ) {
         hoveredResizeHandle =
             hitTestResizeHandle(m_items[*hoveredItem], mouseLogical);
     }
@@ -713,21 +882,73 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                      canvasOrigin,
                      dpiScale,
                      hoveredItem == index,
-                     (m_draggingItem == index || m_resizingItem == index) &&
+                     (m_draggingItem == index || m_resizingItem == index ||
+                      (m_batchDragging && item.batchSelected)) &&
                          ImGui::IsMouseDown(ImGuiMouseButton_Left),
                      *drawList);
         }
     }
 
+    const auto refreshMarqueeSelection = [&]() {
+        if ( m_marqueeBaseSelection.size() != m_items.size() ) return;
+        const auto selectionRect = rectFromPoints(m_marqueeStart, m_marqueeEnd);
+        const bool selectionValid =
+            selectionRect.width > 0.5F && selectionRect.height > 0.5F;
+        const auto selectionMode =
+            Config::AppConfig::instance().getEditorSettings().selectionMode;
+        for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+            bool selected = m_marqueeBaseSelection[index] != 0;
+            if ( selectionValid ) {
+                selected =
+                    selected ||
+                    (selectionMode == Config::SelectionMode::Strict
+                         ? containsRect(selectionRect, m_items[index].rect)
+                         : ProjectAudioToolLayout::intersection(
+                               selectionRect, m_items[index].rect)
+                               .has_value());
+            }
+            m_items[index].batchSelected = selected;
+        }
+    };
+
     if ( canvasHovered && !m_draggingItem && !m_resizingItem &&
+         !m_batchDragging && !m_marqueeSelecting &&
          ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
         if ( hoveredItem ) {
-            if ( hoveredResizeHandle != ResizeHandle::None ) {
+            if ( m_items[*hoveredItem].batchSelected ) {
+                beginBatchDrag(*hoveredItem, mouseLogical);
+            } else if ( hoveredResizeHandle != ResizeHandle::None ) {
+                clearBatchSelection();
                 beginItemResize(
                     *hoveredItem, hoveredResizeHandle, mouseLogical);
             } else {
+                clearBatchSelection();
                 beginItemDrag(*hoveredItem, mouseLogical);
             }
+        } else {
+            const bool additiveSelection =
+                ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
+            m_marqueeSelecting = true;
+            m_marqueeStart     = mouseLogical;
+            m_marqueeEnd       = mouseLogical;
+            m_marqueeBaseSelection.assign(m_items.size(), 0);
+            if ( additiveSelection ) {
+                for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+                    m_marqueeBaseSelection[index] =
+                        m_items[index].batchSelected ? 1 : 0;
+                }
+            } else {
+                clearBatchSelection();
+            }
+        }
+    }
+
+    if ( m_marqueeSelecting ) {
+        m_marqueeEnd = mouseLogical;
+        refreshMarqueeSelection();
+        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            m_marqueeSelecting = false;
+            m_marqueeBaseSelection.clear();
         }
     }
 
@@ -761,6 +982,61 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             rebuildLabelRects();
             persistWorkspace();
             m_draggingItem.reset();
+            m_dragSnapTargets.clear();
+            m_dragVisibilityConstraints.clear();
+            m_snapLocks = {};
+        }
+    }
+
+    if ( m_batchDragging && !m_batchDragEntries.empty() ) {
+        if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            ProjectAudioToolLayout::Rect rawBounds{
+                mouseLogical.x - m_batchDragOffset.x,
+                mouseLogical.y - m_batchDragOffset.y,
+                m_batchDragInitialBounds.width,
+                m_batchDragInitialBounds.height,
+            };
+            rawBounds = ProjectAudioToolLayout::snapRect(rawBounds,
+                                                         visibleCanvas,
+                                                         m_dragSnapTargets,
+                                                         SNAP_THRESHOLD,
+                                                         SNAP_RELEASE_THRESHOLD,
+                                                         m_snapLocks);
+            m_batchDragCurrentBounds =
+                ProjectAudioToolLayout::constrainTranslatedVisibility(
+                    m_batchDragCurrentBounds,
+                    rawBounds,
+                    m_batchDragInitialBounds,
+                    m_batchDragUnionCells,
+                    ProjectAudioToolLayout::Rect{
+                        0.0F,
+                        0.0F,
+                        contentLogical.x,
+                        contentLogical.y,
+                    },
+                    m_dragVisibilityConstraints,
+                    MINIMUM_VISIBLE_RATIO);
+            const float deltaX =
+                m_batchDragCurrentBounds.x - m_batchDragInitialBounds.x;
+            const float deltaY =
+                m_batchDragCurrentBounds.y - m_batchDragInitialBounds.y;
+            for ( const auto& entry : m_batchDragEntries ) {
+                if ( entry.itemIndex >= m_items.size() ) continue;
+                auto& item = m_items[entry.itemIndex];
+                item.rect  = {
+                    entry.startRect.x + deltaX,
+                    entry.startRect.y + deltaY,
+                    entry.startRect.width,
+                    entry.startRect.height,
+                };
+                item.labelRect = item.rect;
+            }
+        } else {
+            rebuildLabelRects();
+            persistWorkspace();
+            m_batchDragging = false;
+            m_batchDragEntries.clear();
+            m_batchDragUnionCells.clear();
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};
@@ -863,9 +1139,17 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         }
     }
 
-    const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
-    if ( activeItem && *activeItem < m_items.size() ) {
-        const auto&  item = m_items[*activeItem];
+    std::optional<ProjectAudioToolLayout::Rect> snapGuideBounds;
+    if ( m_batchDragging ) {
+        snapGuideBounds = m_batchDragCurrentBounds;
+    } else {
+        const auto activeItem =
+            m_draggingItem ? m_draggingItem : m_resizingItem;
+        if ( activeItem && *activeItem < m_items.size() ) {
+            snapGuideBounds = m_items[*activeItem].rect;
+        }
+    }
+    if ( snapGuideBounds ) {
         const ImVec2 visibleMinimum{
             canvasOrigin.x + visibleCanvas.x * dpiScale,
             canvasOrigin.y + visibleCanvas.y * dpiScale,
@@ -880,7 +1164,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const float     snapGuideGap       = std::max(3.0F, 4.0F * dpiScale);
         if ( m_snapLocks.x.targetLine &&
              alignsWithTargetLine(
-                 item.rect, *m_snapLocks.x.targetLine, true) ) {
+                 *snapGuideBounds, *m_snapLocks.x.targetLine, true) ) {
             const float guideX =
                 canvasOrigin.x + *m_snapLocks.x.targetLine * dpiScale;
             drawSnapGuide(*drawList,
@@ -893,7 +1177,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         }
         if ( m_snapLocks.y.targetLine &&
              alignsWithTargetLine(
-                 item.rect, *m_snapLocks.y.targetLine, false) ) {
+                 *snapGuideBounds, *m_snapLocks.y.targetLine, false) ) {
             const float guideY =
                 canvasOrigin.y + *m_snapLocks.y.targetLine * dpiScale;
             drawSnapGuide(*drawList,
@@ -906,6 +1190,22 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         }
     }
 
+    if ( m_marqueeSelecting ) {
+        const auto selectionRect =
+            toScreenRect(rectFromPoints(m_marqueeStart, m_marqueeEnd),
+                         canvasOrigin,
+                         dpiScale);
+        const ImVec2 minimum{ selectionRect.x, selectionRect.y };
+        const ImVec2 maximum{ selectionRect.right(), selectionRect.bottom() };
+        drawList->AddRectFilled(minimum, maximum, IM_COL32(120, 170, 255, 42));
+        drawList->AddRect(minimum,
+                          maximum,
+                          IM_COL32(120, 170, 255, 180),
+                          0.0F,
+                          0,
+                          std::max(1.5F, 1.5F * dpiScale));
+    }
+
     ImGui::EndChild();
     ImGui::Separator();
     if ( m_selectedAudioResourceId.empty() ) {
@@ -916,6 +1216,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             TR("ui.project_audio_tool.status_selected").data(),
             m_selectedAudioTrackType == AudioTrackType::Main ? "MAIN" : "FX",
             m_selectedAudioLabel.c_str());
+    }
+    const std::size_t batchCount = batchSelectionCount();
+    if ( batchCount > 0 ) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "| %s: %zu",
+            TR("ui.project_audio_tool.status_batch_selected").data(),
+            batchCount);
     }
 }
 
