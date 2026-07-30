@@ -1274,6 +1274,22 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     bool        audioControlsHovered = false;
     const bool  audioControlsEnabled = !m_draggingItem && !m_resizingItem &&
                                        !m_batchDragging && !m_marqueeSelecting;
+    std::optional<std::size_t> hoveredAudioControls;
+    if ( audioControlsEnabled ) {
+        for ( std::size_t reverse = m_items.size(); reverse > 0; --reverse ) {
+            const std::size_t index = reverse - 1U;
+            if ( !isVisible(m_items[index].rect, visibleCanvas) ) continue;
+            const auto screenRect =
+                toScreenRect(m_items[index].rect, canvasOrigin, dpiScale);
+            const auto layout = calculateItemAudioControlLayout(screenRect);
+            if ( containsItemAudioControls(layout.controls,
+                                           ImGui::GetIO().MousePos) ) {
+                hoveredAudioControls = index;
+                audioControlsHovered = true;
+                break;
+            }
+        }
+    }
     std::string volumeEditorResourceId;
     bool        brushVolumeChanged = false;
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
@@ -1297,10 +1313,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             toScreenRect(item.rect, canvasOrigin, dpiScale);
         const auto controls = calculateItemAudioControlLayout(itemScreenRect);
         const bool controlsPointerInside =
-            audioControlsEnabled && hoveredItem == index &&
-            containsItemAudioControls(controls.controls,
-                                      ImGui::GetIO().MousePos);
-        audioControlsHovered = audioControlsHovered || controlsPointerInside;
+            hoveredAudioControls && *hoveredAudioControls == index;
         if ( !audioControlsEnabled ) {
             ImGui::BeginDisabled();
         }
