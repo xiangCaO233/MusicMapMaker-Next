@@ -690,8 +690,6 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const auto& inspect = currentSnapshot.hoverInspect;
     auto*       project = Logic::EditorEngine::instance().getCurrentProject();
     if ( currentSnapshot.currentTool != Logic::EditTool::Move ||
-         !inspect.show || !inspect.showAudioPreview ||
-         inspect.entity == entt::null || inspect.audioResourceId.empty() ||
          m_leftPressStartedOnCanvas || m_leftPressStartedOnEntity ||
          m_rightEraseActive || !project || targetWidth <= 0.0F ||
          targetHeight <= 0.0F ) {
@@ -699,10 +697,51 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         return false;
     }
 
+    const auto& style            = ImGui::GetStyle();
+    const float retentionPadding = std::max(6.0F, style.ItemSpacing.x * 0.5F);
+    const bool  pointerInsideLockedRetention =
+        m_audioPreviewOverlay.valid &&
+        pointerX >= std::min(m_audioPreviewOverlay.left,
+                             m_audioPreviewOverlay.controlsLeft) -
+                        retentionPadding &&
+        pointerX <= std::max(m_audioPreviewOverlay.right,
+                             m_audioPreviewOverlay.controlsRight) +
+                        retentionPadding &&
+        pointerY >= std::min(m_audioPreviewOverlay.top,
+                             m_audioPreviewOverlay.controlsTop) -
+                        retentionPadding &&
+        pointerY <= std::max(m_audioPreviewOverlay.bottom,
+                             m_audioPreviewOverlay.controlsBottom) +
+                        retentionPadding;
+
+    entt::entity           targetEntity{ entt::null };
+    Logic::ChartObjectKind targetObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
+    std::string_view targetAudioResourceId;
+    float            targetVolume{ 1.0F };
+    if ( pointerInsideLockedRetention ) {
+        targetEntity          = m_audioPreviewOverlay.entity;
+        targetObjectKind      = m_audioPreviewOverlay.objectKind;
+        targetAudioResourceId = m_audioPreviewOverlay.audioResourceId;
+        targetVolume          = m_audioPreviewOverlay.volume;
+    } else if ( inspect.show && inspect.showAudioPreview &&
+                inspect.entity != entt::null &&
+                !inspect.audioResourceId.empty() ) {
+        targetEntity          = inspect.entity;
+        targetObjectKind      = inspect.objectKind;
+        targetAudioResourceId = inspect.audioResourceId;
+        targetVolume          = inspect.volume;
+    } else {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
     const bool sameObject =
         m_audioPreviewOverlay.valid &&
-        m_audioPreviewOverlay.entity == inspect.entity &&
-        m_audioPreviewOverlay.objectKind == inspect.objectKind;
+        m_audioPreviewOverlay.entity == targetEntity &&
+        m_audioPreviewOverlay.objectKind == targetObjectKind &&
+        m_audioPreviewOverlay.audioResourceId == targetAudioResourceId;
     const float previousCenterX =
         (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right) * 0.5F;
     const float previousCenterY =
@@ -711,9 +750,8 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const Logic::Hitbox* anchor    = nullptr;
     float                bestScore = std::numeric_limits<float>::max();
     for ( const auto& hitbox : currentSnapshot.hitboxes ) {
-        if ( hitbox.entity != inspect.entity ||
-             hitbox.kind != inspect.objectKind || hitbox.w <= 0.0F ||
-             hitbox.h <= 0.0F ) {
+        if ( hitbox.entity != targetEntity || hitbox.kind != targetObjectKind ||
+             hitbox.w <= 0.0F || hitbox.h <= 0.0F ) {
             continue;
         }
 
@@ -738,18 +776,19 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         return false;
     }
 
-    m_audioPreviewOverlay.valid           = true;
-    m_audioPreviewOverlay.entity          = inspect.entity;
-    m_audioPreviewOverlay.objectKind      = inspect.objectKind;
-    m_audioPreviewOverlay.audioResourceId = inspect.audioResourceId;
-    m_audioPreviewOverlay.volume          = inspect.volume;
+    m_audioPreviewOverlay.valid      = true;
+    m_audioPreviewOverlay.entity     = targetEntity;
+    m_audioPreviewOverlay.objectKind = targetObjectKind;
+    if ( !pointerInsideLockedRetention ) {
+        m_audioPreviewOverlay.audioResourceId = targetAudioResourceId;
+        m_audioPreviewOverlay.volume          = targetVolume;
+    }
     if ( !sameObject ) {
         const std::string previewInstanceId =
             "canvas/" + m_cameraId + "/" +
-            std::to_string(static_cast<std::uint32_t>(inspect.objectKind)) +
-            "/" +
+            std::to_string(static_cast<std::uint32_t>(targetObjectKind)) + "/" +
             std::to_string(
-                static_cast<std::uint32_t>(entt::to_integral(inspect.entity)));
+                static_cast<std::uint32_t>(entt::to_integral(targetEntity)));
         m_audioPreviewOverlay.previewPoolKey =
             UI::makeProjectAudioPreviewPoolKey(previewInstanceId);
     }
@@ -758,7 +797,6 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     m_audioPreviewOverlay.right  = anchor->x + anchor->w;
     m_audioPreviewOverlay.bottom = anchor->y + anchor->h;
 
-    const auto& style = ImGui::GetStyle();
     const float buttonSize =
         std::ceil(std::max(20.0F, ImGui::GetFrameHeight()));
     const float spacing =
@@ -768,19 +806,21 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
         std::max(2.0F, std::min(style.ItemInnerSpacing.y, 4.0F));
     const float rowWidth    = buttonSize * 3.0F + spacing * 2.0F;
     const float panelHeight = progressHeight + progressSpacing + buttonSize;
-    const float gap         = std::max(4.0F, style.ItemSpacing.x * 0.5F);
+    const float gap         = std::max(6.0F, style.ItemSpacing.y * 0.5F);
 
-    float controlsX = m_audioPreviewOverlay.right + gap;
-    if ( controlsX + rowWidth > targetWidth ) {
-        controlsX = m_audioPreviewOverlay.left - gap - rowWidth;
-    }
+    float controlsX =
+        (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right - rowWidth) *
+        0.5F;
     controlsX =
         std::clamp(controlsX, 0.0F, std::max(0.0F, targetWidth - rowWidth));
-    float controlsY = (m_audioPreviewOverlay.top +
-                       m_audioPreviewOverlay.bottom - panelHeight) *
-                      0.5F;
+    float controlsY = m_audioPreviewOverlay.top - gap - panelHeight;
     controlsY =
         std::clamp(controlsY, 0.0F, std::max(0.0F, targetHeight - panelHeight));
+
+    m_audioPreviewOverlay.controlsLeft   = controlsX;
+    m_audioPreviewOverlay.controlsTop    = controlsY;
+    m_audioPreviewOverlay.controlsRight  = controlsX + rowWidth;
+    m_audioPreviewOverlay.controlsBottom = controlsY + panelHeight;
 
     const auto result = UI::renderProjectAudioPreviewControls(
         "CanvasObjectAudioPreview",
@@ -801,7 +841,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
                                       pointerX <= m_audioPreviewOverlay.right &&
                                       pointerY >= m_audioPreviewOverlay.top &&
                                       pointerY <= m_audioPreviewOverlay.bottom;
-    const float bridgePadding       = std::max(4.0F, gap);
+    const float bridgePadding       = std::max(retentionPadding, gap);
     const float bridgeLeft =
         std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
     const float bridgeTop =

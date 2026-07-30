@@ -210,6 +210,14 @@ private:
         float right{ 0.0F };
         /// @brief 当前锚定拾取盒下边界。
         float bottom{ 0.0F };
+        /// @brief 当前试听控制面板左边界。
+        float controlsLeft{ 0.0F };
+        /// @brief 当前试听控制面板上边界。
+        float controlsTop{ 0.0F };
+        /// @brief 当前试听控制面板右边界。
+        float controlsRight{ 0.0F };
+        /// @brief 当前试听控制面板下边界。
+        float controlsBottom{ 0.0F };
     };
 
     /// @brief 允许指针从物件移动到按钮而不使按钮消失的试听覆盖层状态。
