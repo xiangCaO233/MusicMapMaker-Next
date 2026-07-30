@@ -46,6 +46,11 @@ bool collectDirectoryPollingSnapshot(const std::filesystem::path& root,
             currentPath.lexically_relative(root.lexically_normal());
         if ( !ProjectDirectoryWatcher::isRelevantProjectPathChange(
                  relativePath) ) {
+            std::error_code directoryError;
+            if ( relativePath == std::filesystem::path(".mmm") &&
+                 iterator->is_directory(directoryError) && !directoryError ) {
+                iterator.disable_recursion_pending();
+            }
             iterator.increment(iteratorError);
             continue;
         }
@@ -171,8 +176,13 @@ bool ProjectDirectoryWatcher::consumeChangePending()
 bool ProjectDirectoryWatcher::isRelevantProjectPathChange(
     const std::filesystem::path& relativePath)
 {
-    return relativePath.lexically_normal() !=
-           std::filesystem::path("mmm_project.json");
+    const auto normalized = relativePath.lexically_normal();
+    if ( normalized == std::filesystem::path("mmm_project.json") ) {
+        return false;
+    }
+    const auto firstComponent = normalized.begin();
+    return firstComponent == normalized.end() ||
+           *firstComponent != std::filesystem::path(".mmm");
 }
 
 /// @brief 文件夹监听线程的主循环。

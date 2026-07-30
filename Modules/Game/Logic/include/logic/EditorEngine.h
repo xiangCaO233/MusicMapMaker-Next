@@ -469,7 +469,7 @@ public:
     void setEditorConfig(const Config::EditorConfig& config);
 
     /**
-     * @brief 持久化当前项目配置到 mmm_project.json
+     * @brief 持久化当前项目配置到 .mmm 隐藏目录中的职责分片。
      */
     void saveProject();
 

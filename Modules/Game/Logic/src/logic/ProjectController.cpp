@@ -10,9 +10,7 @@
 #include <chrono>
 #include <fmt/format.h>
 #include <fstream>
-#include <iomanip>
 #include <miniz.h>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <system_error>
 #include <vector>
@@ -134,64 +132,6 @@ bool writeBytesToFile(const std::filesystem::path& path, const void* data,
                    static_cast<std::streamsize>(size));
     }
     return static_cast<bool>(file);
-}
-
-/// @brief 以临时文件替换方式写入项目描述文件。
-/// @param project 需要序列化的项目。
-/// @param projectFile 项目描述文件路径。
-/// @return 写入和替换成功时返回 true。
-bool writeProjectFile(const Project&               project,
-                      const std::filesystem::path& projectFile)
-{
-    const auto parentPath = projectFile.parent_path();
-    if ( !parentPath.empty() ) {
-        std::error_code createDirectoryError;
-        std::filesystem::create_directories(parentPath, createDirectoryError);
-        if ( createDirectoryError ) {
-            XERROR("Failed to create project directory: {}. Error: {}",
-                   Config::pathToUtf8(parentPath),
-                   createDirectoryError.message());
-            return false;
-        }
-    }
-
-    nlohmann::json        jsonData = project;
-    std::filesystem::path tempPath = projectFile;
-    tempPath += ".tmp";
-    {
-        std::ofstream file(tempPath);
-        if ( !file.is_open() ) {
-            XERROR("Failed to open project temp file: {}",
-                   Config::pathToUtf8(tempPath));
-            return false;
-        }
-        file << std::setw(4) << jsonData << '\n';
-        if ( !file.good() ) {
-            XERROR("Failed to write project temp file: {}",
-                   Config::pathToUtf8(tempPath));
-            return false;
-        }
-    }
-
-    std::error_code replaceError;
-    std::filesystem::rename(tempPath, projectFile, replaceError);
-    if ( !replaceError ) return true;
-
-    std::error_code copyError;
-    std::filesystem::copy_file(
-        tempPath,
-        projectFile,
-        std::filesystem::copy_options::overwrite_existing,
-        copyError);
-    std::error_code removeTempError;
-    std::filesystem::remove(tempPath, removeTempError);
-    if ( copyError ) {
-        XERROR("Failed to replace project file: {}. Error: {}",
-               Config::pathToUtf8(projectFile),
-               copyError.message());
-        return false;
-    }
-    return true;
 }
 
 /// @brief 将 zip 包内路径归一化为通用分隔符。
@@ -568,30 +508,6 @@ bool copyDirectoryContents(const std::filesystem::path& sourceRoot,
     return true;
 }
 
-/// @brief 将项目描述文件写入指定目录。
-/// @param project 项目数据。
-/// @param projectRoot 输出项目目录。
-/// @param errorMessage 失败时写入错误信息。
-/// @return 写入成功返回 true。
-bool writeProjectFileTo(const Project&               project,
-                        const std::filesystem::path& projectRoot,
-                        std::string&                 errorMessage)
-{
-    const auto    projectFile = projectRoot / "mmm_project.json";
-    std::ofstream file(projectFile, std::ios::trunc);
-    if ( !file ) {
-        errorMessage = "无法写入项目描述文件";
-        return false;
-    }
-
-    nlohmann::json jsonData = project;
-    file << std::setw(4) << jsonData << std::endl;
-    if ( !file ) {
-        errorMessage = "写入项目描述文件失败";
-        return false;
-    }
-    return true;
-}
 }  // namespace
 
 /// @brief 获取项目控制器全局实例。
@@ -1100,73 +1016,55 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 
     m_projectResourceService.buildInitialResources(*newProject, directoryScan);
 
-    /// @brief 项目描述文件路径。
-    std::filesystem::path projectFile = actualProjectPath / "mmm_project.json";
-    /// @brief 项目描述文件是否已存在。
-    std::error_code projectFileExistsError;
-    const bool      projectFileExists =
-        std::filesystem::exists(projectFile, projectFileExistsError) &&
-        !projectFileExistsError;
-    if ( projectFileExists ) {
-        /// @brief 项目描述文件输入流。
-        std::ifstream file(projectFile);
-        if ( !file.is_open() ) {
-            XWARN(
-                "Failed to open existing mmm_project.json, using scanned "
-                "results.");
-        } else {
-            /// @brief 项目描述 JSON 数据。
-            nlohmann::json jsonData =
-                nlohmann::json::parse(file, nullptr, false);
-            if ( jsonData.is_discarded() || !jsonData.is_object() ||
-                 file.bad() ) {
-                XWARN(
-                    "Failed to parse existing mmm_project.json, using scanned "
-                    "results.");
-            } else {
-                /// @brief 从项目描述文件反序列化出的项目配置。
-                Project loadedProject = jsonData.get<Project>();
-                /// @brief 需要从旧版 m_volume 迁移且不信任持久化类型的资源。
-                const auto legacyAudioResourceKeys =
-                    ProjectResourceService::collectLegacyAudioResourceKeys(
-                        jsonData);
-                newProject->m_metadata = loadedProject.m_metadata;
-                newProject->m_settings = loadedProject.m_settings;
-                newProject->m_excludedBeatmapPaths =
-                    loadedProject.m_excludedBeatmapPaths;
-                newProject->m_excludedAudioPaths =
-                    loadedProject.m_excludedAudioPaths;
+    /// @brief 是否存在新分片或旧单文件项目配置。
+    const bool projectConfigurationExists =
+        ProjectStorage::hasProjectConfiguration(actualProjectPath);
+    /// @brief 从分片或旧单文件读取出的持久化项目配置。
+    auto persistedProject = m_projectStorage.load(actualProjectPath);
+    if ( persistedProject.m_success ) {
+        auto& loadedProject = persistedProject.m_project;
+        /// @brief 需要从旧版 m_volume 迁移且不信任持久化类型的资源。
+        const auto legacyAudioResourceKeys =
+            ProjectResourceService::collectLegacyAudioResourceKeys(
+                persistedProject.m_serializedProject);
+        newProject->m_metadata = loadedProject.m_metadata;
+        newProject->m_settings = loadedProject.m_settings;
+        newProject->m_excludedBeatmapPaths =
+            loadedProject.m_excludedBeatmapPaths;
+        newProject->m_excludedAudioPaths = loadedProject.m_excludedAudioPaths;
 
-                m_projectResourceService.mergePersistedAudioResources(
-                    *newProject, loadedProject, legacyAudioResourceKeys);
-                if ( !legacyAudioResourceKeys.empty() ) {
-                    XINFO("Migrated {} legacy audio resource configurations.",
-                          legacyAudioResourceKeys.size());
-                }
-
-                const auto legacyBeatmapAudioMigration =
-                    m_projectResourceService.migrateLegacyBeatmapAudioTracks(
-                        *newProject, loadedProject);
-                if ( legacyBeatmapAudioMigration.m_migratedBeatmapCount > 0 ) {
-                    XINFO(
-                        "Migrated {} legacy beatmap audio track references to "
-                        "MMM v2 samples.",
-                        legacyBeatmapAudioMigration.m_migratedBeatmapCount);
-                }
-                for ( const auto& failedBeatmapPath :
-                      legacyBeatmapAudioMigration.m_failedBeatmapPaths ) {
-                    XWARN(
-                        "Failed to migrate legacy beatmap audio reference: "
-                        "{}",
-                        failedBeatmapPath);
-                }
-
-                XINFO("Project configuration loaded from mmm_project.json");
-            }
+        m_projectResourceService.mergePersistedAudioResources(
+            *newProject, loadedProject, legacyAudioResourceKeys);
+        if ( !legacyAudioResourceKeys.empty() ) {
+            XINFO("Migrated {} legacy audio resource configurations.",
+                  legacyAudioResourceKeys.size());
         }
+
+        const auto legacyBeatmapAudioMigration =
+            m_projectResourceService.migrateLegacyBeatmapAudioTracks(
+                *newProject, loadedProject);
+        if ( legacyBeatmapAudioMigration.m_migratedBeatmapCount > 0 ) {
+            XINFO(
+                "Migrated {} legacy beatmap audio track references to MMM v2 "
+                "samples.",
+                legacyBeatmapAudioMigration.m_migratedBeatmapCount);
+        }
+        for ( const auto& failedBeatmapPath :
+              legacyBeatmapAudioMigration.m_failedBeatmapPaths ) {
+            XWARN("Failed to migrate legacy beatmap audio reference: {}",
+                  failedBeatmapPath);
+        }
+
+        XINFO("Project configuration loaded from {} storage.",
+              persistedProject.m_source == ProjectStorage::Source::Split
+                  ? "split"
+                  : "legacy");
+    } else if ( projectConfigurationExists ) {
+        XWARN("Failed to load project configuration, using scanned results: {}",
+              persistedProject.m_errorMessage);
     }
 
-    if ( creationOptions && !projectFileExists ) {
+    if ( creationOptions && !projectConfigurationExists ) {
         applyProjectCreationOptions(
             *newProject,
             *creationOptions,
@@ -1199,7 +1097,23 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             Config::utf8ToPath(newProject->m_beatmaps.front().m_filePath);
     }
 
-    (void)writeProjectFile(*newProject, projectFile);
+    std::string storageError;
+    if ( m_projectStorage.save(*newProject, actualProjectPath, storageError) ) {
+        if ( persistedProject.m_success &&
+             !m_projectStorage.removeLegacyProjectFile(actualProjectPath,
+                                                       storageError) ) {
+            XWARN(
+                "Project split storage saved but legacy file could not be "
+                "removed: {}",
+                storageError);
+        } else if ( persistedProject.m_source ==
+                    ProjectStorage::Source::Legacy ) {
+            XINFO("Legacy mmm_project.json migrated to split .mmm storage.");
+        }
+    } else {
+        XWARN("Failed to save split project storage while opening project: {}",
+              storageError);
+    }
 
     for ( const auto& resource : newProject->m_audioResources ) {
         if ( resource.m_type != AudioTrackType::Effect ) {
@@ -1360,7 +1274,8 @@ ProjectController::saveTemporaryProjectTo(
     savedProject.m_isTemporaryProject = false;
     savedProject.m_temporarySourcePackagePath.clear();
     savedProject.m_projectRoot = saveRoot;
-    if ( !writeProjectFileTo(savedProject, saveRoot, errorMessage) ) {
+    if ( !m_projectStorage.save(savedProject, saveRoot, errorMessage) ||
+         !m_projectStorage.removeLegacyProjectFile(saveRoot, errorMessage) ) {
         result.m_errorMessage = errorMessage;
         return result;
     }
@@ -1445,18 +1360,27 @@ bool ProjectController::saveProject()
 {
     if ( !m_currentProject ) return false;
 
-    /// @brief 当前项目描述文件路径。
-    std::filesystem::path projectFile =
-        m_currentProject->m_projectRoot / "mmm_project.json";
-    XINFO("Saving project to {}", Config::pathToUtf8(projectFile));
+    const auto manifest =
+        ProjectStorage::manifestPath(m_currentProject->m_projectRoot);
+    XINFO("Saving split project storage to {}", Config::pathToUtf8(manifest));
 
-    if ( !writeProjectFile(*m_currentProject, projectFile) ) {
+    std::string errorMessage;
+    if ( !m_projectStorage.save(*m_currentProject,
+                                m_currentProject->m_projectRoot,
+                                errorMessage) ) {
+        XERROR("Failed to save split project storage: {}", errorMessage);
+        return false;
+    }
+    if ( !m_projectStorage.removeLegacyProjectFile(
+             m_currentProject->m_projectRoot, errorMessage) ) {
+        XERROR("Failed to remove legacy project configuration: {}",
+               errorMessage);
         return false;
     }
 
     XINFO("Project saved successfully.");
     Event::EventBus::instance().publish(Event::ProjectSavedEvent{
-        .m_projectFilePath = Config::pathToUtf8(projectFile),
+        .m_projectFilePath = Config::pathToUtf8(manifest),
     });
     return true;
 }

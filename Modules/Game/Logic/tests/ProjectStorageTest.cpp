@@ -1,7 +1,7 @@
 #include "logic/ProjectStorage.h"
 
-#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "logic/ProjectDirectoryScanner.h"
 
 #include <array>
 #include <chrono>
@@ -112,15 +112,20 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
         }
     }
 
+    nlohmann::json settingsJson;
     nlohmann::json workspaceJson;
     nlohmann::json audioToolJson;
     {
+        std::ifstream settingsFile(directory / "settings.json");
         std::ifstream workspaceFile(directory / "workspace.json");
         std::ifstream audioToolFile(directory / "project_audio_tool.json");
+        settingsJson  = nlohmann::json::parse(settingsFile, nullptr, false);
         workspaceJson = nlohmann::json::parse(workspaceFile, nullptr, false);
         audioToolJson = nlohmann::json::parse(audioToolFile, nullptr, false);
     }
-    if ( !check(!workspaceJson.contains("m_projectAudioToolPlacements"),
+    if ( !check(!settingsJson.contains("m_workspace"),
+                "workspace should not remain in general settings") ||
+         !check(!workspaceJson.contains("m_projectAudioToolPlacements"),
                 "audio tool layout should not remain in general workspace") ||
          !check(audioToolJson["m_projectAudioToolPlacements"].size() == 1,
                 "audio tool layout should use its own file") ) {
@@ -145,6 +150,27 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                               .m_width -
                           128.0F) < 1e-6F,
                  "custom block size should round trip");
+}
+
+/// @brief 验证资源扫描不会把内部配置目录中的文件识别为谱面。
+bool testInternalDirectoryIsNotScanned(const std::filesystem::path& root)
+{
+    {
+        std::ofstream visibleBeatmap(root / "visible.mmm");
+        std::ofstream internalBeatmap(root / ".mmm" / "internal.mmm");
+        if ( !visibleBeatmap.is_open() || !internalBeatmap.is_open() ) {
+            return false;
+        }
+    }
+
+    const MMM::Logic::ProjectDirectoryScanner scanner;
+    const auto                                result = scanner.scan(root);
+    return check(result.m_success, "project scan should complete") &&
+           check(result.m_beatmapFiles.size() == 1,
+                 "internal .mmm files should not be scanned") &&
+           check(result.m_beatmapFiles.front().filename() ==
+                     std::filesystem::path("visible.mmm"),
+                 "visible project beatmap should remain discoverable");
 }
 
 /// @brief 验证新分片损坏时仍可回退旧文件并在成功迁移后移除旧文件。
@@ -198,6 +224,7 @@ int main()
     std::filesystem::create_directories(fallbackRoot, filesystemError);
 
     const bool success = !filesystemError && testSplitRoundTrip(root) &&
+                         testInternalDirectoryIsNotScanned(root) &&
                          testLegacyFallbackAndRemoval(fallbackRoot);
     std::filesystem::remove_all(root, filesystemError);
     return success ? 0 : 1;

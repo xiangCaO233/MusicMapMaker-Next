@@ -47,6 +47,12 @@ ProjectDirectoryScanner::ScanResult ProjectDirectoryScanner::scan(
     while ( iterator != endIterator ) {
         /// @brief 当前正在检查的目录条目。
         const auto& entry = *iterator;
+        if ( entry.path().lexically_relative(projectRoot) ==
+                 std::filesystem::path(".mmm") &&
+             entry.is_directory(filesystemError) && !filesystemError ) {
+            iterator.disable_recursion_pending();
+        }
+        filesystemError.clear();
         if ( entry.is_regular_file(filesystemError) && !filesystemError ) {
             /// @brief 当前条目对应的完整文件系统路径。
             const auto path = entry.path();

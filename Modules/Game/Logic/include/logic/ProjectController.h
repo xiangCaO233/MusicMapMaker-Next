@@ -6,6 +6,7 @@
 #include "logic/ProjectDirectoryScanner.h"
 #include "logic/ProjectDirectoryWatcher.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ProjectStorage.h"
 #include "mmm/project/Project.h"
 
 #include <atomic>
@@ -338,6 +339,9 @@ private:
 
     /// @brief 监听当前项目目录中的文件系统变更。
     ProjectDirectoryWatcher m_projectDirectoryWatcher;
+
+    /// @brief 读写隐藏目录中的项目配置分片并迁移旧单文件。
+    ProjectStorage m_projectStorage;
 
     /// @brief 根据项目目录扫描结果构建和同步项目资源。
     ProjectResourceService m_projectResourceService;

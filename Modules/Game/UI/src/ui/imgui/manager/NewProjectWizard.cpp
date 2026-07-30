@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectStorage.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -213,10 +214,7 @@ bool NewProjectWizard::targetHasProjectFile() const
     const auto targetPath = targetProjectPath();
     if ( targetPath.empty() ) return false;
 
-    std::error_code filesystemError;
-    return std::filesystem::exists(targetPath / "mmm_project.json",
-                                   filesystemError) &&
-           !filesystemError;
+    return Logic::ProjectStorage::hasProjectConfiguration(targetPath);
 }
 
 bool NewProjectWizard::hasValidTargetPath() const
@@ -635,8 +633,8 @@ void NewProjectWizard::update(UIManager* sourceManager)
 
     Utils::CenteredModalPopupScope modalScope(dpiScale);
     constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoCollapse |
-                                              ImGuiWindowFlags_NoResize |
-                                              ImGuiWindowFlags_NoDocking;
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoDocking;
     const bool                     windowVisible =
         modalScope.begin(windowTitle.c_str(),
                          &m_isOpen,

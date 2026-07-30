@@ -85,6 +85,12 @@ bool isAudioExtension(const std::string& extension)
            ext == ".opus" || ext == ".aac" || ext == ".m4a";
 }
 
+/// @brief 判断文件系统条目是否是项目内部隐藏配置目录。
+bool isInternalProjectStorageEntry(const std::filesystem::path& path)
+{
+    return path.filename() == std::filesystem::path(".mmm");
+}
+
 /// @brief 文件或目录移动后同步其中音频资源的项目路径。
 /// @param oldPath 移动前路径。
 /// @param newPath 移动后路径。
@@ -122,7 +128,9 @@ std::optional<std::uintmax_t> countDirectoryChildren(
     std::uintmax_t                            count = 0;
     const std::filesystem::directory_iterator endIterator;
     while ( iterator != endIterator ) {
-        ++count;
+        if ( !isInternalProjectStorageEntry(iterator->path()) ) {
+            ++count;
+        }
         iterator.increment(filesystemError);
         if ( filesystemError ) {
             return std::nullopt;
@@ -825,7 +833,11 @@ const FileManagerView::DirectorySnapshot& FileManagerView::getDirectorySnapshot(
         path, options, filesystemError);
     const std::filesystem::directory_iterator endIterator;
     while ( !filesystemError && iterator != endIterator ) {
-        const auto         entryPath = iterator->path();
+        const auto entryPath = iterator->path();
+        if ( isInternalProjectStorageEntry(entryPath) ) {
+            iterator.increment(filesystemError);
+            continue;
+        }
         DirectoryEntryInfo info;
         info.path      = entryPath;
         info.filename  = Config::pathToUtf8(entryPath.filename());
