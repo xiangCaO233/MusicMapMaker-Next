@@ -100,7 +100,6 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         return result;
     }
 
-    const ImVec2 previousCursor = ImGui::GetCursorScreenPos();
     const ImVec2 buttonExtent{ buttonSize, buttonSize };
     ImGui::PushID(idScope);
 
@@ -144,7 +143,6 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                  2U);
 
     ImGui::PopID();
-    ImGui::SetCursorScreenPos(previousCursor);
     return result;
 }
 

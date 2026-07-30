@@ -52,7 +52,9 @@ struct ProjectAudioPreviewControlsResult {
 /// @param buttonSize 单个方形按钮边长。
 /// @param spacing 按钮间距。
 /// @return 本帧按钮组悬浮和动作状态。
-/// @warning UI 热路径：每帧仅提交三个按钮；资源查找和加载只在点击后发生。
+/// @warning UI 热路径：每帧仅提交三个绝对定位按钮；为遵守 ImGui
+/// 边界约束，返回后游标停留在最后一个按钮之后，调用方不得依赖原流式布局
+/// 游标。资源查找和加载只在点击后发生。
 [[nodiscard]] ProjectAudioPreviewControlsResult
 renderProjectAudioPreviewControls(const char* idScope, const Project& project,
                                   std::string_view audioResourceId,
