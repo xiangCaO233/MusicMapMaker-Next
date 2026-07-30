@@ -118,6 +118,8 @@ struct PreparedTimelineClip {
     std::string sourceKey;
     /// @brief 片段在统一音频时间线上的起始帧，允许为负数。
     AudioTimelineFrame startFrame{ 0 };
+    /// @brief 相对玩家轨道区的零基 BGM 轨道索引。
+    std::uint32_t bgmTrackIndex{ 0U };
     /// @brief 片段自身的线性音量。
     float volume{ 1.0F };
     /// @brief 已完整缓存并应用资源级 DSP 的只读音频数据。

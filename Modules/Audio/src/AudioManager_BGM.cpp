@@ -258,9 +258,10 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
                 ? 0.0F
                 : sanitizedResourceVolume(event.resourceConfig.volume);
         preparedClips.push_back(PreparedTimelineClip{
-            .eventId    = event.eventId,
-            .sourceKey  = event.resourceKey,
-            .startFrame = secondsToTimelineFrame(startSeconds),
+            .eventId       = event.eventId,
+            .sourceKey     = event.resourceKey,
+            .startFrame    = secondsToTimelineFrame(startSeconds),
+            .bgmTrackIndex = event.bgmTrackIndex,
             .volume = resourceVolume * sanitizedEventVolume(event.eventVolume),
             .audio  = std::move(preparedAudio),
         });
@@ -268,10 +269,12 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
 
     const double normalizedChartEnd =
         std::isfinite(chartEndSeconds) ? std::max(chartEndSeconds, 0.0) : 0.0;
-    m_audioTimelineNode->replaceSchedule(
-        std::move(preparedClips),
-        secondsToTimelineFrame(normalizedChartEnd),
-        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    m_audioTimelineBaseClips = std::move(preparedClips);
+    m_audioTimelineRequestedEndFrame =
+        secondsToTimelineFrame(normalizedChartEnd);
+    m_audioTimelineMaximumProcessFrames =
+        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
+    refreshAudioTimelineTrackMutes();
     resetMainTimeStretcher();
     m_audioTimelineLoaded           = true;
     m_audioTimelineFingerprint      = fingerprint;
@@ -313,6 +316,9 @@ void AudioManager::unloadAudioTimeline()
     clearAllScheduledSoundEffects();
     m_audioTimelineNode->replaceSchedule(
         {}, 0, std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    m_audioTimelineBaseClips.clear();
+    m_audioTimelineRequestedEndFrame    = 0;
+    m_audioTimelineMaximumProcessFrames = 1U;
     resetMainTimeStretcher();
     m_audioTimelineLoaded = false;
     m_audioTimelineFingerprint.clear();
@@ -350,6 +356,113 @@ std::size_t AudioManager::getMissingAudioTimelineClipCount() const
 bool AudioManager::hasLoadedAudioTimeline() const
 {
     return m_audioTimelineLoaded;
+}
+
+/// @brief 设置指定玩家轨道的 Key 音静音状态。
+/// @param trackIndex 零基玩家轨道索引。
+/// @param muted 是否静音。
+void AudioManager::setPlayerKeySoundTrackMuted(std::uint32_t trackIndex,
+                                               bool          muted) noexcept
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
+    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
+    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
+    const auto bit       = std::uint64_t{ 1U } << bitIndex;
+    if ( muted ) {
+        m_playerKeySoundTrackMutes[wordIndex].fetch_or(
+            bit, std::memory_order_relaxed);
+    } else {
+        m_playerKeySoundTrackMutes[wordIndex].fetch_and(
+            ~bit, std::memory_order_relaxed);
+    }
+}
+
+/// @brief 查询指定玩家轨道是否已静音。
+/// @param trackIndex 零基玩家轨道索引。
+/// @return 静音时返回 true。
+/// @warning 打击判定热路径：只读取一个 lock-free 原子字。
+bool AudioManager::isPlayerKeySoundTrackMuted(
+    std::uint32_t trackIndex) const noexcept
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return false;
+    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
+    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
+    const auto bit       = std::uint64_t{ 1U } << bitIndex;
+    return (m_playerKeySoundTrackMutes[wordIndex].load(
+                std::memory_order_relaxed) &
+            bit) != 0U;
+}
+
+/// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
+/// @param muted 是否静音。
+/// @warning 低频控制路径：会复制当前片段表并提交一次调度替换。
+void AudioManager::setBgmKeySoundAreaMuted(bool muted)
+{
+    if ( m_bgmKeySoundAreaMuted.exchange(muted, std::memory_order_relaxed) ==
+         muted ) {
+        return;
+    }
+    refreshAudioTimelineTrackMutes();
+}
+
+/// @brief 查询整个 BGM 轨道区是否已静音。
+/// @return 静音时返回 true。
+bool AudioManager::isBgmKeySoundAreaMuted() const noexcept
+{
+    return m_bgmKeySoundAreaMuted.load(std::memory_order_relaxed);
+}
+
+/// @brief 设置指定 BGM 轨道的 Key 音静音状态。
+/// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
+/// @param muted 是否静音。
+/// @warning 低频控制路径：会复制当前片段表并提交一次调度替换。
+void AudioManager::setBgmKeySoundTrackMuted(std::uint32_t trackIndex,
+                                            bool          muted)
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
+    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
+    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
+    const auto bit       = std::uint64_t{ 1U } << bitIndex;
+    const auto previous  = muted ? m_bgmKeySoundTrackMutes[wordIndex].fetch_or(
+                                       bit, std::memory_order_relaxed)
+                                 : m_bgmKeySoundTrackMutes[wordIndex].fetch_and(
+                                       ~bit, std::memory_order_relaxed);
+    const bool changed =
+        muted ? (previous & bit) == 0U : (previous & bit) != 0U;
+    if ( changed ) refreshAudioTimelineTrackMutes();
+}
+
+/// @brief 查询指定 BGM 轨道是否已静音。
+/// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
+/// @return 静音时返回 true。
+bool AudioManager::isBgmKeySoundTrackMuted(
+    std::uint32_t trackIndex) const noexcept
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return false;
+    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
+    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
+    const auto bit       = std::uint64_t{ 1U } << bitIndex;
+    return (m_bgmKeySoundTrackMutes[wordIndex].load(std::memory_order_relaxed) &
+            bit) != 0U;
+}
+
+/// @brief 将当前 BGM 区域和逐轨静音状态应用到不可变调度表。
+/// @warning 低频控制路径：复制片段表并在音频 block 边界原子替换。
+void AudioManager::refreshAudioTimelineTrackMutes()
+{
+    if ( !m_audioTimelineNode ) return;
+
+    auto       audibleClips = m_audioTimelineBaseClips;
+    const bool areaMuted =
+        m_bgmKeySoundAreaMuted.load(std::memory_order_relaxed);
+    for ( auto& clip : audibleClips ) {
+        if ( areaMuted || isBgmKeySoundTrackMuted(clip.bgmTrackIndex) ) {
+            clip.volume = 0.0F;
+        }
+    }
+    m_audioTimelineNode->replaceSchedule(std::move(audibleClips),
+                                         m_audioTimelineRequestedEndFrame,
+                                         m_audioTimelineMaximumProcessFrames);
 }
 
 /// @brief 提交主时间线半开循环范围。

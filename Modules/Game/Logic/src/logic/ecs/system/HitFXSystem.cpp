@@ -23,6 +23,11 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
     if ( !config.settings.sfxConfig.enableHitSfx ) return;
 
     auto& audioManager = Audio::AudioManager::instance();
+    if ( ev.trackIndex >= 0 &&
+         audioManager.isPlayerKeySoundTrackMuted(
+             static_cast<std::uint32_t>(ev.trackIndex)) ) {
+        return;
+    }
 
     // 1. 根据策略确定最终播放类型
     ::MMM::NoteType effectiveType = ev.type;

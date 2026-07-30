@@ -139,6 +139,7 @@ bool sameLoadEvent(const MMM::Audio::AudioTimelineLoadEvent& lhs,
     return lhs.eventId == rhs.eventId && lhs.resourceKey == rhs.resourceKey &&
            lhs.filePath == rhs.filePath &&
            lhs.effectiveStartSeconds == rhs.effectiveStartSeconds &&
+           lhs.bgmTrackIndex == rhs.bgmTrackIndex &&
            lhs.eventVolume == rhs.eventVolume &&
            sameConfig(lhs.resourceConfig, rhs.resourceConfig);
 }
@@ -195,13 +196,17 @@ bool testCanonicalDescriptor()
          descriptor.m_events[0].filePath != "" ||
          std::abs(descriptor.m_events[0].effectiveStartSeconds + 0.5) >
              1.0e-9 ||
+         descriptor.m_events[0].bgmTrackIndex != 996U ||
          descriptor.m_events[1].resourceKey != "main-id" ||
          descriptor.m_events[2].resourceKey != "main-id" ||
+         descriptor.m_events[1].bgmTrackIndex != 0U ||
+         descriptor.m_events[2].bgmTrackIndex != 23U ||
          std::abs(descriptor.m_events[1].effectiveStartSeconds - 1.25) >
              1.0e-9 ||
          std::abs(descriptor.m_events[2].effectiveStartSeconds - 1.25) >
              1.0e-9 ||
          descriptor.m_events[3].resourceKey != "effect-id" ||
+         descriptor.m_events[3].bgmTrackIndex != 4U ||
          std::abs(descriptor.m_events[3].effectiveStartSeconds - 2.0) >
              1.0e-9 ) {
         XERROR("Audio timeline descriptor was not canonically time-sorted");
@@ -268,8 +273,8 @@ bool testOrderIndependentIdentity()
     return true;
 }
 
-/// @brief 验证画布轨道、轨道数量、歌曲提示和 Note 绑定不进入音频指纹。
-/// @return 纯视觉或非自动采样字段变化时指纹保持不变。
+/// @brief 验证玩家轨道数量变化后保持相对 BGM 轨道时指纹不变。
+/// @return 仅绝对画布索引迁移及非自动采样字段变化时指纹保持不变。
 bool testNonAudioFieldsAreExcluded()
 {
     const auto project                        = makeProject();
@@ -279,7 +284,7 @@ bool testNonAudioFieldsAreExcluded()
     changed.m_baseMapMetadata.bgm_track_count = 2048;
     changed.m_baseMapMetadata.song_file_hint  = "another-hint.wav";
     for ( auto& sample : changed.m_audioSamples ) {
-        sample.m_track += 333U;
+        sample.m_track += 5U;
     }
     changed.m_noteData.notes.front().setSampleBinding(
         MMM::AudioSampleBinding{ "main-id", 0.95F });
@@ -297,7 +302,7 @@ bool testNonAudioFieldsAreExcluded()
     if ( baselineDescriptor.m_fingerprint != changedDescriptor.m_fingerprint ||
          !sameLoadEvents(baselineDescriptor.m_events,
                          changedDescriptor.m_events) ) {
-        XERROR("Purely visual or Note fields leaked into audio fingerprint");
+        XERROR("Absolute canvas track migration leaked into audio fingerprint");
         return false;
     }
     return true;
@@ -381,9 +386,19 @@ bool testFingerprintSensitivity()
         baselineProject,
         MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
         10.5);
+    auto bgmTrackMap = makeBeatMap(false);
+    ++bgmTrackMap.m_audioSamples.front().m_track;
+    const auto bgmTrackChanged = MMM::Logic::buildAudioTimelineDescriptor(
+        bgmTrackMap,
+        baselineProject,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        10.0);
     if ( volumeChanged.m_fingerprint == baseline.m_fingerprint ||
-         chartEndChanged.m_fingerprint == baseline.m_fingerprint ) {
-        XERROR("Event volume or chart end was absent from fingerprint");
+         chartEndChanged.m_fingerprint == baseline.m_fingerprint ||
+         bgmTrackChanged.m_fingerprint == baseline.m_fingerprint ) {
+        XERROR(
+            "Event volume, BGM track routing or chart end was absent from "
+            "fingerprint");
         return false;
     }
     return true;

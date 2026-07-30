@@ -202,6 +202,30 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
     audio.setPlaybackSpeed(cmd.speed);
 }
 
+/// @brief 应用单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+/// @param cmd 目标区域、轨道索引和静音状态。
+/// @warning 低频 UI 控制路径；BGM 轨道修改会在音频 block 边界替换调度表。
+void PlaybackController::handleCommand(const CmdSetKeySoundTrackMute& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( cmd.area == KeySoundTrackArea::Bgm ) {
+        audio.setBgmKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
+        return;
+    }
+    audio.setPlayerKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
+}
+
+/// @brief 应用整个 BGM 轨道区的运行时 Key 音静音状态。
+/// @param cmd BGM 区静音状态。
+/// @warning 低频 UI 控制路径；会在音频 block 边界替换调度表。
+void PlaybackController::handleCommand(const CmdSetBgmKeySoundAreaMute& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+    Audio::AudioManager::instance().setBgmKeySoundAreaMuted(cmd.muted);
+}
+
 /// @brief 处理普通时间滚动或仅应用滚动暂停策略的滚轮命令。
 /// @param cmd 滚轮滚动指令。
 /// @warning

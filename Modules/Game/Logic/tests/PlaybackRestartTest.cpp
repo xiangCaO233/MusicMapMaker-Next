@@ -95,12 +95,14 @@ bool testZeroAndMultipleSampleDescriptors()
     context.isAudioTimelineActivationPending               = false;
     context.currentBeatmap->m_audioSamples.front().m_track = 128U;
     context.isAudioTimelineDescriptorDirty                 = true;
-    if ( MMM::Logic::SessionUtils::rebuildAudioTimelineDescriptor(context,
-                                                                  &project) ||
-         context.audioTimelineDescriptor.m_fingerprint !=
+    if ( !MMM::Logic::SessionUtils::rebuildAudioTimelineDescriptor(context,
+                                                                   &project) ||
+         context.audioTimelineDescriptor.m_fingerprint ==
              multiSampleFingerprint ||
-         context.isAudioTimelineActivationPending ) {
-        XERROR("Visual-only BGM lane movement requested an audio reload");
+         !context.isAudioTimelineActivationPending ||
+         context.audioTimelineDescriptor.m_events.front().bgmTrackIndex !=
+             128U ) {
+        XERROR("BGM lane routing change did not request an audio reload");
         return false;
     }
     return true;

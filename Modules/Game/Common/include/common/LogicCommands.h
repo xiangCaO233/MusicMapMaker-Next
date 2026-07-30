@@ -283,6 +283,30 @@ struct CmdSetPlaybackSpeed {
     double speed;
 };
 
+/// @brief Key 音所在的画布轨道区域。
+enum class KeySoundTrackArea : std::uint8_t {
+    Player,  ///< 玩家操作轨道区。
+    Bgm      ///< 自动采样 BGM 轨道区。
+};
+
+/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+struct CmdSetKeySoundTrackMute {
+    /// @brief 目标轨道区域。
+    KeySoundTrackArea area{ KeySoundTrackArea::Player };
+
+    /// @brief 区域内零基轨道索引。
+    std::uint32_t trackIndex{ 0U };
+
+    /// @brief 是否静音。
+    bool muted{ false };
+};
+
+/// @brief 设置整个 BGM 轨道区的运行时 Key 音静音状态。
+struct CmdSetBgmKeySoundAreaMute {
+    /// @brief 是否静音。
+    bool muted{ false };
+};
+
 /**
  * @brief 切换编辑工具指令
  */
@@ -687,8 +711,9 @@ using LogicCommand = std::variant<
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
     CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
-    CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-    CmdCut, CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
+    CmdSetKeySoundTrackMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
+    CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
     CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
     CmdSetBrushNotePalette, CmdSetBrushAudioResource,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,

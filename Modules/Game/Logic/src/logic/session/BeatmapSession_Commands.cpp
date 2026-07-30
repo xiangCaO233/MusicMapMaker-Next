@@ -1099,6 +1099,10 @@ bool BeatmapSession::processCommands()
                 else if constexpr ( std::is_same_v<T, CmdSetPlayState> ||
                                     std::is_same_v<T, CmdSeek> ||
                                     std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                                    std::is_same_v<T,
+                                                   CmdSetKeySoundTrackMute> ||
+                                    std::is_same_v<T,
+                                                   CmdSetBgmKeySoundAreaMute> ||
                                     std::is_same_v<T, CmdScroll> ||
                                     std::is_same_v<T, CmdPanCanvas> ) {
                     m_playback->handleCommand(arg);

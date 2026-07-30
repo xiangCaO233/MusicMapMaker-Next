@@ -152,6 +152,7 @@ CanonicalBytes makeCanonicalEventBytes(
                    event.resourceConfig.eqBandQs.size()) *
                       sizeof(std::uint64_t));
     appendDouble(bytes, event.effectiveStartSeconds);
+    appendUnsigned(bytes, event.bgmTrackIndex);
     appendString(bytes, event.resourceKey);
     appendString(bytes, event.filePath);
     appendFloat(bytes, event.eventVolume);
@@ -366,7 +367,12 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
         event.effectiveStartSeconds =
             (sample.m_timestamp + static_cast<double>(sample.m_offsetMs)) /
             1000.0;
-        event.eventVolume = sample.m_volume;
+        const auto playerTrackCount = static_cast<std::uint32_t>(
+            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        event.bgmTrackIndex = sample.m_track >= playerTrackCount
+                                  ? sample.m_track - playerTrackCount
+                                  : 0U;
+        event.eventVolume   = sample.m_volume;
         if ( resource ) {
             auto [pathIterator, inserted] =
                 absolutePathsByResource.try_emplace(resource);

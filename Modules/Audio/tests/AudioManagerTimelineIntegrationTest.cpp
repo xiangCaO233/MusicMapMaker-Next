@@ -140,6 +140,55 @@ bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
     return true;
 }
 
+/// @brief 验证玩家与 BGM 逐轨静音状态及调度替换保持时间线结构。
+/// @param manager 已初始化音频管理器。
+/// @param samplePath 可解码短音频路径。
+/// @return 状态可独立切换且 BGM 调度替换不改变时长和片段数量时返回 true。
+bool testKeySoundTrackMutes(MMM::Audio::AudioManager& manager,
+                            const std::string&        samplePath)
+{
+    const auto result =
+        manager.loadAudioTimeline({ MMM::Audio::AudioTimelineLoadEvent{
+                                        .eventId               = 501U,
+                                        .resourceKey           = "lane-zero",
+                                        .filePath              = samplePath,
+                                        .effectiveStartSeconds = 0.0,
+                                        .bgmTrackIndex         = 0U,
+                                    },
+                                    MMM::Audio::AudioTimelineLoadEvent{
+                                        .eventId               = 502U,
+                                        .resourceKey           = "lane-two",
+                                        .filePath              = samplePath,
+                                        .effectiveStartSeconds = 0.02,
+                                        .bgmTrackIndex         = 2U,
+                                    } },
+                                  0.08,
+                                  "key-sound-track-mutes");
+    if ( !result.success || result.loadedClipCount != 2U ) return false;
+
+    const double totalTime = manager.getTotalTime();
+    manager.setPlayerKeySoundTrackMuted(1U, true);
+    manager.setBgmKeySoundTrackMuted(2U, true);
+    manager.setBgmKeySoundAreaMuted(true);
+    if ( !manager.isPlayerKeySoundTrackMuted(1U) ||
+         manager.isPlayerKeySoundTrackMuted(2U) ||
+         !manager.isBgmKeySoundTrackMuted(2U) ||
+         manager.isBgmKeySoundTrackMuted(1U) ||
+         !manager.isBgmKeySoundAreaMuted() ||
+         manager.getLoadedAudioTimelineClipCount() != 2U ||
+         std::abs(manager.getTotalTime() - totalTime) > 0.002 ) {
+        XERROR("Key sound track mute state changed timeline structure");
+        return false;
+    }
+
+    manager.setPlayerKeySoundTrackMuted(1U, false);
+    manager.setBgmKeySoundTrackMuted(2U, false);
+    manager.setBgmKeySoundAreaMuted(false);
+    return !manager.isPlayerKeySoundTrackMuted(1U) &&
+           !manager.isBgmKeySoundTrackMuted(2U) &&
+           !manager.isBgmKeySoundAreaMuted();
+}
+
 /// @brief 验证同一文件的不同资源倍率可并存且全局预览倍率不改写资源时长。
 bool testIndependentResourceAndGlobalSpeed(MMM::Audio::AudioManager& manager,
                                            const std::string&        samplePath)
@@ -471,6 +520,7 @@ int main(int argc, char** argv)
     const bool        passed =
         testEmptyTimelineClock(manager) &&
         testSingleClipResourceProcessing(manager, samplePath) &&
+        testKeySoundTrackMutes(manager, samplePath) &&
         testIndependentResourceAndGlobalSpeed(manager, samplePath) &&
         testDualUseEffectSharesPreparedAudio(manager, samplePath) &&
         testLegacyBgmWrapper(manager, samplePath) &&

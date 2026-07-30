@@ -26,6 +26,14 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdSetPlaybackSpeed& cmd);
 
+    /// @brief 处理单条玩家或 BGM 轨道的 Key 音静音命令。
+    /// @param cmd 目标区域、轨道索引和静音状态。
+    void handleCommand(const CmdSetKeySoundTrackMute& cmd);
+
+    /// @brief 处理整个 BGM 轨道区的 Key 音静音命令。
+    /// @param cmd BGM 区静音状态。
+    void handleCommand(const CmdSetBgmKeySoundAreaMute& cmd);
+
     /// @brief 处理鼠标滚轮滚动的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdScroll& cmd);
