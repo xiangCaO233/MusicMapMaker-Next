@@ -5,6 +5,7 @@
 #include "ui/IUIView.h"
 #include "ui/imgui/manager/ProjectAudioToolLayout.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <optional>
@@ -90,6 +91,18 @@ private:
         ProjectAudioToolLayout::Rect startRect;
     };
 
+    /// @brief 一个已评分并可直接定位的实时搜索结果。
+    struct SearchResult {
+        /// @brief 项目音频资源稳定 ID。
+        std::string audioResourceId;
+
+        /// @brief 结果列表显示文本。
+        std::string displayLabel;
+
+        /// @brief 文件名或资源 ID 的最高相似度分数。
+        int score{ 0 };
+    };
+
     /// @brief 从当前项目资源和工作区布局低频重建方块缓存。
     /// @param visibleWidth 当前可见画布的逻辑宽度。
     /// @param dpiScale 当前内容缩放。
@@ -130,6 +143,13 @@ private:
 
     /// @brief 统计当前批量布局选区中的方块数量。
     [[nodiscard]] std::size_t batchSelectionCount() const;
+
+    /// @brief 按当前输入词增量重建相似音频结果缓存。
+    /// @warning 只在输入词、项目资源或 DPI 布局变化后调用；允许遍历和排序资源。
+    void rebuildSearchResults();
+
+    /// @brief 请求下一次画布更新时定位并选中指定搜索结果。
+    void requestSearchResultFocus(const std::string& audioResourceId);
 
     /// @brief 根据鼠标位置检测方块边缘或四角的缩放热区。
     [[nodiscard]] ResizeHandle hitTestResizeHandle(const Item& item,
@@ -213,6 +233,21 @@ private:
 
     /// @brief 追加框选开始前每个方块的批量选中状态。
     std::vector<std::uint8_t> m_marqueeBaseSelection;
+
+    /// @brief 项目音频实时搜索输入。
+    std::array<char, 256> m_searchBuffer{};
+
+    /// @brief 按相似度从高到低排列的搜索结果缓存。
+    std::vector<SearchResult> m_searchResults;
+
+    /// @brief 当前键盘或鼠标预选的搜索结果下标。
+    std::size_t m_searchHighlightedIndex{ 0 };
+
+    /// @brief 搜索输入或资源列表变化后需要低频重新评分。
+    bool m_searchResultsDirty{ true };
+
+    /// @brief 等待画布创建后执行定位的音频资源 ID。
+    std::string m_searchFocusRequestId;
 
     /// @brief 当前选中项目音频资源 ID。
     std::string m_selectedAudioResourceId;

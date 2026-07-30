@@ -6,6 +6,7 @@
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
@@ -223,23 +224,31 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         m_batchDragEntries.clear();
         m_batchDragUnionCells.clear();
         m_marqueeBaseSelection.clear();
+        m_searchBuffer.fill('\0');
+        m_searchResults.clear();
+        m_searchFocusRequestId.clear();
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
         m_cachedProjectRoot.clear();
-        m_cachedDpiScale   = 0.0F;
-        m_batchDragging    = false;
-        m_marqueeSelecting = false;
+        m_cachedDpiScale     = 0.0F;
+        m_batchDragging      = false;
+        m_marqueeSelecting   = false;
+        m_searchResultsDirty = true;
         return;
     }
 
     const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
+    const bool        projectChanged = projectRoot != m_cachedProjectRoot;
     std::unordered_set<std::string> batchSelectedResourceIds;
-    if ( projectRoot == m_cachedProjectRoot ) {
+    if ( !projectChanged ) {
         for ( const auto& item : m_items ) {
             if ( item.batchSelected ) {
                 batchSelectedResourceIds.insert(item.audioResourceId);
             }
         }
+    } else {
+        m_searchBuffer.fill('\0');
+        m_searchFocusRequestId.clear();
     }
 
     m_draggingItem.reset();
@@ -364,6 +373,7 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         }
     }
     rebuildLabelRects();
+    m_searchResultsDirty = true;
 }
 
 void ProjectAudioToolView::rebuildLabelRects()
@@ -501,6 +511,53 @@ std::size_t ProjectAudioToolView::batchSelectionCount() const
 {
     return static_cast<std::size_t>(std::ranges::count_if(
         m_items, [](const Item& item) { return item.batchSelected; }));
+}
+
+void ProjectAudioToolView::rebuildSearchResults()
+{
+    m_searchResultsDirty = false;
+    m_searchResults.clear();
+    const std::string_view query =
+        ProjectAudioToolSearch::trimAsciiWhitespace(m_searchBuffer.data());
+    if ( query.empty() ) {
+        m_searchHighlightedIndex = 0;
+        return;
+    }
+
+    m_searchResults.reserve(m_items.size());
+    for ( const auto& item : m_items ) {
+        const auto labelScore =
+            ProjectAudioToolSearch::scoreCandidate(item.label, query);
+        const auto resourceIdScore =
+            ProjectAudioToolSearch::scoreCandidate(item.audioResourceId, query);
+        if ( !labelScore && !resourceIdScore ) continue;
+
+        SearchResult result;
+        result.audioResourceId = item.audioResourceId;
+        result.displayLabel =
+            item.type == AudioTrackType::Main ? "[MAIN] " : "[FX] ";
+        result.displayLabel.append(item.label);
+        result.score =
+            std::max(labelScore.value_or(std::numeric_limits<int>::min()),
+                     resourceIdScore.value_or(std::numeric_limits<int>::min()));
+        m_searchResults.push_back(std::move(result));
+    }
+    std::ranges::sort(m_searchResults,
+                      [](const SearchResult& lhs, const SearchResult& rhs) {
+                          if ( lhs.score != rhs.score )
+                              return lhs.score > rhs.score;
+                          if ( lhs.displayLabel != rhs.displayLabel ) {
+                              return lhs.displayLabel < rhs.displayLabel;
+                          }
+                          return lhs.audioResourceId < rhs.audioResourceId;
+                      });
+    m_searchHighlightedIndex = 0;
+}
+
+void ProjectAudioToolView::requestSearchResultFocus(
+    const std::string& audioResourceId)
+{
+    m_searchFocusRequestId = audioResourceId;
 }
 
 void ProjectAudioToolView::beginBatchDrag(std::size_t itemIndex,
@@ -795,6 +852,100 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
 
     ImGui::TextUnformatted(TR("ui.project_audio_tool.hint").data());
+
+    ImGui::SetNextItemWidth(-1.0F);
+    const bool searchSubmitted =
+        ImGui::InputTextWithHint("##ProjectAudioToolSearch",
+                                 TR("ui.project_audio_tool.search_hint").data(),
+                                 m_searchBuffer.data(),
+                                 m_searchBuffer.size(),
+                                 ImGuiInputTextFlags_EnterReturnsTrue |
+                                     ImGuiInputTextFlags_AutoSelectAll);
+    const bool searchInputActive = ImGui::IsItemActive();
+    if ( ImGui::IsItemEdited() ) {
+        m_searchResultsDirty = true;
+    }
+    if ( m_searchResultsDirty ) {
+        rebuildSearchResults();
+    }
+
+    bool searchHighlightMoved = false;
+    if ( searchInputActive && !m_searchResults.empty() ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow) ) {
+            m_searchHighlightedIndex =
+                (m_searchHighlightedIndex + 1) % m_searchResults.size();
+            searchHighlightMoved = true;
+        } else if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow) ) {
+            m_searchHighlightedIndex =
+                (m_searchHighlightedIndex + m_searchResults.size() - 1) %
+                m_searchResults.size();
+            searchHighlightMoved = true;
+        }
+    }
+    if ( searchSubmitted && !m_searchResults.empty() ) {
+        requestSearchResultFocus(
+            m_searchResults[m_searchHighlightedIndex].audioResourceId);
+    }
+
+    const std::string_view searchQuery =
+        ProjectAudioToolSearch::trimAsciiWhitespace(m_searchBuffer.data());
+    if ( !searchQuery.empty() ) {
+        if ( m_searchResults.empty() ) {
+            ImGui::TextDisabled("%s", TR("ui.search.no_results").data());
+        } else {
+            ImGui::TextDisabled(
+                "%s: %zu",
+                TR("ui.project_audio_tool.search_results").data(),
+                m_searchResults.size());
+            constexpr std::size_t MAX_VISIBLE_SEARCH_RESULTS = 5;
+            const std::size_t     visibleResultCount =
+                std::min(MAX_VISIBLE_SEARCH_RESULTS, m_searchResults.size());
+            const float resultRowHeight = ImGui::GetFrameHeight();
+            const float resultListHeight =
+                resultRowHeight * static_cast<float>(visibleResultCount) +
+                ImGui::GetStyle().WindowPadding.y * 2.0F;
+            ImGui::BeginChild("ProjectAudioToolSearchResults",
+                              { 0.0F, resultListHeight },
+                              true);
+            if ( searchHighlightMoved ) {
+                const float targetScroll =
+                    (static_cast<float>(m_searchHighlightedIndex) + 0.5F) *
+                        resultRowHeight -
+                    resultListHeight * 0.5F;
+                ImGui::SetScrollY(std::max(0.0F, targetScroll));
+            }
+
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(m_searchResults.size()),
+                          resultRowHeight);
+            while ( clipper.Step() ) {
+                for ( int resultIndex = clipper.DisplayStart;
+                      resultIndex < clipper.DisplayEnd;
+                      ++resultIndex ) {
+                    auto& result =
+                        m_searchResults[static_cast<std::size_t>(resultIndex)];
+                    ImGui::PushID(result.audioResourceId.c_str());
+                    const bool clicked = FeedbackSelectable(
+                        result.displayLabel.c_str(),
+                        static_cast<std::size_t>(resultIndex) ==
+                            m_searchHighlightedIndex,
+                        ImGuiSelectableFlags_None,
+                        { 0.0F, resultRowHeight });
+                    if ( ImGui::IsItemHovered() ) {
+                        m_searchHighlightedIndex =
+                            static_cast<std::size_t>(resultIndex);
+                    }
+                    if ( clicked ) {
+                        m_searchHighlightedIndex =
+                            static_cast<std::size_t>(resultIndex);
+                        requestSearchResultFocus(result.audioResourceId);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+        }
+    }
     ImGui::Separator();
     const float statusHeight =
         ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
@@ -824,6 +975,30 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         "ProjectAudioToolCanvasSurface",
         { contentLogical.x * dpiScale, contentLogical.y * dpiScale },
         ImGuiButtonFlags_MouseButtonLeft);
+
+    if ( !m_searchFocusRequestId.empty() ) {
+        const auto requestedItem =
+            std::ranges::find_if(m_items, [this](const Item& item) {
+                return item.audioResourceId == m_searchFocusRequestId;
+            });
+        if ( requestedItem != m_items.end() ) {
+            const auto activeIndex = activateItem(static_cast<std::size_t>(
+                std::distance(m_items.begin(), requestedItem)));
+            if ( activeIndex ) {
+                const auto& activeRect = m_items[*activeIndex].rect;
+                const float targetScrollX =
+                    (activeRect.x + activeRect.width * 0.5F) * dpiScale -
+                    visibleSizePixels.x * 0.5F;
+                const float targetScrollY =
+                    (activeRect.y + activeRect.height * 0.5F) * dpiScale -
+                    visibleSizePixels.y * 0.5F;
+                ImGui::SetScrollX(std::max(0.0F, targetScrollX));
+                ImGui::SetScrollY(std::max(0.0F, targetScrollY));
+                persistWorkspace();
+            }
+        }
+        m_searchFocusRequestId.clear();
+    }
 
     const ProjectAudioToolLayout::Rect visibleCanvas{
         scroll.x / dpiScale,
