@@ -1715,7 +1715,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ImportAudio", ICON_MMM_PLUS).c_str(),
                          ImVec2(r.width, r.height)) ) {
-                    auto& settings = engine.getEditorConfig().settings;
+                    const auto settings = engine.getEditorConfig().settings;
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
                         ::MMM::UI::PlayPopupOpenFeedback();

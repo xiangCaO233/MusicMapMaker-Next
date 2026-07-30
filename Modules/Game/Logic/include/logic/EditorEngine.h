@@ -373,13 +373,11 @@ public:
         Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
         Common::UnicodeFontMetrics& targetUnicodeFontMetrics) const;
 
-    /**
-     * @brief 获取当前编辑器配置
-     */
-    const Config::EditorConfig& getEditorConfig() const
-    {
-        return m_editorConfig;
-    }
+    /// @brief 获取当前编辑器配置的线程安全值快照。
+    /// @return 调用时完整且自洽的配置副本。
+    /// @warning UI 热路径：会短暂持有配置互斥锁并复制配置；单帧内应复用返回值，
+    /// 禁止在物件循环中重复调用。
+    Config::EditorConfig getEditorConfig() const;
 
     /**
      * @brief 获取当前工具类型
@@ -590,8 +588,27 @@ private:
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
 
-    /// @brief 编辑器配置
+    /// @brief 将共享配置按修订号同步到逻辑线程本地快照。
+    /// @param target 接收稳定配置的逻辑线程本地对象。
+    /// @param targetRevision 本地对象当前对应的修订号，成功同步后更新。
+    /// @return 配置修订发生变化并完成复制时返回 true。
+    /// @warning 逻辑热路径：每轮 loop 调用；未变化时只进行一次 acquire
+    /// 原子读取， 变化时才短暂加锁并复制完整配置。
+    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
+                                     std::uint64_t& targetRevision) const;
+
+    /// @brief 保护编辑器配置完整对象的读写，防止 UI
+    /// 拖拽更新与逻辑线程复制并发。
+    mutable std::mutex m_editorConfigMutex;
+
+    /// @brief 编辑器配置，由 m_editorConfigMutex 保护。
     Config::EditorConfig m_editorConfig;
+
+    /// @brief 当前编辑器配置修订号。
+    /// @warning 逻辑/UI 热路径原子：UI 配置提交时 release
+    /// 递增，逻辑 loop 每轮 acquire
+    /// 读取；用于避免未变化时复制含容器的完整配置。
+    std::atomic<std::uint64_t> m_editorConfigRevision{ 0 };
 
     /// @brief 当前全局编辑工具。
     /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update

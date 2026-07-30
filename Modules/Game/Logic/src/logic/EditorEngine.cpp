@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <ice/thread/ThreadPool.hpp>
 #include <iterator>
+#include <limits>
 #include <system_error>
 #include <thread>
 #include <unordered_set>
@@ -823,8 +824,13 @@ EditorEngine& EditorEngine::instance()
 EditorEngine::EditorEngine()
 {
     // 从全局配置初始化本地缓存
-    m_editorConfig = Config::AppConfig::instance().getEditorConfig();
-    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+    const auto initialConfig = Config::AppConfig::instance().getEditorConfig();
+    {
+        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+        m_editorConfig = initialConfig;
+        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+    }
+    m_frameLimitPreference.store(initialConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
 
     /// @brief 初始化项目控制器单例并建立项目事件订阅。
@@ -951,9 +957,10 @@ void EditorEngine::captureProjectWorkspaceState()
     workspace.m_activePlaybackTime = 0.0;
     workspace.m_activeEditTool =
         editToolToWorkspaceName(m_currentTool.load(std::memory_order_relaxed));
+    const auto editorConfig = getEditorConfig();
     captureToolbarWorkspaceState(
         workspace,
-        m_editorConfig,
+        editorConfig,
         m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
 
     /// @brief 保护工作区状态捕获期间的会话列表访问。
@@ -1257,7 +1264,7 @@ void EditorEngine::finishOpenProject(
         m_currentTool.store(workspaceNameToEditTool(workspace.m_activeEditTool),
                             std::memory_order_relaxed);
         if ( workspace.m_toolbarState.m_valid ) {
-            auto restoredConfig = m_editorConfig;
+            auto restoredConfig = getEditorConfig();
             applyToolbarWorkspaceState(restoredConfig,
                                        workspace.m_toolbarState);
             m_syncSameMainAudioCanvases.store(
@@ -1350,8 +1357,13 @@ void EditorEngine::start()
     }
 
     // 从全局配置同步到本地缓存
-    m_editorConfig = Config::AppConfig::instance().getEditorConfig();
-    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+    const auto initialConfig = Config::AppConfig::instance().getEditorConfig();
+    {
+        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+        m_editorConfig = initialConfig;
+        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+    }
+    m_frameLimitPreference.store(initialConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
 
     m_running.store(true, std::memory_order_release);
@@ -2043,8 +2055,9 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
         }
     }
     if ( auto* project = ProjectController::instance().currentProject() ) {
+        const auto editorConfig = getEditorConfig();
         captureToolbarWorkspaceState(
-            project->m_settings.m_workspace, m_editorConfig, enabled);
+            project->m_settings.m_workspace, editorConfig, enabled);
     }
     if ( enabled ) {
         syncSameMainAudioCanvases();
@@ -2132,6 +2145,7 @@ void EditorEngine::syncSameMainAudioCanvases()
 /// relaxed，后续只遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 {
+    const auto editorConfig = getEditorConfig();
     if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
         return;
     }
@@ -2187,7 +2201,7 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 
             const double sourceAnimateTarget =
                 sourceCtx.currentTime +
-                m_editorConfig.visual.getEffectiveVisualOffset();
+                editorConfig.visual.getEffectiveVisualOffset();
             const double sourceResetTime     = sourceCtx.isPlaying
                                                    ? sourceCtx.animateTime
                                                    : sourceAnimateTarget;
@@ -2233,7 +2247,7 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             if ( ctx.isAudioTimelineSyncFollower && entry.isCanvasVisible ) {
                 updateFollowerHitEffects(ctx,
                                          previousAnimateTime,
-                                         m_editorConfig,
+                                         editorConfig,
                                          shouldClearHitEffects);
             }
         }
@@ -2248,6 +2262,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     bool               restoreDockFromWorkspace)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto                            editorConfig = getEditorConfig();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions      = m_sessionRegistry.entriesUnsafe();
     auto  cameraIdInUse = [&](const std::string& cameraId) {
@@ -2324,7 +2339,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
                 }
                 sessions[i].session->pushCommand(
-                    LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+                    LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
                     m_currentTool.load(std::memory_order_relaxed) }));
                 restoreBrushNoteColorsUnsafe(*sessions[i].session);
@@ -2373,7 +2388,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 
     // 推送初始配置
     newSession->pushCommand(
-        LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+        LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
     restoreBrushNoteColorsUnsafe(*newSession);
@@ -2445,6 +2460,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
                                                  bool updateWorkspace)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto                            editorConfig = getEditorConfig();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
 
@@ -2471,7 +2487,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
             entry.cameraId, mainViewportSize->x, mainViewportSize->y });
     }
     newSession->pushCommand(
-        LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+        LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
     newSession->pushCommand(LogicCommand(
         CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
     restoreBrushNoteColorsUnsafe(*newSession);
@@ -2500,6 +2516,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto                            editorConfig = getEditorConfig();
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         return;
@@ -2558,7 +2575,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         previousTime,
         ctx.currentTime,
         previousWasPlaying,
-        m_editorConfig.settings.stopPlaybackOnScroll,
+        editorConfig.settings.stopPlaybackOnScroll,
         m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
     ctx.currentTime       = switchDecision.m_targetTime;
     bool transferPlayback = switchDecision.m_resumePlayback;
@@ -2566,7 +2583,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     const bool timelineReady = !sessions[index].isLogoPlaceholder &&
                                SessionUtils::activateAudioTimeline(ctx, false);
     double     totalTime     = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
-    double     minTime = -m_editorConfig.visual.getEffectiveVisualOffset();
+    double     minTime       = -editorConfig.visual.getEffectiveVisualOffset();
     if ( minTime > totalTime ) minTime = totalTime;
     ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
     if ( timelineReady ) {
@@ -2581,11 +2598,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     }
 
     ctx.animateTime =
-        ctx.currentTime + m_editorConfig.visual.getEffectiveVisualOffset();
-    ctx.animateTimeTarget          = ctx.animateTime;
-    ctx.animateTimeAnimationActive = false;
-    ctx.animatedTimelineZoom       = m_editorConfig.visual.timelineZoom;
-    ctx.animatedTimelineZoomTarget = ctx.animatedTimelineZoom;
+        ctx.currentTime + editorConfig.visual.getEffectiveVisualOffset();
+    ctx.animateTimeTarget                   = ctx.animateTime;
+    ctx.animateTimeAnimationActive          = false;
+    ctx.animatedTimelineZoom                = editorConfig.visual.timelineZoom;
+    ctx.animatedTimelineZoomTarget          = ctx.animatedTimelineZoom;
     ctx.animatedTimelineZoomAnimationActive = false;
     ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
     ctx.hitFXSystem.clearActiveEffects();
@@ -2618,6 +2635,32 @@ int32_t EditorEngine::consumePendingFocusSessionIndex()
     return m_pendingFocusSessionIndex.exchange(-1, std::memory_order_relaxed);
 }
 
+/// @brief 获取当前编辑器配置的线程安全值快照。
+/// @warning UI 热路径：只在调用期间持有配置互斥锁；调用者应在本帧复用副本。
+Config::EditorConfig EditorEngine::getEditorConfig() const
+{
+    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    return m_editorConfig;
+}
+
+/// @brief 按修订号刷新逻辑线程持有的编辑器配置快照。
+/// @warning 逻辑热路径：未变化时仅执行一次 acquire
+/// 原子读取，配置变化时才加锁复制。
+bool EditorEngine::refreshEditorConfigSnapshot(
+    Config::EditorConfig& target, std::uint64_t& targetRevision) const
+{
+    const std::uint64_t publishedRevision =
+        m_editorConfigRevision.load(std::memory_order_acquire);
+    if ( publishedRevision == targetRevision ) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    target         = m_editorConfig;
+    targetRevision = m_editorConfigRevision.load(std::memory_order_relaxed);
+    return true;
+}
+
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 {
     // 关键修复：从全局 AppConfig 中同步软件级状态，防止被
@@ -2628,23 +2671,29 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     const auto  globalDefaultColorPalette =
         globalConfig.settings.defaultColorPaletteSchemeName;
 
-    m_editorConfig                        = config;
-    m_editorConfig.recentProjects         = globalRecent;
-    m_editorConfig.settings.colorPalettes = globalColorPalettes;
-    m_editorConfig.settings.defaultColorPaletteSchemeName =
+    Config::EditorConfig updatedConfig   = config;
+    updatedConfig.recentProjects         = globalRecent;
+    updatedConfig.settings.colorPalettes = globalColorPalettes;
+    updatedConfig.settings.defaultColorPaletteSchemeName =
         globalDefaultColorPalette;
-    preserveGlobalAppManagedSettings(m_editorConfig, globalConfig);
-    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+    preserveGlobalAppManagedSettings(updatedConfig, globalConfig);
+    m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
         captureToolbarWorkspaceState(
             project->m_settings.m_workspace,
-            m_editorConfig,
+            updatedConfig,
             m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+        m_editorConfig = updatedConfig;
+        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+    }
+
     // 同步回全局 AppConfig 实例
-    Config::AppConfig::instance().getEditorConfig() = m_editorConfig;
+    Config::AppConfig::instance().getEditorConfig() = updatedConfig;
 
     // 向所有 Session 广播配置变更
     {
@@ -2654,7 +2703,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 entry.session->pushCommand(
-                    LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+                    LogicCommand(CmdUpdateEditorConfig{ updatedConfig }));
             }
         }
     }
@@ -2665,11 +2714,11 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
                                  "8x Refresh Rate",
                                  "Unlimited" };
     XINFO("EditorEngine: Updated config. Frame Limit: {}",
-          limitNames[static_cast<int>(m_editorConfig.settings.frameLimit)]);
+          limitNames[static_cast<int>(updatedConfig.settings.frameLimit)]);
 
     // 发布配置更新事件，供 UI 层订阅
     Event::EventBus::instance().publish(
-        Event::EditorConfigChangedEvent{ m_editorConfig });
+        Event::EditorConfigChangedEvent{ updatedConfig });
 }
 
 void EditorEngine::saveProject()
@@ -2726,6 +2775,12 @@ void EditorEngine::loop()
     m_logicUps.store(0.0f, std::memory_order_relaxed);
     /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
     auto& projectController = ProjectController::instance();
+    /// @brief 逻辑线程独占的编辑器配置快照，配置修订变化时才刷新。
+    Config::EditorConfig editorConfigSnapshot;
+    std::uint64_t        editorConfigSnapshotRevision =
+        std::numeric_limits<std::uint64_t>::max();
+    (void)refreshEditorConfigSnapshot(editorConfigSnapshot,
+                                      editorConfigSnapshotRevision);
 
     while ( m_running.load(std::memory_order_acquire) ) {
         // 动态获取当前的延迟目标，并与渲染循环共用相同换算规则。
@@ -2801,6 +2856,9 @@ void EditorEngine::loop()
             }
         }
 
+        (void)refreshEditorConfigSnapshot(editorConfigSnapshot,
+                                          editorConfigSnapshotRevision);
+
         // 多 Session 轮询更新
         /// @brief 当前已发布的 Session 快照，避免每 update 获取注册表锁。
         /// @warning 逻辑热路径/原子：只读取发布快照指针；快照自身保留
@@ -2862,7 +2920,8 @@ void EditorEngine::loop()
 
                 const double previousCurrentTime =
                     entry.session->getContext().currentTime;
-                entry.session->update(dt, m_editorConfig, isActiveSession);
+                entry.session->update(
+                    dt, editorConfigSnapshot, isActiveSession);
                 if ( isActiveSession && hadPendingCommands &&
                      std::abs(entry.session->getContext().currentTime -
                               previousCurrentTime) >

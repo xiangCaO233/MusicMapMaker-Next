@@ -3,8 +3,10 @@
 #include "log/colorful-log.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <optional>
+#include <thread>
 
 namespace
 {
@@ -111,6 +113,51 @@ bool testAudioResourceRestoredAfterSessionClose()
     return matches;
 }
 
+/// @brief 验证布局拖拽式高频配置写入不会产生撕裂的容器和字符串快照。
+/// @return 并发读取到的每份配置都保持内部字段一致时返回 true。
+bool testConcurrentEditorConfigSnapshots()
+{
+    auto&             engine       = MMM::Logic::EditorEngine::instance();
+    const auto        baseConfig   = engine.getEditorConfig();
+    const std::string STRESS_KEY   = "layout-snapshot-stress";
+    constexpr int     UPDATE_COUNT = 256;
+    std::atomic<bool> writerDone{ false };
+
+    std::thread writer([&]() {
+        for ( int i = 0; i < UPDATE_COUNT; ++i ) {
+            auto        updatedConfig = baseConfig;
+            auto&       sfxConfig     = updatedConfig.settings.sfxConfig;
+            const float marker        = static_cast<float>(i);
+            sfxConfig.flickWidthVolumeMultiplier = marker;
+            sfxConfig.permanentSfxVolumes.clear();
+            sfxConfig.permanentSfxMutes.clear();
+            sfxConfig.permanentSfxVolumes.emplace(STRESS_KEY, marker);
+            sfxConfig.permanentSfxMutes.emplace(STRESS_KEY, (i % 2) == 0);
+            engine.setEditorConfig(updatedConfig);
+        }
+        writerDone.store(true, std::memory_order_release);
+    });
+
+    bool consistent = true;
+    while ( !writerDone.load(std::memory_order_acquire) ) {
+        const auto  snapshot  = engine.getEditorConfig();
+        const auto& sfxConfig = snapshot.settings.sfxConfig;
+        const auto  marker    = sfxConfig.permanentSfxVolumes.find(STRESS_KEY);
+        if ( marker != sfxConfig.permanentSfxVolumes.end() &&
+             !near(marker->second, sfxConfig.flickWidthVolumeMultiplier) ) {
+            consistent = false;
+            break;
+        }
+    }
+
+    writer.join();
+    engine.setEditorConfig(baseConfig);
+    if ( !consistent ) {
+        XERROR("Concurrent editor config snapshot contained torn SFX fields");
+    }
+    return consistent;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -118,7 +165,8 @@ bool testAudioResourceRestoredAfterSessionClose()
 int main()
 {
     return testPaletteRestoredAfterSessionClose() &&
-                   testAudioResourceRestoredAfterSessionClose()
+                   testAudioResourceRestoredAfterSessionClose() &&
+                   testConcurrentEditorConfigSnapshots()
                ? 0
                : 1;
 }

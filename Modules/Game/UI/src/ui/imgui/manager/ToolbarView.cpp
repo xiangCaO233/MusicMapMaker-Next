@@ -428,7 +428,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
         auto&       engine      = Logic::EditorEngine::instance();
-        const auto& editorCfg   = engine.getEditorConfig();
+        const auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
         m_beatLineDisplayModeHistory.observe(
             editorCfg.visual.beatLineDisplayMode);

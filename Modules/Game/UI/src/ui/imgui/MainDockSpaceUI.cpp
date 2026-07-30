@@ -345,8 +345,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         m_isMaximized = nativeWindow->isWindowMaximized();
     }
 
-    auto& editorSettings = engine.getEditorConfig().settings;
-    auto& aesthetics     = editorSettings.aesthetics;
+    const auto& editorSettings =
+        Config::AppConfig::instance().getEditorConfig().settings;
+    const auto& aesthetics = editorSettings.aesthetics;
 
     float windowPaddingVal = std::floor(aesthetics.windowPadding * dpiScale);
 
