@@ -106,10 +106,14 @@ public:
             m_renderSize =
                 ImVec2(std::max(0.0f, size.x - m_reservedRightWidth), size.y);
             if ( size.x > 0 && size.y > 0 ) {
-                // 核心修复：通知渲染器目标尺寸及其缩放倍率
+                // 离屏纹理必须匹配 ImGui 最终 framebuffer，而非只表示手动
+                // UI 补偿量的 windowContentScale。
+                const ImVec2 framebufferScale =
+                    ImGui::GetIO().DisplayFramebufferScale;
                 view->setTargetSize(static_cast<uint32_t>(m_renderSize.x),
                                     static_cast<uint32_t>(m_renderSize.y),
-                                    dpiScale);
+                                    framebufferScale.x,
+                                    framebufferScale.y);
             }
 
             // 1. 必须清空上一帧的顶点

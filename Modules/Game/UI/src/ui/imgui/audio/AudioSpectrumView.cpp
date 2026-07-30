@@ -340,11 +340,11 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double viewStart = visualTime - m_zoom;
     double viewEnd   = visualTime + m_zoom;
 
-    const float dpiScale =
-        Config::AppConfig::instance().getWindowContentScale();
+    const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
     setTargetSize(static_cast<uint32_t>(std::max(1.0f, avail.x)),
                   static_cast<uint32_t>(std::max(1.0f, surfaceH)),
-                  dpiScale);
+                  framebufferScale.x,
+                  framebufferScale.y);
 
     m_vertices.clear();
     m_indices.clear();

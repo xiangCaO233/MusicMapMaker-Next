@@ -404,7 +404,7 @@ bool Basic2DCanvas::shouldKeepOpenForLastSessionReset() const
 
 float Basic2DCanvas::currentFontRasterScale()
 {
-    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    const float scale = ImGui::GetIO().DisplayFramebufferScale.y;
     return std::isfinite(scale) && scale > 0.0F ? scale : 1.0F;
 }
 

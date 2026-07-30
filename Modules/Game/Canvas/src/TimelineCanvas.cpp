@@ -340,8 +340,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         return;
     }
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float                dpiScale = viewport->DpiScale;
+    const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
 
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
@@ -425,7 +424,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( size.x > 0 && size.y > 0 ) {
             setTargetSize(static_cast<uint32_t>(size.x),
                           static_cast<uint32_t>(size.y),
-                          dpiScale);
+                          framebufferScale.x,
+                          framebufferScale.y);
         }
 
         vk::DescriptorSet texID = getDescriptorSet();
