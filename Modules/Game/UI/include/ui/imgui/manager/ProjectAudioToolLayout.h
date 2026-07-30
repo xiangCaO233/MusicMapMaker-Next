@@ -37,8 +37,17 @@ struct VisibilityConstraint {
     /// @brief 必须保留可见面积的下层方块。
     Rect base;
 
-    /// @brief 已经位于基础方块上方且不可移动的遮挡。
+    /// @brief 已经位于基础方块上方且与其相交的不可移动遮挡。
     std::vector<Rect> fixedOccluders;
+
+    /// @brief 扣除固定遮挡后互不重叠的可见矩形。
+    std::vector<Rect> fixedVisibleCells;
+
+    /// @brief 固定遮挡在基础方块内的并集面积。
+    float fixedCoveredArea{ 0.0F };
+
+    /// @brief 扣除固定遮挡后剩余的可见面积。
+    float fixedVisibleArea{ 0.0F };
 };
 
 /// @brief 单轴吸附锁；拖过释放阈值前保持落在同一目标位置。
@@ -159,6 +168,138 @@ enum class ResizeEdge {
     if ( baseArea <= 0.0F ) return 0.0F;
     return std::clamp(
         1.0F - coveredArea(base, occluders) / baseArea, 0.0F, 1.0F);
+}
+
+/// @brief 将一个矩形扣除遮挡交集并追加为最多四个互不重叠矩形。
+/// @param source 需要裁切的矩形。
+/// @param occluder 遮挡矩形。
+/// @param output 接收剩余可见矩形。
+inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
+                                 std::vector<Rect>& output)
+{
+    const auto clipped = intersection(source, occluder);
+    if ( !clipped ) {
+        output.push_back(source);
+        return;
+    }
+
+    const float sourceRight  = source.right();
+    const float sourceBottom = source.bottom();
+    if ( clipped->y > source.y ) {
+        output.push_back(
+            Rect{ source.x, source.y, source.width, clipped->y - source.y });
+    }
+    if ( clipped->bottom() < sourceBottom ) {
+        output.push_back(Rect{ source.x,
+                               clipped->bottom(),
+                               source.width,
+                               sourceBottom - clipped->bottom() });
+    }
+    if ( clipped->x > source.x ) {
+        output.push_back(Rect{
+            source.x, clipped->y, clipped->x - source.x, clipped->height });
+    }
+    if ( clipped->right() < sourceRight ) {
+        output.push_back(Rect{ clipped->right(),
+                               clipped->y,
+                               sourceRight - clipped->right(),
+                               clipped->height });
+    }
+}
+
+/// @brief 预处理一个下层方块的固定遮挡，过滤不相交方块并缓存并集面积。
+/// @warning 拖动开始时的低频路径：允许分配和并集计算，禁止每帧重建。
+[[nodiscard]] inline VisibilityConstraint prepareVisibilityConstraint(
+    const Rect& base, std::span<const Rect> fixedOccluders)
+{
+    VisibilityConstraint constraint;
+    constraint.base = base;
+    constraint.fixedOccluders.reserve(fixedOccluders.size());
+    for ( const auto& occluder : fixedOccluders ) {
+        if ( intersection(base, occluder) ) {
+            constraint.fixedOccluders.push_back(occluder);
+        }
+    }
+
+    if ( area(base) > 0.0F ) {
+        constraint.fixedVisibleCells.push_back(base);
+    }
+    std::vector<Rect> remainingCells;
+    for ( const auto& occluder : constraint.fixedOccluders ) {
+        remainingCells.clear();
+        remainingCells.reserve(constraint.fixedVisibleCells.size() * 2 + 2);
+        for ( const auto& visibleCell : constraint.fixedVisibleCells ) {
+            appendSubtractedRect(visibleCell, occluder, remainingCells);
+        }
+        constraint.fixedVisibleCells.swap(remainingCells);
+        if ( constraint.fixedVisibleCells.empty() ) break;
+    }
+    for ( const auto& visibleCell : constraint.fixedVisibleCells ) {
+        constraint.fixedVisibleArea += area(visibleCell);
+    }
+    constraint.fixedCoveredArea =
+        std::max(0.0F, area(base) - constraint.fixedVisibleArea);
+    return constraint;
+}
+
+/// @brief 计算固定遮挡上再加入一个候选前景方块后的可见比例。
+/// @warning 拖动热路径：只读取预切分的可见矩形，禁止分配、排序或复制遮挡。
+[[nodiscard]] inline float visibleRatioWithCandidate(
+    const VisibilityConstraint& constraint, const Rect& candidate)
+{
+    const float baseArea = area(constraint.base);
+    if ( baseArea <= 0.0F ) return 0.0F;
+
+    const auto candidateIntersection = intersection(constraint.base, candidate);
+    if ( !candidateIntersection ) {
+        return std::clamp(
+            1.0F - constraint.fixedCoveredArea / baseArea, 0.0F, 1.0F);
+    }
+    if ( constraint.fixedVisibleCells.empty() ) {
+        if ( !constraint.fixedOccluders.empty() ) return 0.0F;
+        return std::clamp(
+            1.0F - area(*candidateIntersection) / baseArea, 0.0F, 1.0F);
+    }
+
+    float newlyCoveredArea = 0.0F;
+    for ( const auto& visibleCell : constraint.fixedVisibleCells ) {
+        const auto newlyCovered =
+            intersection(visibleCell, *candidateIntersection);
+        if ( newlyCovered ) {
+            newlyCoveredArea += area(*newlyCovered);
+        }
+    }
+    return std::clamp(
+        (constraint.fixedVisibleArea - newlyCoveredArea) / baseArea,
+        0.0F,
+        1.0F);
+}
+
+/// @brief 获取固定遮挡本身留下的可见比例。
+/// @warning 拖动热路径：只读取预计算面积，禁止引入几何重建。
+[[nodiscard]] inline float fixedVisibleRatio(
+    const VisibilityConstraint& constraint)
+{
+    const float baseArea = area(constraint.base);
+    if ( baseArea <= 0.0F ) return 0.0F;
+    if ( constraint.fixedVisibleCells.empty() &&
+         constraint.fixedOccluders.empty() ) {
+        return 1.0F;
+    }
+    return std::clamp(
+        1.0F - constraint.fixedCoveredArea / baseArea, 0.0F, 1.0F);
+}
+
+/// @brief 计算候选方块相对既有布局新增的可见比例缺口。
+/// @warning 拖动热路径：只允许调用无分配的缓存查询。
+[[nodiscard]] inline float visibilityDeficit(
+    const VisibilityConstraint& constraint, const Rect& candidate,
+    float minimumVisibleRatio)
+{
+    const float requiredRatio =
+        std::min(minimumVisibleRatio, fixedVisibleRatio(constraint));
+    return std::max(
+        0.0F, requiredRatio - visibleRatioWithCandidate(constraint, candidate));
 }
 
 /// @brief 将矩形限制在工具画布边界内。
@@ -383,17 +524,15 @@ enum class ResizeEdge {
 }
 
 /// @brief 计算全部可见比例约束的总缺口。
+/// @warning 拖动热路径：每帧遍历约束缓存，禁止复制、分配或重建固定遮挡。
 [[nodiscard]] inline float visibilityDeficit(
     const Rect& candidate, std::span<const VisibilityConstraint> constraints,
     float minimumVisibleRatio)
 {
     float deficit = 0.0F;
     for ( const auto& constraint : constraints ) {
-        auto occluders = constraint.fixedOccluders;
-        occluders.push_back(candidate);
-        deficit += std::max(
-            0.0F,
-            minimumVisibleRatio - visibleRatio(constraint.base, occluders));
+        deficit +=
+            visibilityDeficit(constraint, candidate, minimumVisibleRatio);
     }
     return deficit;
 }
@@ -419,10 +558,8 @@ enum class ResizeEdge {
             visibilityDeficit(candidate, constraints, minimumVisibleRatio);
         float bestDistance = std::numeric_limits<float>::max();
         for ( const auto& constraint : constraints ) {
-            auto occluders = constraint.fixedOccluders;
-            occluders.push_back(candidate);
-            if ( visibleRatio(constraint.base, occluders) + 1e-5F >=
-                 minimumVisibleRatio ) {
+            if ( visibilityDeficit(
+                     constraint, candidate, minimumVisibleRatio) <= 1e-5F ) {
                 continue;
             }
 

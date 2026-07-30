@@ -442,14 +442,18 @@ void ProjectAudioToolView::rebuildInteractionConstraints()
         if ( baseIndex == movingIndex ) continue;
         m_dragSnapTargets.push_back(m_items[baseIndex].rect);
 
-        ProjectAudioToolLayout::VisibilityConstraint constraint;
-        constraint.base = m_items[baseIndex].rect;
+        std::vector<ProjectAudioToolLayout::Rect> fixedOccluders;
         for ( std::size_t higherIndex = baseIndex + 1;
               higherIndex < movingIndex;
               ++higherIndex ) {
-            constraint.fixedOccluders.push_back(m_items[higherIndex].rect);
+            if ( ProjectAudioToolLayout::intersection(
+                     m_items[baseIndex].rect, m_items[higherIndex].rect) ) {
+                fixedOccluders.push_back(m_items[higherIndex].rect);
+            }
         }
-        m_dragVisibilityConstraints.push_back(std::move(constraint));
+        m_dragVisibilityConstraints.push_back(
+            ProjectAudioToolLayout::prepareVisibilityConstraint(
+                m_items[baseIndex].rect, fixedOccluders));
     }
 }
 

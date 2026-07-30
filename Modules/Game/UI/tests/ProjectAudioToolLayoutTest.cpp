@@ -181,6 +181,51 @@ bool testResizeVisibilityConstraint()
            result.width > 64.9F && result.width < 65.1F;
 }
 
+/// @brief 验证预处理会剔除无关遮挡且候选方块仍按固定遮挡并集限制。
+bool testPreparedVisibilityConstraint()
+{
+    const Rect        base{ 100.0F, 100.0F, 100.0F, 100.0F };
+    const std::vector fixedOccluders{
+        Rect{ 100.0F, 100.0F, 30.0F, 100.0F },
+        Rect{ 500.0F, 500.0F, 100.0F, 100.0F },
+    };
+    const auto constraint =
+        MMM::UI::ProjectAudioToolLayout::prepareVisibilityConstraint(
+            base, fixedOccluders);
+    if ( constraint.fixedOccluders.size() != 1 ||
+         !near(constraint.fixedCoveredArea, 3000.0F) ) {
+        return false;
+    }
+
+    const std::vector constraints{ constraint };
+    const Rect result = MMM::UI::ProjectAudioToolLayout::constrainVisibility(
+        Rect{ 130.0F, 100.0F, 70.0F, 100.0F },
+        Rect{ 0.0F, 0.0F, 600.0F, 600.0F },
+        constraints,
+        0.35F);
+    return MMM::UI::ProjectAudioToolLayout::visibleRatioWithCandidate(
+               constraint, result) >= 0.35F - 1e-4F;
+}
+
+/// @brief 验证旧布局已有轻微可见率缺口时不会让无关拖动反复尝试修复。
+bool testExistingVisibilityDeficitIsBaseline()
+{
+    const Rect        base{ 100.0F, 100.0F, 100.0F, 100.0F };
+    const std::vector fixedOccluders{
+        Rect{ 100.0F, 100.0F, 66.0F, 100.0F },
+    };
+    const auto constraint =
+        MMM::UI::ProjectAudioToolLayout::prepareVisibilityConstraint(
+            base, fixedOccluders);
+    const Rect unrelatedCandidate{ 400.0F, 400.0F, 100.0F, 100.0F };
+    const Rect worseningCandidate{ 166.0F, 100.0F, 34.0F, 100.0F };
+    return near(MMM::UI::ProjectAudioToolLayout::visibilityDeficit(
+                    constraint, unrelatedCandidate, 0.35F),
+                0.0F) &&
+           MMM::UI::ProjectAudioToolLayout::visibilityDeficit(
+               constraint, worseningCandidate, 0.35F) > 0.0F;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频工具几何布局测试。
@@ -193,5 +238,7 @@ int main()
     if ( !testMinimumVisibleRatio() ) return 5;
     if ( !testVisibleLabelCell() ) return 6;
     if ( !testResizeVisibilityConstraint() ) return 7;
+    if ( !testPreparedVisibilityConstraint() ) return 8;
+    if ( !testExistingVisibilityDeficitIsBaseline() ) return 9;
     return 0;
 }
