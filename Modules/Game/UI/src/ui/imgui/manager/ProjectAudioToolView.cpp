@@ -872,10 +872,13 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
     const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
     const float labelHeight =
         std::max(1.0F, audioControlLayout.labelBottom - labelRect.y);
+    const float filenameHeight =
+        std::min(ImGui::GetTextLineHeight(), labelHeight);
     const ImVec2 labelStart{
         labelRect.x + horizontalPadding,
-        labelRect.y +
-            std::max(0.0F, (labelHeight - ImGui::GetTextLineHeight()) * 0.5F),
+        std::max(
+            labelRect.y,
+            audioControlLayout.labelBottom - verticalPadding - filenameHeight),
     };
     const float labelWidth =
         std::max(1.0F, labelRect.width - horizontalPadding * 2.0F);
@@ -884,7 +887,7 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
                           true);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.06F, 0.08F, 0.11F, 1.0F));
     Utils::drawScrollingText(
-        item.label, labelStart, labelWidth, labelRect.height);
+        item.label, labelStart, labelWidth, filenameHeight);
     ImGui::PopStyleColor();
     drawList.PopClipRect();
 

@@ -100,7 +100,23 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         return result;
     }
 
+    const auto& style      = ImGui::GetStyle();
+    const float widestIcon = std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).x,
+                                        ImGui::CalcTextSize(ICON_MMM_PAUSE).x,
+                                        ImGui::CalcTextSize(ICON_MMM_STOP).x });
+    const float tallestIcon =
+        std::max({ ImGui::CalcTextSize(ICON_MMM_PLAY).y,
+                   ImGui::CalcTextSize(ICON_MMM_PAUSE).y,
+                   ImGui::CalcTextSize(ICON_MMM_STOP).y });
+    const ImVec2 adaptivePadding{
+        std::min(style.FramePadding.x,
+                 std::max(0.0F, (buttonSize - widestIcon) * 0.5F)),
+        std::min(style.FramePadding.y,
+                 std::max(0.0F, (buttonSize - tallestIcon) * 0.5F)),
+    };
+
     const ImVec2 buttonExtent{ buttonSize, buttonSize };
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, adaptivePadding);
     ImGui::PushID(idScope);
 
     const auto renderButton = [&](const char*               icon,
@@ -143,6 +159,7 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                  2U);
 
     ImGui::PopID();
+    ImGui::PopStyleVar();
     return result;
 }
 
