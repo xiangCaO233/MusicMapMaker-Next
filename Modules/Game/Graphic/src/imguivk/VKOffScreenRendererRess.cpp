@@ -364,8 +364,10 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_imageView = m_device.createImageView(viewInfo).value;
 
     vk::SamplerCreateInfo samplerInfo;
-    samplerInfo.setMagFilter(vk::Filter::eLinear)
-        .setMinFilter(vk::Filter::eLinear)
+    // 主离屏画布与 ImGui 目标按物理像素 1:1 映射；最终提交再次执行线性
+    // 插值会把已经抗锯齿的字形边缘重复滤波，导致画布文字明显发糊。
+    samplerInfo.setMagFilter(vk::Filter::eNearest)
+        .setMinFilter(vk::Filter::eNearest)
         .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
         .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
         .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
@@ -374,7 +376,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         .setUnnormalizedCoordinates(VK_FALSE)
         .setCompareEnable(VK_FALSE)
         .setCompareOp(vk::CompareOp::eAlways)
-        .setMipmapMode(vk::SamplerMipmapMode::eLinear);
+        .setMipmapMode(vk::SamplerMipmapMode::eNearest);
 
     m_sampler = m_device.createSampler(samplerInfo).value;
 
