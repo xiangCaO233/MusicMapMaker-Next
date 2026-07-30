@@ -38,6 +38,92 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
         result.hovered || ImGui::IsItemHovered() || ImGui::IsItemActive();
 }
 
+/// @brief 保留主题色相并确保方块内控件具有足够的不透明度。
+/// @param color 当前主题颜色。
+/// @param minimumAlpha 最低不透明度。
+/// @return 可用于叠加在音频方块上的高对比度颜色。
+ImVec4 ensureControlAlpha(ImVec4 color, float minimumAlpha)
+{
+    color.w = std::max(color.w, minimumAlpha);
+    return color;
+}
+
+/// @brief 绘制一个采用全局圆角、边框和文字对齐的方形按钮外观。
+/// @param minimum 按钮左上角屏幕坐标。
+/// @param extent 按钮屏幕尺寸。
+/// @param icon 按钮图标。
+/// @param hovered 当前是否悬浮。
+/// @param active 当前是否按下。
+/// @warning UI 热路径：只向当前 ImGui DrawList 追加固定数量图元。
+void drawPreviewButton(ImVec2 minimum, ImVec2 extent, const char* icon,
+                       bool hovered, bool active)
+{
+    const auto& style = ImGui::GetStyle();
+    ImVec4 fill = ImGui::GetStyleColorVec4(active    ? ImGuiCol_ButtonActive
+                                           : hovered ? ImGuiCol_ButtonHovered
+                                                     : ImGuiCol_Button);
+    fill        = ensureControlAlpha(fill, 0.88F);
+    const ImVec4 border =
+        ensureControlAlpha(ImGui::GetStyleColorVec4(ImGuiCol_Border), 0.72F);
+    const ImVec2 maximum{ minimum.x + extent.x, minimum.y + extent.y };
+
+    auto* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(
+        minimum, maximum, ImGui::GetColorU32(fill), style.FrameRounding);
+    drawList->AddRect(minimum,
+                      maximum,
+                      ImGui::GetColorU32(border),
+                      style.FrameRounding,
+                      0,
+                      std::max(1.0F, style.FrameBorderSize));
+
+    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+    const ImVec2 iconPosition{
+        minimum.x +
+            std::max(0.0F, extent.x - iconSize.x) * style.ButtonTextAlign.x,
+        minimum.y +
+            std::max(0.0F, extent.y - iconSize.y) * style.ButtonTextAlign.y,
+    };
+    drawList->AddText(iconPosition, ImGui::GetColorU32(ImGuiCol_Text), icon);
+}
+
+/// @brief 绘制方块内的试听进度条。
+/// @param minimum 进度条左上角屏幕坐标。
+/// @param extent 进度条屏幕尺寸。
+/// @param progress 已裁切到 `[0, 1]` 的播放进度。
+/// @warning UI 热路径：只向当前 ImGui DrawList 追加固定数量图元。
+void drawPreviewProgress(ImVec2 minimum, ImVec2 extent, float progress)
+{
+    const auto&  style = ImGui::GetStyle();
+    const ImVec2 maximum{ minimum.x + extent.x, minimum.y + extent.y };
+    const ImVec2 filledMaximum{
+        minimum.x + extent.x * std::clamp(progress, 0.0F, 1.0F),
+        maximum.y,
+    };
+    const ImVec4 background =
+        ensureControlAlpha(ImGui::GetStyleColorVec4(ImGuiCol_FrameBg), 0.82F);
+    const ImVec4 filled = ensureControlAlpha(
+        ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram), 0.95F);
+    const ImVec4 border =
+        ensureControlAlpha(ImGui::GetStyleColorVec4(ImGuiCol_Border), 0.72F);
+
+    auto* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(
+        minimum, maximum, ImGui::GetColorU32(background), style.FrameRounding);
+    if ( filledMaximum.x > minimum.x ) {
+        drawList->AddRectFilled(minimum,
+                                filledMaximum,
+                                ImGui::GetColorU32(filled),
+                                style.FrameRounding);
+    }
+    drawList->AddRect(minimum,
+                      maximum,
+                      ImGui::GetColorU32(border),
+                      style.FrameRounding,
+                      0,
+                      std::max(1.0F, style.FrameBorderSize));
+}
+
 }  // namespace
 
 std::string makeProjectAudioPreviewPoolKey(std::string_view previewInstanceId)
@@ -127,10 +213,14 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                  std::max(0.0F, (layout.buttonSize - tallestIcon) * 0.5F)),
     };
 
+    ImGui::PushID(idScope);
+    const ImVec2 progressExtent{ layout.width, layout.progressHeight };
     ImGui::SetCursorScreenPos(layout.topLeft);
-    ImGui::ProgressBar(progress, { layout.width, layout.progressHeight }, "");
+    ImGui::InvisibleButton("##ProjectAudioPreviewProgress", progressExtent);
     accumulateLastItemState(result);
-    if ( ImGui::IsItemHovered() ) {
+    const bool progressHovered = ImGui::IsItemHovered();
+    drawPreviewProgress(layout.topLeft, progressExtent, progress);
+    if ( progressHovered ) {
         ImGui::SetTooltip("%.2f / %.2f s", playbackTime, duration);
     }
 
@@ -145,19 +235,24 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         layout.topLeft.y + layout.progressHeight + layout.progressSpacing;
     const ImVec2 buttonExtent{ layout.buttonSize, layout.buttonSize };
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, adaptivePadding);
-    ImGui::PushID(idScope);
 
     const auto renderButton = [&](const char*               icon,
                                   const char*               hiddenId,
                                   const char*               tooltip,
                                   ProjectAudioPreviewAction action,
-                                  std::size_t               index) {
+                                  std::size_t               index,
+                                  bool triggerPreview = true) {
         ImGui::SetCursorScreenPos(
             { buttonStartX + static_cast<float>(index) *
                                  (layout.buttonSize + layout.buttonSpacing),
               buttonY });
         const std::string label = std::string(icon) + hiddenId;
-        if ( FeedbackButton(label.c_str(), buttonExtent) ) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
+        const bool clicked = FeedbackButton(label.c_str(), buttonExtent);
+        if ( clicked && triggerPreview ) {
             if ( !previewPoolKey.empty() ) {
                 result.activated = controlProjectAudioPreview(project,
                                                               audioResourceId,
@@ -167,10 +262,22 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                                    result.activated;
             }
         }
+        ImGui::PopStyleColor(4);
+        const bool hovered = ImGui::IsItemHovered();
+        const bool active  = ImGui::IsItemActive();
         accumulateLastItemState(result);
-        if ( ImGui::IsItemHovered() ) {
+        drawPreviewButton(
+            { buttonStartX + static_cast<float>(index) *
+                                 (layout.buttonSize + layout.buttonSpacing),
+              buttonY },
+            buttonExtent,
+            icon,
+            hovered,
+            active);
+        if ( hovered ) {
             ImGui::SetTooltip("%s", tooltip);
         }
+        return clicked;
     };
 
     renderButton(ICON_MMM_PLAY,
@@ -190,19 +297,13 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
                  2U);
 
     if ( editableVolume ) {
-        ImGui::SetCursorScreenPos(
-            { buttonStartX + 3.0F * (layout.buttonSize + layout.buttonSpacing),
-              buttonY });
-        if ( FeedbackButton((std::string(ICON_MMM_VOLUME_HIGH) +
-                             "##ProjectAudioPreviewVolume")
-                                .c_str(),
-                            buttonExtent) ) {
+        if ( renderButton(ICON_MMM_VOLUME_HIGH,
+                          "##ProjectAudioPreviewVolume",
+                          TR("ui.edit.sample_properties.volume").data(),
+                          ProjectAudioPreviewAction::Stop,
+                          3U,
+                          false) ) {
             ImGui::OpenPopup("##ProjectAudioPreviewVolumePopup");
-        }
-        accumulateLastItemState(result);
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip("%s",
-                              TR("ui.edit.sample_properties.volume").data());
         }
 
         if ( ImGui::BeginPopup("##ProjectAudioPreviewVolumePopup") ) {
