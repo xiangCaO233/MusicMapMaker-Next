@@ -47,13 +47,17 @@ void accumulateLastItemState(ProjectAudioPreviewControlsResult& result)
 bool isPreviewControlHovered(ImVec2 minimum, ImVec2 extent,
                              bool acceptExplicitPointerHit)
 {
-    if ( !acceptExplicitPointerHit &&
-         !ImGui::IsWindowHovered(
-             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ) {
+    const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+    const bool   inside        = mousePosition.x >= minimum.x &&
+                                 mousePosition.x <= minimum.x + extent.x &&
+                                 mousePosition.y >= minimum.y &&
+                                 mousePosition.y <= minimum.y + extent.y;
+    if ( !inside ) {
         return false;
     }
-    return ImGui::IsMouseHoveringRect(
-        minimum, { minimum.x + extent.x, minimum.y + extent.y }, true);
+    return acceptExplicitPointerHit ||
+           ImGui::IsWindowHovered(
+               ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 }
 
 /// @brief 保留主题色相并确保方块内控件具有足够的不透明度。
