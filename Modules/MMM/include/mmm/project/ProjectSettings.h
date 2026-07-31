@@ -145,6 +145,17 @@ struct ProjectWorkspaceToolbarState {
     /// @brief 是否开启滚动吸附。
     bool m_scrollSnap{ false };
 
+    /// @brief 是否开启物件放置磁吸。
+    bool m_objectPlacementSnap{ false };
+
+    /// @brief 物件放置磁吸模式，使用 CurrentBeatDivisor 或 CommonBeatDivisors。
+    std::string m_objectPlacementSnapMode{ "CurrentBeatDivisor" };
+
+    /// @brief 1/2 至 1/24 常用分拍线的选择位。
+    std::uint32_t m_commonBeatDivisorMask{
+        Config::COMMON_BEAT_DIVISOR_MASK_DEFAULT
+    };
+
     /// @brief 是否吸附到早于鼠标位置的分拍线。
     bool m_snapFloor{ false };
 
@@ -180,6 +191,9 @@ struct ProjectWorkspaceToolbarState {
             { "m_valid", state.m_valid },
             { "m_reverseScroll", state.m_reverseScroll },
             { "m_scrollSnap", state.m_scrollSnap },
+            { "m_objectPlacementSnap", state.m_objectPlacementSnap },
+            { "m_objectPlacementSnapMode", state.m_objectPlacementSnapMode },
+            { "m_commonBeatDivisorMask", state.m_commonBeatDivisorMask },
             { "m_snapFloor", state.m_snapFloor },
             { "m_enableLinearScrollMapping",
               state.m_enableLinearScrollMapping },
@@ -200,7 +214,19 @@ struct ProjectWorkspaceToolbarState {
         state.m_valid         = j.value("m_valid", false);
         state.m_reverseScroll = j.value("m_reverseScroll", false);
         state.m_scrollSnap    = j.value("m_scrollSnap", false);
-        state.m_snapFloor     = j.value("m_snapFloor", false);
+        state.m_objectPlacementSnap =
+            j.value("m_objectPlacementSnap", state.m_scrollSnap);
+        state.m_objectPlacementSnapMode = j.value(
+            "m_objectPlacementSnapMode", std::string{ "CurrentBeatDivisor" });
+        if ( state.m_objectPlacementSnapMode != "CurrentBeatDivisor" &&
+             state.m_objectPlacementSnapMode != "CommonBeatDivisors" ) {
+            state.m_objectPlacementSnapMode = "CurrentBeatDivisor";
+        }
+        state.m_commonBeatDivisorMask =
+            j.value("m_commonBeatDivisorMask",
+                    Config::COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
+            Config::COMMON_BEAT_DIVISOR_MASK_ALL;
+        state.m_snapFloor = j.value("m_snapFloor", false);
         state.m_enableLinearScrollMapping =
             j.value("m_enableLinearScrollMapping", false);
         state.m_drawBeatLines = j.value("m_drawBeatLines", true);

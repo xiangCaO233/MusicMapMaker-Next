@@ -286,32 +286,52 @@ bool testBulkCurrentConfigMerge()
     return true;
 }
 
-/// @brief 验证项目工作区从旧分拍线布尔开关迁移到三态模式。
-/// @return 旧关闭状态和新自动状态均能稳定往返时返回 true。
+/// @brief 验证项目工作区分拍线模式与磁吸设置的兼容迁移。
+/// @return 旧开关迁移和当前磁吸设置往返均稳定时返回 true。
 bool testBeatLineToolbarStateMigration()
 {
     const nlohmann::json legacyJson{
         { "m_valid", true },
         { "m_drawBeatLines", false },
+        { "m_scrollSnap", true },
     };
     const auto legacyState =
         legacyJson.get<MMM::ProjectWorkspaceToolbarState>();
     if ( legacyState.m_beatLineDisplayMode != "Hidden" ||
-         legacyState.m_drawBeatLines ) {
-        XERROR("Legacy beat line toolbar state was not migrated");
+         legacyState.m_drawBeatLines || !legacyState.m_objectPlacementSnap ||
+         !MMM::Config::isCommonBeatDivisorEnabled(
+             legacyState.m_commonBeatDivisorMask, 2) ||
+         MMM::Config::isCommonBeatDivisorEnabled(
+             legacyState.m_commonBeatDivisorMask, 5) ) {
+        XERROR("Legacy toolbar state was not migrated");
         return false;
     }
 
     MMM::ProjectWorkspaceToolbarState currentState;
-    currentState.m_valid               = true;
-    currentState.m_beatLineDisplayMode = "NearCursor";
-    const nlohmann::json currentJson   = currentState;
+    currentState.m_valid                   = true;
+    currentState.m_beatLineDisplayMode     = "NearCursor";
+    currentState.m_objectPlacementSnap     = true;
+    currentState.m_objectPlacementSnapMode = "CommonBeatDivisors";
+    currentState.m_commonBeatDivisorMask   = 0U;
+    MMM::Config::setCommonBeatDivisorEnabled(
+        currentState.m_commonBeatDivisorMask, 3, true);
+    MMM::Config::setCommonBeatDivisorEnabled(
+        currentState.m_commonBeatDivisorMask, 7, true);
+    const nlohmann::json currentJson = currentState;
     const auto           restoredState =
         currentJson.get<MMM::ProjectWorkspaceToolbarState>();
     if ( restoredState.m_beatLineDisplayMode != "NearCursor" ||
          !restoredState.m_drawBeatLines ||
-         !currentJson.value("m_drawBeatLines", false) ) {
-        XERROR("Current beat line toolbar state did not survive round trip");
+         !currentJson.value("m_drawBeatLines", false) ||
+         !restoredState.m_objectPlacementSnap ||
+         restoredState.m_objectPlacementSnapMode != "CommonBeatDivisors" ||
+         !MMM::Config::isCommonBeatDivisorEnabled(
+             restoredState.m_commonBeatDivisorMask, 3) ||
+         !MMM::Config::isCommonBeatDivisorEnabled(
+             restoredState.m_commonBeatDivisorMask, 7) ||
+         MMM::Config::isCommonBeatDivisorEnabled(
+             restoredState.m_commonBeatDivisorMask, 4) ) {
+        XERROR("Current toolbar state did not survive round trip");
         return false;
     }
     return true;

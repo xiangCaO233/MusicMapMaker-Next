@@ -688,6 +688,32 @@ Config::BeatLineDisplayMode workspaceNameToBeatLineDisplayMode(
     return Config::BeatLineDisplayMode::Always;
 }
 
+/// @brief 将物件放置磁吸模式转换为项目工作区稳定文本。
+/// @param mode 当前物件放置磁吸模式。
+/// @return 可持久化的稳定模式文本。
+const char* objectPlacementSnapModeToWorkspaceName(
+    Config::ObjectPlacementSnapMode mode)
+{
+    switch ( mode ) {
+    case Config::ObjectPlacementSnapMode::CommonBeatDivisors:
+        return "CommonBeatDivisors";
+    case Config::ObjectPlacementSnapMode::CurrentBeatDivisor:
+    default: return "CurrentBeatDivisor";
+    }
+}
+
+/// @brief 将项目工作区稳定文本转换为物件放置磁吸模式。
+/// @param name 工作区中保存的模式文本。
+/// @return 对应的物件放置磁吸模式。
+Config::ObjectPlacementSnapMode workspaceNameToObjectPlacementSnapMode(
+    const std::string& name)
+{
+    if ( name == "CommonBeatDivisors" ) {
+        return Config::ObjectPlacementSnapMode::CommonBeatDivisors;
+    }
+    return Config::ObjectPlacementSnapMode::CurrentBeatDivisor;
+}
+
 /// @brief 捕获工具栏开关到项目工作区状态。
 /// @param workspace 需要写入的项目工作区状态。
 /// @param editorConfig 当前编辑器配置。
@@ -700,7 +726,14 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
     toolbarState.m_valid         = true;
     toolbarState.m_reverseScroll = editorConfig.settings.reverseScroll;
     toolbarState.m_scrollSnap    = editorConfig.settings.scrollSnap;
-    toolbarState.m_snapFloor     = editorConfig.settings.snapFloor;
+    toolbarState.m_objectPlacementSnap =
+        editorConfig.settings.objectPlacementSnap;
+    toolbarState.m_objectPlacementSnapMode =
+        objectPlacementSnapModeToWorkspaceName(
+            editorConfig.settings.objectPlacementSnapMode);
+    toolbarState.m_commonBeatDivisorMask =
+        editorConfig.settings.commonBeatDivisorMask;
+    toolbarState.m_snapFloor = editorConfig.settings.snapFloor;
     toolbarState.m_enableLinearScrollMapping =
         editorConfig.visual.enableLinearScrollMapping;
     toolbarState.m_beatLineDisplayMode = beatLineDisplayModeToWorkspaceName(
@@ -724,7 +757,15 @@ void applyToolbarWorkspaceState(
 {
     editorConfig.settings.reverseScroll = toolbarState.m_reverseScroll;
     editorConfig.settings.scrollSnap    = toolbarState.m_scrollSnap;
-    editorConfig.settings.snapFloor     = toolbarState.m_snapFloor;
+    editorConfig.settings.objectPlacementSnap =
+        toolbarState.m_objectPlacementSnap;
+    editorConfig.settings.objectPlacementSnapMode =
+        workspaceNameToObjectPlacementSnapMode(
+            toolbarState.m_objectPlacementSnapMode);
+    editorConfig.settings.commonBeatDivisorMask =
+        toolbarState.m_commonBeatDivisorMask &
+        Config::COMMON_BEAT_DIVISOR_MASK_ALL;
+    editorConfig.settings.snapFloor = toolbarState.m_snapFloor;
     editorConfig.visual.enableLinearScrollMapping =
         toolbarState.m_enableLinearScrollMapping;
     editorConfig.visual.beatLineDisplayMode =

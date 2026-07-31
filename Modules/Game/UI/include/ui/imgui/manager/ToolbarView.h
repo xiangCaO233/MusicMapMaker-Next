@@ -71,6 +71,14 @@ private:
     float m_lastKeyBtnY      = 0.0f;
     float m_keyPopupWidth    = 160.0f;
     float m_keyPopupHeight   = 120.0f;
+    /// @brief 是否显示磁铁工具设置弹窗。
+    bool m_showMagnetPopup{ false };
+    /// @brief 上一帧磁铁工具按钮的屏幕 Y 坐标，用于定位弹窗。
+    float m_lastMagnetBtnY{ 0.0f };
+    /// @brief 磁铁工具弹窗上一帧宽度，用于防止视口越界。
+    float m_magnetPopupWidth{ 280.0f };
+    /// @brief 磁铁工具弹窗上一帧高度，用于防止视口越界。
+    float m_magnetPopupHeight{ 360.0f };
     /// @brief 是否显示分拍线模式设置弹窗。
     bool m_showBeatLinePopup{ false };
     /// @brief 上一帧分拍线模式按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -188,6 +196,11 @@ private:
     /// @param dpiScale 当前 DPI 缩放。
     /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
     void renderBeatLinePopup(float dpiScale);
+
+    /// @brief 绘制滚动画布与物件放置磁吸设置弹窗。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
+    void renderMagnetPopup(float dpiScale);
 
     /// @brief 绘制锚定在工具栏按钮旁的 Key 音逐轨控制弹层。
     /// @param dpiScale 当前 DPI 缩放。

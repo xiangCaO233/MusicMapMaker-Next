@@ -304,6 +304,81 @@ bool applyAudioTimelineTransportSnapshot(
     return ctx.isPlaying || ctx.isAudioTimelineSyncFollower;
 }
 
+SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
+                                        double nextTimingTime, double bpm,
+                                        const Config::EditorSettings& settings)
+{
+    SnapResult result;
+    if ( !settings.objectPlacementSnap || !std::isfinite(rawTime) ||
+         !std::isfinite(timingTime) || !std::isfinite(bpm) || bpm <= 0.0 ) {
+        return result;
+    }
+
+    const double beatDuration = 60.0 / bpm;
+    if ( !std::isfinite(beatDuration) || beatDuration <= 1e-9 ) {
+        return result;
+    }
+
+    double bestDistance    = std::numeric_limits<double>::infinity();
+    auto   considerDivisor = [&](int divisor) {
+        if ( divisor <= 0 ) return;
+
+        const double stepDuration = beatDuration / divisor;
+        if ( !std::isfinite(stepDuration) || stepDuration <= 1e-9 ) return;
+
+        const double relativeTime = rawTime - timingTime;
+        const double stepCount =
+            settings.snapFloor ? std::floor(relativeTime / stepDuration + 1e-6)
+                               : std::round(relativeTime / stepDuration);
+        double candidate = timingTime + stepCount * stepDuration;
+        if ( candidate > nextTimingTime ) candidate = nextTimingTime;
+        if ( !std::isfinite(candidate) ) return;
+
+        const double distance = std::abs(candidate - rawTime);
+        if ( distance >= bestDistance - 1e-12 ) return;
+
+        result.isSnapped   = true;
+        result.snappedTime = candidate;
+        bestDistance       = distance;
+
+        if ( std::isfinite(nextTimingTime) &&
+             std::abs(candidate - nextTimingTime) <= 1e-9 ) {
+            result.numerator   = 1;
+            result.denominator = 1;
+            return;
+        }
+
+        auto stepIndex = static_cast<std::int64_t>(
+            std::llround((candidate - timingTime) / stepDuration));
+        int beatIndex = static_cast<int>(stepIndex % divisor);
+        if ( beatIndex < 0 ) beatIndex += divisor;
+        if ( beatIndex == 0 ) {
+            result.numerator   = 1;
+            result.denominator = 1;
+            return;
+        }
+        const int factor   = std::gcd(beatIndex, divisor);
+        result.numerator   = beatIndex / factor;
+        result.denominator = divisor / factor;
+    };
+
+    if ( settings.objectPlacementSnapMode ==
+         Config::ObjectPlacementSnapMode::CommonBeatDivisors ) {
+        for ( int divisor = Config::COMMON_BEAT_DIVISOR_MIN;
+              divisor <= Config::COMMON_BEAT_DIVISOR_MAX;
+              ++divisor ) {
+            if ( Config::isCommonBeatDivisorEnabled(
+                     settings.commonBeatDivisorMask, divisor) ) {
+                considerDivisor(divisor);
+            }
+        }
+    } else {
+        considerDivisor(std::max(settings.beatDivisor, 1));
+    }
+
+    return result;
+}
+
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
     const Config::EditorConfig&                  config,
@@ -313,8 +388,6 @@ SnapResult getSnapResult(
     double                                             fallbackBpm)
 {
     SnapResult result;
-    int        beatDivisor = config.settings.beatDivisor;
-    if ( beatDivisor <= 0 ) beatDivisor = 4;
 
     auto* cache = timelineRegistry.ctx().find<System::ScrollCache>();
     if ( !cache ) return result;
@@ -364,46 +437,17 @@ SnapResult getSnapResult(
             bVal = fallbackBpm;
         }
         if ( !std::isfinite(bVal) || bVal <= 0.0 ) bVal = 120.0;
-        double beatDuration = 60.0 / bVal;
-        double stepDuration = beatDuration / beatDivisor;
+        auto candidate = calculateObjectPlacementSnap(
+            rawTime, bpmTime, nextBpmTime, bVal, config.settings);
+        if ( !candidate.isSnapped ) continue;
 
-        double relativeTime = rawTime - bpmTime;
-        double stepCount;
-        if ( config.settings.snapFloor ) {
-            stepCount = std::floor(relativeTime / stepDuration + 1e-6);
-        } else {
-            stepCount = std::round(relativeTime / stepDuration);
-        }
-        double nearestStepTime = bpmTime + stepCount * stepDuration;
-
-        if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
-
-        double snapAbsY = cache->getAbsY(nearestStepTime);
+        double snapAbsY = cache->getAbsY(candidate.snappedTime);
         float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
+        if ( !std::isfinite(snapY) || !std::isfinite(mouseY) ) continue;
 
-        if ( config.settings.scrollSnap ||
-             std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
-            result.isSnapped   = true;
-            result.snappedTime = nearestStepTime;
-
-            // 计算当前分拍位置。
-            int64_t stepInt = static_cast<int64_t>(
-                std::round((nearestStepTime - bpmTime) / stepDuration));
-            int beatIndex = stepInt % beatDivisor;
-            if ( beatIndex < 0 ) beatIndex += beatDivisor;
-
-            if ( beatIndex == 0 ) {
-                result.numerator   = 1;
-                result.denominator = 1;
-            } else {
-                int gcd            = std::gcd(beatIndex, beatDivisor);
-                result.numerator   = beatIndex / gcd;
-                result.denominator = beatDivisor / gcd;
-            }
-
-            break;
-        }
+        result = candidate;
+        break;
     }
 
     return result;

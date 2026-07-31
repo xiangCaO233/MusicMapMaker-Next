@@ -653,6 +653,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showKeyPopup      = false;
                 m_showSpeedPopup    = false;
                 m_showBeatLinePopup = false;
+                m_showMagnetPopup   = false;
                 m_showKeySoundTool  = false;
             }
         }
@@ -720,15 +721,29 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.settings.reverseScroll;
                          });
 
-        drawToggleButton(ICON_MMM_MAGNET,
-                         editorCfg.settings.scrollSnap,
-                         TR("ui.toolbar.scroll_snap").data(),
-                         TR("ui.toolbar.short.scroll_snap").data(),
-                         shortcutConfig.toggleScrollSnap,
-                         [](Config::EditorConfig& config) {
-                             config.settings.scrollSnap =
-                                 !config.settings.scrollSnap;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("MagnetTool");
+        if ( drawIconButton(ICON_MMM_MAGNET,
+                            "##ToolbarMagnetTool",
+                            TR("ui.toolbar.short.magnet_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showMagnetPopup = !m_showMagnetPopup;
+            if ( m_showMagnetPopup ) {
+                m_showColorPopup    = false;
+                m_showDivisorPopup  = false;
+                m_showKeyPopup      = false;
+                m_showSpeedPopup    = false;
+                m_showBeatLinePopup = false;
+                m_showKeySoundTool  = false;
+            }
+        }
+        m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        drawTooltip(TR("ui.toolbar.magnet_tool").data());
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_ARROW_DOWN,
                          editorCfg.settings.snapFloor,
@@ -764,6 +779,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showDivisorPopup = false;
                 m_showKeyPopup     = false;
                 m_showSpeedPopup   = false;
+                m_showMagnetPopup  = false;
                 m_showKeySoundTool = false;
             }
         }
@@ -803,6 +819,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showKeyPopup      = false;
                 m_showSpeedPopup    = false;
                 m_showBeatLinePopup = false;
+                m_showMagnetPopup   = false;
             }
         }
         m_lastKeySoundToolBtnY = ImGui::GetItemRectMin().y;
@@ -898,6 +915,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         m_showKeyPopup      = false;
                         m_showDivisorPopup  = false;
                         m_showBeatLinePopup = false;
+                        m_showMagnetPopup   = false;
                         m_showKeySoundTool  = false;
                     }
                 }
@@ -963,6 +981,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup  = false;
                     m_showSpeedPopup    = false;
                     m_showBeatLinePopup = false;
+                    m_showMagnetPopup   = false;
                     m_showKeySoundTool  = false;
                 }
             }
@@ -1015,6 +1034,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showKeyPopup      = false;
                     m_showSpeedPopup    = false;
                     m_showBeatLinePopup = false;
+                    m_showMagnetPopup   = false;
                     m_showKeySoundTool  = false;
                 }
             }
@@ -1054,6 +1074,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
     renderLayoutPopup(dpiScale);
+    renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
     renderKeySoundTool(dpiScale);
 
@@ -2869,6 +2890,139 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
     ImGui::PopID();
     drawTooltip(TR("ui.toolbar.layout").data());
     ImGui::PopStyleColor(3);
+}
+
+void ToolbarView::renderMagnetPopup(float dpiScale)
+{
+    if ( !m_showMagnetPopup ) return;
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    padding        = std::floor(8.0f * dpiScale);
+    const float    popupW         = m_magnetPopupWidth > 0.0f
+                                        ? m_magnetPopupWidth
+                                        : std::floor(280.0f * dpiScale);
+    const float    popupH         = m_magnetPopupHeight > 0.0f
+                                        ? m_magnetPopupHeight
+                                        : std::floor(360.0f * dpiScale);
+    float          targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
+    float          targetY = m_lastMagnetBtnY;
+    targetX                = std::max(targetX, viewportLeft + popupW + padding);
+    const float minTargetY = viewportTop + padding;
+    const float maxTargetY =
+        std::max(minTargetY, viewportBottom - popupH - padding);
+    targetY = std::clamp(targetY, minTargetY, maxTargetY);
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& aesthetics = appConfig.getEditorSettings().aesthetics;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                        std::floor(aesthetics.windowRounding * dpiScale));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(aesthetics.windowPadding * dpiScale),
+               std::floor(aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                        std::floor(aesthetics.frameRounding * dpiScale));
+
+    if ( ImGui::Begin("##MagnetToolPopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.magnet_tool.title").data());
+        ImGui::Separator();
+
+        auto editorConfig  = appConfig.getEditorConfig();
+        auto persistConfig = [&]() {
+            Logic::EditorEngine::instance().setEditorConfig(editorConfig);
+            appConfig.save();
+        };
+
+        bool scrollSnap = editorConfig.settings.scrollSnap;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.magnet_tool.scroll_canvas_snap").data(),
+                 &scrollSnap) ) {
+            editorConfig.settings.scrollSnap = scrollSnap;
+            persistConfig();
+        }
+
+        bool objectPlacementSnap = editorConfig.settings.objectPlacementSnap;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.magnet_tool.object_placement_snap").data(),
+                 &objectPlacementSnap) ) {
+            editorConfig.settings.objectPlacementSnap = objectPlacementSnap;
+            persistConfig();
+        }
+
+        if ( objectPlacementSnap ) {
+            ImGui::Separator();
+            auto mode = editorConfig.settings.objectPlacementSnapMode;
+            if ( ::MMM::UI::FeedbackRadioButton(
+                     TR("ui.magnet_tool.current_beat_lines").data(),
+                     mode == Config::ObjectPlacementSnapMode::
+                                 CurrentBeatDivisor) ) {
+                mode = Config::ObjectPlacementSnapMode::CurrentBeatDivisor;
+                editorConfig.settings.objectPlacementSnapMode = mode;
+                persistConfig();
+            }
+            if ( ::MMM::UI::FeedbackRadioButton(
+                     TR("ui.magnet_tool.common_beat_lines").data(),
+                     mode == Config::ObjectPlacementSnapMode::
+                                 CommonBeatDivisors) ) {
+                mode = Config::ObjectPlacementSnapMode::CommonBeatDivisors;
+                editorConfig.settings.objectPlacementSnapMode = mode;
+                persistConfig();
+            }
+
+            if ( mode == Config::ObjectPlacementSnapMode::CommonBeatDivisors ) {
+                ImGui::Spacing();
+                ImGui::TextDisabled(
+                    "%s", TR("ui.magnet_tool.common_beat_lines_hint").data());
+                if ( ImGui::BeginTable("##CommonBeatDivisorSelection",
+                                       4,
+                                       ImGuiTableFlags_SizingFixedFit |
+                                           ImGuiTableFlags_NoSavedSettings) ) {
+                    for ( int divisor = Config::COMMON_BEAT_DIVISOR_MIN;
+                          divisor <= Config::COMMON_BEAT_DIVISOR_MAX;
+                          ++divisor ) {
+                        ImGui::TableNextColumn();
+                        bool selected = Config::isCommonBeatDivisorEnabled(
+                            editorConfig.settings.commonBeatDivisorMask,
+                            divisor);
+                        char label[32];
+                        std::snprintf(label,
+                                      sizeof(label),
+                                      "1/%d##CommonBeatDivisor%d",
+                                      divisor,
+                                      divisor);
+                        if ( ::MMM::UI::FeedbackCheckbox(label, &selected) ) {
+                            Config::setCommonBeatDivisorEnabled(
+                                editorConfig.settings.commonBeatDivisorMask,
+                                divisor,
+                                selected);
+                            persistConfig();
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
+
+        const ImVec2 size   = ImGui::GetWindowSize();
+        m_magnetPopupWidth  = size.x;
+        m_magnetPopupHeight = size.y;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 void ToolbarView::renderBeatLinePopup(float dpiScale)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/EditorSettings.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include <entt/entt.hpp>
@@ -28,6 +29,18 @@ struct SnapResult {
     int    numerator{ 0 };      ///< 分子
     int    denominator{ 1 };    ///< 分母
 };
+
+/// @brief 按物件放置磁吸配置计算单个 BPM 段内最近的分拍线。
+/// @param rawTime 原始逻辑时间。
+/// @param timingTime 当前 BPM 段起始时间。
+/// @param nextTimingTime 下一 BPM 段起始时间；末段可传正无穷。
+/// @param bpm 当前 BPM 值。
+/// @param settings 编辑器行为设置。
+/// @return 已启用且存在合法分拍候选时返回磁吸结果，否则返回未磁吸结果。
+/// @warning 逻辑热路径：绘制、移动和悬停预览会频繁调用；仅允许固定上限循环。
+SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
+                                        double nextTimingTime, double bpm,
+                                        const Config::EditorSettings& settings);
 
 /// @brief 计算指定时间点从首个 BPM Timing 起算的拍号。
 /// @param time 待查询的谱面时间，单位秒。

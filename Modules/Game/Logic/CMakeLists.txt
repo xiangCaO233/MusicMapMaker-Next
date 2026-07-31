@@ -81,6 +81,11 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 
+mmm_add_test_executable(Logic ObjectPlacementSnapTest
+                        tests/ObjectPlacementSnapTest.cpp)
+target_link_libraries(ObjectPlacementSnapTest PRIVATE Logic Log)
+add_test(NAME ObjectPlacementSnapTest COMMAND ObjectPlacementSnapTest)
+
 # 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。
 mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
 target_link_libraries(ProjectStorageTest PRIVATE Logic Log)

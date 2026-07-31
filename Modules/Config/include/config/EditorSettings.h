@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -581,6 +582,79 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
                                  { CopyPasteTimeBasis::Beat, "Beat" },
                              })
 
+/// @brief 物件放置磁吸使用的分拍线来源。
+enum class ObjectPlacementSnapMode {
+    CurrentBeatDivisor,  ///< 仅使用当前分拍策略生成的分拍线。
+    CommonBeatDivisors   ///< 使用用户选中的常用分拍线集合。
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(
+    ObjectPlacementSnapMode,
+    {
+        { ObjectPlacementSnapMode::CurrentBeatDivisor, "CurrentBeatDivisor" },
+        { ObjectPlacementSnapMode::CommonBeatDivisors, "CommonBeatDivisors" },
+    })
+
+/// @brief 常用分拍选择允许的最小分母。
+inline constexpr int COMMON_BEAT_DIVISOR_MIN = 2;
+
+/// @brief 常用分拍选择允许的最大分母。
+inline constexpr int COMMON_BEAT_DIVISOR_MAX = 24;
+
+/// @brief 常用分拍选择的有效位数量。
+inline constexpr int COMMON_BEAT_DIVISOR_COUNT =
+    COMMON_BEAT_DIVISOR_MAX - COMMON_BEAT_DIVISOR_MIN + 1;
+
+/// @brief 1/2 至 1/24 常用分拍线的全部有效位。
+inline constexpr std::uint32_t COMMON_BEAT_DIVISOR_MASK_ALL =
+    (std::uint32_t{ 1 } << COMMON_BEAT_DIVISOR_COUNT) - 1U;
+
+/// @brief 默认启用的常用分拍集合。
+inline constexpr std::uint32_t COMMON_BEAT_DIVISOR_MASK_DEFAULT =
+    (std::uint32_t{ 1 } << (2 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (3 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (4 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (6 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (8 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (12 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (16 - COMMON_BEAT_DIVISOR_MIN)) |
+    (std::uint32_t{ 1 } << (24 - COMMON_BEAT_DIVISOR_MIN));
+
+/// @brief 判断常用分拍选择中是否启用了指定分母。
+/// @param mask 常用分拍选择位掩码。
+/// @param divisor 待查询的分母。
+/// @return 分母处于 2 至 24 且对应选择位开启时返回 true。
+inline constexpr bool isCommonBeatDivisorEnabled(std::uint32_t mask,
+                                                 int           divisor)
+{
+    if ( divisor < COMMON_BEAT_DIVISOR_MIN ||
+         divisor > COMMON_BEAT_DIVISOR_MAX ) {
+        return false;
+    }
+    const auto bit = static_cast<unsigned>(divisor - COMMON_BEAT_DIVISOR_MIN);
+    return (mask & (std::uint32_t{ 1 } << bit)) != 0U;
+}
+
+/// @brief 修改常用分拍选择中的指定分母状态。
+/// @param mask 待修改的常用分拍选择位掩码。
+/// @param divisor 待修改的分母。
+/// @param enabled 是否启用该分母。
+inline constexpr void setCommonBeatDivisorEnabled(std::uint32_t& mask,
+                                                  int divisor, bool enabled)
+{
+    if ( divisor < COMMON_BEAT_DIVISOR_MIN ||
+         divisor > COMMON_BEAT_DIVISOR_MAX ) {
+        return;
+    }
+    const auto bit  = static_cast<unsigned>(divisor - COMMON_BEAT_DIVISOR_MIN);
+    const auto flag = std::uint32_t{ 1 } << bit;
+    if ( enabled ) {
+        mask |= flag;
+    } else {
+        mask &= ~flag;
+    }
+}
+
 /// @brief BPM 测量工具中不依赖具体项目或音轨的用户偏好。
 struct BpmMeasurementToolPreferences {
     /// @brief 黄色拍框宽度，单位为毫秒。
@@ -656,6 +730,17 @@ struct EditorSettings {
 
     /// @brief 是否开启滚动吸附
     bool scrollSnap{ false };
+
+    /// @brief 是否开启物件放置磁吸。
+    bool objectPlacementSnap{ false };
+
+    /// @brief 物件放置磁吸使用当前分拍策略或常用分拍集合。
+    ObjectPlacementSnapMode objectPlacementSnapMode{
+        ObjectPlacementSnapMode::CurrentBeatDivisor
+    };
+
+    /// @brief 1/2 至 1/24 常用分拍线的选择位。
+    std::uint32_t commonBeatDivisorMask{ COMMON_BEAT_DIVISOR_MASK_DEFAULT };
 
     /// @brief 最近打开项目的显示上限
     int recentProjectsLimit{ 10 };
@@ -821,6 +906,9 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "overlapTimeWindowMs", c.overlapTimeWindowMs },
         { "reverseScroll", c.reverseScroll },
         { "scrollSnap", c.scrollSnap },
+        { "objectPlacementSnap", c.objectPlacementSnap },
+        { "objectPlacementSnapMode", c.objectPlacementSnapMode },
+        { "commonBeatDivisorMask", c.commonBeatDivisorMask },
         { "recentProjectsLimit", c.recentProjectsLimit },
         { "language", c.language },
         { "frameLimit", c.frameLimit },
@@ -896,10 +984,16 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("disabledPluginIds", std::vector<std::string>());
     c.selectedSkinDirectory =
         j.value("selectedSkinDirectory", std::string("mmm-default"));
-    c.beatDivisor         = j.value("beatDivisor", 4);
-    c.overlapTimeWindowMs = j.value("overlapTimeWindowMs", 5.0f);
-    c.reverseScroll       = j.value("reverseScroll", false);
-    c.scrollSnap          = j.value("scrollSnap", false);
+    c.beatDivisor             = j.value("beatDivisor", 4);
+    c.overlapTimeWindowMs     = j.value("overlapTimeWindowMs", 5.0f);
+    c.reverseScroll           = j.value("reverseScroll", false);
+    c.scrollSnap              = j.value("scrollSnap", false);
+    c.objectPlacementSnap     = j.value("objectPlacementSnap", c.scrollSnap);
+    c.objectPlacementSnapMode = j.value(
+        "objectPlacementSnapMode", ObjectPlacementSnapMode::CurrentBeatDivisor);
+    c.commonBeatDivisorMask =
+        j.value("commonBeatDivisorMask", COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
+        COMMON_BEAT_DIVISOR_MASK_ALL;
     c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
     c.language            = j.value("language", std::string("zh_cn"));
     c.frameLimit =
