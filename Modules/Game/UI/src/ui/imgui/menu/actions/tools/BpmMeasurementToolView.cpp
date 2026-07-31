@@ -1987,12 +1987,16 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
             *ImGui::GetWindowDrawList(), plotMin, plotMax, viewStart, viewEnd);
         drawPlaybackCursor(
             *ImGui::GetWindowDrawList(), plotMin, plotMax, viewStart, viewEnd);
-        handlePlaybackCursorDrag(plotMin, plotMax, viewStart, viewEnd, 1);
-        handleBeatMarkerDrag(plotMin, plotMax, viewStart, viewEnd, 1);
-        handleTimelineNavigation(plotMin, plotMax, viewStart, viewEnd);
+        const bool interactionHovered = ImPlot::IsPlotHovered();
+        handlePlaybackCursorDrag(
+            plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
+        handleBeatMarkerDrag(
+            plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
+        handleTimelineNavigation(
+            plotMin, plotMax, viewStart, viewEnd, interactionHovered);
         ImPlot::PopPlotClipRect();
 
-        if ( ImPlot::IsPlotHovered() ) {
+        if ( interactionHovered ) {
             ImPlotPoint  mousePos  = ImPlot::GetPlotMousePos();
             const double hoverTime = std::clamp<double>(
                 mousePos.x, 0.0, std::max(0.0, canvasDuration));
@@ -2069,15 +2073,18 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     drawBeatSubdivisionLines(*drawList, imageMin, imageMax, viewStart, viewEnd);
     drawBeatMarkers(*drawList, imageMin, imageMax, viewStart, viewEnd);
     drawPlaybackCursor(*drawList, imageMin, imageMax, viewStart, viewEnd);
-    handlePlaybackCursorDrag(imageMin, imageMax, viewStart, viewEnd, 2);
-    handleBeatMarkerDrag(imageMin, imageMax, viewStart, viewEnd, 2);
 
     ImGui::SetCursorScreenPos(imageMin);
     ImGui::InvisibleButton(
         "##BpmMeasureSpectrumHover",
         ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y));
-    handleTimelineNavigation(imageMin, imageMax, viewStart, viewEnd);
     const bool isSpectrumHovered = ImGui::IsItemHovered();
+    handlePlaybackCursorDrag(
+        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
+    handleBeatMarkerDrag(
+        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
+    handleTimelineNavigation(
+        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered);
     if ( isSpectrumHovered ) {
         const ImVec2 mousePos = ImGui::GetMousePos();
         const double relX     = std::clamp<double>(
@@ -2416,13 +2423,13 @@ void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
 /// @param rectMax 交互区域右下角。
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
+/// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
 /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
 /// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
-void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
-                                                  const ImVec2& rectMax,
-                                                  double        viewStart,
-                                                  double viewEnd, int ownerId)
+void BpmMeasurementToolView::handleBeatMarkerDrag(
+    const ImVec2& rectMin, const ImVec2& rectMax, double viewStart,
+    double viewEnd, bool interactionHovered, int ownerId)
 {
     ensureTimingSegments();
     const double canvasDuration = playbackCanvasDuration();
@@ -2484,6 +2491,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
                                   std::size_t        segmentIndex,
                                   int64_t            beatIndex,
                                   BeatMarkerDragMode mode) {
+        if ( !interactionHovered ) return;
         if ( markerTime < viewStart - 1e-6 || markerTime > viewEnd + 1e-6 ) {
             return;
         }
@@ -2714,15 +2722,14 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
 /// @param rectMax 交互区域右下角。
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
+/// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
 /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
 /// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
 /// 松手后才执行实际播放跳转，不访问文件系统。
-void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
-                                                      const ImVec2& rectMax,
-                                                      double        viewStart,
-                                                      double        viewEnd,
-                                                      int           ownerId)
+void BpmMeasurementToolView::handlePlaybackCursorDrag(
+    const ImVec2& rectMin, const ImVec2& rectMax, double viewStart,
+    double viewEnd, bool interactionHovered, int ownerId)
 {
     if ( viewEnd <= viewStart || rectMax.x <= rectMin.x ||
          rectMax.y <= rectMin.y || !isSelectedTrackLoadedForPlayback() ) {
@@ -2761,7 +2768,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
     const ImVec2 handleMax(lineX + PLAYBACK_CURSOR_HANDLE_HALF_WIDTH + 2.0f,
                            rectMin.y + PLAYBACK_CURSOR_HANDLE_HEIGHT + 3.0f);
     const bool   hoverHandle =
-        cursorVisible && ImGui::IsMouseHoveringRect(handleMin, handleMax, true);
+        interactionHovered && cursorVisible &&
+        ImGui::IsMouseHoveringRect(handleMin, handleMax, true);
 
     if ( hoverHandle || m_isPlaybackCursorDragging ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -2880,11 +2888,13 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
 /// @param rectMax 交互区域右下角。
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
+/// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
 /// @warning UI 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算。
 void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
                                                       const ImVec2& rectMax,
                                                       double        viewStart,
-                                                      double        viewEnd)
+                                                      double        viewEnd,
+                                                      bool interactionHovered)
 {
     const double canvasDuration = playbackCanvasDuration();
     if ( canvasDuration <= 0.0 || rectMax.x <= rectMin.x ||
@@ -2898,8 +2908,9 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         return;
     }
 
-    ImGuiIO&   io    = ImGui::GetIO();
-    const bool hover = ImGui::IsMouseHoveringRect(rectMin, rectMax);
+    ImGuiIO&   io = ImGui::GetIO();
+    const bool hover =
+        interactionHovered && ImGui::IsMouseHoveringRect(rectMin, rectMax);
     if ( hover || m_isTimelinePanning ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     }

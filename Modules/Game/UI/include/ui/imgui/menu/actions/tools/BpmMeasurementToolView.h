@@ -274,34 +274,39 @@ private:
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
     void handleBeatMarkerDrag(const ImVec2& rectMin, const ImVec2& rectMax,
-                              double viewStart, double viewEnd, int ownerId);
+                              double viewStart, double viewEnd,
+                              bool interactionHovered, int ownerId);
 
     /// @brief 处理播放指针顶部三角手柄的拖拽预览和松手跳转。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
     /// 松手后才执行实际播放跳转，不访问文件系统。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
-                                  int ownerId);
+                                  bool interactionHovered, int ownerId);
 
     /// @brief 处理分析视图的滚轮缩放和鼠标拖动平移。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算。
     void handleTimelineNavigation(const ImVec2& rectMin, const ImVec2& rectMax,
-                                  double viewStart, double viewEnd);
+                                  double viewStart, double viewEnd,
+                                  bool interactionHovered);
 
     /// @brief 请求重新分析当前选择的音频轨道。
     /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
