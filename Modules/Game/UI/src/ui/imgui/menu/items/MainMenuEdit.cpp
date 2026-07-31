@@ -4,6 +4,7 @@
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include "ui/imgui/menu/items/MainMenuSeparatorItem.h"
+#include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include <memory>
 #include <utility>
 
@@ -69,6 +70,11 @@ MainMenuEdit::MainMenuEdit()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenNoteMetadataAction()));
+    registerItem(std::make_unique<MainMenuSeparatorItem>());
+    registerItem(std::make_unique<MainMenuToggleItem>(
+        "ui.edit.polyline_editing",
+        MainMenuItemTextKind::TranslationKey,
+        createPolylineEditingToggleAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_PLAY,

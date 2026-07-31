@@ -1009,9 +1009,10 @@ void ActionController::handleCommand(const CmdCopy& cmd)
     auto         beatTimeline = buildClipboardBeatTimeline(m_ctx, fallbackBpm);
     auto view = m_ctx.noteRegistry.view<NoteComponent, InteractionComponent>();
     for ( auto entity : view ) {
-        const auto& ic = view.get<InteractionComponent>(entity);
-        if ( ic.isSelected ) {
-            const auto&   note = view.get<NoteComponent>(entity);
+        const auto& ic   = view.get<InteractionComponent>(entity);
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( ic.isSelected &&
+             SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ) {
             ClipboardItem item;
             item.note = note;
             populateClipboardBeatPositions(item, beatTimeline, fallbackBpm);
@@ -1051,10 +1052,12 @@ void ActionController::handleCommand(const CmdCopy& cmd)
 void ActionController::handleCommand(const CmdCut& cmd)
 {
     handleCommand(CmdCopy{});
-    auto view = m_ctx.noteRegistry.view<InteractionComponent>();
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : view ) {
-        auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
-        if ( ic.isSelected ) {
+        auto&       ic   = m_ctx.noteRegistry.get<InteractionComponent>(entity);
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( ic.isSelected &&
+             SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ) {
             ic.isCut = true;
         }
     }
@@ -1084,10 +1087,11 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
 
     auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : view ) {
-        const auto& ic = view.get<InteractionComponent>(entity);
-        if ( ic.isSelected ) {
-            entries.push_back(
-                { entity, view.get<NoteComponent>(entity), std::nullopt });
+        const auto& ic   = view.get<InteractionComponent>(entity);
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( ic.isSelected &&
+             SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ) {
+            entries.push_back({ entity, note, std::nullopt });
         }
     }
 
@@ -1109,7 +1113,11 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
          m_ctx.hoveredEntity != entt::null ) {
         if ( m_ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
              m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
-             m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) ) {
+             m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) &&
+             SessionUtils::isNoteEditable(
+                 m_ctx.noteRegistry.get<const NoteComponent>(
+                     m_ctx.hoveredEntity),
+                 m_ctx.lastConfig.settings) ) {
             entries.push_back(
                 { m_ctx.hoveredEntity,
                   m_ctx.noteRegistry.get<NoteComponent>(m_ctx.hoveredEntity),
@@ -1172,11 +1180,12 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : view ) {
         const auto& ic = view.get<InteractionComponent>(entity);
-        if ( ic.isSelected ) {
+        const auto& nc = view.get<NoteComponent>(entity);
+        if ( ic.isSelected &&
+             SessionUtils::isNoteEditable(nc, m_ctx.lastConfig.settings) ) {
             toMirror.insert(entity);
 
             // 如果是 Polyline，收集其所有子物件实体
-            const auto& nc = view.get<NoteComponent>(entity);
             if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
                 for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
                     const auto& subNC =
@@ -1229,7 +1238,10 @@ void ActionController::handleCommand(const CmdApplyNoteColorToSelection& cmd)
         if ( !ic.isSelected ) continue;
 
         const auto& oldNote = view.get<NoteComponent>(entity);
-        if ( oldNote.m_isSubNote ) continue;
+        if ( oldNote.m_isSubNote || !SessionUtils::isNoteEditable(
+                                        oldNote, m_ctx.lastConfig.settings) ) {
+            continue;
+        }
 
         auto newNote = oldNote;
         setNoteColorOverride(newNote, cmd.slot, cmd.color);
@@ -1258,7 +1270,10 @@ void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
         if ( !ic.isSelected ) continue;
 
         const auto& oldNote = view.get<NoteComponent>(entity);
-        if ( oldNote.m_isSubNote ) continue;
+        if ( oldNote.m_isSubNote || !SessionUtils::isNoteEditable(
+                                        oldNote, m_ctx.lastConfig.settings) ) {
+            continue;
+        }
 
         auto newNote = oldNote;
         applyNoteColorOverrides(newNote, colors);
@@ -1282,7 +1297,10 @@ void ActionController::handleCommand(const CmdApplyBrushPaletteToEntity& cmd)
     if ( !hasAnyNoteColorOverride(colors) ) return;
 
     const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
-    auto        newNote = oldNote;
+    if ( !SessionUtils::isNoteEditable(oldNote, m_ctx.lastConfig.settings) ) {
+        return;
+    }
+    auto newNote = oldNote;
     applyNoteColorOverrides(newNote, colors);
     if ( isSameNoteColorOverrides(oldNote.m_customColors,
                                   newNote.m_customColors) )
@@ -1302,7 +1320,10 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
     entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
     if ( target == entt::null ) return;
 
-    const auto&        oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    if ( !SessionUtils::isNoteEditable(oldNote, m_ctx.lastConfig.settings) ) {
+        return;
+    }
     auto               newNote = oldNote;
     NoteColorOverrides emptyColors;
     applyNoteColorOverrides(newNote, emptyColors);
@@ -1332,6 +1353,10 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         noteClipboard   = m_ctx.clipboard;
         sampleClipboard = m_ctx.sampleClipboard;
     }
+    std::erase_if(noteClipboard, [&](const auto& item) {
+        return !SessionUtils::isNoteEditable(item.note,
+                                             m_ctx.lastConfig.settings);
+    });
     if ( noteClipboard.empty() && sampleClipboard.empty() &&
          timelineClipboard.empty() ) {
         return;
@@ -1467,6 +1492,10 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
                     auto oldNote =
                         m_ctx.noteRegistry.get<NoteComponent>(entity);
+                    if ( !SessionUtils::isNoteEditable(
+                             oldNote, m_ctx.lastConfig.settings) ) {
+                        continue;
+                    }
                     noteEntries.push_back({
                         .entity         = entity,
                         .before         = oldNote,
@@ -2009,8 +2038,10 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     auto                             noteView =
         m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : noteView ) {
-        const auto& ic = noteView.get<InteractionComponent>(entity);
-        if ( ic.isSelected ) {
+        const auto& ic   = noteView.get<InteractionComponent>(entity);
+        const auto& note = noteView.get<NoteComponent>(entity);
+        if ( ic.isSelected &&
+             SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ) {
             toAlign.insert(entity);
         }
     }

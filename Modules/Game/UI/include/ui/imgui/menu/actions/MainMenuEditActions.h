@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
+#include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
 
 #include <memory>
 
@@ -30,6 +31,10 @@ std::unique_ptr<IMainMenuItemActionHandler> createMirrorAction();
 
 /// @brief 创建全选动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createSelectAllAction();
+
+/// @brief 创建折线编辑开关处理器。
+std::unique_ptr<IMainMenuToggleItemActionHandler>
+createPolylineEditingToggleAction();
 
 /// @brief 创建打开音符元数据编辑器动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenNoteMetadataAction();

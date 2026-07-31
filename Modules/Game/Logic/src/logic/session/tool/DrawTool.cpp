@@ -54,10 +54,15 @@ bool isPlaceableNote(const NoteComponent& note)
 /// @return 悬停对象属于玩家物件域且实体有效时返回 true。
 bool isHoveredPlayerNote(const SessionContext& ctx)
 {
-    return ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
-           ctx.hoveredEntity != entt::null &&
-           ctx.noteRegistry.valid(ctx.hoveredEntity) &&
-           ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity);
+    if ( ctx.hoveredObjectKind != ChartObjectKind::PlayerNote ||
+         ctx.hoveredEntity == entt::null ||
+         !ctx.noteRegistry.valid(ctx.hoveredEntity) ||
+         !ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
+        return false;
+    }
+    return SessionUtils::isNoteEditable(
+        ctx.noteRegistry.get<const NoteComponent>(ctx.hoveredEntity),
+        ctx.lastConfig.settings);
 }
 
 /// @brief 判断当前悬停对象是否为自动采样注册表中的有效物件。
@@ -290,7 +295,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     }
 
     bool isResuming = false;
-    if ( cmd.isShiftDown && isHoveredPlayerNote(ctx) ) {
+    if ( ctx.lastConfig.settings.enablePolylineEditing && cmd.isShiftDown &&
+         isHoveredPlayerNote(ctx) ) {
         const auto& note =
             ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
         entt::entity targetEntity = ctx.hoveredEntity;
@@ -543,6 +549,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     currentTrack = std::clamp(currentTrack, 0, ctx.trackCount - 1);
 
+    if ( cmd.isShiftDown && !ctx.lastConfig.settings.enablePolylineEditing ) {
+        const float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
+        const bool  timeChanged =
+            std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
+        ctx.brushState.type  = timeChanged || diffY > 5.0F
+                                   ? ::MMM::NoteType::HOLD
+                                   : ::MMM::NoteType::NOTE;
+        ctx.brushState.time  = ctx.brushState.holdStartTime;
+        ctx.brushState.track = ctx.brushState.startTrack;
+        ctx.brushState.duration =
+            ctx.brushState.type == ::MMM::NoteType::HOLD
+                ? std::max(0.0, currentPosTime - ctx.brushState.holdStartTime)
+                : 0.0;
+        ctx.brushState.dtrack = 0;
+        ctx.brushState.polylineSegments.clear();
+        return;
+    }
+
     if ( cmd.isShiftDown ) {
         if ( ctx.brushState.type == ::MMM::NoteType::NOTE &&
              ctx.brushState.polylineSegments.empty() &&
@@ -769,6 +793,11 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_type          = ctx.brushState.type;
     note.m_sampleBinding = ctx.brushState.activeSampleBinding;
     applyNoteColorOverrides(note, ctx.brushState.customColors);
+
+    if ( !SessionUtils::isNoteEditable(note, ctx.lastConfig.settings) ) {
+        resetBrushState(ctx);
+        return;
+    }
 
     // 折线尾部结合所需的删除条目列表 (声明在外部以便后续使用)
     std::vector<BatchNoteAction::Entry> mergeDeleteEntries;

@@ -214,6 +214,8 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 3. 基础层渲染
+    const bool generatePolylineHitboxes =
+        shouldGenerateHitboxes && config.settings.enablePolylineEditing;
     NoteRenderSystem::renderNoteBaseLayer(
         registry,
         snapshot,
@@ -230,7 +232,7 @@ void NoteRenderSystem::renderNotes(
         singleTrackW,
         renderScaleY,
         trackCount,
-        shouldGenerateHitboxes,
+        generatePolylineHitboxes,
         config.visual.showBoundSampleLabels &&
             SessionUtils::isMainCanvasCameraId(cameraId));
 
@@ -759,6 +761,7 @@ void NoteRenderSystem::generateNoteHitboxes(
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
+        if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
@@ -846,7 +849,8 @@ void NoteRenderSystem::generateNoteHitboxes(
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
-        float       screenY =
+        if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
+        float screenY =
             judgmentLineY -
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *

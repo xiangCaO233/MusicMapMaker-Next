@@ -23,6 +23,7 @@ add_library(
   src/ui/imgui/menu/actions/edit/OpenBeatmapSettingsAction.cpp
   src/ui/imgui/menu/actions/edit/OpenNoteMetadataAction.cpp
   src/ui/imgui/menu/actions/edit/PasteAction.cpp
+  src/ui/imgui/menu/actions/edit/PolylineEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/RedoAction.cpp
   src/ui/imgui/menu/actions/edit/SelectAllAction.cpp
   src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp

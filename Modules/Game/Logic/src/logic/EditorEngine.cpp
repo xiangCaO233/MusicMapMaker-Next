@@ -792,6 +792,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.showToolLabels    = source.settings.showToolLabels;
     target.settings.fixedToolWindow   = source.settings.fixedToolWindow;
     target.settings.showManagerLabels = source.settings.showManagerLabels;
+    target.settings.enablePolylineEditing =
+        source.settings.enablePolylineEditing;
     target.settings.autoUploadPgoProfiles =
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
@@ -1578,6 +1580,11 @@ void EditorEngine::consumeCrossSessionCutClipboard(
             if ( !collectedNoteEntities.insert(entity).second ) continue;
 
             auto oldNote = sourceCtx.noteRegistry.get<NoteComponent>(entity);
+            if ( pasteContext &&
+                 !SessionUtils::isNoteEditable(
+                     oldNote, pasteContext->lastConfig.settings) ) {
+                continue;
+            }
             noteEntries.push_back({
                 .entity         = entity,
                 .before         = oldNote,

@@ -68,6 +68,100 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
                    context.currentBeatmap.get());
 }
 
+/// @brief 验证关闭折线编辑后只有主 Note 和 Hold 可被选中与悬停。
+/// @return Note/Hold 可交互且 Flick/Polyline 被忽略时返回 true。
+bool testKeyModeInteractionRestriction()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = false;
+
+    const auto createNote = [&](MMM::NoteType type) {
+        const auto entity = context.noteRegistry.create();
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{
+                .m_type       = type,
+                .m_timestamp  = 1.0,
+                .m_trackIndex = static_cast<int>(entt::to_integral(entity)),
+            });
+        return entity;
+    };
+    const auto noteEntity     = createNote(MMM::NoteType::NOTE);
+    const auto holdEntity     = createNote(MMM::NoteType::HOLD);
+    const auto flickEntity    = createNote(MMM::NoteType::FLICK);
+    const auto polylineEntity = createNote(MMM::NoteType::POLYLINE);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    const auto isSelected = [&](entt::entity entity) {
+        const auto* interaction =
+            context.noteRegistry.try_get<MMM::Logic::InteractionComponent>(
+                entity);
+        return interaction && interaction->isSelected;
+    };
+    if ( !isSelected(noteEntity) || !isSelected(holdEntity) ||
+         isSelected(flickEntity) || isSelected(polylineEntity) ) {
+        XERROR("Key mode select-all included a non-Note/Hold object");
+        return false;
+    }
+
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        flickEntity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+    });
+    if ( context.hoveredEntity != entt::null ) {
+        XERROR("Key mode allowed hovering a Flick");
+        return false;
+    }
+
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        holdEntity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+    });
+    return context.hoveredEntity == holdEntity;
+}
+
+/// @brief 验证关闭折线编辑后 Shift 拖绘只创建普通 Hold。
+/// @return 跨时间和轨道拖绘仍生成起始轨道 Hold 时返回 true。
+bool testKeyModeBrushCreatesOnlyHold()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = false;
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId    = "Basic2DCanvas",
+                                  .mouseX      = 150.0F,
+                                  .mouseY      = 300.0F,
+                                  .isShiftDown = true,
+                                  .isCtrlDown  = true,
+                              });
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId    = "Basic2DCanvas",
+                                   .mouseX      = 250.0F,
+                                   .mouseY      = 50.0F,
+                                   .isShiftDown = true,
+                                   .isCtrlDown  = true,
+                               });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( notes.size() != 1 ) {
+        XERROR("Key mode brush did not create exactly one object");
+        return false;
+    }
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    return note.m_type == MMM::NoteType::HOLD && note.m_trackIndex == 0 &&
+           note.m_duration > 0.0 && note.m_subNotes.empty();
+}
+
 /// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
 /// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样时返回
 /// true。
@@ -1758,7 +1852,9 @@ bool testMixedChartObjectLocalCut()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testBrushAudioResourcePlacementRules() &&
+    return testKeyModeInteractionRestriction() &&
+                   testKeyModeBrushCreatesOnlyHold() &&
+                   testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&

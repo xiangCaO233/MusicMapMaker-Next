@@ -17,6 +17,14 @@
 namespace MMM::Logic::SessionUtils
 {
 
+bool isNoteEditable(const NoteComponent&          note,
+                    const Config::EditorSettings& settings)
+{
+    if ( settings.enablePolylineEditing ) return true;
+    return !note.m_isSubNote && (note.m_type == ::MMM::NoteType::NOTE ||
+                                 note.m_type == ::MMM::NoteType::HOLD);
+}
+
 bool isMainCanvasCameraId(const std::string& cameraId)
 {
     return cameraId != "Preview" && cameraId != "PreviewCanvas" &&

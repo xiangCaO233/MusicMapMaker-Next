@@ -116,6 +116,38 @@ entt::registry& registryForObjectKind(SessionContext& ctx, ChartObjectKind kind)
                                                 : ctx.noteRegistry;
 }
 
+/// @brief 判断玩家物件实体是否允许在当前模式下编辑。
+/// @param ctx 会话上下文。
+/// @param entity 待判断实体。
+/// @return 实体有效且当前编辑模式允许编辑时返回 true。
+/// @warning 交互热路径：只访问单个实体组件与配置快照。
+bool isEditablePlayerNote(const SessionContext& ctx, entt::entity entity)
+{
+    if ( entity == entt::null || !ctx.noteRegistry.valid(entity) ||
+         !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+        return false;
+    }
+    return SessionUtils::isNoteEditable(
+        ctx.noteRegistry.get<const NoteComponent>(entity),
+        ctx.lastConfig.settings);
+}
+
+/// @brief 判断带领域的谱面物件是否允许在当前模式下编辑。
+/// @param ctx 会话上下文。
+/// @param kind 物件领域。
+/// @param entity 待判断实体。
+/// @return 自动采样有效或玩家物件可编辑时返回 true。
+/// @warning 交互热路径：只访问单个实体组件与配置快照。
+bool isEditableChartObject(const SessionContext& ctx, ChartObjectKind kind,
+                           entt::entity entity)
+{
+    if ( kind == ChartObjectKind::PlayerNote ) {
+        return isEditablePlayerNote(ctx, entity);
+    }
+    return entity != entt::null && ctx.sampleRegistry.valid(entity) &&
+           ctx.sampleRegistry.all_of<SampleComponent>(entity);
+}
+
 /// @brief 清空实体选中状态和框选运行状态。
 void clearSelection(SessionContext& ctx)
 {
@@ -991,8 +1023,17 @@ InteractionController::InteractionController(SessionContext& ctx) : m_ctx(ctx)
 
 void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
 {
-    if ( (m_ctx.hoveredEntity != cmd.entity ||
-          m_ctx.hoveredObjectKind != cmd.kind) &&
+    const bool targetIsEditable =
+        isEditableChartObject(m_ctx, cmd.kind, cmd.entity);
+    const entt::entity targetEntity =
+        targetIsEditable ? cmd.entity : entt::null;
+    const ChartObjectKind targetKind =
+        targetIsEditable ? cmd.kind : ChartObjectKind::PlayerNote;
+    const std::int32_t targetPart     = targetIsEditable ? cmd.part : 0;
+    const std::int32_t targetSubIndex = targetIsEditable ? cmd.subIndex : -1;
+
+    if ( (m_ctx.hoveredEntity != targetEntity ||
+          m_ctx.hoveredObjectKind != targetKind) &&
          m_ctx.hoveredEntity != entt::null ) {
         auto& previousRegistry =
             registryForObjectKind(m_ctx, m_ctx.hoveredObjectKind);
@@ -1006,11 +1047,10 @@ void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
         }
     }
 
-    m_ctx.hoveredEntity = cmd.entity;
-    m_ctx.hoveredObjectKind =
-        cmd.entity == entt::null ? ChartObjectKind::PlayerNote : cmd.kind;
-    m_ctx.hoveredPart     = cmd.part;
-    m_ctx.hoveredSubIndex = cmd.subIndex;
+    m_ctx.hoveredEntity     = targetEntity;
+    m_ctx.hoveredObjectKind = targetKind;
+    m_ctx.hoveredPart       = targetPart;
+    m_ctx.hoveredSubIndex   = targetSubIndex;
 
     auto& registry = registryForObjectKind(m_ctx, m_ctx.hoveredObjectKind);
     if ( m_ctx.hoveredEntity != entt::null &&
@@ -1020,8 +1060,8 @@ void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
         }
         auto& ic     = registry.get<InteractionComponent>(m_ctx.hoveredEntity);
         ic.isHovered = true;
-        ic.hoveredPart     = cmd.part;
-        ic.hoveredSubIndex = cmd.subIndex;
+        ic.hoveredPart     = static_cast<std::uint8_t>(targetPart);
+        ic.hoveredSubIndex = targetSubIndex;
     }
 }
 
@@ -1036,6 +1076,8 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
 
     // 只有在框选工具模式下才允许通过点击实体修改选中状态。
     if ( m_ctx.currentTool != EditTool::Marquee ) return;
+
+    if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
 
     auto& registry = registryForObjectKind(m_ctx, cmd.kind);
     if ( !registry.valid(cmd.entity) ) return;
@@ -1066,7 +1108,10 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
     auto view = m_ctx.noteRegistry.view<NoteComponent>();
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
-        if ( note.m_isSubNote ) continue;
+        if ( !SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ||
+             note.m_isSubNote ) {
+            continue;
+        }
 
         setChartObjectSelected(
             m_ctx, ChartObjectKind::PlayerNote, entity, true);
@@ -1080,6 +1125,7 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
 
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
+    if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
     if ( m_tools.count(m_ctx.currentTool) ) {
         m_tools[m_ctx.currentTool]->handleStartDrag(m_ctx, cmd);
     }
@@ -1293,7 +1339,10 @@ void InteractionController::handleCommand(
     }
 
     const auto before = m_ctx.noteRegistry.get<const NoteComponent>(cmd.entity);
-    auto       after  = before;
+    if ( !SessionUtils::isNoteEditable(before, m_ctx.lastConfig.settings) ) {
+        return;
+    }
+    auto                                      after   = before;
     std::optional<::MMM::AudioSampleBinding>* binding = &after.m_sampleBinding;
     if ( cmd.subIndex >= 0 ) {
         if ( after.m_type != ::MMM::NoteType::POLYLINE ||
@@ -1628,7 +1677,11 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
 
             const auto& note =
                 m_ctx.noteRegistry.get<const NoteComponent>(candidate.entity);
-            if ( note.m_isSubNote ) continue;
+            if ( !SessionUtils::isNoteEditable(note,
+                                               m_ctx.lastConfig.settings) ||
+                 note.m_isSubNote ) {
+                continue;
+            }
             for ( const auto& box : preparedBoxes ) {
                 if ( noteMatchesSelection(note, box.screen, box.rect, mode) ) {
                     isSelectedInAny = true;

@@ -15,6 +15,14 @@ class Project;
 namespace MMM::Logic::SessionUtils
 {
 
+/// @brief 判断音符是否允许在当前折线编辑模式下响应编辑操作。
+/// @param note 待判断的音符组件。
+/// @param settings 当前编辑器行为设置。
+/// @return 折线编辑开启时返回 true；关闭时仅主 Note 和 Hold 返回 true。
+/// @warning 逻辑与渲染热路径：只读取组件类型和设置布尔值。
+bool isNoteEditable(const NoteComponent&          note,
+                    const Config::EditorSettings& settings);
+
 /// @brief 判断给定视口是否为主编辑画布。
 bool isMainCanvasCameraId(const std::string& cameraId);
 

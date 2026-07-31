@@ -32,6 +32,7 @@ return {
 	["ui.edit.beatmap_settings"] = "谱面设置",
 	["ui.edit.select_all"] = "全选",
 	["ui.edit.note_metadata"] = "编辑元数据",
+	["ui.edit.polyline_editing"] = "折线编辑",
 	["ui.edit.note_metadata.title"] = "编辑选中物件属性###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "已选中 {} 个物件，分为 {} 组",
 	["ui.edit.note_metadata.group_header"] = "组 {} ({} 个物件, {} ~ {})",

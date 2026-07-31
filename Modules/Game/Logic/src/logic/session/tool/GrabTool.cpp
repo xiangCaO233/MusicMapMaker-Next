@@ -516,6 +516,14 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.dragSampleRenderPinnedEntities.clear();
 
     if ( cmd.entity == entt::null ) return;
+    if ( cmd.kind == ChartObjectKind::PlayerNote ) {
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(cmd.entity);
+        if ( !note ||
+             !SessionUtils::isNoteEditable(*note, ctx.lastConfig.settings) ) {
+            return;
+        }
+    }
 
     ctx.draggedEntity     = cmd.entity;
     ctx.draggedObjectKind = cmd.kind;
@@ -558,7 +566,11 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                 const auto& interaction =
                     noteView.get<InteractionComponent>(entity);
                 const auto& note = noteView.get<NoteComponent>(entity);
-                if ( !interaction.isSelected || note.m_isSubNote ) continue;
+                if ( !interaction.isSelected || note.m_isSubNote ||
+                     !SessionUtils::isNoteEditable(note,
+                                                   ctx.lastConfig.settings) ) {
+                    continue;
+                }
                 m_initialStates.emplace(entity, InitialState{ note, true });
                 ctx.noteRegistry.get<InteractionComponent>(entity).isDragging =
                     true;
@@ -604,9 +616,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
             // 模式 A: 拖动整个选中组
             auto view = registry.view<InteractionComponent, NoteComponent>();
             for ( auto entity : view ) {
-                if ( view.get<InteractionComponent>(entity).isSelected ) {
+                const auto& note = view.get<NoteComponent>(entity);
+                if ( view.get<InteractionComponent>(entity).isSelected &&
+                     SessionUtils::isNoteEditable(note,
+                                                  ctx.lastConfig.settings) ) {
                     m_initialStates[entity] = {
-                        view.get<NoteComponent>(entity),
+                        note,
                         true,
                     };
                     registry.get<InteractionComponent>(entity).isDragging =

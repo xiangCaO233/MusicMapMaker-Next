@@ -835,6 +835,9 @@ struct EditorSettings {
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 
+    /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
+    bool enablePolylineEditing{ true };
+
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 
@@ -941,6 +944,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "disableScrollAccelerationWhileDrawing",
           c.disableScrollAccelerationWhileDrawing },
         { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
+        { "enablePolylineEditing", c.enablePolylineEditing },
         { "selectPastedObjects", c.selectPastedObjects },
         { "copyPasteTimeBasis", c.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
@@ -1039,7 +1043,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("disableScrollAccelerationWhileDrawing", true);
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
-    c.selectPastedObjects = j.value("selectPastedObjects", false);
+    c.enablePolylineEditing = j.value("enablePolylineEditing", true);
+    c.selectPastedObjects   = j.value("selectPastedObjects", false);
     c.copyPasteTimeBasis =
         j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     c.timelineSelectionIncludesBpm =

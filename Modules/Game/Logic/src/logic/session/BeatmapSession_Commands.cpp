@@ -12,6 +12,7 @@
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/CanvasCamera.h"
@@ -1169,7 +1170,42 @@ bool BeatmapSession::processCommands()
 
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
+    const bool disablePolylineEditing =
+        m_ctx->lastConfig.settings.enablePolylineEditing &&
+        !cmd.config.settings.enablePolylineEditing;
     m_ctx->lastConfig = cmd.config;
+    if ( disablePolylineEditing ) {
+        auto view =
+            m_ctx->noteRegistry.view<NoteComponent, InteractionComponent>();
+        for ( const auto entity : view ) {
+            const auto& note = view.get<NoteComponent>(entity);
+            if ( SessionUtils::isNoteEditable(note, cmd.config.settings) ) {
+                continue;
+            }
+            auto& interaction      = view.get<InteractionComponent>(entity);
+            interaction.isSelected = false;
+            interaction.isHovered  = false;
+            interaction.isDragging = false;
+            interaction.isCut      = false;
+            interaction.hoveredPart =
+                static_cast<std::uint8_t>(HoverPart::None);
+            interaction.hoveredSubIndex = -1;
+            m_ctx->selectedNoteEntities.erase(entity);
+        }
+
+        if ( m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
+             m_ctx->hoveredEntity != entt::null &&
+             m_ctx->noteRegistry.valid(m_ctx->hoveredEntity) &&
+             m_ctx->noteRegistry.all_of<NoteComponent>(m_ctx->hoveredEntity) &&
+             !SessionUtils::isNoteEditable(
+                 m_ctx->noteRegistry.get<const NoteComponent>(
+                     m_ctx->hoveredEntity),
+                 cmd.config.settings) ) {
+            m_ctx->hoveredEntity   = entt::null;
+            m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
+            m_ctx->hoveredSubIndex = -1;
+        }
+    }
     auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
     if ( cache ) {
         cache->isDirty = true;
