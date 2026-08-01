@@ -287,9 +287,9 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
                     fontPath.parent_path() / "OFL-1.1.txt", fontError) &&
                     !fontError,
                 "IVM 字体必须随附 SIL OFL 1.1 许可证");
-    ok &= check(skinManager.getGlowPasses() == 0 &&
-                    skinManager.getGlowIntensity() == 0.0f,
-                "IVM 纯色物件不应启用模糊发光");
+    ok &= check(skinManager.getGlowPasses() == 6 &&
+                    skinManager.getGlowIntensity() == 0.5f,
+                "IVM 悬浮或选中物件必须启用发光");
     return ok;
 }
 }  // namespace

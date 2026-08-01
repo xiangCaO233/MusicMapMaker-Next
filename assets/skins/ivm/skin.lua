@@ -138,15 +138,15 @@ return {
 		},
 	},
 
-	-- IVM 物件保持纯色，不启用悬浮模糊发光；打击时使用独立的轨道渐变。
+	-- IVM 物件保持纯色，交互时使用发光标识悬浮或选中；打击时使用独立的轨道渐变。
 	effects = {
 		hit_effect = {
 			-- fixed：在判定线按物件尺寸绘制；track_fill：拉伸到整条可见轨道。
 			layout = "track_fill",
 		},
 		glow = {
-			passes = 0,
-			intensity = 0.0,
+			passes = 6,
+			intensity = 0.5,
 		},
 	},
 
