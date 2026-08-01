@@ -1,15 +1,18 @@
 #pragma once
 
 #include "common/AsciiFontData.h"
+#include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/UnicodeFontData.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <concurrentqueue.h>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -47,7 +50,10 @@ enum class TextureID : uint32_t {
     EffectStart = 1000,
 
     /// @brief ASCII 字形使用独立高位保留区，避免与皮肤动态特效 ID 冲突。
-    AsciiGlyphStart = 0x00100000U
+    AsciiGlyphStart = 0x00100000U,
+
+    /// @brief 按需 Unicode 字形使用独立高位保留区。
+    UnicodeGlyphStart = 0x00200000U
 };
 
 /// @brief 将 ASCII 字号档位与字符转换为字体图集纹理 ID。
@@ -68,13 +74,29 @@ enum class TextureID : uint32_t {
         Common::ASCII_GLYPH_FIRST);
 }
 
+/// @brief 将 Unicode 码点转换为字体图集纹理 ID。
+/// @param codepoint 合法且非 ASCII 的 Unicode 码点。
+/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
+[[nodiscard]] inline constexpr TextureID unicodeGlyphTextureId(
+    std::uint32_t codepoint)
+{
+    if ( codepoint <= Common::ASCII_GLYPH_LAST ||
+         !Common::isValidUnicodeCodepoint(codepoint) ) {
+        return TextureID::None;
+    }
+    return static_cast<TextureID>(
+        static_cast<std::uint32_t>(TextureID::UnicodeGlyphStart) + codepoint);
+}
+
 enum class HoverPart : uint8_t {
     None = 0,
     Head,
     HoldBody,
     HoldEnd,
     FlickArrow,
-    PolylineNode
+    PolylineNode,
+    SampleAnchor,
+    SampleOffset
 };
 
 enum class HoverInspectKind : uint8_t {
@@ -91,7 +113,9 @@ enum class HoverInspectKind : uint8_t {
     PolylineHoldBody,
     PolylineHoldEnd,
     PolylineFlickBody,
-    PolylineFlickEnd
+    PolylineFlickEnd,
+    AudioSampleAnchor,
+    AudioSampleTrigger
 };
 
 struct HoverBeatPoint {
@@ -112,6 +136,10 @@ struct HoverBeatPoint {
 struct HoverInspectInfo {
     /// @brief 是否显示结构化悬浮检视信息
     bool show{ false };
+    /// @brief 当前检视物件实体。
+    entt::entity entity{ entt::null };
+    /// @brief 当前检视物件所在的独立 ECS 注册表。
+    ChartObjectKind objectKind{ ChartObjectKind::PlayerNote };
     /// @brief 当前悬浮部位类型
     HoverInspectKind kind{ HoverInspectKind::None };
     /// @brief Head 部位信息
@@ -133,6 +161,19 @@ struct HoverInspectInfo {
     /// @brief 当前部位轨道位置
     int32_t track{ 0 };
 
+    /// @brief 是否显示自动采样资源信息。
+    bool showAudioSample{ false };
+    /// @brief 当前物件是否存在可独立试听的项目音频引用。
+    bool showAudioPreview{ false };
+    /// @brief 自动采样引用的项目音频资源 ID。
+    std::string audioResourceId;
+    /// @brief 自动采样物件音量。
+    float volume{ 1.0F };
+    /// @brief 当前试听绑定所属的 Polyline 子物件索引；负值表示物件本体。
+    std::int32_t sampleBindingSubIndex{ -1 };
+    /// @brief 自动采样相对锚点的有符号播放偏移，单位毫秒。
+    std::int64_t offsetMs{ 0 };
+
     /// @brief 当前悬浮位置按重叠检测规则命中的物件数量。
     int overlapCount{ 1 };
 };
@@ -144,12 +185,14 @@ struct Hitbox {
     entt::entity entity;
     HoverPart    part{ HoverPart::None };
     int          subIndex{
-        -1
+                 -1
     };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
     float x;
     float y;
     float w;
     float h;
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -201,15 +244,6 @@ struct TimelineInteractiveElement {
     uint32_t markerIndexCount{ 0 };
 };
 
-/// @brief Timeline 专业模式中显示的主音轨快照。
-struct TimelineAudioTrackSnapshot {
-    /// @brief 显示名称。
-    std::string label;
-
-    /// @brief 音频时长，单位秒。
-    double duration{ 0.0 };
-};
-
 /// @brief 单个可选画布组件实例的渲染与布局编辑边界。
 struct CanvasComponentInstanceSnapshot {
     /// @brief 组件类型。
@@ -254,7 +288,6 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               overlayCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
-    std::vector<TimelineAudioTrackSnapshot>     mainAudioTracks;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     std::vector<System::ScrollSegment>
@@ -293,11 +326,49 @@ struct RenderSnapshot {
     /// @brief 当前主画布 ASCII 字体的多档归一化字形度量。
     Common::AsciiFontAtlasMetrics asciiFontAtlasMetrics;
 
+    /// @brief 当前主画布按项目资源名加载的 Unicode 字形度量。
+    Common::UnicodeFontMetrics unicodeFontMetrics;
+
+    /// @brief 单个快照最多回报的缺失 Unicode 字形数量。
+    static constexpr std::size_t MAX_REQUESTED_UNICODE_GLYPHS = 256U;
+
+    /// @brief 本帧可见标签请求补载的 Unicode 码点。
+    std::array<std::uint32_t, MAX_REQUESTED_UNICODE_GLYPHS>
+        requestedUnicodeGlyphs{};
+
+    /// @brief `requestedUnicodeGlyphs` 中的有效元素数量。
+    std::size_t requestedUnicodeGlyphCount{ 0U };
+
+    /// @brief 记录当前字体图集中缺失的 Unicode 字形。
+    /// @param codepoint 待补载码点。
+    /// @warning 逻辑渲染热路径：只扫描固定上限栈内数组，不分配内存。
+    void requestUnicodeGlyph(std::uint32_t codepoint)
+    {
+        if ( codepoint <= Common::ASCII_GLYPH_LAST ||
+             !Common::isValidUnicodeCodepoint(codepoint) ||
+             unicodeFontMetrics.glyph(codepoint) ) {
+            return;
+        }
+        for ( std::size_t index = 0U; index < requestedUnicodeGlyphCount;
+              ++index ) {
+            if ( requestedUnicodeGlyphs[index] == codepoint ) return;
+        }
+        if ( requestedUnicodeGlyphCount < requestedUnicodeGlyphs.size() ) {
+            requestedUnicodeGlyphs[requestedUnicodeGlyphCount++] = codepoint;
+        }
+    }
+
     /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
     std::vector<entt::entity> noteQueryScratch;
 
     /// @brief 逻辑线程可见音符查询去重临时集合，UI 线程不读取。
     std::unordered_set<entt::entity> noteQuerySeenScratch;
+
+    /// @brief 逻辑线程可见自动采样查询临时列表，UI 线程不读取。
+    std::vector<entt::entity> sampleQueryScratch;
+
+    /// @brief 逻辑线程可见自动采样查询去重临时集合，UI 线程不读取。
+    std::unordered_set<entt::entity> sampleQuerySeenScratch;
 
     /// @brief 背景资源绝对 UTF-8 路径。
     std::string backgroundPath;
@@ -314,6 +385,8 @@ struct RenderSnapshot {
     // 播放状态
     bool   isPlaying{ false };
     double currentTime{ 0.0 };
+    /// @brief 当前主画布内容相对基础轨道布局的横向逻辑像素偏移。
+    float canvasHorizontalOffsetX{ 0.0F };
     /// @brief 未包含视觉偏移的原始谱面播放时间，单位秒。
     double playbackTime{ 0.0 };
     double totalTime{ 0.0 };
@@ -379,7 +452,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-        0
+            0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -390,7 +463,9 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
-    int32_t trackCount{ 4 };          ///< 谱面轨道数量
+    int32_t trackCount{ 4 };  ///< 谱面轨道数量
+    /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
+    int32_t bgmTrackCount{ 0 };
     float   renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
@@ -399,7 +474,9 @@ struct RenderSnapshot {
 
     // 笔刷预览状态
     struct BrushSnapshot {
-        bool            isActive{ false };              ///< 是否激活
+        bool isActive{ false };  ///< 是否激活
+        /// @brief 当前手势是否创建 BGM 区自动采样。
+        bool            createsAudioSample{ false };
         double          time{ 0.0 };                    ///< 位置/起始时间
         double          duration{ 0.0 };                ///< 持续时间 (Hold)
         int             track{ 0 };                     ///< 轨道
@@ -409,13 +486,18 @@ struct RenderSnapshot {
         /// @brief 笔刷预览使用的自定义颜色。
         NoteColorOverrides customColors;
 
+        /// @brief 自动采样预览引用的项目音频资源 ID。
+        std::string audioResourceId;
+
         // Polyline 子物件预览
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brush;
 
     // 橡皮擦预览状态
     std::unordered_set<entt::entity> erasingEntities;
-    int                              erasingSubIndex{ -1 };
+    /// @brief 橡皮擦目标所在的独立 ECS 注册表。
+    ChartObjectKind erasingObjectKind{ ChartObjectKind::PlayerNote };
+    int             erasingSubIndex{ -1 };
 
     // 是否已加载谱面
     bool hasBeatmap{ false };
@@ -437,6 +519,59 @@ struct RenderSnapshot {
     /// @brief 动态元素的顶点数量
     /// 用于区分“动态层”之后是否还有“置顶静态层”
     uint32_t dynamicVertexCount{ 0 };
+
+    /// @brief 计算当前 UI 时刻相对快照的有效播放补间时长。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 仅播放中且处于 100ms 新鲜窗口时返回正时长，否则返回零。
+    /// @warning UI 每帧路径：只做常量级数值校验。
+    [[nodiscard]] double playbackInterpolationElapsed(
+        double nowSteadySeconds) const noexcept
+    {
+        if ( !isPlaying || snapshotSysTime <= 0.0 ||
+             !std::isfinite(nowSteadySeconds) ||
+             !std::isfinite(playbackSpeed) || playbackSpeed <= 0.0 ) {
+            return 0.0;
+        }
+        double elapsed = nowSteadySeconds - snapshotSysTime;
+        if ( elapsed <= 0.0 || elapsed >= 0.1 ) {
+            return 0.0;
+        }
+        if ( std::isfinite(playbackTime) && std::isfinite(totalTime) ) {
+            const double remainingTime =
+                (totalTime - playbackTime) / playbackSpeed;
+            if ( remainingTime <= 0.0 ) {
+                return 0.0;
+            }
+            elapsed = std::min(elapsed, remainingTime);
+        }
+        return elapsed;
+    }
+
+    /// @brief 将动画时间解析到当前 UI 壁钟。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 与画布补间同源的动画时间。
+    /// @warning UI 每帧路径：只做常量级时间计算。
+    [[nodiscard]] double resolveCurrentTimeAt(
+        double nowSteadySeconds) const noexcept
+    {
+        const double resolved =
+            currentTime +
+            playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
+        return std::isfinite(resolved) ? resolved : currentTime;
+    }
+
+    /// @brief 将未含视觉偏移的播放时间解析到当前 UI 壁钟。
+    /// @param nowSteadySeconds 当前 steady_clock 秒数。
+    /// @return 与画布补间同源的谱面播放时间。
+    /// @warning UI 每帧路径：只做常量级时间计算。
+    [[nodiscard]] double resolvePlaybackTimeAt(
+        double nowSteadySeconds) const noexcept
+    {
+        const double resolved =
+            playbackTime +
+            playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
+        return std::isfinite(resolved) ? resolved : playbackTime;
+    }
 
     /**
      * @brief [UI 线程专用] 亚帧插值：获取从 currentTime 到 currentTime + dt
@@ -471,18 +606,21 @@ struct RenderSnapshot {
         hitboxes.clear();
         overlapMasks.clear();
         timelineElements.clear();
-        mainAudioTracks.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
         previewDensity.clear();
+        requestedUnicodeGlyphCount = 0U;
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();
+        sampleQueryScratch.clear();
+        sampleQuerySeenScratch.clear();
         backgroundPath.clear();
         bgSize                       = glm::vec2(0.0f, 0.0f);
         backgroundIsVideo            = false;
         backgroundVideoStartTime     = 0.0;
         isPlaying                    = false;
         currentTime                  = 0.0;
+        canvasHorizontalOffsetX      = 0.0F;
         playbackTime                 = 0.0;
         totalTime                    = 0.0;
         snapshotSysTime              = 0.0;
@@ -500,28 +638,31 @@ struct RenderSnapshot {
         isSelecting                  = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
-        hoveredTime            = 0.0;
-        snappedTime            = 0.0;
-        isSnapped              = false;
-        snappedNumerator       = 0;
-        snappedDenominator     = 1;
-        currentBeatDivisor     = 4;
-        hoveredTrack           = 0;
-        hoveredNoteNumerator   = 0;
-        hoveredNoteDenominator = 1;
-        hoveredBeatIndex       = 0;
-        hoveredNoteBeatIndex   = 0;
-        hoveredNoteTime        = 0.0;
-        hoveredNoteTrack       = 0;
-        hoverInspect           = HoverInspectInfo{};
-        isPreviewHovered       = false;
-        previewHoverY          = 0.0f;
-        previewHoverTime       = 0.0;
-        isPreviewDragging      = false;
-        brush.isActive         = false;
+        hoveredTime              = 0.0;
+        snappedTime              = 0.0;
+        isSnapped                = false;
+        snappedNumerator         = 0;
+        snappedDenominator       = 1;
+        currentBeatDivisor       = 4;
+        hoveredTrack             = 0;
+        hoveredNoteNumerator     = 0;
+        hoveredNoteDenominator   = 1;
+        hoveredBeatIndex         = 0;
+        hoveredNoteBeatIndex     = 0;
+        hoveredNoteTime          = 0.0;
+        hoveredNoteTrack         = 0;
+        hoverInspect             = HoverInspectInfo{};
+        isPreviewHovered         = false;
+        previewHoverY            = 0.0f;
+        previewHoverTime         = 0.0;
+        isPreviewDragging        = false;
+        brush.isActive           = false;
+        brush.createsAudioSample = false;
+        brush.audioResourceId.clear();
         erasingEntities.clear();
-        erasingSubIndex = -1;
-        hasBeatmap      = false;
+        erasingObjectKind = ChartObjectKind::PlayerNote;
+        erasingSubIndex   = -1;
+        hasBeatmap        = false;
         beatmapPathKey.clear();
         beatmapName.clear();
         isDirty = false;
@@ -533,6 +674,7 @@ struct RenderSnapshot {
         visibleTimeEnd     = 0.0;
         noteCount          = 0;
         maxCombo           = 0;
+        bgmTrackCount      = 0;
     }
 };
 
@@ -543,7 +685,7 @@ class BeatmapSyncBuffer
 {
 public:
     BeatmapSyncBuffer();
-    ~BeatmapSyncBuffer() = default;
+    ~BeatmapSyncBuffer();
 
     // 禁用拷贝与移动
     BeatmapSyncBuffer(BeatmapSyncBuffer&&)                 = delete;
@@ -581,8 +723,11 @@ public:
     void reset();
 
 private:
-    moodycamel::ConcurrentQueue<RenderSnapshot*> m_freeQueue;
-    moodycamel::ConcurrentQueue<RenderSnapshot*> m_readyQueue;
+    /// @brief 隐藏无锁队列实现，避免公共快照头向所有画布传播并发队列依赖。
+    struct QueueState;
+
+    /// @brief 仅在同步缓冲区构造时分配一次的私有队列状态。
+    std::unique_ptr<QueueState> m_queueState;
 
     std::vector<std::unique_ptr<RenderSnapshot>> m_storage;
 

@@ -1,3 +1,4 @@
+#include "graphic/CursorManager.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 

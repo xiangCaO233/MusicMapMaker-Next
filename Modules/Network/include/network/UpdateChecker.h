@@ -27,19 +27,20 @@ struct UpdateInfo {
     std::string  currentVersion;     ///< 当前应用版本号
     std::string  changelog;          ///< 更新日志
     std::string  releaseDate;        ///< 发布日期
-    std::string  downloadUrl;        ///< 下载地址（主程序，平台相关）
+    std::string  downloadUrl;        ///< 下载地址（单文件或 App ZIP，平台相关）
     int64_t      downloadSize{ 0 };  ///< 下载文件总大小（字节）
     std::string  checksum;           ///< SHA256 校验和
     std::string  errorMessage;       ///< 错误信息
 
-    // 更新器（独立下载，负责替换主程序）
+    // 更新器（独立下载，负责替换主程序或完整 App bundle）
     std::string updaterUrl;       ///< 更新器下载地址
+    std::string updaterChecksum;  ///< 更新器 SHA256 校验和
     std::string updaterFilePath;  ///< 更新器下载后的临时文件路径
 
     // 下载进度
     int64_t     downloadedBytes{ 0 };     ///< 已下载字节数
     double      downloadProgress{ 0.0 };  ///< 下载进度 0.0~1.0
-    std::string downloadedFilePath;  ///< 下载完成后的临时文件路径（主程序）
+    std::string downloadedFilePath;  ///< 下载完成后的单文件或 App ZIP 临时路径
 };
 
 /// @brief 应用更新检查器，面向 xiand233.top 的更新 API
@@ -78,8 +79,8 @@ public:
     static std::string currentExecutablePath();
 
     /// @brief 应用更新并重启（成功启动 Updater 后立即退出当前进程）
-    /// @param downloadedFilePath 已下载的更新文件路径（主程序）
-    /// @param updaterFilePath 更新器文件路径（负责替换主程序）
+    /// @param downloadedFilePath 已下载的更新文件路径；macOS 下为 App ZIP。
+    /// @param updaterFilePath 更新器文件路径（负责替换主程序或 App bundle）
     /// @param errorMessage 启动失败时写入错误信息，可为空。
     /// @return 成功启动更新器时返回 true；失败时返回 false。
     static bool applyUpdateAndRestart(const std::string& downloadedFilePath,

@@ -3,9 +3,11 @@
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -21,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -299,12 +302,12 @@ glm::vec4 timelineEffectColor(::MMM::TimingEffect effect, float alpha)
 int professionalTimingLane(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
-    case ::MMM::TimingEffect::BPM: return 1;
-    case ::MMM::TimingEffect::SCROLL: return 2;
-    case ::MMM::TimingEffect::JUMP: return 3;
-    case ::MMM::TimingEffect::HS: return 4;
+    case ::MMM::TimingEffect::BPM: return 0;
+    case ::MMM::TimingEffect::SCROLL: return 1;
+    case ::MMM::TimingEffect::JUMP: return 2;
+    case ::MMM::TimingEffect::HS: return 3;
     }
-    return 1;
+    return 0;
 }
 
 /// @brief 生成用于去重同一个 marker glow 命令的键。
@@ -340,8 +343,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         return;
     }
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float                dpiScale = viewport->DpiScale;
+    const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
 
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
@@ -383,13 +385,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             ImGui::BeginGroup();
 
-            ImVec2 sliderSize(sliderWidth, sliderHeight);
-            if ( ::MMM::UI::FeedbackVSliderFloat("##AudioTimeSlider",
-                                                 sliderSize,
-                                                 &time,
-                                                 0.0f,
-                                                 total,
-                                                 "") ) {
+            ImVec2     sliderSize(sliderWidth, sliderHeight);
+            const bool sliderChanged = ::MMM::UI::FeedbackVSliderFloat(
+                "##AudioTimeSlider", sliderSize, &time, 0.0f, total, "");
+            const bool sliderActive = ImGui::IsItemActive();
+            const bool sliderDeactivatedAfterEdit =
+                ImGui::IsItemDeactivatedAfterEdit();
+            if ( sliderChanged ) {
                 float  visualOffset = Config::AppConfig::instance()
                                           .getVisualConfig()
                                           .getEffectiveVisualOffset();
@@ -400,12 +402,26 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                             static_cast<double>(total));
                     time       = static_cast<float>(targetTime);
                 }
+                const double commandTime =
+                    targetTime - static_cast<double>(visualOffset);
+                m_isAudioTimeSliderScrubbing = sliderActive;
+                m_audioTimeSliderScrubTarget = commandTime;
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdSeek{
-                        targetTime - static_cast<double>(visualOffset) }));
+                        .time        = commandTime,
+                        .isScrubbing = sliderActive,
+                    }));
+            }
+            if ( sliderDeactivatedAfterEdit && m_isAudioTimeSliderScrubbing ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSeek{
+                        .time        = m_audioTimeSliderScrubTarget,
+                        .isScrubbing = false,
+                    }));
+                m_isAudioTimeSliderScrubbing = false;
             }
 
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+            if ( sliderActive || ImGui::IsItemHovered() ) {
                 const auto timeText =
                     formatCanvasTimePair(static_cast<double>(time),
                                          static_cast<double>(total),
@@ -425,7 +441,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( size.x > 0 && size.y > 0 ) {
             setTargetSize(static_cast<uint32_t>(size.x),
                           static_cast<uint32_t>(size.y),
-                          dpiScale);
+                          framebufferScale.x,
+                          framebufferScale.y);
         }
 
         vk::DescriptorSet texID = getDescriptorSet();
@@ -581,7 +598,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                      int                     index,
                                      int                     count) {
                 if ( editorSettings.timelineProfessionalMode ) {
-                    constexpr float laneCount = 5.0f;
+                    constexpr float laneCount = 4.0f;
                     const int       lane = professionalTimingLane(gear.effect);
                     const float     centerX =
                         canvasPos.x +
@@ -866,86 +883,10 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
     const ImVec2 clipMax(canvasPos.x + size.x, canvasPos.y + size.y);
     drawList->PushClipRect(canvasPos, clipMax, true);
 
-    constexpr int laneCount = 5;
+    constexpr int laneCount = 4;
     const float   laneWidth = size.x / static_cast<float>(laneCount);
-    const char*   laneLabels[laneCount] = {
-        "BGM", "BPM", "Scroll", "Jump", "HS"
-    };
-    const ImU32 laneTextColor = IM_COL32(240, 235, 225, 210);
-
-    const float bgmLaneX0  = canvasPos.x + 6.0f;
-    const float bgmLaneX1  = canvasPos.x + laneWidth - 6.0f;
-    const int   audioCount = static_cast<int>(
-        std::max<size_t>(1, m_currentSnapshot->mainAudioTracks.size()));
-    const float audioColumnWidth = std::max(
-        5.0f, (bgmLaneX1 - bgmLaneX0) / static_cast<float>(audioCount));
-    for ( size_t i = 0; i < m_currentSnapshot->mainAudioTracks.size(); ++i ) {
-        const auto& track    = m_currentSnapshot->mainAudioTracks[i];
-        double      duration = track.duration;
-        if ( !(std::isfinite(duration) && duration > 0.0) ) {
-            duration = m_currentSnapshot->totalTime;
-        }
-        if ( !(std::isfinite(duration) && duration > 0.0) ) {
-            continue;
-        }
-
-        float rawStartY =
-            canvasPos.y + static_cast<float>(canvasYAtTime(size, 0.0));
-        float rawEndY =
-            canvasPos.y + static_cast<float>(canvasYAtTime(size, duration));
-        float rectY0 =
-            std::clamp(std::min(rawStartY, rawEndY), canvasPos.y, clipMax.y);
-        float rectY1 =
-            std::clamp(std::max(rawStartY, rawEndY), canvasPos.y, clipMax.y);
-        if ( rectY1 - rectY0 < 2.0f ) {
-            continue;
-        }
-
-        const float x0 =
-            bgmLaneX0 + audioColumnWidth * static_cast<float>(i) + 2.0f;
-        const float x1 =
-            std::min(bgmLaneX1, x0 + std::max(4.0f, audioColumnWidth - 4.0f));
-        drawList->AddRectFilled(ImVec2(x0, rectY0),
-                                ImVec2(x1, rectY1),
-                                IM_COL32(92, 196, 210, 116),
-                                4.0f);
-        drawList->AddRect(ImVec2(x0, rectY0),
-                          ImVec2(x1, rectY1),
-                          IM_COL32(190, 245, 255, 185),
-                          4.0f,
-                          0,
-                          1.2f);
-
-        if ( rectY1 - rectY0 > 22.0f && x1 - x0 > 18.0f ) {
-            const char* label =
-                track.label.empty() ? "BGM" : track.label.c_str();
-            const ImVec2 textSize     = ImGui::CalcTextSize(label);
-            const float  textPadding  = 6.0f;
-            const float  visibleWidth = std::max(1.0f, x1 - x0 - textPadding);
-            float        offset       = 0.0f;
-            if ( textSize.x > visibleWidth ) {
-                const float scrollRange = textSize.x - visibleWidth + 40.0f;
-                const float time        = static_cast<float>(ImGui::GetTime());
-                float       t =
-                    static_cast<float>(std::sin(time * 0.5f - 1.57f)) * 0.5f +
-                    0.5f;
-                t      = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
-                offset = t * scrollRange;
-            }
-
-            const float  textX = textSize.x > visibleWidth
-                                     ? x0 + textPadding * 0.5f - offset
-                                     : x0 + (x1 - x0 - textSize.x) * 0.5f;
-            const ImVec2 textPos(
-                textX, rectY0 + (rectY1 - rectY0 - textSize.y) * 0.5f);
-            drawList->PushClipRect(
-                ImVec2(x0 + textPadding * 0.5f, rectY0 + 3.0f),
-                ImVec2(x1 - textPadding * 0.5f, rectY1 - 3.0f),
-                true);
-            drawList->AddText(textPos, IM_COL32(242, 255, 255, 220), label);
-            drawList->PopClipRect();
-        }
-    }
+    const char*   laneLabels[laneCount] = { "BPM", "Scroll", "Jump", "HS" };
+    const ImU32   laneTextColor         = IM_COL32(240, 235, 225, 210);
 
     for ( int lane = 0; lane < laneCount; ++lane ) {
         const float laneX0 = canvasPos.x + laneWidth * lane;
@@ -1129,7 +1070,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         float noteW = std::max(1.0f, size.x - paddingX * 2.0f);
         float noteX = paddingX;
         if ( professionalMode ) {
-            constexpr float laneCount = 5.0f;
+            constexpr float laneCount = 4.0f;
             const float     laneWidth = size.x / laneCount;
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);

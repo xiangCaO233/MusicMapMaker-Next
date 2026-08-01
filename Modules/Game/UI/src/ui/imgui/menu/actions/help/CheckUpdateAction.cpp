@@ -3,7 +3,9 @@
 #include "config/skin/SkinConfig.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>

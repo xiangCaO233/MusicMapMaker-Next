@@ -6,6 +6,8 @@
 #include "mmm/note/Hold.h"
 #include "mmm/timing/Timing.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -16,9 +18,54 @@
 namespace MMM
 {
 
+/// @brief 将谱面保存为 osu! 文本格式。
+/// @param beatMap 待保存谱面。
+/// @param path 输出路径。
+/// @return 保存成功时返回 true；采样时间线无法无损表达时返回 false。
 inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     using enum MapMetadataType;
+
+    /// @brief 判断玩家物件是否包含 osu! HitObject 无法无损表达的采样绑定。
+    ///
+    /// 普通 Note、Hold 及顶层 Flick 均可复用 HitSample 的 sampleFile
+    /// 字段；Polyline 根节点不会直接写出，非 Hold 子节点也不会进入当前
+    /// osu! 展开结果，因此仅拒绝这些确实会丢失的绑定。
+    const auto hasUnsupportedNoteSampleBinding = [&beatMap]() {
+        return std::any_of(
+            beatMap.m_noteData.polylines.begin(),
+            beatMap.m_noteData.polylines.end(),
+            [](const Polyline& polyline) {
+                if ( polyline.getSampleBinding() ) return true;
+                return std::any_of(
+                    polyline.m_subNotes.begin(),
+                    polyline.m_subNotes.end(),
+                    [](const auto& noteRef) {
+                        const Note& note = noteRef.get();
+                        return note.m_type != NoteType::HOLD &&
+                               note.getSampleBinding().has_value();
+                    });
+            });
+    };
+    if ( hasUnsupportedNoteSampleBinding() ) {
+        XERROR(
+            "osu! 导出失败：Polyline 根节点或非 Hold 子节点的采样绑定"
+            "无法由当前 HitObject 展开逻辑无损表达");
+        return false;
+    }
+
+    const int representableBgmTrackCount =
+        beatMap.m_audioSamples.empty() ? 0 : 1;
+    if ( beatMap.m_baseMapMetadata.bgm_track_count !=
+         representableBgmTrackCount ) {
+        XERROR(
+            "osu! 导出失败：格式只能由单音频隐式表达 {} 条 BGM "
+            "轨，当前谱面显式保存了 {} 条",
+            representableBgmTrackCount,
+            beatMap.m_baseMapMetadata.bgm_track_count);
+        return false;
+    }
+
     auto map_it = beatMap.m_metadata.map_properties.find(OSU);
     std::unordered_map<std::string, std::string, StringHash, std::equal_to<>>
                 empty_props;
@@ -34,6 +81,38 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         return default_val;
     };
 
+    const AudioSampleEvent* legacyAudioSample = nullptr;
+    if ( beatMap.m_audioSamples.size() > 1 ) {
+        XERROR(
+            "osu! 导出失败：格式只能表达一个全局音频，当前有 {} 个自动采样对象",
+            beatMap.m_audioSamples.size());
+        return false;
+    }
+    if ( !beatMap.m_audioSamples.empty() ) {
+        legacyAudioSample            = &beatMap.m_audioSamples.front();
+        const uint32_t firstBgmTrack = static_cast<uint32_t>(
+            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        if ( legacyAudioSample->m_audioResourceId.empty() ||
+             !std::isfinite(legacyAudioSample->m_timestamp) ||
+             std::abs(legacyAudioSample->m_timestamp) > 1e-6 ||
+             legacyAudioSample->m_offsetMs != 0 ||
+             legacyAudioSample->m_track != firstBgmTrack ||
+             !std::isfinite(legacyAudioSample->m_volume) ||
+             std::abs(legacyAudioSample->m_volume - 1.0F) > 1e-6F ) {
+            XERROR(
+                "osu! 导出失败：自动采样必须是 timestamp=0、offset=0、"
+                "track={}、volume=1 且音频引用非空；当前为 "
+                "timestamp={}、offset={}、track={}、volume={}、ref='{}'",
+                firstBgmTrack,
+                legacyAudioSample->m_timestamp,
+                legacyAudioSample->m_offsetMs,
+                legacyAudioSample->m_track,
+                legacyAudioSample->m_volume,
+                legacyAudioSample->m_audioResourceId);
+            return false;
+        }
+    }
+
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) {
         XWARN("打开文件[{}]进行写出失败", Config::pathToUtf8(path));
@@ -45,10 +124,10 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "osu file format " << format_ver << "\n\n";
 
     ofs << "[General]\n";
-    std::string audio_path =
-        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
-    if ( audio_path.empty() )
-        audio_path = get_prop("General::AudioFilename", "");
+    std::string audio_path;
+    if ( legacyAudioSample != nullptr ) {
+        audio_path = legacyAudioSample->m_audioResourceId;
+    }
     ofs << "AudioFilename: " << audio_path << "\n";
 
     ofs << "AudioLeadIn: " << get_prop("General::AudioLeadIn", "0") << "\n";

@@ -1,4 +1,5 @@
 #include "logic/EditorEngine.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <imgui.h>

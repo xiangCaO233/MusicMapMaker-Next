@@ -1,6 +1,7 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIWidgetUtils.h"

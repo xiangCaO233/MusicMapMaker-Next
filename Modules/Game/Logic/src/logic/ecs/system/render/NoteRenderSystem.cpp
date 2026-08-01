@@ -1,11 +1,15 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+#include "logic/ecs/system/SampleRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
@@ -32,18 +36,62 @@ constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
     1.0 / 120.0;
 
 /// @brief Timeline 专业模式轨道数量。
-constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 5;
+constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 4;
+
+/// @brief 判断当前拖动中的玩家物件是否已进入 BGM 轨道区。
+/// @param registry 玩家物件注册表。
+/// @param playerTrackCount 玩家轨道数量。
+/// @return 至少一个拖动物件或其 Flick 端点进入 BGM 区时返回 true。
+/// @warning 主画布快照热路径：仅在拖动期间遍历已固定的局部实体列表，
+/// 禁止退化为完整 Registry 扫描。
+bool hasDraggedNoteAcrossPlayerBoundary(entt::registry& registry,
+                                        std::int32_t    playerTrackCount)
+{
+    if ( playerTrackCount <= 0 ) return false;
+    const auto* pinned = registry.ctx().find<DragRenderPinnedEntities>();
+    if ( !pinned || !pinned->entities ) return false;
+
+    const auto crossesBoundary = [playerTrackCount](::MMM::NoteType type,
+                                                    std::int32_t    track,
+                                                    std::int32_t    dtrack) {
+        std::int64_t rightTrack = track;
+        if ( type == ::MMM::NoteType::FLICK ) {
+            rightTrack = std::max<std::int64_t>(
+                rightTrack, static_cast<std::int64_t>(track) + dtrack);
+        }
+        return rightTrack >= playerTrackCount;
+    };
+
+    for ( const auto entity : *pinned->entities ) {
+        const auto* note = registry.try_get<const NoteComponent>(entity);
+        if ( !note ) continue;
+        const auto* interaction =
+            registry.try_get<const InteractionComponent>(entity);
+        if ( !interaction || !interaction->isDragging ) continue;
+        if ( crossesBoundary(
+                 note->m_type, note->m_trackIndex, note->m_dtrack) ) {
+            return true;
+        }
+        for ( const auto& subNote : note->m_subNotes ) {
+            if ( crossesBoundary(
+                     subNote.type, subNote.trackIndex, subNote.dtrack) ) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 /// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
 int professionalTimelineLane(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
-    case ::MMM::TimingEffect::BPM: return 1;
-    case ::MMM::TimingEffect::SCROLL: return 2;
-    case ::MMM::TimingEffect::JUMP: return 3;
-    case ::MMM::TimingEffect::HS: return 4;
+    case ::MMM::TimingEffect::BPM: return 0;
+    case ::MMM::TimingEffect::SCROLL: return 1;
+    case ::MMM::TimingEffect::JUMP: return 2;
+    case ::MMM::TimingEffect::HS: return 3;
     }
-    return 1;
+    return 0;
 }
 
 /// @brief 获取 Timeline Timing 类型的快照效果掩码。
@@ -107,12 +155,16 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
 /// registry 全量无缓存扫描或阻塞同步；Timeline 与活跃主画布 Move
 /// 工具会复制 ScrollSegment 供 UI 精确时间映射。
 void NoteRenderSystem::generateSnapshot(
-    entt::registry& registry, const entt::registry& timelineRegistry,
+    entt::registry& registry, entt::registry& sampleRegistry,
+    const std::vector<entt::entity>&             sortedSampleEntities,
+    const std::vector<double>&                   sortedSampleMaxEndPrefix,
+    const entt::registry&                        timelineRegistry,
     const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Config::EditorConfig& config,
-    float mainViewportHeight, HitFXSystem* hitFXSystem)
+    int32_t trackCount, int32_t bgmTrackCount,
+    const Config::EditorConfig& config, float mainViewportHeight,
+    HitFXSystem* hitFXSystem)
 {
     const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
 
@@ -183,19 +235,29 @@ void NoteRenderSystem::generateSnapshot(
     float   renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
-    // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
-    // 因此，我们在设置 staticVertexCount
-    // 之前生成它的顶点，但将其命令延迟到最后插入。
+    // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
+    // 绘制命令再按皮肤布局模式插入对应覆盖层。
     uint32_t fxCmdStart = static_cast<uint32_t>(snapshot->cmds.size());
-    if ( hitFXSystem && (isMainCanvas || cameraId == "Preview") ) {
+    if ( hitFXSystem && trackCount > 0 &&
+         (isMainCanvas || cameraId == "Preview") ) {
         // 提前计算轨道参数
-        float tempLX = 0, tempRX = 0;
+        float tempLX = 0, tempRX = 0, tempTY = 0, tempBY = viewportHeight;
         if ( isMainCanvas ) {
-            tempLX = viewportWidth * config.visual.trackLayout.left;
-            tempRX = viewportWidth * config.visual.trackLayout.right;
+            const auto projection = calculatePlayerTrackProjection(
+                viewportWidth,
+                trackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            tempLX = projection.leftX;
+            tempRX = projection.rightX;
+            tempTY = viewportHeight * config.visual.trackLayout.top;
+            tempBY = viewportHeight * config.visual.trackLayout.bottom;
         } else {
             tempLX = config.visual.previewConfig.margin.left;
             tempRX = viewportWidth - config.visual.previewConfig.margin.right;
+            tempTY = config.visual.previewConfig.margin.top;
+            tempBY = viewportHeight - config.visual.previewConfig.margin.bottom;
         }
         float tempSTW = (tempRX - tempLX) / static_cast<float>(trackCount);
 
@@ -205,6 +267,8 @@ void NoteRenderSystem::generateSnapshot(
                                       trackCount,
                                       judgmentLineY,
                                       tempLX,
+                                      tempTY,
+                                      tempBY,
                                       tempSTW);
     }
     uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
@@ -267,6 +331,7 @@ void NoteRenderSystem::generateSnapshot(
                                                      judgmentLineY,
                                                      trackCount,
                                                      config,
+                                                     bgmTrackCount,
                                                      cache,
                                                      leftX,
                                                      rightX,
@@ -285,6 +350,18 @@ void NoteRenderSystem::generateSnapshot(
         }
     }
 
+    // 整轨光效属于轨道覆盖层：在静态布局之后、拍线和物件之前绘制，
+    // 避免半透明渐变覆盖物件本身；固定尺寸特效继续在 Phase 3 置顶。
+    if ( Config::SkinManager::instance().getHitEffectLayoutMode() ==
+             Config::HitEffectLayoutMode::TrackFill &&
+         !deferredHitCmds.empty() ) {
+        batcher.flush();
+        snapshot->cmds.insert(snapshot->cmds.end(),
+                              deferredHitCmds.begin(),
+                              deferredHitCmds.end());
+        deferredHitCmds.clear();
+    }
+
     // 记录静态边界 (此时 snapshot->vertices 包含了特效和布局的顶点)
     if ( cameraId != "Timeline" ) {
         snapshot->staticVertexCount =
@@ -298,6 +375,7 @@ void NoteRenderSystem::generateSnapshot(
     snapshot->renderScaleY = renderScaleY;
 
     if ( cameraId != "Timeline" ) {
+        batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         // 先绘制拍线，使其在物件下方
         const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
                                            Config::BeatLineDisplayMode::Hidden;
@@ -328,7 +406,42 @@ void NoteRenderSystem::generateSnapshot(
                                             bottomY,
                                             trackAreaW,
                                             renderScaleY,
-                                            revealBeatLinesNearCursor);
+                                            revealBeatLinesNearCursor,
+                                            1.0F);
+        }
+
+        if ( isMainCanvas && shouldDrawBeatLines ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            const float visibleLeft = std::max(0.0F, laneProjection.bgmLeftX);
+            const float visibleRight =
+                std::min(viewportWidth, laneProjection.bgmRightX);
+            if ( visibleRight > visibleLeft ) {
+                batcher.setScissor(visibleLeft,
+                                   topY,
+                                   visibleRight - visibleLeft,
+                                   bottomY - topY);
+                NoteRenderSystem::drawBeatLines(batcher,
+                                                viewportHeight,
+                                                judgmentLineY,
+                                                config,
+                                                bpmEvents,
+                                                renderTime,
+                                                cache,
+                                                visibleLeft,
+                                                topY,
+                                                bottomY,
+                                                visibleRight - visibleLeft,
+                                                renderScaleY,
+                                                revealBeatLinesNearCursor,
+                                                0.28F);
+                batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+            }
         }
 
         if ( shouldDrawTimingLines ) {
@@ -345,7 +458,21 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
-        batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+        float noteRenderRightX = rightX;
+        if ( isMainCanvas &&
+             hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            noteRenderRightX = laneProjection.bgmRightX;
+            batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+        } else {
+            batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+        }
         NoteRenderSystem::renderNotes(registry,
                                       snapshot,
                                       cameraId,
@@ -355,11 +482,34 @@ void NoteRenderSystem::generateSnapshot(
                                       config,
                                       batcher,
                                       leftX,
-                                      rightX,
+                                      noteRenderRightX,
                                       topY,
                                       bottomY,
                                       singleTrackW,
                                       renderScaleY);
+        if ( isMainCanvas ) {
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout.left,
+                config.visual.trackLayout.right,
+                snapshot->canvasHorizontalOffsetX);
+            SampleRenderSystem::renderSamples(sampleRegistry,
+                                              sortedSampleEntities,
+                                              sortedSampleMaxEndPrefix,
+                                              snapshot,
+                                              batcher,
+                                              laneProjection,
+                                              cache,
+                                              config,
+                                              renderTime,
+                                              judgmentLineY,
+                                              viewportWidth,
+                                              topY,
+                                              bottomY,
+                                              renderScaleY);
+        }
         if ( cameraId == "Preview" ) {
             float lx = config.visual.previewConfig.margin.left;
             float rx = viewportWidth - config.visual.previewConfig.margin.right;
@@ -580,8 +730,9 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     if ( professionalMode ) {
         constexpr glm::vec4 laneColors[PROFESSIONAL_TIMELINE_LANE_COUNT] = {
-            { 0.39f, 0.69f, 0.75f, 0.22f }, { 1.0f, 0.28f, 0.28f, 0.20f },
-            { 0.28f, 1.0f, 0.38f, 0.18f },  { 0.34f, 0.55f, 1.0f, 0.18f },
+            { 1.0f, 0.28f, 0.28f, 0.20f },
+            { 0.28f, 1.0f, 0.38f, 0.18f },
+            { 0.34f, 0.55f, 1.0f, 0.18f },
             { 1.0f, 0.87f, 0.28f, 0.18f },
         };
         const float laneWidth =
@@ -975,20 +1126,16 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-    float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
+    int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
+    float& rightX, float& topY, float& bottomY, float& trackAreaW,
+    float& singleTrackW, float renderScaleY)
 {
     BackgroundRenderSystem::render(
         batcher, viewportWidth, viewportHeight, config, snapshot);
 
-    // 设置轨道区域裁剪
-    float lx = viewportWidth * config.visual.trackLayout.left;
-    float rx = viewportWidth * config.visual.trackLayout.right;
-    // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量
-    batcher.setScissor(
-        lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
-
     if ( !snapshot->hasBeatmap ) {
+        // Logo 属于完整画布占位内容，不应继承轨道布局的水平裁剪范围。
+        batcher.setScissor(0.0f, 0.0f, viewportWidth, viewportHeight);
         batcher.setTexture(TextureID::Logo);
         float logoSize = std::min(viewportWidth, viewportHeight) * 0.4f;
         float cx       = viewportWidth * 0.5f;
@@ -999,6 +1146,18 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                          logoSize,
                          { 1.0f, 1.0f, 1.0f, 0.15f });
     } else {
+        // 谱面布局只允许在轨道水平范围内生成基础绘制命令。
+        const auto projection =
+            calculatePlayerTrackProjection(viewportWidth,
+                                           trackCount,
+                                           config.visual.trackLayout.left,
+                                           config.visual.trackLayout.right,
+                                           snapshot->canvasHorizontalOffsetX);
+        const float lx = projection.leftX;
+        const float rx = projection.rightX;
+        // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量。
+        batcher.setScissor(
+            lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
         NoteRenderSystem::renderTrackLayout(batcher,
                                             viewportWidth,
                                             viewportHeight,
@@ -1015,6 +1174,19 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                             trackAreaW,
                                             singleTrackW,
                                             renderScaleY);
+        const auto laneProjection =
+            calculateCanvasLaneProjection(viewportWidth,
+                                          trackCount,
+                                          bgmTrackCount,
+                                          config.visual.trackLayout.left,
+                                          config.visual.trackLayout.right,
+                                          snapshot->canvasHorizontalOffsetX);
+        SampleRenderSystem::renderLaneLayout(batcher,
+                                             laneProjection,
+                                             bgmTrackCount,
+                                             viewportWidth,
+                                             topY,
+                                             bottomY);
     }
 }
 
@@ -1036,6 +1208,10 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
         case HoverPart::PolylineNode:
             color = { 1.0f, 1.0f, 0.15f, 0.85f };
             break;
+        case HoverPart::SampleAnchor:
+            color = { 0.25f, 0.85f, 1.0f, 0.9f };
+            break;
+        case HoverPart::SampleOffset: color = { 1.0f, 0.5f, 0.2f, 0.9f }; break;
         case HoverPart::None: color = { 1.0f, 1.0f, 1.0f, 0.45f }; break;
         }
 

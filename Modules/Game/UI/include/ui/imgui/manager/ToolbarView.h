@@ -4,6 +4,7 @@
 #include "common/NoteColor.h"
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
+#include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
 #include <array>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -26,6 +27,7 @@ public:
 
     /// @brief 绘制工具栏主界面。
     /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：每帧执行，禁止引入阻塞或文件系统操作。
     void update(UIManager* sourceManager) override;
 
 private:
@@ -69,6 +71,14 @@ private:
     float m_lastKeyBtnY      = 0.0f;
     float m_keyPopupWidth    = 160.0f;
     float m_keyPopupHeight   = 120.0f;
+    /// @brief 是否显示磁铁工具设置弹窗。
+    bool m_showMagnetPopup{ false };
+    /// @brief 上一帧磁铁工具按钮的屏幕 Y 坐标，用于定位弹窗。
+    float m_lastMagnetBtnY{ 0.0f };
+    /// @brief 磁铁工具弹窗上一帧宽度，用于防止视口越界。
+    float m_magnetPopupWidth{ 280.0f };
+    /// @brief 磁铁工具弹窗上一帧高度，用于防止视口越界。
+    float m_magnetPopupHeight{ 360.0f };
     /// @brief 是否显示分拍线模式设置弹窗。
     bool m_showBeatLinePopup{ false };
     /// @brief 上一帧分拍线模式按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -79,6 +89,8 @@ private:
     float m_beatLinePopupHeight{ 220.0f };
     /// @brief 自动显示比例是否有尚未写入配置文件的修改。
     bool m_beatLinePopupConfigDirty{ false };
+    /// @brief 最近使用的两个分拍线显示模式，用于快捷键双向切换。
+    BeatLineDisplayModeHistory m_beatLineDisplayModeHistory;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -87,6 +99,16 @@ private:
     float m_speedPopupWidth{ 160.0f };
     /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
     float m_speedPopupHeight{ 120.0f };
+    /// @brief 是否显示音效分区与逐轨混音控制工具。
+    bool m_showSoundEffectTool{ false };
+    /// @brief 上一帧音效工具按钮的屏幕 Y 坐标，用于定位弹层。
+    float m_lastSoundEffectToolBtnY{ 0.0f };
+    /// @brief 绑定分类增益草稿是否已从配置初始化。
+    bool m_soundEffectGainDraftInitialized{ false };
+    /// @brief 未绑定音效文件的实时增益草稿。
+    float m_unboundHitSoundGainDraft{ 1.0f };
+    /// @brief 已绑定音效文件的实时增益草稿。
+    float m_boundHitSoundGainDraft{ 1.0f };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
     /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -180,6 +202,17 @@ private:
     /// @param dpiScale 当前 DPI 缩放。
     /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
     void renderBeatLinePopup(float dpiScale);
+
+    /// @brief 绘制滚动画布与物件放置磁吸设置弹窗。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
+    void renderMagnetPopup(float dpiScale);
+
+    /// @brief 绘制锚定在工具栏按钮旁的音效逐轨与分类控制弹层。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI
+    /// 热路径：弹层打开时每帧执行，仅绘制滚动区可见轨道行并提交命令。
+    void renderSoundEffectTool(float dpiScale);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。

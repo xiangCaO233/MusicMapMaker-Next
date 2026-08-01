@@ -54,6 +54,14 @@ constexpr bool shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute route)
     return route == BpmPlaybackRoute::SynchronizedWithEditor;
 }
 
+/// @brief 判断 BPM 工具是否可以直接调用独立试听 transport。
+/// @param route 当前播放路由。
+/// @return 仅 Audition 路由返回 true；同步路由必须派发逻辑命令。
+constexpr bool shouldDirectlyControlBpmAudioTransport(BpmPlaybackRoute route)
+{
+    return route == BpmPlaybackRoute::Audition;
+}
+
 /// @brief 判断 BPM 工具聚焦时的空格键是否应切换工具音轨播放状态。
 /// @param hasModifier 当前是否按下任意修饰键。
 /// @param wantsTextInput 当前焦点控件是否正在接收文字输入。

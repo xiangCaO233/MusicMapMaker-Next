@@ -1,3 +1,4 @@
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "ui/UIManager.h"

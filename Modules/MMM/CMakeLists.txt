@@ -1,6 +1,8 @@
 add_library(
-  MMM STATIC src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
-             src/note/Note.cpp src/note/Hold.cpp src/timing/Timing.cpp)
+  MMM STATIC
+  src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
+  src/note/Note.cpp src/note/Hold.cpp src/project/AudioResource.cpp
+  src/timing/Timing.cpp)
 
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(MMM PUBLIC Log Event 3rd_nlohmann_json)
@@ -62,6 +64,12 @@ target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
 
+# 跨格式物件绑定音效测试覆盖 osu! sampleFile、Malody sound 与原生 MMM 往返。
+mmm_add_test_executable(MMM BoundNoteSoundTest tests/BoundNoteSoundTest.cpp)
+target_link_libraries(BoundNoteSoundTest PRIVATE MMM Log)
+add_test(NAME Test_Bound_Note_Sound
+         COMMAND BoundNoteSoundTest "${TEST_OUTPUT_DIR}/bound_note_sound")
+
 # 1. MMM Native Format Test
 mmm_add_test_executable(MMM MapConsistencyTest tests/MapConsistencyTest.cpp)
 target_link_libraries(MapConsistencyTest PRIVATE MMM Log)
@@ -88,3 +96,8 @@ target_link_libraries(BeatmapSpeedTransformTest PRIVATE MMM Log)
 add_test(NAME Test_Beatmap_Speed_Transform
          COMMAND BeatmapSpeedTransformTest "${MMM_TEST_RESOURCE_DIR}/ma"
                  "${TEST_OUTPUT_DIR}/speed_transform_coverage")
+
+# 打包文件类型测试覆盖各目标格式的资源候选与写入扩展名规则。
+mmm_add_test_executable(MMM PackageFileTypesTest tests/PackageFileTypesTest.cpp)
+target_link_libraries(PackageFileTypesTest PRIVATE MMM Log)
+add_test(NAME Test_Package_File_Types COMMAND PackageFileTypesTest)

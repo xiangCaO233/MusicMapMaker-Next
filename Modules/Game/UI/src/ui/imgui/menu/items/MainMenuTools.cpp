@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/items/MainMenuTools.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/Icons.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include <memory>
@@ -48,6 +49,18 @@ MainMenuTools::MainMenuTools()
         MainMenuItemTextKind::Literal,
         nullptr,
         createOpenBeatmapSpeedExportAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_BARS,
+        "ui.tools.plugin_list",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenPluginListAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COG,
+        "ui.tools.reload_plugins",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createReloadPluginsAction()));
 }
 
 /// @brief 获取工具菜单标识。

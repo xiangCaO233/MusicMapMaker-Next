@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config/EditorSettings.h"
+#include "config/FrameLimitPreference.h"
 
 namespace MMM::Config
 {

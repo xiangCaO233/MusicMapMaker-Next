@@ -7,11 +7,17 @@
 #include "font/SystemFontResolver.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderPass.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/system/SystemTheme.h"
+#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include "mmm/SafeParse.h"
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -20,6 +26,11 @@
 
 namespace MMM::Graphic
 {
+
+const ImGuiThemeRegistry& VKContext::getThemeRegistry() const
+{
+    return *m_themeRegistry;
+}
 
 /// @brief Wayland 下独立图标字体的视觉缩放，避免 DPI 下方形按钮裁切字形。
 static constexpr float WAYLAND_PURE_ICON_VISUAL_SCALE = 0.86f;
@@ -41,10 +52,9 @@ static float parseFontLayoutFloat(std::string_view value, float fallback)
 {
     if ( value.empty() ) return fallback;
 
-    float      parsed = fallback;
-    const auto result =
-        std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+    const auto  result = Internal::parseFloatingPrefix(value);
+    const float parsed = static_cast<float>(result.value);
+    if ( result.error == std::errc{} && result.parsedLength != 0 &&
          std::isfinite(parsed) && parsed > 0.0f ) {
         return parsed;
     }
@@ -59,6 +69,65 @@ static bool pathExistsNoError(const std::filesystem::path& path)
     std::error_code filesystemError;
     return std::filesystem::exists(path, filesystemError) && !filesystemError;
 }
+
+/// @brief 内置 DeepDark 主题样式。
+static void applyDeepDarkStyle(ImGuiStyle& style);
+/// @brief 内置 Dark 主题样式。
+static void applyDarkStyle(ImGuiStyle& style);
+/// @brief 内置 Light 主题样式。
+static void applyLightStyle(ImGuiStyle& style);
+/// @brief 内置 IVM 经典 Windows 工具软件主题样式。
+static void applyIvmStyle(ImGuiStyle& style);
+/// @brief 内置 Classic 主题样式。
+static void applyClassicStyle(ImGuiStyle& style);
+/// @brief 内置 Microsoft 主题样式。
+static void applyMicrosoftStyle(ImGuiStyle& style);
+/// @brief 内置 Darcula 主题样式。
+static void applyDarculaStyle(ImGuiStyle& style);
+/// @brief 内置 Photoshop 主题样式。
+static void applyPhotoshopStyle(ImGuiStyle& style);
+/// @brief 内置 Unreal 主题样式。
+static void applyUnrealStyle(ImGuiStyle& style);
+/// @brief 内置 Gold 主题样式。
+static void applyGoldStyle(ImGuiStyle& style);
+/// @brief 内置 RoundedVisualStudio 主题样式。
+static void applyRoundedVisualStudioStyle(ImGuiStyle& style);
+/// @brief 内置 SonicRiders 主题样式。
+static void applySonicRidersStyle(ImGuiStyle& style);
+/// @brief 内置 DarkRuda 主题样式。
+static void applyDarkRudaStyle(ImGuiStyle& style);
+/// @brief 内置 SoftCherry 主题样式。
+static void applySoftCherryStyle(ImGuiStyle& style);
+/// @brief 内置 Enemymouse 主题样式。
+static void applyEnemymouseStyle(ImGuiStyle& style);
+/// @brief 内置 DiscordDark 主题样式。
+static void applyDiscordDarkStyle(ImGuiStyle& style);
+/// @brief 内置 Comfy 主题样式。
+static void applyComfyStyle(ImGuiStyle& style);
+/// @brief 内置 PurpleComfy 主题样式。
+static void applyPurpleComfyStyle(ImGuiStyle& style);
+/// @brief 内置 FutureDark 主题样式。
+static void applyFutureDarkStyle(ImGuiStyle& style);
+/// @brief 内置 CleanDark 主题样式。
+static void applyCleanDarkStyle(ImGuiStyle& style);
+/// @brief 内置 Moonlight 主题样式。
+static void applyMoonlightStyle(ImGuiStyle& style);
+/// @brief 内置 Cecilia 主题样式。
+static void applyCeciliaStyle(ImGuiStyle& style);
+/// @brief 内置 ComfortableLight 主题样式。
+static void applyComfortableLightStyle(ImGuiStyle& style);
+/// @brief 内置 HazyDark 主题样式。
+static void applyHazyDarkStyle(ImGuiStyle& style);
+/// @brief 内置 Everforest 主题样式。
+static void applyEverforestStyle(ImGuiStyle& style);
+/// @brief 内置 Windark 主题样式。
+static void applyWindarkStyle(ImGuiStyle& style);
+/// @brief 内置 Rest 主题样式。
+static void applyRestStyle(ImGuiStyle& style);
+/// @brief 内置 ComfortableDarkCyan 主题样式。
+static void applyComfortableDarkCyanStyle(ImGuiStyle& style);
+/// @brief 内置 KazamCherry 主题样式。
+static void applyKazamCherryStyle(ImGuiStyle& style);
 
 static void check_vk_result(VkResult err)
 {
@@ -147,7 +216,7 @@ void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
         applyBootstrapTheme();
     } else {
         setupFonts();
-        applyTheme();
+        reloadPlugins();
     }
     XDEBUG("ImGui Vulkan backend initialized.");
 }
@@ -471,7 +540,7 @@ void VKContext::checkAndRebuildFonts()
 void VKContext::checkAndApplySystemTheme()
 {
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    if ( settings.theme != Config::UITheme::Auto ) {
+    if ( settings.theme != Config::UI_THEME_AUTO_ID ) {
         m_appliedSystemTheme = SystemTheme::Unknown;
         return;
     }
@@ -486,12 +555,89 @@ void VKContext::checkAndApplySystemTheme()
     }
 }
 
+void VKContext::registerBuiltInThemes()
+{
+    auto registerTheme = [this](const char*               id,
+                                ImGuiTheme::ApplyFunction applyFunction) {
+        if ( m_themeRegistry->contains(id) ) return;
+        if ( !m_themeRegistry->registerBuiltInTheme(
+                 std::make_unique<ImGuiTheme>(id,
+                                              id,
+                                              ImGuiThemeOrigin::BuiltIn,
+                                              std::string(),
+                                              std::filesystem::path(),
+                                              std::move(applyFunction))) ) {
+            XERROR("Failed to register built-in ImGui theme: {}", id);
+        }
+    };
+
+    registerTheme("DeepDark", applyDeepDarkStyle);
+    registerTheme("Dark", applyDarkStyle);
+    registerTheme("Light", applyLightStyle);
+    registerTheme("IVM", applyIvmStyle);
+    registerTheme("Classic", applyClassicStyle);
+    registerTheme("Microsoft", applyMicrosoftStyle);
+    registerTheme("Darcula", applyDarculaStyle);
+    registerTheme("Photoshop", applyPhotoshopStyle);
+    registerTheme("Unreal", applyUnrealStyle);
+    registerTheme("Gold", applyGoldStyle);
+    registerTheme("RoundedVisualStudio", applyRoundedVisualStudioStyle);
+    registerTheme("SonicRiders", applySonicRidersStyle);
+    registerTheme("DarkRuda", applyDarkRudaStyle);
+    registerTheme("SoftCherry", applySoftCherryStyle);
+    registerTheme("Enemymouse", applyEnemymouseStyle);
+    registerTheme("DiscordDark", applyDiscordDarkStyle);
+    registerTheme("Comfy", applyComfyStyle);
+    registerTheme("PurpleComfy", applyPurpleComfyStyle);
+    registerTheme("FutureDark", applyFutureDarkStyle);
+    registerTheme("CleanDark", applyCleanDarkStyle);
+    registerTheme("Moonlight", applyMoonlightStyle);
+    registerTheme("Cecilia", applyCeciliaStyle);
+    registerTheme("ComfortableLight", applyComfortableLightStyle);
+    registerTheme("HazyDark", applyHazyDarkStyle);
+    registerTheme("Everforest", applyEverforestStyle);
+    registerTheme("Windark", applyWindarkStyle);
+    registerTheme("Rest", applyRestStyle);
+    registerTheme("ComfortableDarkCyan", applyComfortableDarkCyanStyle);
+    registerTheme("KazamCherry", applyKazamCherryStyle);
+}
+
+ThemePluginReloadResult VKContext::reloadPlugins()
+{
+    registerBuiltInThemes();
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    ThemePluginReloadResult result = m_themeRegistry->reloadThemePlugins(
+        Config::AppPaths::themePluginsRootPath(), settings.disabledPluginIds);
+    applyTheme();
+    return result;
+}
+
+bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
+{
+    if ( !m_themeRegistry->findPlugin(pluginId) ) return false;
+
+    auto& disabledPluginIds =
+        Config::AppConfig::instance().getEditorSettings().disabledPluginIds;
+    if ( enabled ) {
+        std::erase(disabledPluginIds, pluginId);
+    } else if ( std::find(disabledPluginIds.begin(),
+                          disabledPluginIds.end(),
+                          pluginId) == disabledPluginIds.end() ) {
+        disabledPluginIds.emplace_back(pluginId);
+        std::sort(disabledPluginIds.begin(), disabledPluginIds.end());
+    }
+
+    const bool saved = Config::AppConfig::instance().save();
+    reloadPlugins();
+    return saved;
+}
+
 void VKContext::applyTheme()
 {
-    auto& settings    = Config::AppConfig::instance().getEditorSettings();
-    ImGui::GetStyle() = ImGuiStyle();
-    auto appliedTheme = settings.theme;
-    if ( appliedTheme == Config::UITheme::Auto ) {
+    registerBuiltInThemes();
+    auto&       settings = Config::AppConfig::instance().getEditorSettings();
+    std::string appliedThemeId = settings.theme;
+    if ( appliedThemeId == Config::UI_THEME_AUTO_ID ) {
         const SystemTheme systemTheme = getSystemTheme();
         m_appliedSystemTheme          = systemTheme;
         const Config::SkinThemeAppearance appearance =
@@ -500,100 +646,16 @@ void VKContext::applyTheme()
                 : Config::SkinThemeAppearance::Light;
         const std::string& skinTheme =
             Config::SkinManager::instance().getDefaultTheme(appearance);
-        if ( skinTheme == "Dark" )
-            appliedTheme = Config::UITheme::Dark;
-        else if ( skinTheme == "Light" )
-            appliedTheme = Config::UITheme::Light;
-        else if ( skinTheme == "Classic" )
-            appliedTheme = Config::UITheme::Classic;
-        else if ( skinTheme == "DeepDark" )
-            appliedTheme = Config::UITheme::DeepDark;
-        else if ( skinTheme == "Microsoft" )
-            appliedTheme = Config::UITheme::Microsoft;
-        else if ( skinTheme == "Darcula" )
-            appliedTheme = Config::UITheme::Darcula;
-        else if ( skinTheme == "Photoshop" )
-            appliedTheme = Config::UITheme::Photoshop;
-        else if ( skinTheme == "Unreal" )
-            appliedTheme = Config::UITheme::Unreal;
-        else if ( skinTheme == "Gold" )
-            appliedTheme = Config::UITheme::Gold;
-        else if ( skinTheme == "RoundedVisualStudio" )
-            appliedTheme = Config::UITheme::RoundedVisualStudio;
-        else if ( skinTheme == "SonicRiders" )
-            appliedTheme = Config::UITheme::SonicRiders;
-        else if ( skinTheme == "DarkRuda" )
-            appliedTheme = Config::UITheme::DarkRuda;
-        else if ( skinTheme == "SoftCherry" )
-            appliedTheme = Config::UITheme::SoftCherry;
-        else if ( skinTheme == "Enemymouse" )
-            appliedTheme = Config::UITheme::Enemymouse;
-        else if ( skinTheme == "DiscordDark" )
-            appliedTheme = Config::UITheme::DiscordDark;
-        else if ( skinTheme == "Comfy" )
-            appliedTheme = Config::UITheme::Comfy;
-        else if ( skinTheme == "PurpleComfy" )
-            appliedTheme = Config::UITheme::PurpleComfy;
-        else if ( skinTheme == "FutureDark" )
-            appliedTheme = Config::UITheme::FutureDark;
-        else if ( skinTheme == "CleanDark" )
-            appliedTheme = Config::UITheme::CleanDark;
-        else if ( skinTheme == "Moonlight" )
-            appliedTheme = Config::UITheme::Moonlight;
-        else if ( skinTheme == "Cecilia" || skinTheme == "MmmDefault" )
-            appliedTheme = Config::UITheme::Cecilia;
-        else if ( skinTheme == "ComfortableLight" )
-            appliedTheme = Config::UITheme::ComfortableLight;
-        else if ( skinTheme == "HazyDark" )
-            appliedTheme = Config::UITheme::HazyDark;
-        else if ( skinTheme == "Everforest" )
-            appliedTheme = Config::UITheme::Everforest;
-        else if ( skinTheme == "Windark" )
-            appliedTheme = Config::UITheme::Windark;
-        else if ( skinTheme == "Rest" )
-            appliedTheme = Config::UITheme::Rest;
-        else if ( skinTheme == "ComfortableDarkCyan" )
-            appliedTheme = Config::UITheme::ComfortableDarkCyan;
-        else if ( skinTheme == "KazamCherry" )
-            appliedTheme = Config::UITheme::KazamCherry;
+        appliedThemeId =
+            skinTheme == "MmmDefault" ? std::string("Cecilia") : skinTheme;
     } else {
         m_appliedSystemTheme = SystemTheme::Unknown;
     }
 
-    switch ( appliedTheme ) {
-    case Config::UITheme::DeepDark: setDeepDarkStyle(); break;
-    case Config::UITheme::Dark: setDarkStyle(); break;
-    case Config::UITheme::Light: setLightStyle(); break;
-    case Config::UITheme::Classic: setClassicStyle(); break;
-    case Config::UITheme::Microsoft: setMicrosoftStyle(); break;
-    case Config::UITheme::Darcula: setDarculaStyle(); break;
-    case Config::UITheme::Photoshop: setPhotoshopStyle(); break;
-    case Config::UITheme::Unreal: setUnrealStyle(); break;
-    case Config::UITheme::Gold: setGoldStyle(); break;
-    case Config::UITheme::RoundedVisualStudio:
-        setRoundedVisualStudioStyle();
-        break;
-    case Config::UITheme::SonicRiders: setSonicRidersStyle(); break;
-    case Config::UITheme::DarkRuda: setDarkRudaStyle(); break;
-    case Config::UITheme::SoftCherry: setSoftCherryStyle(); break;
-    case Config::UITheme::Enemymouse: setEnemymouseStyle(); break;
-    case Config::UITheme::DiscordDark: setDiscordDarkStyle(); break;
-    case Config::UITheme::Comfy: setComfyStyle(); break;
-    case Config::UITheme::PurpleComfy: setPurpleComfyStyle(); break;
-    case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
-    case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
-    case Config::UITheme::Moonlight: setMoonlightStyle(); break;
-    case Config::UITheme::Cecilia: setCeciliaStyle(); break;
-    case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
-    case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
-    case Config::UITheme::Everforest: setEverforestStyle(); break;
-    case Config::UITheme::Windark: setWindarkStyle(); break;
-    case Config::UITheme::Rest: setRestStyle(); break;
-    case Config::UITheme::ComfortableDarkCyan:
-        setComfortableDarkCyanStyle();
-        break;
-    case Config::UITheme::KazamCherry: setKazamCherryStyle(); break;
-    default: setDeepDarkStyle(); break;
+    if ( !m_themeRegistry->applyTheme(appliedThemeId, ImGui::GetStyle()) ) {
+        XWARN("Unknown or invalid ImGui theme '{}'; falling back to DeepDark",
+              appliedThemeId);
+        m_themeRegistry->applyTheme("DeepDark", ImGui::GetStyle());
     }
 
     // 应用全局缩放 (注意：ScaleAllSizes 是增量修改，但由于各 setStyle
@@ -626,10 +688,9 @@ void VKContext::applyTheme()
 /**
  * @brief 设置DeepDark样式
  */
-void VKContext::setDeepDarkStyle()
+static void applyDeepDarkStyle(ImGuiStyle& style)
 {
     // AdobeInspired 样式，来源为 ImThemes 的 nexacopic 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -760,10 +821,9 @@ void VKContext::setDeepDarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setDarkStyle()
+static void applyDarkStyle(ImGuiStyle& style)
 {
     // Dark 样式，来源为 ImThemes 的 dougbinks 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -896,10 +956,9 @@ void VKContext::setDarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setLightStyle()
+static void applyLightStyle(ImGuiStyle& style)
 {
     // Light 样式，来源为 ImThemes 的 dougbinks 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1030,10 +1089,130 @@ void VKContext::setLightStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.2f, 0.2f, 0.2f, 0.35f);
 }
 
-void VKContext::setClassicStyle()
+/// @brief 设置 IVM 经典 Windows 工具软件样式。
+/// @param style 待覆盖的 ImGui 样式。
+static void applyIvmStyle(ImGuiStyle& style)
+{
+    applyLightStyle(style);
+
+    style.Alpha                    = 1.0f;
+    style.DisabledAlpha            = 0.55f;
+    style.WindowPadding            = ImVec2(7.0f, 6.0f);
+    style.WindowMinSize            = ImVec2(32.0f, 32.0f);
+    style.WindowRounding           = 0.0f;
+    style.WindowBorderSize         = 1.0f;
+    style.WindowBorderHoverPadding = 3.0f;
+    style.WindowTitleAlign         = ImVec2(0.0f, 0.5f);
+    style.WindowMenuButtonPosition = ImGuiDir_Left;
+    style.ChildRounding            = 0.0f;
+    style.ChildBorderSize          = 1.0f;
+    style.PopupRounding            = 0.0f;
+    style.PopupBorderSize          = 1.0f;
+    style.FramePadding             = ImVec2(6.0f, 3.0f);
+    style.FrameRounding            = 0.0f;
+    style.FrameBorderSize          = 1.0f;
+    style.ItemSpacing              = ImVec2(7.0f, 5.0f);
+    style.ItemInnerSpacing         = ImVec2(5.0f, 4.0f);
+    style.CellPadding              = ImVec2(5.0f, 3.0f);
+    style.IndentSpacing            = 18.0f;
+    style.ScrollbarSize            = 16.0f;
+    style.ScrollbarRounding        = 0.0f;
+    style.ScrollbarPadding         = 1.0f;
+    style.GrabMinSize              = 12.0f;
+    style.GrabRounding             = 0.0f;
+    style.TabRounding              = 0.0f;
+    style.TabBorderSize            = 1.0f;
+    style.TabBarBorderSize         = 1.0f;
+    style.TabBarOverlineSize       = 2.0f;
+    style.MenuItemRounding         = 0.0f;
+    style.SelectableRounding       = 0.0f;
+    style.ButtonTextAlign          = ImVec2(0.5f, 0.5f);
+    style.SelectableTextAlign      = ImVec2(0.0f, 0.0f);
+    style.SeparatorSize            = 1.0f;
+    style.SeparatorTextBorderSize  = 1.0f;
+    style.DockingSeparatorSize     = 1.0f;
+    style.AntiAliasedLines         = true;
+    style.AntiAliasedLinesUseTex   = true;
+    style.AntiAliasedFill          = true;
+
+    style.Colors[ImGuiCol_Text]         = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.43f, 0.43f, 0.43f, 1.0f);
+    style.Colors[ImGuiCol_WindowBg]     = ImVec4(0.941f, 0.941f, 0.941f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_PopupBg]      = ImVec4(0.965f, 0.965f, 0.965f, 1.0f);
+    style.Colors[ImGuiCol_Border]       = ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
+    style.Colors[ImGuiCol_BorderShadow] = ImVec4(1.0f, 1.0f, 1.0f, 0.55f);
+    style.Colors[ImGuiCol_FrameBg]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.82f, 0.97f, 0.95f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive]  = ImVec4(0.66f, 0.92f, 0.89f, 1.0f);
+    style.Colors[ImGuiCol_TitleBg]       = ImVec4(0.925f, 0.949f, 0.957f, 1.0f);
+    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.925f, 0.949f, 0.957f, 1.0f);
+    style.Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.90f, 0.92f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_MenuBarBg]     = ImVec4(0.949f, 0.949f, 0.949f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarBg]   = ImVec4(0.91f, 0.91f, 0.91f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.72f, 0.72f, 0.72f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrabHovered] =
+        ImVec4(0.61f, 0.61f, 0.61f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarGrabActive] =
+        ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
+    style.Colors[ImGuiCol_CheckMark]        = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrab]       = ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.0f, 0.88f, 0.16f, 1.0f);
+    style.Colors[ImGuiCol_Button]           = ImVec4(0.91f, 0.91f, 0.91f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered]    = ImVec4(0.82f, 0.97f, 0.95f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive]     = ImVec4(0.67f, 0.91f, 0.88f, 1.0f);
+    style.Colors[ImGuiCol_Header]           = ImVec4(0.91f, 0.82f, 0.92f, 1.0f);
+    style.Colors[ImGuiCol_HeaderHovered]    = ImVec4(0.77f, 0.95f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_HeaderActive]     = ImVec4(0.56f, 0.88f, 0.84f, 1.0f);
+    style.Colors[ImGuiCol_Separator]        = ImVec4(0.63f, 0.63f, 0.63f, 1.0f);
+    style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_SeparatorActive]  = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_ResizeGrip] = ImVec4(0.55f, 0.55f, 0.55f, 0.20f);
+    style.Colors[ImGuiCol_ResizeGripHovered] =
+        ImVec4(0.08f, 0.75f, 0.70f, 0.65f);
+    style.Colors[ImGuiCol_ResizeGripActive] = ImVec4(0.0f, 0.82f, 0.12f, 0.90f);
+    style.Colors[ImGuiCol_InputTextCursor]  = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+    style.Colors[ImGuiCol_TabHovered]       = ImVec4(0.77f, 0.95f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_Tab]              = ImVec4(0.88f, 0.88f, 0.88f, 1.0f);
+    style.Colors[ImGuiCol_TabSelected]      = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_TabSelectedOverline] =
+        ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmed] = ImVec4(0.86f, 0.86f, 0.86f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmedSelected] =
+        ImVec4(0.92f, 0.92f, 0.92f, 1.0f);
+    style.Colors[ImGuiCol_TabDimmedSelectedOverline] =
+        ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+    style.Colors[ImGuiCol_DockingPreview] = ImVec4(0.08f, 0.75f, 0.70f, 0.55f);
+    style.Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.86f, 0.86f, 0.86f, 1.0f);
+    style.Colors[ImGuiCol_PlotLines]      = ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
+    style.Colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.0f, 0.10f, 0.10f, 1.0f);
+    style.Colors[ImGuiCol_PlotHistogram]    = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_PlotHistogramHovered] =
+        ImVec4(0.08f, 0.75f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_TableHeaderBg] = ImVec4(0.93f, 0.93f, 0.93f, 1.0f);
+    style.Colors[ImGuiCol_TableBorderStrong] =
+        ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
+    style.Colors[ImGuiCol_TableBorderLight] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    style.Colors[ImGuiCol_TableRowBg]       = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    style.Colors[ImGuiCol_TableRowBgAlt]  = ImVec4(0.90f, 0.96f, 0.96f, 0.55f);
+    style.Colors[ImGuiCol_TextLink]       = ImVec4(0.0f, 0.40f, 0.38f, 1.0f);
+    style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.08f, 0.75f, 0.70f, 0.35f);
+    style.Colors[ImGuiCol_TreeLines]      = ImVec4(0.62f, 0.62f, 0.62f, 1.0f);
+    style.Colors[ImGuiCol_DragDropTarget] = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_DragDropTargetBg] = ImVec4(0.0f, 0.82f, 0.12f, 0.16f);
+    style.Colors[ImGuiCol_UnsavedMarker]    = ImVec4(1.0f, 0.12f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_NavCursor]        = ImVec4(0.0f, 0.82f, 0.12f, 1.0f);
+    style.Colors[ImGuiCol_NavWindowingHighlight] =
+        ImVec4(0.08f, 0.75f, 0.70f, 0.70f);
+    style.Colors[ImGuiCol_NavWindowingDimBg] =
+        ImVec4(0.80f, 0.80f, 0.80f, 0.30f);
+    style.Colors[ImGuiCol_ModalWindowDimBg] =
+        ImVec4(0.78f, 0.78f, 0.78f, 0.55f);
+}
+
+static void applyClassicStyle(ImGuiStyle& style)
 {
     // Classic 样式，来源为 ImThemes 的 ocornut 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1158,10 +1337,9 @@ void VKContext::setClassicStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.2f, 0.2f, 0.2f, 0.35f);
 }
 
-void VKContext::setMicrosoftStyle()
+static void applyMicrosoftStyle(ImGuiStyle& style)
 {
     // Microsoft 样式，来源为 ImThemes 的 usernameiwantedwasalreadytaken 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1291,10 +1469,9 @@ void VKContext::setMicrosoftStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setDarculaStyle()
+static void applyDarculaStyle(ImGuiStyle& style)
 {
     // Darcula 样式，来源为 ImThemes 的 ice1000 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1427,10 +1604,9 @@ void VKContext::setDarculaStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setPhotoshopStyle()
+static void applyPhotoshopStyle(ImGuiStyle& style)
 {
     // Photoshop 样式，来源为 ImThemes 的 Derydoca 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1557,10 +1733,9 @@ void VKContext::setPhotoshopStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.0f, 0.0f, 0.0f, 0.586f);
 }
 
-void VKContext::setUnrealStyle()
+static void applyUnrealStyle(ImGuiStyle& style)
 {
     // Unreal 样式，来源为 ImThemes 的 dev0-1 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1691,10 +1866,9 @@ void VKContext::setUnrealStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setGoldStyle()
+static void applyGoldStyle(ImGuiStyle& style)
 {
     // Gold 样式，来源为 ImThemes 的 CookiePLMonster 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1828,10 +2002,9 @@ void VKContext::setGoldStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setRoundedVisualStudioStyle()
+static void applyRoundedVisualStudioStyle(ImGuiStyle& style)
 {
     // Rounded Visual Studio 样式，来源为 ImThemes 的 RedNicStone 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -1964,10 +2137,9 @@ void VKContext::setRoundedVisualStudioStyle()
         ImVec4(0.14509805f, 0.14509805f, 0.14901961f, 1.0f);
 }
 
-void VKContext::setSonicRidersStyle()
+static void applySonicRidersStyle(ImGuiStyle& style)
 {
     // Sonic Riders 样式，来源为 ImThemes 的 Sewer56 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -2098,10 +2270,9 @@ void VKContext::setSonicRidersStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setDarkRudaStyle()
+static void applyDarkRudaStyle(ImGuiStyle& style)
 {
     // Dark Ruda 样式，来源为 ImThemes 的 Raikiri 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -2236,10 +2407,9 @@ void VKContext::setDarkRudaStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setSoftCherryStyle()
+static void applySoftCherryStyle(ImGuiStyle& style)
 {
     // Soft Cherry 样式，来源为 ImThemes 的 Patitotective 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.4f;
@@ -2375,10 +2545,9 @@ void VKContext::setSoftCherryStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.3f);
 }
 
-void VKContext::setEnemymouseStyle()
+static void applyEnemymouseStyle(ImGuiStyle& style)
 {
     // Enemymouse 样式，来源为 ImThemes 的 enemymouse 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -2490,10 +2659,9 @@ void VKContext::setEnemymouseStyle()
         ImVec4(0.039215688f, 0.09803922f, 0.08627451f, 0.51f);
 }
 
-void VKContext::setDiscordDarkStyle()
+static void applyDiscordDarkStyle(ImGuiStyle& style)
 {
     // Discord (Dark) 样式，来源为 ImThemes 的 BttrDrgn 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -2627,10 +2795,9 @@ void VKContext::setDiscordDarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setComfyStyle()
+static void applyComfyStyle(ImGuiStyle& style)
 {
     // Comfy 样式，来源为 ImThemes 的 Giuseppe 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.1f;
@@ -2761,10 +2928,9 @@ void VKContext::setComfyStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setPurpleComfyStyle()
+static void applyPurpleComfyStyle(ImGuiStyle& style)
 {
     // Purple Comfy 样式，来源为 ImThemes 的 RegularLunar 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.1f;
@@ -2895,10 +3061,9 @@ void VKContext::setPurpleComfyStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setFutureDarkStyle()
+static void applyFutureDarkStyle(ImGuiStyle& style)
 {
     // Future Dark 样式，来源为 ImThemes 的 rewrking 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 1.0f;
@@ -3038,10 +3203,9 @@ void VKContext::setFutureDarkStyle()
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
 }
 
-void VKContext::setCleanDarkStyle()
+static void applyCleanDarkStyle(ImGuiStyle& style)
 {
     // Clean Dark/Red 样式，来源为 ImThemes 的 ImBritish 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -3168,10 +3332,9 @@ void VKContext::setCleanDarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setMoonlightStyle()
+static void applyMoonlightStyle(ImGuiStyle& style)
 {
     // Moonlight 样式，来源为 ImThemes 的 Madam-Herta 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 1.0f;
@@ -3313,11 +3476,10 @@ void VKContext::setMoonlightStyle()
 /**
  * @brief 设置 Cecilia 塞西莉娅配色派生样式。
  */
-void VKContext::setCeciliaStyle()
+static void applyCeciliaStyle(ImGuiStyle& style)
 {
-    setMoonlightStyle();
+    applyMoonlightStyle(style);
 
-    ImGuiStyle& style = ImGui::GetStyle();
 
     auto skinColor = [](const std::string& key, ImVec4 fallback) {
         const auto& colors = Config::SkinManager::instance().getData().colors;
@@ -3426,10 +3588,9 @@ void VKContext::setCeciliaStyle()
     style.WindowBorderSize = 1.0f;
 }
 
-void VKContext::setComfortableLightStyle()
+static void applyComfortableLightStyle(ImGuiStyle& style)
 {
     // Comfortable Light Orange 样式，来源为 ImThemes 的 SouthCraftX 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 1.0f;
@@ -3568,10 +3729,9 @@ void VKContext::setComfortableLightStyle()
         ImVec4(0.8039216f, 0.8235294f, 0.45490196f, 0.502f);
 }
 
-void VKContext::setHazyDarkStyle()
+static void applyHazyDarkStyle(ImGuiStyle& style)
 {
     // Hazy Dark 样式，来源为 ImThemes 的 kaitabuchi314 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -3704,10 +3864,9 @@ void VKContext::setHazyDarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setEverforestStyle()
+static void applyEverforestStyle(ImGuiStyle& style)
 {
     // Everforest 样式，来源为 ImThemes 的 DestroyerDarkNess 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -3845,10 +4004,9 @@ void VKContext::setEverforestStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setWindarkStyle()
+static void applyWindarkStyle(ImGuiStyle& style)
 {
     // Windark 样式，来源为 ImThemes 的 DestroyerDarkNess 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;
@@ -3982,10 +4140,9 @@ void VKContext::setWindarkStyle()
     style.Colors[ImGuiCol_ModalWindowDimBg]  = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
-void VKContext::setRestStyle()
+static void applyRestStyle(ImGuiStyle& style)
 {
     // Rest 样式，来源为 ImThemes 的 AaronBeardless 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.5f;
@@ -4105,10 +4262,9 @@ void VKContext::setRestStyle()
         ImVec4(0.0f, 0.0f, 0.0f, 0.5647059f);
 }
 
-void VKContext::setComfortableDarkCyanStyle()
+static void applyComfortableDarkCyanStyle(ImGuiStyle& style)
 {
     // Comfortable Dark Cyan 样式，来源为 ImThemes 的 SouthCraftX 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 1.0f;
@@ -4247,10 +4403,9 @@ void VKContext::setComfortableDarkCyanStyle()
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
 }
 
-void VKContext::setKazamCherryStyle()
+static void applyKazamCherryStyle(ImGuiStyle& style)
 {
     // Kazam's Cherry 样式，来源为 ImThemes 的 coyoteclan 配色。
-    ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
     style.DisabledAlpha                    = 0.6f;

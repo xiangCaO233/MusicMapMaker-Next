@@ -1,6 +1,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <fstream>
+#include <nlohmann/json.hpp>
 
 int main()
 {
@@ -47,7 +48,7 @@ int main()
         auto&  e    = j["effect"][i];
         auto   beat = e["beat"];
         double b    = beat[0].get<double>() +
-                   beat[1].get<double>() / beat[2].get<double>();
+                      beat[1].get<double>() / beat[2].get<double>();
         XINFO("  eff[{}] beat={:.4f} {}", i, b, e.dump());
     }
 

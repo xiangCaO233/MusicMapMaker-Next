@@ -1,4 +1,5 @@
 #include "ui/UIManager.h"
+#include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/Utf8Path.h"
@@ -13,6 +14,7 @@
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -28,6 +30,7 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
+#include "ui/imgui/manager/ProjectAudioToolView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -51,6 +54,9 @@ constexpr const char* AUDIO_SPECTRUM_VIEW_NAME = "AudioSpectrum";
 
 /// @brief BPM 测量工具窗口的稳定 UIManager 视图名。
 constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
+
+/// @brief 项目音频工具窗口的稳定 UIManager 视图名。
+constexpr const char* PROJECT_AUDIO_TOOL_VIEW_NAME = "ProjectAudioTool";
 
 /// @brief 独立设置窗口的稳定 UIManager 视图名。
 constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
@@ -157,7 +163,8 @@ bool isProjectWorkspaceDynamicView(const std::string& name)
     return name.rfind("TrackController_", 0) == 0 ||
            name == AUDIO_WAVEFORM_VIEW_NAME ||
            name == AUDIO_SPECTRUM_VIEW_NAME ||
-           name == BPM_MEASUREMENT_TOOL_VIEW_NAME;
+           name == BPM_MEASUREMENT_TOOL_VIEW_NAME ||
+           name == PROJECT_AUDIO_TOOL_VIEW_NAME;
 }
 
 /// @brief 查询项目或皮肤中是否仍存在工作区保存的音轨。
@@ -192,6 +199,44 @@ bool resolveWorkspaceAudioTrack(
     }
 
     return false;
+}
+
+/// @brief 在打开音效控制器前按需加载对应音效。
+/// @param trackId 需要试听或控制的音效资源 ID。
+/// @return 音效已经加载或成功加载时返回 true。
+/// @warning 低频显式交互路径：仅在用户打开或恢复音效控制器时调用，可能
+/// 访问文件系统并等待单个音效解码，禁止放入每帧 UI 更新。
+bool ensureEffectAudioTrackLoaded(const std::string& trackId)
+{
+    auto& audio = Audio::AudioManager::instance();
+    if ( audio.isSoundEffectLoaded(trackId) ) {
+        return true;
+    }
+
+    auto* project = Logic::ProjectController::instance().currentProject();
+    if ( project ) {
+        for ( const auto& resource : project->m_audioResources ) {
+            if ( resource.m_id != trackId ||
+                 resource.m_type != AudioTrackType::Effect ) {
+                continue;
+            }
+
+            const auto absolutePath =
+                project->m_projectRoot / Config::utf8ToPath(resource.m_path);
+            audio.registerSoundEffect(
+                trackId, Config::pathToUtf8(absolutePath), resource.m_config);
+            return audio.ensureSoundEffectLoaded(trackId);
+        }
+    }
+
+    const auto& skinData = Config::SkinManager::instance().getData();
+    if ( auto path = skinData.audioPaths.find(trackId);
+         path != skinData.audioPaths.end() ) {
+        audio.registerSoundEffect(trackId,
+                                  Config::pathToUtf8(path->second),
+                                  audio.getSFXPoolVolume(trackId));
+    }
+    return audio.ensureSoundEffectLoaded(trackId);
 }
 
 /// @brief 判断文本是否拥有指定前缀。
@@ -543,6 +588,10 @@ void UIManager::openAudioTrackController(const std::string& trackId,
                                          const std::string& trackName,
                                          AudioTrackControllerUI::TrackType type)
 {
+    if ( type == AudioTrackControllerUI::TrackType::Effect ) {
+        (void)ensureEffectAudioTrackLoaded(trackId);
+    }
+
     std::string viewName   = AudioTrackControllerUI::makeViewName(trackId);
     auto*       controller = getView<AudioTrackControllerUI>(viewName);
     if ( !controller ) {
@@ -555,6 +604,53 @@ void UIManager::openAudioTrackController(const std::string& trackId,
     if ( controller ) {
         controller->requestDockTo(resolveAudioControllerDockId());
         controller->requestFocus();
+    }
+}
+
+void UIManager::openProjectAudioTool()
+{
+    if ( !hasActiveProjectUiState() || isProjectTransitionInProgress() ) {
+        return;
+    }
+
+    auto* tool = getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME);
+    const bool wasOpen = tool && tool->isOpen();
+    if ( !tool ) {
+        auto view = std::make_unique<ProjectAudioToolView>(
+            TR("title.project_audio_tool").data());
+        tool = view.get();
+        registerView(PROJECT_AUDIO_TOOL_VIEW_NAME, std::move(view));
+    }
+    if ( !tool ) return;
+
+    tool->setOpen(true);
+    tool->requestFocus();
+    if ( auto* project = Logic::EditorEngine::instance().getCurrentProject() ) {
+        project->m_settings.m_workspace.m_projectAudioToolOpen = true;
+        Logic::EditorEngine::instance().saveProject();
+    }
+    if ( !wasOpen ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
+/// @brief 重新加载当前已打开控制器引用的项目音效。
+/// @warning 低频皮肤重载路径：每个已打开音效控制器最多触发一次单文件
+/// 解码，禁止放入每帧 UI 更新。
+void UIManager::reloadOpenEffectAudioTracks()
+{
+    for ( const auto& [name, view] : m_uiviews ) {
+        if ( name.rfind("TrackController_", 0) != 0 || !view ) {
+            continue;
+        }
+
+        auto* controller =
+            static_cast<AudioTrackControllerUI*>(view->getActualInstance());
+        if ( !controller || controller->getTrackType() !=
+                                AudioTrackControllerUI::TrackType::Effect ) {
+            continue;
+        }
+        (void)ensureEffectAudioTrackLoaded(controller->getTrackId());
     }
 }
 
@@ -678,6 +774,7 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
     workspace.m_audioWaveformOpen      = false;
     workspace.m_audioSpectrumOpen      = false;
     workspace.m_bpmMeasurementToolOpen = false;
+    workspace.m_projectAudioToolOpen   = false;
     workspace.m_bpmMeasurementAudioTrackId.clear();
     workspace.m_timingPointsTableOpen  = false;
     workspace.m_overlapCheckOpen       = false;
@@ -717,6 +814,8 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
                 workspace.m_bpmMeasurementAudioTrackId =
                     tool->getSelectedAudioTrackId();
             }
+        } else if ( name == PROJECT_AUDIO_TOOL_VIEW_NAME ) {
+            workspace.m_projectAudioToolOpen = true;
         }
     }
 
@@ -766,6 +865,9 @@ void UIManager::restoreProjectWorkspaceViews(
                                          trackName) ) {
             continue;
         }
+        if ( trackType == AudioTrackControllerUI::TrackType::Effect ) {
+            (void)ensureEffectAudioTrackLoaded(controllerState.m_trackId);
+        }
 
         std::string viewName =
             AudioTrackControllerUI::makeViewName(controllerState.m_trackId);
@@ -804,6 +906,13 @@ void UIManager::restoreProjectWorkspaceViews(
         if ( bpmTool ) {
             bpmTool->openWithAudioTrack(workspace.m_bpmMeasurementAudioTrackId);
         }
+    }
+
+    if ( workspace.m_projectAudioToolOpen &&
+         !getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME) ) {
+        registerView(PROJECT_AUDIO_TOOL_VIEW_NAME,
+                     std::make_unique<ProjectAudioToolView>(
+                         TR("title.project_audio_tool").data()));
     }
 
     if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {

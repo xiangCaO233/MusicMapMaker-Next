@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ui/imgui/menu/MainMenuTypes.h"
-
 namespace MMM::UI
 {
+struct MainMenuContext;
+struct MainMenuItemActivation;
 
 /// @brief 主菜单普通菜单项的业务处理接口。
 class IMainMenuItemActionHandler

@@ -1,24 +1,26 @@
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
-#include "audio/SoundEffectPool.h"
+#include "audio/AudioTimelineMixerNode.h"
+#include "audio/AudioTimelineResourceProcessor.h"
+#include "audio/KeySoundControl.h"
 #include "config/Utf8Path.h"
-#include "event/audio/AudioPlaybackEvent.h"
-#include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
 
 #include <algorithm>
-#include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <ice/core/MixBus.hpp>
-#include <ice/core/PlayCallBack.hpp>
 #include <ice/core/SourceNode.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
+#include <ice/manage/AudioTrack.hpp>
 
 namespace MMM::Audio
 {
@@ -43,179 +45,504 @@ std::string makeAudioPathSyncKey(const std::string& filePath)
     }
     return Config::pathToUtf8(path.lexically_normal());
 }
-}  // namespace
 
-/// @brief IonCachyEngine 播放回调适配器，将音频播放进度转发到事件系统。
-class AudioPlayCallBack : public ice::PlayCallBack
+/// @brief 将秒数安全转换为统一时间线帧。
+/// @param seconds 秒数，允许为负。
+/// @return 限制在 AudioTimelineFrame 可表达范围内的最近帧。
+AudioTimelineFrame secondsToTimelineFrame(double seconds) noexcept
 {
-public:
-    /// @brief 播放完成回调。
-    /// @param loop 本次播放是否为循环播放。
-    void play_done(bool loop) const override
-    {
-        if ( !loop ) {
-            Event::AudioFinishedEvent e;
-            e.isLooping = loop;
-            Event::EventBus::instance().publish(e);
-        }
+    if ( !std::isfinite(seconds) ) return 0;
+
+    const long double frames =
+        static_cast<long double>(seconds) *
+        static_cast<long double>(ice::ICEConfig::internal_format.samplerate);
+    constexpr auto MIN_FRAME = static_cast<long double>(
+        std::numeric_limits<AudioTimelineFrame>::min());
+    constexpr auto MAX_FRAME = static_cast<long double>(
+        std::numeric_limits<AudioTimelineFrame>::max());
+    if ( frames <= MIN_FRAME ) {
+        return std::numeric_limits<AudioTimelineFrame>::min();
     }
-
-    /// @brief 帧播放位置更新回调。
-    /// @param frame_pos 当前播放帧位置。
-    void frameplaypos_updated(size_t frame_pos) override { (void)frame_pos; }
-
-    /// @brief 时间播放位置更新回调。
-    /// @param time_pos 当前播放时间位置。
-    void timeplaypos_updated(std::chrono::nanoseconds time_pos) override
-    {
-        Event::AudioPositionEvent e;
-        e.positionSeconds = std::chrono::duration<double>(time_pos).count();
-        e.systemTimeSeconds =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        Event::EventBus::instance().publish(e);
+    if ( frames >= MAX_FRAME ) {
+        return std::numeric_limits<AudioTimelineFrame>::max();
     }
-};
-
-/// @brief 主音轨播放回调实例，生命周期覆盖整个音频管理器使用期。
-static std::shared_ptr<AudioPlayCallBack> g_callback =
-    std::make_shared<AudioPlayCallBack>();
-
-/// @brief 加载主音轨并接入 EQ、变速器和主混音器。
-/// @param filePath 音频文件绝对路径。
-/// @param config 主音轨配置。
-/// @return 加载成功时返回 true。
-bool AudioManager::loadBGM(const std::string&      filePath,
-                           const AudioTrackConfig& config)
-{
-    if ( !m_audioPool || !m_threadPool ) return false;
-
-    XINFO("Loading BGM: {}", filePath);
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
-
-    if ( !track ) {
-        XERROR("Failed to load audio track: {}", filePath);
-        return false;
-    }
-
-    stop();
-
-    m_bgmTrack.reset();
-    if ( m_stretcher ) {
-        m_mainMixer->remove_source(m_stretcher);
-    } else if ( m_bgmSource ) {
-        m_mainMixer->remove_source(m_bgmSource);
-    }
-    if ( m_mainEQ ) {
-        m_preStretcherMixer->remove_source(m_mainEQ);
-    } else if ( m_bgmSpectrumCapture ) {
-        m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
-    } else if ( m_bgmSource ) {
-        m_preStretcherMixer->remove_source(m_bgmSource);
-    }
-
-    m_mainTrackVolume = config.volume;
-    m_mainTrackMuted  = config.muted;
-
-    m_bgmTrack     = track;
-    m_bgmPath      = filePath;
-    m_bgmSyncKey   = makeAudioPathSyncKey(filePath);
-    m_bgmSource    = std::make_shared<ice::SourceNode>(track);
-    float finalVol = (m_globalMuted || m_bgmGainMuted)
-                         ? 0.0f
-                         : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-    if ( m_mainTrackMuted ) finalVol = 0.0f;
-    m_bgmSource->setvolume(finalVol);
-    m_bgmSource->add_playcallback(g_callback);
-    m_bgmSpectrumCapture =
-        std::make_shared<BackgroundSpectrumCaptureNode>(m_bgmSource);
-
-    m_stretcher = std::make_shared<ice::TimeStretcher>();
-    m_stretcher->set_inputnode(m_preStretcherMixer);
-
-    if ( m_mainEQ ) {
-        m_mainEQ->set_inputnode(m_bgmSpectrumCapture);
-        m_preStretcherMixer->add_source(m_mainEQ);
-    } else {
-        m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
-    }
-    m_mainMixer->add_source(m_stretcher);
-
-    // 应用播放速度与音高
-    setPlaybackSpeed(config.playbackSpeed);
-    setPlaybackPitch(config.playbackPitch);
-
-    // 应用图形均衡器设置
-    if ( config.eqEnabled &&
-         config.eqPreset != static_cast<int>(EQPreset::None) ) {
-        createMainTrackEQ(static_cast<EQPreset>(config.eqPreset));
-        const size_t bandCount = getMainTrackEQBandCount();
-        for ( size_t i = 0; i < bandCount; ++i ) {
-            if ( i < config.eqBandGains.size() ) {
-                setMainTrackEQBandGain(i, config.eqBandGains[i]);
-            }
-            if ( i < config.eqBandQs.size() ) {
-                setMainTrackEQBandQ(i, config.eqBandQs[i]);
-            }
-        }
-    } else {
-        destroyMainTrackEQ();
-    }
-
-    XINFO("BGM loaded successfully.");
-    return true;
+    return static_cast<AudioTimelineFrame>(std::llround(frames));
 }
 
-/// @brief 卸载当前主音轨并断开相关音频节点。
-void AudioManager::unloadBGM()
+/// @brief 追加与指定采样事件关联的加载诊断。
+/// @param result 接收诊断的加载结果。
+/// @param code 诊断类型。
+/// @param event 诊断关联的采样事件。
+void appendTimelineDiagnostic(AudioTimelineLoadResult&        result,
+                              AudioTimelineLoadDiagnosticCode code,
+                              const AudioTimelineLoadEvent&   event)
 {
-    if ( !m_bgmSource && !m_bgmTrack && !m_stretcher && !m_mainEQ ) {
+    const char* message = "未知音频时间线加载问题";
+    switch ( code ) {
+    case AudioTimelineLoadDiagnosticCode::AudioSystemUnavailable:
+        message = "音频系统尚未初始化";
+        break;
+    case AudioTimelineLoadDiagnosticCode::MissingResource:
+        message = "音频资源缺失或无法解码";
+        break;
+    case AudioTimelineLoadDiagnosticCode::InvalidStartTime:
+        message = "采样实际起播时间无效，已按 0 秒载入";
+        break;
+    }
+    result.diagnostics.push_back(AudioTimelineLoadDiagnostic{
+        .code        = code,
+        .eventId     = event.eventId,
+        .resourceKey = event.resourceKey,
+        .filePath    = event.filePath,
+        .message     = message,
+    });
+}
+
+/// @brief 将资源配置音量规范化到其声明的单位范围。
+/// @param volume 资源配置中的线性音量。
+/// @return 有限的 0 到 1 音量。
+float sanitizedResourceVolume(float volume) noexcept
+{
+    return std::isfinite(volume) ? std::clamp(volume, 0.0F, 1.0F) : 0.0F;
+}
+
+/// @brief 将采样物件音量规范化为可混音的非负线性倍率。
+/// @param volume 采样物件线性音量。
+/// @return 有限非负倍率。
+float sanitizedEventVolume(float volume) noexcept
+{
+    return std::isfinite(volume) ? std::max(volume, 0.0F) : 0.0F;
+}
+
+}  // namespace
+
+/// @brief 查找或建立自动采样与 HitEffect 共用的资源 DSP PCM。
+/// @warning 低频控制路径：缓存未命中且无候选时会执行完整离线 DSP。
+std::shared_ptr<const PreparedTimelineAudio>
+AudioManager::getOrPrepareAudioTimelineResource(
+    const std::string& filePath, const std::shared_ptr<ice::AudioTrack>& track,
+    const AudioTrackConfig&                      resourceConfig,
+    std::shared_ptr<const PreparedTimelineAudio> preparedCandidate)
+{
+    if ( !track || track->num_frames() == 0U ) return {};
+
+    const auto processingCacheKey =
+        makeAudioResourceProcessingCacheKey(filePath, resourceConfig);
+    const auto existingPreparedAudio =
+        m_audioTimelineResourceCache.find(processingCacheKey);
+    if ( existingPreparedAudio != m_audioTimelineResourceCache.end() &&
+         existingPreparedAudio->second.sourceTrack.lock() == track ) {
+        if ( auto prepared =
+                 existingPreparedAudio->second.preparedAudio.lock() ) {
+            return prepared;
+        }
+    }
+
+    auto preparedAudio = std::move(preparedCandidate);
+    if ( !preparedAudio ) {
+        preparedAudio = prepareAudioTimelineResource(track, resourceConfig);
+    }
+    if ( preparedAudio ) {
+        m_audioTimelineResourceCache.insert_or_assign(
+            processingCacheKey,
+            CachedTimelineResourceAudio{
+                .sourceTrack   = track,
+                .preparedAudio = preparedAudio,
+            });
+    }
+    return preparedAudio;
+}
+
+/// @brief 在非实时路径准备全部资源并替换复合音频时间线。
+/// @param events 自动采样事件。
+/// @param chartEndSeconds 非音频谱面内容结束时间。
+/// @param fingerprint 完整时间线稳定指纹。
+/// @return 图替换结果及逐事件诊断。
+/// @warning 低频资源路径：会访问文件系统、等待资源解码并执行资源级离线 DSP。
+AudioTimelineLoadResult AudioManager::loadAudioTimeline(
+    const std::vector<AudioTimelineLoadEvent>& events, double chartEndSeconds,
+    const std::string& fingerprint)
+{
+    AudioTimelineLoadResult result;
+    if ( !m_audioPool || !m_threadPool || !m_audioTimelineNode ) {
+        result.diagnostics.push_back(AudioTimelineLoadDiagnostic{
+            .code    = AudioTimelineLoadDiagnosticCode::AudioSystemUnavailable,
+            .message = "音频系统尚未初始化",
+        });
+        return result;
+    }
+
+    static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
+
+    std::vector<PreparedTimelineClip> preparedClips;
+    preparedClips.reserve(events.size());
+    std::unordered_map<std::string, std::shared_ptr<ice::AudioTrack>>
+        tracksByPath;
+    tracksByPath.reserve(events.size());
+    std::unordered_map<std::string,
+                       std::shared_ptr<const PreparedTimelineAudio>>
+        preparedAudioByProcessingKey;
+    preparedAudioByProcessingKey.reserve(events.size());
+    std::erase_if(m_audioTimelineResourceCache, [](const auto& cacheEntry) {
+        return cacheEntry.second.sourceTrack.expired() ||
+               cacheEntry.second.preparedAudio.expired();
+    });
+    std::shared_ptr<ice::AudioTrack> firstLoadedTrack;
+
+    // 先提交全部唯一文件的解码任务，避免逐文件启动后立即等待导致串行化。
+    for ( const auto& event : events ) {
+        if ( event.filePath.empty() || tracksByPath.contains(event.filePath) ) {
+            continue;
+        }
+        auto track =
+            m_audioPool->get_or_load(*m_threadPool, event.filePath).lock();
+        tracksByPath.emplace(event.filePath, std::move(track));
+    }
+    result.requestedSourceCount = tracksByPath.size();
+
+    // 全部解码任务均已提交后，才按事件顺序等待并准备唯一 DSP 结果。
+    for ( const auto& event : events ) {
+        double startSeconds = event.effectiveStartSeconds;
+        if ( !std::isfinite(startSeconds) ) {
+            appendTimelineDiagnostic(
+                result,
+                AudioTimelineLoadDiagnosticCode::InvalidStartTime,
+                event);
+            startSeconds = 0.0;
+        }
+
+        std::shared_ptr<ice::AudioTrack> track;
+        if ( !event.filePath.empty() ) {
+            const auto existingTrack = tracksByPath.find(event.filePath);
+            if ( existingTrack != tracksByPath.end() ) {
+                track = existingTrack->second;
+            }
+        }
+
+        if ( !track ) {
+            ++result.missingClipCount;
+            appendTimelineDiagnostic(
+                result,
+                AudioTimelineLoadDiagnosticCode::MissingResource,
+                event);
+            continue;
+        }
+
+        const auto processingCacheKey = makeAudioResourceProcessingCacheKey(
+            event.filePath, event.resourceConfig);
+        std::shared_ptr<const PreparedTimelineAudio> preparedAudio;
+        const auto                                   existingPreparedAudio =
+            preparedAudioByProcessingKey.find(processingCacheKey);
+        if ( existingPreparedAudio != preparedAudioByProcessingKey.end() ) {
+            preparedAudio = existingPreparedAudio->second;
+        } else {
+            preparedAudio = getOrPrepareAudioTimelineResource(
+                event.filePath, track, event.resourceConfig);
+            preparedAudioByProcessingKey.emplace(processingCacheKey,
+                                                 preparedAudio);
+            if ( preparedAudio ) {
+                ++result.preparedResourceCount;
+            }
+        }
+        if ( !preparedAudio ) {
+            ++result.missingClipCount;
+            appendTimelineDiagnostic(
+                result,
+                AudioTimelineLoadDiagnosticCode::MissingResource,
+                event);
+            continue;
+        }
+
+        if ( !firstLoadedTrack ) firstLoadedTrack = track;
+        const float resourceVolume =
+            event.resourceConfig.muted
+                ? 0.0F
+                : sanitizedResourceVolume(event.resourceConfig.volume);
+        preparedClips.push_back(PreparedTimelineClip{
+            .eventId       = event.eventId,
+            .sourceKey     = event.resourceKey,
+            .startFrame    = secondsToTimelineFrame(startSeconds),
+            .bgmTrackIndex = event.bgmTrackIndex,
+            .volume = resourceVolume * sanitizedEventVolume(event.eventVolume),
+            .audio  = std::move(preparedAudio),
+        });
+    }
+
+    const double normalizedChartEnd =
+        std::isfinite(chartEndSeconds) ? std::max(chartEndSeconds, 0.0) : 0.0;
+    m_audioTimelineBaseClips = std::move(preparedClips);
+    m_audioTimelineRequestedEndFrame =
+        secondsToTimelineFrame(normalizedChartEnd);
+    m_audioTimelineMaximumProcessFrames =
+        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
+    result.scheduleGeneration = m_audioTimelineNode->replaceSchedule(
+        m_audioTimelineBaseClips,
+        m_audioTimelineRequestedEndFrame,
+        m_audioTimelineMaximumProcessFrames);
+    resetMainTimeStretcher();
+    m_audioTimelineLoaded           = true;
+    m_audioTimelineFingerprint      = fingerprint;
+    m_audioTimelineClipCount        = m_audioTimelineNode->clipCount();
+    m_missingAudioTimelineClipCount = result.missingClipCount;
+    m_bgmTrack                      = std::move(firstLoadedTrack);
+    m_bgmPath = events.size() == 1U ? events.front().filePath : std::string{};
+    m_bgmSyncKey = fingerprint;
+
+    refreshAudioTimelineVolume();
+    setPlaybackSpeed(m_speed);
+    setPlaybackPitch(m_playbackPitch);
+    setPlaybackQuality(m_playbackQuality);
+
+    result.success         = true;
+    result.loadedClipCount = m_audioTimelineClipCount;
+    XINFO(
+        "Audio timeline loaded: sources={}, prepared={}, clips={}, missing={}, "
+        "end={}s, fingerprint={}",
+        result.requestedSourceCount,
+        result.preparedResourceCount,
+        result.loadedClipCount,
+        result.missingClipCount,
+        getTotalTime(),
+        fingerprint);
+    return result;
+}
+
+/// @brief 停止并卸载当前复合音频时间线。
+void AudioManager::unloadAudioTimeline()
+{
+    if ( !m_audioTimelineNode || !m_audioTimelineLoaded ) {
         return;
     }
 
-    stop();
-
-    if ( m_mainMixer ) {
-        if ( m_stretcher ) {
-            m_mainMixer->remove_source(m_stretcher);
-        } else if ( m_bgmSource ) {
-            m_mainMixer->remove_source(m_bgmSource);
-        }
-    }
-
-    if ( m_preStretcherMixer ) {
-        if ( m_mainEQ ) {
-            m_preStretcherMixer->remove_source(m_mainEQ);
-        } else if ( m_bgmSpectrumCapture ) {
-            m_preStretcherMixer->remove_source(m_bgmSpectrumCapture);
-        } else if ( m_bgmSource ) {
-            m_preStretcherMixer->remove_source(m_bgmSource);
-        }
-    }
-
-    m_mainEQ.reset();
-    m_mainEQPreset = EQPreset::None;
-    m_stretcher.reset();
-    m_bgmSpectrumCapture.reset();
-    m_bgmSource.reset();
+    static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
+    m_audioTimelineNode->stop();
+    m_audioTimelineNode->clearLoop();
+    clearAllScheduledSoundEffects();
+    m_audioTimelineNode->replaceSchedule(
+        {}, 0, std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    m_audioTimelineBaseClips.clear();
+    m_audioTimelineRequestedEndFrame    = 0;
+    m_audioTimelineMaximumProcessFrames = 1U;
+    resetMainTimeStretcher();
+    m_audioTimelineLoaded = false;
+    m_audioTimelineFingerprint.clear();
+    m_audioTimelineClipCount        = 0U;
+    m_missingAudioTimelineClipCount = 0U;
     m_bgmTrack.reset();
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
-    m_status = PlaybackStatus::Stopped;
-    XINFO("BGM unloaded.");
+    XINFO("Audio timeline unloaded.");
 }
 
-/// @brief 获取当前加载的主音轨数据。
-/// @return 当前主音轨数据；未加载时返回空指针。
+/// @brief 获取当前完整时间线稳定指纹。
+/// @return 未加载时为空字符串。
+const std::string& AudioManager::getLoadedAudioTimelineFingerprint() const
+{
+    return m_audioTimelineFingerprint;
+}
+
+/// @brief 获取当前有效采样片段数量。
+/// @return 调度表中的片段数量。
+std::size_t AudioManager::getLoadedAudioTimelineClipCount() const
+{
+    return m_audioTimelineClipCount;
+}
+
+/// @brief 获取上次加载时缺失的片段数量。
+/// @return 缺失或无法解码的事件数量。
+std::size_t AudioManager::getMissingAudioTimelineClipCount() const
+{
+    return m_missingAudioTimelineClipCount;
+}
+
+/// @brief 判断当前是否已构造时间线时钟。
+/// @return 即使零片段时间线也在已构造时返回 true。
+bool AudioManager::hasLoadedAudioTimeline() const
+{
+    return m_audioTimelineLoaded;
+}
+
+/// @brief 设置整个玩家打击音区的运行时静音覆盖。
+void AudioManager::setPlayerKeySoundAreaMuted(bool muted) noexcept
+{
+    m_keySoundControls->setPlayerAreaMuted(muted);
+}
+
+/// @brief 查询整个玩家打击音区的运行时静音覆盖。
+bool AudioManager::isPlayerKeySoundAreaMuted() const noexcept
+{
+    return m_keySoundControls->isPlayerAreaMuted();
+}
+
+/// @brief 设置指定玩家轨道的 Key 音静音状态。
+void AudioManager::setPlayerKeySoundTrackMuted(std::uint32_t trackIndex,
+                                               bool          muted) noexcept
+{
+    m_keySoundControls->setPlayerTrackMuted(trackIndex, muted);
+}
+
+/// @brief 查询指定玩家轨道是否已静音。
+bool AudioManager::isPlayerKeySoundTrackMuted(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->isPlayerTrackMuted(trackIndex);
+}
+
+/// @brief 设置指定玩家轨道的 Key 音线性增益。
+void AudioManager::setPlayerKeySoundTrackGain(std::uint32_t trackIndex,
+                                              float         gain) noexcept
+{
+    m_keySoundControls->setPlayerTrackGain(trackIndex, gain);
+}
+
+/// @brief 查询指定玩家轨道的 Key 音线性增益。
+float AudioManager::getPlayerKeySoundTrackGain(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->getPlayerTrackGain(trackIndex);
+}
+
+/// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
+void AudioManager::setBgmKeySoundAreaMuted(bool muted) noexcept
+{
+    m_keySoundControls->setBgmAreaMuted(muted);
+}
+
+/// @brief 查询整个 BGM 轨道区是否已静音。
+bool AudioManager::isBgmKeySoundAreaMuted() const noexcept
+{
+    return m_keySoundControls->isBgmAreaMuted();
+}
+
+/// @brief 设置整个 BGM Key 音区的线性增益。
+void AudioManager::setBgmKeySoundAreaGain(float gain) noexcept
+{
+    m_keySoundControls->setBgmAreaGain(gain);
+}
+
+/// @brief 查询整个 BGM Key 音区的线性增益。
+float AudioManager::getBgmKeySoundAreaGain() const noexcept
+{
+    return m_keySoundControls->getBgmAreaGain();
+}
+
+/// @brief 设置指定 BGM 轨道的 Key 音静音状态。
+void AudioManager::setBgmKeySoundTrackMuted(std::uint32_t trackIndex,
+                                            bool          muted) noexcept
+{
+    m_keySoundControls->setBgmTrackMuted(trackIndex, muted);
+}
+
+/// @brief 查询指定 BGM 轨道是否已静音。
+bool AudioManager::isBgmKeySoundTrackMuted(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->isBgmTrackMuted(trackIndex);
+}
+
+/// @brief 设置指定 BGM 轨道的 Key 音线性增益。
+void AudioManager::setBgmKeySoundTrackGain(std::uint32_t trackIndex,
+                                           float         gain) noexcept
+{
+    m_keySoundControls->setBgmTrackGain(trackIndex, gain);
+}
+
+/// @brief 查询指定 BGM 轨道的 Key 音线性增益。
+float AudioManager::getBgmKeySoundTrackGain(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->getBgmTrackGain(trackIndex);
+}
+
+/// @brief 设置未绑定或绑定打击音效类别的运行时静音覆盖。
+void AudioManager::setKeySoundEffectGroupMuted(KeySoundEffectGroup group,
+                                               bool muted) noexcept
+{
+    m_keySoundControls->setEffectGroupMuted(group, muted);
+}
+
+/// @brief 查询未绑定或绑定打击音效类别的运行时静音覆盖。
+bool AudioManager::isKeySoundEffectGroupMuted(
+    KeySoundEffectGroup group) const noexcept
+{
+    return m_keySoundControls->isEffectGroupMuted(group);
+}
+
+/// @brief 设置未绑定或绑定打击音效类别的线性增益。
+void AudioManager::setKeySoundEffectGroupGain(KeySoundEffectGroup group,
+                                              float               gain) noexcept
+{
+    m_keySoundControls->setEffectGroupGain(group, gain);
+}
+
+/// @brief 查询未绑定或绑定打击音效类别的线性增益。
+float AudioManager::getKeySoundEffectGroupGain(
+    KeySoundEffectGroup group) const noexcept
+{
+    return m_keySoundControls->getEffectGroupGain(group);
+}
+
+/// @brief 提交主时间线半开循环范围。
+/// @param startSeconds 循环起点。
+/// @param endSeconds 排除结束点。
+/// @return 参数和时间线均有效时返回 true。
+bool AudioManager::setAudioTimelineLoop(double startSeconds, double endSeconds)
+{
+    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ||
+         !std::isfinite(startSeconds) || !std::isfinite(endSeconds) ||
+         startSeconds >= endSeconds ) {
+        return false;
+    }
+    resetMainTimeStretcher();
+    return m_audioTimelineNode->setLoop({ secondsToTimelineFrame(startSeconds),
+                                          secondsToTimelineFrame(endSeconds) });
+}
+
+/// @brief 关闭主时间线循环并清除拉伸历史。
+void AudioManager::clearAudioTimelineLoop()
+{
+    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
+        resetMainTimeStretcher();
+        m_audioTimelineNode->clearLoop();
+    }
+}
+
+/// @brief 将旧单 BGM 请求包装为零秒单事件时间线。
+/// @param filePath 音频文件路径。
+/// @param config 完整资源配置；高级 DSP 离线应用且不覆盖全局预览参数。
+/// @return 单片段成功载入时返回 true。
+bool AudioManager::loadBGM(const std::string&      filePath,
+                           const AudioTrackConfig& config)
+{
+    const auto fingerprint = makeAudioPathSyncKey(filePath);
+    const auto result      = loadAudioTimeline({ AudioTimelineLoadEvent{
+                                                   .eventId     = 0U,
+                                                   .resourceKey = fingerprint,
+                                                   .filePath    = filePath,
+                                                   .effectiveStartSeconds = 0.0,
+                                                   .eventVolume           = 1.0F,
+                                                   .resourceConfig        = config,
+                                               } },
+                                               0.0,
+                                               fingerprint);
+    return result.success && result.loadedClipCount == 1U;
+}
+
+/// @brief 兼容入口：卸载当前复合时间线。
+void AudioManager::unloadBGM()
+{
+    unloadAudioTimeline();
+}
+
+/// @brief 获取当前时间线首个成功加载的音轨，供旧可视化入口兼容。
+/// @return 没有有效采样时返回空指针。
 std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
 {
     return m_bgmTrack;
 }
 
-/// @brief 获取当前加载的 BGM 文件路径。
-/// @return 当前 BGM 文件路径；未加载时返回空字符串。
+/// @brief 获取单片段兼容时间线的文件路径。
+/// @return 复合时间线或未加载时返回空字符串。
 const std::string& AudioManager::getLoadedBGMPath() const
 {
     return m_bgmPath;
@@ -294,8 +621,8 @@ const std::string& AudioManager::getLoadedAuditionPath() const
     return m_auditionPath;
 }
 
-/// @brief 获取当前 BGM 文件的规范化绝对路径键。
-/// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+/// @brief 获取当前时间线兼容同步键。
+/// @return 完整时间线指纹；未加载时为空。
 const std::string& AudioManager::getLoadedBGMSyncKey() const
 {
     return m_bgmSyncKey;

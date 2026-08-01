@@ -6,16 +6,80 @@
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "logic/ProjectController.h"
+#include "mmm/SafeParse.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 无异常解析侧边栏布局浮点配置。
+/// @param value 配置字符串。
+/// @param fallback 解析失败时的默认值。
+/// @return 解析成功的有限浮点数或默认值。
+float parseSidebarLayoutFloat(std::string_view value, float fallback)
+{
+    if ( value.empty() ) return fallback;
+
+    const auto  result = Internal::parseFloatingPrefix(value);
+    const float parsed = static_cast<float>(result.value);
+    if ( result.error == std::errc{} && result.parsedLength != 0 &&
+         std::isfinite(parsed) && parsed > 0.0f ) {
+        return parsed;
+    }
+    return fallback;
+}
+}  // namespace
+
+float SideBarUI::GetSidebarWidth(float dpiScale)
+{
+    Config::SkinManager& skinCfg = Config::SkinManager::instance();
+    std::string sidebarBaseWStr  = skinCfg.getLayoutConfig("side_bar.width");
+    float       sidebarBaseW = parseSidebarLayoutFloat(sidebarBaseWStr, 32.0f);
+
+    float iconAreaW = std::floor(sidebarBaseW * dpiScale);
+    if ( !Config::AppConfig::instance()
+              .getEditorSettings()
+              .showManagerLabels ) {
+        return iconAreaW;
+    }
+
+    float   maxLabelWidth = 0.0f;
+    ImFont* menuFont      = skinCfg.getFont("menu");
+    if ( menuFont && ImGui::GetCurrentContext() ) {
+        ImGui::PushFont(menuFont, menuFont->LegacySize);
+        const std::array tabs = { SideBarTab::Search,
+                                  SideBarTab::FileExplorer,
+                                  SideBarTab::AudioExplorer,
+                                  SideBarTab::BeatMapExplorer,
+                                  SideBarTab::Settings };
+        for ( auto tab : tabs ) {
+            std::string label = TabToShortLabel(tab);
+            if ( !label.empty() ) {
+                maxLabelWidth = std::max(maxLabelWidth,
+                                         ImGui::CalcTextSize(label.c_str()).x);
+            }
+        }
+        ImGui::PopFont();
+    }
+
+    // 字体或 ImGui 上下文尚未就绪时使用稳定的保底宽度。
+    if ( maxLabelWidth < 1.0f ) {
+        maxLabelWidth = std::floor(40.0f * dpiScale);
+    }
+
+    float labelPadding = std::floor(12.0f * dpiScale);
+    return std::floor(std::max(iconAreaW, maxLabelWidth + labelPadding));
+}
 
 SideBarUI::SideBarUI(const std::string& name) : IUIView(name)
 {

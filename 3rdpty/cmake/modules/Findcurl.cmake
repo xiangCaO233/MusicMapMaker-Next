@@ -40,13 +40,14 @@ if(NOT TARGET 3rd_curl)
     target_compile_definitions(3rd_curl INTERFACE CURL_STATICLIB)
   endif()
   if(WIN32)
-    # 当前预编译 curl 静态包禁用 IDN2/PSL/SSH/HTTP2/压缩后端；
-    # 这里只保留 Windows 系统库，避免把 MSYS2 附加库塞进全静态 exe。
+    # 当前预编译 curl 静态包禁用 IDN2/PSL/SSH/HTTP2/压缩后端； 这里只保留 Windows 系统库，避免把 MSYS2
+    # 附加库塞进全静态 exe。
     target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt iphlpapi)
   elseif(APPLE)
     target_link_libraries(
-      3rd_curl INTERFACE "-framework CoreFoundation"
-                         "-framework SystemConfiguration" "-framework Security")
+      3rd_curl
+      INTERFACE "-framework CoreFoundation" "-framework SystemConfiguration"
+                "-framework Security" "-framework CoreServices")
   else()
     find_package(OpenSSL REQUIRED)
     target_link_libraries(3rd_curl INTERFACE OpenSSL::SSL OpenSSL::Crypto)

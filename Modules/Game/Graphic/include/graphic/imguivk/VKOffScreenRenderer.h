@@ -11,8 +11,10 @@
 #    define VULKAN_HPP_NO_EXCEPTIONS
 #endif
 #include "vulkan/vulkan.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
@@ -101,17 +103,35 @@ protected:
     // 消抖阈值 (150ms 是肉眼感知和性能的平衡点)
     const std::chrono::milliseconds m_debounceThreshold{ 150 };
 
-    // UI 只设置目标，不改实际尺寸
-    /// @brief UI 只设置目标，不改实际尺寸
+    /// @brief 按 ImGui 逻辑尺寸和真实 framebuffer 倍率更新离屏目标尺寸。
+    /// @param logicalW ImGui 内容区逻辑宽度。
+    /// @param logicalH ImGui 内容区逻辑高度。
+    /// @param framebufferScaleX 逻辑像素到 framebuffer 物理像素的横向倍率。
+    /// @param framebufferScaleY 逻辑像素到 framebuffer 物理像素的纵向倍率。
     /// @warning 热路径/原子：ImGui update
     /// 期间可能每帧调用；只有尺寸变化时才写入重建脏位。
     inline void setTargetSize(uint32_t logicalW, uint32_t logicalH,
-                              float dpiScale)
+                              float framebufferScaleX, float framebufferScaleY)
     {
-        uint32_t physicalW = static_cast<uint32_t>(logicalW * dpiScale);
-        uint32_t physicalH = static_cast<uint32_t>(logicalH * dpiScale);
+        const float safeScaleX =
+            std::isfinite(framebufferScaleX) && framebufferScaleX > 0.0F
+                ? framebufferScaleX
+                : 1.0F;
+        const float safeScaleY =
+            std::isfinite(framebufferScaleY) && framebufferScaleY > 0.0F
+                ? framebufferScaleY
+                : 1.0F;
+        const uint32_t physicalW =
+            std::max(1U,
+                     static_cast<uint32_t>(std::lround(
+                         static_cast<float>(logicalW) * safeScaleX)));
+        const uint32_t physicalH =
+            std::max(1U,
+                     static_cast<uint32_t>(std::lround(
+                         static_cast<float>(logicalH) * safeScaleY)));
 
-        if ( physicalW != m_targetWidth || physicalH != m_targetHeight ) {
+        if ( physicalW != m_targetWidth || physicalH != m_targetHeight ||
+             logicalW != m_logicalWidth || logicalH != m_logicalHeight ) {
             // 核心修复：向逻辑线程同步逻辑尺寸而非物理尺寸
             // 因为逻辑线程的渲染系统 (NoteRenderSystem) 基于逻辑坐标生成几何体
             resizeCall(m_logicalWidth, m_logicalHeight, logicalW, logicalH);
@@ -138,19 +158,31 @@ protected:
     /// 来补偿时间差对应的像素移动量，消除因采样混叠导致的周期性停顿
     float m_yOffset{ 0.0f };
 
-    /// @brief 获取 DPI 缩放倍率
-    inline float getDpiScale() const
+    /// @brief 获取横向 framebuffer 物理像素倍率。
+    /// @return 离屏物理宽度与逻辑宽度之比。
+    inline float getFramebufferScaleX() const
     {
         if ( m_logicalWidth == 0 ) return 1.0f;
         return static_cast<float>(m_targetWidth) /
                static_cast<float>(m_logicalWidth);
     }
 
+    /// @brief 获取纵向 framebuffer 物理像素倍率。
+    /// @return 离屏物理高度与逻辑高度之比。
+    inline float getFramebufferScaleY() const
+    {
+        if ( m_logicalHeight == 0 ) return 1.0f;
+        return static_cast<float>(m_targetHeight) /
+               static_cast<float>(m_logicalHeight);
+    }
+
     /// @brief 将逻辑裁剪矩形转换为物理裁剪矩形 (Vulkan Scissor 使用物理坐标)
     inline vk::Rect2D getPhysicalScissor(const vk::Rect2D& logicalScissor) const
     {
-        float scaleX = m_scissorScaleX > 0.0f ? m_scissorScaleX : getDpiScale();
-        float scaleY = m_scissorScaleY > 0.0f ? m_scissorScaleY : getDpiScale();
+        const float scaleX =
+            m_scissorScaleX > 0.0f ? m_scissorScaleX : getFramebufferScaleX();
+        const float scaleY =
+            m_scissorScaleY > 0.0f ? m_scissorScaleY : getFramebufferScaleY();
         vk::Rect2D physical;
         physical.offset.x =
             static_cast<int32_t>(logicalScissor.offset.x * scaleX);

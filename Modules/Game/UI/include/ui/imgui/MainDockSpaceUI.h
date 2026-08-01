@@ -1,9 +1,7 @@
 #pragma once
 
-#include "event/core/EventBus.h"
-#include "event/ui/GLFWNativeEvent.h"
-#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.h"
 #include "ui/imgui/feedback/SaveResultFeedback.h"
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/MainMenuView.h"
@@ -12,6 +10,10 @@
 #include <functional>
 #include <memory>
 
+namespace MMM::Graphic
+{
+class VKTexture;
+}
 
 namespace MMM::UI
 {
@@ -51,32 +53,15 @@ private:
     };
 
 public:
-    MainDockSpaceUI(const std::string& name)
-        : IUIView(name), ITextureLoader(name)
-    {
-        // 订阅原生事件以同步窗口最大化状态
-        Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
-            [&](Event::GLFWNativeEvent e) {
-                if ( e.hasStateChange &&
-                     e.type ==
-                         Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
-                    m_isMaximized = e.isMaximized;
-                }
-            });
-
-        // 订阅音频导入触发事件
-        Event::EventBus::instance().subscribe<Event::AudioImportTriggerEvent>(
-            [&](Event::AudioImportTriggerEvent e) {
-                m_pendingImportPath   = e.path;
-                m_showImportTypeModal = true;
-            });
-    }
+    /// @brief 创建主停靠区并订阅原生窗口与音频导入事件。
+    MainDockSpaceUI(const std::string& name);
     MainDockSpaceUI(MainDockSpaceUI&&)                 = delete;
     MainDockSpaceUI(const MainDockSpaceUI&)            = delete;
     MainDockSpaceUI& operator=(MainDockSpaceUI&&)      = delete;
     MainDockSpaceUI& operator=(const MainDockSpaceUI&) = delete;
 
-    ~MainDockSpaceUI() override = default;
+    /// @brief 在纹理类型完整的实现单元中销毁主停靠区资源。
+    ~MainDockSpaceUI() override;
 
     void update(UIManager* sourceManager) override;
 
@@ -147,6 +132,9 @@ public:
 
     /// @brief 保存结果事件反馈气泡组件。
     SaveResultFeedback m_saveResultFeedback;
+
+    /// @brief 谱面加载兼容诊断的中央通知组件。
+    BeatmapLoadDiagnosticFeedback m_beatmapLoadDiagnosticFeedback;
 
     /// @brief PGO 性能数据上传授权窗口组件。
     PgoUploadConsentWindow m_pgoUploadConsentWindow;

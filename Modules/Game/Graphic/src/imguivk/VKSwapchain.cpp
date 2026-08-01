@@ -1,4 +1,6 @@
 #include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/imguivk/VKQueueFamilyDef.h"
+#include "graphic/imguivk/VKRenderPass.h"
 #include "log/colorful-log.h"
 #include <set>
 

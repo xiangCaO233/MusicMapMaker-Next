@@ -78,6 +78,12 @@ public:
     /// 超时时调用；可能同步谱面数据、访问文件系统并保存项目配置。
     bool flushPendingMetadataAutoSave();
 
+    /// @brief 为打包流程立即保存当前会话中的全部未落盘修改。
+    /// @return 没有待保存内容或谱面完整保存成功时返回 true。
+    /// @warning
+    /// 低频阻塞路径：仅允许逻辑线程在打包前调用；会同步完整谱面并访问文件系统。
+    bool saveDirtyBeatmapForPackaging();
+
 private:
     /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
     /// @param currentSysTime 当前单调系统时间（秒）。

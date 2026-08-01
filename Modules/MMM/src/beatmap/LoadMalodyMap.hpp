@@ -6,11 +6,15 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -47,6 +51,26 @@ inline double readMalodyJsonDouble(const json& object, const char* key,
     const auto value = object.find(key);
     if ( value == object.end() ) return defaultValue;
     return parseMalodyJsonDouble(*value, defaultValue);
+}
+
+/// @brief 无异常读取 Malody JSON 对象中的 64 位整数字段。
+/// @param object 待读取的 JSON 对象。
+/// @param key 字段名称。
+/// @param defaultValue 字段缺失、越界或解析失败时使用的默认值。
+/// @return 四舍五入后的 64 位整数或默认值。
+inline std::int64_t readMalodyJsonInt64(const json& object, const char* key,
+                                        std::int64_t defaultValue)
+{
+    const long double value = static_cast<long double>(readMalodyJsonDouble(
+        object, key, std::numeric_limits<double>::quiet_NaN()));
+    if ( !std::isfinite(value) ||
+         value < static_cast<long double>(
+                     std::numeric_limits<std::int64_t>::min()) ||
+         value > static_cast<long double>(
+                     std::numeric_limits<std::int64_t>::max()) ) {
+        return defaultValue;
+    }
+    return static_cast<std::int64_t>(std::llround(value));
 }
 
 /// @brief 从 Malody `.mc` JSON 文件加载谱面。
@@ -103,9 +127,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             basemeta.title_unicode  = song.value("titleorg", "");
             basemeta.artist         = song.value("artist", "");
             basemeta.artist_unicode = song.value("artistorg", "");
-            basemeta.main_audio_path =
+            basemeta.song_file_hint =
                 Config::utf8ToPath(song.value("file", ""));
-            basemeta.preference_bpm = readMalodyJsonDouble(song, "bpm", 0.0);
+            basemeta.main_audio_path = basemeta.song_file_hint;
+            basemeta.preference_bpm  = readMalodyJsonDouble(song, "bpm", 0.0);
         }
 
         if ( meta.contains("mode_ext") ) {
@@ -165,11 +190,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 2. 收集原始时间事件
     struct RawEvent {
         /// @brief Malody 拍号位置。
-        double beat;
+        double beat = 0.0;
         /// @brief Timing 事件使用的 BPM 值。
         double bpm = -1.0;
         /// @brief 非 BPM 事件使用的效果参数。
         double value = 0.0;
+        /// @brief BPM 事件在原始 time 数组中的顺序。
+        std::size_t bpmSourceOrder = 0;
         /// @brief 用于往返保存的原始 JSON 对象。
         json raw;
         /// @brief 内部 Timing 效果类型。
@@ -179,29 +206,34 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     };
     struct BpmEvent {
         /// @brief Malody 拍号位置。
-        double beat;
+        double beat = 0.0;
         /// @brief 从该拍号开始生效的 BPM 值。
-        double bpm;
+        double bpm = 120.0;
+        /// @brief 相对纯 beat 时间追加的局部延迟，单位为毫秒。
+        double delayMs = 0.0;
+        /// @brief 应用当前 delay 后的绝对时间锚点，单位为毫秒。
+        double timestamp = 0.0;
+        /// @brief 对应原始 time 数组的稳定顺序。
+        std::size_t sourceOrder = 0;
     };
     std::vector<RawEvent> rawEvents;
     std::vector<BpmEvent> bpmEvents;
 
-    double time0Delay = 0.0;
-    if ( fileData.contains("time") && fileData["time"].is_array() &&
-         !fileData["time"].empty() ) {
-        const auto& firstTime = fileData["time"][0];
-        time0Delay            = readMalodyJsonDouble(firstTime, "delay", 0.0);
-    }
     if ( fileData.contains("time") ) {
         for ( const auto& t : fileData["time"] ) {
             RawEvent ev;
-            ev.beat  = beatToDouble(t.value("beat", json::array()));
-            ev.bpm   = readMalodyJsonDouble(t, "bpm", 120.0);
-            ev.isBpm = true;
-            ev.raw   = t;
+            ev.beat           = beatToDouble(t.value("beat", json::array()));
+            ev.bpm            = readMalodyJsonDouble(t, "bpm", 120.0);
+            ev.bpmSourceOrder = bpmEvents.size();
+            ev.isBpm          = true;
+            ev.raw            = t;
 
             rawEvents.push_back(ev);
-            bpmEvents.push_back({ ev.beat, ev.bpm });
+            bpmEvents.push_back(
+                { .beat        = ev.beat,
+                  .bpm         = ev.bpm,
+                  .delayMs     = readMalodyJsonDouble(t, "delay", 0.0),
+                  .sourceOrder = ev.bpmSourceOrder });
         }
     }
     if ( fileData.contains("effect") ) {
@@ -221,14 +253,15 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             pushEffect("hs", TimingEffect::HS);
         }
     }
-    std::sort(rawEvents.begin(),
-              rawEvents.end(),
-              [](const RawEvent& a, const RawEvent& b) {
-                  if ( std::abs(a.beat - b.beat) > 1e-9 )
-                      return a.beat < b.beat;
-                  return a.isBpm && !b.isBpm;
-              });
-    std::sort(
+    std::stable_sort(rawEvents.begin(),
+                     rawEvents.end(),
+                     [](const RawEvent& a, const RawEvent& b) {
+                         if ( a.beat != b.beat ) {
+                             return a.beat < b.beat;
+                         }
+                         return a.isBpm && !b.isBpm;
+                     });
+    std::stable_sort(
         bpmEvents.begin(),
         bpmEvents.end(),
         [](const BpmEvent& a, const BpmEvent& b) { return a.beat < b.beat; });
@@ -245,8 +278,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         if ( n.contains("type") ) {
             if ( n["type"].is_string() )
                 return n["type"].get<std::string>() == "SOUND";
-            if ( n["type"].is_number_integer() )
-                return n["type"].get<int>() == 1;
+            if ( n["type"].is_number() ) {
+                return std::abs(parseMalodyJsonDouble(n["type"], 0.0) - 1.0) <=
+                       std::numeric_limits<double>::epsilon();
+            }
         }
         return false;
     };
@@ -364,10 +399,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         return 0;
     };
 
-    // 3. 辅助函数：计算绝对时间 (ms)
-    double audioOffset        = 0.0;
-    bool   hasSoundNoteOffset = false;
-    auto   getInitialBpm      = [&]() {
+    // 3. 辅助函数：计算拍号锚点的绝对时间 (ms)
+    auto getInitialBpm = [&]() {
         double initialBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
         if ( !bpmEvents.empty() && bpmEvents.front().beat <= 0.0 ) {
@@ -375,6 +408,20 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         }
         return initialBpm;
     };
+    std::vector<double> bpmTimestampsBySourceOrder(bpmEvents.size(), 0.0);
+    double              anchorBeat = 0.0;
+    double              anchorTime = 0.0;
+    double              anchorBpm  = getInitialBpm();
+    for ( auto& ev : bpmEvents ) {
+        ev.timestamp = anchorTime +
+                       (ev.beat - anchorBeat) * (60000.0 / anchorBpm) +
+                       ev.delayMs;
+        bpmTimestampsBySourceOrder[ev.sourceOrder] = ev.timestamp;
+        anchorBeat                                 = ev.beat;
+        anchorTime                                 = ev.timestamp;
+        anchorBpm                                  = ev.bpm;
+    }
+
     auto getBpmAtBeat = [&](double beat) {
         double curBpm = getInitialBpm();
         for ( const auto& ev : bpmEvents ) {
@@ -384,57 +431,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         return curBpm;
     };
     auto getAbsTime = [&](double beat) {
-        double curBpm = getInitialBpm();
-
-        double lastB = 0.0;
-        double lastT = 0.0;  // 默认 0.0 对应 beat 0
-
+        const BpmEvent* relative = nullptr;
         for ( const auto& ev : bpmEvents ) {
             if ( ev.beat > beat + 1e-9 ) break;
-            if ( ev.beat > lastB ) {
-                lastT += (ev.beat - lastB) * (60000.0 / curBpm);
-                lastB = ev.beat;
-            }
-            curBpm = ev.bpm;
+            relative = &ev;
         }
-        lastT += (beat - lastB) * (60000.0 / curBpm);
-        return lastT;
+        if ( relative == nullptr ) {
+            return beat * (60000.0 / getInitialBpm());
+        }
+        return relative->timestamp +
+               (beat - relative->beat) * (60000.0 / relative->bpm);
     };
-
-    // 4. 处理音频偏移
-    audioOffset = 0.0;
-    if ( fileData.contains("note") ) {
-        for ( const auto& n : fileData["note"] ) {
-            if ( isSoundNote(n) ) {
-                std::string soundFile = n.value("sound", "");
-                if ( basemeta.main_audio_path.empty() ) {
-                    basemeta.main_audio_path = Config::utf8ToPath(soundFile);
-                }
-                if ( Config::utf8ToPath(soundFile) ==
-                         basemeta.main_audio_path ||
-                     soundFile.empty() ) {
-                    if ( n.contains("offset") ) {
-                        audioOffset = readMalodyJsonDouble(n, "offset", 0.0);
-                        hasSoundNoteOffset = true;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    if ( !hasSoundNoteOffset ) {
-        audioOffset = time0Delay;
-    }
-
-    beatMap.m_metadata.map_properties[MapMetadataType::MALODY]["initialDelay"] =
-        std::to_string(time0Delay);
-    beatMap.m_metadata.map_properties[MapMetadataType::MALODY]["audioOffset"] =
-        std::to_string(audioOffset);
-    XINFO("找到 Malody 音频偏移: {} ms, Timing Delay: {} ms, 音频文件: {}",
-          audioOffset,
-          time0Delay,
-          Config::pathToUtf8(basemeta.main_audio_path));
 
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
@@ -449,7 +456,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             runtimeBeat = 0.0;
             ++clampedNegativeEffectCount;
         }
-        timing.m_timestamp = getAbsTime(runtimeBeat) - audioOffset;
+        timing.m_timestamp = ev.isBpm
+                                 ? bpmTimestampsBySourceOrder[ev.bpmSourceOrder]
+                                 : getAbsTime(runtimeBeat);
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -491,7 +500,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     if ( beatMap.m_timings.empty() ) {
         Timing t;
-        t.m_timestamp             = -audioOffset;
+        t.m_timestamp             = 0.0;
         t.m_bpm                   = currentBpm;
         t.m_beat_length           = 60000.0 / currentBpm;
         t.m_timingEffect          = TimingEffect::BPM;
@@ -513,13 +522,120 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     // 5. 处理物件 (Notes)
+    constexpr std::uint32_t     MALODY_LEGACY_SAMPLE_TRACK_BEGIN = 10U;
+    std::optional<std::int64_t> legacySampleEffectiveTimestampMs;
+    std::uint32_t               nextLegacySampleTrack =
+        std::max(MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                 static_cast<std::uint32_t>(std::max(0, finalK)));
+    std::size_t legacyAutoPositionedSampleCount = 0;
+
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
             if ( !n.contains("beat") ) continue;
-            if ( isSoundNote(n) ) continue;
 
-            double   startBeat = beatToDouble(n["beat"]);
-            double   startTime = getAbsTime(startBeat) - audioOffset;
+            double startBeat = beatToDouble(n["beat"]);
+            double startTime = getAbsTime(startBeat);
+
+            if ( isSoundNote(n) ) {
+                const auto soundIt = n.find("sound");
+                if ( soundIt == n.end() || !soundIt->is_string() ||
+                     soundIt->get_ref<const std::string&>().empty() ) {
+                    continue;
+                }
+
+                AudioSampleEvent& sample =
+                    beatMap.m_audioSamples.emplace_back();
+                sample.m_timestamp = startTime;
+                sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
+                sample.m_audioResourceId =
+                    soundIt->get_ref<const std::string&>();
+                sample.m_volume = static_cast<float>(
+                    readMalodyJsonDouble(n, "vol", 100.0) / 100.0);
+
+                auto& props =
+                    sample.m_metadata
+                        .sample_properties[SampleMetadataType::MALODY];
+                for ( auto it = n.begin(); it != n.end(); ++it ) {
+                    if ( it.key() != "type" && it.key() != "sound" &&
+                         it.key() != "offset" && it.key() != "x" &&
+                         it.key() != "vol" ) {
+                        props[it.key()] = it.value().dump();
+                    }
+                }
+                const auto   xIt = n.find("x");
+                const double parsedX =
+                    xIt == n.end()
+                        ? std::numeric_limits<double>::quiet_NaN()
+                        : parseMalodyJsonDouble(
+                              *xIt, std::numeric_limits<double>::quiet_NaN());
+                const double roundedX = std::round(parsedX);
+                const bool   validBgmTrack =
+                    std::isfinite(parsedX) &&
+                    std::abs(parsedX - roundedX) <= 1e-6 &&
+                    roundedX >= static_cast<double>(finalK) &&
+                    roundedX <=
+                        static_cast<double>(std::numeric_limits<int>::max());
+                if ( xIt == n.end() ) {
+                    const std::int64_t effectiveTimestampMs =
+                        static_cast<std::int64_t>(
+                            std::llround(sample.effectiveTimestamp()));
+                    if ( !legacySampleEffectiveTimestampMs.has_value() ||
+                         *legacySampleEffectiveTimestampMs !=
+                             effectiveTimestampMs ) {
+                        legacySampleEffectiveTimestampMs = effectiveTimestampMs;
+                        nextLegacySampleTrack            = std::max(
+                            MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                            static_cast<std::uint32_t>(std::max(0, finalK)));
+                    }
+                    sample.m_track = nextLegacySampleTrack;
+                    if ( nextLegacySampleTrack <
+                         std::numeric_limits<std::uint32_t>::max() ) {
+                        ++nextLegacySampleTrack;
+                    }
+                    props["original_x"] = "null";
+                    ++legacyAutoPositionedSampleCount;
+                } else if ( validBgmTrack ) {
+                    sample.m_track =
+                        static_cast<uint32_t>(static_cast<int>(roundedX));
+                } else {
+                    sample.m_track      = static_cast<uint32_t>(finalK);
+                    props["original_x"] = xIt == n.end() ? "null" : xIt->dump();
+                    beatMap.m_loadDiagnostics.push_back(
+                        { .m_code = BeatmapLoadDiagnosticCode::
+                              AUDIO_SAMPLE_TRACK_RELOCATED,
+                          .m_severity = BeatmapLoadDiagnosticSeverity::
+                              BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+                          .m_message = fmt::format(
+                              "Malody 自动采样 '{}' 的轨道 x={} 不属于 "
+                              "BGM 区，已迁移到首条 BGM 轨 {}",
+                              sample.m_audioResourceId,
+                              props["original_x"],
+                              finalK),
+                          .m_relatedPath = basemeta.map_path });
+                    XWARN(
+                        "Malody 自动采样 '{}' 的 BGM 轨道 x={} "
+                        "非法，已归入首个 "
+                        "BGM 轨道 {}",
+                        sample.m_audioResourceId,
+                        props["original_x"],
+                        finalK);
+                }
+
+                const std::uint64_t requiredBgmTrackCount64 =
+                    static_cast<std::uint64_t>(sample.m_track) -
+                    static_cast<std::uint64_t>(finalK) + 1;
+                const int requiredBgmTrackCount =
+                    static_cast<int>(std::min<std::uint64_t>(
+                        requiredBgmTrackCount64,
+                        static_cast<std::uint64_t>(
+                            std::numeric_limits<int>::max())));
+                basemeta.bgm_track_count =
+                    std::max(basemeta.bgm_track_count, requiredBgmTrackCount);
+                basemeta.map_length =
+                    std::max(basemeta.map_length, sample.effectiveTimestamp());
+                continue;
+            }
+
             uint32_t track =
                 std::clamp(getNoteTrackIndex(n),
                            0u,
@@ -532,7 +648,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 double rootBeatRaw  = beatToDouble(n["beat"]);
                 double firstSegBeat = rootBeatRaw + beatToDouble(segs[0].value(
                                                         "beat", json::array()));
-                double firstTime    = getAbsTime(firstSegBeat) - audioOffset;
+                double firstTime    = getAbsTime(firstSegBeat);
 
                 int      rootX   = n.value("x", 0);
                 int      xOffset = segs[0].value("x", 0);
@@ -575,8 +691,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         double      stepBeatValue =
                             rootBeatRaw +
                             beatToDouble(s.value("beat", json::array()));
-                        double stepTime =
-                            getAbsTime(stepBeatValue) - audioOffset;
+                        double stepTime = getAbsTime(stepBeatValue);
 
                         int      stepAbsX  = rootX + s.value("x", 0);
                         uint32_t stepTrack = std::clamp(
@@ -629,7 +744,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             } else if ( n.contains("endbeat") ) {
                 // 处理长条 Hold
                 double endBeat   = beatToDouble(n["endbeat"]);
-                double endTime   = getAbsTime(endBeat) - audioOffset;
+                double endTime   = getAbsTime(endBeat);
                 Hold&  hold      = beatMap.m_noteData.holds.emplace_back();
                 hold.m_type      = NoteType::HOLD;
                 hold.m_timestamp = startTime;
@@ -676,6 +791,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
             // 物件元数据存储
             if ( notePtr ) {
+                if ( auto sound = n.find("sound");
+                     sound != n.end() && sound->is_string() ) {
+                    notePtr->setSampleBinding(
+                        { sound->get_ref<const std::string&>(),
+                          static_cast<float>(
+                              readMalodyJsonDouble(n, "vol", 100.0) / 100.0) });
+                }
+
                 auto& props = notePtr->m_metadata
                                   .note_properties[NoteMetadataType::MALODY];
 
@@ -683,7 +806,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                     if ( it.key() != "beat" && it.key() != "column" &&
                          it.key() != "x" && it.key() != "w" &&
                          it.key() != "type" && it.key() != "dir" &&
-                         it.key() != "endbeat" && it.key() != "seg" ) {
+                         it.key() != "endbeat" && it.key() != "seg" &&
+                         it.key() != "sound" && it.key() != "vol" ) {
                         props[it.key()] = it.value().dump();
                     }
                 }
@@ -708,6 +832,27 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
             }
         }
+    }
+
+    if ( legacyAutoPositionedSampleCount > 0 ) {
+        const auto legacyTrackBegin =
+            std::max(MALODY_LEGACY_SAMPLE_TRACK_BEGIN,
+                     static_cast<std::uint32_t>(std::max(0, finalK)));
+        beatMap.m_loadDiagnostics.push_back(
+            { .m_code = BeatmapLoadDiagnosticCode::AUDIO_SAMPLE_TRACK_RELOCATED,
+              .m_severity = BeatmapLoadDiagnosticSeverity::
+                  BEATMAP_LOAD_DIAGNOSTIC_SEVERITY_WARNING,
+              .m_message = fmt::format(
+                  "{} 个缺少 x 的旧版 Malody 自动采样已从绝对轨道 {} "
+                  "开始自动分轨；同一实际触发时刻的采样会依次展开",
+                  legacyAutoPositionedSampleCount,
+                  legacyTrackBegin),
+              .m_relatedPath = basemeta.map_path });
+        XINFO(
+            "已按 Malody Pro Editor 规则为 {} 个缺少 x 的自动采样分轨，"
+            "起始绝对轨道为 {}",
+            legacyAutoPositionedSampleCount,
+            legacyTrackBegin);
     }
 
     // 更新谱面元数据

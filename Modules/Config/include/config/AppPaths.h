@@ -33,6 +33,14 @@ public:
     /// @return skins 目录在用户资源包根目录下的完整路径。
     static std::filesystem::path skinsRootPath();
 
+    /// @brief 获取用户插件根目录。
+    /// @return plugins 目录在用户配置根目录下的完整路径。
+    static std::filesystem::path pluginsRootPath();
+
+    /// @brief 获取 Lua 主题插件目录。
+    /// @return themes 目录在用户插件根目录下的完整路径。
+    static std::filesystem::path themePluginsRootPath();
+
     /// @brief 获取默认皮肤入口脚本路径。
     /// @return mmm-default 皮肤的 skin.lua 完整路径。
     static std::filesystem::path defaultSkinFilePath();

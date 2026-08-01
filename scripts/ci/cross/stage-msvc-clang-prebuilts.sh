@@ -12,7 +12,9 @@ Options:
   --build-type <type>     Prebuilt config directory. Default: RelWithDebInfo
   --compiler-tag <tag>    Prebuilt compiler tag. Default: 2026
   --scope <all|main|ice>  Staging scope. Default: all
+  --packages <list>       Comma-separated packages to stage. Default: all
   --strict-symbols        Fail when a Debug/RelWithDebInfo PDB cannot be found.
+  --embedded-symbols      Remove stale PDBs because CodeView is embedded in archives.
   -h, --help              Show this help
 
 Environment overrides:
@@ -34,16 +36,16 @@ findSourceFile() {
     local outVar="$1"
     shift
 
-    local sourcePath=""
+    local resolvedPath=""
     local candidatePath
     for candidatePath in "$@"; do
         if [[ -f "${buildDir}/${candidatePath}" ]]; then
-            sourcePath="${buildDir}/${candidatePath}"
+            resolvedPath="${buildDir}/${candidatePath}"
             break
         fi
     done
 
-    printf -v "${outVar}" "%s" "${sourcePath}"
+    printf -v "${outVar}" "%s" "${resolvedPath}"
 }
 
 copyLib() {
@@ -51,6 +53,10 @@ copyLib() {
     local packageName="$2"
     local outputName="$3"
     shift 3
+
+    if ! shouldStagePackage "${packageName}"; then
+        return 0
+    fi
 
     local sourcePath=""
     findSourceFile sourcePath "$@"
@@ -92,6 +98,10 @@ copyPdb() {
     local outputName="$3"
     shift 3
 
+    if ! shouldStagePackage "${packageName}"; then
+        return 0
+    fi
+
     case "${buildType}" in
         Debug | RelWithDebInfo)
             ;;
@@ -99,6 +109,15 @@ copyPdb() {
             return 0
             ;;
     esac
+
+    local outputPath="${prebuiltRoot}/binaries/windows/${packageName}/symbols/x86_64/msvc/${compilerTag}/${buildType}/${outputName}"
+    if (( embeddedSymbols )); then
+        if [[ -f "${outputPath}" ]]; then
+            rm -f -- "${outputPath}"
+            printf "removed stale %s\n" "${outputPath#${projectRoot}/}"
+        fi
+        return 0
+    fi
 
     local sourcePath=""
     findPdbByName sourcePath "$@"
@@ -113,7 +132,6 @@ copyPdb() {
         return 0
     fi
 
-    local outputPath="${prebuiltRoot}/binaries/windows/${packageName}/symbols/x86_64/msvc/${compilerTag}/${buildType}/${outputName}"
     install -D -m 0644 "${sourcePath}" "${outputPath}"
     printf "staged %s\n" "${outputPath#${projectRoot}/}"
 }
@@ -173,11 +191,19 @@ stageIceLibWithPdb() {
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 
+shouldStagePackage() {
+    local packageName="$1"
+
+    [[ -z "${packageFilter}" || ",${packageFilter}," == *",${packageName},"* ]]
+}
+
 buildDir="build_cross_msvc_sources"
 buildType="RelWithDebInfo"
 compilerTag="${MSVC_PREBUILT_COMPILER_TAG:-2026}"
 stageScope="all"
+packageFilter=""
 strictSymbols=0
+embeddedSymbols=0
 
 while (( $# > 0 )); do
     case "$1" in
@@ -213,8 +239,20 @@ while (( $# > 0 )); do
             stageScope="$2"
             shift 2
             ;;
+        --packages)
+            if (( $# < 2 )); then
+                printf "error: --packages requires a value\n" >&2
+                exit 1
+            fi
+            packageFilter="$2"
+            shift 2
+            ;;
         --strict-symbols)
             strictSymbols=1
+            shift
+            ;;
+        --embedded-symbols)
+            embeddedSymbols=1
             shift
             ;;
         -h | --help)
@@ -234,6 +272,11 @@ if [[ -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ -n "${packageFilter}" && ",${packageFilter}," == *",,"* ]]; then
+    printf "error: --packages contains an empty package name: %s\n" "${packageFilter}" >&2
+    exit 1
+fi
+
 case "${stageScope}" in
     all | main | ice)
         ;;
@@ -242,6 +285,11 @@ case "${stageScope}" in
         exit 1
         ;;
 esac
+
+if (( strictSymbols && embeddedSymbols )); then
+    printf "error: --strict-symbols and --embedded-symbols cannot be used together\n" >&2
+    exit 1
+fi
 
 buildDir="$(projectPath "${buildDir}")"
 
@@ -257,7 +305,6 @@ freetypePdbName="freetype.pdb"
 spdlogOutputName="spdlog.lib"
 spdlogPdbName="spdlog.pdb"
 zlibOutputName="libzs.lib"
-zlibPdbName="libzs.pdb"
 
 case "${buildType}" in
     Debug | debug)
@@ -268,7 +315,6 @@ case "${buildType}" in
         spdlogOutputName="spdlogd.lib"
         spdlogPdbName="spdlog.pdb"
         zlibOutputName="libzsd.lib"
-        zlibPdbName="libzsd.pdb"
         ;;
 esac
 
@@ -286,19 +332,18 @@ stageMainLibWithPdb "freetype" "${freetypeOutputName}" "${freetypePdbName}" "lib
 stageMainLibWithPdb "glfw" "glfw3.lib" "glfw.pdb" "lib/glfw3.lib" "lib/glfw.lib"
 stageMainLibWithPdb "imgui" "imgui-static.lib" "imgui-static.pdb" "lib/imgui-static.lib"
 stageMainLibWithPdb "implot" "3rd_implot.lib" "3rd_implot.pdb" "lib/3rd_implot.lib"
-copyMainLib "lame" "libmp3lame-static.lib" "3rdpty/lame_inst/lib/libmp3lame-static.lib" "3rdpty/lame_inst/lib/mp3lame.lib" "3rdpty/lame_inst/lib/libmp3lame.lib"
-copyMainPdb "lame" "libmp3lame-static.pdb" "libmp3lame-static.pdb" "mp3lame.pdb" "libmp3lame.pdb"
+stageMainLibWithPdb "lame" "libmp3lame-static.lib" "mp3lame.pdb" "3rdpty/lame_inst/lib/mp3lame.lib"
 stageMainLibWithPdb "libsamplerate" "samplerate.lib" "samplerate.pdb" "3rdpty/libsamplerate/samplerate.lib" "lib/samplerate.lib"
-stageMainLibWithPdb "luajit" "lua51.lib" "lua51.pdb" "luajit/src/lua51.lib"
+stageMainLibWithPdb "luajit" "lua51.lib" "lua51.pdb" "luajit/src/libluajit.a"
 stageMainLibWithPdb "lunasvg" "lunasvg.lib" "lunasvg.pdb" "lib/lunasvg.lib"
 stageMainLibWithPdb "lunasvg" "plutovg.lib" "plutovg.pdb" "lib/plutovg.lib"
 stageMainLibWithPdb "miniz" "3rd_miniz.lib" "3rd_miniz.pdb" "lib/3rd_miniz.lib"
 stageMainLibWithPdb "nativefiledialog-extended" "nfd.lib" "nfd.pdb" "lib/nfd.lib"
 stageMainLibWithPdb "openal" "OpenAL32.lib" "OpenAL.pdb" "lib/OpenAL32.lib" "lib/OpenAL.lib"
-stageMainLibWithPdb "rubberband" "rubberband-static.lib" "rubberband-static.pdb" "rb_inst/lib/rubberband-static.lib" "rb_inst/lib/rubberband.lib" "lib/rubberband-static.lib"
+stageMainLibWithPdb "rubberband" "rubberband-static.lib" "rubberband-static.pdb" "rb_inst/lib/rubberband-static.lib" "rb_inst/lib/rubberband.lib" "rb_inst/lib/librubberband.a" "lib/rubberband-static.lib"
 stageMainLibWithPdb "sdl" "SDL3-static.lib" "SDL3-static.pdb" "lib/SDL3-static.lib" "lib/SDL3.lib"
 stageMainLibWithPdb "spdlog" "${spdlogOutputName}" "${spdlogPdbName}" "lib/${spdlogOutputName}" "lib/spdlog.lib" "lib/spdlogd.lib"
-stageMainLibWithPdb "zlib" "${zlibOutputName}" "${zlibPdbName}" "3rdpty/zlib_inst/lib/${zlibOutputName}" "3rdpty/zlib_inst/lib/libzs.lib" "3rdpty/zlib_inst/lib/libzsd.lib"
+stageMainLibWithPdb "zlib" "${zlibOutputName}" "zlib.pdb" "3rdpty/zlib_inst/lib/libz.lib"
 
 stageIceLibWithPdb "ffmpeg" "avcodec.lib" "avcodec.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/avcodec.lib"
 stageIceLibWithPdb "ffmpeg" "avformat.lib" "avformat.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/avformat.lib"
@@ -307,11 +352,10 @@ stageIceLibWithPdb "ffmpeg" "swresample.lib" "swresample.pdb" "3rdpty/sources/Io
 stageIceLibWithPdb "ffmpeg" "swscale.lib" "swscale.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/swscale.lib"
 stageIceLibWithPdb "fftw" "fftw3.lib" "fftw3.pdb" "3rdpty/fftw_inst/lib/fftw3.lib"
 stageIceLibWithPdb "fmt" "${fmtOutputName}" "${fmtPdbName}" "lib/${fmtOutputName}" "lib/fmt.lib" "lib/fmtd.lib"
-copyIceLib "lame" "libmp3lame-static.lib" "3rdpty/lame_inst/lib/libmp3lame-static.lib" "3rdpty/lame_inst/lib/mp3lame.lib" "3rdpty/lame_inst/lib/libmp3lame.lib"
-copyIcePdb "lame" "libmp3lame-static.pdb" "libmp3lame-static.pdb" "mp3lame.pdb" "libmp3lame.pdb"
+stageIceLibWithPdb "lame" "libmp3lame-static.lib" "mp3lame.pdb" "3rdpty/lame_inst/lib/mp3lame.lib"
 stageIceLibWithPdb "libsamplerate" "samplerate.lib" "samplerate.pdb" "3rdpty/libsamplerate/samplerate.lib" "lib/samplerate.lib"
 stageIceLibWithPdb "openal" "OpenAL32.lib" "OpenAL.pdb" "lib/OpenAL32.lib" "lib/OpenAL.lib"
-stageIceLibWithPdb "rubberband" "rubberband-static.lib" "rubberband-static.pdb" "rb_inst/lib/rubberband-static.lib" "rb_inst/lib/rubberband.lib" "lib/rubberband-static.lib"
+stageIceLibWithPdb "rubberband" "rubberband-static.lib" "rubberband-static.pdb" "rb_inst/lib/rubberband-static.lib" "rb_inst/lib/rubberband.lib" "rb_inst/lib/librubberband.a" "lib/rubberband-static.lib"
 stageIceLibWithPdb "sdl" "SDL3-static.lib" "SDL3-static.pdb" "lib/SDL3-static.lib" "lib/SDL3.lib"
 stageIceLibWithPdb "spdlog" "${spdlogOutputName}" "${spdlogPdbName}" "lib/${spdlogOutputName}" "lib/spdlog.lib" "lib/spdlogd.lib"
-stageIceLibWithPdb "zlib" "${zlibOutputName}" "${zlibPdbName}" "3rdpty/zlib_inst/lib/${zlibOutputName}" "3rdpty/zlib_inst/lib/libzs.lib" "3rdpty/zlib_inst/lib/libzsd.lib"
+stageIceLibWithPdb "zlib" "${zlibOutputName}" "zlib.pdb" "3rdpty/zlib_inst/lib/libz.lib"

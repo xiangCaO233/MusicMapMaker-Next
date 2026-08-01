@@ -12,19 +12,24 @@ add_library(
   src/logic/session/SessionUtils.cpp
   src/logic/session/ActionController.cpp
   src/logic/session/EditorAction.cpp
+  src/logic/session/SampleAction.cpp
   src/logic/session/tool/GrabTool.cpp
   src/logic/session/tool/MarqueeTool.cpp
   src/logic/session/tool/DrawTool.cpp
   src/logic/EditorClipboard.cpp
   src/logic/EditorClipboardProtocol.cpp
+  src/logic/BeatmapLoadDiagnosticPublisher.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
   src/logic/ProjectDirectoryWatcher.cpp
+  src/logic/ProjectStorage.cpp
   src/logic/ProjectResourceService.cpp
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
+  src/logic/audio/AudioTimelineDescriptor.cpp
+  src/logic/audio/PlaybackVisualClock.cpp
   src/logic/BeatmapSyncBuffer.cpp
   src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp
@@ -32,6 +37,8 @@ add_library(
   src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Types.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
+  src/logic/ecs/system/render/AudioObjectLabelRenderer.cpp
+  src/logic/ecs/system/render/SampleRenderSystem.cpp
   src/logic/ecs/system/render/CanvasComponentRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundRenderSystem.cpp
   src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp
@@ -74,9 +81,51 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
 
+mmm_add_test_executable(Logic ObjectPlacementSnapTest
+                        tests/ObjectPlacementSnapTest.cpp)
+target_link_libraries(ObjectPlacementSnapTest PRIVATE Logic Log)
+add_test(NAME ObjectPlacementSnapTest COMMAND ObjectPlacementSnapTest)
+
+# 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。
+mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
+target_link_libraries(ProjectStorageTest PRIVATE Logic Log)
+add_test(NAME ProjectStorageTest COMMAND ProjectStorageTest)
+
+mmm_add_test_executable(Logic ProjectAudioReferenceTest
+                        tests/ProjectAudioReferenceTest.cpp)
+target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
+add_test(NAME ProjectAudioReferenceTest COMMAND ProjectAudioReferenceTest)
+
+# Malody 导出模式测试覆盖临时模式覆盖、Key 自动转换与会话元数据恢复。
+mmm_add_test_executable(Logic MalodyExportModeTest
+                        tests/MalodyExportModeTest.cpp)
+target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
+add_test(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
+
+mmm_add_test_executable(Logic AudioTimelineDescriptorTest
+                        tests/AudioTimelineDescriptorTest.cpp)
+target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
+add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
+
+mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
+                        tests/ProjectDirectoryWatcherTest.cpp)
+target_link_libraries(ProjectDirectoryWatcherTest PRIVATE Logic Log)
+add_test(NAME ProjectDirectoryWatcherTest COMMAND ProjectDirectoryWatcherTest)
+
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
+
+# 连续播放时钟测试覆盖 block 内推演、校准、暂停、Seek、循环与 UI 补间。
+mmm_add_test_executable(Logic PlaybackVisualClockTest
+                        tests/PlaybackVisualClockTest.cpp)
+target_link_libraries(PlaybackVisualClockTest PRIVATE Logic Log)
+add_test(NAME PlaybackVisualClockTest COMMAND PlaybackVisualClockTest)
+
+# 主画布相机测试覆盖中键二维平移、逻辑像素投影和 Resize 比例保持。
+mmm_add_test_executable(Logic CanvasCameraTest tests/CanvasCameraTest.cpp)
+target_link_libraries(CanvasCameraTest PRIVATE Logic Log)
+add_test(NAME CanvasCameraTest COMMAND CanvasCameraTest)
 
 mmm_add_test_executable(Logic BackgroundRenderSystemTest
                         tests/BackgroundRenderSystemTest.cpp)
@@ -89,6 +138,25 @@ target_link_libraries(CanvasComponentRenderSystemTest PRIVATE Logic Log)
 add_test(NAME CanvasComponentRenderSystemTest
          COMMAND CanvasComponentRenderSystemTest)
 
+# 自动采样渲染测试确保 BGM 物件复用当前皮肤的 Note 纹理。
+mmm_add_test_executable(Logic SampleRenderSystemTest
+                        tests/SampleRenderSystemTest.cpp)
+target_link_libraries(SampleRenderSystemTest PRIVATE Logic Log)
+add_test(NAME SampleRenderSystemTest COMMAND SampleRenderSystemTest)
+
+# 玩家物件标签测试确保绑定音效显示只在主画布启用并复用采样标签滚动。
+mmm_add_test_executable(Logic NoteBoundSampleLabelRenderTest
+                        tests/NoteBoundSampleLabelRenderTest.cpp)
+target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
+add_test(NAME NoteBoundSampleLabelRenderTest
+         COMMAND NoteBoundSampleLabelRenderTest)
+
+# Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
+mmm_add_test_executable(Logic LogoPlaceholderScissorTest
+                        tests/LogoPlaceholderScissorTest.cpp)
+target_link_libraries(LogoPlaceholderScissorTest PRIVATE Logic Log)
+add_test(NAME LogoPlaceholderScissorTest COMMAND LogoPlaceholderScissorTest)
+
 mmm_add_test_executable(Logic BrushPaletteSessionStateTest
                         tests/BrushPaletteSessionStateTest.cpp)
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
@@ -98,3 +166,10 @@ add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
 mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
 target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
 add_test(NAME HitEffectStereoTest COMMAND HitEffectStereoTest)
+
+# 旧 MMM 加载诊断测试覆盖一次载入内的事件生成、去重与空输入行为。
+mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest
+                        tests/BeatmapLoadDiagnosticPublisherTest.cpp)
+target_link_libraries(BeatmapLoadDiagnosticPublisherTest PRIVATE Logic Log)
+add_test(NAME BeatmapLoadDiagnosticPublisherTest
+         COMMAND BeatmapLoadDiagnosticPublisherTest)

@@ -1,28 +1,17 @@
 #include "BackgroundSpectrumAnalyzer.h"
 
 #include "audio/AudioManager.h"
-#include "log/colorful-log.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
-#include <mutex>
 #include <numbers>
 #include <utility>
 
 namespace MMM::Audio
 {
-namespace
-{
-/// @brief FFTW 计划创建和销毁使用的进程内互斥量。
-std::mutex& fftwPlanMutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-}  // namespace
-
 BackgroundSpectrumCaptureNode::BackgroundSpectrumCaptureNode(
     std::shared_ptr<ice::IAudioNode> input)
     : m_input(std::move(input))
@@ -90,52 +79,50 @@ void BackgroundSpectrumCaptureNode::copyLatest(std::span<float> left,
 BackgroundSpectrumAnalyzer::BackgroundSpectrumAnalyzer()
 {
     constexpr std::size_t fftSize = BackgroundSpectrumCaptureNode::FFT_SIZE;
+    static_assert((fftSize & (fftSize - 1U)) == 0U);
+
+    constexpr std::size_t bitCount = std::bit_width(fftSize) - 1U;
     for ( std::size_t index = 0U; index < fftSize; ++index ) {
         m_window[index] =
             0.5 -
             0.5 * std::cos(2.0 * std::numbers::pi * static_cast<double>(index) /
                            static_cast<double>(fftSize - 1U));
+
+        std::size_t reversed = 0U;
+        std::size_t value    = index;
+        for ( std::size_t bit = 0U; bit < bitCount; ++bit ) {
+            reversed = (reversed << 1U) | (value & 1U);
+            value >>= 1U;
+        }
+        m_bitReversedIndices[index] = reversed;
     }
 
-    m_fftInputLeft =
-        static_cast<double*>(fftw_malloc(sizeof(double) * fftSize));
-    m_fftInputRight =
-        static_cast<double*>(fftw_malloc(sizeof(double) * fftSize));
-    m_fftOutputLeft = static_cast<fftw_complex*>(
-        fftw_malloc(sizeof(fftw_complex) * (fftSize / 2U + 1U)));
-    m_fftOutputRight = static_cast<fftw_complex*>(
-        fftw_malloc(sizeof(fftw_complex) * (fftSize / 2U + 1U)));
-    if ( !m_fftInputLeft || !m_fftInputRight || !m_fftOutputLeft ||
-         !m_fftOutputRight ) {
-        XERROR("Failed to allocate background spectrum FFT buffers.");
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(fftwPlanMutex());
-    m_fftPlanLeft  = fftw_plan_dft_r2c_1d(static_cast<int>(fftSize),
-                                          m_fftInputLeft,
-                                          m_fftOutputLeft,
-                                          FFTW_ESTIMATE);
-    m_fftPlanRight = fftw_plan_dft_r2c_1d(static_cast<int>(fftSize),
-                                          m_fftInputRight,
-                                          m_fftOutputRight,
-                                          FFTW_ESTIMATE);
-    if ( !m_fftPlanLeft || !m_fftPlanRight ) {
-        XERROR("Failed to create background spectrum FFT plans.");
+    for ( std::size_t index = 0U; index < fftSize / 2U; ++index ) {
+        const double angle      = -2.0 * std::numbers::pi *
+                                  static_cast<double>(index) /
+                                  static_cast<double>(fftSize);
+        m_twiddleFactors[index] = { std::cos(angle), std::sin(angle) };
     }
 }
 
-BackgroundSpectrumAnalyzer::~BackgroundSpectrumAnalyzer()
+void BackgroundSpectrumAnalyzer::executeFft(
+    std::span<std::complex<double>, BackgroundSpectrumCaptureNode::FFT_SIZE>
+        buffer) const
 {
-    {
-        std::lock_guard<std::mutex> lock(fftwPlanMutex());
-        if ( m_fftPlanLeft ) fftw_destroy_plan(m_fftPlanLeft);
-        if ( m_fftPlanRight ) fftw_destroy_plan(m_fftPlanRight);
+    constexpr std::size_t fftSize = BackgroundSpectrumCaptureNode::FFT_SIZE;
+    for ( std::size_t stageSize = 2U; stageSize <= fftSize; stageSize <<= 1U ) {
+        const std::size_t halfStage     = stageSize / 2U;
+        const std::size_t twiddleStride = fftSize / stageSize;
+        for ( std::size_t base = 0U; base < fftSize; base += stageSize ) {
+            for ( std::size_t offset = 0U; offset < halfStage; ++offset ) {
+                const auto even = buffer[base + offset];
+                const auto odd  = buffer[base + offset + halfStage] *
+                                  m_twiddleFactors[offset * twiddleStride];
+                buffer[base + offset]             = even + odd;
+                buffer[base + offset + halfStage] = even - odd;
+            }
+        }
     }
-    if ( m_fftInputLeft ) fftw_free(m_fftInputLeft);
-    if ( m_fftInputRight ) fftw_free(m_fftInputRight);
-    if ( m_fftOutputLeft ) fftw_free(m_fftOutputLeft);
-    if ( m_fftOutputRight ) fftw_free(m_fftOutputRight);
 }
 
 const BackgroundSpectrumLevels& BackgroundSpectrumAnalyzer::analyze(
@@ -170,34 +157,31 @@ const BackgroundSpectrumLevels& BackgroundSpectrumAnalyzer::analyze(
         }
     }
 
-    if ( !m_fftPlanLeft || !m_fftPlanRight || !m_fftInputLeft ||
-         !m_fftInputRight || !m_fftOutputLeft || !m_fftOutputRight ) {
-        m_levels.left.fill(0.0f);
-        m_levels.right.fill(0.0f);
-        m_adaptivePeakReference = 0.0f;
-        return m_levels;
-    }
-
     for ( std::size_t index = 0U;
           index < BackgroundSpectrumCaptureNode::FFT_SIZE;
           ++index ) {
-        m_fftInputLeft[index] =
-            static_cast<double>(m_captureLeft[index]) * m_window[index];
-        m_fftInputRight[index] =
-            static_cast<double>(m_captureRight[index]) * m_window[index];
+        const std::size_t target = m_bitReversedIndices[index];
+        m_fftLeft[target]        = {
+            static_cast<double>(m_captureLeft[index]) * m_window[index], 0.0
+        };
+        m_fftRight[target] = {
+            static_cast<double>(m_captureRight[index]) * m_window[index], 0.0
+        };
     }
-    fftw_execute(m_fftPlanLeft);
-    fftw_execute(m_fftPlanRight);
-    const float leftSignalPeak = updateChannel(
-        m_fftOutputLeft, m_smoothedLeft, m_levels.left, bandCount);
-    const float rightSignalPeak = updateChannel(
-        m_fftOutputRight, m_smoothedRight, m_levels.right, bandCount);
+    executeFft(m_fftLeft);
+    executeFft(m_fftRight);
+    const float leftSignalPeak =
+        updateChannel(m_fftLeft, m_smoothedLeft, m_levels.left, bandCount);
+    const float rightSignalPeak =
+        updateChannel(m_fftRight, m_smoothedRight, m_levels.right, bandCount);
     normalizeLevels(std::max(leftSignalPeak, rightSignalPeak), bandCount);
     return m_levels;
 }
 
 float BackgroundSpectrumAnalyzer::updateChannel(
-    const fftw_complex*                                       spectrum,
+    std::span<const std::complex<double>,
+              BackgroundSpectrumCaptureNode::FFT_SIZE>
+                                                              spectrum,
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& smoothed,
     std::array<float, Config::BACKGROUND_SPECTRUM_MAX_BANDS>& output,
     std::size_t                                               bandCount)
@@ -205,7 +189,7 @@ float BackgroundSpectrumAnalyzer::updateChannel(
     constexpr std::size_t fftSize = BackgroundSpectrumCaptureNode::FFT_SIZE;
     const double          sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    if ( !spectrum || sampleRate <= 0.0 ) {
+    if ( sampleRate <= 0.0 ) {
         output.fill(0.0f);
         return 0.0f;
     }
@@ -241,10 +225,7 @@ float BackgroundSpectrumAnalyzer::updateChannel(
 
         double peakMagnitude = 0.0;
         for ( std::size_t bin = firstBin; bin < finalBin; ++bin ) {
-            const double real = spectrum[bin][0];
-            const double imag = spectrum[bin][1];
-            peakMagnitude =
-                std::max(peakMagnitude, std::sqrt(real * real + imag * imag));
+            peakMagnitude = std::max(peakMagnitude, std::abs(spectrum[bin]));
         }
         const double normalizedMagnitude =
             peakMagnitude * 2.0 / static_cast<double>(fftSize);

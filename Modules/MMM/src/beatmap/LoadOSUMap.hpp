@@ -135,6 +135,9 @@ public:
     }
 };
 
+/// @brief 加载 osu! 谱面并迁移其单音频字段。
+/// @param path 谱面文件路径。
+/// @return 解析出的谱面数据。
 inline BeatMap loadOSUMap(std::filesystem::path path)
 {
     BeatMap beatMap;
@@ -201,6 +204,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     osumeta_props["General::AudioFilename"] = main_audio_rpath;
 
     basemeta.main_audio_path = Config::utf8ToPath(main_audio_rpath);
+    basemeta.song_file_hint  = basemeta.main_audio_path;
 
     osumeta_props["General::AudioLeadIn"] =
         osureader.get_value("General", "AudioLeadIn", std::string("0"));
@@ -435,6 +439,18 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
             firstBpmSet                              = true;
         }
+    }
+
+    // osu! 仅有一个全局音频字段，将其迁移为第一条 BGM 轨上的显式采样。
+    if ( !basemeta.song_file_hint.empty() ) {
+        AudioSampleEvent& sample = beatMap.m_audioSamples.emplace_back();
+        sample.m_timestamp       = 0.0;
+        sample.m_offsetMs        = 0;
+        sample.m_track =
+            static_cast<uint32_t>(std::max(0, basemeta.track_count));
+        sample.m_audioResourceId = Config::pathToUtf8(basemeta.song_file_hint);
+        sample.m_volume          = 1.0F;
+        basemeta.bgm_track_count = std::max(1, basemeta.bgm_track_count);
     }
 
     beatMap.sync();

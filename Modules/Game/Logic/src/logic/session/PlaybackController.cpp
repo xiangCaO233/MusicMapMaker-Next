@@ -1,140 +1,49 @@
 #include "logic/session/PlaybackController.h"
 #include "audio/AudioManager.h"
-#include "config/Utf8Path.h"
-#include "log/colorful-log.h"
-#include "logic/EditorEngine.h"
+#include "common/LogicCommands.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/project/Project.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
+#include <cmath>
 
 namespace MMM::Logic
 {
 namespace
 {
-/// @brief 判断项目音频资源是否匹配谱面主音频路径。
-/// @param resource 待匹配的项目音频资源。
-/// @param mainAudioPath 谱面元数据中保存的主音频路径。
-/// @return ID、原始路径或通用分隔符路径任一匹配时返回 true。
-bool matchesMainAudioPath(const AudioResource&         resource,
-                          const std::filesystem::path& mainAudioPath)
+/// @brief 获取当前控制手势使用的 steady_clock 秒数。
+[[nodiscard]] double currentSteadySeconds() noexcept
 {
-    const std::string audioFileName =
-        Config::pathToUtf8(mainAudioPath.filename());
-    const std::string audioPath = Config::pathToUtf8(mainAudioPath);
-    const std::string genericAudioPath =
-        Config::pathToUtf8Generic(mainAudioPath);
-
-    return resource.m_id == audioFileName || resource.m_path == audioPath ||
-           resource.m_path == genericAudioPath;
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
-/// @brief 查找当前谱面主音频在项目资源表中的轨道配置。
-/// @param project 当前项目。
-/// @param mainAudioPath 谱面元数据中保存的主音频路径。
-/// @return 匹配到的音轨配置；找不到时返回默认配置。
-AudioTrackConfig findMainAudioConfig(const Project&               project,
-                                     const std::filesystem::path& mainAudioPath)
+/// @brief 在暂停命令提交前冻结会话连续时钟，避免回读离散 block 位置。
+/// @param ctx 当前会话。
+/// @param audio 全局音频管理器。
+/// @warning 低频播放控制路径：只读取本地锚点并提交常量级控制命令。
+void pauseAndFreezeVisualClock(SessionContext& ctx, Audio::AudioManager& audio)
 {
-    for ( const auto& resource : project.m_audioResources ) {
-        if ( matchesMainAudioPath(resource, mainAudioPath) ) {
-            return resource.m_config;
-        }
+    const double now         = currentSteadySeconds();
+    double       currentTime = ctx.playbackVisualClock.initialized()
+                                   ? ctx.playbackVisualClock.currentTimeAt(now)
+                                   : ctx.currentTime;
+    const double totalTime   = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    if ( std::isfinite(totalTime) ) {
+        currentTime = std::min(currentTime, totalTime);
     }
-    return {};
-}
-
-/// @brief 将当前播放倍率写回当前谱面主音轨的项目资源配置。
-/// @param ctx 当前播放控制器所属的会话上下文。
-/// @param playbackSpeed 已应用到音频管理器的播放倍率。
-/// @warning
-/// 低频播放控制路径：仅在用户修改播放倍率时执行，遍历项目音频资源表，不放入每帧
-/// update。
-void syncMainAudioPlaybackSpeedToProjectResource(SessionContext& ctx,
-                                                 double          playbackSpeed)
-{
-    if ( !ctx.currentBeatmap ) {
-        return;
+    if ( !std::isfinite(currentTime) ) {
+        currentTime = 0.0;
     }
-
-    auto* project = EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
-        return;
-    }
-
-    const auto& mainAudioPath =
-        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-    if ( mainAudioPath.empty() ) {
-        return;
-    }
-
-    for ( auto& resource : project->m_audioResources ) {
-        if ( !matchesMainAudioPath(resource, mainAudioPath) ) {
-            continue;
-        }
-
-        resource.m_config.playbackSpeed = static_cast<float>(playbackSpeed);
-        return;
-    }
-}
-
-/// @brief 确保播放前 AudioManager 已加载当前谱面的主音频。
-/// @param ctx 当前播放控制器所属的会话上下文。
-/// @return 已加载或成功补加载时返回 true；没有可用主音频时返回 false。
-/// @warning
-/// 低频播放控制路径：仅在用户切换到播放态时执行，可能访问文件系统并触发音频解码缓存加载，禁止放入每帧
-/// update。
-bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
-{
-    if ( !ctx.currentBeatmap ) {
-        ctx.loadedMainAudioPath.clear();
-        ctx.mainAudioTotalTime = 0.0;
-        return false;
-    }
-
-    const auto& meta = ctx.currentBeatmap->m_baseMapMetadata;
-    if ( meta.main_audio_path.empty() ) {
-        ctx.loadedMainAudioPath.clear();
-        ctx.mainAudioTotalTime = 0.0;
-        return false;
-    }
-
-    const auto* project   = EditorEngine::instance().getCurrentProject();
-    auto        audioPath = SessionUtils::resolveMainAudioPath(ctx, project);
-    std::error_code filesystemError;
-    const bool      isAudioFile =
-        std::filesystem::is_regular_file(audioPath, filesystemError);
-    if ( filesystemError || !isAudioFile ) {
-        ctx.loadedMainAudioPath.clear();
-        ctx.mainAudioTotalTime = 0.0;
-        XWARN("PlaybackController: main audio file is unavailable: {}",
-              Config::pathToUtf8(audioPath));
-        return false;
-    }
-
-    auto&             audio         = Audio::AudioManager::instance();
-    const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
-    if ( audio.getLoadedBGMPath() != audioPathUtf8 ) {
-        AudioTrackConfig config;
-        if ( project ) {
-            config = findMainAudioConfig(*project, meta.main_audio_path);
-        }
-        if ( !audio.loadBGM(audioPathUtf8, config) ) {
-            ctx.loadedMainAudioPath.clear();
-            ctx.mainAudioTotalTime = 0.0;
-            XERROR("PlaybackController: failed to load main audio: {}",
-                   audioPathUtf8);
-            return false;
-        }
-    }
-
-    ctx.loadedMainAudioPath = audioPathUtf8;
-    ctx.mainAudioTotalTime  = audio.getTotalTime();
-    audio.seek(ctx.currentTime);
-    return true;
+    audio.pause();
+    ctx.currentTime = currentTime;
+    ctx.playbackVisualClock.rebase(
+        currentTime, now, audio.getPlaybackSpeed(), false);
 }
 
 /// @brief 取消未完成的鼠标编辑状态，防止进入播放后交互预览残留。
@@ -179,57 +88,68 @@ void cancelActiveEditingState(SessionContext& ctx)
         ctx.brushState.dtrack        = 0;
     }
 
-    ctx.eraserState.isActive    = false;
-    ctx.eraserState.isShiftDown = false;
+    ctx.eraserState.isActive         = false;
+    ctx.eraserState.isShiftDown      = false;
+    ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
     ctx.eraserState.targetEntities.clear();
 }
 }  // namespace
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
-    const bool shouldRestartFromBeginning =
-        cmd.isPlaying && m_ctx.restartPlaybackAfterFinishPending.exchange(
-                             false, std::memory_order_acquire);
+    if ( !m_ctx.isActiveSession ) {
+        m_ctx.isPlaying                   = false;
+        m_ctx.isAudioTimelineSyncFollower = false;
+        return;
+    }
 
-    m_ctx.isMainAudioSyncFollower = false;
-    m_ctx.isPlaying               = cmd.isPlaying;
+    const bool shouldRestartFromBeginning =
+        cmd.isPlaying && m_ctx.restartPlaybackAfterFinishPending;
+    if ( cmd.isPlaying ) {
+        m_ctx.restartPlaybackAfterFinishPending = false;
+    }
+
+    m_ctx.isAudioTimelineSyncFollower = false;
+    m_ctx.isPlaying                   = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
         if ( shouldRestartFromBeginning ) {
             m_ctx.currentTime = 0.0;
         }
         cancelActiveEditingState(m_ctx);
-        m_ctx.syncTimer             = 0.0;
-        m_ctx.lastAudioPos          = 0.0;
-        m_ctx.lastAudioSysTime      = 0.0;
-        m_ctx.hasInitialAudioOffset = false;
-        // 初始化壁钟基准，用于后续无抖动的 visualTime 计算
-        m_ctx.playStartSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        m_ctx.playStartVisualTime = m_ctx.currentTime;
-        (void)ensureCurrentBeatmapBgmLoaded(m_ctx);
-        Audio::AudioManager::instance().play();
-        m_ctx.syncClock.reset(m_ctx.currentTime);
+        if ( !SessionUtils::activateAudioTimeline(m_ctx, true) ) {
+            m_ctx.isPlaying = false;
+            return;
+        }
         SessionUtils::syncHitIndex(m_ctx);
         m_ctx.hitFXSystem.clearActiveEffects();
     } else {
-        m_ctx.restartPlaybackAfterFinishPending.store(
-            false, std::memory_order_relaxed);
-        Audio::AudioManager::instance().pause();
-        m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
+        m_ctx.restartPlaybackAfterFinishPending = false;
+        auto& audio = Audio::AudioManager::instance();
+        if ( audio.getLoadedAudioTimelineFingerprint() ==
+             m_ctx.audioTimelineDescriptor.m_fingerprint ) {
+            pauseAndFreezeVisualClock(m_ctx, audio);
+        } else {
+            audio.pause();
+        }
     }
 }
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
-    m_ctx.restartPlaybackAfterFinishPending.store(false,
-                                                  std::memory_order_relaxed);
-    m_ctx.isMainAudioSyncFollower = false;
+    const bool isContinuingScrub = cmd.isScrubbing && m_isSeekScrubbing;
+    m_ctx.restartPlaybackAfterFinishPending = false;
+    m_ctx.isAudioTimelineSyncFollower       = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
         m_ctx.isPlaying = false;
-        Audio::AudioManager::instance().pause();
-        m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
+        if ( m_ctx.isActiveSession ) {
+            auto& audio = Audio::AudioManager::instance();
+            if ( audio.getLoadedAudioTimelineFingerprint() ==
+                 m_ctx.audioTimelineDescriptor.m_fingerprint ) {
+                pauseAndFreezeVisualClock(m_ctx, audio);
+            } else {
+                audio.pause();
+            }
+        }
     }
 
     double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(m_ctx);
@@ -242,65 +162,102 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
         minTime = totalTime;
     }
 
-    m_ctx.currentTime           = std::clamp(cmd.time, minTime, totalTime);
-    m_ctx.lastAudioPos          = 0.0;
-    m_ctx.lastAudioSysTime      = 0.0;
-    m_ctx.hasInitialAudioOffset = false;
-    // 重置壁钟基准
-    m_ctx.playStartSysTime =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    m_ctx.playStartVisualTime = m_ctx.currentTime;
-    m_ctx.syncClock.reset(m_ctx.currentTime);
-    Audio::AudioManager::instance().seek(m_ctx.currentTime);
+    m_ctx.currentTime = std::clamp(cmd.time, minTime, totalTime);
+    if ( m_ctx.isActiveSession ) {
+        auto& audio = Audio::AudioManager::instance();
+        if ( m_ctx.isAudioTimelineActivationPending ||
+             !audio.hasLoadedAudioTimeline() ||
+             audio.getLoadedAudioTimelineFingerprint() !=
+                 m_ctx.audioTimelineDescriptor.m_fingerprint ) {
+            (void)SessionUtils::activateAudioTimeline(m_ctx, m_ctx.isPlaying);
+        } else {
+            audio.seek(m_ctx.currentTime,
+                       isContinuingScrub ? Audio::AudioSeekMode::ScrubUpdate
+                                         : Audio::AudioSeekMode::Commit);
+            m_ctx.playbackVisualClock.rebase(m_ctx.currentTime,
+                                             currentSteadySeconds(),
+                                             audio.getPlaybackSpeed(),
+                                             m_ctx.isPlaying);
+        }
+    }
+    m_isSeekScrubbing = cmd.isScrubbing;
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
 }
 
-/// @brief 处理播放倍率切换，并同步当前主音轨的项目资源配置。
+/// @brief 处理全局预览播放倍率切换。
 /// @param cmd 设置播放倍率指令。
-/// @warning
-/// 低频播放控制路径：仅在用户修改播放倍率时执行；播放中会重置同步基准，不放入每帧
-/// update。
+/// @warning 低频播放控制路径：仅活动会话可以修改全局 transport 倍率。
 void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 {
-    auto& audio    = Audio::AudioManager::instance();
-    float oldSpeed = static_cast<float>(audio.getPlaybackSpeed());
-    if ( std::abs(static_cast<float>(cmd.speed) - oldSpeed) < 1e-6f ) {
-        syncMainAudioPlaybackSpeedToProjectResource(m_ctx, oldSpeed);
+    if ( !m_ctx.isActiveSession ) {
         return;
     }
 
+    auto& audio = Audio::AudioManager::instance();
     if ( m_ctx.isPlaying ) {
-        // 获取当前系统时间
-        double currentSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-
-        // 1. 在切换速度前，以旧速度计算出当前的精确逻辑时间
-        m_ctx.currentTime =
-            m_ctx.playStartVisualTime +
-            (currentSysTime - m_ctx.playStartSysTime) * oldSpeed;
-
-        // 2. 以当前逻辑时间作为新速度的起点，重置系统时钟基准
-        m_ctx.playStartVisualTime = m_ctx.currentTime;
-        m_ctx.playStartSysTime    = currentSysTime;
-
-        // 3. 强制重置音频同步系统，使其在变速后立即重新对齐硬件时钟
-        m_ctx.hasInitialAudioOffset = false;
-        // 将计时器设为间隔值，确保在下一次 BeatmapSession::update
-        // 中立即触发同步块
-        m_ctx.syncTimer = m_ctx.lastConfig.settings.syncConfig.syncInterval;
-
-        m_ctx.syncClock.reset(m_ctx.currentTime);
+        const double now = currentSteadySeconds();
+        if ( m_ctx.playbackVisualClock.initialized() ) {
+            m_ctx.currentTime = m_ctx.playbackVisualClock.currentTimeAt(now);
+        }
         SessionUtils::syncHitIndex(m_ctx);
+        audio.setPlaybackSpeed(cmd.speed);
+        return;
     }
 
     audio.setPlaybackSpeed(cmd.speed);
-    syncMainAudioPlaybackSpeedToProjectResource(m_ctx,
-                                                audio.getPlaybackSpeed());
+}
+
+/// @brief 应用单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+/// @param cmd 目标区域、轨道索引和静音状态。
+/// @warning 低频 UI 控制路径；只发布固定大小原子控制状态。
+void PlaybackController::handleCommand(const CmdSetKeySoundTrackMute& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( cmd.area == KeySoundTrackArea::Bgm ) {
+        audio.setBgmKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
+        return;
+    }
+    audio.setPlayerKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
+}
+
+/// @brief 应用单条玩家或 BGM 轨道的运行时 Key 音增益。
+/// @param cmd 目标区域、轨道索引和线性增益。
+/// @warning 低频 UI 控制路径；只发布固定大小原子控制状态。
+void PlaybackController::handleCommand(const CmdSetKeySoundTrackGain& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( cmd.area == KeySoundTrackArea::Bgm ) {
+        audio.setBgmKeySoundTrackGain(cmd.trackIndex, cmd.gain);
+        return;
+    }
+    audio.setPlayerKeySoundTrackGain(cmd.trackIndex, cmd.gain);
+}
+
+/// @brief 应用绑定或未绑定打击音效类别的实时增益。
+/// @param cmd 目标类别和线性增益。
+/// @warning 低频 UI 控制路径；只发布一个固定大小原子控制字。
+void PlaybackController::handleCommand(const CmdSetKeySoundEffectGroupGain& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    const auto group = cmd.group == KeySoundEffectGroup::Bound
+                           ? Audio::KeySoundEffectGroup::Bound
+                           : Audio::KeySoundEffectGroup::Unbound;
+    Audio::AudioManager::instance().setKeySoundEffectGroupGain(group, cmd.gain);
+}
+
+/// @brief 应用整个 BGM 轨道区的运行时 Key 音静音状态。
+/// @param cmd BGM 区静音状态。
+/// @warning 低频 UI 控制路径；只发布一个固定大小原子控制字。
+void PlaybackController::handleCommand(const CmdSetBgmKeySoundAreaMute& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+    Audio::AudioManager::instance().setBgmKeySoundAreaMuted(cmd.muted);
 }
 
 /// @brief 处理普通时间滚动或仅应用滚动暂停策略的滚轮命令。
@@ -319,12 +276,19 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 
     const bool shouldStopPlayback =
         m_ctx.lastConfig.settings.stopPlaybackOnScroll &&
-        (m_ctx.isPlaying || m_ctx.isMainAudioSyncFollower);
+        (m_ctx.isPlaying || m_ctx.isAudioTimelineSyncFollower);
     if ( shouldStopPlayback ) {
-        m_ctx.isPlaying               = false;
-        m_ctx.isMainAudioSyncFollower = false;
-        Audio::AudioManager::instance().pause();
-        m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
+        m_ctx.isPlaying                   = false;
+        m_ctx.isAudioTimelineSyncFollower = false;
+        if ( m_ctx.isActiveSession ) {
+            auto& audio = Audio::AudioManager::instance();
+            if ( audio.getLoadedAudioTimelineFingerprint() ==
+                 m_ctx.audioTimelineDescriptor.m_fingerprint ) {
+                pauseAndFreezeVisualClock(m_ctx, audio);
+            } else {
+                audio.pause();
+            }
+        }
         // 如果停止了播放，需要同步一下渲染状态 (虽然 seek
         // 也会做，但这里明确一下更好)
     }
@@ -333,8 +297,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         return;
     }
 
-    m_ctx.restartPlaybackAfterFinishPending.store(false,
-                                                  std::memory_order_relaxed);
+    m_ctx.restartPlaybackAfterFinishPending = false;
 
     bool isShiftAccelerated = cmd.isShiftDown;
     if ( isShiftAccelerated && m_ctx.brushState.isActive &&
@@ -415,20 +378,104 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         minTime = totalTime;
     }
 
-    m_ctx.currentTime           = std::clamp(targetTime, minTime, totalTime);
-    m_ctx.lastAudioPos          = 0.0;
-    m_ctx.lastAudioSysTime      = 0.0;
-    m_ctx.hasInitialAudioOffset = false;
-    // 重置壁钟基准
-    m_ctx.playStartSysTime =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    m_ctx.playStartVisualTime = m_ctx.currentTime;
-    m_ctx.syncClock.reset(m_ctx.currentTime);
-    Audio::AudioManager::instance().seek(m_ctx.currentTime);
+    m_ctx.currentTime = std::clamp(targetTime, minTime, totalTime);
+    if ( m_ctx.isActiveSession ) {
+        auto& audio = Audio::AudioManager::instance();
+        if ( m_ctx.isAudioTimelineActivationPending ||
+             !audio.hasLoadedAudioTimeline() ||
+             audio.getLoadedAudioTimelineFingerprint() !=
+                 m_ctx.audioTimelineDescriptor.m_fingerprint ) {
+            (void)SessionUtils::activateAudioTimeline(m_ctx, m_ctx.isPlaying);
+        } else {
+            audio.seek(m_ctx.currentTime);
+            m_ctx.playbackVisualClock.rebase(m_ctx.currentTime,
+                                             currentSteadySeconds(),
+                                             audio.getPlaybackSpeed(),
+                                             m_ctx.isPlaying);
+        }
+    }
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
+}
+
+/// @brief 处理主画布中键二维平移。
+/// @param cmd 逻辑像素空间中的平移增量和输入视口尺寸。
+/// @warning 逻辑输入热路径：中键拖动期间每个 update
+/// 调用；只更新单个相机并通过 ScrollCache 执行对数级反向映射。
+void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
+{
+    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
+        return;
+    }
+
+    auto cameraIt = m_ctx.cameras.find(cmd.cameraId);
+    if ( cameraIt == m_ctx.cameras.end() ) {
+        if ( !std::isfinite(cmd.viewportWidth) || cmd.viewportWidth <= 0.0F ||
+             !std::isfinite(cmd.viewportHeight) ||
+             cmd.viewportHeight <= 0.0F ) {
+            return;
+        }
+        cameraIt = m_ctx.cameras
+                       .emplace(cmd.cameraId,
+                                CameraInfo{ cmd.cameraId,
+                                            cmd.viewportWidth,
+                                            cmd.viewportHeight })
+                       .first;
+    }
+
+    auto& camera = cameraIt->second;
+    if ( std::isfinite(cmd.viewportWidth) && cmd.viewportWidth > 0.0F &&
+         std::abs(camera.viewportWidth - cmd.viewportWidth) > 0.01F ) {
+        camera.horizontalOffsetX = resizeCanvasHorizontalOffset(
+            camera.horizontalOffsetX, camera.viewportWidth, cmd.viewportWidth);
+        camera.viewportWidth = cmd.viewportWidth;
+    }
+    if ( std::isfinite(cmd.viewportHeight) && cmd.viewportHeight > 0.0F ) {
+        camera.viewportHeight = cmd.viewportHeight;
+    }
+
+    if ( std::isfinite(cmd.deltaX) ) {
+        camera.horizontalOffsetX += cmd.deltaX;
+        if ( !std::isfinite(camera.horizontalOffsetX) ) {
+            camera.horizontalOffsetX = 0.0F;
+        }
+    }
+
+    if ( !std::isfinite(cmd.deltaY) || std::abs(cmd.deltaY) <= 0.001F ) {
+        return;
+    }
+
+    const double visualOffset =
+        m_ctx.lastConfig.visual.getEffectiveVisualOffset();
+    const double visualTime   = m_ctx.currentTime + visualOffset;
+    double       renderScaleY = static_cast<double>(cmd.renderScaleY);
+    if ( !std::isfinite(renderScaleY) || std::abs(renderScaleY) <= 1e-6 ) {
+        renderScaleY = 1.0;
+    }
+
+    double      targetVisualTime = visualTime;
+    const auto* cache =
+        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( cache ) {
+        const double currentAbsY = cache->getVisualAnchorAbsY(visualTime);
+        targetVisualTime         = cache->getTime(
+            currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+    } else {
+        constexpr double FALLBACK_PIXELS_PER_SECOND = 500.0;
+        targetVisualTime += static_cast<double>(cmd.deltaY) / renderScaleY /
+                            FALLBACK_PIXELS_PER_SECOND;
+    }
+
+    if ( !std::isfinite(targetVisualTime) ) {
+        return;
+    }
+
+    handleCommand(CmdSeek{ targetVisualTime - visualOffset });
+
+    // 直接操作期间不叠加滚动动画，否则视觉内容会落后于中键指针。
+    m_ctx.animateTime                = m_ctx.currentTime + visualOffset;
+    m_ctx.animateTimeTarget          = m_ctx.animateTime;
+    m_ctx.animateTimeAnimationActive = false;
 }
 
 

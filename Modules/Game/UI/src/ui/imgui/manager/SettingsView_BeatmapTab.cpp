@@ -1,4 +1,3 @@
-#include "ui/imgui/manager/SettingsView.h"
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -6,16 +5,19 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <initializer_list>
+#include <limits>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -471,6 +473,55 @@ void SettingsView::drawBeatmapSettings()
                 }
             });
 
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.bgm_tracks").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                const auto bgmTrackCount =
+                    std::max(0, session->getContext().bgmTrackCount);
+                const float buttonSize = ImGui::GetFrameHeight();
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::BeginDisabled(bgmTrackCount <= 0);
+                if ( ::MMM::UI::FeedbackButton(
+                         "-##RemovePersistentBgmTrack",
+                         ImVec2(buttonSize, buttonSize)) ) {
+                    engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
+                        bgmTrackCount - 1,
+                    });
+                }
+                ImGui::EndDisabled();
+                if ( ImGui::IsItemHovered(
+                         ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.settings.beatmap.bgm_tracks_remove").data());
+                }
+
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%d", bgmTrackCount);
+                ImGui::SameLine();
+
+                const bool canAdd =
+                    bgmTrackCount < std::numeric_limits<std::int32_t>::max();
+                ImGui::BeginDisabled(!canAdd);
+                if ( ::MMM::UI::FeedbackButton(
+                         "+##AddPersistentBgmTrack",
+                         ImVec2(buttonSize, buttonSize)) ) {
+                    engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
+                        bgmTrackCount + 1,
+                    });
+                }
+                ImGui::EndDisabled();
+                if ( ImGui::IsItemHovered(
+                         ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.settings.beatmap.bgm_tracks_add").data());
+                }
+            });
+
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.beatmap.length").data(),
@@ -498,13 +549,16 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.audio").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                std::string currentAudioPath =
-                    displayProjectPath(meta.main_audio_path);
-                std::string audioPreview = currentAudioPath;
+                /// @brief 歌曲文件提示只服务于外部格式，不决定实际播放时间线。
+                const auto& audioHint        = meta.song_file_hint.empty()
+                                                   ? meta.main_audio_path
+                                                   : meta.song_file_hint;
+                std::string currentAudioPath = displayProjectPath(audioHint);
+                std::string audioPreview     = currentAudioPath;
 
                 bool audioExists =
-                    project && std::filesystem::exists(
-                                   resolveProjectPath(meta.main_audio_path));
+                    project &&
+                    std::filesystem::exists(resolveProjectPath(audioHint));
                 bool audioPushed = false;
                 if ( !audioExists && !currentAudioPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -527,9 +581,10 @@ void SettingsView::drawBeatmapSettings()
                             if ( ::MMM::UI::FeedbackSelectable(
                                      (res.m_id + "##" + res.m_path).c_str(),
                                      isSelected) ) {
-                                meta.main_audio_path =
+                                meta.song_file_hint =
                                     normalizeProjectResourcePath(
                                         Config::utf8ToPath(res.m_path));
+                                meta.main_audio_path.clear();
                                 changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();

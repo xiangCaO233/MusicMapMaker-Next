@@ -511,6 +511,7 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "judgeline_pos", config.judgeline_pos },
         { "noteScaleX", config.noteScaleX },
         { "noteScaleY", config.noteScaleY },
+        { "showBoundSampleLabels", config.showBoundSampleLabels },
         { "noteFillMode", config.noteFillMode },
         { "visualOffset", config.visualOffset },
         { "waveformVisualOffset", config.waveformVisualOffset },
@@ -559,6 +560,8 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.judgeline_pos     = j.value("judgeline_pos", 0.85f);
     config.noteScaleX        = j.value("noteScaleX", VisualConfig{}.noteScaleX);
     config.noteScaleY        = j.value("noteScaleY", VisualConfig{}.noteScaleY);
+    config.showBoundSampleLabels =
+        j.value("showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
     config.noteFillMode = j.value("noteFillMode", BackgroundFillMode::Stretch);
     config.visualOffset = j.value("visualOffset", 0.0f);
     config.waveformVisualOffset    = j.value("waveformVisualOffset", 0.0f);

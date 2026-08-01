@@ -68,6 +68,49 @@ unsigned char bitmapCoverage(const FT_Bitmap& bitmap, unsigned int x,
     return 0U;
 }
 
+/// @brief 将当前 FreeType 字形槽转换为归一化度量与 RGBA 位图。
+/// @param slot 已加载的 FreeType 字形槽。
+/// @param inverseHeight 标准栅格高度倒数。
+/// @param metrics 接收归一化字形度量。
+/// @param glyph 接收 RGBA 字形位图。
+void copyLoadedGlyph(FT_GlyphSlot slot, float inverseHeight,
+                     Common::AsciiGlyphMetrics& metrics,
+                     RasterizedAsciiGlyph&      glyph)
+{
+    const FT_Bitmap& bitmap = slot->bitmap;
+    metrics.available       = true;
+    metrics.hasBitmap       = bitmap.width > 0U && bitmap.rows > 0U;
+    metrics.width           = static_cast<float>(bitmap.width) * inverseHeight;
+    metrics.height          = static_cast<float>(bitmap.rows) * inverseHeight;
+    metrics.bearingX = static_cast<float>(slot->bitmap_left) * inverseHeight;
+    metrics.bearingY = static_cast<float>(slot->bitmap_top) * inverseHeight;
+    metrics.advanceX =
+        static_cast<float>(slot->advance.x) / 64.0F * inverseHeight;
+
+    if ( !metrics.hasBitmap ) return;
+    if ( bitmap.pixel_mode != FT_PIXEL_MODE_GRAY &&
+         bitmap.pixel_mode != FT_PIXEL_MODE_MONO ) {
+        metrics.hasBitmap = false;
+        return;
+    }
+
+    glyph.width  = bitmap.width;
+    glyph.height = bitmap.rows;
+    glyph.pixels.resize(static_cast<std::size_t>(glyph.width) *
+                        static_cast<std::size_t>(glyph.height) * 4U);
+    for ( std::uint32_t y = 0; y < glyph.height; ++y ) {
+        for ( std::uint32_t x = 0; x < glyph.width; ++x ) {
+            const auto alpha = bitmapCoverage(bitmap, x, y);
+            const auto offset =
+                (static_cast<std::size_t>(y) * glyph.width + x) * 4U;
+            glyph.pixels[offset + 0U] = 255U;
+            glyph.pixels[offset + 1U] = 255U;
+            glyph.pixels[offset + 2U] = 255U;
+            glyph.pixels[offset + 3U] = alpha;
+        }
+    }
+}
+
 }  // namespace
 
 std::optional<RasterizedAsciiFont> AsciiFontRasterizer::rasterize(
@@ -118,47 +161,89 @@ std::optional<RasterizedAsciiFont> AsciiFontRasterizer::rasterize(
             continue;
         }
 
-        const FT_GlyphSlot slot    = face->glyph;
-        const FT_Bitmap&   bitmap  = slot->bitmap;
-        auto&              metrics = result.metrics.glyphs[index];
-        metrics.available          = true;
-        metrics.hasBitmap          = bitmap.width > 0U && bitmap.rows > 0U;
-        metrics.width  = static_cast<float>(bitmap.width) * inverseHeight;
-        metrics.height = static_cast<float>(bitmap.rows) * inverseHeight;
-        metrics.bearingX =
-            static_cast<float>(slot->bitmap_left) * inverseHeight;
-        metrics.bearingY = static_cast<float>(slot->bitmap_top) * inverseHeight;
-        metrics.advanceX =
-            static_cast<float>(slot->advance.x) / 64.0f * inverseHeight;
-
-        if ( !metrics.hasBitmap ) continue;
-        if ( bitmap.pixel_mode != FT_PIXEL_MODE_GRAY &&
-             bitmap.pixel_mode != FT_PIXEL_MODE_MONO ) {
-            metrics.hasBitmap = false;
-            continue;
-        }
-
-        auto& glyph  = result.glyphs[index];
-        glyph.width  = bitmap.width;
-        glyph.height = bitmap.rows;
-        glyph.pixels.resize(static_cast<std::size_t>(glyph.width) *
-                            static_cast<std::size_t>(glyph.height) * 4U);
-        for ( std::uint32_t y = 0; y < glyph.height; ++y ) {
-            for ( std::uint32_t x = 0; x < glyph.width; ++x ) {
-                const auto alpha = bitmapCoverage(bitmap, x, y);
-                const auto offset =
-                    (static_cast<std::size_t>(y) * glyph.width + x) * 4U;
-                glyph.pixels[offset + 0U] = 255U;
-                glyph.pixels[offset + 1U] = 255U;
-                glyph.pixels[offset + 2U] = 255U;
-                glyph.pixels[offset + 3U] = alpha;
-            }
-        }
+        copyLoadedGlyph(face->glyph,
+                        inverseHeight,
+                        result.metrics.glyphs[index],
+                        result.glyphs[index]);
     }
 
     XDEBUG("Rasterized ASCII font atlas source: {} ({} px)",
            pathUtf8,
            pixelHeight);
+    return result;
+}
+
+std::optional<RasterizedUnicodeFont> AsciiFontRasterizer::rasterizeUnicode(
+    const std::filesystem::path&   fontPath,
+    std::span<const std::uint32_t> codepoints, std::uint32_t pixelHeight)
+{
+    if ( pixelHeight == 0U ) {
+        XERROR("Unicode font raster height must be greater than zero");
+        return std::nullopt;
+    }
+
+    FT_Library rawLibrary = nullptr;
+    if ( FT_Init_FreeType(&rawLibrary) != 0 || !rawLibrary ) {
+        XERROR("Failed to initialize FreeType for Unicode font atlas");
+        return std::nullopt;
+    }
+    UniqueFreeTypeLibrary library(rawLibrary);
+
+    const std::string pathUtf8 = fontPathUtf8(fontPath);
+    FT_Face           rawFace  = nullptr;
+    if ( FT_New_Face(library.get(), pathUtf8.c_str(), 0, &rawFace) != 0 ||
+         !rawFace ) {
+        XERROR("Failed to load Unicode font: {}", pathUtf8);
+        return std::nullopt;
+    }
+    UniqueFreeTypeFace face(rawFace);
+
+    if ( FT_Set_Pixel_Sizes(face.get(), 0U, pixelHeight) != 0 ) {
+        XERROR("Failed to set Unicode font raster size: {}", pathUtf8);
+        return std::nullopt;
+    }
+
+    RasterizedUnicodeFont result;
+    const float inverseHeight = 1.0F / static_cast<float>(pixelHeight);
+    result.metrics.valid      = true;
+    result.metrics.ascender = static_cast<float>(face->size->metrics.ascender) /
+                              64.0F * inverseHeight;
+    result.metrics.lineHeight =
+        std::max(1.0F, static_cast<float>(face->size->metrics.height) / 64.0F) *
+        inverseHeight;
+    result.metrics.glyphs.reserve(codepoints.size());
+    result.glyphs.reserve(codepoints.size());
+
+    std::uint32_t previousCodepoint = 0U;
+    bool          hasPrevious       = false;
+    for ( const std::uint32_t codepoint : codepoints ) {
+        if ( !Common::isValidUnicodeCodepoint(codepoint) ||
+             codepoint <= Common::ASCII_GLYPH_LAST ||
+             (hasPrevious && codepoint <= previousCodepoint) ) {
+            continue;
+        }
+        previousCodepoint = codepoint;
+        hasPrevious       = true;
+
+        if ( FT_Get_Char_Index(face.get(), codepoint) == 0U ||
+             FT_Load_Char(face.get(),
+                          codepoint,
+                          FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0 ) {
+            continue;
+        }
+
+        Common::UnicodeGlyphMetrics metrics;
+        metrics.codepoint = codepoint;
+        RasterizedAsciiGlyph glyph;
+        copyLoadedGlyph(face->glyph, inverseHeight, metrics.metrics, glyph);
+        result.metrics.glyphs.push_back(metrics);
+        result.glyphs.push_back(std::move(glyph));
+    }
+
+    XDEBUG("Rasterized Unicode font atlas source: {} ({} px, {} glyphs)",
+           pathUtf8,
+           pixelHeight,
+           result.metrics.glyphs.size());
     return result;
 }
 

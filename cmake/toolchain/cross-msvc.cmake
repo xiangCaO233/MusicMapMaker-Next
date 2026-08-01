@@ -51,6 +51,16 @@ find_program(MMM_LLD_LINK NAMES lld-link-22)
 find_program(MMM_LLVM_LIB NAMES llvm-lib-22)
 find_program(MMM_LLVM_RC NAMES llvm-rc-22)
 find_program(MMM_LLVM_MT NAMES llvm-mt-22)
+find_program(MMM_LLVM_RANLIB NAMES llvm-ranlib-22)
+find_program(MMM_LLVM_STRIP NAMES llvm-strip-22)
+find_program(
+  MMM_LLVM_NM
+  NAMES llvm-nm-22 llvm-nm
+  PATHS /opt/llvm-22/bin)
+find_program(
+  MMM_LLVM_OBJCOPY
+  NAMES llvm-objcopy-22 llvm-objcopy
+  PATHS /opt/llvm-22/bin)
 if(NOT MMM_CLANG_CL)
   message(FATAL_ERROR "找不到 clang-cl-22，请安装 LLVM 22 clang-cl。")
 endif()
@@ -65,6 +75,12 @@ if(NOT MMM_LLVM_RC)
 endif()
 if(NOT MMM_LLVM_MT)
   message(FATAL_ERROR "找不到 llvm-mt-22，请安装 LLVM 22 manifest tool。")
+endif()
+if(NOT MMM_LLVM_RANLIB
+   OR NOT MMM_LLVM_STRIP
+   OR NOT MMM_LLVM_NM
+   OR NOT MMM_LLVM_OBJCOPY)
+  message(FATAL_ERROR "找不到完整的 LLVM 22 归档与二进制检查工具。")
 endif()
 set(CMAKE_C_COMPILER
     "${MMM_CLANG_CL}"
@@ -84,6 +100,18 @@ set(CMAKE_RC_COMPILER
 set(CMAKE_MT
     "${MMM_LLVM_MT}"
     CACHE FILEPATH "LLVM manifest tool." FORCE)
+set(CMAKE_RANLIB
+    "${MMM_LLVM_RANLIB}"
+    CACHE FILEPATH "LLVM archive indexer." FORCE)
+set(CMAKE_NM
+    "${MMM_LLVM_NM}"
+    CACHE FILEPATH "LLVM symbol inspector." FORCE)
+set(CMAKE_STRIP
+    "${MMM_LLVM_STRIP}"
+    CACHE FILEPATH "LLVM strip tool." FORCE)
+set(CMAKE_OBJCOPY
+    "${MMM_LLVM_OBJCOPY}"
+    CACHE FILEPATH "LLVM object copy tool." FORCE)
 
 # 告诉 clang-cl 目标平台
 set(MSVC_TARGET_TRIPLE x86_64-pc-windows-msvc)
@@ -106,14 +134,14 @@ set(ALSOFT_ENABLE_MODULES
     OFF
     CACHE BOOL "" FORCE)
 
-# 预编译库的 Debug/RelWithDebInfo 必须生成外置 PDB。CMake 的 MSVC 默认 调试信息策略在 clang-cl
-# 交叉编译下不稳定，这里显式使用 ProgramDatabase。
+# clang-cl 的 Linux 交叉编译不会生成 cl.exe 的编译器 PDB，因此将完整 CodeView 调试信息保留在 COFF
+# 对象中，随静态归档一起分发。
 if(POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
 endif()
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-    "ProgramDatabase"
-    CACHE STRING "Use external PDB debug information for clang-cl prebuilts."
+    "Embedded"
+    CACHE STRING "Embed CodeView debug information in clang-cl prebuilts."
           FORCE)
 
 # --- 核心：配置头文件搜索路径 (-imsvc 模拟 MSVC 的包含逻辑) ---
@@ -148,16 +176,16 @@ set(CMAKE_CXX_FLAGS
     "${FLAGS} ${WIN_VER_FLAGS} ${MSVC_INCLUDE_STR}"
     CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DEBUG
-    "/Zi /Ob0 /Od /RTC1"
+    "/Z7 /Ob0 /Od /RTC1"
     CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_DEBUG
-    "/Zi /Ob0 /Od /RTC1"
+    "/Z7 /Ob0 /Od /RTC1"
     CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_RELWITHDEBINFO
-    "/Zi /O2 /Ob1 /DNDEBUG"
+    "/Z7 /O2 /Ob1 /DNDEBUG"
     CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
-    "/Zi /O2 /Ob1 /DNDEBUG"
+    "/Z7 /O2 /Ob1 /DNDEBUG"
     CACHE STRING "" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS
     "${MSVC_LIB_STR}"

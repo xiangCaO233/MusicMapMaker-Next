@@ -1,6 +1,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 
 #include "audio/StereoGainEnvelope.h"
+#include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 
 #include <cmath>
@@ -101,6 +102,119 @@ bool testDisabledKeepsOriginalStereo()
     return true;
 }
 
+/// @brief 验证绑定音效严格优先于内置 Note/Flick 音效。
+/// @return 非空绑定返回原资源，空绑定按物件类型返回内置资源时返回 true。
+bool testBoundSoundOverridesDefault()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto boundEvent          = makeEvent(MMM::NoteType::FLICK, 1, 1);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.35F };
+    if ( HitFXSystem::soundEffectKeyForEvent(
+             boundEvent, MMM::NoteType::FLICK) != "sample.wav" ) {
+        XERROR("Bound note sound did not override the built-in Flick sound");
+        return false;
+    }
+
+    const auto noteEvent  = makeEvent(MMM::NoteType::NOTE, 0);
+    const auto flickEvent = makeEvent(MMM::NoteType::FLICK, 0, 1);
+    if ( HitFXSystem::soundEffectKeyForEvent(noteEvent, MMM::NoteType::NOTE) !=
+             "hiteffect.note" ||
+         HitFXSystem::soundEffectKeyForEvent(
+             flickEvent, MMM::NoteType::FLICK) != "hiteffect.flick" ) {
+        XERROR("Empty bound sound did not select the built-in hit effect");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证自定义采样的物件音量独立进入打击音效倍率。
+/// @return 有绑定时返回物件音量、无绑定时返回 1。
+bool testBoundSampleVolume()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto boundEvent          = makeEvent(MMM::NoteType::NOTE, 1);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.35F };
+    if ( !near(HitFXSystem::sampleVolumeForEvent(boundEvent), 0.35F) ||
+         !near(HitFXSystem::sampleVolumeForEvent(
+                   makeEvent(MMM::NoteType::NOTE, 1)),
+               1.0F) ) {
+        XERROR("Bound sample volume was not applied independently");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证仅非空资源绑定会进入已绑定打击音效分组。
+/// @return 无绑定和空绑定为未绑定，非空绑定为已绑定时返回 true。
+bool testBoundSoundClassification()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto emptyBindingEvent          = makeEvent(MMM::NoteType::NOTE, 0);
+    emptyBindingEvent.sampleBinding = MMM::AudioSampleBinding{ "", 0.5F };
+    auto boundEvent                 = makeEvent(MMM::NoteType::NOTE, 0);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.5F };
+    if ( HitFXSystem::hasBoundSoundEffect(makeEvent(MMM::NoteType::NOTE, 0)) ||
+         HitFXSystem::hasBoundSoundEffect(emptyBindingEvent) ||
+         !HitFXSystem::hasBoundSoundEffect(boundEvent) ) {
+        XERROR("Hit sound binding groups were classified incorrectly");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧皮肤的固定模式仍在判定线中心按原尺寸绘制。
+/// @return 固定矩形的中心、宽高与旧算法一致时返回 true。
+bool testFixedHitEffectBounds()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    const auto bounds = HitFXSystem::calculateRenderBounds(
+        MMM::Config::HitEffectLayoutMode::Fixed,
+        4,
+        1,
+        1,
+        300.0F,
+        100.0F,
+        20.0F,
+        500.0F,
+        50.0F,
+        40.0F,
+        20.0F);
+    if ( !near(bounds.x, 205.0F) || !near(bounds.y, 310.0F) ||
+         !near(bounds.width, 40.0F) || !near(bounds.height, 20.0F) ) {
+        XERROR("Fixed hit effect bounds no longer match legacy placement");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证整轨模式覆盖 Flick 目标轨道的完整可见区域。
+/// @return 目标轨道宽度和上下边界均精确匹配时返回 true。
+bool testTrackFillHitEffectBounds()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    const auto bounds = HitFXSystem::calculateRenderBounds(
+        MMM::Config::HitEffectLayoutMode::TrackFill,
+        4,
+        1,
+        1,
+        300.0F,
+        100.0F,
+        20.0F,
+        500.0F,
+        50.0F,
+        40.0F,
+        20.0F);
+    if ( !near(bounds.x, 200.0F) || !near(bounds.y, 500.0F) ||
+         !near(bounds.width, 50.0F) || !near(bounds.height, 480.0F) ) {
+        XERROR("Track-fill hit effect did not cover the destination track");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
@@ -109,7 +223,10 @@ int main()
 {
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
                    testTrackSidesMatchChannels() &&
-                   testDisabledKeepsOriginalStereo()
+                   testDisabledKeepsOriginalStereo() &&
+                   testBoundSoundOverridesDefault() &&
+                   testBoundSampleVolume() && testBoundSoundClassification() &&
+                   testFixedHitEffectBounds() && testTrackFillHitEffectBounds()
                ? 0
                : 1;
 }

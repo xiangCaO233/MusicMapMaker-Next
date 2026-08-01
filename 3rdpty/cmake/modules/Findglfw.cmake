@@ -34,6 +34,19 @@ if(NOT TARGET glfw)
     glfw PROPERTIES IMPORTED_CONFIGURATIONS "${_glfw_imported_configs}"
                     IMPORTED_LOCATION "${_glfw_default_library}")
   target_link_libraries(glfw INTERFACE Vulkan::Vulkan)
+
+  if(APPLE)
+    # macOS 静态 GLFW 不会把系统框架封装进归档，导入目标必须恢复源码目标的传递依赖。
+    find_library(_glfw_cocoa_framework Cocoa REQUIRED)
+    find_library(_glfw_iokit_framework IOKit REQUIRED)
+    find_library(_glfw_quartz_core_framework QuartzCore REQUIRED)
+    find_library(_glfw_core_foundation_framework CoreFoundation REQUIRED)
+    target_link_libraries(
+      glfw
+      INTERFACE "${_glfw_cocoa_framework}" "${_glfw_iokit_framework}"
+                "${_glfw_quartz_core_framework}"
+                "${_glfw_core_foundation_framework}")
+  endif()
 endif()
 
 if(NOT TARGET 3rd_glfw)

@@ -1,11 +1,16 @@
 #include "logic/ProjectCommandService.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <deque>
+#include <limits>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 namespace MMM::Logic
@@ -121,7 +126,83 @@ std::string normalizeStoredProjectPath(const Project&     project,
     return Config::pathToUtf8(relativePath.lexically_normal());
 }
 
-/// @brief 清空目标谱面的物件数据并复制非折线物件。
+/// @brief 按资源 ID、项目相对路径或旧版文件名查找项目音频资源。
+/// @param project 当前项目。
+/// @param audioReference 谱面中保存的资源 ID 或路径。
+/// @return 匹配到的项目音频资源；未匹配时返回空。
+const AudioResource* findAudioResourceForReference(
+    const Project& project, const std::filesystem::path& audioReference)
+{
+    if ( audioReference.empty() ) return nullptr;
+
+    const auto referenceText = Config::pathToUtf8(audioReference);
+    const auto normalizedReference =
+        normalizeStoredProjectPath(project, referenceText);
+    const auto filename = Config::pathToUtf8(audioReference.filename());
+    for ( const auto& resource : project.m_audioResources ) {
+        if ( resource.m_id == referenceText || resource.m_id == filename ||
+             normalizeStoredProjectPath(project, resource.m_path) ==
+                 normalizedReference ) {
+            return &resource;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief 从详细引用中提取去重后的谱面路径。
+/// @param references 待汇总的音频引用。
+/// @param acceptedKind 需要保留的引用类型判断器。
+/// @return 保持首次出现顺序的谱面路径列表。
+template<typename Predicate>
+std::vector<std::string> collectBlockingBeatmapPaths(
+    const std::vector<BeatmapAudioReference>& references,
+    Predicate                                 acceptedKind)
+{
+    std::vector<std::string> result;
+    for ( const auto& reference : references ) {
+        if ( !acceptedKind(reference.m_kind) ||
+             std::find(result.begin(), result.end(), reference.m_beatmapPath) !=
+                 result.end() ) {
+            continue;
+        }
+        result.push_back(reference.m_beatmapPath);
+    }
+    return result;
+}
+
+/// @brief 将打开会话中的匹配引用合并进磁盘扫描结果。
+/// @param project 当前项目。
+/// @param resource 待检查的音频资源。
+/// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
+/// @param matchingReferences 接收匹配引用的结果列表。
+void appendMatchingOpenBeatmapReferences(
+    const Project& project, const AudioResource& resource,
+    const std::vector<BeatmapAudioReference>& openBeatmapReferences,
+    std::vector<BeatmapAudioReference>&       matchingReferences)
+{
+    for ( const auto& reference : openBeatmapReferences ) {
+        if ( ProjectResourceService::audioReferenceMatchesResource(
+                 project, reference, resource) ) {
+            matchingReferences.push_back(reference);
+        }
+    }
+}
+
+/// @brief 收集模板谱面中被 Polyline 引用的全部子物件。
+/// @param source 模板谱面。
+/// @return 子物件的稳定地址集合。
+std::unordered_set<const Note*> collectPolylineSubNotes(const BeatMap& source)
+{
+    std::unordered_set<const Note*> subNotes;
+    for ( const auto& polyline : source.m_noteData.polylines ) {
+        for ( const auto& subNoteReference : polyline.m_subNotes ) {
+            subNotes.insert(&subNoteReference.get());
+        }
+    }
+    return subNotes;
+}
+
+/// @brief 清空目标谱面的物件数据并复制真正的非折线物件。
 /// @param target 接收复制结果的新谱面。
 /// @param source 模板谱面。
 void copyStandaloneNotes(BeatMap& target, const BeatMap& source)
@@ -131,16 +212,18 @@ void copyStandaloneNotes(BeatMap& target, const BeatMap& source)
     target.m_noteData.flicks.clear();
     target.m_noteData.polylines.clear();
 
+    /// @brief 某些旧格式加载器没有写入 m_isSubNote，实际引用关系才是权威来源。
+    const auto polylineSubNotes = collectPolylineSubNotes(source);
     for ( const auto& note : source.m_noteData.notes ) {
-        if ( note.m_isSubNote ) continue;
+        if ( note.m_isSubNote || polylineSubNotes.contains(&note) ) continue;
         target.m_noteData.notes.push_back(note);
     }
     for ( const auto& hold : source.m_noteData.holds ) {
-        if ( hold.m_isSubNote ) continue;
+        if ( hold.m_isSubNote || polylineSubNotes.contains(&hold) ) continue;
         target.m_noteData.holds.push_back(hold);
     }
     for ( const auto& flick : source.m_noteData.flicks ) {
-        if ( flick.m_isSubNote ) continue;
+        if ( flick.m_isSubNote || polylineSubNotes.contains(&flick) ) continue;
         target.m_noteData.flicks.push_back(flick);
     }
 }
@@ -204,13 +287,188 @@ void copyTemplateNotes(BeatMap& target, const BeatMap& source)
     target.sync();
 }
 
+/// @brief 判断玩家物件的起始列是否位于目标主轨道区。
+/// @param note 待验证物件。
+/// @param targetPlayerTrackCount 目标玩家轨道数。
+/// @return 起始列可原样复制时返回 true。
+bool isTemplateNoteTrackValid(const Note&  note,
+                              std::int32_t targetPlayerTrackCount)
+{
+    return targetPlayerTrackCount > 0 &&
+           static_cast<std::uint64_t>(note.m_track) <
+               static_cast<std::uint64_t>(targetPlayerTrackCount);
+}
+
+/// @brief 判断 Flick 的起始列和终止列是否均位于目标主轨道区。
+/// @param flick 待验证 Flick。
+/// @param targetPlayerTrackCount 目标玩家轨道数。
+/// @return Flick 可保持列和方向原样复制时返回 true。
+bool isTemplateFlickTrackValid(const Flick& flick,
+                               std::int32_t targetPlayerTrackCount)
+{
+    if ( !isTemplateNoteTrackValid(flick, targetPlayerTrackCount) ) {
+        return false;
+    }
+
+    const auto endTrack = static_cast<std::int64_t>(flick.m_track) +
+                          static_cast<std::int64_t>(flick.m_dtrack);
+    return endTrack >= 0 && endTrack < targetPlayerTrackCount;
+}
+
+/// @brief 验证模板全部玩家物件均可保持原列复制到目标主轨道区。
+/// @param source 模板谱面。
+/// @param targetPlayerTrackCount 目标玩家轨道数。
+/// @param errorMessage 接收失败原因。
+/// @return 普通 Note、Hold、Flick、Polyline 及全部子物件均合法时返回 true。
+bool validateTemplatePlayerObjectTracks(const BeatMap& source,
+                                        std::int32_t   targetPlayerTrackCount,
+                                        std::string&   errorMessage)
+{
+    for ( const auto& note : source.m_noteData.notes ) {
+        if ( isTemplateNoteTrackValid(note, targetPlayerTrackCount) ) {
+            continue;
+        }
+        errorMessage = "模板 Note 超出新谱面的玩家轨道范围";
+        return false;
+    }
+    for ( const auto& hold : source.m_noteData.holds ) {
+        if ( isTemplateNoteTrackValid(hold, targetPlayerTrackCount) ) {
+            continue;
+        }
+        errorMessage = "模板 Hold 超出新谱面的玩家轨道范围";
+        return false;
+    }
+    for ( const auto& flick : source.m_noteData.flicks ) {
+        if ( isTemplateFlickTrackValid(flick, targetPlayerTrackCount) ) {
+            continue;
+        }
+        errorMessage = "模板 Flick 起止列超出新谱面的玩家轨道范围";
+        return false;
+    }
+    for ( const auto& polyline : source.m_noteData.polylines ) {
+        if ( isTemplateNoteTrackValid(polyline, targetPlayerTrackCount) ) {
+            for ( const auto& subNoteReference : polyline.m_subNotes ) {
+                const auto& subNote = subNoteReference.get();
+                const bool  valid   = subNote.m_type == NoteType::FLICK
+                                          ? isTemplateFlickTrackValid(
+                                                static_cast<const Flick&>(subNote),
+                                                targetPlayerTrackCount)
+                                          : isTemplateNoteTrackValid(
+                                                subNote, targetPlayerTrackCount);
+                if ( valid ) continue;
+
+                errorMessage = "模板 Polyline 子物件超出新谱面的玩家轨道范围";
+                return false;
+            }
+            continue;
+        }
+        errorMessage = "模板 Polyline 超出新谱面的玩家轨道范围";
+        return false;
+    }
+    errorMessage.clear();
+    return true;
+}
+
+/// @brief 原子构造模板自动采样在新玩家轨道数下的绝对轨道。
+/// @param source 模板谱面。
+/// @param targetPlayerTrackCount 新谱面的玩家轨道数。
+/// @param targetBgmTrackCount 新谱面原有的 BGM 轨道数。
+/// @param remappedSamples 接收完整验证后的自动采样列表。
+/// @param remappedBgmTrackCount 接收保留并扩展后的 BGM 轨道数。
+/// @param errorMessage 接收失败原因。
+/// @return 全部自动采样均可保持 BGM 相对轨道时返回 true。
+bool remapTemplateAudioSamples(const BeatMap& source,
+                               std::int32_t   targetPlayerTrackCount,
+                               std::int32_t   targetBgmTrackCount,
+                               std::deque<AudioSampleEvent>& remappedSamples,
+                               std::int32_t& remappedBgmTrackCount,
+                               std::string&  errorMessage)
+{
+    /// @brief 模板声明的玩家轨道数。
+    const auto sourcePlayerTrackCount = source.m_baseMapMetadata.track_count;
+    if ( !source.m_audioSamples.empty() &&
+         (sourcePlayerTrackCount < 0 || targetPlayerTrackCount < 0) ) {
+        errorMessage = "模板或新谱面的玩家轨道数无效，无法重映射自动采样";
+        return false;
+    }
+
+    /// @brief 完整验证成功前不暴露给调用方的候选采样列表。
+    std::deque<AudioSampleEvent> candidateSamples;
+
+    /// @brief 同时保留模板和目标显式创建的空 BGM 轨道。
+    std::int32_t candidateBgmTrackCount = std::max(
+        { 0, targetBgmTrackCount, source.m_baseMapMetadata.bgm_track_count });
+    for ( const auto& sourceSample : source.m_audioSamples ) {
+        const auto sourcePlayerTrackCountUnsigned =
+            static_cast<std::uint32_t>(sourcePlayerTrackCount);
+        if ( sourceSample.m_track < sourcePlayerTrackCountUnsigned ) {
+            errorMessage = "模板自动采样落入玩家轨道区，无法复制到新谱面";
+            return false;
+        }
+
+        /// @brief 自动采样相对于模板首条 BGM 轨道的零基索引。
+        const auto relativeBgmTrack =
+            static_cast<std::uint64_t>(sourceSample.m_track) -
+            sourcePlayerTrackCountUnsigned;
+        /// @brief 新谱面中的绝对轨道，使用宽整数防止无符号回绕。
+        const auto mappedTrack =
+            static_cast<std::uint64_t>(targetPlayerTrackCount) +
+            relativeBgmTrack;
+        /// @brief 容纳当前相对轨道所需的最小 BGM 轨道数。
+        const auto requiredBgmTrackCount = relativeBgmTrack + 1U;
+        if ( mappedTrack > std::numeric_limits<std::uint32_t>::max() ||
+             requiredBgmTrackCount >
+                 static_cast<std::uint64_t>(
+                     std::numeric_limits<std::int32_t>::max()) ) {
+            errorMessage = "模板自动采样轨道重映射溢出，无法复制到新谱面";
+            return false;
+        }
+
+        auto remappedSample    = sourceSample;
+        remappedSample.m_track = static_cast<std::uint32_t>(mappedTrack);
+        candidateSamples.push_back(std::move(remappedSample));
+        candidateBgmTrackCount =
+            std::max(candidateBgmTrackCount,
+                     static_cast<std::int32_t>(requiredBgmTrackCount));
+    }
+
+    remappedSamples       = std::move(candidateSamples);
+    remappedBgmTrackCount = candidateBgmTrackCount;
+    errorMessage.clear();
+    return true;
+}
+
 /// @brief 按用户选项将模板谱面内容应用到新谱面。
 /// @param target 正在创建的新谱面。
 /// @param source 模板谱面。
 /// @param options 模板复制选项。
-void applyTemplateBeatmap(BeatMap& target, const BeatMap& source,
-                          const BeatmapTemplateCreateOptions& options)
+/// @param errorMessage 接收模板内容无法无损复制时的失败原因。
+/// @return 所选模板内容完整应用时返回 true。
+bool applyTemplateBeatmap(BeatMap& target, const BeatMap& source,
+                          const BeatmapTemplateCreateOptions& options,
+                          std::string&                        errorMessage)
 {
+    /// @brief 在修改目标谱面前完成整批自动采样重映射验证。
+    std::deque<AudioSampleEvent> remappedSamples;
+    /// @brief 自动采样重映射后需要持久化的 BGM 轨道数。
+    std::int32_t remappedBgmTrackCount =
+        target.m_baseMapMetadata.bgm_track_count;
+    if ( options.copyObjects ) {
+        if ( !validateTemplatePlayerObjectTracks(
+                 source, target.m_baseMapMetadata.track_count, errorMessage) ) {
+            return false;
+        }
+        if ( !remapTemplateAudioSamples(
+                 source,
+                 target.m_baseMapMetadata.track_count,
+                 target.m_baseMapMetadata.bgm_track_count,
+                 remappedSamples,
+                 remappedBgmTrackCount,
+                 errorMessage) ) {
+            return false;
+        }
+    }
+
     if ( options.copyMetadata ) {
         target.m_metadata = source.m_metadata;
     }
@@ -219,9 +477,13 @@ void applyTemplateBeatmap(BeatMap& target, const BeatMap& source,
     }
     if ( options.copyObjects ) {
         copyTemplateNotes(target, source);
+        target.m_audioSamples                    = std::move(remappedSamples);
+        target.m_baseMapMetadata.bgm_track_count = remappedBgmTrackCount;
     } else {
         target.sync();
     }
+    errorMessage.clear();
+    return true;
 }
 
 /// @brief 按时间和类型稳定排序谱面 Timing。
@@ -305,23 +567,84 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
 
     meta.map_path = makeProjectRelativePath(project, mapPath);
 
-    meta.main_audio_path =
-        makeProjectRelativePath(project, meta.main_audio_path);
+    if ( meta.song_file_hint.empty() ) {
+        meta.song_file_hint = meta.main_audio_path;
+    }
+    meta.song_file_hint = makeProjectRelativePath(project, meta.song_file_hint);
+    meta.main_audio_path.clear();
     meta.main_cover_path =
         makeProjectRelativePath(project, meta.main_cover_path);
     meta.cover_path = makeProjectRelativePath(project, meta.cover_path);
+
+    /// @brief 新谱面歌曲提示解析出的项目主音频资源 ID。
+    std::string selectedMainResourceId;
+    /// @brief 保存成功后才登记的缺失主音频资源。
+    std::optional<AudioResource> pendingMainResource;
+    if ( !meta.song_file_hint.empty() ) {
+        if ( const auto* resource =
+                 findAudioResourceForReference(project, meta.song_file_hint) ) {
+            if ( resource->m_type == AudioTrackType::Main ) {
+                selectedMainResourceId = resource->m_id;
+            } else {
+                XWARN(
+                    "New beatmap song_file_hint '{}' resolves to Effect '{}'; "
+                    "no automatic Main sample was created",
+                    Config::pathToUtf8(meta.song_file_hint),
+                    resource->m_id);
+            }
+        } else {
+            AudioResource pendingResource;
+            pendingResource.m_id =
+                Config::pathToUtf8(meta.song_file_hint.filename());
+            pendingResource.m_path   = Config::pathToUtf8(meta.song_file_hint);
+            pendingResource.m_type   = AudioTrackType::Main;
+            pendingResource.m_config = makeDefaultAudioConfig();
+            selectedMainResourceId   = pendingResource.m_id;
+            pendingMainResource      = std::move(pendingResource);
+        }
+    }
 
     /// @brief 新建并即将保存到磁盘的谱面实例。
     auto newBeatmap               = std::make_shared<MMM::BeatMap>();
     newBeatmap->m_baseMapMetadata = meta;
     if ( cmd.templateBeatmap ) {
-        applyTemplateBeatmap(
-            *newBeatmap, *cmd.templateBeatmap, cmd.templateOptions);
+        /// @brief 模板复制失败时用于日志说明且不会产生任何持久化副作用。
+        std::string templateError;
+        if ( !applyTemplateBeatmap(*newBeatmap,
+                                   *cmd.templateBeatmap,
+                                   cmd.templateOptions,
+                                   templateError) ) {
+            XERROR("Cannot create beatmap from template: {}", templateError);
+            return result;
+        }
     }
     applyInitialBeatmapTimings(
         *newBeatmap,
         cmd.initialTimings,
         cmd.templateBeatmap && cmd.templateOptions.copyTimelines);
+
+    if ( !selectedMainResourceId.empty() ) {
+        auto& baseMeta           = newBeatmap->m_baseMapMetadata;
+        baseMeta.bgm_track_count = std::max(1, baseMeta.bgm_track_count);
+        const auto sampleTrack =
+            static_cast<uint32_t>(std::max(0, baseMeta.track_count));
+        const bool alreadyMaterialized = std::any_of(
+            newBeatmap->m_audioSamples.begin(),
+            newBeatmap->m_audioSamples.end(),
+            [&](const AudioSampleEvent& sample) {
+                return sample.m_audioResourceId == selectedMainResourceId &&
+                       sample.m_timestamp == 0.0 && sample.m_offsetMs == 0 &&
+                       sample.m_track == sampleTrack;
+            });
+        if ( !alreadyMaterialized ) {
+            AudioSampleEvent sample;
+            sample.m_timestamp       = 0.0;
+            sample.m_offsetMs        = 0;
+            sample.m_track           = sampleTrack;
+            sample.m_audioResourceId = selectedMainResourceId;
+            newBeatmap->m_audioSamples.push_back(std::move(sample));
+        }
+    }
 
     if ( newBeatmap->saveToFile(mapPath) ) {
         XINFO("Beatmap saved to: {}", Config::pathToUtf8(mapPath));
@@ -335,32 +658,13 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
     entry.m_name = meta.name;
     entry.m_filePath =
         Config::pathToUtf8(makeProjectRelativePath(project, mapPath));
-    entry.m_audioTrackId = Config::pathToUtf8(meta.main_audio_path.filename());
     removeExcludedPath(project.m_excludedBeatmapPaths, entry.m_filePath);
     project.m_beatmaps.push_back(entry);
 
-    /// @brief 当前项目是否已经登记了新谱面声明的主音轨。
-    bool audioExists = false;
-    /// @brief 新谱面主音轨的规范化项目相对路径。
-    const std::string normalizedMainAudioPath = normalizeStoredProjectPath(
-        project, Config::pathToUtf8(meta.main_audio_path));
-    for ( const auto& resource : project.m_audioResources ) {
-        if ( normalizeStoredProjectPath(project, resource.m_path) ==
-             normalizedMainAudioPath ) {
-            audioExists = true;
-            break;
-        }
-    }
-
-    if ( !audioExists && !meta.main_audio_path.empty() ) {
-        /// @brief 根据新谱面主音轨自动补充的项目音频资源。
-        AudioResource resource;
-        resource.m_id     = Config::pathToUtf8(meta.main_audio_path.filename());
-        resource.m_path   = Config::pathToUtf8(meta.main_audio_path);
-        resource.m_type   = AudioTrackType::Main;
-        resource.m_config = makeDefaultAudioConfig();
-        removeExcludedPath(project.m_excludedAudioPaths, resource.m_path);
-        project.m_audioResources.push_back(resource);
+    if ( pendingMainResource ) {
+        removeExcludedPath(project.m_excludedAudioPaths,
+                           pendingMainResource->m_path);
+        project.m_audioResources.push_back(std::move(*pendingMainResource));
     }
 
     result.m_created     = true;
@@ -462,11 +766,11 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
     project.m_audioResources.push_back(resource);
 
     if ( resource.m_type == AudioTrackType::Effect ) {
-        /// @brief 新导入音效的预加载请求。
-        AudioPreloadRequest preloadRequest;
-        preloadRequest.m_resource     = resource;
-        preloadRequest.m_absolutePath = finalAbsolutePath;
-        result.m_effectPreload        = preloadRequest;
+        /// @brief 新导入音效的按需加载登记请求。
+        AudioRegistrationRequest registrationRequest;
+        registrationRequest.m_resource     = resource;
+        registrationRequest.m_absolutePath = finalAbsolutePath;
+        result.m_effectRegistration        = registrationRequest;
     }
 
     result.m_imported = true;
@@ -546,11 +850,6 @@ ProjectCommandService::syncProjectWithFile(
 
     entry.m_filePath = relMapPath;
 
-    if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
-        entry.m_audioTrackId = Config::pathToUtf8(
-            map.m_baseMapMetadata.main_audio_path.filename());
-    }
-
     project.m_beatmaps.push_back(entry);
     result.m_changed = true;
     XINFO("EditorEngine: Discovered new beatmap for project: {}", entry.m_name);
@@ -605,10 +904,6 @@ ProjectCommandService::updateBeatmapFilePath(
             if ( entry.m_name.empty() ) {
                 entry.m_name = Config::pathToUtf8(absNew.filename());
             }
-            if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
-                entry.m_audioTrackId = Config::pathToUtf8(
-                    map.m_baseMapMetadata.main_audio_path.filename());
-            }
         }
 
         return ProjectMutationResult{ true };
@@ -620,10 +915,12 @@ ProjectCommandService::updateBeatmapFilePath(
 /// @brief 更新音频资源类型。
 /// @param project 当前打开的项目。
 /// @param cmd 更新音频资源命令。
+/// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
 /// @return 更新音频资源的处理结果。
 ProjectCommandService::UpdateAudioResourceResult
 ProjectCommandService::updateAudioResource(
-    Project& project, const CmdUpdateAudioResource& cmd) const
+    Project& project, const CmdUpdateAudioResource& cmd,
+    const std::vector<BeatmapAudioReference>& openBeatmapReferences) const
 {
     /// @brief 本次更新音频资源的返回结果。
     UpdateAudioResourceResult result;
@@ -637,8 +934,38 @@ ProjectCommandService::updateAudioResource(
             continue;
         }
 
+        const AudioTrackType previousType = resource.m_type;
+        if ( previousType == AudioTrackType::Effect &&
+             cmd.newType == AudioTrackType::Main ) {
+            auto references =
+                ProjectResourceService::findAudioResourceReferences(project,
+                                                                    resource);
+            appendMatchingOpenBeatmapReferences(
+                project, resource, openBeatmapReferences, references);
+            result.m_blockingBeatmapPaths = collectBlockingBeatmapPaths(
+                references, [](BeatmapAudioReferenceKind kind) {
+                    return kind == BeatmapAudioReferenceKind::NoteSampleBinding;
+                });
+            if ( !result.m_blockingBeatmapPaths.empty() ) {
+                XWARN(
+                    "Cannot change Effect '{}' to Main because it is bound by "
+                    "Notes in {} beatmap(s)",
+                    resource.m_id,
+                    result.m_blockingBeatmapPaths.size());
+                for ( const auto& beatmapPath :
+                      result.m_blockingBeatmapPaths ) {
+                    XWARN("  Note sample reference: {}", beatmapPath);
+                }
+                return result;
+            }
+        }
+
         resource.m_type  = cmd.newType;
         result.m_updated = true;
+        if ( previousType == AudioTrackType::Effect &&
+             resource.m_type == AudioTrackType::Main ) {
+            result.m_effectResourceIdToUnload = resource.m_id;
+        }
         if ( resource.m_type == AudioTrackType::Effect ) {
             /// @brief 音频资源在项目目录中的绝对路径。
             auto absPath = resolveProjectPath(
@@ -646,11 +973,11 @@ ProjectCommandService::updateAudioResource(
             std::error_code resourcePathError;
             if ( std::filesystem::exists(absPath, resourcePathError) &&
                  !resourcePathError ) {
-                /// @brief 更新后音效的预加载请求。
-                AudioPreloadRequest preloadRequest;
-                preloadRequest.m_resource     = resource;
-                preloadRequest.m_absolutePath = absPath;
-                result.m_effectPreload        = preloadRequest;
+                /// @brief 更新后音效的按需加载登记请求。
+                AudioRegistrationRequest registrationRequest;
+                registrationRequest.m_resource     = resource;
+                registrationRequest.m_absolutePath = absPath;
+                result.m_effectRegistration        = registrationRequest;
             }
         }
         break;
@@ -662,15 +989,98 @@ ProjectCommandService::updateAudioResource(
 /// @brief 从项目中删除音频资源并清理谱面引用。
 /// @param project 当前打开的项目。
 /// @param cmd 删除音频资源命令。
+/// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
 /// @return 删除音频资源的处理结果。
 ProjectCommandService::RemoveAudioResourceResult
 ProjectCommandService::removeAudioResource(
-    Project& project, const CmdRemoveAudioResource& cmd) const
+    Project& project, const CmdRemoveAudioResource& cmd,
+    const std::vector<BeatmapAudioReference>& openBeatmapReferences) const
 {
     /// @brief 本次删除音频资源的返回结果。
     RemoveAudioResourceResult result;
 
     XINFO("Removing audio resource from project: {}", cmd.id);
+
+    const auto resourceIterator = std::find_if(
+        project.m_audioResources.begin(),
+        project.m_audioResources.end(),
+        [&](const AudioResource& resource) { return resource.m_id == cmd.id; });
+    if ( resourceIterator == project.m_audioResources.end() ) {
+        return result;
+    }
+
+    auto references = ProjectResourceService::findAudioResourceReferences(
+        project, *resourceIterator);
+    appendMatchingOpenBeatmapReferences(
+        project, *resourceIterator, openBeatmapReferences, references);
+    result.m_blockingBeatmapPaths = collectBlockingBeatmapPaths(
+        references, [](BeatmapAudioReferenceKind kind) {
+            return kind == BeatmapAudioReferenceKind::NoteSampleBinding ||
+                   kind == BeatmapAudioReferenceKind::AudioSampleEvent;
+        });
+    if ( !result.m_blockingBeatmapPaths.empty() ) {
+        XWARN(
+            "Cannot remove audio resource '{}' because it is referenced by {} "
+            "beatmap(s)",
+            cmd.id,
+            result.m_blockingBeatmapPaths.size());
+        for ( const auto& beatmapPath : result.m_blockingBeatmapPaths ) {
+            XWARN("  Audio object reference: {}", beatmapPath);
+        }
+        return result;
+    }
+
+    if ( cmd.deleteSourceFile ) {
+        /// @brief 项目根目录的规范化绝对路径。
+        const auto projectRoot =
+            weaklyCanonicalAbsolutePath(project.m_projectRoot);
+        /// @brief 待删除源音频的解析路径。
+        const auto sourcePath = resolveProjectPath(
+            project, Config::utf8ToPath(resourceIterator->m_path));
+        /// @brief 解析符号链接后的源音频规范化路径。
+        const auto comparableSourcePath =
+            weaklyCanonicalAbsolutePath(sourcePath);
+        /// @brief 源音频相对项目根目录的安全路径。
+        const auto relativeSourcePath =
+            makeRelativeToProjectRoot(projectRoot, comparableSourcePath);
+        if ( relativeSourcePath.empty() ) {
+            result.m_errorMessage = "拒绝删除项目目录之外的音频源文件";
+            XWARN(
+                "Refusing to delete audio resource '{}' outside project root: "
+                "{}",
+                cmd.id,
+                Config::pathToUtf8(sourcePath));
+            return result;
+        }
+
+        std::error_code filesystemError;
+        const bool      sourceIsRegularFile =
+            std::filesystem::is_regular_file(sourcePath, filesystemError);
+        if ( filesystemError || !sourceIsRegularFile ) {
+            result.m_errorMessage =
+                filesystemError
+                    ? "无法访问待删除的音频源文件：" + filesystemError.message()
+                    : "待删除的音频源文件不存在或不是普通文件";
+            XWARN("Cannot access audio source file '{}': {}",
+                  Config::pathToUtf8(sourcePath),
+                  result.m_errorMessage);
+            return result;
+        }
+
+        filesystemError.clear();
+        const bool sourceRemoved =
+            std::filesystem::remove(sourcePath, filesystemError);
+        if ( filesystemError || !sourceRemoved ) {
+            result.m_errorMessage =
+                filesystemError
+                    ? "删除音频源文件失败：" + filesystemError.message()
+                    : "删除音频源文件失败";
+            XWARN("Failed to delete audio source file '{}': {}",
+                  Config::pathToUtf8(sourcePath),
+                  result.m_errorMessage);
+            return result;
+        }
+    }
 
     /// @brief 被删除音频资源的项目相对路径。
     std::string removedPath;
@@ -701,12 +1111,6 @@ ProjectCommandService::removeAudioResource(
     }
 
     addExcludedPath(project.m_excludedAudioPaths, removedPath);
-
-    for ( auto& map : project.m_beatmaps ) {
-        if ( map.m_audioTrackId == cmd.id ) {
-            map.m_audioTrackId = "";
-        }
-    }
 
     return result;
 }
@@ -934,6 +1338,7 @@ void ProjectCommandService::normalizeBeatmapMetadataPathsForProject(
     };
 
     normalizeResourcePath(meta.main_audio_path);
+    normalizeResourcePath(meta.song_file_hint);
     normalizeResourcePath(meta.main_cover_path);
     normalizeResourcePath(meta.cover_path);
 }

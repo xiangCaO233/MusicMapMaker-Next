@@ -20,8 +20,6 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
 void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
                                const Config::EditorConfig& config)
 {
-    if ( !config.settings.sfxConfig.enableHitSfx ) return;
-
     auto& audioManager = Audio::AudioManager::instance();
 
     // 1. 根据策略确定最终播放类型
@@ -53,15 +51,75 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
             1.0f + (ev.trackSpan - 1) *
                        config.settings.sfxConfig.flickWidthVolumeMultiplier;
     }
+    volumeFactor *= sampleVolumeForEvent(ev);
 
-    std::string sfxKey = (effectiveType == ::MMM::NoteType::FLICK)
-                             ? "hiteffect.flick"
-                             : "hiteffect.note";
+    const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
         ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
+    const auto playbackControl = Audio::KeySoundPlaybackControl{
+        .enabled          = true,
+        .playerTrackIndex = ev.trackIndex >= 0
+                                ? static_cast<std::uint32_t>(ev.trackIndex)
+                                : Audio::KEY_SOUND_INVALID_TRACK_INDEX,
+        .effectGroup      = hasBoundSoundEffect(ev)
+                                ? Audio::KeySoundEffectGroup::Bound
+                                : Audio::KeySoundEffectGroup::Unbound,
+    };
     audioManager.playSoundEffectScheduled(
-        sfxKey, ev.timestamp, volumeFactor, stereoEnvelope);
+        sfxKey, ev.timestamp, volumeFactor, stereoEnvelope, playbackControl);
+}
+
+const std::string& HitFXSystem::soundEffectKeyForEvent(
+    const HitEvent& ev, ::MMM::NoteType effectiveType)
+{
+    if ( hasBoundSoundEffect(ev) ) {
+        return ev.sampleBinding->m_audioResourceId;
+    }
+
+    static const std::string NOTE_SOUND_EFFECT_KEY  = "hiteffect.note";
+    static const std::string FLICK_SOUND_EFFECT_KEY = "hiteffect.flick";
+    return effectiveType == ::MMM::NoteType::FLICK ? FLICK_SOUND_EFFECT_KEY
+                                                   : NOTE_SOUND_EFFECT_KEY;
+}
+
+bool HitFXSystem::hasBoundSoundEffect(const HitEvent& ev) noexcept
+{
+    return ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty();
+}
+
+float HitFXSystem::sampleVolumeForEvent(const HitEvent& ev)
+{
+    return hasBoundSoundEffect(ev) ? ev.sampleBinding->m_volume : 1.0F;
+}
+
+HitEffectRenderBounds HitFXSystem::calculateRenderBounds(
+    Config::HitEffectLayoutMode layoutMode, std::int32_t trackCount,
+    std::int32_t trackIndex, std::int32_t trackOffset, float judgmentLineY,
+    float leftX, float topY, float bottomY, float singleTrackWidth,
+    float fixedWidth, float fixedHeight)
+{
+    const std::int32_t lastTrack = std::max(trackCount - 1, 0);
+    const std::int32_t targetTrack =
+        std::clamp(trackIndex + trackOffset, 0, lastTrack);
+
+    if ( layoutMode == Config::HitEffectLayoutMode::TrackFill ) {
+        return {
+            .x     = leftX + static_cast<float>(targetTrack) * singleTrackWidth,
+            .y     = bottomY,
+            .width = singleTrackWidth,
+            .height = std::max(0.0f, bottomY - topY),
+        };
+    }
+
+    const float centerX =
+        leftX + (static_cast<float>(targetTrack) + 0.5f) * singleTrackWidth;
+    return {
+        .x      = centerX - fixedWidth * 0.5f,
+        .y      = judgmentLineY + fixedHeight * 0.5f,
+        .width  = fixedWidth,
+        .height = fixedHeight,
+    };
 }
 
 Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
@@ -245,14 +303,17 @@ void HitFXSystem::clearActiveEffects()
 void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
                                    const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,
-                                   float leftX, float singleTrackW)
+                                   float leftX, float topY, float bottomY,
+                                   float singleTrackW)
 {
-    if ( !config.visual.enableHitEffects || m_trackActiveEffects.empty() )
+    if ( !config.visual.enableHitEffects || m_trackActiveEffects.empty() ||
+         trackCount <= 0 || singleTrackW <= 0.0f )
         return;
 
     RenderSnapshot* snapshot    = batcher.snapshot;
     auto&           skinManager = Config::SkinManager::instance();
     float           baseFps     = skinManager.getEffectBaseFps();
+    const auto      layoutMode  = skinManager.getHitEffectLayoutMode();
 
     for ( const auto& [track, active] : m_trackActiveEffects ) {
         const auto* seq =
@@ -280,33 +341,40 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
 
         // 获取特效序列帧的 UV 信息以计算比例
         auto itTex = snapshot->uvMap.find(textureId);
-        if ( itTex == snapshot->uvMap.end() ) continue;
+        if ( itTex == snapshot->uvMap.end() || itTex->second.z <= 0.0f ||
+             itTex->second.w <= 0.0f )
+            continue;
         float texAspect = itTex->second.z / itTex->second.w;
 
-        // 计算基准尺寸：特效宽度 = 音符宽度 * 2.5 (稍微大一点)
-        float noteW   = singleTrackW * config.visual.noteScaleX;
-        float effectW = noteW;
-        float effectH = effectW / texAspect;
-
-        // 计算位置：
-        // 打击点中心 X：起始轨道 X + (偏移量 + 0.5) * 轨道宽
-        // 对于 Flick，trackOffset 即为 dtrack
-        float centerX =
-            leftX +
-            (active.trackIndex + active.trackOffset + 0.5f) * singleTrackW;
-        float centerY = judgmentLineY;
-
-        float x = centerX - effectW * 0.5f;
-        float y = centerY + effectH * 0.5f;
+        // 固定模式继续复用物件横纵缩放；整轨模式只使用其纵横比采样纹理。
+        const float fixedWidth = singleTrackW * config.visual.noteScaleX;
+        const float fixedHeight =
+            (singleTrackW / texAspect) * config.visual.noteScaleY;
+        const HitEffectRenderBounds bounds =
+            calculateRenderBounds(layoutMode,
+                                  trackCount,
+                                  active.trackIndex,
+                                  active.trackOffset,
+                                  judgmentLineY,
+                                  leftX,
+                                  topY,
+                                  bottomY,
+                                  singleTrackW,
+                                  fixedWidth,
+                                  fixedHeight);
 
         batcher.setTexture(static_cast<TextureID>(textureId));
-        // 使用 pushFilledQuad 以保证采样一致性并适配 FillMode
-        batcher.pushFilledQuad(x,
-                               y,
-                               effectW,
-                               effectH,
+        // 整轨模式必须完整拉伸；固定模式继续服从原有物件填充设置。
+        const auto fillMode =
+            layoutMode == Config::HitEffectLayoutMode::TrackFill
+                ? Config::BackgroundFillMode::Stretch
+                : config.visual.noteFillMode;
+        batcher.pushFilledQuad(bounds.x,
+                               bounds.y,
+                               bounds.width,
+                               bounds.height,
                                { texAspect, 1.0f },
-                               config.visual.noteFillMode,
+                               fillMode,
                                glm::vec4(1.0f));
     }
 

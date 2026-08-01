@@ -1,5 +1,7 @@
 add_library(
   UI STATIC
+  src/ui/IUIView.cpp
+  src/ui/ITextureLoader.cpp
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
@@ -10,6 +12,7 @@ add_library(
   src/ui/imgui/MainDockSpaceUI_StatusBar.cpp
   src/ui/imgui/FloatingManagerUI.cpp
   src/ui/imgui/SideBarUI.cpp
+  src/ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.cpp
   src/ui/imgui/feedback/SaveResultFeedback.cpp
   src/ui/imgui/menu/MainMenuView.cpp
   src/ui/imgui/menu/MainMenuNavigationController.cpp
@@ -22,6 +25,7 @@ add_library(
   src/ui/imgui/menu/actions/edit/OpenBeatmapSettingsAction.cpp
   src/ui/imgui/menu/actions/edit/OpenNoteMetadataAction.cpp
   src/ui/imgui/menu/actions/edit/PasteAction.cpp
+  src/ui/imgui/menu/actions/edit/PolylineEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/RedoAction.cpp
   src/ui/imgui/menu/actions/edit/SelectAllAction.cpp
   src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp
@@ -44,6 +48,8 @@ add_library(
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
+  src/ui/imgui/menu/actions/tools/OpenPluginListAction.cpp
+  src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp
   src/ui/imgui/menu/actions/view/FixedToolWindowToggleAction.cpp
@@ -72,6 +78,7 @@ add_library(
   src/ui/imgui/manager/FileManagerView_Interactions.cpp
   src/ui/imgui/manager/SearchView.cpp
   src/ui/imgui/manager/AudioManagerView.cpp
+  src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
@@ -81,6 +88,7 @@ add_library(
   src/ui/imgui/manager/SettingsView_EditorTab.cpp
   src/ui/imgui/manager/SettingsView_ProjectTab.cpp
   src/ui/imgui/manager/SettingsView_ShortcutTab.cpp
+  src/ui/imgui/manager/SettingsView_SkinPackage.cpp
   src/ui/imgui/manager/SettingsView_SoftwareTab.cpp
   src/ui/imgui/manager/SettingsView_Tabs.cpp
   src/ui/imgui/manager/SettingsView_VisualTab.cpp
@@ -88,6 +96,7 @@ add_library(
   src/ui/imgui/audio/AudioTrackControllerUI.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
+  src/ui/imgui/audio/ProjectAudioPreviewControls.cpp
   src/ui/imgui/audio/AudioWaveformView.cpp
   src/ui/imgui/audio/AudioSpectrumView.cpp
   src/ui/imgui/DebugWindowUI.cpp
@@ -142,6 +151,15 @@ target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
 
+# 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。
+mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
+                        tests/BeatLineDisplayModeHistoryTest.cpp)
+target_include_directories(BeatLineDisplayModeHistoryTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(BeatLineDisplayModeHistoryTest PRIVATE Config)
+add_test(NAME BeatLineDisplayModeHistoryTest
+         COMMAND BeatLineDisplayModeHistoryTest)
+
 mmm_add_test_executable(UI PackageDefaultSelectionTest
                         tests/PackageDefaultSelectionTest.cpp)
 target_include_directories(PackageDefaultSelectionTest
@@ -153,3 +171,17 @@ mmm_add_test_executable(UI ProjectUiLifecycleStateTest
 target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
+
+# 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
+mmm_add_test_executable(UI ProjectAudioToolLayoutTest
+                        tests/ProjectAudioToolLayoutTest.cpp)
+target_include_directories(ProjectAudioToolLayoutTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectAudioToolLayoutTest COMMAND ProjectAudioToolLayoutTest)
+
+# 项目音频工具搜索测试覆盖精确、子串、顺序模糊和 UTF-8 文件名匹配。
+mmm_add_test_executable(UI ProjectAudioToolSearchTest
+                        tests/ProjectAudioToolSearchTest.cpp)
+target_include_directories(ProjectAudioToolSearchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectAudioToolSearchTest COMMAND ProjectAudioToolSearchTest)

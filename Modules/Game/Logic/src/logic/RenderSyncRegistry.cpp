@@ -1,4 +1,5 @@
 #include "logic/RenderSyncRegistry.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include <mutex>
 
 namespace MMM::Logic
@@ -66,11 +67,44 @@ bool asciiFontMetricsEqual(const Common::AsciiFontMetrics& lhs,
 bool asciiFontAtlasMetricsEqual(const Common::AsciiFontAtlasMetrics& lhs,
                                 const Common::AsciiFontAtlasMetrics& rhs)
 {
-    if ( lhs.valid != rhs.valid ) return false;
+    if ( lhs.valid != rhs.valid || lhs.rasterScale != rhs.rasterScale ) {
+        return false;
+    }
     for ( std::size_t tierIndex = 0U; tierIndex < lhs.tiers.size();
           ++tierIndex ) {
         if ( !asciiFontMetricsEqual(lhs.tiers[tierIndex],
                                     rhs.tiers[tierIndex]) ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 判断两套按需 Unicode 字体度量是否完全一致。
+/// @param lhs 左侧 Unicode 字体度量。
+/// @param rhs 右侧 Unicode 字体度量。
+/// @return 字体标量与全部码点字形度量一致时返回 true。
+bool unicodeFontMetricsEqual(const Common::UnicodeFontMetrics& lhs,
+                             const Common::UnicodeFontMetrics& rhs)
+{
+    if ( lhs.valid != rhs.valid || lhs.ascender != rhs.ascender ||
+         lhs.lineHeight != rhs.lineHeight ||
+         lhs.glyphs.size() != rhs.glyphs.size() ) {
+        return false;
+    }
+    for ( std::size_t index = 0U; index < lhs.glyphs.size(); ++index ) {
+        const auto& left        = lhs.glyphs[index];
+        const auto& right       = rhs.glyphs[index];
+        const auto& leftMetric  = left.metrics;
+        const auto& rightMetric = right.metrics;
+        if ( left.codepoint != right.codepoint ||
+             leftMetric.available != rightMetric.available ||
+             leftMetric.hasBitmap != rightMetric.hasBitmap ||
+             leftMetric.width != rightMetric.width ||
+             leftMetric.height != rightMetric.height ||
+             leftMetric.bearingX != rightMetric.bearingX ||
+             leftMetric.bearingY != rightMetric.bearingY ||
+             leftMetric.advanceX != rightMetric.advanceX ) {
             return false;
         }
     }
@@ -115,19 +149,23 @@ std::shared_ptr<BeatmapSyncBuffer> RenderSyncRegistry::getSyncBuffer(
 void RenderSyncRegistry::setAtlasUVMap(
     const std::string&                             cameraId,
     const std::unordered_map<uint32_t, glm::vec4>& uvMap,
-    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics)
+    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics,
+    const Common::UnicodeFontMetrics&              unicodeFontMetrics)
 {
     /// @brief 保护本次图集 UV 映射写入的临界区。
     std::unique_lock<std::shared_mutex> lock(m_mutex);
     auto&                               state = m_cameraUVMaps[cameraId];
     if ( atlasUVMapsEqual(state.uvMap, uvMap) &&
          asciiFontAtlasMetricsEqual(state.asciiFontAtlasMetrics,
-                                    asciiFontAtlasMetrics) ) {
+                                    asciiFontAtlasMetrics) &&
+         unicodeFontMetricsEqual(state.unicodeFontMetrics,
+                                 unicodeFontMetrics) ) {
         return;
     }
 
     state.uvMap                 = uvMap;
     state.asciiFontAtlasMetrics = asciiFontAtlasMetrics;
+    state.unicodeFontMetrics    = unicodeFontMetrics;
     state.revision              = m_nextAtlasUvRevision++;
     if ( state.revision == 0 ) {
         state.revision = m_nextAtlasUvRevision++;
@@ -162,7 +200,8 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     const std::string&                       cameraId,
     std::unordered_map<uint32_t, glm::vec4>& target,
     std::uint64_t&                           targetRevision,
-    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics) const
+    Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
+    Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
     const auto* snapshot =
         m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
@@ -170,10 +209,12 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
     if ( !state ) {
         if ( targetRevision != 0 || !target.empty() ||
-             targetAsciiFontAtlasMetrics.valid ) {
+             targetAsciiFontAtlasMetrics.valid ||
+             targetUnicodeFontMetrics.valid ) {
             target.clear();
             targetRevision              = 0;
             targetAsciiFontAtlasMetrics = {};
+            targetUnicodeFontMetrics    = {};
         }
         return;
     }
@@ -185,6 +226,7 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     target                      = state->uvMap;
     targetRevision              = state->revision;
     targetAsciiFontAtlasMetrics = state->asciiFontAtlasMetrics;
+    targetUnicodeFontMetrics    = state->unicodeFontMetrics;
 }
 
 /// @brief 缓存指定画布的最后已知视口尺寸。

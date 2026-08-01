@@ -29,6 +29,16 @@ namespace
 /// @brief 音频倍速导出的离线处理块大小。
 constexpr std::size_t AUDIO_SPEED_EXPORT_CHUNK_FRAMES = 65536;
 
+/// @brief 将 SourceNode 的同块输入结束通知转交给离线拉伸器。
+/// @param context 生命周期覆盖导出图的 TimeStretcher。
+/// @warning 音频处理热路径：只写入 lock-free final 邮箱。
+void requestFinalStretcherInput(void* context) noexcept
+{
+    if ( !context ) return;
+    static_cast<void>(
+        static_cast<ice::TimeStretcher*>(context)->request_final_input());
+}
+
 /// @brief 发送导出进度。
 /// @param options 导出参数。
 /// @param progress 进度值。
@@ -179,8 +189,14 @@ std::shared_ptr<ice::IAudioNode> createPitchPreservedGraph(
 
     auto stretcher = std::make_shared<ice::TimeStretcher>();
     stretcher->set_inputnode(source);
+    if ( !stretcher->prepare(ice::ICEConfig::internal_format,
+                             AUDIO_SPEED_EXPORT_CHUNK_FRAMES) ) {
+        return {};
+    }
     stretcher->set_playback_ratio(speed);
     stretcher->set_pitch_semitones(0.0);
+    source->set_final_input_listener(stretcher.get(),
+                                     &requestFinalStretcherInput);
     return stretcher;
 }
 

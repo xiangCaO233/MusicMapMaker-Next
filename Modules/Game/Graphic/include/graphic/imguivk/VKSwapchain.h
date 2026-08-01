@@ -1,12 +1,13 @@
 #pragma once
 
-#include "graphic/imguivk/VKQueueFamilyDef.h"
-#include "graphic/imguivk/VKRenderPass.h"
 #include <atomic>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
 {
+struct QueueFamilyIndices;
+class VKRenderPass;
 
 /**
  * @brief Vulkan 交换链管理类

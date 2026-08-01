@@ -1,6 +1,7 @@
 #include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 namespace MMM::UI

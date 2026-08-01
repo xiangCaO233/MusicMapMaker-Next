@@ -90,13 +90,52 @@ bool testPreviewAreaLineDefaults()
     return true;
 }
 
+/// @brief 验证玩家物件绑定音效标签开关能够持久化且旧配置默认关闭。
+/// @return 当前格式往返开启且缺省 JSON 保持关闭时返回 true。
+bool testBoundSampleLabelConfigRoundTrip()
+{
+    MMM::Config::VisualConfig source;
+    source.showBoundSampleLabels = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    if ( !encoded.value("showBoundSampleLabels", false) ||
+         !restored.showBoundSampleLabels || legacy.showBoundSampleLabels ) {
+        XERROR("Bound sample label config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证折线编辑开关可持久化且旧配置保持现有完整编辑行为。
+/// @return 关闭状态往返不变且缺失字段默认开启时返回 true。
+bool testPolylineEditingConfigRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.enablePolylineEditing = false;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( encoded.value("enablePolylineEditing", true) ||
+         restored.enablePolylineEditing || !legacy.enablePolylineEditing ) {
+        XERROR("Polyline editing config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
 /// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
 bool testRenderingDefaultsReset()
 {
     MMM::Config::EditorConfig config;
-    config.visual.noteScaleX   = 2.4F;
-    config.visual.noteScaleY   = 0.7F;
+    config.visual.noteScaleX            = 2.4F;
+    config.visual.noteScaleY            = 0.7F;
+    config.visual.showBoundSampleLabels = true;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
     config.settings.defaultColorPaletteSchemeName = "Custom";
     config.visual.background.fillMode =
@@ -110,6 +149,8 @@ bool testRenderingDefaultsReset()
     const MMM::Config::EditorConfig defaults;
     if ( !near(config.visual.noteScaleX, defaults.visual.noteScaleX) ||
          !near(config.visual.noteScaleY, defaults.visual.noteScaleY) ||
+         config.visual.showBoundSampleLabels !=
+             defaults.visual.showBoundSampleLabels ||
          config.visual.noteFillMode != defaults.visual.noteFillMode ||
          config.settings.defaultColorPaletteSchemeName !=
              defaults.settings.defaultColorPaletteSchemeName ||
@@ -243,6 +284,8 @@ int main()
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
                    testPreviewAreaLineDefaults() &&
+                   testBoundSampleLabelConfigRoundTrip() &&
+                   testPolylineEditingConfigRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&

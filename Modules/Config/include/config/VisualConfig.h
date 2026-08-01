@@ -38,6 +38,8 @@ struct VisualConfig {
     float noteScaleX{ 1.2f };
     /// @brief 音符 Y 轴缩放。
     float noteScaleY{ 1.2f };
+    /// @brief 是否在玩家物件上方显示绑定音效资源标签。
+    bool showBoundSampleLabels{ false };
     /// @brief 音符填充模式。
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移。

@@ -1,12 +1,15 @@
 #pragma once
 
+#include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
-#include "mmm/beatmap/BeatMap.h"
+#include "mmm/Metadata.h"
+#include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include <array>
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
@@ -61,6 +64,8 @@ struct CmdSetHoveredEntity {
     entt::entity entity;    // 如果为 entt::null 则表示取消悬停
     uint8_t      part;      // 悬停的具体部位 (HoverPart)
     int          subIndex;  // 悬停的具体子索引
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -69,6 +74,8 @@ struct CmdSetHoveredEntity {
 struct CmdSelectEntity {
     entt::entity entity;
     bool         clearOthers;
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -78,6 +85,8 @@ struct CmdStartDrag {
     entt::entity entity;
     std::string  cameraId;
     bool         isCtrlDown{ false };
+    /// @brief 实体所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
 
 /**
@@ -95,6 +104,57 @@ struct CmdUpdateDrag {
  */
 struct CmdEndDrag {
     std::string cameraId;
+};
+
+/// @brief 将项目音频资源作为自动采样放入主画布 BGM 轨道区。
+struct CmdCreateAudioSample {
+    /// @brief 项目内稳定音频资源 ID。
+    std::string audioResourceId;
+
+    /// @brief 接收放置操作的主画布 ID。
+    std::string cameraId;
+
+    /// @brief 鼠标相对画布的横坐标。
+    float mouseX{ 0.0F };
+
+    /// @brief 鼠标相对画布的纵坐标。
+    float mouseY{ 0.0F };
+
+    /// @brief 是否临时禁用分拍吸附。
+    bool isCtrlDown{ false };
+};
+
+/// @brief 原子更新一个自动采样的精确属性。
+struct CmdUpdateAudioSampleProperties {
+    /// @brief 自动采样在独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 项目资源 ID 或待兼容解析的已有资源引用。
+    std::string audioResourceId;
+
+    /// @brief 相对玩家轨道区的零基 BGM 轨道索引。
+    std::int32_t bgmLane{ 0 };
+
+    /// @brief 相对锚点的有符号毫秒偏移。
+    std::int64_t offsetMs{ 0 };
+
+    /// @brief 自动采样物件音量。
+    float volume{ 1.0F };
+};
+
+/// @brief 更新主画布单个玩家绑定或自动采样的物件音量。
+struct CmdUpdateObjectSampleVolume {
+    /// @brief 目标物件在对应独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 目标物件所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+
+    /// @brief Polyline 子物件索引；负值表示玩家物件本体或自动采样。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 要写入物件的非负音量倍率。
+    float volume{ 1.0F };
 };
 
 /**
@@ -206,11 +266,20 @@ struct CmdUpdateTrackCount {
     int32_t trackCount;
 };
 
+/// @brief 更新持久化 BGM 轨道数量指令。
+struct CmdUpdateBgmTrackCount {
+    int32_t bgmTrackCount;  ///< 目标持久化 BGM 轨道数量。
+};
+
 /**
  * @brief 跳转时间指令
  */
 struct CmdSeek {
+    /// @brief 目标音频时间，单位为秒。
     double time;
+
+    /// @brief 是否为拖动进度条期间的连续预览请求。
+    bool isScrubbing{ false };
 };
 
 /**
@@ -218,6 +287,57 @@ struct CmdSeek {
  */
 struct CmdSetPlaybackSpeed {
     double speed;
+};
+
+/// @brief Key 音所在的画布轨道区域。
+enum class KeySoundTrackArea : std::uint8_t {
+    Player,  ///< 玩家操作轨道区。
+    Bgm      ///< 自动采样 BGM 轨道区。
+};
+
+/// @brief 玩家打击音效的资源绑定类别。
+enum class KeySoundEffectGroup : std::uint8_t {
+    Unbound,  ///< 未绑定音效文件，使用皮肤默认音效。
+    Bound     ///< 已绑定项目音效文件。
+};
+
+/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+struct CmdSetKeySoundTrackMute {
+    /// @brief 目标轨道区域。
+    KeySoundTrackArea area{ KeySoundTrackArea::Player };
+
+    /// @brief 区域内零基轨道索引。
+    std::uint32_t trackIndex{ 0U };
+
+    /// @brief 是否静音。
+    bool muted{ false };
+};
+
+/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音增益。
+struct CmdSetKeySoundTrackGain {
+    /// @brief 目标轨道区域。
+    KeySoundTrackArea area{ KeySoundTrackArea::Player };
+
+    /// @brief 区域内零基轨道索引。
+    std::uint32_t trackIndex{ 0U };
+
+    /// @brief 非负线性增益；音频层负责限制到支持范围。
+    float gain{ 1.0F };
+};
+
+/// @brief 设置一类玩家打击音效的实时线性增益。
+struct CmdSetKeySoundEffectGroupGain {
+    /// @brief 目标资源绑定类别。
+    KeySoundEffectGroup group{ KeySoundEffectGroup::Unbound };
+
+    /// @brief 非负线性增益；音频层负责限制到支持范围。
+    float gain{ 1.0F };
+};
+
+/// @brief 设置整个 BGM 轨道区的运行时 Key 音静音状态。
+struct CmdSetBgmKeySoundAreaMute {
+    /// @brief 是否静音。
+    bool muted{ false };
 };
 
 /**
@@ -247,6 +367,18 @@ struct CmdApplyNoteColorToSelection {
 struct CmdSetBrushNotePalette {
     /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
+/// @brief 设置画笔新建物件使用的项目音频资源。
+struct CmdSetBrushAudioResource {
+    /// @brief 项目内稳定音频资源 ID；空字符串表示清除选择。
+    std::string audioResourceId;
+
+    /// @brief 所选资源类型，用于限制玩家物件只能绑定 Effect。
+    ::MMM::AudioTrackType audioTrackType{ ::MMM::AudioTrackType::Effect };
+
+    /// @brief 新建玩家物件绑定或自动采样使用的物件音量倍率。
+    float volume{ 1.0F };
 };
 
 /// @brief 将完整音符调色盘应用到当前选中物件。
@@ -338,6 +470,9 @@ struct CmdSaveBeatmap {
  * @brief 另存为谱面指令
  */
 struct CmdSaveBeatmapAs {
+    /// @brief 导出 MC 时临时覆盖的 Malody 模式；其它格式忽略。
+    std::optional<MMM::MalodyMode> malodyExportMode;
+
     /// @brief 导出 MC 时是否写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
@@ -373,6 +508,9 @@ struct CmdPackBeatmap {
     /// @brief MCZ 打包时是否为写出的 MC 谱面写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
+    /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
+    std::optional<MMM::MalodyMode> malodyExportMode;
+
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
@@ -393,6 +531,27 @@ struct CmdScroll {
     bool        isShiftDown;  ///< 是否按住 Shift 加速普通时间滚动。
     /// @brief 本条滚轮指令需要执行的逻辑意图。
     ScrollCommandIntent intent{ ScrollCommandIntent::MoveTimeline };
+};
+
+/// @brief 按逻辑像素增量二维平移主画布。
+struct CmdPanCanvas {
+    /// @brief 接收平移的主画布 ID。
+    std::string cameraId;
+
+    /// @brief 内容在屏幕上的横向逻辑像素位移。
+    float deltaX{ 0.0F };
+
+    /// @brief 内容在屏幕上的纵向逻辑像素位移。
+    float deltaY{ 0.0F };
+
+    /// @brief 产生本次输入时的视口逻辑宽度。
+    float viewportWidth{ 0.0F };
+
+    /// @brief 产生本次输入时的视口逻辑高度。
+    float viewportHeight{ 0.0F };
+
+    /// @brief 当前画布纵向渲染缩放。
+    float renderScaleY{ 1.0F };
 };
 
 /**
@@ -540,11 +699,33 @@ struct CmdUpdateAudioResource {
     ::MMM::AudioTrackType newType;
 };
 
+/// @brief 同时重命名项目音频资源的逻辑轨道 ID 与物理文件名。
+struct CmdRenameAudioResource {
+    /// @brief 重命名前的稳定资源 ID。
+    std::string id;
+
+    /// @brief 不含目录的目标文件名；扩展名必须与源文件一致。
+    std::string newFileName;
+};
+
+/// @brief 更新项目音频资源的完整持久化 DSP 配置。
+struct CmdUpdateAudioResourceConfig {
+    /// @brief 待更新资源的稳定 ID。
+    std::string id;
+
+    /// @brief 替换写入的完整资源配置。
+    ::MMM::AudioTrackConfig config;
+};
+
 /**
  * @brief 移除音轨资源指令
  */
 struct CmdRemoveAudioResource {
+    /// @brief 待删除资源的稳定 ID。
     std::string id;
+
+    /// @brief 是否同时删除项目目录中的源音频文件。
+    bool deleteSourceFile{ false };
 };
 
 /**
@@ -566,20 +747,25 @@ struct CmdSaveTemporaryProject {
 using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
-    CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
-    CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
-    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
-    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
+    CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
+    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
+    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
+    CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
+    CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
+    CmdSetBrushNotePalette, CmdSetBrushAudioResource,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdUpdateTimelineEvents,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdCreateTimelineEvents,
-    CmdReplaceBeatmapTimings, CmdReplaceBeatmapData, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap,
+    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

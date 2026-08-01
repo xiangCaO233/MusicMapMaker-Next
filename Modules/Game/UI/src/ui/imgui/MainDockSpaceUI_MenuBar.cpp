@@ -1,8 +1,9 @@
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
@@ -10,6 +11,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <fmt/format.h>
 #include <memory>
 
 namespace MMM::UI
@@ -142,9 +144,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiIO&    io       = ImGui::GetIO();
         float       logicUps = Logic::EditorEngine::instance().getLogicUps();
         std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                    1000.0f / io.Framerate,
-                                    io.Framerate,
-                                    logicUps);
+                                      1000.0f / io.Framerate,
+                                      io.Framerate,
+                                      logicUps);
         float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         float numberOfButtons  = 3;

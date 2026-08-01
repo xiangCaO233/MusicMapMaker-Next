@@ -29,6 +29,9 @@ public:
      * @brief 生成快照
      *
      * @param registry 音符注册表
+     * @param sampleRegistry 自动采样注册表
+     * @param sortedSampleEntities 已按覆盖区间起点排序的自动采样实体
+     * @param sortedSampleMaxEndPrefix 自动采样覆盖区间终点前缀最大值
      * @param timelineRegistry 时间线注册表 (用于坐标积分映射)
      * @param snapshot 目标渲染快照缓冲区
      * @param cameraId 视口 ID
@@ -36,7 +39,8 @@ public:
      * @param viewportWidth 视口总宽度
      * @param viewportHeight 视口总高度
      * @param judgmentLineY 判定线位置 (视口空间)
-     * @param trackCount 轨道数量
+     * @param trackCount 玩家轨道数量
+     * @param bgmTrackCount 持久化 BGM 轨道数量
      * @param config 编辑器配置
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      * @param hitFXSystem 打击特效系统 (可选)
@@ -45,11 +49,14 @@ public:
      * entt 遍历、完整排序、try/catch 和 shared_ptr 所有权复制。
      */
     static void generateSnapshot(
-        entt::registry& registry, const entt::registry& timelineRegistry,
+        entt::registry& registry, entt::registry& sampleRegistry,
+        const std::vector<entt::entity>&             sortedSampleEntities,
+        const std::vector<double>&                   sortedSampleMaxEndPrefix,
+        const entt::registry&                        timelineRegistry,
         const std::vector<const TimelineComponent*>& bpmEvents,
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
-        float judgmentLineY, int32_t trackCount,
+        float judgmentLineY, int32_t trackCount, int32_t bgmTrackCount,
         const Config::EditorConfig& config, float mainViewportHeight = 1000.0f,
         class HitFXSystem* hitFXSystem = nullptr);
 
@@ -82,9 +89,9 @@ private:
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
         int32_t trackCount, const Config::EditorConfig& config,
-        const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-        float& bottomY, float& trackAreaW, float& singleTrackW,
-        float renderScaleY);
+        int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
+        float& rightX, float& topY, float& bottomY, float& trackAreaW,
+        float& singleTrackW, float renderScaleY);
 
     /// @warning 热路径：每次画布快照生成基础轨道布局时执行；仅允许
     /// O(trackCount) 绘制。
@@ -118,7 +125,7 @@ private:
         const std::vector<const TimelineComponent*>& bpmEvents,
         double currentTime, const ScrollCache* cache, float leftX, float topY,
         float bottomY, float trackAreaW, float renderScaleY,
-        bool revealNearCursor);
+        bool revealNearCursor, float opacityScale);
 
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。
@@ -178,7 +185,7 @@ private:
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
-        bool generateHitboxes);
+        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels);
 
     /// @warning
     /// 热路径：悬浮发光层每次快照生成时执行；只扫描当前可见实体列表，禁止完整

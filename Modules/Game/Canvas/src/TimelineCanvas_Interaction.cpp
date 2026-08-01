@@ -95,18 +95,18 @@ constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
 int professionalTimingLane(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
-    case ::MMM::TimingEffect::BPM: return 1;
-    case ::MMM::TimingEffect::SCROLL: return 2;
-    case ::MMM::TimingEffect::JUMP: return 3;
-    case ::MMM::TimingEffect::HS: return 4;
+    case ::MMM::TimingEffect::BPM: return 0;
+    case ::MMM::TimingEffect::SCROLL: return 1;
+    case ::MMM::TimingEffect::JUMP: return 2;
+    case ::MMM::TimingEffect::HS: return 3;
     }
-    return 1;
+    return 0;
 }
 
 /// @brief 将专业模式轨道位置转换为创建弹窗类型索引。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseX 鼠标相对画布左上角的 X 坐标。
-/// @return 可创建 Timing 的轨道返回类型索引；BGM 或越界轨道返回空。
+/// @return 可创建 Timing 的轨道返回类型索引；越界轨道返回空。
 std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
                                              float         localMouseX)
 {
@@ -114,17 +114,16 @@ std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
         return std::nullopt;
     }
 
-    constexpr int laneCount = 5;
+    constexpr int laneCount = 4;
     const float   laneWidth = size.x / static_cast<float>(laneCount);
     int           lane =
         static_cast<int>(std::floor(localMouseX / std::max(1.0f, laneWidth)));
     lane = std::clamp(lane, 0, laneCount - 1);
     switch ( lane ) {
-    case 1: return 0;
-    case 2: return 1;
-    case 3: return 2;
-    case 4: return 3;
-    case 0:
+    case 0: return 0;
+    case 1: return 1;
+    case 2: return 2;
+    case 3: return 3;
     default: return std::nullopt;
     }
 }
@@ -325,11 +324,11 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
     }
 
     double targetAbsY = currentAbsY + (judgmentLineY - compensatedMouseY);
-    auto   itTime     = std::lower_bound(segments.begin(),
-                                   segments.end(),
-                                   targetAbsY,
-                                   [](const Logic::System::ScrollSegment& seg,
-                                      double val) { return seg.absY < val; });
+    auto   itTime = std::lower_bound(segments.begin(),
+                                     segments.end(),
+                                     targetAbsY,
+                                     [](const Logic::System::ScrollSegment& seg,
+                                        double val) { return seg.absY < val; });
 
     if ( itTime == segments.begin() ) {
         if ( std::abs(segments[0].speed) < 1e-6 ) {
@@ -485,10 +484,10 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
             continue;
         }
 
-        double relativeTime    = rawTime - point.time;
-        double stepCount       = editorConfig.settings.snapFloor
-                                     ? std::floor(relativeTime / stepDuration + 1e-6)
-                                     : std::round(relativeTime / stepDuration);
+        double relativeTime = rawTime - point.time;
+        double stepCount = editorConfig.settings.snapFloor
+                               ? std::floor(relativeTime / stepDuration + 1e-6)
+                               : std::round(relativeTime / stepDuration);
         double nearestStepTime = point.time + stepCount * stepDuration;
         if ( nearestStepTime > nextBpmTime ) {
             nearestStepTime = nextBpmTime;
@@ -600,10 +599,10 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
         }
 
         double relativeTime = rawTime - point.time;
-        double stepCount    = editorConfig.settings.snapFloor
-                                  ? std::floor(relativeTime / stepDuration + 1e-6)
-                                  : std::round(relativeTime / stepDuration);
-        double candidate    = point.time + stepCount * stepDuration;
+        double stepCount = editorConfig.settings.snapFloor
+                               ? std::floor(relativeTime / stepDuration + 1e-6)
+                               : std::round(relativeTime / stepDuration);
+        double candidate = point.time + stepCount * stepDuration;
         if ( candidate > nextBpmTime ) {
             candidate = nextBpmTime;
         }
@@ -739,7 +738,7 @@ float TimelineCanvas::timingTargetCenterX(const TimelineHitTarget& target,
     if ( Config::AppConfig::instance()
              .getEditorSettings()
              .timelineProfessionalMode ) {
-        constexpr float laneCount = 5.0f;
+        constexpr float laneCount = 4.0f;
         const int       lane      = professionalTimingLane(target.effect);
         return canvasPos.x +
                size.x * (static_cast<float>(lane) + 0.5f) / laneCount;
@@ -1006,10 +1005,10 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
     sharedClipboard.reserve(selectedTargets.size());
     for ( const auto& target : selectedTargets ) {
         TimelineClipboardEntry entry;
-        entry.relativeTime = target.time - anchorTime;
-        entry.relativeBeat = timelineClipboardTimeToBeat(
-                                 beatTimeline, target.time, fallbackBpm) -
-                             anchorBeat;
+        entry.relativeTime    = target.time - anchorTime;
+        entry.relativeBeat    = timelineClipboardTimeToBeat(
+                                    beatTimeline, target.time, fallbackBpm) -
+                                anchorBeat;
         entry.effect          = target.effect;
         entry.value           = target.value;
         entry.hasBeatPosition = true;
@@ -1017,8 +1016,8 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
 
         Logic::TimelineClipboardItem sharedEntry;
         sharedEntry.timeline        = Logic::TimelineComponent{ target.time,
-                                                         target.effect,
-                                                         target.value };
+                                                                target.effect,
+                                                                target.value };
         sharedEntry.relativeTime    = entry.relativeTime;
         sharedEntry.relativeBeat    = entry.relativeBeat;
         sharedEntry.hasBeatPosition = entry.hasBeatPosition;
@@ -1382,12 +1381,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     case Logic::EditTool::Marquee: {
         auto makeMarqueeRect = [&]() {
             TimingSelectionRect rect;
-            rect.left = canvasPos.x +
-                        std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.right = canvasPos.x +
-                         std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.top = canvasPos.y +
-                       std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
+            rect.left   = canvasPos.x +
+                          std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.right  = canvasPos.x +
+                          std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.top    = canvasPos.y +
+                          std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.bottom = canvasPos.y +
                           std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.valid =

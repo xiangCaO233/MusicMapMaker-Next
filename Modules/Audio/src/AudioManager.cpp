@@ -1,5 +1,7 @@
 #include "audio/AudioManager.h"
 #include "BackgroundSpectrumAnalyzer.h"
+#include "audio/AudioTimelineMixerNode.h"
+#include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -12,7 +14,9 @@
 #include <thread>
 #include <vector>
 
+#include <ice/config/config.hpp>
 #include <ice/core/MixBus.hpp>
+#include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/out/IReceiver.hpp>
 #include <ice/out/play/openal/ALPlayer.hpp>
@@ -84,6 +88,55 @@ bool containsOutputDeviceName(const std::vector<AudioOutputDevice>& devices,
     });
 }
 
+/// @brief 读取主时间线最近发布的 discontinuity 代际。
+/// @param context 生命周期覆盖音频后端的 AudioTimelineMixerNode。
+/// @return 当前时间线代际。
+/// @warning 音频回调热路径：只执行一次 relaxed 原子读取。
+std::uint64_t readTimelineEpoch(const void* context) noexcept
+{
+    if ( !context ) return 0U;
+    return static_cast<const AudioTimelineMixerNode*>(context)->epoch();
+}
+
+/// @brief 在变速器拉取上游前取得不跨循环或自然结束点的连续输入区间。
+/// @param context 生命周期覆盖音频后端的 AudioTimelineMixerNode。
+/// @param maximumInputFrames 本段最多允许拉取的输入帧数。
+/// @return 连续输入帧数及段尾动作。
+/// @warning 音频回调热路径：只推进时间线控制邮箱，不分配、不阻塞。
+ice::TimeStretcher::InputSpan readTimelineInputBoundary(
+    void* context, std::size_t maximumInputFrames) noexcept
+{
+    if ( !context ) return {};
+
+    const auto boundary =
+        static_cast<AudioTimelineMixerNode*>(context)->prepareInputBoundary(
+            maximumInputFrames);
+    auto kind = ice::TimeStretcher::InputBoundary::None;
+    switch ( boundary.kind ) {
+    case AudioTimelineInputBoundaryKind::None: break;
+    case AudioTimelineInputBoundaryKind::Discontinuity:
+        kind = ice::TimeStretcher::InputBoundary::Discontinuity;
+        break;
+    case AudioTimelineInputBoundaryKind::Final:
+        kind = ice::TimeStretcher::InputBoundary::Final;
+        break;
+    }
+    return {
+        .frameCount = boundary.frameCount,
+        .boundary   = kind,
+    };
+}
+
+/// @brief 在上游自然结束的同一 block 通知拉伸器提交 final 输入。
+/// @param context 生命周期覆盖音频后端的 TimeStretcher。
+/// @warning 音频回调热路径：只写入 lock-free 代际邮箱。
+void requestFinalStretcherInput(void* context) noexcept
+{
+    if ( !context ) return;
+    static_cast<void>(
+        static_cast<ice::TimeStretcher*>(context)->request_final_input());
+}
+
 /// @brief 记录后端可见的 OpenAL 播放设备。
 void logOpenALDeviceDiagnostics()
 {
@@ -114,6 +167,7 @@ AudioManager& AudioManager::instance()
 
 /// @brief 构造音频管理器并从编辑器配置初始化音量状态。
 AudioManager::AudioManager()
+    : m_keySoundControls(std::make_unique<KeySoundControlBank>())
 {
     // 从配置初始化音量
     auto& settings       = Config::AppConfig::instance().getEditorSettings();
@@ -125,11 +179,20 @@ AudioManager::AudioManager()
     m_sfxGainMuted       = settings.sfxGainMuted;
     m_interactionSfxGain = settings.interactionSfxGain;
     m_interactionSfxGainMuted = settings.interactionSfxGainMuted;
-    m_mainTrackVolume         = 0.5f;  // 默认主音轨音量
+    m_mainTrackVolume         = 1.0f;
     m_playbackBackend         = settings.audioPlaybackBackend;
     m_sdlOutputDeviceName     = settings.sdlAudioOutputDeviceName;
     m_openALOutputDeviceName  = settings.openALAudioOutputDeviceName;
     m_openALSpatialConfig     = settings.openALSpatialConfig;
+    m_keySoundControls->setPlayerAreaMuted(!settings.sfxConfig.enableHitSfx);
+    m_keySoundControls->setEffectGroupMuted(
+        KeySoundEffectGroup::Unbound, !settings.sfxConfig.enableUnboundHitSfx);
+    m_keySoundControls->setEffectGroupGain(
+        KeySoundEffectGroup::Unbound, settings.sfxConfig.unboundHitSfxGain);
+    m_keySoundControls->setEffectGroupMuted(
+        KeySoundEffectGroup::Bound, !settings.sfxConfig.enableBoundHitSfx);
+    m_keySoundControls->setEffectGroupGain(KeySoundEffectGroup::Bound,
+                                           settings.sfxConfig.boundHitSfxGain);
 
     // 初始化常驻音效静音状态
     for ( const auto& [key, muted] : settings.sfxConfig.permanentSfxMutes ) {
@@ -154,6 +217,34 @@ void AudioManager::init()
     m_mainMixer         = std::make_shared<ice::MixBus>();
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
     m_hitEffectMixer    = std::make_shared<ice::MixBus>();
+    const std::size_t maximumBlockFrames =
+        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
+    m_mainMixer->prepare(ice::ICEConfig::internal_format, maximumBlockFrames);
+    m_preStretcherMixer->prepare(ice::ICEConfig::internal_format,
+                                 maximumBlockFrames);
+    m_hitEffectMixer->prepare(ice::ICEConfig::internal_format,
+                              maximumBlockFrames);
+    m_audioTimelineNode = std::make_shared<AudioTimelineMixerNode>(
+        std::vector<PreparedTimelineClip>{},
+        0,
+        maximumBlockFrames,
+        m_keySoundControls.get());
+    m_bgmSpectrumCapture =
+        std::make_shared<BackgroundSpectrumCaptureNode>(m_audioTimelineNode);
+    m_stretcher = std::make_shared<ice::TimeStretcher>();
+    m_stretcher->set_inputnode(m_preStretcherMixer);
+    static_cast<void>(m_stretcher->prepare(ice::ICEConfig::internal_format,
+                                           maximumBlockFrames));
+    m_stretcher->set_playback_ratio(m_speed);
+    m_stretcher->set_pitch_semitones(m_playbackPitch);
+    m_stretcher->set_discontinuity_generation_provider(
+        m_audioTimelineNode.get(), &readTimelineEpoch);
+    m_stretcher->set_input_boundary_provider(m_audioTimelineNode.get(),
+                                             &readTimelineInputBoundary);
+    m_audioTimelineNode->setFinalInputListener(m_stretcher.get(),
+                                               &requestFinalStretcherInput);
+    m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
+    m_mainMixer->add_source(m_stretcher);
     m_hitEffectSpectrumCapture =
         std::make_shared<BackgroundSpectrumCaptureNode>(m_hitEffectMixer);
     m_backgroundSpectrumAnalyzer =
@@ -189,15 +280,25 @@ void AudioManager::init()
 void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
+    waitForQueuedSoundEffectLoads();
     destroyPlaybackBackend();
+    clearSoundEffects();
+    unloadAudioTimeline();
     unloadAuditionTrack();
 
     m_bgmTrack.reset();
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
-    m_bgmSource.reset();
+    m_audioTimelineNode.reset();
+    m_audioTimelineLoaded = false;
+    m_audioTimelineFingerprint.clear();
+    m_audioTimelineClipCount        = 0U;
+    m_missingAudioTimelineClipCount = 0U;
+    m_audioTimelineResourceCache.clear();
     m_bgmSpectrumCapture.reset();
     m_stretcher.reset();
+    m_mainEQ.reset();
+    m_mainEQPreset = EQPreset::None;
     m_backgroundSpectrumAnalyzer.reset();
     m_hitEffectSpectrumCapture.reset();
     m_hitEffectMixer.reset();

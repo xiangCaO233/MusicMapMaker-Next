@@ -120,6 +120,14 @@ public:
                                   const std::string&                trackName,
                                   AudioTrackControllerUI::TrackType type);
 
+    /// @brief 打开项目音频工具并聚焦到前台。
+    void openProjectAudioTool();
+
+    /// @brief 重新加载当前已打开控制器引用的项目音效。
+    /// @warning 低频皮肤重载路径：每个已打开音效控制器最多触发一次单文件
+    /// 解码，禁止放入每帧 UI 更新。
+    void reloadOpenEffectAudioTracks();
+
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
     {

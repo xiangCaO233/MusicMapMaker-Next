@@ -1,11 +1,15 @@
 #pragma once
 
-#include "config/EditorConfig.h"
 #include <cstddef>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <utility>
 #include <vector>
+
+namespace MMM::Config
+{
+struct EditorConfig;
+}
 
 namespace MMM
 {

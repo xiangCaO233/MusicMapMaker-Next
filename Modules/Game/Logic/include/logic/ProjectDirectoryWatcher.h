@@ -43,6 +43,12 @@ public:
     /// 不可避免，用于将 watcher 线程的文件系统事件去抖后转入低频扫描。
     bool consumeChangePending();
 
+    /// @brief 判断项目内相对路径变化是否需要触发资源重扫。
+    /// @param relativePath 相对于项目根目录的变化路径。
+    /// @return 资源文件变化返回 true；项目描述文件自身变化返回 false。
+    static bool isRelevantProjectPathChange(
+        const std::filesystem::path& relativePath);
+
 private:
     /// @brief 文件夹监听线程的主循环。
     /// @param watchPath 需要递归监听的项目目录路径。

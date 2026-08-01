@@ -1,10 +1,14 @@
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
 
 #include "log/colorful-log.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <optional>
+#include <thread>
 
 namespace
 {
@@ -74,11 +78,97 @@ bool testPaletteRestoredAfterSessionClose()
     return matches;
 }
 
+/// @brief 验证新会话恢复编辑器级项目音频画笔选择。
+/// @return 稳定资源 ID 与资源类型均跨会话保留时返回 true。
+bool testAudioResourceRestoredAfterSessionClose()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    while ( engine.getSessionCount() > 0 ) {
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+
+    engine.createSession(nullptr, "Audio Source", false);
+    engine.pushCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "main-track",
+        .audioTrackType  = MMM::AudioTrackType::Main,
+        .volume          = 0.65F,
+    });
+    engine.closeSession(0, false);
+    engine.createSession(nullptr, "Audio Target", true);
+
+    auto session = engine.getActiveSession();
+    if ( !session ) {
+        XERROR("Audio target session was not created");
+        return false;
+    }
+    session->update(0.0, engine.getEditorConfig(), true);
+
+    const auto& brush = session->getContext().brushState;
+    const bool  matches =
+        brush.selectedAudioResourceId == "main-track" &&
+        brush.selectedAudioTrackType == MMM::AudioTrackType::Main &&
+        std::abs(brush.selectedAudioVolume - 0.65F) < 1e-6F;
+    engine.closeSession(0, false);
+    if ( !matches ) {
+        XERROR("New session did not restore the editor audio selection");
+    }
+    return matches;
+}
+
+/// @brief 验证布局拖拽式高频配置写入不会产生撕裂的容器和字符串快照。
+/// @return 并发读取到的每份配置都保持内部字段一致时返回 true。
+bool testConcurrentEditorConfigSnapshots()
+{
+    auto&             engine       = MMM::Logic::EditorEngine::instance();
+    const auto        baseConfig   = engine.getEditorConfig();
+    const std::string STRESS_KEY   = "layout-snapshot-stress";
+    constexpr int     UPDATE_COUNT = 256;
+    std::atomic<bool> writerDone{ false };
+
+    std::thread writer([&]() {
+        for ( int i = 0; i < UPDATE_COUNT; ++i ) {
+            auto        updatedConfig = baseConfig;
+            auto&       sfxConfig     = updatedConfig.settings.sfxConfig;
+            const float marker        = static_cast<float>(i);
+            sfxConfig.flickWidthVolumeMultiplier = marker;
+            sfxConfig.permanentSfxVolumes.clear();
+            sfxConfig.permanentSfxMutes.clear();
+            sfxConfig.permanentSfxVolumes.emplace(STRESS_KEY, marker);
+            sfxConfig.permanentSfxMutes.emplace(STRESS_KEY, (i % 2) == 0);
+            engine.setEditorConfig(updatedConfig);
+        }
+        writerDone.store(true, std::memory_order_release);
+    });
+
+    bool consistent = true;
+    while ( !writerDone.load(std::memory_order_acquire) ) {
+        const auto  snapshot  = engine.getEditorConfig();
+        const auto& sfxConfig = snapshot.settings.sfxConfig;
+        const auto  marker    = sfxConfig.permanentSfxVolumes.find(STRESS_KEY);
+        if ( marker != sfxConfig.permanentSfxVolumes.end() &&
+             !near(marker->second, sfxConfig.flickWidthVolumeMultiplier) ) {
+            consistent = false;
+            break;
+        }
+    }
+
+    writer.join();
+    engine.setEditorConfig(baseConfig);
+    if ( !consistent ) {
+        XERROR("Concurrent editor config snapshot contained torn SFX fields");
+    }
+    return consistent;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testPaletteRestoredAfterSessionClose() ? 0 : 1;
+    return testPaletteRestoredAfterSessionClose() &&
+                   testAudioResourceRestoredAfterSessionClose() &&
+                   testConcurrentEditorConfigSnapshots()
+               ? 0
+               : 1;
 }

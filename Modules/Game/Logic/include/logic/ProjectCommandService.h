@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "logic/ProjectResourceService.h"
+#include "logic/ProjectTypes.h"
 #include "mmm/project/Project.h"
 
 #include <filesystem>
@@ -21,14 +23,8 @@ namespace MMM::Logic
 class ProjectCommandService
 {
 public:
-    /// @brief 音效资源预加载请求。
-    struct AudioPreloadRequest {
-        /// @brief 需要预加载的项目音频资源。
-        AudioResource m_resource;
-
-        /// @brief 音频资源在文件系统中的绝对路径。
-        std::filesystem::path m_absolutePath;
-    };
+    /// @brief 保留原嵌套类型名，兼容现有项目命令调用方。
+    using AudioRegistrationRequest = MMM::Logic::AudioRegistrationRequest;
 
     /// @brief 新建谱面命令结果。
     struct CreateBeatmapResult {
@@ -47,8 +43,8 @@ public:
         /// @brief 是否成功导入音频并登记资源。
         bool m_imported{ false };
 
-        /// @brief 新导入资源若为音效，则需要由引擎预加载。
-        std::optional<AudioPreloadRequest> m_effectPreload;
+        /// @brief 新导入资源若为音效，则需要由引擎登记。
+        std::optional<AudioRegistrationRequest> m_effectRegistration;
     };
 
     /// @brief 更新音频资源命令结果。
@@ -56,8 +52,14 @@ public:
         /// @brief 是否成功找到并更新音频资源。
         bool m_updated{ false };
 
-        /// @brief 更新后若资源变成音效，则需要由引擎预加载。
-        std::optional<AudioPreloadRequest> m_effectPreload;
+        /// @brief 阻止 Effect 转 Main 的 Note 绑定所在谱面列表。
+        std::vector<std::string> m_blockingBeatmapPaths;
+
+        /// @brief 更新后若资源变成音效，则需要由引擎登记。
+        std::optional<AudioRegistrationRequest> m_effectRegistration;
+
+        /// @brief 更新前若资源是音效且现已变成主音轨，需要卸载的音效 ID。
+        std::optional<std::string> m_effectResourceIdToUnload;
     };
 
     /// @brief 删除音频资源命令结果。
@@ -65,8 +67,14 @@ public:
         /// @brief 是否从项目资源列表中删除了音频资源。
         bool m_removed{ false };
 
+        /// @brief 阻止删除的 Note 或自动采样引用所在谱面列表。
+        std::vector<std::string> m_blockingBeatmapPaths;
+
         /// @brief 被删除资源若为音效，则需要由引擎卸载音效缓存。
         std::optional<std::string> m_effectResourceIdToUnload;
+
+        /// @brief 删除失败时供调用方显示的具体原因。
+        std::string m_errorMessage;
     };
 
     /// @brief 项目资源列表变更结果。
@@ -108,16 +116,22 @@ public:
     /// @brief 更新音频资源类型。
     /// @param project 当前打开的项目。
     /// @param cmd 更新音频资源命令。
+    /// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
     /// @return 更新音频资源的处理结果。
     UpdateAudioResourceResult updateAudioResource(
-        Project& project, const CmdUpdateAudioResource& cmd) const;
+        Project& project, const CmdUpdateAudioResource& cmd,
+        const std::vector<BeatmapAudioReference>& openBeatmapReferences = {})
+        const;
 
     /// @brief 从项目中删除音频资源并清理谱面引用。
     /// @param project 当前打开的项目。
     /// @param cmd 删除音频资源命令。
+    /// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
     /// @return 删除音频资源的处理结果。
     RemoveAudioResourceResult removeAudioResource(
-        Project& project, const CmdRemoveAudioResource& cmd) const;
+        Project& project, const CmdRemoveAudioResource& cmd,
+        const std::vector<BeatmapAudioReference>& openBeatmapReferences = {})
+        const;
 
     /// @brief 从项目谱面列表中删除谱面。
     /// @param project 当前打开的项目。

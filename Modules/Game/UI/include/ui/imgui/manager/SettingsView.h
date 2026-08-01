@@ -273,6 +273,36 @@ private:
     bool applySkinSelection(const std::string&           skinDirectoryName,
                             const std::filesystem::path& skinLuaPath);
 
+    /// @brief 在系统文件管理器中打开用户 skins 目录。
+    /// @warning 低频用户操作路径：会创建目录并启动系统文件管理器。
+    void openSkinDirectory();
+
+    /// @brief 打开 MSK 皮肤包导入选择器。
+    /// @return 原生选择器立即完成导入并切换皮肤时返回 true。
+    /// @warning 低频用户操作路径：原生选择器会阻塞当前 UI 操作直至关闭。
+    bool openSkinImportFilePicker();
+
+    /// @brief 打开当前皮肤的 MSK 导出选择器。
+    /// @warning 低频用户操作路径：原生选择器会阻塞当前 UI 操作直至关闭。
+    void openSkinExportFilePicker();
+
+    /// @brief 处理统一 MSK 导入与导出选择器。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 导入并切换到新皮肤时返回 true。
+    bool renderSkinPackageFileDialogs(float dpiScale);
+
+    /// @brief 从指定 MSK 文件导入并切换到新皮肤。
+    /// @param packagePath 待导入的 MSK 文件。
+    /// @return 导入及皮肤切换均成功时返回 true。
+    /// @warning 低频资源路径：会解压文件、写入用户 skins
+    /// 目录并触发皮肤资源热重载。
+    bool importSkinPackage(const std::filesystem::path& packagePath);
+
+    /// @brief 将当前皮肤导出到指定 MSK 文件。
+    /// @param outputPath 文件选择器返回的输出路径。
+    /// @warning 低频资源路径：会遍历当前皮肤目录并压缩全部普通文件。
+    void exportCurrentSkinPackage(const std::filesystem::path& outputPath);
+
     /// @brief 绘制软件设置页。
     void drawSoftwareSettings();
 

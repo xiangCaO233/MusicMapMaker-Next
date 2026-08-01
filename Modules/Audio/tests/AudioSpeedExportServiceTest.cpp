@@ -837,6 +837,10 @@ int main(int argc, char* argv[])
                         "keep-pitch output wav data size");
         }
     }
+    ok &= checkEngineCanReadTail(
+        keepPitchOutput,
+        minimumDecodedFrames(keepPitchResult.outputFrames),
+        "keep-pitch output");
 
     MMM::Audio::AudioSpeedExportOptions paddedOptions;
     paddedOptions.inputPath              = inputPath;

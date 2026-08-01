@@ -86,17 +86,14 @@ inline PreparedCanvasSnapshot prepareCanvasSnapshot(
         return prepared;
     }
 
-    float newYOffset = 0.0f;
-    if ( prepared.snapshot->isPlaying &&
-         prepared.snapshot->snapshotSysTime > 0.0 ) {
-        const double dt =
-            currentSteadySeconds() - prepared.snapshot->snapshotSysTime;
-        if ( dt > 0.0 && dt < 0.1 ) {
-            newYOffset = static_cast<float>(
-                prepared.snapshot->getInterpolatedOffset(dt));
-            if ( scaleByRenderScaleY ) {
-                newYOffset *= prepared.snapshot->renderScaleY;
-            }
+    float        newYOffset = 0.0f;
+    const double dt =
+        prepared.snapshot->playbackInterpolationElapsed(currentSteadySeconds());
+    if ( dt > 0.0 ) {
+        newYOffset =
+            static_cast<float>(prepared.snapshot->getInterpolatedOffset(dt));
+        if ( scaleByRenderScaleY ) {
+            newYOffset *= prepared.snapshot->renderScaleY;
         }
     }
 

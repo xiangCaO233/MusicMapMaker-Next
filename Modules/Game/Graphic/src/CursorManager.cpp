@@ -1,6 +1,7 @@
 #include "graphic/CursorManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui_internal.h"
 
 #include <algorithm>

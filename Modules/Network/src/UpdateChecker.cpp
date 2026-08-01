@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
+#include <fmt/format.h>
 #include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -142,6 +143,49 @@ bool ensureExecutablePermission(const std::filesystem::path& path,
     return true;
 }
 #endif
+
+#if defined(__APPLE__)
+/// @brief 从主程序 Mach-O 路径定位所属 macOS App bundle。
+/// @param executablePath 当前主程序路径。
+/// @param errorMessage 定位失败时写入错误信息，可为空。
+/// @return 成功时返回 .app 根路径，否则返回空路径。
+std::filesystem::path applicationBundlePath(
+    const std::filesystem::path& executablePath, std::string* errorMessage)
+{
+    std::filesystem::path current = executablePath.parent_path();
+    while ( !current.empty() ) {
+        if ( current.extension() == ".app" ) {
+            return current;
+        }
+        const std::filesystem::path parent = current.parent_path();
+        if ( parent == current ) break;
+        current = parent;
+    }
+
+    const std::string message =
+        fmt::format("Executable is not inside an app bundle: {}",
+                    Config::pathToUtf8(executablePath));
+    writeRestartError(errorMessage, message);
+    XERROR("UpdateChecker: {}", message);
+    return {};
+}
+#endif
+
+/// @brief 获取更新成功标记路径。
+/// @param executablePath 当前主程序路径。
+/// @return 标记文件路径；临时目录不可用时返回空路径。
+std::filesystem::path updateSuccessMarkerPath(
+    const std::filesystem::path& executablePath)
+{
+#if defined(__APPLE__)
+    std::error_code tempError;
+    const auto      tempPath = std::filesystem::temp_directory_path(tempError);
+    if ( tempError ) return {};
+    return tempPath / "MusicMapMaker-Next.mm_update_success";
+#else
+    return executablePath.parent_path() / ".mm_update_success";
+#endif
+}
 
 /// @brief 从 JSON 对象读取字符串字段。
 /// @param object JSON 对象。
@@ -321,7 +365,13 @@ std::string UpdateChecker::currentExecutablePath()
 #elif defined(__APPLE__)
     char     buf[PATH_MAX];
     uint32_t size = sizeof(buf);
-    if ( _NSGetExecutablePath(buf, &size) == 0 ) return std::string(buf);
+    if ( _NSGetExecutablePath(buf, &size) == 0 ) {
+        const std::filesystem::path rawPath = Config::utf8ToPath(buf);
+        std::error_code             canonicalError;
+        const auto                  canonicalPath =
+            std::filesystem::weakly_canonical(rawPath, canonicalError);
+        return Config::pathToUtf8(canonicalError ? rawPath : canonicalPath);
+    }
     return "";
 #else
     std::error_code ec;
@@ -349,17 +399,31 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
         return false;
     }
 
-    // 优先使用下载的更新器，不存在时回退到同目录查找
+    const std::filesystem::path executablePath = Config::utf8ToPath(exePath);
+    std::filesystem::path       updateTarget   = executablePath;
+#if defined(__APPLE__)
+    updateTarget = applicationBundlePath(executablePath, errorMessage);
+    if ( updateTarget.empty() ) return false;
+#endif
+
+    // macOS 替换完整 App 时必须使用独立下载到临时目录的新更新器。
     std::filesystem::path updaterPath;
     if ( !updaterFilePath.empty() ) {
         updaterPath = Config::utf8ToPath(updaterFilePath);
     } else {
-        std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
-        updaterPath                     = exePathFs.parent_path();
-#if defined(_WIN32)
-        updaterPath /= "MusicMapMaker-Updater.exe";
+#if defined(__APPLE__)
+        constexpr const char* message =
+            "A downloaded updater is required for macOS app updates";
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
 #else
+        updaterPath = executablePath.parent_path();
+#    if defined(_WIN32)
+        updaterPath /= "MusicMapMaker-Updater.exe";
+#    else
         updaterPath /= "MusicMapMaker-Updater";
+#    endif
 #endif
     }
 
@@ -383,15 +447,14 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
     XINFO("UpdateChecker: Launching updater: {} {} {} {}",
           Config::pathToUtf8(updaterPath),
           downloadedFilePath,
-          exePath,
+          Config::pathToUtf8(updateTarget),
           pid);
 
 #if defined(_WIN32)
-    std::filesystem::path dlPath    = Config::utf8ToPath(downloadedFilePath);
-    std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
-    std::wstring          cmdLine   = L"\"" + updaterPath.wstring() + L"\" \"" +
-                           dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
-                           L"\" " + std::to_wstring(pid);
+    std::filesystem::path dlPath = Config::utf8ToPath(downloadedFilePath);
+    std::wstring          cmdLine =
+        L"\"" + updaterPath.wstring() + L"\" \"" + dlPath.wstring() + L"\" \"" +
+        updateTarget.wstring() + L"\" " + std::to_wstring(pid);
     STARTUPINFOW        si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessW(nullptr,
@@ -414,7 +477,8 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
         return false;
     }
 #else
-    pid_t child = fork();
+    const std::string updateTargetPath = Config::pathToUtf8(updateTarget);
+    pid_t             child            = fork();
     if ( child < 0 ) {
         constexpr const char* message = "Failed to fork updater process";
         writeRestartError(errorMessage, message);
@@ -428,7 +492,7 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
         execl(updater.c_str(),
               updater.c_str(),
               downloadedFilePath.c_str(),
-              exePath.c_str(),
+              updateTargetPath.c_str(),
               pidStr.c_str(),
               nullptr);
         _exit(1);
@@ -449,8 +513,9 @@ bool UpdateChecker::checkStartupUpdateMarker()
     std::string exePath = currentExecutablePath();
     if ( exePath.empty() ) return false;
 
-    std::filesystem::path markerPath =
-        Config::utf8ToPath(exePath).parent_path() / ".mm_update_success";
+    const std::filesystem::path markerPath =
+        updateSuccessMarkerPath(Config::utf8ToPath(exePath));
+    if ( markerPath.empty() ) return false;
 
     std::error_code markerError;
     if ( !std::filesystem::exists(markerPath, markerError) || markerError ) {
@@ -593,6 +658,8 @@ void UpdateChecker::checkAsync()
                         if ( updaterIt != plat.end() &&
                              updaterIt->is_object() ) {
                             result.updaterUrl = jsonString(*updaterIt, "url");
+                            result.updaterChecksum =
+                                jsonString(*updaterIt, "checksum");
                             if ( !result.updaterUrl.empty() &&
                                  result.updaterUrl[0] == '/' ) {
                                 result.updaterUrl = "https://mmm.xiang233.top" +
@@ -641,6 +708,23 @@ void UpdateChecker::downloadAsync()
             m_info.errorMessage = "No download URL";
             return;
         }
+#if defined(__APPLE__)
+        if ( initialInfo.checksum.empty() ) {
+            m_info.status       = UpdateStatus::kError;
+            m_info.errorMessage = "No macOS app archive checksum";
+            return;
+        }
+        if ( initialInfo.updaterUrl.empty() ) {
+            m_info.status       = UpdateStatus::kError;
+            m_info.errorMessage = "No macOS updater URL";
+            return;
+        }
+        if ( initialInfo.updaterChecksum.empty() ) {
+            m_info.status       = UpdateStatus::kError;
+            m_info.errorMessage = "No macOS updater checksum";
+            return;
+        }
+#endif
 
         m_info.status = UpdateStatus::kDownloading;
     }
@@ -729,6 +813,21 @@ void UpdateChecker::downloadAsync()
                 return;
             }
 
+            if ( !result.updaterChecksum.empty() ) {
+                const std::string expectedUpdaterChecksum =
+                    normalizeSha256(result.updaterChecksum);
+                const std::string actualUpdaterChecksum =
+                    AssetSyncService::sha256File(updaterTempPath);
+                if ( expectedUpdaterChecksum.empty() ||
+                     actualUpdaterChecksum.empty() ||
+                     actualUpdaterChecksum != expectedUpdaterChecksum ) {
+                    std::error_code removeError;
+                    std::filesystem::remove(updaterTempPath, removeError);
+                    fail("Downloaded updater checksum verification failed");
+                    return;
+                }
+            }
+
 #if !defined(_WIN32)
             if ( !ensureExecutablePermission(updaterTempPath, nullptr) ) {
                 std::error_code removeError;
@@ -749,7 +848,12 @@ void UpdateChecker::downloadAsync()
 
         // Phase 2: 下载主程序更新
         std::filesystem::path mainTempPath =
-            std::filesystem::temp_directory_path() / "MusicMapMaker_update";
+            std::filesystem::temp_directory_path() /
+#if defined(__APPLE__)
+            "MusicMapMaker_update.zip";
+#else
+            "MusicMapMaker_update";
+#endif
 
         FILE* mFile = openBinaryWriteFile(mainTempPath);
         if ( !mFile ) {

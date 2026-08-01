@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <imgui.h>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,9 +69,16 @@ public:
 
     /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
     /// @param path 目标导出路径。
+    /// @param malodyExportMode MC
+    /// 导出时用户显式选择的模式；为空则读取谱面元数据。
     /// @return 需要展示的警告消息列表。
     static std::vector<std::string> collectExportCompatibilityWarnings(
-        const std::string& path);
+        const std::string&             path,
+        std::optional<MMM::MalodyMode> malodyExportMode = std::nullopt);
+
+    /// @brief 获取当前谱面的 Malody 导出模式，缺省或无效时使用 Slide。
+    /// @return 当前可用于导出选项的 Malody 模式。
+    static MMM::MalodyMode currentMalodyExportMode();
 
     /// @brief 判断当前 MC 导出目标是否需要显示上架 mode_ext 选项。
     /// @param path 目标导出路径。

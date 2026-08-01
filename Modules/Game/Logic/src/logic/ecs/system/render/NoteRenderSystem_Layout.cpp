@@ -1,6 +1,7 @@
+#include "logic/ecs/system/NoteRenderSystem.h"
+
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
-#include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
@@ -63,8 +64,10 @@ void NoteRenderSystem::renderTrackLayout(
         b = t + 0.01f;
     }
 
-    leftX        = viewportWidth * l;
-    rightX       = viewportWidth * r;
+    const float horizontalOffsetX =
+        batcher.snapshot ? batcher.snapshot->canvasHorizontalOffsetX : 0.0F;
+    leftX        = viewportWidth * l + horizontalOffsetX;
+    rightX       = viewportWidth * r + horizontalOffsetX;
     topY         = viewportHeight * t;
     bottomY      = viewportHeight * b;
     trackAreaW   = rightX - leftX;
@@ -204,7 +207,8 @@ void NoteRenderSystem::drawBeatLines(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
-    float trackAreaW, float renderScaleY, bool revealNearCursor)
+    float trackAreaW, float renderScaleY, bool revealNearCursor,
+    float opacityScale)
 {
     if ( !cache ) return;
     if ( revealNearCursor && !batcher.snapshot->isHoveringCanvas ) return;
@@ -249,9 +253,10 @@ void NoteRenderSystem::drawBeatLines(
         return true;
     };
 
-    auto& skin        = Config::SkinManager::instance();
-    float globalAlpha = config.visual.beatLineAlpha;
-    auto  getBeatLineConfig =
+    auto& skin = Config::SkinManager::instance();
+    float globalAlpha =
+        config.visual.beatLineAlpha * std::clamp(opacityScale, 0.0F, 1.0F);
+    auto getBeatLineConfig =
         [&skin, &config, globalAlpha](
             int denominator) -> std::pair<glm::vec4, float> {
         std::string   key = "beat_lines.beat_" + std::to_string(denominator);

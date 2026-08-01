@@ -1,4 +1,5 @@
 #include "logic/ecs/system/ScrollCache.h"
+#include "config/EditorConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>

@@ -1,10 +1,12 @@
 #pragma once
 
-#include "graphic/imguivk/VKSwapchain.h"
+#include <cstdint>
 #include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
 {
+class VKSwapchain;
+
 class IGraphicUserHook
 {
 public:

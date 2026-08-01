@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace
 {
@@ -44,7 +45,7 @@ bool hasTimeGlyphBitmaps(const MMM::Graphic::RasterizedAsciiFont& font)
 /// @return 全部字体度量、时间字形位图和小字号选择有效时返回 0。
 int main(int argc, char** argv)
 {
-    if ( argc != 2 || !argv[1] ) {
+    if ( argc != 3 || !argv[1] || !argv[2] ) {
         return 1;
     }
 
@@ -77,6 +78,30 @@ int main(int argc, char** argv)
                 MMM::Common::ASCII_FONT_RASTER_HEIGHTS[tierIndex]));
         if ( !selected || selected.tierIndex != tierIndex ) {
             return 5;
+        }
+    }
+
+    constexpr std::array<std::uint32_t, 10> cjkCodepoints{
+        0x3074U, 0x3087U, 0x3093U, 0x30AFU, 0x30C6U,
+        0x30C8U, 0x30DFU, 0x521DU, 0x91CDU, 0x97F3U
+    };
+    const auto unicodeFont =
+        MMM::Graphic::AsciiFontRasterizer::rasterizeUnicode(
+            MMM::Config::utf8ToPath(argv[2]),
+            std::span<const std::uint32_t>(cjkCodepoints));
+    if ( !unicodeFont || !unicodeFont->metrics.valid ||
+         unicodeFont->metrics.glyphs.size() != cjkCodepoints.size() ||
+         unicodeFont->glyphs.size() != cjkCodepoints.size() ) {
+        return 6;
+    }
+    for ( std::size_t index = 0U; index < cjkCodepoints.size(); ++index ) {
+        const auto* metrics = unicodeFont->metrics.glyph(cjkCodepoints[index]);
+        const auto& glyph   = unicodeFont->glyphs[index];
+        if ( !metrics || !metrics->available || !metrics->hasBitmap ||
+             glyph.width == 0U || glyph.height == 0U ||
+             glyph.pixels.size() !=
+                 static_cast<std::size_t>(glyph.width) * glyph.height * 4U ) {
+            return 7;
         }
     }
     return 0;

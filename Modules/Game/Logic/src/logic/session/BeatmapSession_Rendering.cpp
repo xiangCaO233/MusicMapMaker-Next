@@ -1,4 +1,5 @@
 #include "logic/BeatmapSession.h"
+
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -6,17 +7,21 @@
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -445,6 +450,66 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         pinnedEntityView.entities = &m_ctx->dragRenderPinnedEntities;
     }
 
+    auto rebuildSamplePrefix = [this]() {
+        m_ctx->sortedSampleMaxEndPrefix.clear();
+        m_ctx->sortedSampleMaxEndPrefix.reserve(
+            m_ctx->sortedSampleEntities.size());
+        double maxEndTime = -std::numeric_limits<double>::infinity();
+        for ( const auto entity : m_ctx->sortedSampleEntities ) {
+            if ( !m_ctx->sampleRegistry.valid(entity) ||
+                 !m_ctx->sampleRegistry.all_of<SampleComponent>(entity) ) {
+                continue;
+            }
+            const auto& sample =
+                m_ctx->sampleRegistry.get<const SampleComponent>(entity);
+            maxEndTime =
+                std::max(maxEndTime,
+                         std::max(sample.m_timestamp, sample.effectiveTime()));
+            m_ctx->sortedSampleMaxEndPrefix.push_back(maxEndTime);
+        }
+    };
+
+    // 自动采样拥有独立的低频可见性索引，普通渲染路径不扫描完整 Registry。
+    if ( m_ctx->isSampleOrderDirty ) {
+        const auto sampleView =
+            m_ctx->sampleRegistry.view<const SampleComponent>();
+        m_ctx->sortedSampleEntities.assign(sampleView.begin(),
+                                           sampleView.end());
+        std::sort(m_ctx->sortedSampleEntities.begin(),
+                  m_ctx->sortedSampleEntities.end(),
+                  [this](entt::entity lhs, entt::entity rhs) {
+                      const auto& left =
+                          m_ctx->sampleRegistry.get<const SampleComponent>(lhs);
+                      const auto& right =
+                          m_ctx->sampleRegistry.get<const SampleComponent>(rhs);
+                      const double leftStart =
+                          std::min(left.m_timestamp, left.effectiveTime());
+                      const double rightStart =
+                          std::min(right.m_timestamp, right.effectiveTime());
+                      if ( leftStart != rightStart )
+                          return leftStart < rightStart;
+                      return entt::to_integral(lhs) < entt::to_integral(rhs);
+                  });
+        rebuildSamplePrefix();
+        ++m_ctx->sampleVisibilityIndexRevision;
+        m_ctx->isSampleOrderDirty = false;
+        m_ctx->isSamplePruneDirty = false;
+    } else if ( m_ctx->isSamplePruneDirty ) {
+        m_ctx->sortedSampleEntities.erase(
+            std::remove_if(
+                m_ctx->sortedSampleEntities.begin(),
+                m_ctx->sortedSampleEntities.end(),
+                [this](entt::entity entity) {
+                    return !m_ctx->sampleRegistry.valid(entity) ||
+                           !m_ctx->sampleRegistry.all_of<SampleComponent>(
+                               entity);
+                }),
+            m_ctx->sortedSampleEntities.end());
+        rebuildSamplePrefix();
+        ++m_ctx->sampleVisibilityIndexRevision;
+        m_ctx->isSamplePruneDirty = false;
+    }
+
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
@@ -474,14 +539,21 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     const double secondaryCameraSnapshotMinInterval =
         engine.adaptiveRenderSnapshotMinInterval(config, true);
     const bool snapshotIsPlaying =
-        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+        m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
     const double snapshotTotalTime =
         SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
     rebuildPreviewDensitySnapshotIfNeeded(*m_ctx, snapshotTotalTime);
-    const double snapshotSysTime =
+    const double renderSnapshotNow =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
+    const double visualClockTime =
+        m_ctx->playbackVisualClock.lastResolvedSteadyTime();
+    const double snapshotSysTime =
+        snapshotIsPlaying && std::isfinite(visualClockTime) &&
+                visualClockTime > 0.0
+            ? std::min(visualClockTime, renderSnapshotNow)
+            : renderSnapshotNow;
     const double snapshotPlaybackSpeed =
         Audio::AudioManager::instance().getPlaybackSpeed();
 
@@ -493,7 +565,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     std::string snapshotBeatmapName;
     bool        snapshotIsDirty     = false;
     double      snapshotFallbackBpm = 120.0;
-    std::vector<TimelineAudioTrackSnapshot> snapshotMainAudioTracks;
     if ( m_ctx->currentBeatmap ) {
         const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         if ( metadata.preference_bpm > 0.0 &&
@@ -519,28 +590,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshotBeatmapPathKey = Config::pathToUtf8(metadata.map_path);
         snapshotBeatmapName    = metadata.name;
         snapshotIsDirty        = m_ctx->actionStack.isDirty();
-
-        if ( !metadata.main_audio_path.empty() ||
-             m_ctx->mainAudioTotalTime > 0.0 ) {
-            TimelineAudioTrackSnapshot track;
-            if ( !metadata.main_audio_path.empty() ) {
-                track.label =
-                    Config::pathToUtf8(metadata.main_audio_path.filename());
-            }
-            if ( track.label.empty() && !m_ctx->loadedMainAudioPath.empty() ) {
-                track.label = Config::pathToUtf8(
-                    Config::utf8ToPath(m_ctx->loadedMainAudioPath).filename());
-            }
-            if ( track.label.empty() ) {
-                track.label = "BGM";
-            }
-
-            track.duration = m_ctx->mainAudioTotalTime;
-            if ( !(std::isfinite(track.duration) && track.duration > 0.0) ) {
-                track.duration = snapshotTotalTime;
-            }
-            snapshotMainAudioTracks.push_back(track);
-        }
     }
 
     double    snapshotCurrentBpm       = snapshotFallbackBpm;
@@ -609,9 +658,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         engine.updateSnapshotAtlasUVMap(cameraId,
                                         snapshot->uvMap,
                                         snapshot->atlasUvRevision,
-                                        snapshot->asciiFontAtlasMetrics);
-        snapshot->isPlaying         = snapshotIsPlaying;
-        snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+                                        snapshot->asciiFontAtlasMetrics,
+                                        snapshot->unicodeFontMetrics);
+        snapshot->isPlaying   = snapshotIsPlaying;
+        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->canvasHorizontalOffsetX =
+            SessionUtils::isMainCanvasCameraId(cameraId)
+                ? camera.horizontalOffsetX
+                : 0.0F;
         snapshot->playbackTime      = m_ctx->currentTime;
         snapshot->totalTime         = snapshotTotalTime;
         snapshot->snapshotSysTime   = snapshotSysTime;
@@ -632,10 +686,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->backgroundIsVideo = snapshotBackgroundIsVideo;
             snapshot->backgroundVideoStartTime =
                 snapshotBackgroundVideoStartTime;
-            snapshot->beatmapPathKey  = snapshotBeatmapPathKey;
-            snapshot->beatmapName     = snapshotBeatmapName;
-            snapshot->isDirty         = snapshotIsDirty;
-            snapshot->mainAudioTracks = snapshotMainAudioTracks;
+            snapshot->beatmapPathKey = snapshotBeatmapPathKey;
+            snapshot->beatmapName    = snapshotBeatmapName;
+            snapshot->isDirty        = snapshotIsDirty;
         }
 
         // 计算可见时间范围 (基于动画时间)
@@ -664,6 +717,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->acceptsInteraction = isActiveSession;
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
+        snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
         snapshot->isHoveringCanvas   = isActiveSession &&
                                        m_ctx->isMouseInCanvas &&
                                        (m_ctx->mouseCameraId == cameraId);
@@ -718,25 +772,32 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 double targetAbsY     = currentAbsY + deltaY;
                 snapshot->hoveredTime = cache->getTime(targetAbsY);
 
-                // 计算轨道
-                float leftX =
-                    camera.viewportWidth * config.visual.trackLayout.left;
-                float rightX =
-                    camera.viewportWidth * config.visual.trackLayout.right;
-
+                // 计算轨道；主画布统一应用相机横向偏移，预览区保持独立布局。
+                CanvasTrackProjection trackProjection;
                 if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
-                    leftX  = config.visual.previewConfig.margin.left;
-                    rightX = camera.viewportWidth -
-                             config.visual.previewConfig.margin.right;
+                    const float leftX = config.visual.previewConfig.margin.left;
+                    const float rightX =
+                        camera.viewportWidth -
+                        config.visual.previewConfig.margin.right;
+                    trackProjection.leftX  = leftX;
+                    trackProjection.rightX = rightX;
+                    trackProjection.singleTrackWidth =
+                        m_ctx->trackCount > 0
+                            ? (rightX - leftX) /
+                                  static_cast<float>(m_ctx->trackCount)
+                            : 0.0F;
+                    trackProjection.valid =
+                        trackProjection.singleTrackWidth > 0.0F;
+                } else {
+                    trackProjection = calculatePlayerTrackProjection(
+                        camera.viewportWidth,
+                        m_ctx->trackCount,
+                        config.visual.trackLayout.left,
+                        config.visual.trackLayout.right,
+                        camera.horizontalOffsetX);
                 }
-                float trackAreaW = rightX - leftX;
-                float singleTrackW =
-                    trackAreaW / static_cast<float>(m_ctx->trackCount);
-
-                int track = static_cast<int>(
-                    std::floor((m_ctx->lastMousePos.x - leftX) / singleTrackW));
-                snapshot->hoveredTrack =
-                    std::clamp(track, 0, m_ctx->trackCount - 1);
+                snapshot->hoveredTrack = trackProjection.trackAt(
+                    m_ctx->lastMousePos.x, m_ctx->trackCount);
 
                 // --- 磁吸拍线时间戳预览 ---
                 auto snap = SessionUtils::getSnapResult(snapshot->hoveredTime,
@@ -750,8 +811,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         snapshotFallbackBpm);
 
                 // 判断是否在轨道框内
-                bool isInsideTrack = (m_ctx->lastMousePos.x >= leftX &&
-                                      m_ctx->lastMousePos.x <= rightX);
+                const bool isInsideTrack =
+                    trackProjection.contains(m_ctx->lastMousePos.x);
 
                 if ( snap.isSnapped ) {
                     if ( cameraId == "Timeline" || isInsideTrack ) {
@@ -889,13 +950,24 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 const entt::entity inspectEntity =
                     (m_ctx->hoveredEntity != entt::null) ? m_ctx->hoveredEntity
                                                          : m_ctx->draggedEntity;
+                const ChartObjectKind inspectObjectKind =
+                    (m_ctx->hoveredEntity != entt::null)
+                        ? m_ctx->hoveredObjectKind
+                        : m_ctx->draggedObjectKind;
                 const bool useDragState = m_ctx->isDragging &&
                                           inspectEntity != entt::null &&
                                           inspectEntity == m_ctx->draggedEntity;
                 const auto* inter =
-                    (inspectEntity != entt::null &&
+                    (inspectObjectKind == ChartObjectKind::PlayerNote &&
+                     inspectEntity != entt::null &&
                      m_ctx->noteRegistry.valid(inspectEntity))
                         ? m_ctx->noteRegistry
+                              .try_get<const InteractionComponent>(
+                                  inspectEntity)
+                    : (inspectObjectKind == ChartObjectKind::AudioSample &&
+                       inspectEntity != entt::null &&
+                       m_ctx->sampleRegistry.valid(inspectEntity))
+                        ? m_ctx->sampleRegistry
                               .try_get<const InteractionComponent>(
                                   inspectEntity)
                         : nullptr;
@@ -903,7 +975,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     useDragState ||
                     (inter && (inter->isHovered || inter->isDragging));
                 const auto* inspectNote =
-                    shouldInspect
+                    shouldInspect &&
+                            inspectObjectKind == ChartObjectKind::PlayerNote
                         ? m_ctx->noteRegistry.try_get<const NoteComponent>(
                               inspectEntity)
                         : nullptr;
@@ -918,7 +991,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                      : inter->hoveredSubIndex;
 
                     HoverInspectInfo inspect;
-                    inspect.show = true;
+                    inspect.show       = true;
+                    inspect.entity     = inspectEntity;
+                    inspect.objectKind = ChartObjectKind::PlayerNote;
 
                     auto setLegacyPoint = [&](const HoverBeatPoint& point) {
                         if ( !point.show ) return;
@@ -1021,6 +1096,28 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         inspect.showTrack = true;
                     }
 
+                    const ::MMM::AudioSampleBinding* sampleBinding =
+                        note.m_sampleBinding ? &*note.m_sampleBinding : nullptr;
+                    if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                         hoveredSubIndex >= 0 &&
+                         hoveredSubIndex <
+                             static_cast<int>(note.m_subNotes.size()) ) {
+                        const auto& subNote = note.m_subNotes[hoveredSubIndex];
+                        sampleBinding       = subNote.sampleBinding
+                                                  ? &*subNote.sampleBinding
+                                                  : nullptr;
+                    }
+                    if ( sampleBinding &&
+                         !sampleBinding->m_audioResourceId.empty() ) {
+                        inspect.showAudioPreview = true;
+                        inspect.audioResourceId =
+                            sampleBinding->m_audioResourceId;
+                        inspect.volume = sampleBinding->m_volume;
+                        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+                            inspect.sampleBindingSubIndex = hoveredSubIndex;
+                        }
+                    }
+
                     snapshot->hoverInspect = inspect;
                     if ( inspect.head.show ) {
                         setLegacyPoint(inspect.head);
@@ -1028,6 +1125,52 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         setLegacyPoint(inspect.body);
                     } else if ( inspect.end.show ) {
                         setLegacyPoint(inspect.end);
+                    }
+                } else if ( inspectObjectKind == ChartObjectKind::AudioSample &&
+                            shouldInspect ) {
+                    const auto* sample =
+                        m_ctx->sampleRegistry.try_get<const SampleComponent>(
+                            inspectEntity);
+                    if ( sample ) {
+                        const auto hoveredPart =
+                            useDragState
+                                ? m_ctx->draggedPart
+                                : static_cast<HoverPart>(inter->hoveredPart);
+                        HoverInspectInfo inspect;
+                        inspect.show       = true;
+                        inspect.entity     = inspectEntity;
+                        inspect.objectKind = ChartObjectKind::AudioSample;
+                        inspect.kind =
+                            hoveredPart == HoverPart::SampleOffset
+                                ? HoverInspectKind::AudioSampleTrigger
+                                : HoverInspectKind::AudioSampleAnchor;
+                        inspect.head =
+                            makeBeatPoint(sample->m_timestamp, sample->m_track);
+                        if ( sample->m_offsetMs != 0 ||
+                             hoveredPart == HoverPart::SampleOffset ) {
+                            inspect.end = makeBeatPoint(sample->effectiveTime(),
+                                                        sample->m_track);
+                        }
+                        inspect.showTrack        = true;
+                        inspect.track            = sample->m_track;
+                        inspect.showAudioSample  = true;
+                        inspect.showAudioPreview = true;
+                        inspect.audioResourceId  = sample->m_audioResourceId;
+                        inspect.volume           = sample->m_volume;
+                        inspect.offsetMs         = sample->m_offsetMs;
+                        snapshot->hoverInspect   = std::move(inspect);
+
+                        const auto& legacyPoint =
+                            hoveredPart == HoverPart::SampleOffset &&
+                                    snapshot->hoverInspect.end.show
+                                ? snapshot->hoverInspect.end
+                                : snapshot->hoverInspect.head;
+                        snapshot->hoveredNoteNumerator = legacyPoint.numerator;
+                        snapshot->hoveredNoteDenominator =
+                            legacyPoint.denominator;
+                        snapshot->hoveredNoteBeatIndex = legacyPoint.beatIndex;
+                        snapshot->hoveredNoteTime      = legacyPoint.time;
+                        snapshot->hoveredNoteTrack     = legacyPoint.track;
                     }
                 }
             }
@@ -1074,26 +1217,32 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // --- 注入画笔预览状态 ---
         if ( isActiveSession && m_ctx->brushState.isActive ) {
-            snapshot->brush.isActive     = true;
+            snapshot->brush.isActive = true;
+            snapshot->brush.createsAudioSample =
+                m_ctx->brushState.createsAudioSample;
             snapshot->brush.time         = m_ctx->brushState.time;
             snapshot->brush.duration     = m_ctx->brushState.duration;
             snapshot->brush.track        = m_ctx->brushState.track;
             snapshot->brush.dtrack       = m_ctx->brushState.dtrack;
             snapshot->brush.type         = m_ctx->brushState.type;
             snapshot->brush.customColors = m_ctx->brushState.customColors;
+            snapshot->brush.audioResourceId =
+                m_ctx->brushState.activeAudioResourceId;
             snapshot->brush.polylineSegments =
                 m_ctx->brushState.polylineSegments;
         }
 
         // --- 注入橡皮擦预览状态 ---
         if ( isActiveSession && m_ctx->eraserState.isActive ) {
-            snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
-            snapshot->erasingSubIndex = -1;
+            snapshot->erasingEntities   = m_ctx->eraserState.targetEntities;
+            snapshot->erasingObjectKind = m_ctx->eraserState.targetObjectKind;
+            snapshot->erasingSubIndex   = -1;
 
             // Shift 模式下保持 erasingSubIndex = -1，使整个 Polyline 标红
             if ( !m_ctx->eraserState.isShiftDown ) {
                 // 非 Shift：悬停在 Polyline 的任意子物件时，允许局部高亮红色
                 if ( m_ctx->hoveredEntity != entt::null &&
+                     m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
                      m_ctx->noteRegistry.all_of<NoteComponent>(
                          m_ctx->hoveredEntity) ) {
                     const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(
@@ -1113,19 +1262,24 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
         // 使用动画时间 m_ctx->animateTime 进行剔除和位置映射
-        System::NoteRenderSystem::generateSnapshot(m_ctx->noteRegistry,
-                                                   m_ctx->timelineRegistry,
-                                                   bpmEvents,
-                                                   snapshot,
-                                                   cameraId,
-                                                   m_ctx->animateTime,
-                                                   camera.viewportWidth,
-                                                   camera.viewportHeight,
-                                                   judgmentLineY,
-                                                   m_ctx->trackCount,
-                                                   config,
-                                                   finalMainHeight,
-                                                   &m_ctx->hitFXSystem);
+        System::NoteRenderSystem::generateSnapshot(
+            m_ctx->noteRegistry,
+            m_ctx->sampleRegistry,
+            m_ctx->sortedSampleEntities,
+            m_ctx->sortedSampleMaxEndPrefix,
+            m_ctx->timelineRegistry,
+            bpmEvents,
+            snapshot,
+            cameraId,
+            m_ctx->animateTime,
+            camera.viewportWidth,
+            camera.viewportHeight,
+            judgmentLineY,
+            m_ctx->trackCount,
+            m_ctx->bgmTrackCount,
+            config,
+            finalMainHeight,
+            &m_ctx->hitFXSystem);
 
         // 5. 提交专属快照
         syncBuffer->pushWorkingSnapshot();

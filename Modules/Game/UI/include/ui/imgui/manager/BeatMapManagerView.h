@@ -55,6 +55,12 @@ public:
 
         /// @brief 是否成功读取谱面元数据 Version 字段。
         bool hasVersion{ false };
+
+        /// @brief 由歌曲提示或自动采样时间线解析出的默认音频资源 ID。
+        std::string audioResourceId;
+
+        /// @brief 是否成功解析默认音频资源。
+        bool hasAudioResource{ false };
     };
 
 private:

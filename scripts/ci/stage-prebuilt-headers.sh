@@ -83,7 +83,8 @@ copyFile() {
     local destinationDir="$2"
 
     requireFile "${sourceFile}"
-    install -D -m 0644 "${sourceFile}" "${destinationDir}/$(basename "${sourceFile}")"
+    mkdir -p "${destinationDir}"
+    install -m 0644 "${sourceFile}" "${destinationDir}/$(basename "${sourceFile}")"
 }
 
 copyGlob() {
@@ -96,7 +97,7 @@ copyGlob() {
     requireDir "${sourceDir}"
     mkdir -p "${destinationDir}"
     while IFS= read -r -d '' sourceFile; do
-        install -D -m 0644 "${sourceFile}" "${destinationDir}/$(basename "${sourceFile}")"
+        install -m 0644 "${sourceFile}" "${destinationDir}/$(basename "${sourceFile}")"
         copied=1
     done < <(find "${sourceDir}" -maxdepth 1 -type f -name "${pattern}" -print0)
 

@@ -2,13 +2,10 @@
 
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
-#include "logic/BeatmapSession.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
-#include "logic/ProjectController.h"
+#include "logic/ProjectTypes.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
-#include "logic/session/context/SessionContext.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -23,8 +20,18 @@
 #include <unordered_map>
 #include <vector>
 
+namespace MMM
+{
+class Project;
+}
+
 namespace MMM::Logic
 {
+
+class BeatmapSession;
+class BeatmapSyncBuffer;
+class ProjectController;
+struct SessionContext;
 
 /**
  * @brief 编辑器逻辑引擎 (全局单例)
@@ -56,17 +63,13 @@ public:
      */
     void stop();
 
-    /**
-     * @brief 获取当前项目
-     */
-    Project* getCurrentProject()
-    {
-        return ProjectController::instance().currentProject();
-    }
-    const Project* getCurrentProject() const
-    {
-        return ProjectController::instance().currentProject();
-    }
+    /// @brief 获取当前项目。
+    /// @return 未打开项目时返回 nullptr。
+    Project* getCurrentProject();
+
+    /// @brief 获取当前项目的只读指针。
+    /// @return 未打开项目时返回 nullptr。
+    const Project* getCurrentProject() const;
 
     /// @brief 当前是否打开了临时只读项目。
     /// @return 当前项目为临时项目时返回 true。
@@ -74,7 +77,7 @@ public:
 
     /// @brief 获取当前临时项目的运行时路径信息。
     /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
-    ProjectController::TemporaryProjectInfo currentTemporaryProjectInfo() const;
+    TemporaryProjectInfo currentTemporaryProjectInfo() const;
 
     /**
      * @brief 向当前活动的 Session 推送指令
@@ -104,16 +107,48 @@ public:
     void updateBeatmapFilePathInProject(const std::filesystem::path& oldPath,
                                         const std::filesystem::path& newPath);
 
+    /// @brief 在文件系统操作前验证外部谱面的音频引用可安全保持。
+    /// @param oldPath 计划移动的文件或目录路径。
+    /// @param newPath 计划移动到的文件或目录路径。
+    /// @return 允许移动时为空；否则返回可直接展示的阻止原因。
+    /// @warning 低频文件操作路径：会读取项目中的 osu! 谱面并检查全部
+    /// RM/IMD 隐式音频关联。
+    std::string validateAudioResourceMove(const std::filesystem::path& oldPath,
+                                          const std::filesystem::path& newPath);
+
+    /// @brief 文件或目录移动后同步项目音频路径和已打开会话引用。
+    /// @param oldPath 移动前的文件或目录路径。
+    /// @param newPath 移动后的文件或目录路径。
+    /// @param errorMessage 失败时接收面向用户的错误和回滚状态。
+    /// @return 路径发生变化的项目音频资源数量。
+    /// @warning 低频文件操作路径：会同步全部打开会话并扫描项目谱面文件。
+    std::size_t remapAudioResourcePathsAfterMove(
+        const std::filesystem::path& oldPath,
+        const std::filesystem::path& newPath,
+        std::string*                 errorMessage = nullptr);
+
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
 
-    /// @brief 重新预加载当前项目中的 Effect 音频资源。
-    /// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
-    /// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
-    void reloadCurrentProjectEffectSoundEffects();
+    /// @brief 重新登记当前项目中按需加载的 Effect 音频资源。
+    /// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；只访问项目
+    /// 资源表并更新内存描述，不执行音频解码。
+    void registerCurrentProjectEffectSoundEffects();
 
     /// @brief 更新音轨资源信息
     void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
+
+    /// @brief 增量重命名项目音频文件、资源 ID 和全部内存引用。
+    /// @param cmd 旧资源 ID 与新文件名。
+    /// @warning 低频项目资源路径：执行文件系统改名、谱面引用事务写回和
+    /// 已打开会话增量同步，禁止从每帧热路径调用。
+    void handleRenameAudioResource(const CmdRenameAudioResource& cmd);
+
+    /// @brief 更新音频资源的完整持久化 DSP 配置并使引用它的时间线失效。
+    /// @param cmd 目标资源 ID 与替换配置。
+    /// @warning 低频项目资源路径：会保存项目并标记受影响的已打开谱面。
+    void handleUpdateAudioResourceConfig(
+        const CmdUpdateAudioResourceConfig& cmd);
 
     /// @brief 移除项目音轨资源
     void handleRemoveAudioResource(const CmdRemoveAudioResource& cmd);
@@ -129,12 +164,25 @@ public:
     void setClipboard(std::vector<ClipboardItem> items,
                       const SessionContext* sourceContext, bool isCut);
 
+    /// @brief 更新编辑器级混合谱面物件剪贴板。
+    /// @param notes 音符剪贴板条目。
+    /// @param samples 自动采样剪贴板条目。
+    /// @param sourceContext 来源会话，仅用于身份比较。
+    /// @param isCut 是否为剪切内容。
+    void setChartObjectClipboard(std::vector<ClipboardItem>       notes,
+                                 std::vector<SampleClipboardItem> samples,
+                                 const SessionContext*            sourceContext,
+                                 bool                             isCut);
+
     /// @brief 更新编辑器级 Timeline 剪贴板。
     void setTimelineClipboard(std::vector<TimelineClipboardItem> items,
                               const SessionContext* sourceContext, bool isCut);
 
     /// @brief 获取编辑器级剪贴板副本。
     std::vector<ClipboardItem> getClipboard() const;
+
+    /// @brief 获取编辑器级自动采样剪贴板副本。
+    std::vector<SampleClipboardItem> getSampleClipboard() const;
 
     /// @brief 获取编辑器级 Timeline 剪贴板副本。
     std::vector<TimelineClipboardItem> getTimelineClipboard() const;
@@ -260,21 +308,6 @@ public:
     std::string makeBeatmapPathKeyForPath(
         const std::filesystem::path& beatmapPath) const;
 
-    /// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
-    /// @param audioPath 待规范化的音频路径。
-    /// @return 规范化绝对路径键；空路径返回空字符串。
-    /// @warning
-    /// 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
-    std::string makeMainAudioSyncKeyForPath(
-        const std::filesystem::path& audioPath) const;
-
-    /// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
-    /// @param audioSyncKey 待比较的规范化音频路径键。
-    /// @return 存在有效活动谱面且主音轨键一致时返回 true。
-    /// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
-    /// SessionRegistry 锁，不复制 Session 或路径字符串。
-    bool activeMainAudioSyncKeyMatches(std::string_view audioSyncKey) const;
-
     /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
     /// @param cameraId 目标主画布 cameraId。
     /// @return 目标是当前活动画布，或与当前活动画布引用同一主音轨时返回 true。
@@ -315,10 +348,11 @@ public:
     void setAtlasUVMap(
         const std::string&                             cameraId,
         const std::unordered_map<uint32_t, glm::vec4>& uvMap,
-        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {})
+        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {},
+        const Common::UnicodeFontMetrics&    unicodeFontMetrics    = {})
     {
         m_renderSyncRegistry.setAtlasUVMap(
-            cameraId, uvMap, asciiFontAtlasMetrics);
+            cameraId, uvMap, asciiFontAtlasMetrics, unicodeFontMetrics);
     }
 
     /**
@@ -332,21 +366,21 @@ public:
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
     /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
+    /// @param targetUnicodeFontMetrics 目标快照中的按需 Unicode 字体度量。
     /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
     /// 表，普通路径只做锁内查找和 revision 比较。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
         std::uint64_t&                           targetRevision,
-        Common::AsciiFontAtlasMetrics& targetAsciiFontAtlasMetrics) const;
+        Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
+        Common::UnicodeFontMetrics& targetUnicodeFontMetrics) const;
 
-    /**
-     * @brief 获取当前编辑器配置
-     */
-    const Config::EditorConfig& getEditorConfig() const
-    {
-        return m_editorConfig;
-    }
+    /// @brief 获取当前编辑器配置的线程安全值快照。
+    /// @return 调用时完整且自洽的配置副本。
+    /// @warning UI 热路径：会短暂持有配置互斥锁并复制配置；单帧内应复用返回值，
+    /// 禁止在物件循环中重复调用。
+    Config::EditorConfig getEditorConfig() const;
 
     /**
      * @brief 获取当前工具类型
@@ -432,10 +466,9 @@ public:
         return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
     }
 
-    /// @brief 刷新已打开 Session 的主音轨同步路径键。
-    /// @warning 低频路径：谱面元数据或项目路径发生变化时调用；会遍历当前
-    /// Session 列表并执行路径规范化，禁止放入每帧或每 update 调用链。
-    void refreshMainAudioSyncKeys();
+    /// @brief 发布已打开 Session 缓存的复合音频时间线指纹。
+    /// @warning 低频路径：仅在描述符重建或 Session 结构变化后调用。
+    void refreshAudioTimelineFingerprints();
 
     /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
@@ -443,7 +476,7 @@ public:
     void setEditorConfig(const Config::EditorConfig& config);
 
     /**
-     * @brief 持久化当前项目配置到 mmm_project.json
+     * @brief 持久化当前项目配置到 .mmm 隐藏目录中的职责分片。
      */
     void saveProject();
 
@@ -453,12 +486,25 @@ public:
     /// Session 注册表锁并可能同步写入多个谱面。
     bool flushPendingMetadataAutoSaves();
 
+    /// @brief 在打包前保存所有已打开会话的完整未落盘谱面修改。
+    /// @return 所有脏会话均成功保存时返回 true。
+    /// @warning
+    /// 低频阻塞路径：仅允许逻辑线程在打包前调用；会持有 Session
+    /// 注册表锁并同步写入多个谱面。
+    bool saveDirtyBeatmapsForPackaging();
+
 private:
     /// @brief 将编辑器级画笔配色恢复到指定会话。
     /// @param session 接收当前画笔配色的会话。
     /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
     /// 重置或切换等低频路径。
     void restoreBrushNoteColorsUnsafe(BeatmapSession& session) const;
+
+    /// @brief 将编辑器级项目音频选择恢复到指定会话。
+    /// @param session 接收当前资源选择的会话。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
+    /// 重置或切换等低频路径。
+    void restoreBrushAudioResourceUnsafe(BeatmapSession& session) const;
 
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
     void captureProjectWorkspaceState();
@@ -480,10 +526,9 @@ private:
 
     /// @brief 打开项目目录并加载其中的所有资源。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void openProject(
-        const std::filesystem::path& projectPath,
-        const std::optional<ProjectController::ProjectCreationOptions>&
-            creationOptions = std::nullopt);
+    void openProject(const std::filesystem::path& projectPath,
+                     const std::optional<ProjectCreationOptions>&
+                         creationOptions = std::nullopt);
 
     /// @brief 打开谱面包为临时只读项目。
     /// @param packagePath 需要临时阅览的谱面包路径。
@@ -491,8 +536,7 @@ private:
 
     /// @brief 应用项目控制器打开项目后的逻辑副作用。
     /// @param openResult 项目控制器返回的打开结果。
-    void finishOpenProject(
-        const ProjectController::OpenProjectResult& openResult);
+    void finishOpenProject(const OpenProjectResult& openResult);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
@@ -512,12 +556,18 @@ private:
     /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
     /// @param sourceIndex 源 Session 在注册表中的索引。
     /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
-    /// relaxed，并只同步 mainAudioSyncKey 相同的 Session。
+    /// relaxed，并只同步 audioTimelineFingerprint 相同的 Session。
     void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
-    /// @brief 刷新已打开 Session 的主音轨同步路径键，调用者必须持有注册表锁。
-    /// @warning 低频路径：会遍历当前 Session 列表并执行路径规范化。
-    void refreshMainAudioSyncKeysUnsafe();
+    /// @brief 发布已打开 Session 的复合时间线指纹，调用者必须持有注册表锁。
+    /// @warning 低频路径：只读取各会话已构建的 descriptor。
+    void refreshAudioTimelineFingerprintsUnsafe();
+
+    /// @brief 标记全部或引用指定资源的已打开谱面描述符需要低频重建。
+    /// @param resourceId 为空时标记全部；否则只标记已引用该资源的谱面。
+    /// @warning 调用者必须持有 SessionRegistry 互斥锁。
+    void markAudioTimelineDescriptorsDirtyUnsafe(
+        std::string_view resourceId = {});
 
     /// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
     /// @warning 低频路径：只在 Session 增删或主音轨路径变化后调用。
@@ -539,8 +589,27 @@ private:
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
 
-    /// @brief 编辑器配置
+    /// @brief 将共享配置按修订号同步到逻辑线程本地快照。
+    /// @param target 接收稳定配置的逻辑线程本地对象。
+    /// @param targetRevision 本地对象当前对应的修订号，成功同步后更新。
+    /// @return 配置修订发生变化并完成复制时返回 true。
+    /// @warning 逻辑热路径：每轮 loop 调用；未变化时只进行一次 acquire
+    /// 原子读取， 变化时才短暂加锁并复制完整配置。
+    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
+                                     std::uint64_t& targetRevision) const;
+
+    /// @brief 保护编辑器配置完整对象的读写，防止 UI
+    /// 拖拽更新与逻辑线程复制并发。
+    mutable std::mutex m_editorConfigMutex;
+
+    /// @brief 编辑器配置，由 m_editorConfigMutex 保护。
     Config::EditorConfig m_editorConfig;
+
+    /// @brief 当前编辑器配置修订号。
+    /// @warning 逻辑/UI 热路径原子：UI 配置提交时 release
+    /// 递增，逻辑 loop 每轮 acquire
+    /// 读取；用于避免未变化时复制含容器的完整配置。
+    std::atomic<std::uint64_t> m_editorConfigRevision{ 0 };
 
     /// @brief 当前全局编辑工具。
     /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
@@ -553,6 +622,15 @@ private:
 
     /// @brief 编辑器是否已经收到过画笔配色命令。
     bool m_brushNoteColorsInitialized{ false };
+
+    /// @brief 当前项目音频工具选中的稳定资源 ID。
+    std::string m_brushAudioResourceId;
+
+    /// @brief 当前项目音频工具选中的资源类型。
+    AudioTrackType m_brushAudioTrackType{ AudioTrackType::Effect };
+
+    /// @brief 当前项目音频工具为新建物件设置的音量倍率。
+    float m_brushAudioVolume{ 1.0F };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用

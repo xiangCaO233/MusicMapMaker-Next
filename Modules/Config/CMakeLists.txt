@@ -3,9 +3,11 @@
 add_library(
   Config STATIC
   src/skin/SkinLoader.cpp
+  src/skin/SkinPackageService.cpp
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  src/EditorSettingTypes.cpp
   src/FontPreferenceValidator.cpp
   src/ColorPaletteFile.cpp
   src/VisualConfig.cpp)
@@ -13,7 +15,8 @@ add_library(
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
-                                    Log)
+                                    fmt::fmt Log)
+target_link_libraries(Config PRIVATE 3rd_miniz)
 
 mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
@@ -26,21 +29,33 @@ mmm_add_test_executable(Config FrameLimitUtilsTest
 target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
 add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
 
-# 皮肤主题绑定测试覆盖旧字符串格式、亮暗双分支以及旧应用配置的 Auto 语义。
+# 皮肤主题绑定测试覆盖旧格式、Auto 语义及 IVM 内置皮肤资源约束。
 mmm_add_test_executable(Config SkinThemeBindingTest
                         tests/SkinThemeBindingTest.cpp)
 target_link_libraries(SkinThemeBindingTest PRIVATE Config)
-add_test(NAME SkinThemeBindingTest
-         COMMAND SkinThemeBindingTest
-                 "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding")
+add_test(
+  NAME SkinThemeBindingTest
+  COMMAND
+    SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
+    "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua")
+
+# MSK 皮肤包测试覆盖安全导入、目录定位、覆盖保护和导出往返。
+mmm_add_test_executable(Config SkinPackageServiceTest
+                        tests/SkinPackageServiceTest.cpp)
+target_link_libraries(SkinPackageServiceTest PRIVATE Config 3rd_miniz)
+add_test(NAME SkinPackageServiceTest
+         COMMAND SkinPackageServiceTest
+                 "${CMAKE_BINARY_DIR}/test_output/skin_package_service")
 
 # 调色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
 mmm_add_test_executable(Config ColorPaletteFileTest
                         tests/ColorPaletteFileTest.cpp)
 target_link_libraries(ColorPaletteFileTest PRIVATE Config)
-add_test(NAME ColorPaletteFileTest
-         COMMAND ColorPaletteFileTest
-                 "${CMAKE_BINARY_DIR}/test_output/color_palette_file")
+add_test(
+  NAME ColorPaletteFileTest
+  COMMAND
+    ColorPaletteFileTest "${CMAKE_BINARY_DIR}/test_output/color_palette_file"
+    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.mmpalette")
 
 # 视觉配置测试覆盖分拍线三态模式、旧布尔开关迁移和自动范围约束。
 mmm_add_test_executable(Config VisualConfigTest tests/VisualConfigTest.cpp)
@@ -51,3 +66,9 @@ add_test(NAME VisualConfigTest COMMAND VisualConfigTest)
 mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
 target_link_libraries(SfxConfigTest PRIVATE Config Log)
 add_test(NAME SfxConfigTest COMMAND SfxConfigTest)
+
+# 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
+mmm_add_test_executable(Config TranslationConcurrencyTest
+                        tests/TranslationConcurrencyTest.cpp)
+target_link_libraries(TranslationConcurrencyTest PRIVATE Config Log)
+add_test(NAME TranslationConcurrencyTest COMMAND TranslationConcurrencyTest)

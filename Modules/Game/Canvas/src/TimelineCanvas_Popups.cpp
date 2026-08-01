@@ -5,19 +5,24 @@
 #include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
+#include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/SafeParse.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <fmt/format.h>
 #include <imgui_internal.h>
 #include <mutex>
 #include <numeric>
@@ -374,13 +379,11 @@ std::optional<double> parseTimingTableDouble(std::string_view text)
         return std::nullopt;
     }
 
-    double value = 0.0;
-    auto   result =
-        std::from_chars(text.data(), text.data() + text.size(), value);
-    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+    const auto result = Internal::parseFloatingPrefix(text);
+    if ( result.error != std::errc{} || result.parsedLength != text.size() ) {
         return std::nullopt;
     }
-    return value;
+    return result.value;
 }
 
 /// @brief 解析分拍位输入文本。
@@ -1597,8 +1600,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                                ? parseTimingTableDouble(searchValueText)
-                                                : std::nullopt;
+                                     ? parseTimingTableDouble(searchValueText)
+                                     : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =

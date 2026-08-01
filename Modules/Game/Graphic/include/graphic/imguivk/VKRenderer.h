@@ -1,11 +1,7 @@
 #pragma once
 
-#include "event/core/EventBus.h"
-#include "graphic/CursorManager.h"
-#include "graphic/glfw/GLFWHeader.h"
-#include "graphic/imguivk/VKRenderPipeline.h"
-#include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -15,8 +11,12 @@ namespace MMM::Graphic
 {
 
 class NativeWindow;
+class CursorManager;
 class IGraphicUserHook;
 class VKContext;
+class VKMemBuffer;
+class VKRenderPass;
+class VKSwapchain;
 
 /**
  * @brief Vulkan 渲染器类
@@ -126,7 +126,7 @@ private:
     static std::array<float, 4> s_clear_color;
 
     /// @brief 清屏颜色更新事件订阅 ID，随渲染器生命周期取消订阅。
-    Event::SubscriptionID m_clearColorSubscription{ 0 };
+    std::uint64_t m_clearColorSubscription{ 0 };
 
     /// @brief 物理设备引用
     vk::PhysicalDevice& m_vkPhysicalDevice;
@@ -234,6 +234,10 @@ private:
                            vk::Device&         logicalDevice);
 
     void releaseCursorManager();
+
+    /// @brief 在 GLFW 终止前销毁并清空进程级原生光标缓存。
+    /// @warning 低频 GLFW 生命周期路径：只能在主线程且 GLFW 仍已初始化时调用。
+    static void releaseGlfwCursorResources();
 
     /// @brief 确保离屏录制任务槽数量足够。
     /// @param taskCount 当前帧需要的任务槽数量。

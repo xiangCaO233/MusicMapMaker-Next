@@ -9,7 +9,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <array>
 #include <cstdint>
-#include <spdlog/fmt/fmt.h>
+#include <fmt/format.h>
 #include <string>
 #include <string_view>
 

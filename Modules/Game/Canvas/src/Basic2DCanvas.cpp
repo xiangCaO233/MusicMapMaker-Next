@@ -1,9 +1,12 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/CanvasTabTitle.h"
 #include "config/AppConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
@@ -11,6 +14,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
 #include <utility>
@@ -126,14 +130,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    std::string title = TR("canvas.editor").pStr;
-    if ( m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
-         !m_currentSnapshot->beatmapName.empty() ) {
-        title = m_currentSnapshot->beatmapName;
-        if ( m_currentSnapshot->isDirty ) {
-            title += " *";
-        }
-    }
+    const std::string title = makeCanvasTabTitle(
+        TR("canvas.editor").pStr,
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap,
+        m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
+        m_currentSnapshot && m_currentSnapshot->isDirty);
 
     bool    showClose = false;
     int32_t myIndex   = findSessionIndex();
@@ -196,6 +197,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 updateBackgroundVideoFrame();
             }
         }
+
+        // 先提交离屏纹理，后续主画布物件控制按钮才能位于纹理之上并接收输入。
+        rctx.renderSurface();
 
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
         bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
@@ -400,6 +404,12 @@ bool Basic2DCanvas::shouldKeepOpenForLastSessionReset() const
     return entry && entry->cameraId == m_cameraId && !entry->isLogoPlaceholder;
 }
 
+float Basic2DCanvas::currentFontRasterScale()
+{
+    const float scale = ImGui::GetIO().DisplayFramebufferScale.y;
+    return std::isfinite(scale) && scale > 0.0F ? scale : 1.0F;
+}
+
 void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
                                uint32_t h) const
 {
@@ -412,10 +422,36 @@ void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
 
 bool Basic2DCanvas::needReload()
 {
-    const auto& currentAsciiFont =
-        Config::AppConfig::instance().getEditorSettings().preferredAsciiFont;
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const auto& currentAsciiFont = settings.preferredAsciiFont;
+    const auto& currentCjkFont   = settings.preferredCjkFont;
     if ( currentAsciiFont != m_loadedAsciiFontPreference ) {
         m_needReload = true;
+    }
+    if ( currentCjkFont != m_loadedCjkFontPreference ) {
+        m_needReload = true;
+    }
+    if ( std::abs(currentFontRasterScale() - m_loadedFontRasterScale) >
+         1e-3F ) {
+        m_needReload = true;
+    }
+    if ( m_currentSnapshot ) {
+        // 逻辑线程只回报当前可见标签真正缺失的码点；收到新码点后才触发
+        // 低频图集重建，避免每帧扫描整个项目资源表。
+        for ( std::size_t index = 0U;
+              index < m_currentSnapshot->requestedUnicodeGlyphCount;
+              ++index ) {
+            const auto codepoint =
+                m_currentSnapshot->requestedUnicodeGlyphs[index];
+            if ( m_unicodeFontMetrics.glyph(codepoint) ||
+                 std::find(m_requestedUnicodeCodepoints.begin(),
+                           m_requestedUnicodeCodepoints.end(),
+                           codepoint) != m_requestedUnicodeCodepoints.end() ) {
+                continue;
+            }
+            m_requestedUnicodeCodepoints.push_back(codepoint);
+            m_needReload = true;
+        }
     }
     return std::exchange(m_needReload, false);
 }

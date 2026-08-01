@@ -68,6 +68,22 @@ MMM::Logic::System::CanvasComponentRenderContext makeRenderContext(
     };
 }
 
+/// @brief 验证高 DPI 画布按物理字号选择更高分辨率的字形档位。
+/// @return 1.75 倍 DPI 下 14 逻辑像素选择 24 像素档位时返回 true。
+bool testDpiAwareAsciiFontTierSelection()
+{
+    MMM::Common::AsciiFontAtlasMetrics atlas;
+    atlas.valid       = true;
+    atlas.rasterScale = 1.75F;
+    for ( auto& tier : atlas.tiers ) {
+        tier.valid = true;
+    }
+
+    const auto selection = MMM::Common::selectAsciiFont(atlas, 14.0F);
+    return selection &&
+           MMM::Common::ASCII_FONT_RASTER_HEIGHTS[selection.tierIndex] == 24U;
+}
+
 /// @brief 验证关闭组件时不会生成覆盖层几何。
 /// @return 快照保持为空时返回 true。
 bool testHiddenComponentDoesNotRender()
@@ -742,7 +758,8 @@ bool testJudgmentLineTimeFormatting()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testHiddenComponentDoesNotRender() &&
+    return testDpiAwareAsciiFontTierSelection() &&
+                   testHiddenComponentDoesNotRender() &&
                    testVisibleComponentRendersInOverlay() &&
                    testJudgmentLineTimeDoesNotRenderWithoutBeatmap() &&
                    testBeatNumbersRenderInsideEachBeat() &&

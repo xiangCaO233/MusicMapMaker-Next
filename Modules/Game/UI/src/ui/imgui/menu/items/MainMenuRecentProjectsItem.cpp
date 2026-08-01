@@ -2,6 +2,7 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <filesystem>
 #include <imgui.h>

@@ -1,6 +1,9 @@
 #pragma once
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -23,14 +26,21 @@ struct ProjectWorkspaceBeatmapState {
     /// @brief 该谱面上次停留的逻辑播放时间（秒）。
     double m_playbackTime{ 0.0 };
 
+    /// @brief 主画布横向平移量相对保存时视口宽度的比例。
+    float m_canvasHorizontalOffsetRatio{ 0.0F };
+
     /// @brief 序列化项目工作区谱面状态。
     friend void to_json(nlohmann::json&                     j,
                         const ProjectWorkspaceBeatmapState& state)
     {
-        j = nlohmann::json{ { "m_filePath", state.m_filePath },
-                            { "m_cameraId", state.m_cameraId },
-                            { "m_displayName", state.m_displayName },
-                            { "m_playbackTime", state.m_playbackTime } };
+        j = nlohmann::json{
+            { "m_filePath", state.m_filePath },
+            { "m_cameraId", state.m_cameraId },
+            { "m_displayName", state.m_displayName },
+            { "m_playbackTime", state.m_playbackTime },
+            { "m_canvasHorizontalOffsetRatio",
+              state.m_canvasHorizontalOffsetRatio },
+        };
     }
 
     /// @brief 反序列化项目工作区谱面状态，并兼容旧项目文件。
@@ -41,6 +51,11 @@ struct ProjectWorkspaceBeatmapState {
         state.m_cameraId     = j.value("m_cameraId", std::string{});
         state.m_displayName  = j.value("m_displayName", std::string{});
         state.m_playbackTime = j.value("m_playbackTime", 0.0);
+        state.m_canvasHorizontalOffsetRatio =
+            j.value("m_canvasHorizontalOffsetRatio", 0.0F);
+        if ( !std::isfinite(state.m_canvasHorizontalOffsetRatio) ) {
+            state.m_canvasHorizontalOffsetRatio = 0.0F;
+        }
     }
 };
 
@@ -83,6 +98,54 @@ struct ProjectWorkspaceAudioControllerState {
                                    m_trackId, m_trackName, m_trackType)
 };
 
+/// @brief 项目音频工具中一个资源方块的持久化布局。
+struct ProjectAudioToolItemPlacement {
+    /// @brief 音频资源稳定 ID。
+    std::string m_audioResourceId;
+
+    /// @brief 方块左上角相对工具画布的逻辑 X 坐标。
+    float m_x{ 0.0F };
+
+    /// @brief 方块左上角相对工具画布的逻辑 Y 坐标。
+    float m_y{ 0.0F };
+
+    /// @brief 用户自定义逻辑宽度；零表示继续按文件名自动计算。
+    float m_width{ 0.0F };
+
+    /// @brief 用户自定义逻辑高度；零表示继续使用类型默认高度。
+    float m_height{ 0.0F };
+
+    /// @brief 方块叠层顺序，数值越大越靠上。
+    std::int32_t m_zOrder{ 0 };
+
+    /// @brief 序列化项目音频工具方块布局。
+    friend void to_json(nlohmann::json&                      json,
+                        const ProjectAudioToolItemPlacement& placement)
+    {
+        json = nlohmann::json{
+            { "m_audioResourceId", placement.m_audioResourceId },
+            { "m_x", placement.m_x },
+            { "m_y", placement.m_y },
+            { "m_width", placement.m_width },
+            { "m_height", placement.m_height },
+            { "m_zOrder", placement.m_zOrder },
+        };
+    }
+
+    /// @brief 反序列化项目音频工具方块布局并兼容缺失字段。
+    friend void from_json(const nlohmann::json&          json,
+                          ProjectAudioToolItemPlacement& placement)
+    {
+        placement.m_audioResourceId =
+            json.value("m_audioResourceId", std::string{});
+        placement.m_x      = json.value("m_x", 0.0F);
+        placement.m_y      = json.value("m_y", 0.0F);
+        placement.m_width  = json.value("m_width", 0.0F);
+        placement.m_height = json.value("m_height", 0.0F);
+        placement.m_zOrder = json.value("m_zOrder", 0);
+    }
+};
+
 /// @brief 项目工作区中的工具栏运行时开关状态。
 struct ProjectWorkspaceToolbarState {
     /// @brief 是否已经记录过有效工具栏状态。
@@ -93,6 +156,17 @@ struct ProjectWorkspaceToolbarState {
 
     /// @brief 是否开启滚动吸附。
     bool m_scrollSnap{ false };
+
+    /// @brief 是否开启物件放置磁吸。
+    bool m_objectPlacementSnap{ false };
+
+    /// @brief 物件放置磁吸模式，使用 CurrentBeatDivisor 或 CommonBeatDivisors。
+    std::string m_objectPlacementSnapMode{ "CurrentBeatDivisor" };
+
+    /// @brief 1/2 至 1/24 常用分拍线的选择位。
+    std::uint32_t m_commonBeatDivisorMask{
+        Config::COMMON_BEAT_DIVISOR_MASK_DEFAULT
+    };
 
     /// @brief 是否吸附到早于鼠标位置的分拍线。
     bool m_snapFloor{ false };
@@ -129,6 +203,9 @@ struct ProjectWorkspaceToolbarState {
             { "m_valid", state.m_valid },
             { "m_reverseScroll", state.m_reverseScroll },
             { "m_scrollSnap", state.m_scrollSnap },
+            { "m_objectPlacementSnap", state.m_objectPlacementSnap },
+            { "m_objectPlacementSnapMode", state.m_objectPlacementSnapMode },
+            { "m_commonBeatDivisorMask", state.m_commonBeatDivisorMask },
             { "m_snapFloor", state.m_snapFloor },
             { "m_enableLinearScrollMapping",
               state.m_enableLinearScrollMapping },
@@ -149,7 +226,19 @@ struct ProjectWorkspaceToolbarState {
         state.m_valid         = j.value("m_valid", false);
         state.m_reverseScroll = j.value("m_reverseScroll", false);
         state.m_scrollSnap    = j.value("m_scrollSnap", false);
-        state.m_snapFloor     = j.value("m_snapFloor", false);
+        state.m_objectPlacementSnap =
+            j.value("m_objectPlacementSnap", state.m_scrollSnap);
+        state.m_objectPlacementSnapMode = j.value(
+            "m_objectPlacementSnapMode", std::string{ "CurrentBeatDivisor" });
+        if ( state.m_objectPlacementSnapMode != "CurrentBeatDivisor" &&
+             state.m_objectPlacementSnapMode != "CommonBeatDivisors" ) {
+            state.m_objectPlacementSnapMode = "CurrentBeatDivisor";
+        }
+        state.m_commonBeatDivisorMask =
+            j.value("m_commonBeatDivisorMask",
+                    Config::COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
+            Config::COMMON_BEAT_DIVISOR_MASK_ALL;
+        state.m_snapFloor = j.value("m_snapFloor", false);
         state.m_enableLinearScrollMapping =
             j.value("m_enableLinearScrollMapping", false);
         state.m_drawBeatLines = j.value("m_drawBeatLines", true);
@@ -208,6 +297,21 @@ struct ProjectWorkspaceState {
     /// @brief 上次选中的编辑工具。
     std::string m_activeEditTool{ "Move" };
 
+    /// @brief 项目音频工具上次选中的资源 ID。
+    std::string m_projectAudioToolSelectedResourceId;
+
+    /// @brief 项目音频工具为后续新建物件设置的音量倍率。
+    float m_projectAudioToolBrushVolume{ 1.0F };
+
+    /// @brief 选中 Effect 音频资源时是否自动试听一次采样。
+    bool m_projectAudioToolPreviewEffectOnSelection{ false };
+
+    /// @brief 上次是否打开了项目音频工具窗口。
+    bool m_projectAudioToolOpen{ false };
+
+    /// @brief 项目音频工具资源方块的持久化布局。
+    std::vector<ProjectAudioToolItemPlacement> m_projectAudioToolPlacements;
+
     /// @brief 上次工具栏上的运行时开关状态。
     ProjectWorkspaceToolbarState m_toolbarState;
 
@@ -244,6 +348,15 @@ struct ProjectWorkspaceState {
             { "m_audioSpectrumOpen", workspace.m_audioSpectrumOpen },
             { "m_sidebarActiveTab", workspace.m_sidebarActiveTab },
             { "m_activeEditTool", workspace.m_activeEditTool },
+            { "m_projectAudioToolSelectedResourceId",
+              workspace.m_projectAudioToolSelectedResourceId },
+            { "m_projectAudioToolBrushVolume",
+              workspace.m_projectAudioToolBrushVolume },
+            { "m_projectAudioToolPreviewEffectOnSelection",
+              workspace.m_projectAudioToolPreviewEffectOnSelection },
+            { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
+            { "m_projectAudioToolPlacements",
+              workspace.m_projectAudioToolPlacements },
             { "m_toolbarState", workspace.m_toolbarState },
             { "m_bpmMeasurementToolOpen", workspace.m_bpmMeasurementToolOpen },
             { "m_bpmMeasurementAudioTrackId",
@@ -276,6 +389,22 @@ struct ProjectWorkspaceState {
             j.value("m_sidebarActiveTab", std::string{ "FileExplorer" });
         workspace.m_activeEditTool =
             j.value("m_activeEditTool", std::string{ "Move" });
+        workspace.m_projectAudioToolSelectedResourceId =
+            j.value("m_projectAudioToolSelectedResourceId", std::string{});
+        workspace.m_projectAudioToolBrushVolume =
+            j.value("m_projectAudioToolBrushVolume", 1.0F);
+        if ( !std::isfinite(workspace.m_projectAudioToolBrushVolume) ) {
+            workspace.m_projectAudioToolBrushVolume = 1.0F;
+        }
+        workspace.m_projectAudioToolBrushVolume =
+            std::max(0.0F, workspace.m_projectAudioToolBrushVolume);
+        workspace.m_projectAudioToolPreviewEffectOnSelection =
+            j.value("m_projectAudioToolPreviewEffectOnSelection", false);
+        workspace.m_projectAudioToolOpen =
+            j.value("m_projectAudioToolOpen", false);
+        workspace.m_projectAudioToolPlacements =
+            j.value("m_projectAudioToolPlacements",
+                    std::vector<ProjectAudioToolItemPlacement>{});
         workspace.m_toolbarState =
             j.value("m_toolbarState", ProjectWorkspaceToolbarState{});
         workspace.m_bpmMeasurementToolOpen =

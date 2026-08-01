@@ -12,6 +12,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -40,20 +41,27 @@ namespace MMM::UI
 
 namespace
 {
-/// @brief 获取快捷键切换后的下一种分拍线显示模式。
-/// @param mode 当前显示模式。
-/// @return 按始终显示、光标附近、隐藏顺序循环后的模式。
-Config::BeatLineDisplayMode nextBeatLineDisplayMode(
-    Config::BeatLineDisplayMode mode)
+/// @brief 绘制文本空间不足时自动滚动的工具栏方形按钮。
+/// @param id 不显示的 ImGui ID。
+/// @param text 按钮显示文本。
+/// @param size 按钮尺寸。
+/// @return 本帧按钮被激活时返回 true。
+/// @warning UI 热路径：只复用反馈按钮并追加一次局部裁剪文本绘制。
+bool drawToolbarScrollingButton(const char* id, std::string_view text,
+                                ImVec2 size)
 {
-    switch ( mode ) {
-    case Config::BeatLineDisplayMode::Always:
-        return Config::BeatLineDisplayMode::NearCursor;
-    case Config::BeatLineDisplayMode::NearCursor:
-        return Config::BeatLineDisplayMode::Hidden;
-    case Config::BeatLineDisplayMode::Hidden:
-    default: return Config::BeatLineDisplayMode::Always;
-    }
+    const bool   clicked = ::MMM::UI::FeedbackButton(id, size);
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const ImVec2 itemMax = ImGui::GetItemRectMax();
+    const float  padding = std::max(2.0f, ImGui::GetStyle().FramePadding.x);
+    const float  availableWidth =
+        std::max(0.0f, itemMax.x - itemMin.x - padding * 2.0f);
+    Utils::drawScrollingText(text,
+                             ImVec2(itemMin.x + padding, itemMin.y),
+                             availableWidth,
+                             itemMax.y - itemMin.y,
+                             true);
+    return clicked;
 }
 
 /// @brief 将颜色槽位转换为数组索引。
@@ -421,9 +429,11 @@ void ToolbarView::update(UIManager* sourceManager)
 
         const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
         auto&       engine      = Logic::EditorEngine::instance();
-        const auto& editorCfg   = engine.getEditorConfig();
+        const auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
-        const bool  shouldPlayAdjustmentFeedback =
+        m_beatLineDisplayModeHistory.observe(
+            editorCfg.visual.beatLineDisplayMode);
+        const bool shouldPlayAdjustmentFeedback =
             editorCfg.settings.stopPlaybackOnScroll;
 
         auto tooltipWithShortcut =
@@ -487,9 +497,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                       !config.visual.enableLinearScrollMapping;
                               });
             tryToggleShortcut(shortcutConfig.toggleBeatLines,
-                              [](Config::EditorConfig& config) {
+                              [this](Config::EditorConfig& config) {
                                   config.visual.beatLineDisplayMode =
-                                      nextBeatLineDisplayMode(
+                                      m_beatLineDisplayModeHistory.toggleTarget(
                                           config.visual.beatLineDisplayMode);
                               });
             tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
@@ -640,10 +650,12 @@ void ToolbarView::update(UIManager* sourceManager)
                                        ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
-                m_showDivisorPopup  = false;
-                m_showKeyPopup      = false;
-                m_showSpeedPopup    = false;
-                m_showBeatLinePopup = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
             }
         }
         {
@@ -710,15 +722,29 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.settings.reverseScroll;
                          });
 
-        drawToggleButton(ICON_MMM_MAGNET,
-                         editorCfg.settings.scrollSnap,
-                         TR("ui.toolbar.scroll_snap").data(),
-                         TR("ui.toolbar.short.scroll_snap").data(),
-                         shortcutConfig.toggleScrollSnap,
-                         [](Config::EditorConfig& config) {
-                             config.settings.scrollSnap =
-                                 !config.settings.scrollSnap;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("MagnetTool");
+        if ( drawIconButton(ICON_MMM_MAGNET,
+                            "##ToolbarMagnetTool",
+                            TR("ui.toolbar.short.magnet_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showMagnetPopup = !m_showMagnetPopup;
+            if ( m_showMagnetPopup ) {
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showSoundEffectTool = false;
+            }
+        }
+        m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        drawTooltip(TR("ui.toolbar.magnet_tool").data());
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_ARROW_DOWN,
                          editorCfg.settings.snapFloor,
@@ -750,10 +776,12 @@ void ToolbarView::update(UIManager* sourceManager)
                             showToolLabels) ) {
             m_showBeatLinePopup = !m_showBeatLinePopup;
             if ( m_showBeatLinePopup ) {
-                m_showColorPopup   = false;
-                m_showDivisorPopup = false;
-                m_showKeyPopup     = false;
-                m_showSpeedPopup   = false;
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
             }
         }
         m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
@@ -777,15 +805,44 @@ void ToolbarView::update(UIManager* sourceManager)
                                  !config.settings.stopPlaybackOnScroll;
                          });
 
-        drawToggleButton(ICON_MMM_HIT_SFX,
-                         editorCfg.settings.sfxConfig.enableHitSfx,
-                         TR("ui.toolbar.hit_sfx").data(),
-                         TR("ui.toolbar.short.hit_sfx").data(),
-                         shortcutConfig.toggleHitSfx,
-                         [](Config::EditorConfig& config) {
-                             config.settings.sfxConfig.enableHitSfx =
-                                 !config.settings.sfxConfig.enableHitSfx;
-                         });
+        pushBtnStyle(true);
+        ImGui::PushID("SoundEffectTool");
+        if ( drawIconButton(ICON_MMM_HIT_SFX,
+                            "##ToolbarSoundEffectTool",
+                            TR("ui.toolbar.short.key_sound_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showSoundEffectTool = !m_showSoundEffectTool;
+            if ( m_showSoundEffectTool ) {
+                m_soundEffectGainDraftInitialized = false;
+                m_showLayoutPopup                 = false;
+                m_showColorPopup                  = false;
+                m_showDivisorPopup                = false;
+                m_showKeyPopup                    = false;
+                m_showSpeedPopup                  = false;
+                m_showBeatLinePopup               = false;
+                m_showMagnetPopup                 = false;
+            }
+        }
+        m_lastSoundEffectToolBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        {
+            std::string tooltipText = TR("ui.toolbar.key_sound_tool").data();
+            const auto  shortcutText =
+                ShortcutUtils::formatShortcut(shortcutConfig.toggleHitSfx);
+            if ( !shortcutText.empty() ) {
+                tooltipText += "\n";
+                tooltipText +=
+                    TR("ui.toolbar.key_sound_tool_shortcut_hint").data();
+                tooltipText += " (";
+                tooltipText += shortcutText;
+                tooltipText += ")";
+            }
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
 
         drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
                          editorCfg.visual.enableHitEffects,
@@ -845,25 +902,24 @@ void ToolbarView::update(UIManager* sourceManager)
 
                 const double currentSpeed =
                     Audio::AudioManager::instance().getPlaybackSpeed();
-                char speedBuf[64];
+                char speedText[32];
                 if ( hasBeatmap ) {
-                    snprintf(speedBuf,
-                             sizeof(speedBuf),
-                             "%.2g###ToolbarPlaybackSpeed",
-                             currentSpeed);
+                    snprintf(
+                        speedText, sizeof(speedText), "%.2g", currentSpeed);
                 } else {
-                    snprintf(speedBuf,
-                             sizeof(speedBuf),
-                             "--###ToolbarPlaybackSpeed");
+                    snprintf(speedText, sizeof(speedText), "--");
                 }
 
-                if ( ::MMM::UI::FeedbackButton(speedBuf,
-                                               ImVec2(btnSize, btnSize)) ) {
+                if ( drawToolbarScrollingButton("###ToolbarPlaybackSpeed",
+                                                speedText,
+                                                ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
-                        m_showKeyPopup      = false;
-                        m_showDivisorPopup  = false;
-                        m_showBeatLinePopup = false;
+                        m_showKeyPopup        = false;
+                        m_showDivisorPopup    = false;
+                        m_showBeatLinePopup   = false;
+                        m_showMagnetPopup     = false;
+                        m_showSoundEffectTool = false;
                     }
                 }
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
@@ -925,9 +981,11 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
-                    m_showDivisorPopup  = false;
-                    m_showSpeedPopup    = false;
-                    m_showBeatLinePopup = false;
+                    m_showDivisorPopup    = false;
+                    m_showSpeedPopup      = false;
+                    m_showBeatLinePopup   = false;
+                    m_showMagnetPopup     = false;
+                    m_showSoundEffectTool = false;
                 }
             }
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
@@ -976,9 +1034,11 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
-                    m_showKeyPopup      = false;
-                    m_showSpeedPopup    = false;
-                    m_showBeatLinePopup = false;
+                    m_showKeyPopup        = false;
+                    m_showSpeedPopup      = false;
+                    m_showBeatLinePopup   = false;
+                    m_showMagnetPopup     = false;
+                    m_showSoundEffectTool = false;
                 }
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
@@ -1017,7 +1077,9 @@ void ToolbarView::update(UIManager* sourceManager)
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
     renderLayoutPopup(dpiScale);
+    renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
+    renderSoundEffectTool(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1357,6 +1419,407 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImGui::PopStyleVar(4);
     }
+}
+
+/// @brief 绘制锚定在工具栏按钮旁的音效逐轨与分类控制弹层。
+/// @param dpiScale 当前 DPI 缩放。
+/// @warning UI 热路径：弹层打开时每帧执行，仅绘制滚动区可见控制行。
+void ToolbarView::renderSoundEffectTool(float dpiScale)
+{
+    if ( !m_showSoundEffectTool ) return;
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    auto& engine = Logic::EditorEngine::instance();
+    bool  hasBeatmap{ false };
+    int   playerTrackCount{ 0 };
+    int   bgmTrackCount{ 0 };
+    {
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        const auto session = engine.getActiveSession();
+        if ( session && session->getContext().currentBeatmap ) {
+            const auto& metadata =
+                session->getContext().currentBeatmap->m_baseMapMetadata;
+            hasBeatmap       = true;
+            playerTrackCount = std::max(0, metadata.track_count);
+            bgmTrackCount    = std::max(0, metadata.bgm_track_count);
+        }
+    }
+
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    const float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
+    const float windowRounding =
+        std::floor(aesthetics.windowRounding * dpiScale);
+    const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
+    const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
+    const int   playerRows    = std::max(1, playerTrackCount);
+    const int   bgmRows       = std::max(1, bgmTrackCount);
+    const int   totalRows     = 7 + playerRows + bgmRows;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    edgePadding    = std::floor(8.0F * dpiScale);
+    const float    popupWidth     = std::floor(420.0F * dpiScale);
+    const float    titleHeight =
+        ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    const float desiredHeight = windowPadding * 2.0F + titleHeight +
+                                static_cast<float>(totalRows) * rowHeight;
+    const float availableHeight =
+        std::max(std::floor(180.0F * dpiScale),
+                 viewportBottom - viewportTop - edgePadding * 2.0F);
+    const float maximumHeight =
+        std::min(availableHeight, std::floor(480.0F * dpiScale));
+    const float minimumHeight =
+        std::min(maximumHeight, std::floor(180.0F * dpiScale));
+    const float popupHeight =
+        std::clamp(desiredHeight, minimumHeight, maximumHeight);
+
+    float targetX = toolbarWindow->Pos.x - std::floor(4.0F * dpiScale);
+    float targetY = m_lastSoundEffectToolBtnY;
+    targetX       = std::max(targetX, viewportLeft + popupWidth + edgePadding);
+    targetY = std::clamp(targetY,
+                         viewportTop + edgePadding,
+                         std::max(viewportTop + edgePadding,
+                                  viewportBottom - popupHeight - edgePadding));
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        { targetX, targetY }, ImGuiCond_Always, { 1.0F, 0.0F });
+    ImGui::SetNextWindowSize({ popupWidth, popupHeight }, ImGuiCond_Always);
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(windowPadding, windowPadding));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRounding);
+
+    if ( !ImGui::Begin("##SoundEffectToolPopup", nullptr, popupFlags) ) {
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+        return;
+    }
+
+    ImGui::TextUnformatted(TR("ui.key_sound_tool.title").data());
+    ImGui::Separator();
+
+    auto&      audio        = Audio::AudioManager::instance();
+    const auto editorConfig = engine.getEditorConfig();
+    if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
+        m_unboundHitSoundGainDraft =
+            editorConfig.settings.sfxConfig.unboundHitSfxGain;
+        m_boundHitSoundGainDraft =
+            editorConfig.settings.sfxConfig.boundHitSfxGain;
+        m_soundEffectGainDraftInitialized = true;
+    }
+    const float muteButtonSize  = std::floor(ImGui::GetFrameHeight());
+    const float gainSliderWidth = std::floor(170.0F * dpiScale);
+    const float controlSpacing  = ImGui::GetStyle().ItemSpacing.x;
+    const float trackViewportHeight =
+        std::max(1.0F, ImGui::GetContentRegionAvail().y);
+    ImGui::BeginChild("##SoundEffectControlScroller",
+                      { 0.0F, trackViewportHeight },
+                      ImGuiChildFlags_None,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+    const auto drawMuteStateButton = [&](bool        muted,
+                                         float       gain,
+                                         const auto& applyChange) {
+        const char* icon = ICON_MMM_VOLUME_MUTE;
+        if ( !muted ) {
+            if ( gain <= 0.0F )
+                icon = ICON_MMM_VOLUME_OFF;
+            else if ( gain < 1.0F )
+                icon = ICON_MMM_VOLUME_LOW;
+            else
+                icon = ICON_MMM_VOLUME_HIGH;
+        }
+
+        char buttonLabel[64];
+        std::snprintf(buttonLabel, sizeof(buttonLabel), "%s##MuteState", icon);
+        if ( muted ) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  Utils::UIThemeUtils::getDangerColor());
+        }
+        Utils::pushFixedButtonStyleVars();
+        const bool clicked = ::MMM::UI::FeedbackButton(
+            buttonLabel, ImVec2(muteButtonSize, muteButtonSize));
+        Utils::popFixedButtonStyleVars();
+        if ( muted ) ImGui::PopStyleColor();
+
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(muted ? TR("ui.audio_manager.unmute").data()
+                                       : TR("ui.audio_manager.mute").data());
+        }
+        if ( clicked ) applyChange(!muted);
+    };
+
+    const auto drawMuteOnlyRow = [&](const char* label,
+                                     const char* id,
+                                     bool        muted,
+                                     const auto& applyMute) {
+        ImGui::PushID(id);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(
+            std::max(ImGui::GetCursorPosX(),
+                     ImGui::GetWindowContentRegionMax().x - muteButtonSize));
+        drawMuteStateButton(muted, 1.0F, applyMute);
+        ImGui::PopID();
+    };
+
+    const auto drawMixRow = [&](const char* label,
+                                const char* id,
+                                bool        muted,
+                                float       gain,
+                                const auto& applyMute,
+                                const auto& applyGain,
+                                const auto& persistGain) {
+        ImGui::PushID(id);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+        const float controlWidth =
+            muteButtonSize + controlSpacing + gainSliderWidth;
+        ImGui::SetCursorPosX(
+            std::max(ImGui::GetCursorPosX(),
+                     ImGui::GetWindowContentRegionMax().x - controlWidth));
+        drawMuteStateButton(muted, gain, applyMute);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(gainSliderWidth);
+        float gainPercent = std::clamp(gain * 100.0F, 0.0F, 200.0F);
+        if ( ::MMM::UI::FeedbackSliderFloat(
+                 "##Gain", &gainPercent, 0.0F, 200.0F, "%.0f%%") ) {
+            applyGain(gainPercent * 0.01F);
+        }
+        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+            persistGain(gainPercent * 0.01F);
+        }
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(TR("ui.key_sound_tool.gain").data());
+        }
+        ImGui::PopID();
+    };
+
+    const int    hitSoundHeaderRow  = 0;
+    const int    unboundHitSoundRow = 1;
+    const int    boundHitSoundRow   = 2;
+    const int    playerHeaderRow    = 3;
+    const int    playerMasterRow    = 4;
+    const int    playerTrackBegin   = 5;
+    const int    bgmHeaderRow       = playerTrackBegin + playerRows;
+    const int    bgmMasterRow       = bgmHeaderRow + 1;
+    const int    bgmTrackBegin      = bgmMasterRow + 1;
+    const ImVec2 contentStart       = ImGui::GetCursorPos();
+    const float  scrollY            = ImGui::GetScrollY();
+    const float  visibleHeight      = std::max(
+        1.0F,
+        ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y * 2.0F);
+    const float visibleStart = std::max(0.0F, scrollY - contentStart.y);
+    const float visibleEnd =
+        std::max(visibleStart, scrollY + visibleHeight - contentStart.y);
+    const int firstVisibleRow = std::clamp(
+        static_cast<int>(std::floor(visibleStart / rowHeight)), 0, totalRows);
+    const int lastVisibleRow =
+        std::clamp(static_cast<int>(std::ceil(visibleEnd / rowHeight)) + 1,
+                   firstVisibleRow,
+                   totalRows);
+
+    for ( int row = firstVisibleRow; row < lastVisibleRow; ++row ) {
+        ImGui::SetCursorPos(
+            { contentStart.x,
+              contentStart.y + static_cast<float>(row) * rowHeight });
+
+        if ( row == hitSoundHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
+            continue;
+        }
+        if ( row == unboundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.unbound_hit_sound").data(),
+                "UnboundHitSound",
+                !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
+                m_unboundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableUnboundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_unboundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Unbound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.unboundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
+                });
+            continue;
+        }
+        if ( row == boundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.bound_hit_sound").data(),
+                "BoundHitSound",
+                !editorConfig.settings.sfxConfig.enableBoundHitSfx,
+                m_boundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableBoundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_boundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Bound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.boundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
+                });
+            continue;
+        }
+        if ( row == playerHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.player_area").data());
+            continue;
+        }
+        if ( row == playerMasterRow ) {
+            drawMuteOnlyRow(TR("ui.key_sound_tool.area_master").data(),
+                            "PlayerArea",
+                            !editorConfig.settings.sfxConfig.enableHitSfx,
+                            [&engine](bool muted) {
+                                auto config = engine.getEditorConfig();
+                                config.settings.sfxConfig.enableHitSfx = !muted;
+                                engine.setEditorConfig(config);
+                            });
+            continue;
+        }
+        if ( row < bgmHeaderRow ) {
+            const int track = row - playerTrackBegin;
+            if ( track >= playerTrackCount ) {
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(hasBeatmap ? "ui.key_sound_tool.no_player_tracks"
+                                  : "ui.key_sound_tool.no_beatmap")
+                        .data());
+                continue;
+            }
+
+            ImGui::PushID("PlayerTrack");
+            ImGui::PushID(track);
+            char label[64];
+            std::snprintf(label,
+                          sizeof(label),
+                          TR("ui.key_sound_tool.player_track").data(),
+                          track + 1);
+            const auto trackIndex = static_cast<std::uint32_t>(track);
+            drawMixRow(
+                label,
+                "MixState",
+                audio.isPlayerKeySoundTrackMuted(trackIndex),
+                audio.getPlayerKeySoundTrackGain(trackIndex),
+                [&engine, trackIndex](bool muted) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
+                        .area       = Logic::KeySoundTrackArea::Player,
+                        .trackIndex = trackIndex,
+                        .muted      = muted,
+                    });
+                },
+                [&engine, trackIndex](float gain) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
+                        .area       = Logic::KeySoundTrackArea::Player,
+                        .trackIndex = trackIndex,
+                        .gain       = gain,
+                    });
+                },
+                [](float) {});
+            ImGui::PopID();
+            ImGui::PopID();
+            continue;
+        }
+        if ( row == bgmHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.bgm_area").data());
+            continue;
+        }
+        if ( row == bgmMasterRow ) {
+            if ( !hasBeatmap || bgmTrackCount == 0 ) ImGui::BeginDisabled();
+            drawMuteOnlyRow(
+                TR("ui.key_sound_tool.area_master").data(),
+                "BgmArea",
+                audio.isBgmKeySoundAreaMuted(),
+                [&engine](bool muted) {
+                    engine.pushCommand(
+                        Logic::CmdSetBgmKeySoundAreaMute{ .muted = muted });
+                });
+            if ( !hasBeatmap || bgmTrackCount == 0 ) ImGui::EndDisabled();
+            continue;
+        }
+        if ( row >= bgmTrackBegin ) {
+            const int track = row - bgmTrackBegin;
+            if ( track >= bgmTrackCount ) {
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(hasBeatmap ? "ui.key_sound_tool.no_bgm_tracks"
+                                  : "ui.key_sound_tool.no_beatmap")
+                        .data());
+                continue;
+            }
+
+            ImGui::PushID("BgmTrack");
+            ImGui::PushID(track);
+            char label[64];
+            std::snprintf(label,
+                          sizeof(label),
+                          TR("ui.key_sound_tool.bgm_track").data(),
+                          track + 1);
+            const auto trackIndex = static_cast<std::uint32_t>(track);
+            drawMixRow(
+                label,
+                "MixState",
+                audio.isBgmKeySoundTrackMuted(trackIndex),
+                audio.getBgmKeySoundTrackGain(trackIndex),
+                [&engine, trackIndex](bool muted) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
+                        .area       = Logic::KeySoundTrackArea::Bgm,
+                        .trackIndex = trackIndex,
+                        .muted      = muted,
+                    });
+                },
+                [&engine, trackIndex](float gain) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
+                        .area       = Logic::KeySoundTrackArea::Bgm,
+                        .trackIndex = trackIndex,
+                        .gain       = gain,
+                    });
+                },
+                [](float) {});
+            ImGui::PopID();
+            ImGui::PopID();
+            continue;
+        }
+    }
+
+    ImGui::SetCursorPos(
+        { contentStart.x,
+          contentStart.y + static_cast<float>(totalRows) * rowHeight });
+    ImGui::Dummy({ 1.0F, 1.0F });
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 void ToolbarView::initializeColorPalette()
@@ -2562,8 +3025,9 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
                                     : m_toolBeforeLayout;
             m_showLayoutPopup = false;
         } else {
-            m_toolBeforeLayout = m_currentTool;
-            m_showLayoutPopup  = true;
+            m_toolBeforeLayout    = m_currentTool;
+            m_showLayoutPopup     = true;
+            m_showSoundEffectTool = false;
         }
         m_currentTool = nextTool;
         Logic::EditorEngine::instance().pushCommand(
@@ -2573,6 +3037,139 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
     ImGui::PopID();
     drawTooltip(TR("ui.toolbar.layout").data());
     ImGui::PopStyleColor(3);
+}
+
+void ToolbarView::renderMagnetPopup(float dpiScale)
+{
+    if ( !m_showMagnetPopup ) return;
+
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    if ( !toolbarWindow ) return;
+
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    const float    viewportTop    = mainViewport->Pos.y;
+    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    const float    viewportLeft   = mainViewport->Pos.x;
+    const float    padding        = std::floor(8.0f * dpiScale);
+    const float    popupW         = m_magnetPopupWidth > 0.0f
+                                        ? m_magnetPopupWidth
+                                        : std::floor(280.0f * dpiScale);
+    const float    popupH         = m_magnetPopupHeight > 0.0f
+                                        ? m_magnetPopupHeight
+                                        : std::floor(360.0f * dpiScale);
+    float          targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
+    float          targetY = m_lastMagnetBtnY;
+    targetX                = std::max(targetX, viewportLeft + popupW + padding);
+    const float minTargetY = viewportTop + padding;
+    const float maxTargetY =
+        std::max(minTargetY, viewportBottom - popupH - padding);
+    targetY = std::clamp(targetY, minTargetY, maxTargetY);
+
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(
+        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& aesthetics = appConfig.getEditorSettings().aesthetics;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                        std::floor(aesthetics.windowRounding * dpiScale));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(aesthetics.windowPadding * dpiScale),
+               std::floor(aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                        std::floor(aesthetics.frameRounding * dpiScale));
+
+    if ( ImGui::Begin("##MagnetToolPopup", nullptr, popupFlags) ) {
+        ImGui::TextUnformatted(TR("ui.magnet_tool.title").data());
+        ImGui::Separator();
+
+        auto editorConfig  = appConfig.getEditorConfig();
+        auto persistConfig = [&]() {
+            Logic::EditorEngine::instance().setEditorConfig(editorConfig);
+            appConfig.save();
+        };
+
+        bool scrollSnap = editorConfig.settings.scrollSnap;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.magnet_tool.scroll_canvas_snap").data(),
+                 &scrollSnap) ) {
+            editorConfig.settings.scrollSnap = scrollSnap;
+            persistConfig();
+        }
+
+        bool objectPlacementSnap = editorConfig.settings.objectPlacementSnap;
+        if ( ::MMM::UI::FeedbackCheckbox(
+                 TR("ui.magnet_tool.object_placement_snap").data(),
+                 &objectPlacementSnap) ) {
+            editorConfig.settings.objectPlacementSnap = objectPlacementSnap;
+            persistConfig();
+        }
+
+        if ( objectPlacementSnap ) {
+            ImGui::Separator();
+            auto mode = editorConfig.settings.objectPlacementSnapMode;
+            if ( ::MMM::UI::FeedbackRadioButton(
+                     TR("ui.magnet_tool.current_beat_lines").data(),
+                     mode == Config::ObjectPlacementSnapMode::
+                                 CurrentBeatDivisor) ) {
+                mode = Config::ObjectPlacementSnapMode::CurrentBeatDivisor;
+                editorConfig.settings.objectPlacementSnapMode = mode;
+                persistConfig();
+            }
+            if ( ::MMM::UI::FeedbackRadioButton(
+                     TR("ui.magnet_tool.common_beat_lines").data(),
+                     mode == Config::ObjectPlacementSnapMode::
+                                 CommonBeatDivisors) ) {
+                mode = Config::ObjectPlacementSnapMode::CommonBeatDivisors;
+                editorConfig.settings.objectPlacementSnapMode = mode;
+                persistConfig();
+            }
+
+            if ( mode == Config::ObjectPlacementSnapMode::CommonBeatDivisors ) {
+                ImGui::Spacing();
+                ImGui::TextDisabled(
+                    "%s", TR("ui.magnet_tool.common_beat_lines_hint").data());
+                if ( ImGui::BeginTable("##CommonBeatDivisorSelection",
+                                       4,
+                                       ImGuiTableFlags_SizingFixedFit |
+                                           ImGuiTableFlags_NoSavedSettings) ) {
+                    for ( int divisor = Config::COMMON_BEAT_DIVISOR_MIN;
+                          divisor <= Config::COMMON_BEAT_DIVISOR_MAX;
+                          ++divisor ) {
+                        ImGui::TableNextColumn();
+                        bool selected = Config::isCommonBeatDivisorEnabled(
+                            editorConfig.settings.commonBeatDivisorMask,
+                            divisor);
+                        char label[32];
+                        std::snprintf(label,
+                                      sizeof(label),
+                                      "1/%d##CommonBeatDivisor%d",
+                                      divisor,
+                                      divisor);
+                        if ( ::MMM::UI::FeedbackCheckbox(label, &selected) ) {
+                            Config::setCommonBeatDivisorEnabled(
+                                editorConfig.settings.commonBeatDivisorMask,
+                                divisor,
+                                selected);
+                            persistConfig();
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
+
+        const ImVec2 size   = ImGui::GetWindowSize();
+        m_magnetPopupWidth  = size.x;
+        m_magnetPopupHeight = size.y;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 void ToolbarView::renderBeatLinePopup(float dpiScale)
@@ -2641,6 +3238,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
             auto updatedConfig = appConfig.getEditorConfig();
             updatedConfig.visual.beatLineDisplayMode = candidate;
             Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            m_beatLineDisplayModeHistory.observe(candidate);
             appConfig.save();
             m_beatLinePopupConfigDirty = false;
             mode                       = candidate;
@@ -2853,6 +3451,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.settings.visual.note_bound_sample_labels").data(),
+                     &visual.showBoundSampleLabels) ) {
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
 
             visual                   = appConfig.getVisualConfig();
             int         noteFillMode = static_cast<int>(visual.noteFillMode);

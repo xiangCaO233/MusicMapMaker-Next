@@ -1,22 +1,15 @@
 #pragma once
 
-#include "config/EditorSettings.h"
-#include "event/core/EventBus.h"
-#include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
-#include "graphic/imguivk/VKRenderPass.h"
-#include "graphic/imguivk/VKRenderPipeline.h"
-#include "graphic/imguivk/VKRenderer.h"
-#include "graphic/imguivk/VKShader.h"
-#include "graphic/imguivk/VKSwapchain.h"
-#include "graphic/system/SystemTheme.h"
-#include "imgui_impl_vulkan.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -25,8 +18,23 @@
 #endif
 #include <vulkan/vulkan.hpp>
 
+struct GLFWwindow;
+
+namespace MMM::Config
+{
+enum class FrameLimitPreference;
+}
+
 namespace MMM::Graphic
 {
+class ImGuiThemeRegistry;
+class NativeWindow;
+class VKRenderer;
+class VKRenderPass;
+class VKSwapchain;
+struct ThemePluginReloadResult;
+enum class SystemTheme : std::uint8_t;
+
 /// @brief 窗口图形资源的初始化模式。
 enum class VKWindowResourceMode : std::uint8_t {
     Bootstrap,   ///< 资源同步前仅加载系统字体和最小 ImGui 样式。
@@ -174,6 +182,23 @@ public:
      */
     void applyTheme();
 
+    /// @brief 删除所有自定义插件实例并重新载入插件目录。
+    /// @return 主题插件扫描与加载结果。
+    /// @warning 低频插件重载路径：会访问文件系统并执行
+    /// Lua，只能从启动或菜单动作调用。
+    ThemePluginReloadResult reloadPlugins();
+
+    /// @brief 热切换单个已扫描插件的启用状态并立即重载插件。
+    /// @param pluginId 配置根目录相对插件 ID。
+    /// @param enabled 切换后的启用状态。
+    /// @return 找到插件且配置成功保存时返回 true；运行时切换不因保存失败回滚。
+    /// @warning 低频插件管理路径：会保存配置、访问文件系统并执行 Lua。
+    bool setPluginEnabled(std::string_view pluginId, bool enabled);
+
+    /// @brief 获取当前上下文持有的主题实例注册表。
+    /// @return 主题注册表只读引用。
+    [[nodiscard]] const ImGuiThemeRegistry& getThemeRegistry() const;
+
     /**
      * @brief 显式释放资源
      *
@@ -195,10 +220,10 @@ private:
     };
 
     /// @brief GLFW 键盘事件订阅 ID，随上下文资源释放而取消订阅。
-    Event::SubscriptionID m_glfwKeySubscription{ 0 };
+    std::uint64_t m_glfwKeySubscription{ 0 };
 
     /// @brief 逻辑配置命令订阅 ID，随上下文资源释放而取消订阅。
-    Event::SubscriptionID m_logicCommandSubscription{ 0 };
+    std::uint64_t m_logicCommandSubscription{ 0 };
 
     /// @brief 初始化失败原因；为空表示基础上下文初始化成功。
     std::string m_initializationError;
@@ -226,11 +251,14 @@ private:
     std::atomic<bool> m_fontRebuildRequested{ false };
 
     /// @brief 最近一次自动模式实际应用的系统主题。
-    SystemTheme m_appliedSystemTheme{ SystemTheme::Unknown };
+    SystemTheme m_appliedSystemTheme{};
 
     /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
     /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
     std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
+
+    /// @brief 当前图形上下文持有的内置与 Lua 插件主题实例。
+    std::unique_ptr<ImGuiThemeRegistry> m_themeRegistry;
 
     /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
     /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
@@ -430,7 +458,6 @@ private:
     // =========================================================================
     // 光标管理
     // =========================================================================
-    std::unique_ptr<CursorManager> m_cursorManager{ nullptr };
 
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
@@ -454,145 +481,8 @@ private:
     /// @warning 启动低频路径：只修改 ImGui 样式状态。
     void applyBootstrapTheme();
 
-    /**
-     * @brief 设置DeepDark样式
-     */
-    void setDeepDarkStyle();
-
-    /**
-     * @brief 设置Dark样式
-     */
-    void setDarkStyle();
-
-    /**
-     * @brief 设置Light样式
-     */
-    void setLightStyle();
-
-    /**
-     * @brief 设置Classic样式
-     */
-    void setClassicStyle();
-
-    /**
-     * @brief 设置Microsoft样式
-     */
-    void setMicrosoftStyle();
-
-    /**
-     * @brief 设置Darcula样式
-     */
-    void setDarculaStyle();
-
-    /**
-     * @brief 设置Photoshop样式
-     */
-    void setPhotoshopStyle();
-
-    /**
-     * @brief 设置Unreal样式
-     */
-    void setUnrealStyle();
-
-    /**
-     * @brief 设置Gold样式
-     */
-    void setGoldStyle();
-
-    /**
-     * @brief 设置RoundedVisualStudio样式
-     */
-    void setRoundedVisualStudioStyle();
-
-    /**
-     * @brief 设置SonicRiders样式
-     */
-    void setSonicRidersStyle();
-
-    /**
-     * @brief 设置DarkRuda样式
-     */
-    void setDarkRudaStyle();
-
-    /**
-     * @brief 设置SoftCherry样式
-     */
-    void setSoftCherryStyle();
-
-    /**
-     * @brief 设置Enemymouse样式
-     */
-    void setEnemymouseStyle();
-
-    /**
-     * @brief 设置DiscordDark样式
-     */
-    void setDiscordDarkStyle();
-
-    /**
-     * @brief 设置Comfy样式
-     */
-    void setComfyStyle();
-
-    /**
-     * @brief 设置PurpleComfy样式
-     */
-    void setPurpleComfyStyle();
-
-    /**
-     * @brief 设置FutureDark样式
-     */
-    void setFutureDarkStyle();
-
-    /**
-     * @brief 设置CleanDark样式
-     */
-    void setCleanDarkStyle();
-
-    /**
-     * @brief 设置Moonlight样式
-     */
-    void setMoonlightStyle();
-
-    /**
-     * @brief 设置 Cecilia 塞西莉娅配色派生样式。
-     */
-    void setCeciliaStyle();
-
-    /**
-     * @brief 设置ComfortableLight样式
-     */
-    void setComfortableLightStyle();
-
-    /**
-     * @brief 设置HazyDark样式
-     */
-    void setHazyDarkStyle();
-
-    /**
-     * @brief 设置Everforest样式
-     */
-    void setEverforestStyle();
-
-    /**
-     * @brief 设置Windark样式
-     */
-    void setWindarkStyle();
-
-    /**
-     * @brief 设置Rest样式
-     */
-    void setRestStyle();
-
-    /**
-     * @brief 设置ComfortableDarkCyan样式
-     */
-    void setComfortableDarkCyanStyle();
-
-    /**
-     * @brief 设置KazamCherry样式
-     */
-    void setKazamCherryStyle();
+    /// @brief 将全部编译期主题注册为独立实例。
+    void registerBuiltInThemes();
 
     friend class VKRenderer;
 };

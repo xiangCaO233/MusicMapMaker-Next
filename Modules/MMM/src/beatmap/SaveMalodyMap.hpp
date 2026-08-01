@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/MalodyMode.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <optional>
@@ -134,7 +137,8 @@ inline std::optional<json> parseMalodyBeatJsonValue(const std::string& text)
 /// @return 支持 key(0) 或 slide(7) 时返回 true。
 inline bool isSupportedMalodyExportMode(int mode)
 {
-    return mode == 0 || mode == 7;
+    return mode == malodyModeValue(MalodyMode::Key) ||
+           mode == malodyModeValue(MalodyMode::Slide);
 }
 
 /// @brief 保存谱面为 Malody .mc JSON 文件。
@@ -211,18 +215,47 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             mode);
         return false;
     }
-    const bool saveAsKeyMode   = mode == 0;
-    const bool saveAsSlideMode = mode == 7;
+    const bool saveAsKeyMode   = mode == malodyModeValue(MalodyMode::Key);
+    const bool saveAsSlideMode = mode == malodyModeValue(MalodyMode::Slide);
     meta["mode"]               = mode;
+
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        if ( saveAsKeyMode && !polyline.m_subNotes.empty() &&
+             polyline.getSampleBinding() ) {
+            XERROR(
+                "Malody 导出失败：Key 模式会展开 "
+                "Polyline，无法保留其根节点采样绑定");
+            return false;
+        }
+        const auto boundSubNote = std::find_if(
+            polyline.m_subNotes.begin(),
+            polyline.m_subNotes.end(),
+            [](const auto& noteRef) {
+                return noteRef.get().getSampleBinding().has_value();
+            });
+        if ( boundSubNote != polyline.m_subNotes.end() ) {
+            XERROR(
+                "Malody 导出失败：Polyline 子节点的采样绑定无法由 seg "
+                "字段无损表达");
+            return false;
+        }
+    }
 
     auto& song        = meta["song"];
     song["title"]     = beatMap.m_baseMapMetadata.title;
     song["titleorg"]  = beatMap.m_baseMapMetadata.title_unicode;
     song["artist"]    = beatMap.m_baseMapMetadata.artist;
     song["artistorg"] = beatMap.m_baseMapMetadata.artist_unicode;
-    song["file"]      = Config::pathToUtf8(
-        beatMap.m_baseMapMetadata.main_audio_path.filename());
-    song["bpm"] = beatMap.m_baseMapMetadata.preference_bpm;
+    const bool hasExplicitSongFileHint =
+        !beatMap.m_baseMapMetadata.song_file_hint.empty();
+    const std::filesystem::path& songFileHint =
+        hasExplicitSongFileHint ? beatMap.m_baseMapMetadata.song_file_hint
+                                : beatMap.m_baseMapMetadata.main_audio_path;
+    const std::string songFileValue =
+        hasExplicitSongFileHint ? Config::pathToUtf8(songFileHint)
+                                : Config::pathToUtf8(songFileHint.filename());
+    song["file"] = songFileValue;
+    song["bpm"]  = beatMap.m_baseMapMetadata.preference_bpm;
 
     meta["mode_ext"] = json::object();
 
@@ -259,6 +292,71 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
+    /// @brief 从 Timing 的 Malody 元数据读取有限数值。
+    /// @param timing 待读取的 Timing。
+    /// @param key 元数据字段名。
+    /// @return 字段存在且为有限 JSON 数值时返回其值。
+    auto getMalodyTimingNumber =
+        [](const Timing&    timing,
+           std::string_view key) -> std::optional<double> {
+        const auto source = timing.m_metadata.timing_properties.find(
+            TimingMetadataType::MALODY);
+        if ( source == timing.m_metadata.timing_properties.end() ) {
+            return std::nullopt;
+        }
+        const auto value = source->second.find(key);
+        if ( value == source->second.end() ) {
+            return std::nullopt;
+        }
+        const auto parsed = parseMalodyJsonValue(value->second);
+        if ( !parsed ) {
+            return std::nullopt;
+        }
+        double number = std::numeric_limits<double>::quiet_NaN();
+        if ( parsed->is_number() ) {
+            number = parsed->get<double>();
+        } else if ( parsed->is_string() ) {
+            number = Internal::safeStod(parsed->get_ref<const std::string&>(),
+                                        number);
+        }
+        return std::isfinite(number) ? std::optional<double>{ number }
+                                     : std::nullopt;
+    };
+
+    /// @brief 从 Timing 的 Malody 元数据恢复原始拍号。
+    /// @param timing 待读取的 Timing。
+    /// @return 元数据含合法 beat 数组时返回绝对拍数。
+    auto getMalodyTimingBeat =
+        [](const Timing& timing) -> std::optional<double> {
+        const auto source = timing.m_metadata.timing_properties.find(
+            TimingMetadataType::MALODY);
+        if ( source == timing.m_metadata.timing_properties.end() ) {
+            return std::nullopt;
+        }
+        const auto beat = source->second.find("beat");
+        if ( beat == source->second.end() ) {
+            return std::nullopt;
+        }
+        const auto beatJson = parseMalodyJsonValue(beat->second);
+        return beatJson ? malodyBeatArrayToDouble(*beatJson) : std::nullopt;
+    };
+
+    std::vector<const Timing*> bpmTimings;
+    bpmTimings.reserve(beatMap.m_timings.size());
+    for ( const auto& timing : beatMap.m_timings ) {
+        if ( timing.m_timingEffect == TimingEffect::BPM ) {
+            bpmTimings.push_back(&timing);
+        }
+    }
+    std::stable_sort(bpmTimings.begin(),
+                     bpmTimings.end(),
+                     [](const Timing* lhs, const Timing* rhs) {
+                         return lhs->m_timestamp < rhs->m_timestamp;
+                     });
+
+    /// @brief 按 Malody 的逐 Timing delay 锚点将毫秒时间转换为拍号。
+    /// @param time 待转换的绝对时间，单位为毫秒。
+    /// @return Malody beat 三元数组。
     auto timeToBeat = [&](double time) {
         double currentBpm = beatMap.m_baseMapMetadata.preference_bpm > 0
                                 ? beatMap.m_baseMapMetadata.preference_bpm
@@ -266,38 +364,22 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         double lastTime   = 0;
         double lastBeat   = 0;
 
-        // 查找首个 BPM 计时点作为拍号原点
-        for ( const auto& t : beatMap.m_timings ) {
-            if ( t.m_timingEffect == TimingEffect::BPM ) {
-                lastTime   = t.m_timestamp;
-                currentBpm = t.m_bpm;
-
-                // 从元数据中恢复原始 Beat
-                if ( auto it = t.m_metadata.timing_properties.find(
-                         TimingMetadataType::MALODY);
-                     it != t.m_metadata.timing_properties.end() ) {
-                    if ( it->second.contains("beat") ) {
-                        if ( auto beatJson =
-                                 parseMalodyJsonValue(it->second.at("beat")) ) {
-                            if ( auto beatValue =
-                                     malodyBeatArrayToDouble(*beatJson) ) {
-                                lastBeat = *beatValue;
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
-
-        for ( const auto& t : beatMap.m_timings ) {
-            if ( t.m_timingEffect != TimingEffect::BPM ) continue;
+        for ( const Timing* timing : bpmTimings ) {
+            const Timing& t = *timing;
             if ( t.m_timestamp > time + 1e-4 ) break;
-            if ( t.m_timestamp > lastTime + 1e-4 ) {
-                lastBeat += (t.m_timestamp - lastTime) / (60000.0 / currentBpm);
-                lastTime = t.m_timestamp;
+
+            if ( const auto originalBeat = getMalodyTimingBeat(t) ) {
+                lastBeat = *originalBeat;
+            } else {
+                const double delayMs =
+                    getMalodyTimingNumber(t, "delay").value_or(0.0);
+                lastBeat += (t.m_timestamp - delayMs - lastTime) /
+                            (60000.0 / currentBpm);
             }
-            currentBpm = t.m_bpm;
+            lastTime = t.m_timestamp;
+            if ( t.m_bpm > 0.0 ) {
+                currentBpm = t.m_bpm;
+            }
         }
         lastBeat += (time - lastTime) / (60000.0 / currentBpm);
 
@@ -325,22 +407,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         int gcd = std::gcd(n, 1920);
         return json::array({ integerBeat, n / gcd, 1920 / gcd });
     };
-
-    // 获取 audioOffset 和 initialDelay（优先从元数据中恢复）
-    double audioOffset  = 0.0;
-    double initialDelay = 0.0;
-    if ( auto it =
-             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
-         it != beatMap.m_metadata.map_properties.end() ) {
-        if ( it->second.contains("initialDelay") ) {
-            initialDelay =
-                MMM::Internal::safeStod(it->second.at("initialDelay"), 0.0);
-        }
-        if ( it->second.contains("audioOffset") ) {
-            audioOffset =
-                MMM::Internal::safeStod(it->second.at("audioOffset"), 0.0);
-        }
-    }
 
     // 计时与效果数据
     json timeArr = json::array();
@@ -787,6 +853,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
                 if ( key != "beat" && key != "column" && key != "x" &&
                      key != "endbeat" && key != "seg" && key != "dir" &&
+                     key != "type" && key != "sound" && key != "vol" &&
                      key != "original_structure" &&
                      key != "original_structure_flick" &&
                      (!shouldDropWidth || key != "w") ) {
@@ -794,47 +861,75 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
         }
+        const auto binding = note.getSampleBinding();
+        if ( !binding ) {
+            nj.erase("sound");
+            nj.erase("vol");
+        } else {
+            nj["sound"] = binding->m_audioResourceId;
+            nj["vol"]   = static_cast<std::int64_t>(
+                std::llround(binding->m_volume * 100));
+        }
         return nj;
     };
 
     auto& noteArr = fileData["note"];
     noteArr       = json::array();
 
-    // 插入音频节点
-    json audioNode;
-    audioNode["beat"]  = json::array({ 0, 0, 1 });
-    audioNode["sound"] = Config::pathToUtf8(
-        beatMap.m_baseMapMetadata.main_audio_path.filename());
-    audioNode["type"] = "SOUND";
+    /// @brief 将自动采样对象序列化为 Malody type=1 节点。
+    auto serializeAudioSample = [&](const AudioSampleEvent& sample) {
+        json sampleJson;
 
-    double firstTimingTime = 0.0;
-    for ( const auto& t : beatMap.m_timings ) {
-        if ( t.m_timingEffect == TimingEffect::BPM ) {
-            firstTimingTime = t.m_timestamp;
-            // 如果元数据里没有，尝试从第一个 BPM 点的 delay 恢复 initialDelay
-            if ( initialDelay == 0.0 ) {
-                if ( auto it2 = t.m_metadata.timing_properties.find(
-                         TimingMetadataType::MALODY);
-                     it2 != t.m_metadata.timing_properties.end() ) {
-                    if ( it2->second.contains("delay") ) {
-                        initialDelay = MMM::Internal::safeStod(
-                            it2->second.at("delay"), 0.0);
-                    }
+        if ( auto it = sample.m_metadata.sample_properties.find(
+                 SampleMetadataType::MALODY);
+             it != sample.m_metadata.sample_properties.end() ) {
+            for ( const auto& [key, value] : it->second ) {
+                if ( key != "beat" && key != "type" && key != "sound" &&
+                     key != "offset" && key != "x" && key != "vol" &&
+                     key != "original_x" ) {
+                    sampleJson[key] = parseMalodyJsonOrString(value);
                 }
             }
-            break;
+        }
+        // beat 是 m_timestamp 的格式投影；不能让导入时保留的旧 beat
+        // 覆盖编辑器已经移动过的锚点。
+        sampleJson["beat"] = timeToBeat(sample.m_timestamp);
+
+        sampleJson["type"]   = 1;
+        sampleJson["sound"]  = sample.m_audioResourceId;
+        sampleJson["offset"] = sample.m_offsetMs;
+        sampleJson["x"]      = sample.m_track;
+        sampleJson["vol"] =
+            static_cast<std::int64_t>(std::llround(sample.m_volume * 100));
+        return sampleJson;
+    };
+
+    std::vector<const AudioSampleEvent*> sortedSamples;
+    sortedSamples.reserve(beatMap.m_audioSamples.size());
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        if ( !sample.m_audioResourceId.empty() ) {
+            sortedSamples.push_back(&sample);
         }
     }
 
-    // 如果仍然找不到 audioOffset，则使用推导值（假设 initialDelay 对应的
-    // timestamp 是 firstTimingTime）
-    if ( audioOffset == 0.0 && firstTimingTime != 0.0 ) {
-        audioOffset = initialDelay - firstTimingTime;
+    std::stable_sort(
+        sortedSamples.begin(),
+        sortedSamples.end(),
+        [](const AudioSampleEvent* lhs, const AudioSampleEvent* rhs) {
+            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
+                return lhs->m_timestamp < rhs->m_timestamp;
+            }
+            if ( lhs->m_track != rhs->m_track ) {
+                return lhs->m_track < rhs->m_track;
+            }
+            if ( lhs->m_audioResourceId != rhs->m_audioResourceId ) {
+                return lhs->m_audioResourceId < rhs->m_audioResourceId;
+            }
+            return lhs->m_offsetMs < rhs->m_offsetMs;
+        });
+    for ( const AudioSampleEvent* sample : sortedSamples ) {
+        noteArr.push_back(serializeAudioSample(*sample));
     }
-
-    audioNode["offset"] = static_cast<int64_t>(std::round(audioOffset));
-
-    noteArr.push_back(audioNode);
 
     std::vector<std::pair<const Note*, bool>> sortedNotes;
     for ( const auto& n : beatMap.m_noteData.notes )

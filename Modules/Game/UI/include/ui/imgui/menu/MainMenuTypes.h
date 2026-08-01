@@ -1,13 +1,12 @@
 #pragma once
 
-#include "ui/imgui/status/IStatusMessageSink.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace MMM::UI
 {
+class IStatusMessageSink;
 class UIManager;
 
 /// @brief 顶部主菜单的一级菜单标识。

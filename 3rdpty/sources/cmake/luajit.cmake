@@ -32,7 +32,15 @@ endif()
 
 # 核心构建逻辑 - 统一为静态库 统一处理 GCC/Clang 族的编译标志 (MinGW & Unix)
 if(NOT MSVC OR CMAKE_CROSSCOMPILING)
-  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  if(MSVC)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set(LJ_G_FLAGS "TARGET_CFLAGS=/MTd /Z7 /Od -w")
+    elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+      set(LJ_G_FLAGS "TARGET_CFLAGS=/MT /Z7 /O2 -w")
+    else()
+      set(LJ_G_FLAGS "TARGET_CFLAGS=/MT /O2 -w")
+    endif()
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # 注意：这里直接写字符串，不要在里面加 \"
     set(LJ_G_FLAGS "XCFLAGS=-O0 -fPIC" "CCDEBUG=-g")
   elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
@@ -109,10 +117,8 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
 elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
   # --- Windows MinGW (包含 UCRT64/Clang64) 或 Linux -> Windows 交叉编译 ---
   set(LJ_LIB_NAME "libluajit.a")
-  if(MSVC)
-    set(LJ_LIB_NAME "lua51.lib") # clang-cl 目标期望这个名字
-  endif()
   set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  set(LJ_MAKE_TARGET "")
 
   set(MAKE_CMD make)
   if(MINGW)
@@ -123,7 +129,26 @@ elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
   set(CROSS_COMPILE_ARGS "")
   if(CMAKE_CROSSCOMPILING)
     set(CROSS_COMPILE_ARGS "HOST_CC=gcc" "TARGET_SYS=Windows")
-    if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    if(MSVC)
+      # LuaJIT 的 Makefile 负责构建可在 Linux 运行的 host 工具；目标对象必须通过 clang-cl 生成，并由
+      # llvm-lib 归档为 MSVC ABI 的 COFF 静态库。
+      set(LJ_CLANG_CL_WRAPPER
+          "${CMAKE_SOURCE_DIR}/scripts/ci/cross/clang-cl-gcc-compatible.sh")
+      set(LJ_LLVM_LIB_WRAPPER
+          "${CMAKE_SOURCE_DIR}/scripts/ci/cross/llvm-lib-ar-compatible.sh")
+      set(LJ_TARGET_FLAGS "${CMAKE_C_FLAGS}")
+      # MSVC 预编译阶段只需要静态库；目标可执行文件不能在 Linux 宿主运行， 也不应把 GCC 风格链接参数直接传给 lld-link。
+      set(LJ_MAKE_TARGET "libluajit.a")
+      list(
+        APPEND
+        CROSS_COMPILE_ARGS
+        "STATIC_CC=${LJ_CLANG_CL_WRAPPER}"
+        "DYNAMIC_CC=${LJ_CLANG_CL_WRAPPER}"
+        "TARGET_LD=${CMAKE_LINKER}"
+        "TARGET_AR=${LJ_LLVM_LIB_WRAPPER}"
+        "TARGET_STRIP=:"
+        "TARGET_FLAGS=${LJ_TARGET_FLAGS}")
+    elseif(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
       # clang64 预编译包必须使用当前 CMake 工具链的 clang 目标参数，不能退回 x86_64-w64-mingw32-gcc 前缀。
       set(LJ_TARGET_FLAGS "")
       if(CMAKE_C_COMPILER_TARGET)
@@ -163,7 +188,7 @@ elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
     BYPRODUCTS "${LJ_OUTPUT_LIB}"
     COMMAND ${LJ_SYNC_SOURCE_COMMAND}
     COMMAND ${MAKE_CMD} -j${HOST_CORES} BUILDMODE=static ${LJ_G_FLAGS}
-            ${CROSS_COMPILE_ARGS}
+            ${CROSS_COMPILE_ARGS} ${LJ_MAKE_TARGET}
     COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
     DEPENDS ${LJ_SOURCE_INPUTS}
     WORKING_DIRECTORY "${LJ_BUILD_SRC}"

@@ -2,6 +2,7 @@
 
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
+#include "common/ChartObjectKind.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "event/core/EventBus.h"
 #include <cstdint>
@@ -123,6 +124,21 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
+    /// @brief 在移动工具下绘制当前悬浮物件的独立音频试听按钮。
+    /// @param currentSnapshot 当前主画布渲染快照。
+    /// @param canvasScreenX 画布左上角屏幕横坐标。
+    /// @param canvasScreenY 画布左上角屏幕纵坐标。
+    /// @param targetWidth 画布宽度。
+    /// @param targetHeight 画布高度。
+    /// @param pointerX 指针相对画布左侧的像素坐标。
+    /// @param pointerY 指针相对画布顶部的像素坐标。
+    /// @return 指针位于试听按钮或物件到按钮的过渡热区时返回 true。
+    /// @warning UI 热路径：移动工具下每帧只扫描当前可见拾取盒并提交三个
+    /// ImGui 按钮；音频资源查找与加载仅在点击后发生。
+    bool renderObjectAudioPreviewControls(
+        const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+        float canvasScreenY, float targetWidth, float targetHeight,
+        float pointerX, float pointerY);
     /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
@@ -172,10 +188,52 @@ private:
     int m_hoverLayerIndex{ 0 };
     /// @brief 当前鼠标下可切换的悬浮候选层数量。
     int m_hoverLayerCount{ 0 };
+    /// @brief 当前悬浮物件试听按钮的跨帧锚点。
+    struct AudioPreviewOverlayState {
+        /// @brief 是否持有有效物件与屏幕边界。
+        bool valid{ false };
+        /// @brief 试听物件实体。
+        entt::entity entity{ entt::null };
+        /// @brief 试听物件所在 ECS 注册表。
+        Logic::ChartObjectKind objectKind{ Logic::ChartObjectKind::PlayerNote };
+        /// @brief 试听引用的项目音频资源 ID。
+        std::string audioResourceId;
+        /// @brief 只属于当前物件的 AudioManager 试听池标识。
+        std::string previewPoolKey;
+        /// @brief 物件自身音量倍率。
+        float volume{ 1.0F };
+        /// @brief 玩家 Polyline 子物件索引；负值表示物件本体或自动采样。
+        std::int32_t sampleBindingSubIndex{ -1 };
+        /// @brief 音量编辑弹窗是否保持打开，用于跨帧锁定当前物件。
+        bool volumeEditorOpen{ false };
+        /// @brief 当前锚定拾取盒左边界。
+        float left{ 0.0F };
+        /// @brief 当前锚定拾取盒上边界。
+        float top{ 0.0F };
+        /// @brief 当前锚定拾取盒右边界。
+        float right{ 0.0F };
+        /// @brief 当前锚定拾取盒下边界。
+        float bottom{ 0.0F };
+        /// @brief 当前试听控制面板左边界。
+        float controlsLeft{ 0.0F };
+        /// @brief 当前试听控制面板上边界。
+        float controlsTop{ 0.0F };
+        /// @brief 当前试听控制面板右边界。
+        float controlsRight{ 0.0F };
+        /// @brief 当前试听控制面板下边界。
+        float controlsBottom{ 0.0F };
+    };
+
+    /// @brief 允许指针从物件移动到按钮而不使按钮消失的试听覆盖层状态。
+    AudioPreviewOverlayState m_audioPreviewOverlay;
     /// @brief 上一次发送给逻辑线程的鼠标状态。
     LastMouseCommand m_lastMouseCommand;
     /// @brief 上一次发送给逻辑线程的悬浮实体。
     entt::entity m_lastHoveredEntity{ entt::null };
+    /// @brief 上一次悬停实体所在的独立 ECS 注册表。
+    Logic::ChartObjectKind m_lastHoveredObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
     /// @brief 上一次发送给逻辑线程的悬浮部位。
     uint8_t m_lastHoveredPart{ 0 };
     /// @brief 上一次发送给逻辑线程的悬浮子索引。
@@ -190,14 +248,10 @@ private:
     bool m_leftPressStartedOnEntity{ false };
     /// @brief 当前左键手势是否已经发生拖动。
     bool m_leftPressDragged{ false };
-    /// @brief 当前左键手势是否正在用 Move 工具拖动画布。
-    bool m_isCanvasPanning{ false };
-    /// @brief 拖动画布开始时的当前显示时间，单位秒。
-    double m_canvasPanStartTime{ 0.0 };
-    /// @brief 拖动画布开始时鼠标抓住的显示时间，单位秒。
-    double m_canvasPanAnchorTime{ 0.0 };
-    /// @brief 拖动画布开始时鼠标所在的本地 Y 坐标，单位像素。
-    float m_canvasPanAnchorMouseY{ 0.0f };
+    /// @brief 当前中键手势是否正在二维平移主画布。
+    bool m_isMiddleCanvasPanning{ false };
+    /// @brief 上一次中键平移输入的画布局部逻辑像素坐标。
+    glm::vec2 m_lastMiddlePanMousePosition{ 0.0F, 0.0F };
     /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。

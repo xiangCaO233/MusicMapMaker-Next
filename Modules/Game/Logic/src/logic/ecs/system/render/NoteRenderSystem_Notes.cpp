@@ -6,6 +6,7 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -123,6 +124,43 @@ static double getCarrierEndAnchorTime(const NoteComponent& note,
     return note.m_timestamp + note.m_duration;
 }
 
+/// @brief 在玩家轨道物件锚点上方绘制绑定音效标签。
+/// @warning
+/// 主画布热路径：只处理调用方已剔除的物件锚点，不得访问文件系统或分配堆内存。
+static void renderBoundSampleLabelAt(Batcher& batcher, const ScrollCache* cache,
+                                     double currentAbsY, float noteH,
+                                     const ::MMM::AudioSampleBinding& binding,
+                                     double timestamp, int32_t trackIndex,
+                                     int32_t trackCount, float judgmentLineY,
+                                     float leftX, float topY, float bottomY,
+                                     float singleTrackW, float renderScaleY,
+                                     float noteScaleY, glm::vec4 color)
+{
+    if ( binding.m_audioResourceId.empty() || trackIndex < 0 ||
+         trackIndex >= trackCount ) {
+        return;
+    }
+
+    const float screenY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            timestamp, currentAbsY, timestamp)) *
+                            renderScaleY;
+    if ( screenY + noteH * 0.5F < topY || screenY - noteH * 0.5F > bottomY ) {
+        return;
+    }
+
+    renderAudioObjectLabel(
+        batcher,
+        binding.m_audioResourceId,
+        binding.m_volume,
+        leftX + static_cast<float>(trackIndex) * singleTrackW,
+        screenY - noteH * 0.5F,
+        singleTrackW,
+        noteScaleY,
+        color,
+        batcher.snapshot->snapshotSysTime);
+}
+
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
@@ -176,21 +214,27 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 3. 基础层渲染
-    NoteRenderSystem::renderNoteBaseLayer(registry,
-                                          snapshot,
-                                          ctx,
-                                          config,
-                                          noteEntities,
-                                          batcher,
-                                          (float)currentTime,
-                                          judgmentLineY,
-                                          leftX,
-                                          rightX,
-                                          topY,
-                                          bottomY,
-                                          singleTrackW,
-                                          renderScaleY,
-                                          shouldGenerateHitboxes);
+    const bool generatePolylineHitboxes =
+        shouldGenerateHitboxes && config.settings.enablePolylineEditing;
+    NoteRenderSystem::renderNoteBaseLayer(
+        registry,
+        snapshot,
+        ctx,
+        config,
+        noteEntities,
+        batcher,
+        (float)currentTime,
+        judgmentLineY,
+        leftX,
+        rightX,
+        topY,
+        bottomY,
+        singleTrackW,
+        renderScaleY,
+        trackCount,
+        generatePolylineHitboxes,
+        config.visual.showBoundSampleLabels &&
+            SessionUtils::isMainCanvasCameraId(cameraId));
 
     // 4. 发光层渲染
     NoteRenderSystem::renderNoteGlowLayer(registry,
@@ -208,7 +252,7 @@ void NoteRenderSystem::renderNotes(
                                           renderScaleY);
 
     // 5. 笔刷预览渲染
-    if ( snapshot->brush.isActive ) {
+    if ( snapshot->brush.isActive && !snapshot->brush.createsAudioSample ) {
         NoteRenderSystem::renderBrushPreview(snapshot,
                                              ctx,
                                              config,
@@ -334,7 +378,7 @@ static void forEachNoteVisibilitySampleTime(const NoteComponent& note,
     }
 
     const auto& segments = cache->getSegments();
-    auto        it       = std::lower_bound(segments.begin(),
+    auto it = std::lower_bound(segments.begin(),
                                segments.end(),
                                minTime,
                                [](const ScrollSegment& segment, double value) {
@@ -360,7 +404,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto         it      = std::upper_bound(segments.begin(),
+    auto it = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -717,6 +761,7 @@ void NoteRenderSystem::generateNoteHitboxes(
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
+        if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
@@ -804,7 +849,8 @@ void NoteRenderSystem::generateNoteHitboxes(
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
-        float       screenY =
+        if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
+        float screenY =
             judgmentLineY -
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
@@ -897,7 +943,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
     const std::vector<entt::entity>& noteEntities, Batcher& batcher,
     float currentTime, float judgmentLineY, float leftX, float rightX,
     float topY, float bottomY, float singleTrackW, float renderScaleY,
-    bool generateHitboxes)
+    int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels)
 {
     std::vector<entt::entity> visibleEntities;
     for ( auto entity : noteEntities ) {
@@ -960,7 +1006,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX = leftX + note.m_trackIndex * singleTrackW;
+        float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -976,8 +1022,10 @@ void NoteRenderSystem::renderNoteBaseLayer(
         glm::vec4 curColorArrow =
             resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
-        bool isFullErasing = snapshot->erasingEntities.count(entity) &&
-                             (snapshot->erasingSubIndex == -1);
+        bool isFullErasing =
+            snapshot->erasingObjectKind == ChartObjectKind::PlayerNote &&
+            snapshot->erasingEntities.count(entity) &&
+            snapshot->erasingSubIndex == -1;
         if ( isFullErasing ) {
             curColorNote     = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorHead     = { 1.0f, 0.2f, 0.2f, 1.0f };
@@ -1060,6 +1108,63 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              entity,
                                              generateHitboxes);
     }
+
+    if ( showBoundSampleLabels ) {
+        const auto labelColor = audioObjectLabelColor();
+        for ( auto it = visibleEntities.rbegin(); it != visibleEntities.rend();
+              ++it ) {
+            const auto& note = registry.get<const NoteComponent>(
+                static_cast<entt::entity>(*it));
+            if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
+                if ( note.m_sampleBinding ) {
+                    renderBoundSampleLabelAt(batcher,
+                                             ctx.cache,
+                                             ctx.currentAbsY,
+                                             ctx.noteH,
+                                             *note.m_sampleBinding,
+                                             note.m_timestamp,
+                                             note.m_trackIndex,
+                                             trackCount,
+                                             judgmentLineY,
+                                             leftX,
+                                             topY,
+                                             bottomY,
+                                             singleTrackW,
+                                             renderScaleY,
+                                             config.visual.noteScaleY,
+                                             labelColor);
+                }
+                continue;
+            }
+
+            for ( std::size_t subIndex = 0; subIndex < note.m_subNotes.size();
+                  ++subIndex ) {
+                const auto& subNote = note.m_subNotes[subIndex];
+                const auto* binding = subNote.sampleBinding
+                                          ? &*subNote.sampleBinding
+                                      : subIndex == 0 && note.m_sampleBinding
+                                          ? &*note.m_sampleBinding
+                                          : nullptr;
+                if ( !binding ) continue;
+                renderBoundSampleLabelAt(batcher,
+                                         ctx.cache,
+                                         ctx.currentAbsY,
+                                         ctx.noteH,
+                                         *binding,
+                                         subNote.timestamp,
+                                         subNote.trackIndex,
+                                         trackCount,
+                                         judgmentLineY,
+                                         leftX,
+                                         topY,
+                                         bottomY,
+                                         singleTrackW,
+                                         renderScaleY,
+                                         config.visual.noteScaleY,
+                                         labelColor);
+            }
+        }
+    }
     batcher.flush();
 }
 
@@ -1100,11 +1205,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
+                                 note.m_timestamp + note.m_duration,
+                                 ctx.cache->getAbsY(note.m_timestamp),
+                                 note.m_timestamp)) *
+                             renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1450,9 +1555,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                              (singleTrackW - ctx.noteW) * 0.5f;
-                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h = std::abs(y0 - y1) + ctx.noteH;
+                               (singleTrackW - ctx.noteW) * 0.5f;
+                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h  = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1491,9 +1596,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                              (singleTrackW - w) * 0.5f;
-                    float y = std::min(y0, y1) - h0 * 0.5f;
-                    float h = std::abs(y0 - y1) + h0;
+                               (singleTrackW - w) * 0.5f;
+                    float y  = std::min(y0, y1) - h0 * 0.5f;
+                    float h  = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1532,7 +1637,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                      (singleTrackW - verticalBodySize.x) * 0.5f;
+                       (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1601,7 +1706,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                      singleTrackW * 0.5f;
+                       singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;

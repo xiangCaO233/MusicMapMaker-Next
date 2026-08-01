@@ -7,6 +7,7 @@
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -155,10 +156,10 @@ bool hasUnsupportedImdBaseMetadata(const BaseMapMeta& meta)
 {
     return !meta.title.empty() || !meta.title_unicode.empty() ||
            !meta.artist.empty() || !meta.artist_unicode.empty() ||
-           !meta.author.empty() || !meta.main_audio_path.empty() ||
-           !meta.main_cover_path.empty() || !meta.cover_path.empty() ||
-           meta.video_starttime != 0 || meta.bgxoffset != 0 ||
-           meta.bgyoffset != 0;
+           !meta.author.empty() || !meta.song_file_hint.empty() ||
+           !meta.main_audio_path.empty() || !meta.main_cover_path.empty() ||
+           !meta.cover_path.empty() || meta.video_starttime != 0 ||
+           meta.bgxoffset != 0 || meta.bgyoffset != 0;
 }
 
 /// @brief 判断谱面是否包含 RM/IMD 无法保存的谱面扩展元数据。
@@ -413,9 +414,10 @@ std::string MenuUtil::getSaveAsPickerDefaultPath()
 
 /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
 /// @param path 目标导出路径。
+/// @param malodyExportMode MC 导出时显式选择的模式；为空则读取谱面元数据。
 /// @return 需要展示的警告消息列表。
 std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
-    const std::string& path)
+    const std::string& path, std::optional<MMM::MalodyMode> malodyExportMode)
 {
     std::vector<std::string> warnings;
     const std::string        ext = lowerExtension(path);
@@ -495,7 +497,10 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
                 "轨道和格式本身支持的参数。");
         }
     } else if ( ext == ".mc" ) {
-        const auto mode = resolveMalodyModeForCompatibilityWarning(beatMap);
+        const auto mode =
+            malodyExportMode
+                ? std::optional<int>(malodyModeValue(*malodyExportMode))
+                : resolveMalodyModeForCompatibilityWarning(beatMap);
         if ( mode && *mode == 0 && (hasFlick || hasPolyline) ) {
             warnings.push_back(
                 "Malody key(0) 模式无法存储 Flick/折线；继续保存会将 "
@@ -506,6 +511,25 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
     }
 
     return warnings;
+}
+
+/// @brief 获取当前谱面的 Malody 导出模式，缺省或无效时使用 Slide。
+/// @return 当前可用于导出选项的 Malody 模式。
+MMM::MalodyMode MenuUtil::currentMalodyExportMode()
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session || !session->getContext().currentBeatmap ) {
+        return MalodyMode::Slide;
+    }
+
+    const auto mode = resolveMalodyModeForCompatibilityWarning(
+        *session->getContext().currentBeatmap);
+    if ( mode && *mode == malodyModeValue(MalodyMode::Key) ) {
+        return MalodyMode::Key;
+    }
+    return MalodyMode::Slide;
 }
 
 /// @brief 判断当前 MC 导出目标是否需要显示上架 mode_ext 选项。

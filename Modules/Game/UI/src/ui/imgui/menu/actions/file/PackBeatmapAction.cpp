@@ -1,3 +1,4 @@
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
@@ -5,12 +6,14 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -505,8 +508,23 @@ struct PackageBeatmapInfo {
     /// @brief 谱面引用的资源路径列表。
     std::vector<std::string> dependencyRelativePaths;
 
+    /// @brief 无法解析为项目资源的谱面音频引用。
+    std::vector<std::string> unresolvedAudioReferences;
+
+    /// @brief 谱面文件是否读取失败。
+    bool loadFailed{ false };
+
     /// @brief 是否包含 Flick 或折线。
     bool hasStoreModeExtEligibleElements{ false };
+};
+
+/// @brief 等待按单谱面批量解析的音频引用。
+struct PackageAudioReference {
+    /// @brief 谱面中保存的音频资源 ID 或路径。
+    std::string m_audioReference;
+
+    /// @brief 缺失依赖诊断使用的引用字段名称。
+    std::string m_fieldLabel;
 };
 
 /// @brief 将单个 metadata 资源路径解析并追加到依赖列表。
@@ -528,43 +546,19 @@ void appendPackageMetadataDependency(std::vector<std::string>&    dependencies,
         dependencies, makePackageProjectRelativeUtf8(projectRoot, resolved));
 }
 
-/// @brief 查找项目中指定谱面条目。
-/// @param project 项目。
-/// @param beatmapRelativePath UTF-8 项目相对谱面路径。
-/// @return 找到时返回谱面条目，否则返回空。
-const Project::BeatmapEntry* findPackageBeatmapEntry(
-    const Project& project, const std::string& beatmapRelativePath)
+/// @brief 暂存一个待批量解析的谱面音频资源引用。
+/// @param references 接收引用及诊断字段的列表。
+/// @param audioReference 谱面保存的音频资源 ID 或路径。
+/// @param fieldLabel 引用字段的人类可读名称。
+void appendPackageAudioReference(std::vector<PackageAudioReference>& references,
+                                 const std::string& audioReference,
+                                 std::string_view   fieldLabel)
 {
-    const auto normalizedBeatmapPath =
-        normalizePackageRelativeUtf8(beatmapRelativePath);
-    const auto it = std::find_if(
-        project.m_beatmaps.begin(),
-        project.m_beatmaps.end(),
-        [&](const Project::BeatmapEntry& entry) {
-            return normalizePackageRelativeUtf8(entry.m_filePath) ==
-                   normalizedBeatmapPath;
-        });
-    return it == project.m_beatmaps.end() ? nullptr : &(*it);
-}
-
-/// @brief 追加项目谱面条目绑定的主音轨资源路径。
-/// @param dependencies 依赖路径列表。
-/// @param project 项目。
-/// @param entry 项目谱面条目。
-void appendPackageBeatmapEntryAudioDependency(
-    std::vector<std::string>& dependencies, const Project& project,
-    const Project::BeatmapEntry& entry)
-{
-    if ( entry.m_audioTrackId.empty() ) return;
-    const auto audioIt =
-        std::find_if(project.m_audioResources.begin(),
-                     project.m_audioResources.end(),
-                     [&](const AudioResource& resource) {
-                         return resource.m_id == entry.m_audioTrackId;
-                     });
-    if ( audioIt == project.m_audioResources.end() ) return;
-    appendUniquePackageDependency(
-        dependencies, normalizePackageRelativeUtf8(audioIt->m_path));
+    if ( audioReference.empty() ) return;
+    references.push_back(PackageAudioReference{
+        .m_audioReference = audioReference,
+        .m_fieldLabel     = std::string(fieldLabel),
+    });
 }
 
 /// @brief 收集一个谱面打包时需要的资源和元素信息。
@@ -579,16 +573,14 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         normalizePackageRelativeUtf8(beatmapRelativePath);
     if ( normalizedBeatmapPath.empty() ) return result;
 
-    if ( const auto* entry =
-             findPackageBeatmapEntry(project, normalizedBeatmapPath) ) {
-        appendPackageBeatmapEntryAudioDependency(
-            result.dependencyRelativePaths, project, *entry);
-    }
-
     const auto relativePath = Config::utf8ToPath(normalizedBeatmapPath);
     const auto mapPath =
         resolvePackageProjectPath(project.m_projectRoot, relativePath);
     auto beatMap = BeatMap::loadFromFile(mapPath);
+    if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
+        result.loadFailed = true;
+        return result;
+    }
 
     const auto mapDirectory      = mapPath.parent_path();
     auto       mapExtension      = Config::pathToUtf8(mapPath.extension());
@@ -600,11 +592,61 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         !beatMap.m_noteData.flicks.empty() ||
         !beatMap.m_noteData.polylines.empty();
 
-    appendPackageMetadataDependency(result.dependencyRelativePaths,
-                                    project.m_projectRoot,
-                                    mapDirectory,
-                                    meta.main_audio_path,
-                                    preferProjectRoot);
+    std::vector<PackageAudioReference> audioReferences;
+    audioReferences.reserve(
+        beatMap.m_noteData.notes.size() + beatMap.m_noteData.holds.size() +
+        beatMap.m_noteData.flicks.size() + beatMap.m_noteData.polylines.size() +
+        beatMap.m_audioSamples.size());
+
+    /// @brief 收集一个玩家物件绑定的采样资源。
+    auto appendNoteBinding = [&](const Note& note) {
+        const auto binding = note.getSampleBinding();
+        if ( !binding ) return;
+        appendPackageAudioReference(
+            audioReferences, binding->m_audioResourceId, "Note sample");
+    };
+    for ( const auto& note : beatMap.m_noteData.notes ) {
+        appendNoteBinding(note);
+    }
+    for ( const auto& hold : beatMap.m_noteData.holds ) {
+        appendNoteBinding(hold);
+    }
+    for ( const auto& flick : beatMap.m_noteData.flicks ) {
+        appendNoteBinding(flick);
+    }
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        appendNoteBinding(polyline);
+    }
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        appendPackageAudioReference(
+            audioReferences, sample.m_audioResourceId, "audio_samples");
+    }
+
+    std::vector<std::string_view> audioReferenceViews;
+    audioReferenceViews.reserve(audioReferences.size());
+    for ( const auto& reference : audioReferences ) {
+        audioReferenceViews.push_back(reference.m_audioReference);
+    }
+    const auto resolvedResources =
+        Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project,
+            Config::utf8ToPath(normalizedBeatmapPath),
+            audioReferenceViews);
+    for ( std::size_t index = 0; index < audioReferences.size(); ++index ) {
+        const auto* resource = resolvedResources[index];
+        if ( resource && !resource->m_path.empty() ) {
+            appendUniquePackageDependency(
+                result.dependencyRelativePaths,
+                normalizePackageRelativeUtf8(resource->m_path));
+            continue;
+        }
+
+        const auto& reference = audioReferences[index];
+        appendUniquePackageDependency(
+            result.unresolvedAudioReferences,
+            reference.m_fieldLabel + ": " + reference.m_audioReference);
+    }
+
     appendPackageMetadataDependency(result.dependencyRelativePaths,
                                     project.m_projectRoot,
                                     mapDirectory,
@@ -661,6 +703,13 @@ private:
     /// @brief 渲染打包文件复选列表窗口。
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFileSelectionWindow(float dpiScale);
+
+    /// @brief 继续执行打包元数据补充或输出路径选择流程。
+    void continuePackageOutputFlow();
+
+    /// @brief 渲染 MCZ Key 模式自动转换兼容性警告。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageCompatibilityWarningPopup(float dpiScale);
 
     /// @brief 为选中的谱面准备打包转换前的元数据补充项。
     /// @param selectedRelativePaths 当前已选的项目相对路径列表。
@@ -757,6 +806,7 @@ void PackBeatmapAction::renderDeferred(MainMenuContext& context)
     m_statusMessageSink = &context.statusMessageSink;
     renderPackageFormatPickerPopup(context.dpiScale);
     renderPackageFileSelectionWindow(context.dpiScale);
+    renderPackageCompatibilityWarningPopup(context.dpiScale);
     renderPackageBeatmapMetadataWindow(context.dpiScale);
     renderPackageOutputFileDialog(context.dpiScale);
     renderPackageOverwriteWarningPopup(context.dpiScale);
@@ -807,10 +857,15 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
             shouldShowLegacyImdPackageOption(m_package.selectedFileType) &&
             m_package.includeLegacyImdBeatmaps,
         .addStoreModeExtForMalodyExport =
+            m_package.selectedMalodyMode == MalodyMode::Slide &&
             hasSelectedPackageStoreModeExtCandidates() &&
             Config::AppConfig::instance()
                 .getEditorSettings()
                 .autoAddStoreModeExtForMalodyExport,
+        .malodyExportMode =
+            m_package.selectedFileType == PackageFileType::Mcz
+                ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
+                : std::nullopt,
         .metadataOverrides = m_package.pendingMetadataOverrides,
     });
     m_package.pendingRelativePaths.clear();
@@ -933,6 +988,23 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 selectedCount,
                 static_cast<int>(m_package.candidateFiles.size()));
 
+            if ( m_package.selectedFileType == PackageFileType::Mcz ) {
+                ImGui::TextUnformatted("打包模式：");
+                ImGui::SameLine();
+                const bool selectedKey =
+                    m_package.selectedMalodyMode == MalodyMode::Key;
+                if ( ::MMM::UI::FeedbackRadioButton("Key 模式", selectedKey) ) {
+                    m_package.selectedMalodyMode = MalodyMode::Key;
+                }
+                ImGui::SameLine();
+                const bool selectedSlide =
+                    m_package.selectedMalodyMode == MalodyMode::Slide;
+                if ( ::MMM::UI::FeedbackRadioButton("Slide 模式",
+                                                    selectedSlide) ) {
+                    m_package.selectedMalodyMode = MalodyMode::Slide;
+                }
+            }
+
             const ImVec2 selectButtonSize(88.0f * dpiScale, 0.0f);
             if ( ::MMM::UI::FeedbackButton("全选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
@@ -986,7 +1058,8 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 hasPackageStoreModeExtCandidates();
             const bool hasSelectedStoreModeExtCandidates =
                 hasSelectedPackageStoreModeExtCandidates();
-            if ( hasAnyStoreModeExtCandidates ) {
+            if ( hasAnyStoreModeExtCandidates &&
+                 m_package.selectedMalodyMode == MalodyMode::Slide ) {
                 constexpr const char* storeModeExtLabel =
                     "自动添加上架皮肤 mode_ext";
                 sameLineIfItemFits(getCheckboxDisplayWidth(storeModeExtLabel));
@@ -1138,9 +1211,10 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
             if ( ::MMM::UI::FeedbackButton("打包到...", footerButtonSize) ) {
                 m_package.pendingRelativePaths =
                     collectSelectedPackageRelativePaths();
-                if ( preparePackageBeatmapMetadataEdits(
-                         m_package.pendingRelativePaths) ) {
-                    m_package.showBeatmapMetadataWindow = true;
+                if ( m_package.selectedFileType == PackageFileType::Mcz &&
+                     m_package.selectedMalodyMode == MalodyMode::Key &&
+                     hasSelectedPackageStoreModeExtCandidates() ) {
+                    m_package.showMalodyCompatibilityWarning = true;
                 } else {
                     requestOutputPicker = true;
                 }
@@ -1163,7 +1237,75 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
     }
 
     if ( requestOutputPicker ) {
-        openPackageOutputFilePicker();
+        continuePackageOutputFlow();
+    }
+}
+
+/// @brief 继续执行打包元数据补充或输出路径选择流程。
+void PackBeatmapAction::continuePackageOutputFlow()
+{
+    if ( preparePackageBeatmapMetadataEdits(m_package.pendingRelativePaths) ) {
+        m_package.showBeatmapMetadataWindow = true;
+        return;
+    }
+    openPackageOutputFilePicker();
+}
+
+/// @brief 渲染 MCZ Key 模式自动转换兼容性警告。
+/// @param dpiScale 当前窗口内容缩放。
+void PackBeatmapAction::renderPackageCompatibilityWarningPopup(float dpiScale)
+{
+    constexpr const char* popupId =
+        "谱面兼容性警告###PackageMalodyCompatibilityWarningModal";
+    if ( m_package.showMalodyCompatibilityWarning ) {
+        ::MMM::UI::FeedbackOpenPopup(popupId);
+        m_package.showMalodyCompatibilityWarning = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    bool continuePacking = false;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextUnformatted("以 Key 模式打包前需要确认自动转换：");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            MenuUtil::drawWrappedBulletText(
+                "所选谱面包含 Flick 或 Polyline，而 Malody Key(0) "
+                "模式无法直接存储这些物件。");
+            MenuUtil::drawWrappedBulletText(
+                "继续后会将 Flick 作为普通 Note 写出，忽略 Polyline 中的 "
+                "subFlick，并将 subHold 作为普通 Hold 写出。");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            const float  buttonRowWidth =
+                buttonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            centerNextItem(buttonRowWidth);
+            if ( ::MMM::UI::FeedbackButton("继续打包", buttonSize) ) {
+                continuePacking = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           buttonSize) ) {
+                m_package.pendingRelativePaths.clear();
+                m_package.pendingMetadataOverrides.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if ( continuePacking ) {
+        continuePackageOutputFlow();
     }
 }
 
@@ -1493,11 +1635,17 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             std::move(beatmapInfo.dependencyRelativePaths);
         file.hasStoreModeExtEligibleElements =
             beatmapInfo.hasStoreModeExtEligibleElements;
-        file.missingDependencyRelativePaths.clear();
+        file.missingDependencyRelativePaths =
+            std::move(beatmapInfo.unresolvedAudioReferences);
+        if ( beatmapInfo.loadFailed ) {
+            file.missingDependencyRelativePaths.push_back(
+                "谱面文件读取失败，无法检查依赖");
+        }
         for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
             if ( candidateIndexByPath.find(dependencyPath) ==
                  candidateIndexByPath.end() ) {
-                file.missingDependencyRelativePaths.push_back(dependencyPath);
+                appendUniquePackageDependency(
+                    file.missingDependencyRelativePaths, dependencyPath);
             }
         }
     }
@@ -1693,11 +1841,13 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.pendingRelativePaths.clear();
     m_package.pendingMetadataOverrides.clear();
     m_package.beatmapMetadataEdits.clear();
-    m_package.showFileSelectionWindow   = false;
-    m_package.openFileSelectionWindow   = false;
-    m_package.showBeatmapMetadataWindow = false;
-    m_package.formatPickerOpen          = false;
-    m_package.showFormatPicker          = true;
+    m_package.showFileSelectionWindow        = false;
+    m_package.openFileSelectionWindow        = false;
+    m_package.showBeatmapMetadataWindow      = false;
+    m_package.showMalodyCompatibilityWarning = false;
+    m_package.selectedMalodyMode             = MalodyMode::Slide;
+    m_package.formatPickerOpen               = false;
+    m_package.showFormatPicker               = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;
     }

@@ -58,10 +58,17 @@ set(CURL_ZSTD
     CACHE BOOL "" FORCE)
 
 if(WIN32)
+  set(CURL_USE_OPENSSL
+      OFF
+      CACHE BOOL "" FORCE)
   set(CURL_USE_SCHANNEL
       ON
       CACHE BOOL "" FORCE)
 elseif(APPLE)
+  # macOS 预编译包固定使用系统 Secure Transport，禁止拾取 Homebrew OpenSSL。
+  set(CURL_USE_OPENSSL
+      OFF
+      CACHE BOOL "" FORCE)
   set(CURL_USE_SECTRANSP
       ON
       CACHE BOOL "" FORCE)
@@ -90,8 +97,9 @@ endif()
 
 if(APPLE)
   target_link_libraries(
-    3rd_curl INTERFACE "-framework CoreFoundation"
-                       "-framework SystemConfiguration" "-framework Security")
+    3rd_curl
+    INTERFACE "-framework CoreFoundation" "-framework SystemConfiguration"
+              "-framework Security" "-framework CoreServices")
 endif()
 
 if(UNIX AND NOT APPLE)

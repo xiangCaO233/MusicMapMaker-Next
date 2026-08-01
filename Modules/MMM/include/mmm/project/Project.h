@@ -39,11 +39,30 @@ public:
         /// @brief 谱面定义文件路径 (相对于项目根目录)
         std::string m_filePath;
 
-        /// @brief 该谱面关联的主音轨 ID
+        /// @brief 旧项目记录的单主音轨 ID，仅供加载迁移定位资源。
         std::string m_audioTrackId;
 
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE(BeatmapEntry, m_name, m_filePath,
-                                       m_audioTrackId)
+        /// @brief 序列化当前谱面入口，不再写出旧版单主音轨字段。
+        /// @param json 输出 JSON 对象。
+        /// @param entry 待序列化的谱面入口。
+        friend void to_json(nlohmann::json& json, const BeatmapEntry& entry)
+        {
+            json = nlohmann::json{ { "m_name", entry.m_name },
+                                   { "m_filePath", entry.m_filePath } };
+        }
+
+        /// @brief 反序列化谱面入口，并读取旧版单主音轨迁移字段。
+        /// @param json 输入 JSON 对象。
+        /// @param entry 接收反序列化结果的谱面入口。
+        friend void from_json(const nlohmann::json& json, BeatmapEntry& entry)
+        {
+            entry = BeatmapEntry{};
+            if ( !json.is_object() ) return;
+
+            entry.m_name         = json.value("m_name", std::string{});
+            entry.m_filePath     = json.value("m_filePath", std::string{});
+            entry.m_audioTrackId = json.value("m_audioTrackId", std::string{});
+        }
     };
 
     // --- 数据成员 (参与 JSON 序列化) ---

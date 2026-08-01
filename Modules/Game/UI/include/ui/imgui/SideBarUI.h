@@ -1,39 +1,16 @@
 #pragma once
 
-#include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "ui/IUIView.h"
-#include <algorithm>
-#include <charconv>
-#include <cmath>
 #include <memory>
 #include <string_view>
-#include <system_error>
 #include <unordered_map>
 #include <vector>
 
 namespace MMM::UI
 {
-
-/// @brief 无异常解析侧边栏布局浮点配置。
-/// @param value 配置字符串。
-/// @param fallback 解析失败时的默认值。
-/// @return 解析成功的有限浮点数或默认值。
-static float parseSidebarLayoutFloat(std::string_view value, float fallback)
-{
-    if ( value.empty() ) return fallback;
-
-    float      parsed = fallback;
-    const auto result =
-        std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if ( result.ec == std::errc{} && result.ptr != value.data() &&
-         std::isfinite(parsed) && parsed > 0.0f ) {
-        return parsed;
-    }
-    return fallback;
-}
 
 enum class SideBarTab {
     None,             // 无选中
@@ -123,46 +100,7 @@ class SideBarUI : virtual public IUIView
 {
 public:
     /// @brief 获取侧边栏所需的动态宽度（根据当前语言的文本长度测量）
-    static float GetSidebarWidth(float dpiScale)
-    {
-        Config::SkinManager& skinCfg = Config::SkinManager::instance();
-        std::string sidebarBaseWStr = skinCfg.getLayoutConfig("side_bar.width");
-        float sidebarBaseW = parseSidebarLayoutFloat(sidebarBaseWStr, 32.0f);
-
-        float iconAreaW = std::floor(sidebarBaseW * dpiScale);
-        if ( !Config::AppConfig::instance()
-                  .getEditorSettings()
-                  .showManagerLabels ) {
-            return iconAreaW;
-        }
-
-        float   maxLabelWidth = 0.0f;
-        ImFont* menuFont      = skinCfg.getFont("menu");
-        if ( menuFont && ImGui::GetCurrentContext() ) {
-            ImGui::PushFont(menuFont, menuFont->LegacySize);
-            std::vector<SideBarTab> tabs = { SideBarTab::Search,
-                                             SideBarTab::FileExplorer,
-                                             SideBarTab::AudioExplorer,
-                                             SideBarTab::BeatMapExplorer,
-                                             SideBarTab::Settings };
-            for ( auto tab : tabs ) {
-                std::string label = TabToShortLabel(tab);
-                if ( !label.empty() )
-                    maxLabelWidth = std::max(
-                        maxLabelWidth, ImGui::CalcTextSize(label.c_str()).x);
-            }
-            ImGui::PopFont();
-        }
-
-        // 容错：如果测量失败（可能由于 Context
-        // 状态或字体未就绪），给一个合理的默认值
-        if ( maxLabelWidth < 1.0f ) {
-            maxLabelWidth = std::floor(40.0f * dpiScale);
-        }
-
-        float labelPadding = std::floor(12.0f * dpiScale);
-        return std::floor(std::max(iconAreaW, maxLabelWidth + labelPadding));
-    }
+    static float GetSidebarWidth(float dpiScale);
 
     SideBarUI(const std::string& name);
     SideBarUI(SideBarUI&&)                 = delete;

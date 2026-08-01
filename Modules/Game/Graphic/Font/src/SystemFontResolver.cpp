@@ -521,6 +521,30 @@ std::optional<SystemFontFace> resolveCoreTextFont(CTFontRef font)
     return SystemFontFace{ filePath, *faceIndex, std::move(familyName) };
 }
 
+/// @brief 解析可由 FreeType 读取的 macOS 中文界面字体。
+/// @param preferredFont CoreText 当前首选界面字体。
+/// @return 可用于 ImGui 合并的中文字体；系统字体均不可读时返回空。
+std::optional<SystemFontFace> resolveMacOSChineseFallback(
+    CTFontRef preferredFont)
+{
+    if ( preferredFont ) {
+        const CFStringRef               chineseProbe = CFSTR("中文");
+        UniqueCoreFoundation<CTFontRef> coreTextFallback(CTFontCreateForString(
+            preferredFont,
+            chineseProbe,
+            CFRangeMake(0, CFStringGetLength(chineseProbe))));
+        if ( auto resolved = resolveCoreTextFont(coreTextFallback.get()) ) {
+            return resolved;
+        }
+    }
+
+    // 新版 macOS 可能把 CoreText 中文回退解析到受保护的 PingFangUI.ttc；
+    // FreeType 无法打开其中的具体 face，因此退回到系统自带的可读简体中文字体。
+    UniqueCoreFoundation<CTFontRef> readableFallback(
+        CTFontCreateWithName(CFSTR("Hiragino Sans GB"), 0.0, nullptr));
+    return resolveCoreTextFont(readableFallback.get());
+}
+
 #else
 
 /// @brief 释放 Fontconfig 配置。
@@ -652,15 +676,7 @@ std::vector<SystemFontFace> resolvePreferredSystemFonts()
     UniqueCoreFoundation<CTFontRef> preferredFont(
         CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 0.0, nullptr));
     appendUniqueFont(fonts, resolveCoreTextFont(preferredFont.get()));
-
-    if ( preferredFont ) {
-        const CFStringRef               chineseProbe = CFSTR("中文");
-        UniqueCoreFoundation<CTFontRef> chineseFont(CTFontCreateForString(
-            preferredFont.get(),
-            chineseProbe,
-            CFRangeMake(0, CFStringGetLength(chineseProbe))));
-        appendUniqueFont(fonts, resolveCoreTextFont(chineseFont.get()));
-    }
+    appendUniqueFont(fonts, resolveMacOSChineseFallback(preferredFont.get()));
 #else
     UniqueFontConfig config(FcInitLoadConfigAndFonts());
     if ( config ) {

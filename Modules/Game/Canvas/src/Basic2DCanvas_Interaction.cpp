@@ -1,6 +1,8 @@
-#include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+
+#include "audio/AudioManager.h"
 #include "canvas/TimeFormatUtils.h"
+#include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -12,13 +14,16 @@
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/CanvasCamera.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -28,7 +33,9 @@
 #include <filesystem>
 #include <iterator>
 #include <limits>
+#include <string>
 #include <system_error>
+#include <utility>
 
 namespace MMM::Canvas
 {
@@ -42,6 +49,64 @@ constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
 
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
+
+/// @brief 计算物件拖拽靠近单轴视口边缘时的内容平移量。
+/// @param coordinate 指针在该轴上的局部坐标。
+/// @param extent 视口在该轴上的尺寸。
+/// @param deltaTime 当前 UI 帧间隔。
+/// @param sensitivity 用户配置的边缘滚动灵敏度。
+/// @return 内容应在本帧平移的逻辑像素；靠近起始边缘时为正。
+/// @warning UI 热路径：物件拖动期间每帧调用，只做常量数值运算。
+float objectDragAutoPanAxisDelta(float coordinate, float extent,
+                                 float deltaTime, float sensitivity)
+{
+    if ( !std::isfinite(coordinate) || !std::isfinite(extent) ||
+         extent <= 1.0F || !std::isfinite(sensitivity) ||
+         sensitivity <= 0.0F ) {
+        return 0.0F;
+    }
+
+    const float margin      = std::clamp(extent * 0.08F, 24.0F, 64.0F);
+    float       penetration = 0.0F;
+    float       direction   = 0.0F;
+    if ( coordinate < margin ) {
+        penetration = margin - coordinate;
+        direction   = 1.0F;
+    } else if ( coordinate > extent - margin ) {
+        penetration = coordinate - (extent - margin);
+        direction   = -1.0F;
+    }
+    if ( penetration <= 0.0F ) return 0.0F;
+
+    const float frameSeconds = std::clamp(
+        std::isfinite(deltaTime) && deltaTime > 0.0F ? deltaTime : 1.0F / 60.0F,
+        1.0F / 240.0F,
+        1.0F / 15.0F);
+    const float     ramp = std::clamp(penetration / margin, 0.0F, 2.0F);
+    constexpr float PIXELS_PER_SECOND = 900.0F;
+    return direction * PIXELS_PER_SECOND * ramp * ramp * sensitivity *
+           frameSeconds;
+}
+
+/// @brief 计算左键物件拖拽的二维边缘自动平移量。
+/// @param mousePos 指针相对画布的位置。
+/// @param viewportWidth 画布宽度。
+/// @param viewportHeight 画布高度。
+/// @param deltaTime 当前 UI 帧间隔。
+/// @param sensitivity 用户配置的边缘滚动灵敏度。
+/// @return 直接传给 CmdPanCanvas 的二维内容位移。
+/// @warning UI 热路径：物件拖动期间每帧调用，不分配内存。
+glm::vec2 objectDragAutoPanDelta(glm::vec2 mousePos, float viewportWidth,
+                                 float viewportHeight, float deltaTime,
+                                 float sensitivity)
+{
+    return {
+        objectDragAutoPanAxisDelta(
+            mousePos.x, viewportWidth, deltaTime, sensitivity),
+        objectDragAutoPanAxisDelta(
+            mousePos.y, viewportHeight, deltaTime, sensitivity),
+    };
+}
 
 /// @brief 从渲染快照实例取得实际文字内容边界。
 /// @param instance 组件实例快照。
@@ -307,187 +372,6 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
            extension == ".osz" || extension == ".mpk";
 }
 
-/// @brief 用于主画布拖动吸附的 BPM 网格区间。
-struct BpmSnapSpan {
-    /// @brief BPM 段起始时间，单位秒。
-    double time{ 0.0 };
-
-    /// @brief 下一个 BPM 段起始时间，单位秒。
-    double nextTime{ std::numeric_limits<double>::infinity() };
-
-    /// @brief BPM 值。
-    double bpm{ 120.0 };
-};
-
-/// @brief 规整用于分拍吸附的 BPM 值。
-/// @param bpm 原始 BPM。
-/// @param fallbackBpm 快照回退 BPM。
-/// @return 可用于计算分拍间隔的 BPM。
-/// @warning UI 热路径：拖动画布磁吸时调用；只做常量级数值规整。
-double normalizedSnapBpm(double bpm, double fallbackBpm)
-{
-    double result = bpm;
-    if ( result <= 0.0 || !std::isfinite(result) ) {
-        result = fallbackBpm;
-    }
-    if ( result <= 0.0 || !std::isfinite(result) ) {
-        result = 120.0;
-    }
-    return std::min(result, 10000.0);
-}
-
-/// @brief 查找指定时间所在的 BPM 分拍区间。
-/// @param snapshot 当前渲染快照。
-/// @param rawTime 目标显示时间，单位秒。
-/// @param allowBeforeFirstTiming 是否允许在首个 BPM 前反推分拍网格。
-/// @param outSpan 输出 BPM 分拍区间。
-/// @return 找到可用区间时返回 true。
-/// @warning UI 热路径：仅在磁铁开启且拖动画布时调用；线性扫描 Timing
-/// 快照，不访问 ECS 或文件系统。
-bool findBpmSnapSpan(const Logic::RenderSnapshot& snapshot, double rawTime,
-                     bool allowBeforeFirstTiming, BpmSnapSpan& outSpan)
-{
-    constexpr double EPSILON = 1e-6;
-
-    bool   hasAny      = false;
-    bool   hasSelected = false;
-    double firstTime   = 0.0;
-    double firstBpm    = 120.0;
-
-    for ( const auto& segment : snapshot.scrollSegments ) {
-        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
-            continue;
-        }
-
-        const double bpm =
-            normalizedSnapBpm(segment.bpmValue, snapshot.fallbackBpm);
-        if ( !hasAny ) {
-            hasAny    = true;
-            firstTime = segment.time;
-            firstBpm  = bpm;
-        }
-
-        if ( segment.time <= rawTime + EPSILON ) {
-            outSpan.time = segment.time;
-            outSpan.bpm  = bpm;
-            hasSelected  = true;
-            continue;
-        }
-
-        if ( hasSelected ) {
-            outSpan.nextTime = segment.time;
-            return true;
-        }
-
-        break;
-    }
-
-    if ( hasSelected ) {
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        return true;
-    }
-
-    if ( hasAny && rawTime < firstTime && allowBeforeFirstTiming ) {
-        outSpan.time     = firstTime;
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        outSpan.bpm      = firstBpm;
-        for ( const auto& segment : snapshot.scrollSegments ) {
-            if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
-                continue;
-            }
-            if ( std::abs(segment.time - firstTime) <= EPSILON ) {
-                outSpan.bpm =
-                    normalizedSnapBpm(segment.bpmValue, snapshot.fallbackBpm);
-            } else if ( segment.time > firstTime + EPSILON ) {
-                outSpan.nextTime = segment.time;
-                break;
-            }
-        }
-        return true;
-    }
-
-    if ( !hasAny ) {
-        outSpan.time     = 0.0;
-        outSpan.nextTime = std::numeric_limits<double>::infinity();
-        outSpan.bpm      = normalizedSnapBpm(0.0, snapshot.fallbackBpm);
-        return true;
-    }
-
-    return false;
-}
-
-/// @brief 磁铁开启时将拖动画布目标时间转换为已跨过的分拍线。
-/// @param snapshot 当前渲染快照。
-/// @param rawTargetTime 连续拖动换算出的目标显示时间，单位秒。
-/// @param startTime 拖动开始时的当前显示时间，单位秒。
-/// @param snapToWholeBeat 是否按整拍吸附；为 false 时按当前分拍数吸附。
-/// @param outTime 输出吸附后的显示时间。
-/// @return 成功换算时返回 true。
-/// @warning UI 热路径：Move 工具空白拖动画布时每帧调用；读取当前编辑器配置，
-/// 只扫描 Timing 快照并做常量级数学计算。
-bool snapCanvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
-                             double rawTargetTime, double startTime,
-                             bool snapToWholeBeat, double& outTime)
-{
-    if ( !std::isfinite(rawTargetTime) || !std::isfinite(startTime) ) {
-        return false;
-    }
-
-    const auto& editorConfig =
-        Logic::EditorEngine::instance().getEditorConfig();
-
-    int beatDivisor = editorConfig.settings.beatDivisor;
-    if ( beatDivisor <= 0 ) {
-        beatDivisor = 4;
-    }
-
-    BpmSnapSpan span;
-    if ( !findBpmSnapSpan(snapshot,
-                          rawTargetTime,
-                          editorConfig.visual.drawBeatLinesBeforeFirstTiming,
-                          span) ) {
-        return false;
-    }
-
-    const double beatDuration = 60.0 / span.bpm;
-    const double stepDuration =
-        snapToWholeBeat ? beatDuration
-                        : beatDuration / static_cast<double>(beatDivisor);
-    if ( stepDuration <= 1e-9 || !std::isfinite(stepDuration) ) {
-        return false;
-    }
-
-    constexpr double EPSILON       = 1e-6;
-    const bool       movingLater   = rawTargetTime > startTime + EPSILON;
-    const bool       movingEarlier = rawTargetTime < startTime - EPSILON;
-    if ( !movingLater && !movingEarlier ) {
-        outTime = startTime;
-        return true;
-    }
-
-    const double relativeTime = rawTargetTime - span.time;
-    const double stepCount =
-        movingLater ? std::floor(relativeTime / stepDuration + EPSILON)
-                    : std::ceil(relativeTime / stepDuration - EPSILON);
-    double candidate = span.time + stepCount * stepDuration;
-    if ( candidate > span.nextTime ) {
-        candidate = span.nextTime;
-    }
-    candidate = std::max(0.0, candidate);
-    if ( !std::isfinite(candidate) ) {
-        return false;
-    }
-
-    if ( movingLater && candidate <= startTime + EPSILON ) {
-        outTime = startTime;
-    } else if ( movingEarlier && candidate >= startTime - EPSILON ) {
-        outTime = startTime;
-    } else {
-        outTime = candidate;
-    }
-    return true;
-}
-
 /// @brief 跳转到主画布当前悬浮时间点。
 /// @param snapshot 当前渲染快照，时间字段使用视觉时间域。
 /// @return 成功发送跳转命令时返回 true。
@@ -699,93 +583,6 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     return scrolled ? targetTime : snapshot.currentTime;
 }
 
-/// @brief 根据画布 Y 坐标计算鼠标下方的显示时间。
-/// @param snapshot 当前渲染快照。
-/// @param viewportHeight 当前画布高度，单位像素。
-/// @param mouseY 当前鼠标 Y 坐标，单位像素。
-/// @return 鼠标下方的显示时间。
-/// @warning UI 热路径：Move 工具空白按下时调用；只读取当前快照。
-double canvasTimeAtMouseY(const Logic::RenderSnapshot& snapshot,
-                          float viewportHeight, float mouseY)
-{
-    if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
-         viewportHeight <= 1.0f ) {
-        return snapshot.currentTime;
-    }
-
-    const auto&  visual = Config::AppConfig::instance().getVisualConfig();
-    const double scale  = std::abs(snapshot.renderScaleY) > 1e-6f
-                              ? static_cast<double>(snapshot.renderScaleY)
-                              : 1.0;
-    const double judgmentLineY = static_cast<double>(viewportHeight) *
-                                 static_cast<double>(visual.judgeline_pos);
-    const double currentAbsY =
-        snapshotAbsYAtTime(snapshot, snapshot.currentTime);
-    return snapshotTimeAtAbsY(
-        snapshot,
-        currentAbsY + (judgmentLineY - static_cast<double>(mouseY)) / scale);
-}
-
-/// @brief 根据拖动画布锚点计算主画布滚动后的显示时间。
-/// @param snapshot 当前渲染快照。
-/// @param viewportHeight 当前画布高度，单位像素。
-/// @param mouseY 当前鼠标 Y 坐标，单位像素。
-/// @param startTime 拖动开始时的当前显示时间，单位秒。
-/// @param anchorTime 拖动开始时鼠标抓住的显示时间。
-/// @param anchorMouseY 拖动开始时鼠标所在的本地 Y 坐标，单位像素。
-/// @param accelerate 是否使用快速拖动倍率。
-/// @return 保持锚点贴合鼠标位置所需的当前显示时间。
-/// @warning UI 热路径：Move 工具空白拖动画布时每帧调用；读取当前编辑器配置，
-/// 只读取快照与做数值换算，不访问 ECS 或文件系统。
-double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
-                           float viewportHeight, float mouseY, double startTime,
-                           double anchorTime, float anchorMouseY,
-                           bool accelerate)
-{
-    if ( !std::isfinite(mouseY) || !std::isfinite(anchorMouseY) ||
-         !std::isfinite(viewportHeight) || viewportHeight <= 1.0f ||
-         !std::isfinite(startTime) || !std::isfinite(anchorTime) ) {
-        return snapshot.currentTime;
-    }
-
-    double multiplier = 1.0;
-    if ( accelerate ) {
-        multiplier = std::max(1.0f,
-                              Logic::EditorEngine::instance()
-                                  .getEditorConfig()
-                                  .settings.scrollSpeedMultiplier);
-    }
-    const double effectiveMouseY =
-        static_cast<double>(anchorMouseY) +
-        (static_cast<double>(mouseY) - static_cast<double>(anchorMouseY)) *
-            multiplier;
-
-    const auto&  visual = Config::AppConfig::instance().getVisualConfig();
-    const double scale  = std::abs(snapshot.renderScaleY) > 1e-6f
-                              ? static_cast<double>(snapshot.renderScaleY)
-                              : 1.0;
-    const double judgmentLineY = static_cast<double>(viewportHeight) *
-                                 static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
-    const double targetCurrentAbsY =
-        anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
-    const double rawTargetTime =
-        snapshotTimeAtAbsY(snapshot, targetCurrentAbsY);
-    const auto& editorConfig =
-        Logic::EditorEngine::instance().getEditorConfig();
-    if ( editorConfig.settings.scrollSnap ) {
-        double snappedTime = rawTargetTime;
-        if ( snapCanvasPanTargetTime(snapshot,
-                                     rawTargetTime,
-                                     startTime,
-                                     accelerate,
-                                     snappedTime) ) {
-            return snappedTime;
-        }
-    }
-    return rawTargetTime;
-}
-
 /// @brief 开始一个固定在当前 ImGui viewport 内的画布悬浮信息窗口。
 /// @param mousePos 当前鼠标屏幕坐标。
 /// @return `ImGui::Begin` 的返回值；调用方必须始终调用 `ImGui::End`。
@@ -882,6 +679,205 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
     m_lastMoveUpdateCommand.valid    = false;
     m_lastEraseUpdateCommand.valid   = false;
     m_rightEraseActive               = false;
+}
+
+/// @brief 在移动工具下绘制悬浮物件的项目音频试听按钮。
+bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+    float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
+    float pointerY)
+{
+    const auto& inspect = currentSnapshot.hoverInspect;
+    auto*       project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( currentSnapshot.currentTool != Logic::EditTool::Move ||
+         m_leftPressStartedOnCanvas || m_leftPressStartedOnEntity ||
+         m_rightEraseActive || !project || targetWidth <= 0.0F ||
+         targetHeight <= 0.0F ) {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
+    const auto& style            = ImGui::GetStyle();
+    const float retentionPadding = std::max(6.0F, style.ItemSpacing.x * 0.5F);
+    const bool  pointerInsideLockedRetention =
+        m_audioPreviewOverlay.valid &&
+        (m_audioPreviewOverlay.volumeEditorOpen ||
+         (pointerX >= std::min(m_audioPreviewOverlay.left,
+                               m_audioPreviewOverlay.controlsLeft) -
+                          retentionPadding &&
+          pointerX <= std::max(m_audioPreviewOverlay.right,
+                               m_audioPreviewOverlay.controlsRight) +
+                          retentionPadding &&
+          pointerY >= std::min(m_audioPreviewOverlay.top,
+                               m_audioPreviewOverlay.controlsTop) -
+                          retentionPadding &&
+          pointerY <= std::max(m_audioPreviewOverlay.bottom,
+                               m_audioPreviewOverlay.controlsBottom) +
+                          retentionPadding));
+
+    entt::entity           targetEntity{ entt::null };
+    Logic::ChartObjectKind targetObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
+    std::string_view targetAudioResourceId;
+    float            targetVolume{ 1.0F };
+    std::int32_t     targetSampleBindingSubIndex{ -1 };
+    if ( pointerInsideLockedRetention ) {
+        targetEntity          = m_audioPreviewOverlay.entity;
+        targetObjectKind      = m_audioPreviewOverlay.objectKind;
+        targetAudioResourceId = m_audioPreviewOverlay.audioResourceId;
+        targetVolume          = m_audioPreviewOverlay.volume;
+        targetSampleBindingSubIndex =
+            m_audioPreviewOverlay.sampleBindingSubIndex;
+    } else if ( inspect.show && inspect.showAudioPreview &&
+                inspect.entity != entt::null &&
+                !inspect.audioResourceId.empty() ) {
+        targetEntity                = inspect.entity;
+        targetObjectKind            = inspect.objectKind;
+        targetAudioResourceId       = inspect.audioResourceId;
+        targetVolume                = inspect.volume;
+        targetSampleBindingSubIndex = inspect.sampleBindingSubIndex;
+    } else {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
+    const bool sameObject =
+        m_audioPreviewOverlay.valid &&
+        m_audioPreviewOverlay.entity == targetEntity &&
+        m_audioPreviewOverlay.objectKind == targetObjectKind &&
+        m_audioPreviewOverlay.audioResourceId == targetAudioResourceId &&
+        m_audioPreviewOverlay.sampleBindingSubIndex ==
+            targetSampleBindingSubIndex;
+    const float previousCenterX =
+        (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right) * 0.5F;
+    const float previousCenterY =
+        (m_audioPreviewOverlay.top + m_audioPreviewOverlay.bottom) * 0.5F;
+
+    const Logic::Hitbox* anchor    = nullptr;
+    float                bestScore = std::numeric_limits<float>::max();
+    for ( const auto& hitbox : currentSnapshot.hitboxes ) {
+        if ( hitbox.entity != targetEntity || hitbox.kind != targetObjectKind ||
+             hitbox.w <= 0.0F || hitbox.h <= 0.0F ) {
+            continue;
+        }
+
+        const bool pointerInside =
+            pointerX >= hitbox.x && pointerX <= hitbox.x + hitbox.w &&
+            pointerY >= hitbox.y && pointerY <= hitbox.y + hitbox.h;
+        const float centerX = hitbox.x + hitbox.w * 0.5F;
+        const float centerY = hitbox.y + hitbox.h * 0.5F;
+        const float targetX = sameObject ? previousCenterX : pointerX;
+        const float targetY = sameObject ? previousCenterY : pointerY;
+        const float deltaX  = centerX - targetX;
+        const float deltaY  = centerY - targetY;
+        const float score =
+            pointerInside ? -1.0F : deltaX * deltaX + deltaY * deltaY;
+        if ( score < bestScore ) {
+            bestScore = score;
+            anchor    = &hitbox;
+        }
+    }
+    if ( !anchor ) {
+        m_audioPreviewOverlay = {};
+        return false;
+    }
+
+    m_audioPreviewOverlay.valid      = true;
+    m_audioPreviewOverlay.entity     = targetEntity;
+    m_audioPreviewOverlay.objectKind = targetObjectKind;
+    if ( !pointerInsideLockedRetention ) {
+        m_audioPreviewOverlay.audioResourceId = targetAudioResourceId;
+        m_audioPreviewOverlay.volume          = targetVolume;
+        m_audioPreviewOverlay.sampleBindingSubIndex =
+            targetSampleBindingSubIndex;
+    }
+    if ( !sameObject ) {
+        const std::string previewInstanceId =
+            "canvas/" + m_cameraId + "/" +
+            std::to_string(static_cast<std::uint32_t>(targetObjectKind)) + "/" +
+            std::to_string(
+                static_cast<std::uint32_t>(entt::to_integral(targetEntity))) +
+            "/" + std::to_string(targetSampleBindingSubIndex);
+        m_audioPreviewOverlay.previewPoolKey =
+            UI::makeProjectAudioPreviewPoolKey(previewInstanceId);
+    }
+    m_audioPreviewOverlay.left   = anchor->x;
+    m_audioPreviewOverlay.top    = anchor->y;
+    m_audioPreviewOverlay.right  = anchor->x + anchor->w;
+    m_audioPreviewOverlay.bottom = anchor->y + anchor->h;
+
+    const float buttonSize =
+        std::ceil(std::max(20.0F, ImGui::GetFrameHeight()));
+    const float spacing =
+        std::max(2.0F, std::min(style.ItemInnerSpacing.x, 5.0F));
+    const float progressHeight = std::clamp(buttonSize * 0.16F, 4.0F, 7.0F);
+    const float progressSpacing =
+        std::max(2.0F, std::min(style.ItemInnerSpacing.y, 4.0F));
+    const float rowWidth    = buttonSize * 4.0F + spacing * 3.0F;
+    const float panelHeight = progressHeight + progressSpacing + buttonSize;
+    const float gap         = std::max(6.0F, style.ItemSpacing.y * 0.5F);
+
+    float controlsX =
+        (m_audioPreviewOverlay.left + m_audioPreviewOverlay.right - rowWidth) *
+        0.5F;
+    controlsX =
+        std::clamp(controlsX, 0.0F, std::max(0.0F, targetWidth - rowWidth));
+    float controlsY = m_audioPreviewOverlay.top - gap - panelHeight;
+    controlsY =
+        std::clamp(controlsY, 0.0F, std::max(0.0F, targetHeight - panelHeight));
+
+    m_audioPreviewOverlay.controlsLeft   = controlsX;
+    m_audioPreviewOverlay.controlsTop    = controlsY;
+    m_audioPreviewOverlay.controlsRight  = controlsX + rowWidth;
+    m_audioPreviewOverlay.controlsBottom = controlsY + panelHeight;
+
+    const auto result = UI::renderProjectAudioPreviewControls(
+        "CanvasObjectAudioPreview",
+        *project,
+        m_audioPreviewOverlay.audioResourceId,
+        m_audioPreviewOverlay.previewPoolKey,
+        m_audioPreviewOverlay.volume,
+        &m_audioPreviewOverlay.volume,
+        UI::ProjectAudioPreviewControlsLayout{
+            .topLeft = { canvasScreenX + controlsX, canvasScreenY + controlsY },
+            .width   = rowWidth,
+            .buttonSize      = buttonSize,
+            .buttonSpacing   = spacing,
+            .progressHeight  = progressHeight,
+            .progressSpacing = progressSpacing,
+        });
+    m_audioPreviewOverlay.volumeEditorOpen = result.volumeEditorOpen;
+    if ( result.volumeChanged ) {
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::LogicCommand(Logic::CmdUpdateObjectSampleVolume{
+                .entity   = m_audioPreviewOverlay.entity,
+                .kind     = m_audioPreviewOverlay.objectKind,
+                .subIndex = m_audioPreviewOverlay.sampleBindingSubIndex,
+                .volume   = m_audioPreviewOverlay.volume,
+            }));
+    }
+
+    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                      pointerX <= m_audioPreviewOverlay.right &&
+                                      pointerY >= m_audioPreviewOverlay.top &&
+                                      pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding       = std::max(retentionPadding, gap);
+    const float bridgeLeft =
+        std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
+    const float bridgeTop =
+        std::min(m_audioPreviewOverlay.top, controlsY) - bridgePadding;
+    const float bridgeRight =
+        std::max(m_audioPreviewOverlay.right, controlsX + rowWidth) +
+        bridgePadding;
+    const float bridgeBottom =
+        std::max(m_audioPreviewOverlay.bottom, controlsY + panelHeight) +
+        bridgePadding;
+    const bool pointerInsideBridge =
+        pointerX >= bridgeLeft && pointerX <= bridgeRight &&
+        pointerY >= bridgeTop && pointerY <= bridgeBottom;
+    return result.hovered || result.volumeEditorOpen ||
+           (pointerInsideBridge && !pointerInsideObject);
 }
 
 void Basic2DCanvasInteraction::update(
@@ -1211,7 +1207,8 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
     m_noteLayoutIndexScratch.reserve(currentSnapshot.hitboxes.size());
 
     for ( const auto& hitbox : currentSnapshot.hitboxes ) {
-        if ( hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
+        if ( hitbox.kind != Logic::ChartObjectKind::PlayerNote ||
+             hitbox.entity == entt::null || !std::isfinite(hitbox.x) ||
              !std::isfinite(hitbox.y) || !std::isfinite(hitbox.w) ||
              !std::isfinite(hitbox.h) || hitbox.w <= 0.0f ||
              hitbox.h <= 0.0f ) {
@@ -1273,7 +1270,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
     auto& appConfig = Config::AppConfig::instance();
     auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
-    float judgmentLinePosition =
+    const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
+    const float worldPointerX = pointerX - cameraOffsetX;
+    float       judgmentLinePosition =
         sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
     const float dpiScale                 = appConfig.getWindowContentScale();
     const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
@@ -1358,7 +1357,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 !hoveredComponent.has_value() ) {
         hoveredHandle = hitTestTrackLayout(layout,
                                            judgmentLinePosition,
-                                           pointerX,
+                                           worldPointerX,
                                            pointerY,
                                            targetWidth,
                                            targetHeight,
@@ -1474,7 +1473,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_trackLayoutDragHandle   = hoveredHandle;
             m_trackLayoutDragStart    = layout;
             m_trackLayoutPointerStart = {
-                pointerX / targetWidth,
+                worldPointerX / targetWidth,
                 pointerY / targetHeight,
             };
         }
@@ -1600,9 +1599,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
 
             const Logic::CanvasComponentBounds trackLayoutBounds{
-                layout.left * targetWidth,
+                layout.left * targetWidth + cameraOffsetX,
                 layout.top * targetHeight,
-                layout.right * targetWidth,
+                layout.right * targetWidth + cameraOffsetX,
                 layout.bottom * targetHeight,
             };
             appendCanvasComponentSnapTargets(trackLayoutBounds,
@@ -1827,7 +1826,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-        const float         normalizedX = pointerX / targetWidth;
+        const float         normalizedX = worldPointerX / targetWidth;
         const float         normalizedY = pointerY / targetHeight;
         Config::TrackLayout candidate   = m_trackLayoutDragStart;
         if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::JudgmentLine ) {
@@ -1886,9 +1885,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 m_canvasComponentSnapTargetsY.push_back(targetHeight * 0.5f);
 
                 const Logic::CanvasComponentBounds candidateBounds{
-                    candidate.left * targetWidth,
+                    candidate.left * targetWidth + cameraOffsetX,
                     candidate.top * targetHeight,
-                    candidate.right * targetWidth,
+                    candidate.right * targetWidth + cameraOffsetX,
                     candidate.bottom * targetHeight,
                 };
                 const auto snap = Logic::snapCanvasComponentBounds(
@@ -1896,15 +1895,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     m_canvasComponentSnapTargetsX,
                     m_canvasComponentSnapTargetsY,
                     componentSnapDistance);
-                candidate = moveTrackLayoutToPixelCenter(candidate,
-                                                         snap.center.x,
-                                                         snap.center.y,
-                                                         targetWidth,
-                                                         targetHeight);
+                candidate =
+                    moveTrackLayoutToPixelCenter(candidate,
+                                                 snap.center.x - cameraOffsetX,
+                                                 snap.center.y,
+                                                 targetWidth,
+                                                 targetHeight);
                 const Logic::CanvasComponentBounds snappedBounds{
-                    candidate.left * targetWidth,
+                    candidate.left * targetWidth + cameraOffsetX,
                     candidate.top * targetHeight,
-                    candidate.right * targetWidth,
+                    candidate.right * targetWidth + cameraOffsetX,
                     candidate.bottom * targetHeight,
                 };
                 if ( snap.snappedX &&
@@ -1952,9 +1952,11 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2 canvasMax{ canvasScreenX + targetWidth,
                             canvasScreenY + targetHeight };
-    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth,
+    const ImVec2 layoutMin{ canvasScreenX + layout.left * targetWidth +
+                                cameraOffsetX,
                             canvasScreenY + layout.top * targetHeight };
-    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth,
+    const ImVec2 layoutMax{ canvasScreenX + layout.right * targetWidth +
+                                cameraOffsetX,
                             canvasScreenY + layout.bottom * targetHeight };
     const ImVec2 layoutCenter{ (layoutMin.x + layoutMax.x) * 0.5f,
                                (layoutMin.y + layoutMax.y) * 0.5f };
@@ -2260,18 +2262,98 @@ void Basic2DCanvasInteraction::handleInteractions(
         hasValidMousePos && targetWidth > 0.0f && targetHeight > 0.0f &&
         localMousePos.x >= 0.0f && localMousePos.x <= targetWidth &&
         localMousePos.y >= 0.0f && localMousePos.y <= targetHeight;
-    bool isHovered  = isInsideCanvas && ImGui::IsWindowHovered();
-    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0);
+    bool       isHovered = isInsideCanvas && ImGui::IsWindowHovered();
+    const bool middlePanStartHovered =
+        isInsideCanvas &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    const bool middleClicked =
+        middlePanStartHovered &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false);
+    if ( middleClicked ) {
+        m_isMiddleCanvasPanning      = true;
+        m_lastMiddlePanMousePosition = { localMousePos.x, localMousePos.y };
+    }
+    const bool isDragging = !m_isMiddleCanvasPanning && hasValidMousePos &&
+                            ImGui::IsMouseDragging(ImGuiMouseButton_Left);
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     const auto& layout = visual.trackLayout;
-    const float normX =
-        targetWidth > 0.0f ? localMousePos.x / targetWidth : 0.0f;
+    if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
+         targetWidth > 0.0F && targetHeight > 0.0F ) {
+        const auto projection = Logic::calculateCanvasLaneProjection(
+            targetWidth,
+            currentSnapshot->trackCount,
+            currentSnapshot->bgmTrackCount,
+            layout.left,
+            layout.right,
+            currentSnapshot->canvasHorizontalOffsetX,
+            true);
+        const float dropLeft =
+            std::clamp(projection.bgmLeftX, 0.0F, targetWidth);
+        const float dropRight =
+            std::clamp(projection.bgmRightX, 0.0F, targetWidth);
+        const float dropTop =
+            std::clamp(layout.top * targetHeight, 0.0F, targetHeight);
+        const float dropBottom =
+            std::clamp(layout.bottom * targetHeight, 0.0F, targetHeight);
+        if ( projection.valid && dropRight > dropLeft &&
+             dropBottom > dropTop ) {
+            const ImRect dropRect{
+                { windowPos.x + dropLeft, windowPos.y + dropTop },
+                { windowPos.x + dropRight, windowPos.y + dropBottom },
+            };
+            const ImGuiID dropTargetId =
+                ImGui::GetID("##Basic2DCanvasAudioResourceDropTarget");
+            if ( ImGui::BeginDragDropTargetCustom(dropRect, dropTargetId) ) {
+                if ( const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                         Common::AUDIO_RESOURCE_DRAG_PAYLOAD_TYPE);
+                     payload && payload->IsDelivery() && payload->Data &&
+                     payload->DataSize ==
+                         static_cast<int>(
+                             sizeof(Common::AudioResourceDragPayload)) ) {
+                    const auto& resourcePayload =
+                        *static_cast<const Common::AudioResourceDragPayload*>(
+                            payload->Data);
+                    const std::string audioResourceId{
+                        Common::audioResourceIdView(resourcePayload),
+                    };
+                    if ( !audioResourceId.empty() ) {
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdCreateAudioSample{
+                                    .audioResourceId =
+                                        std::move(audioResourceId),
+                                    .cameraId   = m_cameraId,
+                                    .mouseX     = localMousePos.x,
+                                    .mouseY     = localMousePos.y,
+                                    .isCtrlDown = ImGui::GetIO().KeyCtrl,
+                                }));
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+    }
+
+    const float trackLeftX =
+        targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
+    const auto runtimeBgmTrackCount = std::min<std::int64_t>(
+        static_cast<std::int64_t>(std::max(0, currentSnapshot->bgmTrackCount)) +
+            1,
+        std::numeric_limits<std::int32_t>::max());
+    const float trackRightX =
+        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX +
+        (currentSnapshot->trackCount > 0
+             ? (targetWidth * (layout.right - layout.left) /
+                static_cast<float>(currentSnapshot->trackCount)) *
+                   static_cast<float>(runtimeBgmTrackCount)
+             : 0.0F);
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
-        isHovered && normX >= layout.left && normX <= layout.right &&
-        normY >= layout.top && normY <= layout.bottom;
+        isHovered && localMousePos.x >= trackLeftX &&
+        localMousePos.x <= trackRightX && normY >= layout.top &&
+        normY <= layout.bottom;
     const bool isLayoutEditing =
         Logic::EditorEngine::instance().getCurrentTool() ==
         Logic::EditTool::Layout;
@@ -2313,22 +2395,87 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.isDragging     = isDragging;
     }
 
+    if ( m_isMiddleCanvasPanning ) {
+        if ( middleClicked ) {
+            // 中键取得当前手势所有权前先结束已存在的左/右键编辑，避免工具状态悬空。
+            if ( m_leftPressStartedOnCanvas &&
+                 currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            } else if ( m_leftPressStartedOnCanvas &&
+                        currentSnapshot->currentTool ==
+                            Logic::EditTool::Draw ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+            } else if ( m_leftPressStartedOnEntity &&
+                        currentSnapshot->currentTool ==
+                            Logic::EditTool::Move ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            }
+            if ( m_rightEraseActive ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            }
+            if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+                 m_noteScaleDragTarget.has_value() ||
+                 m_canvasComponentDragTarget.has_value() ||
+                 m_layoutConfigurationChanged ) {
+                finishLayoutEditing();
+            }
+
+            m_leftPressStartedOnCanvas      = false;
+            m_leftPressStartedInTrackLayout = false;
+            m_leftPressStartedOnEntity      = false;
+            m_leftPressDragged              = false;
+            m_colorStrokeEntities.clear();
+            resetContinuousEditCommands();
+        }
+
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        if ( ImGui::IsMouseDown(ImGuiMouseButton_Middle) && hasValidMousePos ) {
+            const glm::vec2 currentMousePosition{
+                localMousePos.x,
+                localMousePos.y,
+            };
+            const glm::vec2 delta =
+                currentMousePosition - m_lastMiddlePanMousePosition;
+            m_lastMiddlePanMousePosition = currentMousePosition;
+            if ( std::abs(delta.x) > 0.001F || std::abs(delta.y) > 0.001F ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                        .cameraId       = m_cameraId,
+                        .deltaX         = delta.x,
+                        .deltaY         = delta.y,
+                        .viewportWidth  = targetWidth,
+                        .viewportHeight = targetHeight,
+                        .renderScaleY   = currentSnapshot->renderScaleY,
+                    }));
+            }
+        }
+
+        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Middle) ) {
+            m_isMiddleCanvasPanning = false;
+        }
+        return;
+    }
+
     if ( isLayoutEditing ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
-            m_hasLastHovered      = true;
-            m_lastHoveredEntity   = entt::null;
-            m_lastHoveredPart     = 0;
-            m_lastHoveredSubIndex = -1;
+            m_hasLastHovered        = true;
+            m_lastHoveredEntity     = entt::null;
+            m_lastHoveredObjectKind = Logic::ChartObjectKind::PlayerNote;
+            m_lastHoveredPart       = 0;
+            m_lastHoveredSubIndex   = -1;
         }
 
         m_leftPressStartedOnCanvas      = false;
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
         handleLayoutEditing(localMousePos.x,
@@ -2342,9 +2489,18 @@ void Basic2DCanvasInteraction::handleInteractions(
         return;
     }
 
+    const bool audioPreviewOverlayBlocksCanvas =
+        renderObjectAudioPreviewControls(*currentSnapshot,
+                                         windowPos.x,
+                                         windowPos.y,
+                                         targetWidth,
+                                         targetHeight,
+                                         localMousePos.x,
+                                         localMousePos.y);
+
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( isHovered && currentSnapshot->isHoveringCanvas &&
-         !currentSnapshot->isPlaying ) {
+    if ( !audioPreviewOverlayBlocksCanvas && isHovered &&
+         currentSnapshot->isHoveringCanvas && !currentSnapshot->isPlaying ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
@@ -2382,12 +2538,23 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                TR("ui.canvas.note_time").data(),
                                                timeText.c_str());
                             if ( showTrack ) {
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %d",
-                                    label.data(),
-                                    TR("ui.canvas.track").data(),
-                                    point.track + 1);
+                                if ( point.track >=
+                                     currentSnapshot->trackCount ) {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
+                                        label.data(),
+                                        TR("ui.canvas.bgm_track").data(),
+                                        point.track -
+                                            currentSnapshot->trackCount + 1);
+                                } else {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
+                                        label.data(),
+                                        TR("ui.canvas.track").data(),
+                                        point.track + 1);
+                                }
                             }
                         };
 
@@ -2432,6 +2599,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                                       inspect.body,
                                       inspect.showTrack);
                             break;
+                        case Logic::HoverInspectKind::AudioSampleAnchor:
+                        case Logic::HoverInspectKind::AudioSampleTrigger:
+                            drawPoint("ui.canvas.hover.sample_anchor",
+                                      inspect.head,
+                                      inspect.showTrack);
+                            drawPoint("ui.canvas.hover.sample_trigger",
+                                      inspect.end,
+                                      inspect.showTrack);
+                            break;
                         case Logic::HoverInspectKind::HoldBody:
                         case Logic::HoverInspectKind::PolylineHoldBody:
                         case Logic::HoverInspectKind::None: break;
@@ -2462,6 +2638,24 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                "%s: %d",
                                                TR("ui.canvas.track").data(),
                                                inspect.track + 1);
+                        }
+                        if ( inspect.showAudioPreview ) {
+                            ImGui::TextWrapped(
+                                "%s: %s",
+                                TR("ui.canvas.hover.audio_resource").data(),
+                                inspect.audioResourceId.c_str());
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %.1f%%",
+                                TR("ui.canvas.hover.volume").data(),
+                                inspect.volume * 100.0F);
+                        }
+                        if ( inspect.showAudioSample ) {
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %+lld ms",
+                                TR("ui.canvas.hover.offset").data(),
+                                static_cast<long long>(inspect.offsetMs));
                         }
 
                         // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
@@ -2534,9 +2728,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     currentSnapshot->hoveredBeatIndex);
                     }
 
-                    ImGui::Text("%s: %d",
-                                TR("ui.canvas.track").data(),
-                                currentSnapshot->hoveredTrack + 1);
+                    if ( currentSnapshot->hoveredTrack >=
+                         currentSnapshot->trackCount ) {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.bgm_track").data(),
+                                    currentSnapshot->hoveredTrack -
+                                        currentSnapshot->trackCount + 1);
+                    } else {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.track").data(),
+                                    currentSnapshot->hoveredTrack + 1);
+                    }
 
                     ImGui::Spacing();
                     ImGui::Separator();
@@ -2563,14 +2765,22 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     }
 
-    entt::entity hoveredEntity   = entt::null;
-    uint8_t      hoveredPart     = 0;
-    int          hoveredSubIndex = -1;
+    if ( audioPreviewOverlayBlocksCanvas ) {
+        return;
+    }
+
+    entt::entity           hoveredEntity = entt::null;
+    Logic::ChartObjectKind hoveredObjectKind{
+        Logic::ChartObjectKind::PlayerNote
+    };
+    uint8_t hoveredPart     = 0;
+    int     hoveredSubIndex = -1;
 
     struct HoverCandidate {
-        entt::entity     entity{ entt::null };
-        Logic::HoverPart part{ Logic::HoverPart::None };
-        int              subIndex{ -1 };
+        entt::entity           entity{ entt::null };
+        Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
+        Logic::HoverPart       part{ Logic::HoverPart::None };
+        int                    subIndex{ -1 };
     };
 
     std::vector<HoverCandidate> candidates;
@@ -2582,10 +2792,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
                  localMousePos.y >= it->y &&
                  localMousePos.y <= it->y + it->h ) {
-                candidates.push_back({ it->entity, it->part, it->subIndex });
+                candidates.push_back(
+                    { it->entity, it->kind, it->part, it->subIndex });
                 layerSignature +=
                     std::to_string(
                         static_cast<uint32_t>(entt::to_integral(it->entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(it->kind)) +
                     ":" + std::to_string(static_cast<uint32_t>(it->part)) +
                     ":" + std::to_string(it->subIndex) + ";";
             }
@@ -2620,26 +2832,34 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         const auto& candidate = candidates[m_hoverLayerIndex];
         hoveredEntity         = candidate.entity;
+        hoveredObjectKind     = candidate.kind;
         hoveredPart           = static_cast<uint8_t>(candidate.part);
         hoveredSubIndex       = candidate.subIndex;
     }
 
     bool shouldSendHover = !m_hasLastHovered ||
                            m_lastHoveredEntity != hoveredEntity ||
+                           m_lastHoveredObjectKind != hoveredObjectKind ||
                            m_lastHoveredPart != hoveredPart ||
                            m_lastHoveredSubIndex != hoveredSubIndex;
     if ( shouldSendHover ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
-                hoveredEntity, hoveredPart, hoveredSubIndex }));
-        m_hasLastHovered      = true;
-        m_lastHoveredEntity   = hoveredEntity;
-        m_lastHoveredPart     = hoveredPart;
-        m_lastHoveredSubIndex = hoveredSubIndex;
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetHoveredEntity{ hoveredEntity,
+                                        hoveredPart,
+                                        hoveredSubIndex,
+                                        hoveredObjectKind }));
+        m_hasLastHovered        = true;
+        m_lastHoveredEntity     = hoveredEntity;
+        m_lastHoveredObjectKind = hoveredObjectKind;
+        m_lastHoveredPart       = hoveredPart;
+        m_lastHoveredSubIndex   = hoveredSubIndex;
     }
 
     auto processColorToolTarget = [&](Logic::EditTool tool) {
-        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ) return;
+        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ||
+             hoveredObjectKind != Logic::ChartObjectKind::PlayerNote ) {
+            return;
+        }
         if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;
 
         if ( tool == Logic::EditTool::ColorBrush ) {
@@ -2666,9 +2886,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
-        m_canvasPanStartTime            = 0.0;
-        m_canvasPanAnchorMouseY         = 0.0f;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
         publishCanvasHoverSeek(*currentSnapshot);
@@ -2677,7 +2894,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = isMouseInTrackLayout;
         m_leftPressStartedOnEntity      = hoveredEntity != entt::null;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
 
@@ -2685,8 +2901,10 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 if ( hoveredEntity != entt::null ) {
                     Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdSelectEntity{
-                            hoveredEntity, !ImGui::GetIO().KeyCtrl }));
+                        Event::LogicCommandEvent(
+                            Logic::CmdSelectEntity{ hoveredEntity,
+                                                    !ImGui::GetIO().KeyCtrl,
+                                                    hoveredObjectKind }));
                 } else {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
@@ -2704,13 +2922,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                         Event::LogicCommandEvent(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
-                                                 ImGui::GetIO().KeyCtrl }));
-                } else if ( !currentSnapshot->isPlaying ) {
-                    m_isCanvasPanning       = true;
-                    m_canvasPanStartTime    = currentSnapshot->currentTime;
-                    m_canvasPanAnchorMouseY = localMousePos.y;
-                    m_canvasPanAnchorTime   = canvasTimeAtMouseY(
-                        *currentSnapshot, targetHeight, localMousePos.y);
+                                                 ImGui::GetIO().KeyCtrl,
+                                                 hoveredObjectKind }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -2796,6 +3009,29 @@ void Basic2DCanvasInteraction::handleInteractions(
             }
         } else if ( m_leftPressStartedOnEntity &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
+            const glm::vec2 autoPanDelta =
+                currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying
+                    ? objectDragAutoPanDelta(
+                          { localMousePos.x, localMousePos.y },
+                          targetWidth,
+                          targetHeight,
+                          ImGui::GetIO().DeltaTime,
+                          std::max(0.0F,
+                                   visual.previewConfig.edgeScrollSensitivity))
+                    : glm::vec2{ 0.0F, 0.0F };
+            const bool autoPanned = std::abs(autoPanDelta.x) > 0.001F ||
+                                    std::abs(autoPanDelta.y) > 0.001F;
+            if ( autoPanned ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                        .cameraId       = m_cameraId,
+                        .deltaX         = autoPanDelta.x,
+                        .deltaY         = autoPanDelta.y,
+                        .viewportWidth  = targetWidth,
+                        .viewportHeight = targetHeight,
+                        .renderScaleY   = currentSnapshot->renderScaleY,
+                    }));
+            }
             const bool playbackScrolled =
                 currentSnapshot->hasBeatmap && currentSnapshot->isPlaying;
             const bool shouldUpdateMove =
@@ -2805,32 +3041,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                     *currentSnapshot,
                     ImGui::GetIO().KeyCtrl,
                     false) ||
-                playbackScrolled;
+                autoPanned || playbackScrolled;
             if ( shouldUpdateMove ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateDrag{ m_cameraId,
                                           localMousePos.x,
                                           localMousePos.y,
                                           ImGui::GetIO().KeyCtrl }));
-            }
-        } else if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
-                    m_isCanvasPanning && !currentSnapshot->isPlaying &&
-                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            const double targetTime =
-                canvasPanTargetTime(*currentSnapshot,
-                                    targetHeight,
-                                    localMousePos.y,
-                                    m_canvasPanStartTime,
-                                    m_canvasPanAnchorTime,
-                                    m_canvasPanAnchorMouseY,
-                                    ImGui::GetIO().KeyShift);
-            if ( std::isfinite(targetTime) &&
-                 std::abs(targetTime - currentSnapshot->currentTime) > 1e-6 ) {
-                const double visualOffset = Config::AppConfig::instance()
-                                                .getVisualConfig()
-                                                .getEffectiveVisualOffset();
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSeek{ targetTime - visualOffset }));
             }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
@@ -2882,9 +3099,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
         m_leftPressDragged              = false;
-        m_isCanvasPanning               = false;
-        m_canvasPanStartTime            = 0.0;
-        m_canvasPanAnchorMouseY         = 0.0f;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
     }

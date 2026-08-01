@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
@@ -6,6 +7,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -17,6 +19,7 @@
 #include <imgui.h>
 #include <mutex>
 #include <nfd.h>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,12 +76,15 @@ public:
 private:
     /// @brief 直接分发谱面导出命令。
     /// @param path 目标导出路径。
+    /// @param malodyExportMode MC 导出时临时使用的 Malody 模式。
     /// @param addStoreModeExtForMalodyExport 是否为 MC 导出写入上架皮肤
     /// mode_ext。
-    void dispatchSaveBeatmapAs(const std::string& path,
+    void dispatchSaveBeatmapAs(const std::string&        path,
+                               std::optional<MalodyMode> malodyExportMode,
                                bool addStoreModeExtForMalodyExport = false)
     {
         MenuUtil::dispatchCommand(Logic::CmdSaveBeatmapAs{
+            .malodyExportMode               = malodyExportMode,
             .addStoreModeExtForMalodyExport = addStoreModeExtForMalodyExport,
             .path                           = path,
         });
@@ -88,21 +94,36 @@ private:
     /// @param path 目标导出路径。
     void requestSaveBeatmapAs(std::string path)
     {
-        auto warnings = MenuUtil::collectExportCompatibilityWarnings(path);
-        const bool showStoreModeExtOption =
+        const std::string ext                  = MenuUtil::lowerExtension(path);
+        const bool        showMalodyModeOption = ext == ".mc";
+        const auto        malodyMode = showMalodyModeOption
+                                           ? MenuUtil::currentMalodyExportMode()
+                                           : MalodyMode::Slide;
+        auto warnings = MenuUtil::collectExportCompatibilityWarnings(
+            path,
+            showMalodyModeOption ? std::optional<MalodyMode>(malodyMode)
+                                 : std::nullopt);
+        const bool hasStoreModeExtEligibleElements =
             MenuUtil::shouldOfferMalodyStoreModeExtForCurrentExport(path);
-        if ( warnings.empty() && !showStoreModeExtOption ) {
-            dispatchSaveBeatmapAs(path);
+        const bool showStoreModeExtOption = showMalodyModeOption &&
+                                            malodyMode == MalodyMode::Slide &&
+                                            hasStoreModeExtEligibleElements;
+        if ( warnings.empty() && !showStoreModeExtOption &&
+             !showMalodyModeOption ) {
+            dispatchSaveBeatmapAs(path, std::nullopt);
             return;
         }
 
-        const std::string ext   = MenuUtil::lowerExtension(path);
         m_pendingExportPath     = std::move(path);
         m_pendingExportWarnings = std::move(warnings);
         m_pendingExportFormatName =
             (ext == ".osu") ? "osu!"
                             : ((ext == ".imd") ? "RM" : "Malody Chart");
         m_pendingExportShowStoreModeExtOption = showStoreModeExtOption;
+        m_pendingExportHasStoreModeExtEligibleElements =
+            hasStoreModeExtEligibleElements;
+        m_pendingExportShowMalodyModeOption = showMalodyModeOption;
+        m_pendingExportMalodyMode           = malodyMode;
         m_pendingExportAddStoreModeExt =
             Config::AppConfig::instance()
                 .getEditorSettings()
@@ -363,8 +384,11 @@ private:
         m_pendingExportPath.clear();
         m_pendingExportFormatName.clear();
         m_pendingExportWarnings.clear();
-        m_pendingExportShowStoreModeExtOption = false;
-        m_pendingExportAddStoreModeExt        = false;
+        m_pendingExportShowStoreModeExtOption          = false;
+        m_pendingExportHasStoreModeExtEligibleElements = false;
+        m_pendingExportShowMalodyModeOption            = false;
+        m_pendingExportMalodyMode                      = MalodyMode::Slide;
+        m_pendingExportAddStoreModeExt                 = false;
     }
 
     /// @brief 渲染导出兼容性警告弹窗。
@@ -385,8 +409,9 @@ private:
                               ImGuiWindowFlags_None,
                               ImVec2(520.0f * dpiScale, 0.0f)) ) {
             if ( m_pendingExportWarnings.empty() &&
-                 m_pendingExportShowStoreModeExtOption ) {
-                ImGui::Text("%s %s 前可以选择附加上架元数据：",
+                 (m_pendingExportShowStoreModeExtOption ||
+                  m_pendingExportShowMalodyModeOption) ) {
+                ImGui::Text("%s %s 前请选择导出选项：",
                             "导出",
                             m_pendingExportFormatName.c_str());
             } else {
@@ -400,6 +425,37 @@ private:
 
             for ( const auto& warning : m_pendingExportWarnings ) {
                 MenuUtil::drawWrappedBulletText(warning);
+            }
+            if ( m_pendingExportShowMalodyModeOption ) {
+                if ( !m_pendingExportWarnings.empty() ) {
+                    ImGui::Spacing();
+                }
+                ImGui::TextUnformatted("Malody 模式：");
+                ImGui::SameLine();
+                bool       malodyModeChanged = false;
+                const bool selectedKey =
+                    m_pendingExportMalodyMode == MalodyMode::Key;
+                if ( ::MMM::UI::FeedbackRadioButton("Key 模式", selectedKey) ) {
+                    m_pendingExportMalodyMode = MalodyMode::Key;
+                    malodyModeChanged         = true;
+                }
+                ImGui::SameLine();
+                const bool selectedSlide =
+                    m_pendingExportMalodyMode == MalodyMode::Slide;
+                if ( ::MMM::UI::FeedbackRadioButton("Slide 模式",
+                                                    selectedSlide) ) {
+                    m_pendingExportMalodyMode = MalodyMode::Slide;
+                    malodyModeChanged         = true;
+                }
+
+                if ( malodyModeChanged ) {
+                    m_pendingExportWarnings =
+                        MenuUtil::collectExportCompatibilityWarnings(
+                            m_pendingExportPath, m_pendingExportMalodyMode);
+                    m_pendingExportShowStoreModeExtOption =
+                        m_pendingExportMalodyMode == MalodyMode::Slide &&
+                        m_pendingExportHasStoreModeExtEligibleElements;
+                }
             }
             if ( m_pendingExportShowStoreModeExtOption ) {
                 if ( !m_pendingExportWarnings.empty() ) {
@@ -434,8 +490,13 @@ private:
                 actionButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
             MenuUtil::centerNextItem(actionButtonRowWidth);
             if ( ::MMM::UI::FeedbackButton("继续导出", actionButtonSize) ) {
-                dispatchSaveBeatmapAs(m_pendingExportPath,
-                                      m_pendingExportAddStoreModeExt);
+                dispatchSaveBeatmapAs(
+                    m_pendingExportPath,
+                    m_pendingExportShowMalodyModeOption
+                        ? std::optional<MalodyMode>(m_pendingExportMalodyMode)
+                        : std::nullopt,
+                    m_pendingExportShowStoreModeExtOption &&
+                        m_pendingExportAddStoreModeExt);
                 clearCompatibilityWarningState();
                 ImGui::CloseCurrentPopup();
             }
@@ -468,6 +529,12 @@ private:
     std::vector<std::string> m_pendingExportWarnings;
     /// @brief 待确认导出是否显示上架 mode_ext 选项。
     bool m_pendingExportShowStoreModeExtOption = false;
+    /// @brief 当前谱面是否含可使用上架 mode_ext 的 Flick/折线。
+    bool m_pendingExportHasStoreModeExtEligibleElements = false;
+    /// @brief 待确认导出是否显示 Malody 模式选项。
+    bool m_pendingExportShowMalodyModeOption = false;
+    /// @brief 待确认 MC 导出选中的 Malody 模式。
+    MalodyMode m_pendingExportMalodyMode{ MalodyMode::Slide };
     /// @brief 待确认导出是否写入上架 mode_ext。
     bool m_pendingExportAddStoreModeExt = false;
 };

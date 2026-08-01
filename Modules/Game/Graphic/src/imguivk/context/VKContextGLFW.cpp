@@ -1,10 +1,54 @@
+#include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 
 #include <fmt/format.h>
 
+#ifdef __APPLE__
+#    include <cstdlib>
+#    include <filesystem>
+#    include <limits.h>
+#    include <mach-o/dyld.h>
+#endif
+
 namespace MMM::Graphic
 {
+
+#ifdef __APPLE__
+namespace
+{
+/// @brief 让 Vulkan loader 只使用应用束内的 MoltenVK 驱动清单。
+/// @return 找到并配置应用束 ICD 清单时返回 true。
+bool configureMacOSBundledVulkanDriver()
+{
+    char     executablePathBuffer[PATH_MAX];
+    uint32_t executablePathSize = sizeof(executablePathBuffer);
+    if ( _NSGetExecutablePath(executablePathBuffer, &executablePathSize) !=
+         0 ) {
+        return false;
+    }
+
+    std::filesystem::path driverManifest(executablePathBuffer);
+    driverManifest = driverManifest.parent_path().parent_path() / "Resources" /
+                     "vulkan" / "icd.d" / "MoltenVK_icd.json";
+
+    std::error_code fileError;
+    if ( !std::filesystem::is_regular_file(driverManifest, fileError) ||
+         fileError ) {
+        return false;
+    }
+
+    const std::string driverManifestPath = driverManifest.string();
+    if ( setenv("VK_DRIVER_FILES", driverManifestPath.c_str(), 1) != 0 ) {
+        return false;
+    }
+
+    XDEBUG("Using bundled Vulkan driver manifest: {}", driverManifestPath);
+    return true;
+}
+}  // namespace
+#endif
 
 /**
  * @brief 初始化 GLFW 上下文
@@ -12,6 +56,13 @@ namespace MMM::Graphic
 void VKContext::initGLFW()
 {
     glfwSetErrorCallback(glfw_error_callback);
+
+#ifdef __APPLE__
+    // macOS 开发构建的 Vulkan loader 可能位于 Homebrew 或 SDK 目录；
+    // 显式复用已链接入口，避免 GLFW 按标准动态库名二次查找失败。
+    configureMacOSBundledVulkanDriver();
+    glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#endif
 
     // 1.初始化GLFW
     if ( !glfwInit() ) {
@@ -96,6 +147,7 @@ void VKContext::registerGLFWExtensions()
  */
 void VKContext::releaseGLFW()
 {
+    VKRenderer::releaseGlfwCursorResources();
     glfwTerminate();
     XDEBUG("GLFW Terminated.");
 }

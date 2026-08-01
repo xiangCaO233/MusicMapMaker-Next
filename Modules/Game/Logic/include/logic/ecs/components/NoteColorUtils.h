@@ -338,6 +338,7 @@ inline NoteComponent makeNoteComponentFromSubNote(
     note.m_trackIndex     = normalizedSub.trackIndex;
     note.m_dtrack         = normalizedSub.dtrack;
     note.m_metadata       = normalizedSub.metadata;
+    note.m_sampleBinding  = normalizedSub.sampleBinding;
     note.m_customColors   = normalizedSub.customColors;
     note.m_isSubNote      = isSubNote;
     note.m_parentPolyline = parentPolyline;

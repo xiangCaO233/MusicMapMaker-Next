@@ -8,6 +8,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
@@ -169,20 +170,14 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime  = visualTime - globalVisualOffset;
-
-        // 亚帧平滑补偿 (同步视觉偏移)
-        if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
-             snapshot->snapshotSysTime > 0.0 ) {
-            double now =
+        audioTime  = snapshot->playbackTime;
+        if ( !snapshot->isPreviewDragging ) {
+            const double now =
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
-            double dt = now - snapshot->snapshotSysTime;
-            if ( dt > 0.0 && dt < 0.1 ) {
-                visualTime += dt * snapshot->playbackSpeed;
-                audioTime += dt * snapshot->playbackSpeed;
-            }
+            visualTime = snapshot->resolveCurrentTimeAt(now);
+            audioTime  = snapshot->resolvePlaybackTimeAt(now);
         }
     }
     // 拖动期间优先使用频谱本地中心，避免主画布预览已更新而频谱仍等待逻辑快照。
@@ -346,11 +341,11 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double viewStart = visualTime - m_zoom;
     double viewEnd   = visualTime + m_zoom;
 
-    const float dpiScale =
-        Config::AppConfig::instance().getWindowContentScale();
+    const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
     setTargetSize(static_cast<uint32_t>(std::max(1.0f, avail.x)),
                   static_cast<uint32_t>(std::max(1.0f, surfaceH)),
-                  dpiScale);
+                  framebufferScale.x,
+                  framebufferScale.y);
 
     m_vertices.clear();
     m_indices.clear();
@@ -482,9 +477,9 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
@@ -657,8 +652,6 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     }
 
     if ( ownsSeekDrag && !isLeftMouseDown ) {
-        Audio::AudioManager::instance().seek(
-            std::clamp(hoverAudioTime, 0.0, totalTime));
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -814,7 +807,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
+    m_calcFuture = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -954,6 +947,8 @@ void AudioSpectrumView::backgroundRecalculate(
         std::shared_ptr<ice::GraphicEqualizer> localEQ;
         if ( eq.enabled ) {
             localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
+            localEQ->prepare(ice::ICEConfig::internal_format,
+                             static_cast<std::size_t>(fftSize));
             localEQ->set_inputnode(localBufferSource);
             for ( size_t i = 0; i < eq.gains.size(); ++i ) {
                 localEQ->set_band_gain_db(i, eq.gains[i]);
@@ -1100,9 +1095,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
-                            size_t                      offset,
-                            std::uint8_t                intensity) {
+    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
+                                        size_t                      offset,
+                                        std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);

@@ -3,6 +3,7 @@
 #include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/AsciiFontData.h"
+#include "common/UnicodeFontData.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -180,6 +181,10 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
+    /// @return 有效窗口内容缩放；无效配置回退为 1。
+    [[nodiscard]] static float currentFontRasterScale();
+
     /// @brief 画布名称
     std::string m_canvasName;
 
@@ -206,8 +211,16 @@ private:
 
     /// @brief 当前离屏画布图集中已加载的多档 ASCII 字体度量。
     Common::AsciiFontAtlasMetrics m_asciiFontAtlasMetrics;
+    /// @brief 当前离屏画布图集中按项目资源名加载的 Unicode 字体度量。
+    Common::UnicodeFontMetrics m_unicodeFontMetrics;
     /// @brief 最近一次加载图集时使用的软件 ASCII 字体偏好。
     std::string m_loadedAsciiFontPreference;
+    /// @brief 最近一次加载图集时使用的软件 CJK 字体偏好。
+    std::string m_loadedCjkFontPreference;
+    /// @brief 最近一次发布字体图集时使用的 DPI 栅格倍率。
+    float m_loadedFontRasterScale{ 0.0F };
+    /// @brief 可见标签已请求补载的 Unicode 码点，跨图集重建保留。
+    std::vector<std::uint32_t> m_requestedUnicodeCodepoints;
 
     ///@brief 全局图集
     std::unique_ptr<Graphic::VKTextureAtlas> m_textureAtlas{ nullptr };

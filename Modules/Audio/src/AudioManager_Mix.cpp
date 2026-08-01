@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "audio/AudioTimelineMixerNode.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
 
@@ -41,42 +42,30 @@ MixerChannelMode fromIceChannelMode(ice::MixBusChannelMode mode)
     return MixerChannelMode::Stereo;
 }
 }  // namespace
-/// @brief 设置主音轨音量并立即应用到音频节点。
+/// @brief 设置复合时间线主增益并立即应用。
 /// @param volume 目标音量。
 void AudioManager::setMainTrackVolume(float volume)
 {
     m_mainTrackVolume = std::clamp(volume, 0.0f, 1.0f);
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
+    refreshAudioTimelineVolume();
 }
 
-/// @brief 获取主音轨音量。
+/// @brief 获取复合时间线主增益。
 /// @return 主音轨音量。
 float AudioManager::getMainTrackVolume() const
 {
     return m_mainTrackVolume;
 }
 
-/// @brief 设置主音轨静音状态并立即应用。
+/// @brief 设置复合时间线主静音状态并立即应用。
 /// @param muted 是否静音。
 void AudioManager::setMainTrackMute(bool muted)
 {
     m_mainTrackMuted = muted;
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
+    refreshAudioTimelineVolume();
 }
 
-/// @brief 获取主音轨是否静音。
+/// @brief 获取复合时间线主静音状态。
 /// @return 静音时返回 true。
 bool AudioManager::isMainTrackMuted() const
 {
@@ -97,6 +86,20 @@ void AudioManager::refreshAuditionTrackVolume()
     m_auditionSource->setvolume(effectiveVolume);
 }
 
+/// @brief 按主增益、全局音量和 BGM 总线状态刷新复合时间线音量。
+void AudioManager::refreshAudioTimelineVolume()
+{
+    if ( !m_audioTimelineNode ) {
+        return;
+    }
+
+    float effectiveVolume = m_mainTrackVolume * m_globalVolume * m_bgmGain;
+    if ( m_mainTrackMuted || m_globalMuted || m_bgmGainMuted ) {
+        effectiveVolume = 0.0F;
+    }
+    m_audioTimelineNode->setMasterGain(effectiveVolume);
+}
+
 /// @brief 设置全局音量、保存配置并刷新所有轨道有效音量。
 /// @param volume 目标全局音量。
 void AudioManager::setGlobalVolume(float volume)
@@ -108,15 +111,7 @@ void AudioManager::setGlobalVolume(float volume)
     settings.globalVolume = m_globalVolume;
     Config::AppConfig::instance().save();
 
-    // 重新应用全局音量到主音轨
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
-
+    refreshAudioTimelineVolume();
     refreshAuditionTrackVolume();
     refreshSFXEffectiveVolumes();
 }
@@ -162,7 +157,7 @@ float AudioManager::getOutputLevelR() const
 /// @return 左声道电平。
 float AudioManager::getMainTrackLevelL() const
 {
-    if ( m_bgmSource ) return m_bgmSource->get_left_level();
+    if ( m_audioTimelineNode ) return m_audioTimelineNode->leftLevel();
     return 0.0f;
 }
 
@@ -170,7 +165,7 @@ float AudioManager::getMainTrackLevelL() const
 /// @return 右声道电平。
 float AudioManager::getMainTrackLevelR() const
 {
-    if ( m_bgmSource ) return m_bgmSource->get_right_level();
+    if ( m_audioTimelineNode ) return m_audioTimelineNode->rightLevel();
     return 0.0f;
 }
 

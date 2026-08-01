@@ -12,6 +12,7 @@
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "runtime/AppThreadPool.h"

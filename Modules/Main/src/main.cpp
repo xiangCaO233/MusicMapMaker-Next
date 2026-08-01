@@ -8,6 +8,7 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"

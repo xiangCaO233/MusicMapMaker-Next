@@ -1,9 +1,11 @@
 #pragma once
 
+#include "config/EditorSettings.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include <entt/entt.hpp>
 #include <filesystem>
+#include <string_view>
 
 namespace MMM
 {
@@ -12,6 +14,14 @@ class Project;
 
 namespace MMM::Logic::SessionUtils
 {
+
+/// @brief 判断音符是否允许在当前折线编辑模式下响应编辑操作。
+/// @param note 待判断的音符组件。
+/// @param settings 当前编辑器行为设置。
+/// @return 折线编辑开启时返回 true；关闭时仅主 Note 和 Hold 返回 true。
+/// @warning 逻辑与渲染热路径：只读取组件类型和设置布尔值。
+bool isNoteEditable(const NoteComponent&          note,
+                    const Config::EditorSettings& settings);
 
 /// @brief 判断给定视口是否为主编辑画布。
 bool isMainCanvasCameraId(const std::string& cameraId);
@@ -27,6 +37,18 @@ struct SnapResult {
     int    numerator{ 0 };      ///< 分子
     int    denominator{ 1 };    ///< 分母
 };
+
+/// @brief 按物件放置磁吸配置计算单个 BPM 段内最近的分拍线。
+/// @param rawTime 原始逻辑时间。
+/// @param timingTime 当前 BPM 段起始时间。
+/// @param nextTimingTime 下一 BPM 段起始时间；末段可传正无穷。
+/// @param bpm 当前 BPM 值。
+/// @param settings 编辑器行为设置。
+/// @return 已启用且存在合法分拍候选时返回磁吸结果，否则返回未磁吸结果。
+/// @warning 逻辑热路径：绘制、移动和悬停预览会频繁调用；仅允许固定上限循环。
+SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
+                                        double nextTimingTime, double bpm,
+                                        const Config::EditorSettings& settings);
 
 /// @brief 计算指定时间点从首个 BPM Timing 起算的拍号。
 /// @param time 待查询的谱面时间，单位秒。
@@ -95,14 +117,55 @@ void rebuildHitEvents(SessionContext& ctx);
 /// AudioManager 当前缓存时长和 currentBeatmap 元数据，禁止加入文件系统访问。
 double getEffectiveTotalTimeSeconds(const SessionContext& ctx);
 
-/// @brief 解析当前谱面主音频的可访问文件路径。
-/// @param ctx 会话上下文引用。
-/// @param project 当前项目；为空时回退到谱面文件所在目录。
-/// @return 优先返回存在的音频路径；没有可访问文件时返回最佳候选路径。
-/// @warning 低频资源路径解析：会访问文件系统和项目资源表，仅允许在载入谱面、
-/// 播放状态切换、切换画布或元数据变更时调用，禁止放入每帧 update。
-std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
-                                           const ::MMM::Project* project);
+/// @brief 计算玩家物件和 Timing 共同决定的谱面内容结束时间。
+/// @param beatMap 待读取的谱面领域对象。
+/// @return 不包含自动采样长度的非负结束时间，单位秒。
+/// @warning 低频描述符构建路径：会遍历完整 Note/Timing 集合，禁止在每帧
+/// update 热路径直接调用。
+double calculateChartContentEndSeconds(const MMM::BeatMap& beatMap);
+
+/// @brief 重建当前会话的复合音频时间线描述符。
+/// @param ctx 目标会话上下文。
+/// @param project 当前项目；为空时仅生成缺失资源诊断。
+/// @return 描述符指纹是否发生变化。
+/// @warning 低频脏分支：会遍历采样、解析文件路径并排序，禁止无脏标记调用。
+bool rebuildAudioTimelineDescriptor(SessionContext&       ctx,
+                                    const ::MMM::Project* project);
+
+/// @brief 将当前会话描述符提交为全局唯一活动音频时间线。
+/// @param ctx 目标会话；仅 isActiveSession 为 true 时允许修改 AudioManager。
+/// @param shouldPlay 提交和 Seek 后是否立即播放。
+/// @return 时间线已复用或成功加载时返回 true。
+/// @warning 低频激活路径：可能同步解码全部引用资源，禁止每帧无条件调用。
+bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay);
+
+/// @brief 多标签切换时可独立测试的时间和播放态决策。
+struct AudioTimelineSwitchDecision {
+    /// @brief 目标会话应采用的时间。
+    double m_targetTime{ 0.0 };
+    /// @brief 切换后是否恢复播放。
+    bool m_resumePlayback{ false };
+};
+
+/// @brief 根据完整时间线指纹决定多标签切换语义。
+/// @return 仅同指纹时同步旧时间并按配置恢复播放；不同指纹保留目标状态。
+AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
+    std::string_view previousFingerprint, std::string_view targetFingerprint,
+    double previousTime, double targetTime, bool previousWasPlaying,
+    bool stopPlaybackOnScroll, bool synchronizeMatchingTimelines);
+
+/// @brief 将 AudioManager transport 快照应用为会话唯一播放时钟。
+/// @param ctx 接收状态的会话。
+/// @param loadedFingerprint 当前 AudioManager 已加载指纹。
+/// @param snapshot 位置、状态和发布时间一致的音频时钟快照。
+/// @param nowSteadySeconds 当前逻辑帧的 steady_clock 秒数。
+/// @param syncConfig 音画校准配置。
+/// @return 应继续处理播放态动画和 HitFX 时返回 true。
+/// @warning 逻辑热路径：只比较缓存字符串并更新常量级会话状态。
+bool applyAudioTimelineTransportSnapshot(
+    SessionContext& ctx, std::string_view loadedFingerprint,
+    const Audio::AudioTimelineClockSnapshot& snapshot, double nowSteadySeconds,
+    const Config::SyncConfig& syncConfig);
 
 /// @brief 根据当前背景类型探测并更新会话中的背景原始尺寸。
 /// @param ctx 目标会话上下文。

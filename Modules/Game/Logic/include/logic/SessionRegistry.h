@@ -26,8 +26,8 @@ struct SessionEntry {
     /// @brief 当前会话谱面文件的稳定路径键，用于阻止重复打开同一谱面。
     std::string beatmapPathKey;
 
-    /// @brief 当前会话主音轨文件的稳定路径键，用于同主音轨画布同步。
-    std::string mainAudioSyncKey;
+    /// @brief 当前会话完整复合音频时间线的稳定指纹。
+    std::string audioTimelineFingerprint;
 
     /// @brief 是否为初始 Logo 占位画布，尚未加载谱面时为 true。
     bool isLogoPlaceholder{ false };
@@ -50,8 +50,8 @@ struct SessionSnapshotEntry {
     /// @brief 该 Session 对应主画布本帧是否可见。
     bool isCanvasVisible{ true };
 
-    /// @brief 当前会话主音轨同步键。
-    std::string mainAudioSyncKey;
+    /// @brief 当前会话完整复合音频时间线指纹。
+    std::string audioTimelineFingerprint;
 
     /// @brief 该条目是否为 Logo 占位画布。
     bool isLogoPlaceholder{ false };

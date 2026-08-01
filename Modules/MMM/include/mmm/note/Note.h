@@ -1,7 +1,11 @@
 #pragma once
 
 #include "mmm/Metadata.h"
+#include "mmm/sample/AudioSample.h"
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace MMM
@@ -36,8 +40,33 @@ public:
     /// @brief 是否为子物件（隶属于 Polyline）
     bool m_isSubNote{ false };
 
-    /// @brief 所有物件元数据
+    /// @brief 物件命中时触发的可选采样绑定，是绑定状态的唯一权威来源。
+    std::optional<AudioSampleBinding> m_sampleBinding;
+
+    /// @brief 所有物件元数据。
     NoteMetadata m_metadata;
+
+    /// @brief 设置物件命中采样。
+    /// @param binding 待设置的采样绑定；资源标识为空时清除绑定。
+    void setSampleBinding(AudioSampleBinding binding)
+    {
+        if ( binding.m_audioResourceId.empty() ) {
+            clearSampleBinding();
+            return;
+        }
+        m_sampleBinding = std::move(binding);
+    }
+
+    /// @brief 清除物件命中采样。
+    void clearSampleBinding() { m_sampleBinding.reset(); }
+
+    /// @brief 获取物件命中采样。
+    /// @return 有效采样绑定；没有绑定时返回空。
+    [[nodiscard]] const std::optional<AudioSampleBinding>&
+    getSampleBinding() const
+    {
+        return m_sampleBinding;
+    }
 
     /// @brief 从osu描述加载
     virtual void from_osu_description(

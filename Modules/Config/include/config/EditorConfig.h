@@ -22,13 +22,15 @@ struct EditorConfig {
     std::vector<std::string> recentProjects;
 
     /// @brief 将物件渲染选项恢复为应用默认配置。
-    /// @details 恢复横纵缩放、长条填充模式和打开项目时的默认调色方案。
+    /// @details
+    /// 恢复横纵缩放、绑定音效标签、长条填充模式和打开项目时的默认调色方案。
     void resetNoteRenderingToDefaults()
     {
         const EditorConfig defaults;
-        visual.noteScaleX   = defaults.visual.noteScaleX;
-        visual.noteScaleY   = defaults.visual.noteScaleY;
-        visual.noteFillMode = defaults.visual.noteFillMode;
+        visual.noteScaleX            = defaults.visual.noteScaleX;
+        visual.noteScaleY            = defaults.visual.noteScaleY;
+        visual.showBoundSampleLabels = defaults.visual.showBoundSampleLabels;
+        visual.noteFillMode          = defaults.visual.noteFillMode;
         settings.defaultColorPaletteSchemeName =
             defaults.settings.defaultColorPaletteSchemeName;
     }
@@ -46,18 +48,9 @@ struct EditorConfig {
     }
 };
 
-inline void to_json(nlohmann::json& j, const EditorConfig& c)
-{
-    j = nlohmann::json{ { "visual", c.visual },
-                        { "settings", c.settings },
-                        { "recentProjects", c.recentProjects } };
-}
-
-inline void from_json(const nlohmann::json& j, EditorConfig& c)
-{
-    c.visual         = j.value("visual", VisualConfig());
-    c.settings       = j.value("settings", EditorSettings());
-    c.recentProjects = j.value("recentProjects", std::vector<std::string>());
-}
+/// @brief 将完整编辑器配置序列化为 JSON。
+void to_json(nlohmann::json& json, const EditorConfig& config);
+/// @brief 从 JSON 读取完整编辑器配置。
+void from_json(const nlohmann::json& json, EditorConfig& config);
 
 }  // namespace MMM::Config

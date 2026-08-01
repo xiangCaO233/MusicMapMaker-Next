@@ -7,12 +7,14 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "implot.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <ice/config/config.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
@@ -21,6 +23,8 @@
 
 namespace MMM::UI
 {
+/// @brief 波形离线 EQ 单次处理的最大帧数。
+constexpr std::size_t WAVEFORM_EQ_BLOCK_FRAMES{ 44100U };
 
 /**
  * @brief 一个简单的节点，用于在离线处理中将已有的 Buffer 提供给 EffectNode
@@ -111,19 +115,14 @@ void AudioWaveformView::update(UIManager* sourceManager)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime  = visualTime - globalVisualOffset;
-        // 亚帧平滑补偿 (同步视觉偏移)
-        if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
-             snapshot->snapshotSysTime > 0.0 ) {
-            double now =
+        audioTime  = snapshot->playbackTime;
+        if ( !snapshot->isPreviewDragging ) {
+            const double now =
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
-            double dt = now - snapshot->snapshotSysTime;
-            if ( dt > 0.0 && dt < 0.1 ) {
-                visualTime += dt * snapshot->playbackSpeed;
-                audioTime += dt * snapshot->playbackSpeed;
-            }
+            visualTime = snapshot->resolveCurrentTimeAt(now);
+            audioTime  = snapshot->resolvePlaybackTimeAt(now);
         }
     }
 
@@ -340,9 +339,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
             // 2. 绘制悬停绿色竖线和预览框
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
-                ImVec2 plotMin         = ImPlot::GetPlotPos();
-                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
-                                           plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin = ImPlot::GetPlotPos();
+                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
+                                   plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -415,8 +414,6 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
                 if ( ImGui::IsItemDeactivated() &&
                      ImGui::GetIO().MouseReleased[0] ) {
-                    audioManager.seek(
-                        std::clamp(hoverAudioTime, 0.0, totalTime));
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdSeek{ hoverAudioTime }));
@@ -462,6 +459,8 @@ void AudioWaveformView::syncEQ()
             freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
         }
         m_previewEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
+        m_previewEQ->prepare(ice::ICEConfig::internal_format,
+                             WAVEFORM_EQ_BLOCK_FRAMES);
         m_previewEQ->set_inputnode(g_bufferSource);
     }
 
@@ -491,7 +490,7 @@ void AudioWaveformView::fullRecalculate()
 
     syncEQ();  // 确保 EQ 参数同步
 
-    const size_t chunkSize = 44100;  // 1秒一块
+    const size_t chunkSize = WAVEFORM_EQ_BLOCK_FRAMES;
     m_rawBuffer->resize(ice::ICEConfig::internal_format, chunkSize);
     m_processBuffer->resize(ice::ICEConfig::internal_format, chunkSize);
 
@@ -550,8 +549,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
     double viewEnd   = visualTime + m_zoom;
 
     for ( int i = 0; i < m_samplePoints; ++i ) {
-        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                   (viewEnd - viewStart);
+        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                     (viewEnd - viewStart);
         m_times[i] = t;
 
         double audioT = t - waveformVisualOffset;

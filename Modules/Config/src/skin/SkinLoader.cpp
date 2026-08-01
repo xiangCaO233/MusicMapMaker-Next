@@ -7,12 +7,19 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <sol/sol.hpp>
 #include <vector>
 
 namespace MMM
 {
 namespace Config
 {
+
+/// @brief 旧版内置 IVM 皮肤迁移后使用的交互发光轮次。
+constexpr int IVM_INTERACTION_GLOW_PASSES = 6;
+
+/// @brief 旧版内置 IVM 皮肤迁移后使用的交互发光强度。
+constexpr float IVM_INTERACTION_GLOW_INTENSITY = 0.5F;
 
 SkinManager& SkinManager::instance()
 {
@@ -241,12 +248,34 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     sol::optional<sol::table> effectsTableOpt = skinTable["effects"];
     if ( effectsTableOpt ) {
         sol::table                effectsTable = effectsTableOpt.value();
-        sol::optional<sol::table> glowOpt      = effectsTable["glow"];
+        sol::optional<sol::table> hitEffectOpt = effectsTable["hit_effect"];
+        if ( hitEffectOpt ) {
+            const std::string layout =
+                hitEffectOpt.value()["layout"].get_or<std::string>("fixed");
+            if ( layout == "track_fill" ) {
+                m_data.effects.hitEffect.layout =
+                    HitEffectLayoutMode::TrackFill;
+            } else if ( layout != "fixed" ) {
+                XWARN("未知的打击特效布局模式 '{}', 已回退到 fixed", layout);
+            }
+        }
+
+        sol::optional<sol::table> glowOpt = effectsTable["glow"];
         if ( glowOpt ) {
             m_data.effects.glow.passes = glowOpt.value()["passes"].get_or(8);
             m_data.effects.glow.intensity =
                 glowOpt.value()["intensity"].get_or(1.0f);
         }
+    }
+
+    // 旧版内置 IVM 资源曾将发光完全关闭。资源包尚未更新时也要恢复悬浮与
+    // 选中反馈；限定内置目录和主题名，避免改变其他皮肤显式关闭发光的语义。
+    if ( m_data.themeName == "IVM" && skinPath.filename() == "ivm" &&
+         m_data.effects.glow.passes <= 0 &&
+         m_data.effects.glow.intensity <= 0.0F ) {
+        m_data.effects.glow.passes    = IVM_INTERACTION_GLOW_PASSES;
+        m_data.effects.glow.intensity = IVM_INTERACTION_GLOW_INTENSITY;
+        XINFO("已迁移旧版 IVM 交互发光配置");
     }
 
     // 解析 canvases_2d

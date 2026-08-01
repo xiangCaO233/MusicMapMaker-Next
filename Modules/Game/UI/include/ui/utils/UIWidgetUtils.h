@@ -3,6 +3,7 @@
 #include "imgui.h"
 
 #include <string>
+#include <string_view>
 
 struct Clay_BoundingBox;
 
@@ -270,6 +271,17 @@ void FeedbackDockNodeControls(ImGuiID dockspaceId);
 
 namespace MMM::UI::Utils
 {
+
+/// @brief 在固定裁剪区域中绘制单行自动滚动文本。
+/// @param text 文本内容。
+/// @param startPos 绘制区域左上角。
+/// @param availableWidth 可用宽度。
+/// @param targetHeight 可用高度。
+/// @param centerWhenFits 文本完整放得下时是否水平居中。
+/// @warning UI 热路径：只测量当前短文本并向窗口 DrawList 添加文字。
+void drawScrollingText(std::string_view text, ImVec2 startPos,
+                       float availableWidth, float targetHeight,
+                       bool centerWhenFits = false);
 
 /// @brief Selectable 滚动文本核心绘制结果。
 struct ScrollingSelectableResult {

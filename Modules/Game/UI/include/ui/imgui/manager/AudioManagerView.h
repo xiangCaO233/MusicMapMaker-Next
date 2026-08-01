@@ -4,6 +4,7 @@
 #include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -67,11 +68,8 @@ private:
         /// @brief 当前皮肤常驻音效数量。
         size_t permanentSfxCount{ 0 };
 
-        /// @brief 当前项目主音轨数量。
-        size_t mainTrackCount{ 0 };
-
-        /// @brief 当前项目音效音轨数量。
-        size_t effectTrackCount{ 0 };
+        /// @brief 当前项目全部音频资源数量。
+        size_t projectAudioCount{ 0 };
 
         /// @brief 当前是否展开全局设置段落。
         bool showGlobalSettings{ true };
@@ -232,6 +230,9 @@ private:
         /// @brief 音频资源路径。
         std::string m_path;
 
+        /// @brief 用于按需读取元数据的音频文件绝对路径。
+        std::filesystem::path m_absolutePath;
+
         /// @brief 音频资源类型。
         AudioTrackType m_type{ AudioTrackType::Effect };
 
@@ -249,6 +250,9 @@ private:
 
         /// @brief 是否成功读取最后修改时间。
         bool m_hasLastWriteTime{ false };
+
+        /// @brief 是否已经尝试读取文件大小和修改时间。
+        bool m_metadataLoaded{ false };
     };
 
     /// @brief 当前是否展开全局设置段落。
@@ -262,6 +266,15 @@ private:
 
     /// @brief 音频资源表格行缓存。
     std::vector<AudioTableRow> m_audioTableRows;
+
+    /// @brief 各类音频资源分组的展开状态，索引与分组排序等级一致。
+    std::array<bool, 4> m_audioTableGroupExpanded{ false, false, true, true };
+
+    /// @brief 各类音频资源在排序行缓存中的起始索引。
+    std::array<size_t, 4> m_audioTableGroupStarts{};
+
+    /// @brief 各类音频资源在排序行缓存中的资源数量。
+    std::array<size_t, 4> m_audioTableGroupSizes{};
 
     /// @brief 上次构造音频表格缓存时的皮肤常驻音效数量。
     size_t m_cachedPermanentSfxCount{ 0 };
@@ -286,10 +299,11 @@ private:
     /// @brief 输出设备列表是否需要重新枚举。
     bool m_outputDevicesDirty{ true };
 
-    // --- 音轨管理相关 ---
-    std::string    m_manageTrackId;
-    AudioTrackType m_manageTrackType;
-    bool           m_openManageModal{ false };
+    /// @brief 等待移除确认的项目音轨 ID。
+    std::string m_removeTrackId;
+
+    /// @brief 下一帧是否打开移除音轨确认窗口。
+    bool m_openRemoveModal{ false };
 
     // --- 布局池 (用于避免热路径堆分配) ---
     std::deque<CLayHBox> m_settingRows;
@@ -310,7 +324,7 @@ private:
 
     /// @brief 捕获当前音频管理器布局输入。
     /// @return 当前项目、皮肤音效数量和展开状态。
-    /// @warning UI 热路径：每帧仅统计音频资源数量，禁止拷贝资源内容。
+    /// @warning UI 热路径：每帧只读取容器大小，禁止遍历或拷贝资源内容。
     LayoutInputSnapshot captureLayoutInput() const;
 
     /// @brief 获取音频管理器布局测量缓存。

@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <string>

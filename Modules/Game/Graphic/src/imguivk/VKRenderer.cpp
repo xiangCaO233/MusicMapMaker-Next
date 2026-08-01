@@ -1,9 +1,11 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "event/core/EventBus.h"
 #include "event/ui/ClearColorUpdateEvent.h"
+#include "graphic/CursorManager.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "log/colorful-log.h"
 
 namespace MMM::Graphic

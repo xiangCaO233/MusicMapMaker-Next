@@ -8,9 +8,12 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -172,7 +175,10 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     auto& audio = Audio::AudioManager::instance();
     audio.clearSoundEffects();
     preloadCurrentSkinSoundEffects();
-    Logic::EditorEngine::instance().reloadCurrentProjectEffectSoundEffects();
+    Logic::EditorEngine::instance().registerCurrentProjectEffectSoundEffects();
+    if ( m_sourceManager ) {
+        m_sourceManager->reloadOpenEffectAudioTracks();
+    }
 
     if ( auto ctx = Graphic::VKContext::get() ) {
         ctx->get().applyTheme();
@@ -204,7 +210,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -345,10 +351,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -476,17 +482,27 @@ void SettingsView::drawSoftwareSettings()
         addSettingItem(
             *sec,
             rowIndex,
-            "皮肤",
+            TR_CACHE("ui.settings.software.skin").data(),
             maxLabelW,
             [this, &changed, activeSkinDirectory](Clay_BoundingBox r, bool) {
-                ImGui::SetNextItemWidth(r.width);
+                const ImGuiStyle& style         = ImGui::GetStyle();
+                constexpr float   actionButtonW = 35.0f;
+                const float       comboWidth =
+                    std::max(1.0f,
+                             r.width - actionButtonW * 3.0f -
+                                 style.ItemSpacing.x * 3.0f);
+                ImGui::SetNextItemWidth(comboWidth);
                 if ( m_availableSkinDirectories.empty() ) {
-                    ImGui::TextDisabled("%s", "未找到可用皮肤");
-                    return;
-                }
-
-                if ( ::MMM::UI::FeedbackBeginCombo(
-                         "##SkinCombo", activeSkinDirectory.c_str()) ) {
+                    ImGui::BeginDisabled();
+                    if ( ::MMM::UI::FeedbackBeginCombo(
+                             "##SkinCombo",
+                             TR_CACHE("ui.settings.software.skin.none")
+                                 .data()) ) {
+                        ::MMM::UI::FeedbackEndCombo();
+                    }
+                    ImGui::EndDisabled();
+                } else if ( ::MMM::UI::FeedbackBeginCombo(
+                                "##SkinCombo", activeSkinDirectory.c_str()) ) {
                     for ( const auto& directoryName :
                           m_availableSkinDirectories ) {
                         const bool selected =
@@ -506,6 +522,44 @@ void SettingsView::drawSoftwareSettings()
                     }
                     ::MMM::UI::FeedbackEndCombo();
                 }
+
+                ImGui::SameLine();
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(0.0f, style.FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                    ImVec2(0.5f, 0.5f));
+
+                ImGui::PushID("OpenSkinDirectory");
+                if ( ::MMM::UI::FeedbackButton(ICON_MMM_FOLDER_OPEN,
+                                               { actionButtonW, 0.0f }) ) {
+                    openSkinDirectory();
+                }
+                Utils::renderTooltip(
+                    TR_CACHE("ui.settings.software.skin.open_directory")
+                        .data());
+                ImGui::PopID();
+
+                ImGui::SameLine();
+                ImGui::PushID("ImportSkinPackage");
+                if ( ::MMM::UI::FeedbackButton(ICON_MMM_DOWNLOAD,
+                                               { actionButtonW, 0.0f }) ) {
+                    changed |= openSkinImportFilePicker();
+                }
+                Utils::renderTooltip(
+                    TR_CACHE("ui.settings.software.skin.import").data());
+                ImGui::PopID();
+
+                ImGui::SameLine();
+                ImGui::PushID("ExportSkinPackage");
+                if ( ::MMM::UI::FeedbackButton(ICON_MMM_PACK,
+                                               { actionButtonW, 0.0f }) ) {
+                    openSkinExportFilePicker();
+                }
+                Utils::renderTooltip(
+                    TR_CACHE("ui.settings.software.skin.export").data());
+                ImGui::PopID();
+
+                ImGui::PopStyleVar(2);
             });
 
         // 4. UI 主题
@@ -515,55 +569,53 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.theme").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         theme    = static_cast<int>(settings.theme);
-                const char* themes[] = {
-                    TR_CACHE("ui.settings.software.theme.auto").data(),
-                    "DeepDark",
-                    "Dark",
-                    "Light",
-                    "Classic",
-                    "Microsoft",
-                    "Darcula",
-                    "Photoshop",
-                    "Unreal",
-                    "Gold",
-                    "RoundedVisualStudio",
-                    "SonicRiders",
-                    "DarkRuda",
-                    "SoftCherry",
-                    "Enemymouse",
-                    "DiscordDark",
-                    "Comfy",
-                    "PurpleComfy",
-                    "FutureDark",
-                    "CleanDark",
-                    "Moonlight",
-                    "Cecilia",
-                    "ComfortableLight",
-                    "HazyDark",
-                    "Everforest",
-                    "Windark",
-                    "Rest",
-                    "ComfortableDarkCyan",
-                    "KazamCherry"
-                };
-                const int themeCount = IM_ARRAYSIZE(themes);
-                if ( theme < 0 || theme >= themeCount ) {
-                    theme          = static_cast<int>(Config::UITheme::Auto);
-                    settings.theme = Config::UITheme::Auto;
-                    if ( auto ctx = Graphic::VKContext::get() ) {
-                        ctx->get().applyTheme();
-                    }
-                    changed = true;
-                }
+                auto context = Graphic::VKContext::get();
+                const Graphic::ImGuiThemeRegistry* themeRegistry =
+                    context ? &context->get().getThemeRegistry() : nullptr;
+                const Graphic::ImGuiTheme* selectedTheme =
+                    themeRegistry ? themeRegistry->findTheme(settings.theme)
+                                  : nullptr;
+                const char* preview =
+                    settings.theme == Config::UI_THEME_AUTO_ID
+                        ? TR_CACHE("ui.settings.software.theme.auto").data()
+                    : selectedTheme ? selectedTheme->displayName().data()
+                                    : settings.theme.c_str();
+
                 ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackCombo(
-                         "##ThemeCombo", &theme, themes, themeCount) ) {
-                    settings.theme = static_cast<Config::UITheme>(theme);
-                    if ( auto ctx = Graphic::VKContext::get() ) {
-                        ctx->get().applyTheme();
+                if ( ::MMM::UI::FeedbackBeginCombo("##ThemeCombo", preview) ) {
+                    const bool automaticSelected =
+                        settings.theme == Config::UI_THEME_AUTO_ID;
+                    if ( ::MMM::UI::FeedbackSelectable(
+                             TR_CACHE("ui.settings.software.theme.auto").data(),
+                             automaticSelected) ) {
+                        settings.theme = Config::UI_THEME_AUTO_ID;
+                        if ( context ) {
+                            context->get().applyTheme();
+                        }
+                        changed = true;
                     }
-                    changed = true;
+                    if ( automaticSelected ) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+
+                    if ( themeRegistry ) {
+                        for ( const auto& theme : themeRegistry->themes() ) {
+                            if ( !theme ) continue;
+                            const bool selected = settings.theme == theme->id();
+                            ImGui::PushID(theme->id().data());
+                            if ( ::MMM::UI::FeedbackSelectable(
+                                     theme->displayName().data(), selected) ) {
+                                settings.theme = theme->id();
+                                context->get().applyTheme();
+                                changed = true;
+                            }
+                            ImGui::PopID();
+                            if ( selected ) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                    }
+                    ::MMM::UI::FeedbackEndCombo();
                 }
             });
 
@@ -1265,6 +1317,9 @@ void SettingsView::drawSoftwareSettings()
     ImVec2 sz       = m_contentVBox.renderInCurrent(
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
+
+    changed |= renderSkinPackageFileDialogs(
+        Config::AppConfig::instance().getWindowContentScale());
 
     if ( changed ) {
         Event::EventBus::instance().publish(

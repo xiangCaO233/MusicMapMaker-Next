@@ -3,9 +3,51 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 
 namespace MMM
 {
+namespace
+{
+/// @brief 按冒号拆分 osu! Hold 参数，并保留结尾空字段。
+/// @param value 待拆分的 Hold 参数字符串。
+/// @return 包含结束时间和 HitSample 参数的字段列表。
+std::vector<std::string> splitOsuHoldParameters(std::string_view value)
+{
+    std::vector<std::string> fields;
+    std::size_t              start = 0;
+    while ( start <= value.size() ) {
+        const std::size_t end = value.find(':', start);
+        fields.emplace_back(value.substr(start,
+                                         end == std::string_view::npos
+                                             ? value.size() - start
+                                             : end - start));
+        if ( end == std::string_view::npos ) break;
+        start = end + 1;
+    }
+    return fields;
+}
+
+/// @brief 将 osu! Hold 的 HitSample 参数与自定义音效文件名重新组合。
+/// @param original 原始 Hold 参数字符串。
+/// @param sampleFile 通用物件字段保存的自定义音效文件名。
+/// @return 不含结束时间、固定包含五段参数的 HitSample 字符串。
+std::string composeOsuHoldHitSample(std::string_view original,
+                                    std::string_view sampleFile)
+{
+    auto fields = splitOsuHoldParameters(original);
+    fields.resize(6);
+    fields[5] = sampleFile;
+
+    std::ostringstream stream;
+    for ( std::size_t index = 1; index < fields.size(); ++index ) {
+        if ( index > 1 ) stream << ':';
+        stream << fields[index];
+    }
+    return stream.str();
+}
+}  // namespace
+
 /// @brief 从osu描述加载
 void Hold::from_osu_description(const std::vector<std::string>& description,
                                 int32_t                         orbit_count)
@@ -41,17 +83,16 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
 
     // 长条结束时间
     // 结束时间和音效组参数粘一起了
-    std::string        token;
-    const std::string  sampleGroup = MMM::Internal::safeAt(description, 5);
-    std::istringstream noteiss(sampleGroup);
-
-    // 最后一组的第一个参数就是结束时间
-    std::vector<std::string> last_paras;
-    while ( std::getline(noteiss, token, ':') ) {
-        last_paras.push_back(token);
-    }
+    const std::string sampleGroup = MMM::Internal::safeAt(description, 5);
+    const auto        last_paras  = splitOsuHoldParameters(sampleGroup);
 
     osunote_prop["samplegroup"] = sampleGroup;
+    const auto sampleFile       = MMM::Internal::safeAt(last_paras, 5);
+    if ( sampleFile.empty() ) {
+        clearSampleBinding();
+    } else {
+        setSampleBinding(AudioSampleBinding{ sampleFile, 1.0F });
+    }
 
     m_duration = static_cast<int32_t>(MMM::Internal::safeStod(
                      MMM::Internal::safeAt(last_paras, 0))) -
@@ -101,21 +142,14 @@ std::string Hold::to_osu_description(int32_t orbit_count)
     oss << end_time << ":";
 
     // 音效组参数
-    if ( auto it = osunote_prop.find("samplegroup");
-         it != osunote_prop.end() ) {
-        std::string notegroup = it->second;
-        if ( auto colonPos = notegroup.find(':');
-             colonPos != std::string::npos ) {
-            // 只取第一个冒号之后的部分作为 hitSample
-            std::string samplepart = notegroup.substr(colonPos + 1);
-            oss << samplepart;
-        } else {
-            // 如果没有冒号，则可能是旧格式或异常，尝试直接补齐
-            oss << "0:0:0:0:";
-        }
-    } else {
-        oss << "0:0:0:0:";
-    }
+    const auto             sampleGroup = osunote_prop.contains("samplegroup")
+                                             ? osunote_prop.at("samplegroup")
+                                             : std::string("0:0:0:0:0:");
+    const auto&            binding     = getSampleBinding();
+    const std::string_view sampleFile =
+        binding ? std::string_view(binding->m_audioResourceId)
+                : std::string_view{};
+    oss << composeOsuHoldHitSample(sampleGroup, sampleFile);
 
     return oss.str();
 }

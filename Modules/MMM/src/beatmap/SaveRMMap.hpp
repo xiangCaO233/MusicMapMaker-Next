@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -39,6 +40,110 @@ inline std::optional<int32_t> parseRMInt32(std::string_view text)
 /// @brief 将谱面保存为 RM/IMD 二进制格式。
 inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
+    /// @brief 判断任意玩家物件是否绑定了 RM/IMD 导出器无法表达的采样。
+    const auto hasUnsupportedNoteSampleBinding = [&beatMap]() {
+        const auto containsBinding = [](const auto& notes) {
+            return std::any_of(
+                notes.begin(), notes.end(), [](const auto& note) {
+                    return note.getSampleBinding().has_value();
+                });
+        };
+        if ( containsBinding(beatMap.m_noteData.notes) ||
+             containsBinding(beatMap.m_noteData.holds) ||
+             containsBinding(beatMap.m_noteData.flicks) ||
+             containsBinding(beatMap.m_noteData.polylines) ) {
+            return true;
+        }
+        return std::any_of(
+            beatMap.m_noteData.polylines.begin(),
+            beatMap.m_noteData.polylines.end(),
+            [](const Polyline& polyline) {
+                return std::any_of(
+                    polyline.m_subNotes.begin(),
+                    polyline.m_subNotes.end(),
+                    [](const auto& noteRef) {
+                        return noteRef.get().getSampleBinding().has_value();
+                    });
+            });
+    };
+    if ( hasUnsupportedNoteSampleBinding() ) {
+        XERROR("RM/IMD 导出失败：格式无法表达玩家物件采样绑定");
+        return false;
+    }
+
+    const int representableBgmTrackCount =
+        beatMap.m_audioSamples.empty() ? 0 : 1;
+    if ( beatMap.m_baseMapMetadata.bgm_track_count !=
+         representableBgmTrackCount ) {
+        XERROR(
+            "RM/IMD 导出失败：格式只能由单音频隐式表达 {} 条 BGM "
+            "轨，当前谱面显式保存了 {} 条",
+            representableBgmTrackCount,
+            beatMap.m_baseMapMetadata.bgm_track_count);
+        return false;
+    }
+
+    const AudioSampleEvent* legacyAudioSample = nullptr;
+    if ( beatMap.m_audioSamples.size() > 1 ) {
+        XERROR(
+            "RM/IMD 导出失败：格式只能表达一个隐式音频，当前有 {} "
+            "个自动采样对象",
+            beatMap.m_audioSamples.size());
+        return false;
+    }
+    if ( !beatMap.m_audioSamples.empty() ) {
+        legacyAudioSample            = &beatMap.m_audioSamples.front();
+        const uint32_t firstBgmTrack = static_cast<uint32_t>(
+            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        if ( legacyAudioSample->m_audioResourceId.empty() ||
+             !std::isfinite(legacyAudioSample->m_timestamp) ||
+             std::abs(legacyAudioSample->m_timestamp) > 1e-6 ||
+             legacyAudioSample->m_offsetMs != 0 ||
+             legacyAudioSample->m_track != firstBgmTrack ||
+             !std::isfinite(legacyAudioSample->m_volume) ||
+             std::abs(legacyAudioSample->m_volume - 1.0F) > 1e-6F ) {
+            XERROR(
+                "RM/IMD 导出失败：自动采样必须是 timestamp=0、offset=0、"
+                "track={}、volume=1 且音频引用非空；当前为 "
+                "timestamp={}、offset={}、track={}、volume={}、ref='{}'",
+                firstBgmTrack,
+                legacyAudioSample->m_timestamp,
+                legacyAudioSample->m_offsetMs,
+                legacyAudioSample->m_track,
+                legacyAudioSample->m_volume,
+                legacyAudioSample->m_audioResourceId);
+            return false;
+        }
+
+        const std::string outputFilename = Config::pathToUtf8(path.filename());
+        const size_t      firstSeparator = outputFilename.find('_');
+        const std::string audioPrefix =
+            firstSeparator == std::string::npos
+                ? std::string{}
+                : outputFilename.substr(0, firstSeparator);
+        const std::filesystem::path audioReference =
+            Config::utf8ToPath(legacyAudioSample->m_audioResourceId);
+        static constexpr std::array<std::string_view, 7> AUDIO_EXTENSIONS{
+            ".mp3", ".wav", ".ogg", ".flac", ".opus", ".aac", ".m4a"
+        };
+        const std::string audioExtension =
+            Config::pathToUtf8(audioReference.extension());
+        const bool supportedExtension =
+            std::find(AUDIO_EXTENSIONS.begin(),
+                      AUDIO_EXTENSIONS.end(),
+                      audioExtension) != AUDIO_EXTENSIONS.end();
+        if ( audioPrefix.empty() || audioReference.has_parent_path() ||
+             Config::pathToUtf8(audioReference.stem()) != audioPrefix ||
+             !supportedExtension ) {
+            XERROR(
+                "RM/IMD 导出失败：音频引用 '{}' 无法由输出文件名 '{}' "
+                "的同名前缀规则表达",
+                legacyAudioSample->m_audioResourceId,
+                outputFilename);
+            return false;
+        }
+    }
+
     std::ofstream ofs(path, std::ios::binary);
     if ( !ofs ) {
         XWARN("无法打开文件 [{}] 进行 RM/IMD 写出", Config::pathToUtf8(path));

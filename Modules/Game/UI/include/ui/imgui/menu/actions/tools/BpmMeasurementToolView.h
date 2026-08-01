@@ -49,12 +49,17 @@ public:
     void setMeasurementExportCallback(MeasurementExportCallback callback);
 
     /// @brief 打开窗口并选中指定项目音频轨道。
-    /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
+    /// @param audioTrackId 项目内音频资源 ID；为空时选择活动谱面的默认音频。
     void openWithAudioTrack(const std::string& audioTrackId);
 
-    /// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。
+    /// @brief 请求 BPM 工具窗口在下一次绘制时获得焦点并置于前层。
+    void requestFocus();
+
+    /// @brief 对指定或默认项目音频轨道执行自动 BPM 测量。
     /// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
-    void openWithAutoMeasurement(const std::string& audioTrackId);
+    /// @param keepWindowVisible 测量前窗口已打开时保持可见；否则仅在后台运行。
+    void requestAutomaticMeasurement(const std::string& audioTrackId,
+                                     bool               keepWindowVisible);
 
     /// @brief 获取当前选中的项目音频资源 ID。
     /// @return 当前选中的音频资源 ID，未选择时为空。
@@ -274,34 +279,39 @@ private:
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
     void handleBeatMarkerDrag(const ImVec2& rectMin, const ImVec2& rectMax,
-                              double viewStart, double viewEnd, int ownerId);
+                              double viewStart, double viewEnd,
+                              bool interactionHovered, int ownerId);
 
     /// @brief 处理播放指针顶部三角手柄的拖拽预览和松手跳转。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
     /// 松手后才执行实际播放跳转，不访问文件系统。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
-                                  int ownerId);
+                                  bool interactionHovered, int ownerId);
 
     /// @brief 处理分析视图的滚轮缩放和鼠标拖动平移。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param interactionHovered ImGui 已裁决当前区域可接收鼠标输入时为 true。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算。
     void handleTimelineNavigation(const ImVec2& rectMin, const ImVec2& rectMax,
-                                  double viewStart, double viewEnd);
+                                  double viewStart, double viewEnd,
+                                  bool interactionHovered);
 
     /// @brief 请求重新分析当前选择的音频轨道。
     /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
@@ -631,6 +641,12 @@ private:
 
     /// @brief 是否在下一帧打开自动测偏移应用确认弹窗。
     bool m_shouldOpenAutoApplyPopup{ false };
+
+    /// @brief 自动测偏是否仅在后台运行，不绘制 BPM 工具窗口。
+    bool m_backgroundAutomaticMeasurement{ false };
+
+    /// @brief 下一次绘制 BPM 工具窗口时是否请求焦点。
+    bool m_requestFocus{ false };
 
     /// @brief 是否在下一帧打开应用到谱面弹窗。
     bool m_shouldOpenApplyTimingPopup{ false };

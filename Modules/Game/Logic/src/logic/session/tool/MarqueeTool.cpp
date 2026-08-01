@@ -2,6 +2,8 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 
@@ -19,11 +21,7 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
     if ( !ctx.marqueeIsAdditive ) {
         ctx.marqueeBoxes.clear();
         ctx.isMarqueeSelectionDirty = false;
-        auto view = ctx.noteRegistry.view<InteractionComponent>();
-        for ( auto entity : view ) {
-            ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
-                false;
-        }
+        clearChartObjectSelection(ctx);
     }
 
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
@@ -66,13 +64,16 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
             newBox.startTime = cache->getTime(targetAbsY);
             newBox.endTime   = newBox.startTime;
 
-            float leftX = it->second.viewportWidth *
-                          ctx.lastConfig.visual.trackLayout.left;
-            float rightX = it->second.viewportWidth *
-                           ctx.lastConfig.visual.trackLayout.right;
-            float trackAreaW = rightX - leftX;
+            const auto projection = calculatePlayerTrackProjection(
+                it->second.viewportWidth,
+                ctx.trackCount,
+                ctx.lastConfig.visual.trackLayout.left,
+                ctx.lastConfig.visual.trackLayout.right,
+                SessionUtils::isMainCanvasCameraId(cmd.cameraId)
+                    ? it->second.horizontalOffsetX
+                    : 0.0F);
             newBox.startTrack =
-                (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
+                (cmd.mouseX - projection.leftX) / projection.singleTrackWidth;
             newBox.endTrack = newBox.startTrack;
 
             ctx.marqueeBoxes.push_back(std::move(newBox));
@@ -122,13 +123,16 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
                 currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             currentBox.endTime = cache->getTime(targetAbsY);
 
-            float leftX = it->second.viewportWidth *
-                          ctx.lastConfig.visual.trackLayout.left;
-            float rightX = it->second.viewportWidth *
-                           ctx.lastConfig.visual.trackLayout.right;
-            float trackAreaW = rightX - leftX;
+            const auto projection = calculatePlayerTrackProjection(
+                it->second.viewportWidth,
+                ctx.trackCount,
+                ctx.lastConfig.visual.trackLayout.left,
+                ctx.lastConfig.visual.trackLayout.right,
+                SessionUtils::isMainCanvasCameraId(currentBox.cameraId)
+                    ? it->second.horizontalOffsetX
+                    : 0.0F);
             currentBox.endTrack =
-                (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
+                (cmd.mouseX - projection.leftX) / projection.singleTrackWidth;
             ctx.isMarqueeSelectionDirty = true;
         }
     }
@@ -178,9 +182,9 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -194,12 +198,16 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
     double clickTime = cache->getTime(targetAbsY);
 
-    float leftX =
-        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-    float rightX =
-        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.right;
-    float trackAreaW = rightX - leftX;
-    float clickTrack = (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
+    const auto projection = calculatePlayerTrackProjection(
+        it->second.viewportWidth,
+        ctx.trackCount,
+        ctx.lastConfig.visual.trackLayout.left,
+        ctx.lastConfig.visual.trackLayout.right,
+        SessionUtils::isMainCanvasCameraId(cmd.cameraId)
+            ? it->second.horizontalOffsetX
+            : 0.0F);
+    const float clickTrack =
+        (cmd.mouseX - projection.leftX) / projection.singleTrackWidth;
 
     // 2. 逆序查找被点击的框
     for ( int i = static_cast<int>(ctx.marqueeBoxes.size()) - 1; i >= 0; --i ) {
@@ -221,19 +229,11 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                 ctx.hasMarqueeSelection     = false;
                 ctx.marqueeIsAdditive       = false;
                 ctx.isMarqueeSelectionDirty = false;
-                auto view = ctx.noteRegistry.view<InteractionComponent>();
-                for ( auto entity : view ) {
-                    ctx.noteRegistry.get<InteractionComponent>(entity)
-                        .isSelected = false;
-                }
+                clearChartObjectSelection(ctx);
             } else {
                 // 重置追加模式，确保后续选择集合完整重建。
                 ctx.marqueeIsAdditive = false;
-                auto view = ctx.noteRegistry.view<InteractionComponent>();
-                for ( auto entity : view ) {
-                    ctx.noteRegistry.get<InteractionComponent>(entity)
-                        .isSelected = false;
-                }
+                clearChartObjectSelection(ctx);
                 ctx.hasMarqueeSelection     = true;
                 ctx.isMarqueeSelectionDirty = true;
             }
