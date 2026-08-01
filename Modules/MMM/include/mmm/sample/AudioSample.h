@@ -77,7 +77,7 @@ struct AudioSampleEvent {
     /// @brief 统一轨道空间中的绝对轨道索引。
     uint32_t m_track{ 0 };
 
-    /// @brief 项目音频资源标识。
+    /// @brief 项目音频资源标识；空字符串表示尚未绑定资源的静音草稿。
     std::string m_audioResourceId;
 
     /// @brief 播放音量倍率，1.0 表示原始音量。

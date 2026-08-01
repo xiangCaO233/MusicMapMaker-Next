@@ -640,15 +640,33 @@ std::optional<std::size_t> ProjectAudioToolView::activateItem(
     return activeIndex;
 }
 
+void ProjectAudioToolView::clearActiveItem()
+{
+    m_selectedAudioResourceId.clear();
+    m_selectedAudioLabel.clear();
+    m_selectedAudioTrackType = AudioTrackType::Effect;
+    Logic::EditorEngine::instance().pushCommand(
+        Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
+            {},
+            AudioTrackType::Effect,
+            m_brushAudioVolume,
+        }));
+}
+
 void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
                                          ImVec2      mousePosition)
 {
+    m_itemDragStartedSelected =
+        itemIndex < m_items.size() &&
+        m_items[itemIndex].audioResourceId == m_selectedAudioResourceId;
     const auto activeIndex = activateItem(itemIndex);
     if ( !activeIndex ) return;
 
-    m_draggingItem   = *activeIndex;
-    const auto& item = m_items[*activeIndex];
-    m_dragOffset     = {
+    m_draggingItem       = *activeIndex;
+    m_itemDragStartMouse = mousePosition;
+    m_itemDragMoved      = false;
+    const auto& item     = m_items[*activeIndex];
+    m_dragOffset         = {
         mousePosition.x - item.rect.x,
         mousePosition.y - item.rect.y,
     };
@@ -1491,37 +1509,51 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
 
     if ( m_draggingItem && *m_draggingItem < m_items.size() ) {
-        auto& item = m_items[*m_draggingItem];
+        auto&       item   = m_items[*m_draggingItem];
+        const float deltaX = mouseLogical.x - m_itemDragStartMouse.x;
+        const float deltaY = mouseLogical.y - m_itemDragStartMouse.y;
+        const float dragThreshold =
+            ImGui::GetIO().MouseDragThreshold / dpiScale;
+        m_itemDragMoved = m_itemDragMoved || deltaX * deltaX + deltaY * deltaY >
+                                                 dragThreshold * dragThreshold;
         if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            ProjectAudioToolLayout::Rect rawRect{
-                mouseLogical.x - m_dragOffset.x,
-                mouseLogical.y - m_dragOffset.y,
-                item.rect.width,
-                item.rect.height,
-            };
-            rawRect   = ProjectAudioToolLayout::snapRect(rawRect,
-                                                         visibleCanvas,
-                                                         m_dragSnapTargets,
-                                                         SNAP_THRESHOLD,
-                                                         SNAP_RELEASE_THRESHOLD,
-                                                         m_snapLocks);
-            item.rect = ProjectAudioToolLayout::constrainVisibility(
-                rawRect,
-                ProjectAudioToolLayout::Rect{
-                    0.0F,
-                    0.0F,
-                    contentLogical.x,
-                    contentLogical.y,
-                },
-                m_dragVisibilityConstraints,
-                MINIMUM_VISIBLE_RATIO);
-            item.labelRect = item.rect;
-            refreshInteractionLabelRects();
+            if ( m_itemDragMoved ) {
+                ProjectAudioToolLayout::Rect rawRect{
+                    mouseLogical.x - m_dragOffset.x,
+                    mouseLogical.y - m_dragOffset.y,
+                    item.rect.width,
+                    item.rect.height,
+                };
+                rawRect =
+                    ProjectAudioToolLayout::snapRect(rawRect,
+                                                     visibleCanvas,
+                                                     m_dragSnapTargets,
+                                                     SNAP_THRESHOLD,
+                                                     SNAP_RELEASE_THRESHOLD,
+                                                     m_snapLocks);
+                item.rect = ProjectAudioToolLayout::constrainVisibility(
+                    rawRect,
+                    ProjectAudioToolLayout::Rect{
+                        0.0F,
+                        0.0F,
+                        contentLogical.x,
+                        contentLogical.y,
+                    },
+                    m_dragVisibilityConstraints,
+                    MINIMUM_VISIBLE_RATIO);
+                item.labelRect = item.rect;
+                refreshInteractionLabelRects();
+            }
         } else {
             rebuildLabelRects();
             m_interactionBaseLabelRects.clear();
+            if ( m_itemDragStartedSelected && !m_itemDragMoved ) {
+                clearActiveItem();
+            }
             persistWorkspace();
             m_draggingItem.reset();
+            m_itemDragMoved           = false;
+            m_itemDragStartedSelected = false;
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};

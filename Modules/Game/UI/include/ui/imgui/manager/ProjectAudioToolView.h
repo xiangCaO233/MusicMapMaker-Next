@@ -137,6 +137,9 @@ private:
     [[nodiscard]] std::optional<std::size_t> activateItem(
         std::size_t itemIndex);
 
+    /// @brief 清除当前项目音频选择，并同步为空资源画笔。
+    void clearActiveItem();
+
     /// @brief 从指定边或角开始缩放方块。
     /// @param itemIndex 方块缓存下标。
     /// @param handle 被拖动的边或角。
@@ -240,6 +243,15 @@ private:
 
     /// @brief 鼠标按下点相对方块左上角的逻辑偏移。
     ImVec2 m_dragOffset{ 0.0F, 0.0F };
+
+    /// @brief 单方块拖动手势开始时的鼠标逻辑坐标。
+    ImVec2 m_itemDragStartMouse{ 0.0F, 0.0F };
+
+    /// @brief 当前单方块拖动手势是否已经越过拖动阈值。
+    bool m_itemDragMoved{ false };
+
+    /// @brief 当前手势是否从已选方块开始，用于短按释放时反选。
+    bool m_itemDragStartedSelected{ false };
 
     /// @brief 当前移动或缩放的水平和垂直吸附滞回状态。
     ProjectAudioToolLayout::SnapLocks m_snapLocks;

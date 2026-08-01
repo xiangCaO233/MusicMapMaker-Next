@@ -20,6 +20,7 @@
 #include "logic/session/tool/GrabTool.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -164,8 +165,8 @@ bool testKeyModeBrushCreatesOnlyHold()
 }
 
 /// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
-/// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样时返回
-/// true。
+/// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样，空选择
+/// 可创建静音采样草稿时返回 true。
 bool testBrushAudioResourcePlacementRules()
 {
     MMM::Logic::SessionContext context;
@@ -262,7 +263,39 @@ bool testBrushAudioResourcePlacementRules()
                                            sample.m_audioResourceId == "main" &&
                                            near(sample.m_volume, 0.7));
     }
-    return foundMain;
+    if ( !foundMain ) return false;
+
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = {},
+        .audioTrackType  = MMM::AudioTrackType::Effect,
+        .volume          = 0.55F,
+    });
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    if ( !context.brushState.isActive ||
+         !context.brushState.createsAudioSample ||
+         !context.brushState.activeAudioResourceId.empty() ) {
+        XERROR("Empty audio selection did not expose a silent sample brush");
+        return false;
+    }
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 3 ) {
+        XERROR("Empty audio selection did not create a silent sample draft");
+        return false;
+    }
+    return std::ranges::any_of(samples, [&](const auto entity) {
+        const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
+        return sample.m_audioResourceId.empty() &&
+               sample.m_track >=
+                   static_cast<std::uint32_t>(context.trackCount) &&
+               near(sample.m_volume, 0.55);
+    });
 }
 
 /// @brief 验证 BGM 画笔按住期间持续更新半透明采样预览的轨道与时间。
@@ -1532,6 +1565,16 @@ bool testCrossAreaConversionRules()
         return false;
     }
 
+    auto emptySample              = sample;
+    emptySample.m_audioResourceId = {};
+    const auto unboundNote =
+        MMM::Logic::makePlayerNoteFromSample(emptySample, 1, nullptr);
+    if ( !unboundNote || unboundNote->m_type != MMM::NoteType::NOTE ||
+         unboundNote->m_trackIndex != 1 || unboundNote->m_sampleBinding ) {
+        XERROR("Silent sample draft did not convert to an unbound player Tap");
+        return false;
+    }
+
     const auto convertedSample =
         MMM::Logic::makeAudioSampleFromPlayerNote(*note, 5, &effect);
     auto hold    = *note;
@@ -1549,6 +1592,79 @@ bool testCrossAreaConversionRules()
         return false;
     }
     return true;
+}
+
+/// @brief 验证空采样草稿拖回玩家轨道后成为可撤销的未绑定 Tap。
+/// @return 转换、Undo 与 Redo 均保持空资源语义时返回 true。
+bool testSilentSampleDragConvertsToUnboundNote()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp = 1.0,
+            .m_track     = 4,
+        });
+    context.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sampleEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    context.hoveredEntity     = sampleEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             sampleEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::AudioSample,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              150.0F,
+                              300.0F,
+                              true,
+                          });
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    auto notes   = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    auto samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( !samples.empty() || notes.size() != 1 ||
+         context.actionStack.getUndoStackSize() != 1 ) {
+        XERROR("Silent sample drag did not commit one cross-area conversion");
+        return false;
+    }
+    const auto  noteEntity = *notes.begin();
+    const auto& note       = notes.get<MMM::Logic::NoteComponent>(noteEntity);
+    if ( note.m_type != MMM::NoteType::NOTE || note.m_trackIndex != 0 ||
+         note.m_sampleBinding ) {
+        XERROR("Silent sample drag created a bound or non-Tap player object");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    auto restoredSamples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( restoredSamples.size() != 1 ||
+         !context.noteRegistry.view<MMM::Logic::NoteComponent>().empty() ||
+         !restoredSamples
+              .get<MMM::Logic::SampleComponent>(*restoredSamples.begin())
+              .m_audioResourceId.empty() ) {
+        XERROR("Silent sample conversion undo did not restore the draft");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    notes   = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    return samples.empty() && notes.size() == 1 &&
+           !notes.get<MMM::Logic::NoteComponent>(*notes.begin())
+                .m_sampleBinding;
 }
 
 /// @brief 验证跨 Registry 的同值实体 ID 在复合转换及 Undo 中不会串对象。
@@ -1879,6 +1995,7 @@ int main()
                    testAudioResourceDropRejectsMissingProjectResource() &&
                    testSampleOffsetHandleDrag() &&
                    testCrossAreaConversionRules() &&
+                   testSilentSampleDragConvertsToUnboundNote() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
                    testMixedChartObjectClipboardAcrossSessions() &&

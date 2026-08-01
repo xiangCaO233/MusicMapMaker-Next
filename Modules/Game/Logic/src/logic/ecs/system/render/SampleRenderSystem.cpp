@@ -442,8 +442,7 @@ void SampleRenderSystem::renderSamples(
     }
 
     const auto& brush = snapshot->brush;
-    if ( !brush.isActive || !brush.createsAudioSample ||
-         brush.audioResourceId.empty() || brush.track < 0 ) {
+    if ( !brush.isActive || !brush.createsAudioSample || brush.track < 0 ) {
         return;
     }
     const auto brushAddress = CanvasLaneAddress::fromAbsoluteTrack(

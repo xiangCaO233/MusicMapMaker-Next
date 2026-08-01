@@ -367,6 +367,38 @@ bool testMMMVersion2AudioSampleRoundTrip(
     return ok;
 }
 
+/// @brief 验证 MMM v2 可完整保存和读取未绑定资源的静音采样草稿。
+/// @param outputDirectory 测试输出目录。
+/// @return 空资源 ID、轨道、时间和音量均往返时返回 true。
+bool testMMMSilentSampleDraftRoundTrip(
+    const std::filesystem::path& outputDirectory)
+{
+    const auto path = outputDirectory / "silent_sample_draft.mmm";
+
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count     = 4;
+    source.m_baseMapMetadata.bgm_track_count = 1;
+    source.m_audioSamples.push_back(MMM::AudioSampleEvent{
+        .m_timestamp       = 1250.0,
+        .m_offsetMs        = 0,
+        .m_track           = 4,
+        .m_audioResourceId = {},
+        .m_volume          = 0.45F,
+    });
+    if ( !source.saveToFile(path) ) return false;
+
+    const MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
+    if ( loaded.m_audioSamples.size() != 1 ) {
+        return check(false, "MMM v2 should reload a silent sample draft");
+    }
+    const auto& sample = loaded.m_audioSamples.front();
+    return check(sample.m_audioResourceId.empty() &&
+                     sample.m_timestamp == 1250.0 && sample.m_offsetMs == 0 &&
+                     sample.m_track == 4 &&
+                     std::abs(sample.m_volume - 0.45F) < 1e-6F,
+                 "MMM v2 should preserve silent sample draft fields");
+}
+
 /// @brief 验证旧版 MMM 文件迁移单音频字段和旧玩家采样字段。
 /// @param outputDirectory 测试输出目录。
 /// @return 验证是否通过。
@@ -852,6 +884,7 @@ int main(int argc, char* argv[])
     ok &= testImageEventFallback(outputDirectory);
     ok &= testMMMVideoMetadataRoundTrip(outputDirectory);
     ok &= testMMMVersion2AudioSampleRoundTrip(outputDirectory);
+    ok &= testMMMSilentSampleDraftRoundTrip(outputDirectory);
     ok &= testLegacyMMMMetadataDefaults(outputDirectory);
     ok &= testVersion2LegacyAudioHintCompatibility(outputDirectory);
     ok &= testVersion2InvalidSampleTrackRelocation(outputDirectory);

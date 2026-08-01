@@ -662,6 +662,24 @@ bool testRepeatedAbsoluteLegacyReferenceResolution()
     return true;
 }
 
+/// @brief 验证静音采样草稿不会创建缺失资源诊断或播放事件。
+/// @return 描述符完全忽略空资源采样时返回 true。
+bool testSilentSampleDraftIsExcludedFromPlayback()
+{
+    const auto   project = makeProject();
+    MMM::BeatMap beatMap;
+    beatMap.m_baseMapMetadata.track_count = 4;
+    beatMap.m_audioSamples.push_back(makeSample(1000.0, 0, 4, {}, 1.0F));
+
+    const auto descriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        2.0);
+    return descriptor.m_events.empty() && descriptor.m_diagnostics.empty() &&
+           descriptor.m_chartEndSeconds == 2.0;
+}
+
 }  // namespace
 
 /// @brief 运行音频时间线描述符构建测试。
@@ -675,7 +693,8 @@ int main()
                    testBulkStableIdResolutionUsesFirstResource() &&
                    testCrossModeConflictPreservesResourceOrder() &&
                    testBulkDistinctLegacyPathResolution() &&
-                   testRepeatedAbsoluteLegacyReferenceResolution()
+                   testRepeatedAbsoluteLegacyReferenceResolution() &&
+                   testSilentSampleDraftIsExcludedFromPlayback()
                ? 0
                : 1;
 }

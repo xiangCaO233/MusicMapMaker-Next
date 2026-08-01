@@ -15,7 +15,7 @@ namespace MMM::Logic
 /// @param sample 待转换的自动采样。
 /// @param targetTrack 玩家区目标轨道。
 /// @param resource 已解析的项目音频资源。
-/// @return 仅 Effect 且 offset 为零时返回转换结果。
+/// @return offset 为零且为 Effect 或空资源草稿时返回转换结果。
 [[nodiscard]] std::optional<NoteComponent> makePlayerNoteFromSample(
     const SampleComponent& sample, std::int32_t targetTrack,
     const ::MMM::AudioResource* resource);

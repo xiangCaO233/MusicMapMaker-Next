@@ -19,7 +19,7 @@ struct SampleComponent {
     /// @brief 玩家区与 BGM 区统一空间中的绝对轨道索引。
     std::uint32_t m_track{ 0 };
 
-    /// @brief 项目音频资源 ID。
+    /// @brief 项目音频资源 ID；空字符串表示尚未绑定资源的静音草稿。
     std::string m_audioResourceId;
 
     /// @brief 采样物件播放音量。

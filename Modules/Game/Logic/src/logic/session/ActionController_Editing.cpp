@@ -83,11 +83,11 @@ bool isPlaceableCreatedNote(const NoteComponent& note)
 
 /// @brief 判断新建自动采样锚点是否允许落在谱面时间线上。
 /// @param sample 待创建自动采样。
-/// @return 锚点时间非负且有限、资源 ID 非空时返回 true。
+/// @return 锚点时间非负且有限、音量合法时返回 true；资源可为空以表示静音草稿。
 bool isPlaceableCreatedSample(const SampleComponent& sample)
 {
     return std::isfinite(sample.m_timestamp) && sample.m_timestamp >= 0.0 &&
-           std::isfinite(sample.m_volume) && !sample.m_audioResourceId.empty();
+           std::isfinite(sample.m_volume);
 }
 
 /// @brief 移除 Malody timing 拍位缓存。

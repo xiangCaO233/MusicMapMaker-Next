@@ -352,9 +352,13 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
     if ( sampleIt != root.end() && sampleIt->is_array() ) {
         for ( const auto& sampleJson : *sampleIt ) {
             if ( !sampleJson.is_object() ) continue;
+            const auto audioReferenceIt = sampleJson.find("audio_ref");
+            if ( audioReferenceIt == sampleJson.end() ||
+                 !audioReferenceIt->is_string() ) {
+                continue;
+            }
             const std::string audioResourceId =
-                readMMMString(sampleJson, "audio_ref");
-            if ( audioResourceId.empty() ) continue;
+                audioReferenceIt->get_ref<const std::string&>();
 
             AudioSampleEvent& sample = beatMap.m_audioSamples.emplace_back();
             sample.m_timestamp = readMMMDouble(sampleJson, "timestamp", 0.0);

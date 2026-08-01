@@ -202,11 +202,6 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         return;
     }
     const bool createsAudioSample = targetLane->kind == CanvasLaneKind::Bgm;
-    if ( createsAudioSample &&
-         ctx.brushState.selectedAudioResourceId.empty() ) {
-        ctx.lastActionMessage = "请先在项目音频工具中选择音频资源";
-        return;
-    }
     if ( !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() &&
          ctx.brushState.selectedAudioTrackType ==
@@ -764,8 +759,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     if ( !ctx.brushState.isActive ) return;
 
     if ( ctx.brushState.createsAudioSample ) {
-        if ( !ctx.brushState.activeAudioResourceId.empty() &&
-             isPlaceableNoteTime(ctx.brushState.time) &&
+        if ( isPlaceableNoteTime(ctx.brushState.time) &&
              ctx.brushState.track >= ctx.trackCount ) {
             SampleComponent sample{
                 .m_timestamp = ctx.brushState.time,

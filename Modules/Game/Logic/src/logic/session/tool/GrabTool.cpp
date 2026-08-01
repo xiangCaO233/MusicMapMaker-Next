@@ -464,20 +464,22 @@ std::optional<NoteComponent> makePlayerNoteFromSample(
     const SampleComponent& sample, std::int32_t targetTrack,
     const ::MMM::AudioResource* resource)
 {
-    if ( sample.m_offsetMs != 0 || targetTrack < 0 || !resource ||
-         resource->m_type != ::MMM::AudioTrackType::Effect ||
-         sample.m_audioResourceId.empty() ) {
+    if ( sample.m_offsetMs != 0 || targetTrack < 0 ) {
         return std::nullopt;
     }
 
     NoteComponent note;
-    note.m_type          = ::MMM::NoteType::NOTE;
-    note.m_timestamp     = sample.m_timestamp;
-    note.m_trackIndex    = targetTrack;
-    note.m_sampleBinding = ::MMM::AudioSampleBinding{
-        sample.m_audioResourceId,
-        sample.m_volume,
-    };
+    note.m_type       = ::MMM::NoteType::NOTE;
+    note.m_timestamp  = sample.m_timestamp;
+    note.m_trackIndex = targetTrack;
+    if ( sample.m_audioResourceId.empty() ) {
+        return note;
+    }
+    if ( !resource || resource->m_type != ::MMM::AudioTrackType::Effect ) {
+        return std::nullopt;
+    }
+    note.m_sampleBinding =
+        ::MMM::AudioSampleBinding{ sample.m_audioResourceId, sample.m_volume };
     return note;
 }
 
@@ -1335,7 +1337,8 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
                 resource);
             if ( !converted ) {
                 rejectionReason =
-                    "纯采样仅能在 Effect 且 offset 为 0 时拖入玩家轨道区";
+                    "自动采样仅能在空资源或 Effect 且 offset 为 0 "
+                    "时拖入玩家轨道区";
                 break;
             }
             sampleConversions.push_back({ entity, *converted, state.selected });

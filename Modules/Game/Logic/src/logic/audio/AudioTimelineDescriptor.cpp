@@ -345,6 +345,7 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
     std::vector<std::string_view> audioReferences;
     audioReferences.reserve(beatMap.m_audioSamples.size());
     for ( const auto& sample : beatMap.m_audioSamples ) {
+        if ( sample.m_audioResourceId.empty() ) continue;
         audioReferences.emplace_back(sample.m_audioResourceId);
     }
     /// @brief 一次建表后批量解析的项目资源结果。
@@ -359,6 +360,7 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
 
     std::size_t sampleIndex = 0U;
     for ( const auto& sample : beatMap.m_audioSamples ) {
+        if ( sample.m_audioResourceId.empty() ) continue;
         const auto* resource = resolvedResources[sampleIndex++];
 
         MMM::Audio::AudioTimelineLoadEvent event;
