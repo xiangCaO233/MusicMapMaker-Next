@@ -244,8 +244,8 @@ bool readVec2(const sol::object& object, ImVec2& value)
     const sol::table table = object.as<sol::table>();
     sol::object      x     = table[1];
     sol::object      y     = table[2];
-    if ( !x.valid() || x.get_type() == sol::type::nil ) x = table["x"];
-    if ( !y.valid() || y.get_type() == sol::type::nil ) y = table["y"];
+    if ( !x.valid() || x.get_type() == sol::type::lua_nil ) x = table["x"];
+    if ( !y.valid() || y.get_type() == sol::type::lua_nil ) y = table["y"];
     return readFiniteFloat(x, value.x) && readFiniteFloat(y, value.y);
 }
 
@@ -261,10 +261,10 @@ bool readColor(const sol::object& object, ImVec4& value)
     sol::object      g     = table[2];
     sol::object      b     = table[3];
     sol::object      a     = table[4];
-    if ( !r.valid() || r.get_type() == sol::type::nil ) r = table["r"];
-    if ( !g.valid() || g.get_type() == sol::type::nil ) g = table["g"];
-    if ( !b.valid() || b.get_type() == sol::type::nil ) b = table["b"];
-    if ( !a.valid() || a.get_type() == sol::type::nil ) a = table["a"];
+    if ( !r.valid() || r.get_type() == sol::type::lua_nil ) r = table["r"];
+    if ( !g.valid() || g.get_type() == sol::type::lua_nil ) g = table["g"];
+    if ( !b.valid() || b.get_type() == sol::type::lua_nil ) b = table["b"];
+    if ( !a.valid() || a.get_type() == sol::type::lua_nil ) a = table["a"];
     if ( !readFiniteFloat(r, value.x) || !readFiniteFloat(g, value.y) ||
          !readFiniteFloat(b, value.z) || !readFiniteFloat(a, value.w) ) {
         return false;
@@ -460,7 +460,7 @@ std::unique_ptr<ImGuiTheme> parseThemeDefinition(
 
     ImGuiThemeStylePatch patch;
     sol::object          styleObject = definition["style"];
-    if ( styleObject.valid() && styleObject.get_type() != sol::type::nil ) {
+    if ( styleObject.valid() && styleObject.get_type() != sol::type::lua_nil ) {
         if ( !styleObject.is<sol::table>() ) {
             error = "主题 " + id.value() + " 的 style 必须是表";
             return nullptr;
@@ -644,7 +644,7 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
         std::vector<sol::table> definitions;
         sol::object             themesObject = pluginTable["themes"];
         if ( themesObject.valid() &&
-             themesObject.get_type() != sol::type::nil ) {
+             themesObject.get_type() != sol::type::lua_nil ) {
             if ( !themesObject.is<sol::table>() ) {
                 ++result.failedThemeCount;
                 appendPluginError(result,
@@ -657,7 +657,7 @@ ThemePluginReloadResult ImGuiThemeRegistry::reloadThemePlugins(
             for ( std::size_t index = 1;; ++index ) {
                 sol::object definition = themes[index];
                 if ( !definition.valid() ||
-                     definition.get_type() == sol::type::nil ) {
+                     definition.get_type() == sol::type::lua_nil ) {
                     break;
                 }
                 if ( !definition.is<sol::table>() ) {

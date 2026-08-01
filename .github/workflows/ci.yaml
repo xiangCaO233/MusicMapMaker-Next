@@ -119,6 +119,136 @@ jobs:
           cp -a assets release/assets
           find release -maxdepth 2 -type f | sort
 
+  mmm-macos-ci:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ci-build')
+    runs-on: [self-hosted, macOS, ARM64, musicmapmaker-next]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: ci->Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: ci->macOS AppleClang ARM64 Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/macos-build.sh \
+            --arch arm64 \
+            --build-dir build_ci_macos_arm64 \
+            --fresh
+
+      - name: ci->macOS CTest
+        run: |
+          set -euo pipefail
+          ctest --test-dir build_ci_macos_arm64 \
+            --parallel "$(sysctl -n hw.logicalcpu)" \
+            --output-on-failure
+
+      - name: ci->Package and Stage macOS Release
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            printf "error: invalid GitHub run id: %s\n" "${GITHUB_RUN_ID}" >&2
+            exit 1
+          fi
+
+          package_dir="build_ci_macos_arm64/packages"
+          transfer_dir="build_ci_macos_arm64/transfer"
+          remote_staging="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-transfer/${GITHUB_RUN_ID}/macos-arm64"
+
+          rm -rf "${package_dir}" "${transfer_dir}"
+          bash scripts/ci/macos-package.sh \
+            --arch arm64 \
+            --build-dir build_ci_macos_arm64 \
+            --package-dir "${package_dir}" \
+            --build-type RelWithDebInfo \
+            --package-only
+
+          dmg_path="$(find "${package_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          app_zip_path="$(find "${package_dir}" -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          updater_path="${package_dir}/MusicMapMaker-Updater"
+          [[ -n "${dmg_path}" && -f "${dmg_path}" ]]
+          [[ -n "${app_zip_path}" && -f "${app_zip_path}" ]]
+          [[ -f "${updater_path}" ]]
+
+          mkdir -p "${transfer_dir}"
+          cp "${dmg_path}" "${transfer_dir}/MusicMapMaker-Next.dmg"
+          cp "${app_zip_path}" "${transfer_dir}/MusicMapMaker-Next.app.zip"
+          cp "${updater_path}" "${transfer_dir}/MusicMapMaker-Updater"
+          (
+            cd "${transfer_dir}"
+            shasum -a 256 \
+              MusicMapMaker-Next.dmg \
+              MusicMapMaker-Next.app.zip \
+              MusicMapMaker-Updater > SHA256SUMS
+          )
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            xiang@192.168.31.12 \
+            "rm -rf -- '${remote_staging}' && mkdir -p '${remote_staging}'"
+          rsync -av --delete \
+            -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+            "${transfer_dir}/" \
+            "xiang@192.168.31.12:${remote_staging}/"
+
+  mmm-release-aggregate:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ci-build')
+    needs: [mmm-debian-ci, mmm-macos-ci]
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Aggregate macOS Release
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            printf "error: invalid GitHub run id: %s\n" "${GITHUB_RUN_ID}" >&2
+            exit 1
+          fi
+
+          transfer_root="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-transfer/${GITHUB_RUN_ID}"
+          source_dir="${transfer_root}/macos-arm64"
+          target_dir="/home/xiang/MusicMapMaker-Next/release/macos-arm64"
+          next_dir="/home/xiang/MusicMapMaker-Next/release/.macos-arm64-${GITHUB_RUN_ID}.next"
+          previous_dir="/home/xiang/MusicMapMaker-Next/release/.macos-arm64-${GITHUB_RUN_ID}.previous"
+
+          [[ -d "${source_dir}" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Next.dmg" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Next.app.zip" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Updater" ]]
+          (
+            cd "${source_dir}"
+            sha256sum -c SHA256SUMS
+          )
+
+          rm -rf "${next_dir}" "${previous_dir}"
+          mkdir -p "${next_dir}"
+          cp -a "${source_dir}/." "${next_dir}/"
+
+          if [[ -e "${target_dir}" ]]; then
+            mv "${target_dir}" "${previous_dir}"
+          fi
+          if ! mv "${next_dir}" "${target_dir}"; then
+            if [[ -e "${previous_dir}" ]]; then
+              mv "${previous_dir}" "${target_dir}"
+            fi
+            exit 1
+          fi
+
+          rm -rf "${previous_dir}" "${transfer_root}"
+          find "${target_dir}" -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
+
   mmm-website-release:
     if: github.event_name == 'workflow_dispatch' && inputs.job == 'website-release'
     runs-on: [self-hosted, Linux, X64, debian]

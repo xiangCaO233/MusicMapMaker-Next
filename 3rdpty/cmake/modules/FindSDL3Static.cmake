@@ -40,6 +40,24 @@ endif()
 if(NOT TARGET 3rd_sdl3)
   add_library(3rd_sdl3 INTERFACE)
   target_link_libraries(3rd_sdl3 INTERFACE SDL3-static)
+  if(WIN32 AND NOT PROJECT_LINKAGE STREQUAL "shared")
+    # SDL3 静态库不会携带 Windows 系统库信息，导入目标必须补齐源码目标的链接闭包。
+    target_link_libraries(
+      3rd_sdl3
+      INTERFACE kernel32
+                user32
+                gdi32
+                winmm
+                imm32
+                ole32
+                oleaut32
+                version
+                uuid
+                advapi32
+                setupapi
+                shell32
+                dinput8)
+  endif()
 endif()
 
 set(SDL3Static_FOUND TRUE)
