@@ -915,6 +915,110 @@ bool testTemplateAudioSampleTrackRemap()
     return true;
 }
 
+/// @brief 验证 IMD 风格的未标记 Polyline 子物件不会被重复复制。
+/// @return 新谱面只保留一份折线子物件且引用顺序正确时返回 true。
+bool testImdStyleTemplatePolylineCopyAvoidsDuplicateChildren()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+
+    auto source                           = std::make_shared<MMM::BeatMap>();
+    source->m_baseMapMetadata.track_count = 4;
+
+    MMM::Note standaloneNote;
+    standaloneNote.m_timestamp = 500.0;
+    standaloneNote.m_track     = 3;
+    source->m_noteData.notes.push_back(std::move(standaloneNote));
+
+    MMM::Hold firstHold;
+    firstHold.m_timestamp = 1000.0;
+    firstHold.m_duration  = 500.0;
+    firstHold.m_track     = 0;
+    source->m_noteData.holds.push_back(std::move(firstHold));
+
+    MMM::Flick turnFlick;
+    turnFlick.m_timestamp = 1500.0;
+    turnFlick.m_track     = 0;
+    turnFlick.m_dtrack    = 1;
+    source->m_noteData.flicks.push_back(std::move(turnFlick));
+
+    MMM::Hold secondHold;
+    secondHold.m_timestamp = 1500.0;
+    secondHold.m_duration  = 500.0;
+    secondHold.m_track     = 1;
+    source->m_noteData.holds.push_back(std::move(secondHold));
+
+    MMM::Polyline polyline;
+    polyline.m_timestamp = 1000.0;
+    polyline.m_track     = 0;
+    polyline.m_subNotes.push_back(source->m_noteData.holds[0]);
+    polyline.m_subHolds.push_back(source->m_noteData.holds[0]);
+    polyline.m_subNotes.push_back(source->m_noteData.flicks[0]);
+    polyline.m_subFlicks.push_back(source->m_noteData.flicks[0]);
+    polyline.m_subNotes.push_back(source->m_noteData.holds[1]);
+    polyline.m_subHolds.push_back(source->m_noteData.holds[1]);
+    source->m_noteData.polylines.push_back(std::move(polyline));
+    source->sync();
+
+    if ( source->m_noteData.holds[0].m_isSubNote ||
+         source->m_noteData.holds[1].m_isSubNote ||
+         source->m_noteData.flicks[0].m_isSubNote ) {
+        XERROR("IMD-style template fixture unexpectedly marked sub-notes");
+        return false;
+    }
+
+    MMM::Logic::CmdCreateBeatmap command;
+    command.baseMeta.name               = "ImdTemplatePolyline";
+    command.baseMeta.version            = "ImdTemplatePolyline";
+    command.baseMeta.track_count        = 4;
+    command.templateBeatmap             = source;
+    command.templateOptions.copyObjects = true;
+
+    const auto result =
+        MMM::Logic::ProjectCommandService{}.createBeatmap(project, command);
+    if ( !result.m_created || !result.m_beatmap ) {
+        XERROR("IMD-style Polyline template creation failed");
+        return false;
+    }
+
+    const auto& copied = *result.m_beatmap;
+    if ( copied.m_noteData.notes.size() != 1U ||
+         copied.m_noteData.holds.size() != 2U ||
+         copied.m_noteData.flicks.size() != 1U ||
+         copied.m_noteData.polylines.size() != 1U ) {
+        XERROR(
+            "IMD-style Polyline children were duplicated during template copy");
+        return false;
+    }
+
+    const auto& copiedPolyline = copied.m_noteData.polylines.front();
+    if ( copiedPolyline.m_subNotes.size() != 3U ||
+         &copiedPolyline.m_subNotes[0].get() != &copied.m_noteData.holds[0] ||
+         &copiedPolyline.m_subNotes[1].get() != &copied.m_noteData.flicks[0] ||
+         &copiedPolyline.m_subNotes[2].get() != &copied.m_noteData.holds[1] ||
+         !copied.m_noteData.holds[0].m_isSubNote ||
+         !copied.m_noteData.flicks[0].m_isSubNote ||
+         !copied.m_noteData.holds[1].m_isSubNote ) {
+        XERROR("Copied Polyline child references or flags are invalid");
+        return false;
+    }
+
+    const auto persisted = MMM::BeatMap::loadFromFile(
+        directory.path() / "ImdTemplatePolyline.mmm");
+    if ( persisted.m_noteData.notes.size() != 1U ||
+         persisted.m_noteData.holds.size() != 2U ||
+         persisted.m_noteData.flicks.size() != 1U ||
+         persisted.m_noteData.polylines.size() != 1U ||
+         persisted.m_noteData.polylines.front().m_subNotes.size() != 3U ) {
+        XERROR("IMD-style Polyline template fix was not persisted");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证非法模板物件不会产生部分谱面、文件或项目资源。
 /// @return 越界玩家列、落入玩家区的采样和轨道溢出均被原子拒绝时返回 true。
 bool testInvalidTemplateObjectTracksAreRejectedAtomically()
@@ -1691,6 +1795,7 @@ int main()
                    testInMemoryAudioReferenceRemapResult() &&
                    testSongFileHintSaveSemantics() &&
                    testTemplateAudioSampleTrackRemap() &&
+                   testImdStyleTemplatePolylineCopyAvoidsDuplicateChildren() &&
                    testInvalidTemplateObjectTracksAreRejectedAtomically() &&
                    testCreateBeatmapMaterializesMainSample() &&
                    testDefaultBeatmapAudioResolution() &&

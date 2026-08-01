@@ -10,6 +10,7 @@
 #include <deque>
 #include <limits>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 namespace MMM::Logic
@@ -187,7 +188,21 @@ void appendMatchingOpenBeatmapReferences(
     }
 }
 
-/// @brief 清空目标谱面的物件数据并复制非折线物件。
+/// @brief 收集模板谱面中被 Polyline 引用的全部子物件。
+/// @param source 模板谱面。
+/// @return 子物件的稳定地址集合。
+std::unordered_set<const Note*> collectPolylineSubNotes(const BeatMap& source)
+{
+    std::unordered_set<const Note*> subNotes;
+    for ( const auto& polyline : source.m_noteData.polylines ) {
+        for ( const auto& subNoteReference : polyline.m_subNotes ) {
+            subNotes.insert(&subNoteReference.get());
+        }
+    }
+    return subNotes;
+}
+
+/// @brief 清空目标谱面的物件数据并复制真正的非折线物件。
 /// @param target 接收复制结果的新谱面。
 /// @param source 模板谱面。
 void copyStandaloneNotes(BeatMap& target, const BeatMap& source)
@@ -197,16 +212,18 @@ void copyStandaloneNotes(BeatMap& target, const BeatMap& source)
     target.m_noteData.flicks.clear();
     target.m_noteData.polylines.clear();
 
+    /// @brief 某些旧格式加载器没有写入 m_isSubNote，实际引用关系才是权威来源。
+    const auto polylineSubNotes = collectPolylineSubNotes(source);
     for ( const auto& note : source.m_noteData.notes ) {
-        if ( note.m_isSubNote ) continue;
+        if ( note.m_isSubNote || polylineSubNotes.contains(&note) ) continue;
         target.m_noteData.notes.push_back(note);
     }
     for ( const auto& hold : source.m_noteData.holds ) {
-        if ( hold.m_isSubNote ) continue;
+        if ( hold.m_isSubNote || polylineSubNotes.contains(&hold) ) continue;
         target.m_noteData.holds.push_back(hold);
     }
     for ( const auto& flick : source.m_noteData.flicks ) {
-        if ( flick.m_isSubNote ) continue;
+        if ( flick.m_isSubNote || polylineSubNotes.contains(&flick) ) continue;
         target.m_noteData.flicks.push_back(flick);
     }
 }
