@@ -1,4 +1,5 @@
 #include "canvas/TimeFormatUtils.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "logic/BeatmapSyncBuffer.h"

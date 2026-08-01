@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <concurrentqueue.h>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -686,7 +685,7 @@ class BeatmapSyncBuffer
 {
 public:
     BeatmapSyncBuffer();
-    ~BeatmapSyncBuffer() = default;
+    ~BeatmapSyncBuffer();
 
     // 禁用拷贝与移动
     BeatmapSyncBuffer(BeatmapSyncBuffer&&)                 = delete;
@@ -724,8 +723,11 @@ public:
     void reset();
 
 private:
-    moodycamel::ConcurrentQueue<RenderSnapshot*> m_freeQueue;
-    moodycamel::ConcurrentQueue<RenderSnapshot*> m_readyQueue;
+    /// @brief 隐藏无锁队列实现，避免公共快照头向所有画布传播并发队列依赖。
+    struct QueueState;
+
+    /// @brief 仅在同步缓冲区构造时分配一次的私有队列状态。
+    std::unique_ptr<QueueState> m_queueState;
 
     std::vector<std::unique_ptr<RenderSnapshot>> m_storage;
 

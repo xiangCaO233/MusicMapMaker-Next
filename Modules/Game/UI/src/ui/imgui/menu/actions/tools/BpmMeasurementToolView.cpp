@@ -4,13 +4,16 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
@@ -23,6 +26,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fftw3.h>
+#include <fmt/format.h>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>

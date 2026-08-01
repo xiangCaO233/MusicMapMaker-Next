@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <nlohmann/json.hpp>
 #include <system_error>
 #include <utility>
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "logic/session/context/SessionContext.h"
+#include "logic/session/ClipboardTypes.h"
 #include <optional>
 #include <string>
 #include <string_view>

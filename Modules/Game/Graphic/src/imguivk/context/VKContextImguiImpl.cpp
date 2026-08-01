@@ -7,7 +7,13 @@
 #include "font/SystemFontResolver.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderPass.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/system/SystemTheme.h"
+#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 #include "implot.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
@@ -20,6 +26,11 @@
 
 namespace MMM::Graphic
 {
+
+const ImGuiThemeRegistry& VKContext::getThemeRegistry() const
+{
+    return *m_themeRegistry;
+}
 
 /// @brief Wayland 下独立图标字体的视觉缩放，避免 DPI 下方形按钮裁切字形。
 static constexpr float WAYLAND_PURE_ICON_VISUAL_SCALE = 0.86f;
@@ -548,8 +559,8 @@ void VKContext::registerBuiltInThemes()
 {
     auto registerTheme = [this](const char*               id,
                                 ImGuiTheme::ApplyFunction applyFunction) {
-        if ( m_themeRegistry.contains(id) ) return;
-        if ( !m_themeRegistry.registerBuiltInTheme(
+        if ( m_themeRegistry->contains(id) ) return;
+        if ( !m_themeRegistry->registerBuiltInTheme(
                  std::make_unique<ImGuiTheme>(id,
                                               id,
                                               ImGuiThemeOrigin::BuiltIn,
@@ -595,7 +606,7 @@ ThemePluginReloadResult VKContext::reloadPlugins()
 {
     registerBuiltInThemes();
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    ThemePluginReloadResult result = m_themeRegistry.reloadThemePlugins(
+    ThemePluginReloadResult result = m_themeRegistry->reloadThemePlugins(
         Config::AppPaths::themePluginsRootPath(), settings.disabledPluginIds);
     applyTheme();
     return result;
@@ -603,7 +614,7 @@ ThemePluginReloadResult VKContext::reloadPlugins()
 
 bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
 {
-    if ( !m_themeRegistry.findPlugin(pluginId) ) return false;
+    if ( !m_themeRegistry->findPlugin(pluginId) ) return false;
 
     auto& disabledPluginIds =
         Config::AppConfig::instance().getEditorSettings().disabledPluginIds;
@@ -641,10 +652,10 @@ void VKContext::applyTheme()
         m_appliedSystemTheme = SystemTheme::Unknown;
     }
 
-    if ( !m_themeRegistry.applyTheme(appliedThemeId, ImGui::GetStyle()) ) {
+    if ( !m_themeRegistry->applyTheme(appliedThemeId, ImGui::GetStyle()) ) {
         XWARN("Unknown or invalid ImGui theme '{}'; falling back to DeepDark",
               appliedThemeId);
-        m_themeRegistry.applyTheme("DeepDark", ImGui::GetStyle());
+        m_themeRegistry->applyTheme("DeepDark", ImGui::GetStyle());
     }
 
     // 应用全局缩放 (注意：ScaleAllSizes 是增量修改，但由于各 setStyle

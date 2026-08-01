@@ -1,6 +1,6 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 
-#include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "imgui.h"
 #include "implot.h"
 #include "mmm/project/AudioResource.h"

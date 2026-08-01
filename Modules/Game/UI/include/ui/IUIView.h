@@ -1,11 +1,7 @@
 #pragma once
 
-#include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
-#include "log/colorful-log.h"
-#include "ui/layout/CLayDefs.h"
 #include "ui/layout/CLayWrapperCore.h"
-#include <cmath>
+#include <cstdint>
 #include <imgui.h>
 #include <string>
 
@@ -34,15 +30,11 @@ public:
     std::string m_name;
     bool        m_isOpen{ true };
 
-    IUIView(const std::string& name) : m_name(name)
-    {
-        // 创建独立的布局上下文
-        m_layoutCtx = CLayWrapperCore::instance().createWindowContext();
-    }
-    virtual ~IUIView()
-    {
-        CLayWrapperCore::instance().destroyWindowContext(m_layoutCtx);
-    }
+    /// @brief 创建视图并分配独立的 Clay 布局上下文。
+    IUIView(const std::string& name);
+
+    /// @brief 销毁视图持有的 Clay 布局上下文。
+    virtual ~IUIView();
 
     /// @brief 获取视图具体类型,替代 dynamic_cast
     virtual ViewType getViewType() const { return ViewType::Base; }
@@ -83,84 +75,14 @@ class LayoutContext final
 
 public:
     /// @brief 创建布局上下文并开始 ImGui 窗口
-    LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
-                  const std::string&              iwindow_name,
-                  bool                            custom_window_flags = false,
+    LayoutContext(CLayWrapperCore::WindowContext& layoutContext,
+                  const std::string& windowName, bool customWindowFlags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
-                  bool* p_open = nullptr, ImGuiID dockId = 0,
-                  ImGuiCond dockCond = ImGuiCond_Always)
-    {
-        CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
+                  bool* open = nullptr, ImGuiID dockId = 0,
+                  ImGuiCond dockCond = ImGuiCond_Always);
 
-        // 应用窗口标题字体
-        auto&   skinMgr   = Config::SkinManager::instance();
-        ImFont* titleFont = skinMgr.getFont("title");
-        if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
-
-        // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
-        auto& editorSettings =
-            Config::AppConfig::instance().getEditorSettings();
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-        float windowRound =
-            std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
-        float frameRound =
-            std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
-        ImVec2 itemSpacing = {
-            std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
-            std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
-        };
-
-        m_dpiScale = dpiScale;
-        ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowPadding,
-            ImVec2(
-                std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
-                std::floor(editorSettings.aesthetics.windowPadding *
-                           dpiScale)));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
-
-        if ( dockId != 0 ) {
-            ImGui::SetNextWindowDockID(dockId, dockCond);
-        }
-
-        const bool wasOpenBeforeBegin = p_open != nullptr && *p_open;
-
-        if ( custom_window_flags ) {
-            ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);
-        } else {
-            ImGui::Begin(iwindow_name.c_str(), p_open);
-        }
-        FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, p_open);
-
-        // 核心修复：Begin 后立即弹出标题字体，使内容使用默认（content）字体
-        if ( titleFont ) ImGui::PopFont();
-
-        // 1. 获取 ImGui 的绘图起始点（绝对坐标）
-        m_startPos = ImGui::GetCursorScreenPos();
-        m_avail    = ImGui::GetContentRegionAvail();
-        // 1. 获取鼠标状态并传给 Clay
-        m_mousePos    = ImGui::GetMousePos();
-        m_isMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-
-        // 告诉Clay相对于布局起点坐标
-        Clay_SetPointerState(
-            { m_mousePos.x - m_startPos.x, m_mousePos.y - m_startPos.y },
-            m_isMouseDown);
-    }
-    ~LayoutContext()
-    {
-        // 4. 重置 ImGui 游标，防止 Dummy 影响后续内容
-        ImGui::SetCursorScreenPos(m_startPos);
-        ImGui::Dummy(m_avail);  // 占位，确保滚动条正确
-
-        ImGui::End();
-        // 恢复样式，否则会影响到后面其他的窗口
-        ImGui::PopStyleVar(6);
-    }
+    /// @brief 结束 ImGui 窗口并恢复构造阶段压入的样式。
+    ~LayoutContext();
 
     ImVec2 m_startPos;
     ImVec2 m_avail;

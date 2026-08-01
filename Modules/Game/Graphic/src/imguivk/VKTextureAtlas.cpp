@@ -1,4 +1,5 @@
 #include "graphic/imguivk/VKTextureAtlas.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
 #include <stb_image.h>
 

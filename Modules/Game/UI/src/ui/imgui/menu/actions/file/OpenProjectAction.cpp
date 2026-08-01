@@ -1,6 +1,7 @@
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"

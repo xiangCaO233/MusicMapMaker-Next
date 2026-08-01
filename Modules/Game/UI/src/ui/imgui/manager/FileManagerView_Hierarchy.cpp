@@ -5,7 +5,7 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"

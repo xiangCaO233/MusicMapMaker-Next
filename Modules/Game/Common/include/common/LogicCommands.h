@@ -4,7 +4,7 @@
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
-#include "mmm/beatmap/BeatMap.h"
+#include "mmm/Metadata.h"
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"

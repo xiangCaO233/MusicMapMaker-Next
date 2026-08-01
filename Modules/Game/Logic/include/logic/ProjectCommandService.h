@@ -2,6 +2,7 @@
 
 #include "common/LogicCommands.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ProjectTypes.h"
 #include "mmm/project/Project.h"
 
 #include <filesystem>
@@ -22,14 +23,8 @@ namespace MMM::Logic
 class ProjectCommandService
 {
 public:
-    /// @brief 音效资源按需加载登记请求。
-    struct AudioRegistrationRequest {
-        /// @brief 需要登记的项目音频资源。
-        AudioResource m_resource;
-
-        /// @brief 音频资源在文件系统中的绝对路径。
-        std::filesystem::path m_absolutePath;
-    };
+    /// @brief 保留原嵌套类型名，兼容现有项目命令调用方。
+    using AudioRegistrationRequest = MMM::Logic::AudioRegistrationRequest;
 
     /// @brief 新建谱面命令结果。
     struct CreateBeatmapResult {

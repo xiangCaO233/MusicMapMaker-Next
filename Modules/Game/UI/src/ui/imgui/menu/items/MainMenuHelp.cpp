@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/items/MainMenuHelp.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/Icons.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include <memory>

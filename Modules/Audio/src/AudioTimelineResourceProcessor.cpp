@@ -1,4 +1,6 @@
 #include "audio/AudioTimelineResourceProcessor.h"
+#include "audio/AudioTimelineMixerNode.h"
+#include "mmm/project/AudioResource.h"
 
 #include <algorithm>
 #include <cmath>

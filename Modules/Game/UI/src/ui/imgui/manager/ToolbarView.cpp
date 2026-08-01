@@ -12,6 +12,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"

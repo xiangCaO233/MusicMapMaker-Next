@@ -1,9 +1,11 @@
 #pragma once
 
-#include "ui/imgui/menu/MainMenuTypes.h"
+#include <cstdint>
 
 namespace MMM::UI
 {
+enum class MainMenuId : std::uint8_t;
+struct MainMenuContext;
 
 /// @brief 一级主菜单绘制接口。
 class IMainMenu

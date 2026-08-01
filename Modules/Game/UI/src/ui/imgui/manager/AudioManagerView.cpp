@@ -8,10 +8,11 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "imgui.h"
+#include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/Icons.h"
@@ -29,6 +30,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <fmt/format.h>
 #include <imgui_internal.h>
 #include <nfd.h>
 #include <system_error>

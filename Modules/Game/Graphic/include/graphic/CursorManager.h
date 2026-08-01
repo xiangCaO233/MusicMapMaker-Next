@@ -1,14 +1,15 @@
 #pragma once
 
-#include "graphic/imguivk/VKTexture.h"
 #include <deque>
 #include <imgui.h>
 #include <memory>
+#include <vulkan/vulkan.hpp>
 
 namespace MMM
 {
 namespace Graphic
 {
+class VKTexture;
 
 class CursorManager
 {

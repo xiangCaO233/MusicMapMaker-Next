@@ -1,4 +1,6 @@
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"

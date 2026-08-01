@@ -6,6 +6,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
 #include <fmt/format.h>

@@ -1,5 +1,6 @@
 #include "ui/layout/box/CLayBox.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/IUIView.h"
 
 namespace MMM::UI
 {
@@ -21,22 +22,22 @@ void CLayBox::render(LayoutContext& lctx)
 ImVec2 CLayBox::renderInCurrent(ImVec2 startPos, ImVec2 avail)
 {
     // 当 avail.y > 0 时，使用固定高度（弹簧需要已知的总高度来分配空间）
-    float layoutH = (avail.y > 0.0f) ? avail.y
-                                      : ImGui::GetContentRegionAvail().y;
+    float layoutH =
+        (avail.y > 0.0f) ? avail.y : ImGui::GetContentRegionAvail().y;
     Clay_SetLayoutDimensions({ avail.x, layoutH });
     ImVec2 mousePos = ImGui::GetMousePos();
     Clay_SetPointerState({ mousePos.x - startPos.x, mousePos.y - startPos.y },
                          ImGui::IsMouseDown(ImGuiMouseButton_Left));
 
     Clay_BeginLayout();
-    Clay_SizingAxis hAxis = (avail.y > 0.0f) ? Sizing::Fixed(avail.y).axis
-                                              : Sizing::Fit().axis;
+    Clay_SizingAxis hAxis =
+        (avail.y > 0.0f) ? Sizing::Fixed(avail.y).axis : Sizing::Fit().axis;
     this->internalGenerate(
         "CLAY_IN_CURRENT", Sizing::Fixed(avail.x).axis, hAxis);
     Clay_EndLayout(ImGui::GetIO().DeltaTime);
 
     // 获取布局后的实际总尺寸
-    auto   data = Clay_GetElementData(Clay_GetElementId(ToCS("CLAY_IN_CURRENT")));
+    auto data = Clay_GetElementData(Clay_GetElementId(ToCS("CLAY_IN_CURRENT")));
     ImVec2 totalSize = { data.boundingBox.width, data.boundingBox.height };
 
     // 关键修复：在执行 internalExecute 之前，先提交一个 Dummy 以预留空间

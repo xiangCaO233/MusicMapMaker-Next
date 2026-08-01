@@ -17,6 +17,7 @@
 #include "logic/session/tool/DrawTool.h"
 #include "logic/session/tool/GrabTool.h"
 #include "logic/session/tool/MarqueeTool.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

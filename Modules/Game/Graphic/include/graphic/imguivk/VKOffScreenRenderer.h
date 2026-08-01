@@ -11,6 +11,7 @@
 #    define VULKAN_HPP_NO_EXCEPTIONS
 #endif
 #include "vulkan/vulkan.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>

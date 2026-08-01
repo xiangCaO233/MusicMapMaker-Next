@@ -2,16 +2,23 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
+#include "event/ui/GLFWNativeEvent.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -28,6 +35,28 @@
 
 namespace MMM::UI
 {
+
+MainDockSpaceUI::MainDockSpaceUI(const std::string& name)
+    : IUIView(name), ITextureLoader(name)
+{
+    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
+        [&](Event::GLFWNativeEvent event) {
+            if ( event.hasStateChange &&
+                 event.type ==
+                     Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
+                m_isMaximized = event.isMaximized;
+            }
+        });
+
+    Event::EventBus::instance().subscribe<Event::AudioImportTriggerEvent>(
+        [&](Event::AudioImportTriggerEvent event) {
+            m_pendingImportPath   = event.path;
+            m_showImportTypeModal = true;
+        });
+}
+
+MainDockSpaceUI::~MainDockSpaceUI() = default;
+
 namespace
 {
 /// @brief 无边框窗口缩放热区基础宽度。

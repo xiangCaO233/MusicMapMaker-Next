@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
@@ -17,6 +18,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <fmt/format.h>
 #include <system_error>
 
 namespace MMM::UI

@@ -1,4 +1,5 @@
 #include "MetadataEditorWindowRenderers.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"

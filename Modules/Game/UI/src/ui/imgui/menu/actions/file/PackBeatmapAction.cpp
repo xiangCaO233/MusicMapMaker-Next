@@ -1,3 +1,4 @@
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
@@ -12,6 +13,7 @@
 #include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>

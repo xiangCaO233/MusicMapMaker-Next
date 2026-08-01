@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
+#include <fmt/format.h>
 #include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>

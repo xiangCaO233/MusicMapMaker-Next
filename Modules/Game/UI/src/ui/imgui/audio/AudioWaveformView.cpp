@@ -7,6 +7,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "implot.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"

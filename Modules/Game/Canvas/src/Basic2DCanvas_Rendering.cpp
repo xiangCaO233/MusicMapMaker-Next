@@ -7,9 +7,12 @@
 #include "config/skin/SkinConfig.h"
 #include "font/AsciiFontRasterizer.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <array>
 #include <cmath>

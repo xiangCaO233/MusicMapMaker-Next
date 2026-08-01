@@ -1,6 +1,7 @@
 #include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "imgui_impl_vulkan.h"

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 

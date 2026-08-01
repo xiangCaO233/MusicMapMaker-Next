@@ -1,5 +1,7 @@
 add_library(
   UI STATIC
+  src/ui/IUIView.cpp
+  src/ui/ITextureLoader.cpp
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp

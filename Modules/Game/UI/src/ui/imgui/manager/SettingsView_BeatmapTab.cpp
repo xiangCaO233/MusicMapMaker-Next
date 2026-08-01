@@ -5,6 +5,7 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <sol/sol.hpp>
 #include <vector>
 
 namespace MMM

@@ -6,10 +6,12 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fmt/format.h>
 #include <system_error>
 #include <utility>
 

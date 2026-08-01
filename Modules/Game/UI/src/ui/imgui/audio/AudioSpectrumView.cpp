@@ -8,6 +8,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"

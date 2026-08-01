@@ -1,11 +1,14 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <filesystem>

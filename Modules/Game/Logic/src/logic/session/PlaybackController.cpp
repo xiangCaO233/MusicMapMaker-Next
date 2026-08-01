@@ -5,6 +5,7 @@
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>

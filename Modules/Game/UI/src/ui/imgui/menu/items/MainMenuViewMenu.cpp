@@ -1,5 +1,6 @@
 #include "ui/imgui/menu/items/MainMenuViewMenu.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
 #include "ui/imgui/menu/items/MainMenuSeparatorItem.h"
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"

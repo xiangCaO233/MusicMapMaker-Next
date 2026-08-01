@@ -1,6 +1,6 @@
 #pragma once
 
-#include "logic/session/context/SessionContext.h"
+#include "logic/session/ClipboardTypes.h"
 #include <mutex>
 #include <optional>
 #include <string>
@@ -9,6 +9,8 @@
 
 namespace MMM::Logic
 {
+
+struct SessionContext;
 
 /// @brief 编辑器级共享剪贴板，封装跨 Session 复制/剪切状态。
 class EditorClipboard

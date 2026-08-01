@@ -1,9 +1,8 @@
 #pragma once
 
-#include "ui/imgui/menu/MainMenuTypes.h"
-
 namespace MMM::UI
 {
+struct MainMenuContext;
 
 /// @brief 主菜单项绘制接口。
 class IMainMenuItem

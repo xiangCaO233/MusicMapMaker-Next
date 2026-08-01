@@ -5,9 +5,11 @@
 #endif
 
 #include "config/AppConfig.h"
+#include "graphic/CursorManager.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderPass.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "imgui_impl_glfw.h"

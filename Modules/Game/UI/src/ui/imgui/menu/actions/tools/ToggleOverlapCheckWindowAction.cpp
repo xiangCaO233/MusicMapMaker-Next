@@ -2,6 +2,8 @@
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"

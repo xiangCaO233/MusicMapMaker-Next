@@ -1,14 +1,9 @@
 #pragma once
 
-#include <spdlog/fmt/fmt.h>  // 确保引入了 fmt
-
-#include <atomic>
 #include <cstdint>
-#include <shared_mutex>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace MMM
 {
@@ -36,7 +31,7 @@ public:
     Translator(const Translator&)            = delete;
     Translator& operator=(Translator&&)      = delete;
     Translator& operator=(const Translator&) = delete;
-    ~Translator()                            = default;
+    ~Translator();
 
     /// @brief 载入一个 Lua 语言字典。
     /// @param langLuaFile 语言文件路径。
@@ -69,31 +64,17 @@ public:
     const char* translate(uint32_t keyHash, const char* fallbackStr);
 
 private:
-    /// @brief 保护语言字典、当前字典、指针缓存和稳定字符串池。
-    mutable std::shared_mutex m_mutex;
+    /// @brief 隐藏语言字典、锁与缓存容器，避免实现细节传播到所有 UI 头。
+    struct Impl;
 
-    /// @brief 翻译缓存版本。
-    /// @warning UI 与逻辑线程并发读取，语言加载线程低频写入；原子用于避免
-    /// `TR_CACHE` 版本检查的数据竞争。
-    std::atomic<uint32_t> m_version{ 0 };
-
-    // 语言map: [translate_key:result]
-    using Dictionary = std::unordered_map<uint32_t, std::string>;
-
-    // 所有字典: [langID:langMap]
-    std::unordered_map<std::string, Dictionary> m_Dictionarys;
-
-    // 当前字典
-    Dictionary* m_currentDictionary{ nullptr };
-
-    // 翻译指针缓存：[keyHash:stablePtr]
-    // 当语言切换或字典更新时必须清空，用于加速 translate 函数
-    std::unordered_map<uint32_t, const char*> m_pointerCache;
-
-    // 字符串池：确保所有返回给 UI 的指针在 Translator 生命周期内稳定。
-    // 语言热切换时不得清空；unordered_set 插入和 rehash 不使元素引用失效。
-    std::unordered_set<std::string> m_stringPool;
+    /// @brief 翻译器生命周期内唯一持有的私有实现。
+    std::unique_ptr<Impl> m_impl;
 };
+
+/// @brief 获取当前皮肤持有的翻译器。
+/// @return 当前皮肤翻译器的非拥有引用。
+/// @warning UI 热路径会调用此入口；实现仅转发到全局 SkinManager，不分配内存。
+Translator& getActiveTranslator();
 
 struct TRResult {
     // 原始字符串指针，直接来自字典 Map 或 fallback 字符串字面量
@@ -130,9 +111,9 @@ inline std::string_view format_as(const TRResult& tr)
 // =========================================================
 // 基础宏 (支持自动转换为 const char*)
 // =========================================================
-#define TR(key_str)                                                     \
-    MMM::Translation::TRResult(                                         \
-        MMM::Config::SkinManager::instance().getTranslator().translate( \
+#define TR(key_str)                                        \
+    MMM::Translation::TRResult(                            \
+        MMM::Translation::getActiveTranslator().translate( \
             MMM::Hash::hash_str(key_str), key_str))
 
 // =========================================================
@@ -143,17 +124,13 @@ inline std::string_view format_as(const TRResult& tr)
         static thread_local const char* cached_ptr     = nullptr;                \
         static thread_local uint32_t    cached_version = 0xFFFFFFFF;             \
         static constexpr uint32_t       key_hash = MMM::Hash::hash_str(key_str); \
-        auto&                           translator =                             \
-            MMM::Config::SkinManager::instance().getTranslator();                \
-        const uint32_t version = translator.getVersion();                        \
+        auto&          translator = MMM::Translation::getActiveTranslator();     \
+        const uint32_t version    = translator.getVersion();                     \
         if ( cached_version != version ) {                                       \
             cached_ptr     = translator.translate(key_hash, key_str);            \
             cached_version = version;                                            \
         }                                                                        \
         return MMM::Translation::TRResult(cached_ptr);                           \
     }())
-
-// TR_FMT 保持不变，fmt 会自动识别 TRResult 的转换或其内部的 string_view
-#define TR_FMT(key, ...) fmt::format(fmt::runtime(TR(key).view), __VA_ARGS__)
 
 }  // namespace MMM

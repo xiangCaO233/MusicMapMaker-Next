@@ -14,6 +14,7 @@
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"

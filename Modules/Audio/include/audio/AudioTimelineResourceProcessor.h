@@ -1,8 +1,5 @@
 #pragma once
 
-#include "audio/AudioTimelineMixerNode.h"
-#include "mmm/project/AudioResource.h"
-
 #include <memory>
 #include <string>
 #include <string_view>
@@ -12,8 +9,15 @@ namespace ice
 class AudioTrack;
 }  // namespace ice
 
+namespace MMM
+{
+struct AudioTrackConfig;
+}  // namespace MMM
+
 namespace MMM::Audio
 {
+
+class PreparedTimelineAudio;
 
 /// @brief 构造排除资源音量和静音的离线 DSP 缓存键。
 /// @param filePath 音频文件稳定路径。

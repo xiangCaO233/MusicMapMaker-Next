@@ -2,7 +2,7 @@
 
 #include "audio/AudioTimelineClock.h"
 #include "audio/StereoGainEnvelope.h"
-#include "config/EditorSettings.h"
+#include "config/AudioPlaybackConfig.h"
 #include "mmm/project/AudioResource.h"
 #include <array>
 #include <atomic>

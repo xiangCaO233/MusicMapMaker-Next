@@ -1,5 +1,6 @@
 #include "event/ui/UISettingsTabEvent.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 
 namespace MMM::UI

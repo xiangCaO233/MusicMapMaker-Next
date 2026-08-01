@@ -48,18 +48,9 @@ struct EditorConfig {
     }
 };
 
-inline void to_json(nlohmann::json& j, const EditorConfig& c)
-{
-    j = nlohmann::json{ { "visual", c.visual },
-                        { "settings", c.settings },
-                        { "recentProjects", c.recentProjects } };
-}
-
-inline void from_json(const nlohmann::json& j, EditorConfig& c)
-{
-    c.visual         = j.value("visual", VisualConfig());
-    c.settings       = j.value("settings", EditorSettings());
-    c.recentProjects = j.value("recentProjects", std::vector<std::string>());
-}
+/// @brief 将完整编辑器配置序列化为 JSON。
+void to_json(nlohmann::json& json, const EditorConfig& config);
+/// @brief 从 JSON 读取完整编辑器配置。
+void from_json(const nlohmann::json& json, EditorConfig& config);
 
 }  // namespace MMM::Config

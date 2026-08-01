@@ -3,7 +3,7 @@
 #include "translation/Translation.h"
 #include <cstdint>
 #include <filesystem>
-#include <sol/sol.hpp>
+#include <sol/forward.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>

@@ -4,12 +4,15 @@
 #include "common/BeatmapAudioTimelineCompatibility.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>

@@ -5,6 +5,8 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 
+#include <fmt/format.h>
+
 namespace MMM::Logic
 {
 

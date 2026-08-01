@@ -11,6 +11,8 @@
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
 
+#include <fmt/format.h>
+
 namespace MMM::Logic
 {
 

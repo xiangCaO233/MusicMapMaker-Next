@@ -2,7 +2,6 @@
 
 #include "../CLayDefs.h"
 #include "imgui.h"
-#include "ui/IUIView.h"
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -13,6 +12,7 @@ namespace MMM::UI
 
 class CLayHBox;
 class CLayVBox;
+class LayoutContext;
 
 class CLayBox
 {

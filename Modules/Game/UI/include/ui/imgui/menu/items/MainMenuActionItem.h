@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItem.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
 

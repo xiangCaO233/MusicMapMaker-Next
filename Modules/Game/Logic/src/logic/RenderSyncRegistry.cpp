@@ -1,4 +1,5 @@
 #include "logic/RenderSyncRegistry.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include <mutex>
 
 namespace MMM::Logic

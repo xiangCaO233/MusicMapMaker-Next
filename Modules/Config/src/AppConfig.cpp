@@ -2,6 +2,9 @@
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <fstream>
 #include <iomanip>

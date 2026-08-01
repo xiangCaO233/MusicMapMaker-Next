@@ -1,11 +1,13 @@
 #pragma once
+#include "config/AudioPlaybackConfig.h"
 #include "config/BeatLinePalette.h"
+#include "config/FrameLimitPreference.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,11 +21,10 @@ enum class SyncMode {
     WaterTank  ///< 水箱制同步 (固定延迟)
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(SyncMode, {
-                                           { SyncMode::None, "None" },
-                                           { SyncMode::Integral, "Integral" },
-                                           { SyncMode::WaterTank, "WaterTank" },
-                                       })
+/// @brief 将同步模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const SyncMode& mode);
+/// @brief 从稳定文本读取同步模式。
+void from_json(const nlohmann::json& json, SyncMode& mode);
 
 struct SyncConfig {
     SyncMode mode{ SyncMode::Integral };
@@ -32,21 +33,10 @@ struct SyncConfig {
     double   syncInterval{ 10.0 };      ///< 强制同步周期 (秒)
 };
 
-inline void to_json(nlohmann::json& j, const SyncConfig& c)
-{
-    j = nlohmann::json{ { "mode", c.mode },
-                        { "integralFactor", c.integralFactor },
-                        { "waterTankBuffer", c.waterTankBuffer },
-                        { "syncInterval", c.syncInterval } };
-}
-
-inline void from_json(const nlohmann::json& j, SyncConfig& c)
-{
-    c.mode            = j.value("mode", SyncMode::Integral);
-    c.integralFactor  = j.value("integralFactor", 0.1f);
-    c.waterTankBuffer = j.value("waterTankBuffer", 0.05f);
-    c.syncInterval    = j.value("syncInterval", 10.0);
-}
+/// @brief 将同步配置序列化为 JSON。
+void to_json(nlohmann::json& json, const SyncConfig& config);
+/// @brief 从 JSON 读取同步配置。
+void from_json(const nlohmann::json& json, SyncConfig& config);
 
 enum class PolylineSfxStrategy {
     Exact,             ///< 策略一: 所有子物件精确按照他们的类型播放对应音效
@@ -55,14 +45,10 @@ enum class PolylineSfxStrategy {
     AllAsNormal        ///< 策略四: 全部子物件均播放普通Note音效
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(
-    PolylineSfxStrategy,
-    {
-        { PolylineSfxStrategy::Exact, "Exact" },
-        { PolylineSfxStrategy::InternalAsNormal, "InternalAsNormal" },
-        { PolylineSfxStrategy::OnlyTailExact, "OnlyTailExact" },
-        { PolylineSfxStrategy::AllAsNormal, "AllAsNormal" },
-    })
+/// @brief 将折线音效策略序列化为稳定文本。
+void to_json(nlohmann::json& json, const PolylineSfxStrategy& strategy);
+/// @brief 从稳定文本读取折线音效策略。
+void from_json(const nlohmann::json& json, PolylineSfxStrategy& strategy);
 
 struct SfxConfig {
     /// @brief 折线内部子物件音效播放策略
@@ -90,59 +76,30 @@ struct SfxConfig {
     bool enableHitSfx{ true };
 };
 
-inline void to_json(nlohmann::json& j, const SfxConfig& c)
-{
-    j = nlohmann::json{
-        { "polylineStrategy", c.polylineStrategy },
-        { "enableFlickWidthVolumeScaling", c.enableFlickWidthVolumeScaling },
-        { "flickWidthVolumeMultiplier", c.flickWidthVolumeMultiplier },
-        { "enableStereoHitEffects", c.enableStereoHitEffects },
-        { "permanentSfxVolumes", c.permanentSfxVolumes },
-        { "permanentSfxMutes", c.permanentSfxMutes },
-        { "hitSfxSyncSpeed", c.hitSfxSyncSpeed },
-        { "enableHitSfx", c.enableHitSfx }
-    };
-}
-
-inline void from_json(const nlohmann::json& j, SfxConfig& c)
-{
-    c.polylineStrategy =
-        j.value("polylineStrategy", PolylineSfxStrategy::Exact);
-    c.enableFlickWidthVolumeScaling =
-        j.value("enableFlickWidthVolumeScaling", false);
-    c.flickWidthVolumeMultiplier = j.value("flickWidthVolumeMultiplier", 0.1f);
-    c.enableStereoHitEffects =
-        j.value("enableStereoHitEffects",
-                j.value("enableDirectionalFlickChannels", true));
-    c.permanentSfxVolumes =
-        j.value("permanentSfxVolumes", std::map<std::string, float>());
-    c.permanentSfxMutes =
-        j.value("permanentSfxMutes", std::map<std::string, bool>());
-    c.hitSfxSyncSpeed = j.value("hitSfxSyncSpeed", true);
-    c.enableHitSfx    = j.value("enableHitSfx", true);
-}
+/// @brief 将音效配置序列化为 JSON。
+void to_json(nlohmann::json& json, const SfxConfig& config);
+/// @brief 从 JSON 读取音效配置。
+void from_json(const nlohmann::json& json, SfxConfig& config);
 
 enum class FilePickerStyle {
     Native,  ///< 系统原生对话框 (nfd-extended)
     Unified  ///< 统一风格对话框 (ImGuiFileDialog)
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(FilePickerStyle,
-                             {
-                                 { FilePickerStyle::Native, "Native" },
-                                 { FilePickerStyle::Unified, "Unified" },
-                             })
+/// @brief 将文件选择器样式序列化为稳定文本。
+void to_json(nlohmann::json& json, const FilePickerStyle& style);
+/// @brief 从稳定文本读取文件选择器样式。
+void from_json(const nlohmann::json& json, FilePickerStyle& style);
 
 enum class CursorStyle {
     Software,  ///< 软件内置光标 (CursorManager)
     System     ///< 系统原生光标
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(CursorStyle,
-                             {
-                                 { CursorStyle::Software, "Software" },
-                                 { CursorStyle::System, "System" },
-                             })
+/// @brief 将光标样式序列化为稳定文本。
+void to_json(nlohmann::json& json, const CursorStyle& style);
+/// @brief 从稳定文本读取光标样式。
+void from_json(const nlohmann::json& json, CursorStyle& style);
 
 struct SoftwareCursorConfig {
     /// @brief 软件光标主图尺寸 (px)
@@ -159,26 +116,10 @@ struct SoftwareCursorConfig {
     bool enableBpmSyncSmokeLife{ false };
 };
 
-inline void to_json(nlohmann::json& j, const SoftwareCursorConfig& c)
-{
-    j = nlohmann::json{ { "cursorSize", c.cursorSize },
-                        { "trailSize", c.trailSize },
-                        { "trailLifeTime", c.trailLifeTime },
-                        { "smokeSize", c.smokeSize },
-                        { "smokeLifeTime", c.smokeLifeTime },
-                        { "enableBpmSyncSmokeLife",
-                          c.enableBpmSyncSmokeLife } };
-}
-
-inline void from_json(const nlohmann::json& j, SoftwareCursorConfig& c)
-{
-    c.cursorSize             = j.value("cursorSize", 64.0f);
-    c.trailSize              = j.value("trailSize", 48.0f);
-    c.trailLifeTime          = j.value("trailLifeTime", 0.4f);
-    c.smokeSize              = j.value("smokeSize", 32.0f);
-    c.smokeLifeTime          = j.value("smokeLifeTime", 0.8f);
-    c.enableBpmSyncSmokeLife = j.value("enableBpmSyncSmokeLife", false);
-}
+/// @brief 将软件光标配置序列化为 JSON。
+void to_json(nlohmann::json& json, const SoftwareCursorConfig& config);
+/// @brief 从 JSON 读取软件光标配置。
+void from_json(const nlohmann::json& json, SoftwareCursorConfig& config);
 
 struct UIAestheticsConfig {
     /// @brief UI 动画过渡时间下限，避免配置为 0 导致速度计算异常。
@@ -206,28 +147,10 @@ struct UIAestheticsConfig {
     }
 };
 
-inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
-{
-    j = nlohmann::json{ { "windowRounding", c.windowRounding },
-                        { "frameRounding", c.frameRounding },
-                        { "windowGap", c.windowGap },
-                        { "itemSpacing", c.itemSpacing },
-                        { "windowPadding", c.windowPadding },
-                        { "animationTransitionDuration",
-                          c.animationTransitionDuration } };
-}
-
-inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
-{
-    c.windowRounding = j.value("windowRounding", 8.0f);
-    c.frameRounding  = j.value("frameRounding", 6.0f);
-    c.windowGap      = j.value("windowGap", 8.0f);
-    c.itemSpacing    = j.value("itemSpacing", 8.0f);
-    c.windowPadding  = j.value("windowPadding", 8.0f);
-    c.animationTransitionDuration =
-        std::max(UIAestheticsConfig::MIN_ANIMATION_TRANSITION_DURATION,
-                 j.value("animationTransitionDuration", 0.12f));
-}
+/// @brief 将 UI 审美配置序列化为 JSON。
+void to_json(nlohmann::json& json, const UIAestheticsConfig& config);
+/// @brief 从 JSON 读取 UI 审美配置。
+void from_json(const nlohmann::json& json, UIAestheticsConfig& config);
 
 /// @brief 音符调色盘方案中的颜色槽位数量。
 inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
@@ -249,19 +172,10 @@ struct ColorPaletteScheme {
     BeatLineColorPalette beatLineColors{};
 };
 
-inline void to_json(nlohmann::json& j, const ColorPaletteScheme& c)
-{
-    j = nlohmann::json{ { "name", c.name },
-                        { "noteColors", c.noteColors },
-                        { "beatLineColors", c.beatLineColors } };
-}
-
-inline void from_json(const nlohmann::json& j, ColorPaletteScheme& c)
-{
-    c.name           = j.value("name", std::string("Palette"));
-    c.noteColors     = j.value("noteColors", decltype(c.noteColors){});
-    c.beatLineColors = j.value("beatLineColors", BeatLineColorPalette{});
-}
+/// @brief 将调色盘方案序列化为 JSON。
+void to_json(nlohmann::json& json, const ColorPaletteScheme& scheme);
+/// @brief 从 JSON 读取调色盘方案。
+void from_json(const nlohmann::json& json, ColorPaletteScheme& scheme);
 
 /// @brief 调色盘持久化配置。
 struct ColorPaletteConfig {
@@ -272,22 +186,10 @@ struct ColorPaletteConfig {
     std::vector<ColorPaletteScheme> schemes;
 };
 
-inline void to_json(nlohmann::json& j, const ColorPaletteConfig& c)
-{
-    j = nlohmann::json{ { "activeSchemeIndex", c.activeSchemeIndex },
-                        { "schemes", c.schemes } };
-}
-
-inline void from_json(const nlohmann::json& j, ColorPaletteConfig& c)
-{
-    c.activeSchemeIndex = j.value("activeSchemeIndex", std::size_t{ 0 });
-    c.schemes           = j.value("schemes", std::vector<ColorPaletteScheme>());
-    if ( c.schemes.empty() ) {
-        c.activeSchemeIndex = 0;
-    } else if ( c.activeSchemeIndex >= c.schemes.size() ) {
-        c.activeSchemeIndex = 0;
-    }
-}
+/// @brief 将调色盘配置序列化为 JSON。
+void to_json(nlohmann::json& json, const ColorPaletteConfig& config);
+/// @brief 从 JSON 读取调色盘配置。
+void from_json(const nlohmann::json& json, ColorPaletteConfig& config);
 
 /// @brief 单个自定义快捷键绑定。
 struct ShortcutBinding {
@@ -310,25 +212,10 @@ struct ShortcutBinding {
     bool super{ false };
 };
 
-inline void to_json(nlohmann::json& j, const ShortcutBinding& c)
-{
-    j = nlohmann::json{ { "enabled", c.enabled }, { "key", c.key },
-                        { "ctrl", c.ctrl },       { "shift", c.shift },
-                        { "alt", c.alt },         { "super", c.super } };
-}
-
-inline void from_json(const nlohmann::json& j, ShortcutBinding& c)
-{
-    c.enabled = j.value("enabled", true);
-    c.key     = j.value("key", std::string());
-    c.ctrl    = j.value("ctrl", false);
-    c.shift   = j.value("shift", false);
-    c.alt     = j.value("alt", false);
-    c.super   = j.value("super", false);
-    if ( c.key.empty() ) {
-        c.enabled = false;
-    }
-}
+/// @brief 将快捷键绑定序列化为 JSON。
+void to_json(nlohmann::json& json, const ShortcutBinding& binding);
+/// @brief 从 JSON 读取快捷键绑定。
+void from_json(const nlohmann::json& json, ShortcutBinding& binding);
 
 /// @brief 编辑器可自定义快捷键配置。
 struct ShortcutConfig {
@@ -391,141 +278,10 @@ struct ShortcutConfig {
                                              false, false, false };
 };
 
-inline void to_json(nlohmann::json& j, const ShortcutConfig& c)
-{
-    j = nlohmann::json{
-        { "toolMove", c.toolMove },
-        { "toolMarquee", c.toolMarquee },
-        { "toolDraw", c.toolDraw },
-        { "toolColorBrush", c.toolColorBrush },
-        { "toolColorEraser", c.toolColorEraser },
-        { "mirror", c.mirror },
-        { "mirrorPaste", c.mirrorPaste },
-        { "deleteSelected", c.deleteSelected },
-        { "toggleReverseScroll", c.toggleReverseScroll },
-        { "toggleScrollSnap", c.toggleScrollSnap },
-        { "toggleSnapFloor", c.toggleSnapFloor },
-        { "toggleScrollTimingMapping", c.toggleScrollTimingMapping },
-        { "toggleBeatLines", c.toggleBeatLines },
-        { "toggleStopPlaybackOnScroll", c.toggleStopPlaybackOnScroll },
-        { "toggleHitSfx", c.toggleHitSfx },
-        { "toggleHitEffects", c.toggleHitEffects },
-        { "toggleSyncSameMainAudio", c.toggleSyncSameMainAudio }
-    };
-}
-
-inline void from_json(const nlohmann::json& j, ShortcutConfig& c)
-{
-    c.toolMove    = j.value("toolMove", ShortcutConfig().toolMove);
-    c.toolMarquee = j.value("toolMarquee", ShortcutConfig().toolMarquee);
-    c.toolDraw    = j.value("toolDraw", ShortcutConfig().toolDraw);
-    c.toolColorBrush =
-        j.value("toolColorBrush", ShortcutConfig().toolColorBrush);
-    c.toolColorEraser =
-        j.value("toolColorEraser", ShortcutConfig().toolColorEraser);
-    c.mirror      = j.value("mirror", ShortcutConfig().mirror);
-    c.mirrorPaste = j.value("mirrorPaste", ShortcutConfig().mirrorPaste);
-    c.deleteSelected =
-        j.value("deleteSelected", ShortcutConfig().deleteSelected);
-    c.toggleReverseScroll =
-        j.value("toggleReverseScroll", ShortcutConfig().toggleReverseScroll);
-    c.toggleScrollSnap =
-        j.value("toggleScrollSnap", ShortcutConfig().toggleScrollSnap);
-    c.toggleSnapFloor =
-        j.value("toggleSnapFloor", ShortcutConfig().toggleSnapFloor);
-    c.toggleScrollTimingMapping =
-        j.value("toggleScrollTimingMapping",
-                ShortcutConfig().toggleScrollTimingMapping);
-    c.toggleBeatLines =
-        j.value("toggleBeatLines", ShortcutConfig().toggleBeatLines);
-    c.toggleStopPlaybackOnScroll =
-        j.value("toggleStopPlaybackOnScroll",
-                ShortcutConfig().toggleStopPlaybackOnScroll);
-    c.toggleHitSfx = j.value("toggleHitSfx", ShortcutConfig().toggleHitSfx);
-    c.toggleHitEffects =
-        j.value("toggleHitEffects", ShortcutConfig().toggleHitEffects);
-    c.toggleSyncSameMainAudio = j.value(
-        "toggleSyncSameMainAudio", ShortcutConfig().toggleSyncSameMainAudio);
-}
-
-enum class FrameLimitPreference {
-    VSync,
-    Refresh2x,
-    Refresh4x,
-    Refresh8x,
-    Unlimited
-};
-
-NLOHMANN_JSON_SERIALIZE_ENUM(FrameLimitPreference,
-                             { { FrameLimitPreference::VSync, "VSync" },
-                               { FrameLimitPreference::Refresh2x, "Refresh2x" },
-                               { FrameLimitPreference::Refresh4x, "Refresh4x" },
-                               { FrameLimitPreference::Refresh8x, "Refresh8x" },
-                               { FrameLimitPreference::Unlimited,
-                                 "Unlimited" } })
-
-/// @brief 音频播放后端偏好。
-enum class AudioPlaybackBackend {
-    SDL,    ///< SDL 音频后端。
-    OpenAL  ///< OpenAL Soft 音频后端。
-};
-
-NLOHMANN_JSON_SERIALIZE_ENUM(AudioPlaybackBackend,
-                             {
-                                 { AudioPlaybackBackend::SDL, "SDL" },
-                                 { AudioPlaybackBackend::OpenAL, "OpenAL" },
-                             })
-
-/// @brief OpenAL 空间化输出配置。
-struct OpenALSpatialConfig {
-    /// @brief 是否启用 OpenAL 空间化输出。
-    bool enabled{ false };
-
-    /// @brief 声源方向 X 分量。
-    float directionX{ 0.0f };
-
-    /// @brief 声源方向 Y 分量。
-    float directionY{ 0.0f };
-
-    /// @brief 声源方向 Z 分量。
-    float directionZ{ -1.0f };
-
-    /// @brief 声源距离。
-    float distance{ 1.0f };
-
-    /// @brief OpenAL 参考距离。
-    float referenceDistance{ 1.0f };
-
-    /// @brief OpenAL 最大距离。
-    float maxDistance{ 100.0f };
-
-    /// @brief OpenAL 距离衰减倍率。
-    float rolloffFactor{ 1.0f };
-};
-
-inline void to_json(nlohmann::json& j, const OpenALSpatialConfig& c)
-{
-    j = nlohmann::json{ { "enabled", c.enabled },
-                        { "directionX", c.directionX },
-                        { "directionY", c.directionY },
-                        { "directionZ", c.directionZ },
-                        { "distance", c.distance },
-                        { "referenceDistance", c.referenceDistance },
-                        { "maxDistance", c.maxDistance },
-                        { "rolloffFactor", c.rolloffFactor } };
-}
-
-inline void from_json(const nlohmann::json& j, OpenALSpatialConfig& c)
-{
-    c.enabled           = j.value("enabled", false);
-    c.directionX        = j.value("directionX", 0.0f);
-    c.directionY        = j.value("directionY", 0.0f);
-    c.directionZ        = j.value("directionZ", -1.0f);
-    c.distance          = j.value("distance", 1.0f);
-    c.referenceDistance = j.value("referenceDistance", 1.0f);
-    c.maxDistance       = j.value("maxDistance", 100.0f);
-    c.rolloffFactor     = j.value("rolloffFactor", 1.0f);
-}
+/// @brief 将快捷键配置序列化为 JSON。
+void to_json(nlohmann::json& json, const ShortcutConfig& config);
+/// @brief 从 JSON 读取快捷键配置。
+void from_json(const nlohmann::json& json, ShortcutConfig& config);
 
 /// @brief 自动主题选择使用的稳定 ID。
 inline constexpr std::string_view UI_THEME_AUTO_ID = "Auto";
@@ -535,23 +291,20 @@ enum class SelectionMode {
     Intersection  ///< 相交模式 (只要相交即选中)
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(SelectionMode,
-                             {
-                                 { SelectionMode::Strict, "Strict" },
-                                 { SelectionMode::Intersection,
-                                   "Intersection" },
-                             })
+/// @brief 将框选模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const SelectionMode& mode);
+/// @brief 从稳定文本读取框选模式。
+void from_json(const nlohmann::json& json, SelectionMode& mode);
 
 enum class SaveFormatPreference {
     Original,  ///< 保持原始格式 (例如 .osu, .mc 等)
     ForceMMM   ///< 强制保存为 .mmm 格式 (内置 JSON 格式)
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(SaveFormatPreference,
-                             {
-                                 { SaveFormatPreference::Original, "Original" },
-                                 { SaveFormatPreference::ForceMMM, "ForceMMM" },
-                             })
+/// @brief 将保存格式偏好序列化为稳定文本。
+void to_json(nlohmann::json& json, const SaveFormatPreference& preference);
+/// @brief 从稳定文本读取保存格式偏好。
+void from_json(const nlohmann::json& json, SaveFormatPreference& preference);
 
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
@@ -561,14 +314,10 @@ enum class TimeFormatPreference {
     Beat           ///< 拍号 + 分拍位
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(TimeFormatPreference,
-                             {
-                                 { TimeFormatPreference::Clock, "Clock" },
-                                 { TimeFormatPreference::Seconds, "Seconds" },
-                                 { TimeFormatPreference::Milliseconds,
-                                   "Milliseconds" },
-                                 { TimeFormatPreference::Beat, "Beat" },
-                             })
+/// @brief 将时间格式偏好序列化为稳定文本。
+void to_json(nlohmann::json& json, const TimeFormatPreference& preference);
+/// @brief 从稳定文本读取时间格式偏好。
+void from_json(const nlohmann::json& json, TimeFormatPreference& preference);
 
 /// @brief 复制粘贴时用于计算相对偏移的时间基准。
 enum class CopyPasteTimeBasis {
@@ -576,11 +325,10 @@ enum class CopyPasteTimeBasis {
     Beat        ///< 按 BPM 分拍位置保持相对偏移
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
-                             {
-                                 { CopyPasteTimeBasis::Timestamp, "Timestamp" },
-                                 { CopyPasteTimeBasis::Beat, "Beat" },
-                             })
+/// @brief 将复制粘贴时间基准序列化为稳定文本。
+void to_json(nlohmann::json& json, const CopyPasteTimeBasis& basis);
+/// @brief 从稳定文本读取复制粘贴时间基准。
+void from_json(const nlohmann::json& json, CopyPasteTimeBasis& basis);
 
 /// @brief 物件放置磁吸使用的分拍线来源。
 enum class ObjectPlacementSnapMode {
@@ -588,12 +336,10 @@ enum class ObjectPlacementSnapMode {
     CommonBeatDivisors   ///< 使用用户选中的常用分拍线集合。
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(
-    ObjectPlacementSnapMode,
-    {
-        { ObjectPlacementSnapMode::CurrentBeatDivisor, "CurrentBeatDivisor" },
-        { ObjectPlacementSnapMode::CommonBeatDivisors, "CommonBeatDivisors" },
-    })
+/// @brief 将物件放置磁吸模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const ObjectPlacementSnapMode& mode);
+/// @brief 从稳定文本读取物件放置磁吸模式。
+void from_json(const nlohmann::json& json, ObjectPlacementSnapMode& mode);
 
 /// @brief 常用分拍选择允许的最小分母。
 inline constexpr int COMMON_BEAT_DIVISOR_MIN = 2;
@@ -671,26 +417,11 @@ struct BpmMeasurementToolPreferences {
 };
 
 /// @brief 将 BPM 测量工具用户偏好序列化为 JSON。
-/// @param j 输出 JSON 对象。
-/// @param c 待序列化的 BPM 测量工具偏好。
-inline void to_json(nlohmann::json& j, const BpmMeasurementToolPreferences& c)
-{
-    j = nlohmann::json{ { "markerWidthMs", c.markerWidthMs },
-                        { "beatDivisor", c.beatDivisor },
-                        { "viewCenterSeconds", c.viewCenterSeconds },
-                        { "viewHalfWidthSeconds", c.viewHalfWidthSeconds } };
-}
-
+void to_json(nlohmann::json&                      json,
+             const BpmMeasurementToolPreferences& preferences);
 /// @brief 从 JSON 恢复 BPM 测量工具用户偏好。
-/// @param j 输入 JSON 对象。
-/// @param c 接收结果的 BPM 测量工具偏好。
-inline void from_json(const nlohmann::json& j, BpmMeasurementToolPreferences& c)
-{
-    c.markerWidthMs        = j.value("markerWidthMs", 80.0);
-    c.beatDivisor          = j.value("beatDivisor", 4);
-    c.viewCenterSeconds    = j.value("viewCenterSeconds", 0.0);
-    c.viewHalfWidthSeconds = j.value("viewHalfWidthSeconds", 8.0);
-}
+void from_json(const nlohmann::json&          json,
+               BpmMeasurementToolPreferences& preferences);
 
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
@@ -895,183 +626,9 @@ struct EditorSettings {
     ShortcutConfig shortcutConfig;
 };
 
-inline void to_json(nlohmann::json& j, const EditorSettings& c)
-{
-    j = nlohmann::json{
-        { "syncConfig", c.syncConfig },
-        { "sfxConfig", c.sfxConfig },
-        { "filePickerStyle", c.filePickerStyle },
-        { "cursorStyle", c.cursorStyle },
-        { "theme", c.theme },
-        { "disabledPluginIds", c.disabledPluginIds },
-        { "selectedSkinDirectory", c.selectedSkinDirectory },
-        { "beatDivisor", c.beatDivisor },
-        { "overlapTimeWindowMs", c.overlapTimeWindowMs },
-        { "reverseScroll", c.reverseScroll },
-        { "scrollSnap", c.scrollSnap },
-        { "objectPlacementSnap", c.objectPlacementSnap },
-        { "objectPlacementSnapMode", c.objectPlacementSnapMode },
-        { "commonBeatDivisorMask", c.commonBeatDivisorMask },
-        { "recentProjectsLimit", c.recentProjectsLimit },
-        { "language", c.language },
-        { "frameLimit", c.frameLimit },
-        { "audioPlaybackBackend", c.audioPlaybackBackend },
-        { "sdlAudioOutputDeviceName", c.sdlAudioOutputDeviceName },
-        { "openALAudioOutputDeviceName", c.openALAudioOutputDeviceName },
-        { "openALSpatialConfig", c.openALSpatialConfig },
-        { "renderProfileLogging", c.renderProfileLogging },
-        { "autoUploadPgoProfiles", c.autoUploadPgoProfiles },
-        { "pgoProfileUploadConsentAsked", c.pgoProfileUploadConsentAsked },
-        { "fontSizeMultiplier", c.fontSizeMultiplier },
-        { "uiScaleMultiplier", c.uiScaleMultiplier },
-        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
-        { "globalVolume", c.globalVolume },
-        { "globalMuted", c.globalMuted },
-        { "bgmGain", c.bgmGain },
-        { "bgmGainMuted", c.bgmGainMuted },
-        { "sfxGain", c.sfxGain },
-        { "sfxGainMuted", c.sfxGainMuted },
-        { "interactionSfxGain", c.interactionSfxGain },
-        { "interactionSfxGainMuted", c.interactionSfxGainMuted },
-        { "selectionMode", c.selectionMode },
-        { "marqueeThickness", c.marqueeThickness },
-        { "marqueeRounding", c.marqueeRounding },
-        { "saveFormatPreference", c.saveFormatPreference },
-        { "autoAddStoreModeExtForMalodyExport",
-          c.autoAddStoreModeExtForMalodyExport },
-        { "timeFormatPreference", c.timeFormatPreference },
-        { "lastFilePickerPath", c.lastFilePickerPath },
-        { "disableScrollAccelerationWhileDrawing",
-          c.disableScrollAccelerationWhileDrawing },
-        { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
-        { "enablePolylineEditing", c.enablePolylineEditing },
-        { "selectPastedObjects", c.selectPastedObjects },
-        { "copyPasteTimeBasis", c.copyPasteTimeBasis },
-        { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
-        { "bpmMeasurementToolPreferences", c.bpmMeasurementToolPreferences },
-        { "softwareCursorConfig", c.softwareCursorConfig },
-        { "preferredAsciiFont", c.preferredAsciiFont },
-        { "preferredCjkFont", c.preferredCjkFont },
-        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
-        { "snapFloor", c.snapFloor },
-        { "showTimelineWindow", c.showTimelineWindow },
-        { "timelineProfessionalMode", c.timelineProfessionalMode },
-        { "showPreviewWindow", c.showPreviewWindow },
-        { "showToolLabels", c.showToolLabels },
-        { "fixedToolWindow", c.fixedToolWindow },
-        { "showManagerLabels", c.showManagerLabels },
-        { "aesthetics", c.aesthetics },
-        { "colorPalettes", c.colorPalettes },
-        { "defaultColorPaletteSchemeName", c.defaultColorPaletteSchemeName },
-        { "shortcutConfig", c.shortcutConfig }
-    };
-}
-
-inline void from_json(const nlohmann::json& j, EditorSettings& c)
-{
-    c.syncConfig      = j.value("syncConfig", SyncConfig());
-    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
-    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Native);
-    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
-    if ( auto themeIt = j.find("theme");
-         themeIt != j.end() && themeIt->is_string() ) {
-        c.theme = themeIt->get<std::string>();
-        if ( c.theme.empty() ) {
-            c.theme = UI_THEME_AUTO_ID;
-        } else if ( c.theme == "MmmDefault" ) {
-            c.theme = "Cecilia";
-        }
-    } else {
-        c.theme = UI_THEME_AUTO_ID;
-    }
-    c.disabledPluginIds =
-        j.value("disabledPluginIds", std::vector<std::string>());
-    c.selectedSkinDirectory =
-        j.value("selectedSkinDirectory", std::string("mmm-default"));
-    c.beatDivisor             = j.value("beatDivisor", 4);
-    c.overlapTimeWindowMs     = j.value("overlapTimeWindowMs", 5.0f);
-    c.reverseScroll           = j.value("reverseScroll", false);
-    c.scrollSnap              = j.value("scrollSnap", false);
-    c.objectPlacementSnap     = j.value("objectPlacementSnap", c.scrollSnap);
-    c.objectPlacementSnapMode = j.value(
-        "objectPlacementSnapMode", ObjectPlacementSnapMode::CurrentBeatDivisor);
-    c.commonBeatDivisorMask =
-        j.value("commonBeatDivisorMask", COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
-        COMMON_BEAT_DIVISOR_MASK_ALL;
-    c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
-    c.language            = j.value("language", std::string("zh_cn"));
-    c.frameLimit =
-        j.value("frameLimit",
-                j.contains("vsync") ? (j.value("vsync", false)
-                                           ? FrameLimitPreference::VSync
-                                           : FrameLimitPreference::Unlimited)
-                                    : FrameLimitPreference::Refresh2x);
-    c.audioPlaybackBackend =
-        j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
-    c.sdlAudioOutputDeviceName =
-        j.value("sdlAudioOutputDeviceName", std::string());
-    c.openALAudioOutputDeviceName =
-        j.value("openALAudioOutputDeviceName", std::string());
-    c.openALSpatialConfig =
-        j.value("openALSpatialConfig", OpenALSpatialConfig());
-    c.renderProfileLogging         = j.value("renderProfileLogging", false);
-    c.autoUploadPgoProfiles        = j.value("autoUploadPgoProfiles", false);
-    c.pgoProfileUploadConsentAsked = j.value(
-        "pgoProfileUploadConsentAsked", j.contains("autoUploadPgoProfiles"));
-    c.fontSizeMultiplier      = j.value("fontSizeMultiplier", 1.15f);
-    c.uiScaleMultiplier       = j.value("uiScaleMultiplier", 1.0f);
-    c.scrollSpeedMultiplier   = j.value("scrollSpeedMultiplier", 4.0f);
-    c.globalVolume            = j.value("globalVolume", 0.25f);
-    c.globalMuted             = j.value("globalMuted", false);
-    c.bgmGain                 = j.value("bgmGain", 1.0f);
-    c.bgmGainMuted            = j.value("bgmGainMuted", false);
-    c.sfxGain                 = j.value("sfxGain", 1.0f);
-    c.sfxGainMuted            = j.value("sfxGainMuted", false);
-    c.interactionSfxGain      = j.value("interactionSfxGain", 1.0f);
-    c.interactionSfxGainMuted = j.value("interactionSfxGainMuted", false);
-    c.selectionMode    = j.value("selectionMode", SelectionMode::Intersection);
-    c.marqueeThickness = j.value("marqueeThickness", 2.0f);
-    c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
-    c.saveFormatPreference =
-        j.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
-    c.autoAddStoreModeExtForMalodyExport =
-        j.value("autoAddStoreModeExtForMalodyExport", false);
-    c.timeFormatPreference =
-        j.value("timeFormatPreference", TimeFormatPreference::Seconds);
-    c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
-    c.disableScrollAccelerationWhileDrawing =
-        j.value("disableScrollAccelerationWhileDrawing", true);
-    c.removeObjectsOnPolylinePath =
-        j.value("removeObjectsOnPolylinePath", false);
-    c.enablePolylineEditing = j.value("enablePolylineEditing", true);
-    c.selectPastedObjects   = j.value("selectPastedObjects", false);
-    c.copyPasteTimeBasis =
-        j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
-    c.timelineSelectionIncludesBpm =
-        j.value("timelineSelectionIncludesBpm", false);
-    BpmMeasurementToolPreferences bpmMeasurementToolPreferencesFallback;
-    bpmMeasurementToolPreferencesFallback.beatDivisor = c.beatDivisor;
-    c.bpmMeasurementToolPreferences                   = j.value(
-        "bpmMeasurementToolPreferences", bpmMeasurementToolPreferencesFallback);
-    c.softwareCursorConfig =
-        j.value("softwareCursorConfig", SoftwareCursorConfig());
-    c.preferredAsciiFont =
-        j.value("preferredAsciiFont", std::string("Default"));
-    c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
-    c.stopPlaybackOnScroll     = j.value("stopPlaybackOnScroll", false);
-    c.snapFloor                = j.value("snapFloor", false);
-    c.showTimelineWindow       = j.value("showTimelineWindow", true);
-    c.timelineProfessionalMode = j.value("timelineProfessionalMode", false);
-    c.showPreviewWindow        = j.value("showPreviewWindow", true);
-    c.showToolLabels           = j.value("showToolLabels", false);
-    c.fixedToolWindow          = j.value("fixedToolWindow", true);
-    c.showManagerLabels        = j.value("showManagerLabels", true);
-    c.aesthetics               = j.value("aesthetics", UIAestheticsConfig());
-    c.colorPalettes            = j.value("colorPalettes", ColorPaletteConfig());
-    c.defaultColorPaletteSchemeName =
-        j.value("defaultColorPaletteSchemeName",
-                std::string(COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
-    c.shortcutConfig = j.value("shortcutConfig", ShortcutConfig());
-}
+/// @brief 将编辑器设置序列化为 JSON。
+void to_json(nlohmann::json& json, const EditorSettings& settings);
+/// @brief 从 JSON 读取编辑器设置并兼容旧字段。
+void from_json(const nlohmann::json& json, EditorSettings& settings);
 
 }  // namespace MMM::Config

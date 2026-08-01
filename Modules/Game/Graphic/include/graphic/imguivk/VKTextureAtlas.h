@@ -1,15 +1,18 @@
 #pragma once
 
-#include "graphic/imguivk/VKTexture.h"
+#include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <imgui.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
+#include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
 {
+class VKTexture;
 
 /**
  * @brief 纹理集类，负责将多个小纹理打进一个大纹理中，以减少 DrawCall

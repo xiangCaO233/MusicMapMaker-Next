@@ -2,7 +2,6 @@
 
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include <atomic>
 #include <cstdint>
 #include <glm/vec2.hpp>
@@ -17,6 +16,8 @@
 
 namespace MMM::Logic
 {
+
+class BeatmapSyncBuffer;
 
 /// @brief 渲染同步注册表，封装画布同步缓冲区、图集 UV 映射和视口尺寸缓存。
 class RenderSyncRegistry

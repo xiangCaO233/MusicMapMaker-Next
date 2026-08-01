@@ -7,6 +7,7 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  src/EditorSettingTypes.cpp
   src/FontPreferenceValidator.cpp
   src/ColorPaletteFile.cpp
   src/VisualConfig.cpp)
@@ -14,7 +15,7 @@ add_library(
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
-                                    Log)
+                                    fmt::fmt Log)
 target_link_libraries(Config PRIVATE 3rd_miniz)
 
 mmm_add_test_executable(Config FontPreferenceValidatorTest

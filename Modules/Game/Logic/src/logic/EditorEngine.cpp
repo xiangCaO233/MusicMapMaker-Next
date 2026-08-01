@@ -10,7 +10,9 @@
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
@@ -931,6 +933,20 @@ EditorEngine::~EditorEngine()
     stop();
 }
 
+/// @brief 获取当前项目。
+/// @return 未打开项目时返回 nullptr。
+Project* EditorEngine::getCurrentProject()
+{
+    return ProjectController::instance().currentProject();
+}
+
+/// @brief 获取当前项目的只读指针。
+/// @return 未打开项目时返回 nullptr。
+const Project* EditorEngine::getCurrentProject() const
+{
+    return ProjectController::instance().currentProject();
+}
+
 /// @brief 当前是否打开了临时只读项目。
 /// @return 当前项目为临时项目时返回 true。
 bool EditorEngine::isTemporaryProjectOpen() const
@@ -940,8 +956,7 @@ bool EditorEngine::isTemporaryProjectOpen() const
 
 /// @brief 获取当前临时项目的运行时路径信息。
 /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
-ProjectController::TemporaryProjectInfo
-EditorEngine::currentTemporaryProjectInfo() const
+TemporaryProjectInfo EditorEngine::currentTemporaryProjectInfo() const
 {
     return ProjectController::instance().currentTemporaryProjectInfo();
 }
@@ -1171,9 +1186,8 @@ void EditorEngine::restoreProjectWorkspace(
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 /// @param creationOptions 新建项目初始设置；普通打开时为空。
 void EditorEngine::openProject(
-    const std::filesystem::path& projectPath,
-    const std::optional<ProjectController::ProjectCreationOptions>&
-        creationOptions)
+    const std::filesystem::path&                 projectPath,
+    const std::optional<ProjectCreationOptions>& creationOptions)
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
@@ -1279,8 +1293,7 @@ void EditorEngine::openTemporaryProjectPackage(
 
 /// @brief 应用项目控制器打开项目后的逻辑副作用。
 /// @param openResult 项目控制器返回的打开结果。
-void EditorEngine::finishOpenProject(
-    const ProjectController::OpenProjectResult& openResult)
+void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 {
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {

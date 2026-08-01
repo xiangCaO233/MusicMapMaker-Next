@@ -5,6 +5,7 @@
 #include "ui/ISubView.h"
 #include "ui/ITextureLoader.h"
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct ImGuiDockNode;

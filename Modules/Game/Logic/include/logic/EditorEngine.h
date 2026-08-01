@@ -2,13 +2,10 @@
 
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
-#include "logic/BeatmapSession.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
-#include "logic/ProjectController.h"
+#include "logic/ProjectTypes.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
-#include "logic/session/context/SessionContext.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -23,8 +20,18 @@
 #include <unordered_map>
 #include <vector>
 
+namespace MMM
+{
+class Project;
+}
+
 namespace MMM::Logic
 {
+
+class BeatmapSession;
+class BeatmapSyncBuffer;
+class ProjectController;
+struct SessionContext;
 
 /**
  * @brief 编辑器逻辑引擎 (全局单例)
@@ -56,17 +63,13 @@ public:
      */
     void stop();
 
-    /**
-     * @brief 获取当前项目
-     */
-    Project* getCurrentProject()
-    {
-        return ProjectController::instance().currentProject();
-    }
-    const Project* getCurrentProject() const
-    {
-        return ProjectController::instance().currentProject();
-    }
+    /// @brief 获取当前项目。
+    /// @return 未打开项目时返回 nullptr。
+    Project* getCurrentProject();
+
+    /// @brief 获取当前项目的只读指针。
+    /// @return 未打开项目时返回 nullptr。
+    const Project* getCurrentProject() const;
 
     /// @brief 当前是否打开了临时只读项目。
     /// @return 当前项目为临时项目时返回 true。
@@ -74,7 +77,7 @@ public:
 
     /// @brief 获取当前临时项目的运行时路径信息。
     /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
-    ProjectController::TemporaryProjectInfo currentTemporaryProjectInfo() const;
+    TemporaryProjectInfo currentTemporaryProjectInfo() const;
 
     /**
      * @brief 向当前活动的 Session 推送指令
@@ -523,10 +526,9 @@ private:
 
     /// @brief 打开项目目录并加载其中的所有资源。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void openProject(
-        const std::filesystem::path& projectPath,
-        const std::optional<ProjectController::ProjectCreationOptions>&
-            creationOptions = std::nullopt);
+    void openProject(const std::filesystem::path& projectPath,
+                     const std::optional<ProjectCreationOptions>&
+                         creationOptions = std::nullopt);
 
     /// @brief 打开谱面包为临时只读项目。
     /// @param packagePath 需要临时阅览的谱面包路径。
@@ -534,8 +536,7 @@ private:
 
     /// @brief 应用项目控制器打开项目后的逻辑副作用。
     /// @param openResult 项目控制器返回的打开结果。
-    void finishOpenProject(
-        const ProjectController::OpenProjectResult& openResult);
+    void finishOpenProject(const OpenProjectResult& openResult);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）

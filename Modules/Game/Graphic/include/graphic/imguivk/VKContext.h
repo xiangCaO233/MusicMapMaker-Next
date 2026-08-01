@@ -1,21 +1,12 @@
 #pragma once
 
-#include "config/EditorSettings.h"
-#include "event/core/EventBus.h"
-#include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
-#include "graphic/imguivk/VKRenderPass.h"
-#include "graphic/imguivk/VKRenderPipeline.h"
-#include "graphic/imguivk/VKRenderer.h"
-#include "graphic/imguivk/VKShader.h"
-#include "graphic/imguivk/VKSwapchain.h"
-#include "graphic/system/SystemTheme.h"
-#include "graphic/theme/ImGuiThemeRegistry.h"
-#include "imgui_impl_vulkan.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -27,8 +18,23 @@
 #endif
 #include <vulkan/vulkan.hpp>
 
+struct GLFWwindow;
+
+namespace MMM::Config
+{
+enum class FrameLimitPreference;
+}
+
 namespace MMM::Graphic
 {
+class ImGuiThemeRegistry;
+class NativeWindow;
+class VKRenderer;
+class VKRenderPass;
+class VKSwapchain;
+struct ThemePluginReloadResult;
+enum class SystemTheme : std::uint8_t;
+
 /// @brief 窗口图形资源的初始化模式。
 enum class VKWindowResourceMode : std::uint8_t {
     Bootstrap,   ///< 资源同步前仅加载系统字体和最小 ImGui 样式。
@@ -191,10 +197,7 @@ public:
 
     /// @brief 获取当前上下文持有的主题实例注册表。
     /// @return 主题注册表只读引用。
-    [[nodiscard]] const ImGuiThemeRegistry& getThemeRegistry() const
-    {
-        return m_themeRegistry;
-    }
+    [[nodiscard]] const ImGuiThemeRegistry& getThemeRegistry() const;
 
     /**
      * @brief 显式释放资源
@@ -217,10 +220,10 @@ private:
     };
 
     /// @brief GLFW 键盘事件订阅 ID，随上下文资源释放而取消订阅。
-    Event::SubscriptionID m_glfwKeySubscription{ 0 };
+    std::uint64_t m_glfwKeySubscription{ 0 };
 
     /// @brief 逻辑配置命令订阅 ID，随上下文资源释放而取消订阅。
-    Event::SubscriptionID m_logicCommandSubscription{ 0 };
+    std::uint64_t m_logicCommandSubscription{ 0 };
 
     /// @brief 初始化失败原因；为空表示基础上下文初始化成功。
     std::string m_initializationError;
@@ -248,14 +251,14 @@ private:
     std::atomic<bool> m_fontRebuildRequested{ false };
 
     /// @brief 最近一次自动模式实际应用的系统主题。
-    SystemTheme m_appliedSystemTheme{ SystemTheme::Unknown };
+    SystemTheme m_appliedSystemTheme{};
 
     /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
     /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
     std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
 
     /// @brief 当前图形上下文持有的内置与 Lua 插件主题实例。
-    ImGuiThemeRegistry m_themeRegistry;
+    std::unique_ptr<ImGuiThemeRegistry> m_themeRegistry;
 
     /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
     /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
@@ -455,7 +458,6 @@ private:
     // =========================================================================
     // 光标管理
     // =========================================================================
-    std::unique_ptr<CursorManager> m_cursorManager{ nullptr };
 
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };

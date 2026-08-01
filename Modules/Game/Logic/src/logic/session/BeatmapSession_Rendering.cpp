@@ -17,6 +17,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

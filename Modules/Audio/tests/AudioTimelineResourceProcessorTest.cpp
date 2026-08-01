@@ -1,6 +1,8 @@
 #include "audio/AudioTimelineResourceProcessor.h"
 
+#include "audio/AudioTimelineMixerNode.h"
 #include "log/colorful-log.h"
+#include "mmm/project/AudioResource.h"
 
 #include <algorithm>
 #include <cmath>

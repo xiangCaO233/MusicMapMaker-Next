@@ -13,6 +13,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/SelectionState.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <deque>
 #include <limits>

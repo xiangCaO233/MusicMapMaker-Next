@@ -1,6 +1,8 @@
 add_library(
-  MMM STATIC src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
-             src/note/Note.cpp src/note/Hold.cpp src/timing/Timing.cpp)
+  MMM STATIC
+  src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
+  src/note/Note.cpp src/note/Hold.cpp src/project/AudioResource.cpp
+  src/timing/Timing.cpp)
 
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(MMM PUBLIC Log Event 3rd_nlohmann_json)

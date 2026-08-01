@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include <iomanip>
+#include <nlohmann/json.hpp>
 #include <string_view>
 #include <system_error>
 #include <utility>

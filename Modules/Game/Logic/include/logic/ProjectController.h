@@ -7,6 +7,7 @@
 #include "logic/ProjectDirectoryWatcher.h"
 #include "logic/ProjectResourceService.h"
 #include "logic/ProjectStorage.h"
+#include "logic/ProjectTypes.h"
 #include "mmm/project/Project.h"
 
 #include <atomic>
@@ -43,27 +44,8 @@ public:
     /// @brief 禁止拷贝赋值，避免复制项目实例和事件订阅状态。
     ProjectController& operator=(const ProjectController&) = delete;
 
-    /// @brief 打开项目后的结果信息。
-    struct OpenProjectResult {
-        /// @brief 是否成功打开项目。
-        bool m_opened{ false };
-
-        /// @brief 实际打开的项目目录路径。
-        std::filesystem::path m_actualProjectPath;
-
-        /// @brief 打开项目时若传入谱面文件，则记录需要自动打开的谱面路径。
-        std::filesystem::path m_targetBeatmapPath;
-
-        /// @brief 项目显示标题。
-        std::string m_projectTitle;
-
-        /// @brief 项目内谱面数量。
-        std::size_t m_beatmapCount{ 0 };
-
-        /// @brief 打开项目后需要登记到音频引擎的按需加载音效资源。
-        std::vector<ProjectCommandService::AudioRegistrationRequest>
-            m_effectRegistrations;
-    };
+    /// @brief 保留原嵌套类型名，兼容现有项目控制器调用方。
+    using OpenProjectResult = MMM::Logic::OpenProjectResult;
 
     /// @brief 关闭项目后的结果信息。
     struct CloseProjectResult {
@@ -77,23 +59,8 @@ public:
         std::unique_ptr<Project> m_project;
     };
 
-    /// @brief 新建项目时需要写入项目描述文件的初始设置。
-    struct ProjectCreationOptions {
-        /// @brief 项目显示标题。
-        std::string m_title;
-
-        /// @brief 项目曲作者或艺术家。
-        std::string m_artist;
-
-        /// @brief 项目谱师。
-        std::string m_mapper;
-
-        /// @brief 项目默认调色方案；空字符串表示继承软件默认。
-        std::string m_colorPaletteSchemeName;
-
-        /// @brief 新项目首次打开时的侧边栏页签名称。
-        std::string m_sidebarActiveTab;
-    };
+    /// @brief 保留原嵌套类型名，兼容现有项目控制器调用方。
+    using ProjectCreationOptions = MMM::Logic::ProjectCreationOptions;
 
     /// @brief 项目打开请求的来源模式。
     enum class ProjectOpenMode {
@@ -101,17 +68,8 @@ public:
         TemporaryPackage  ///< 解压谱面包并作为临时只读项目打开。
     };
 
-    /// @brief 当前临时项目的运行时信息。
-    struct TemporaryProjectInfo {
-        /// @brief 是否存在临时项目。
-        bool m_isTemporary{ false };
-
-        /// @brief 用户拖拽打开的原始谱面包路径。
-        std::filesystem::path m_sourcePackagePath;
-
-        /// @brief 当前临时项目缓存目录。
-        std::filesystem::path m_cacheProjectPath;
-    };
+    /// @brief 保留原嵌套类型名，兼容现有项目控制器调用方。
+    using TemporaryProjectInfo = MMM::Logic::TemporaryProjectInfo;
 
     /// @brief 临时项目保存为正式项目的结果。
     struct SaveTemporaryProjectResult {

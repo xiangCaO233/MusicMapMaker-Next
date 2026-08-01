@@ -1,4 +1,6 @@
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
 
 #include "log/colorful-log.h"
 

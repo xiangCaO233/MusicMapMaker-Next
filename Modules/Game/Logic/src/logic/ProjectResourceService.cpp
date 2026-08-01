@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <string_view>

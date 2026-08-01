@@ -3,9 +3,11 @@
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -21,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
 #include <optional>
 #include <string_view>
 #include <system_error>

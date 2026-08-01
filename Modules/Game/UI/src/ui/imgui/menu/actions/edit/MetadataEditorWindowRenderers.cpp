@@ -5,12 +5,15 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/TranslationFormat.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/SamplePropertyEdit.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/core.h>
 #include <imgui.h>

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
 

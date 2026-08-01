@@ -9,9 +9,15 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
+#include "graphic/imguivk/VKRenderPass.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/system/SystemTheme.h"
+#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui.h"
 
 #include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 
 #include <fmt/format.h>
@@ -80,7 +86,7 @@ void VKContext::failInitialization(std::string message)
     }
 }
 
-VKContext::VKContext()
+VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
 {
     // 初始化GLFW
     initGLFW();

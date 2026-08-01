@@ -21,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <fmt/format.h>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>

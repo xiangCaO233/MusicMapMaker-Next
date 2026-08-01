@@ -6,6 +6,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include <algorithm>
 #include <chrono>
