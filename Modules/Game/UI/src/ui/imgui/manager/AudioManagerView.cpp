@@ -1346,9 +1346,21 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                     rowData.m_id,
                                     rowData.m_path,
                                     rowIndex);
-                    if ( ImGui::BeginPopupContextItem(
-                             contextMenuId.c_str(),
-                             ImGuiPopupFlags_MouseButtonRight) ) {
+                    const auto&  style = ImGui::GetStyle();
+                    const ImVec2 popupPadding(
+                        std::max(style.WindowPadding.x, 8.0f),
+                        std::max(style.WindowPadding.y, 6.0f));
+                    const ImVec2 popupItemSpacing(
+                        std::max(style.ItemSpacing.x, 8.0f),
+                        std::max(style.ItemSpacing.y, 4.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                        popupPadding);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                        popupItemSpacing);
+                    const bool contextMenuOpen = ImGui::BeginPopupContextItem(
+                        contextMenuId.c_str(),
+                        ImGuiPopupFlags_MouseButtonRight);
+                    if ( contextMenuOpen ) {
                         auto changeTrackType = [&](AudioTrackType targetType,
                                                    const char*    label) {
                             const bool selected = rowData.m_type == targetType;
@@ -1376,6 +1388,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         }
                         ImGui::EndPopup();
                     }
+                    ImGui::PopStyleVar(2);
                 }
                 if ( clicked ) {
                     const auto controllerType =
