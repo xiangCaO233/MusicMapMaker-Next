@@ -481,6 +481,7 @@ void BpmMeasurementToolView::togglePlaybackFromShortcut()
 /// @param audioTrackId 项目内音频资源 ID；为空时选择活动谱面的默认音频。
 void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
 {
+    m_backgroundAutomaticMeasurement = false;
     if ( !m_isOpen ) {
         restoreUserPreferences();
     }
@@ -508,16 +509,20 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
     }
 }
 
-/// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。
+/// @brief 对指定或默认项目音频轨道执行自动 BPM 测量。
 /// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
-void BpmMeasurementToolView::openWithAutoMeasurement(
-    const std::string& audioTrackId)
+/// @param keepWindowVisible 测量前窗口已打开时保持可见；否则仅在后台运行。
+void BpmMeasurementToolView::requestAutomaticMeasurement(
+    const std::string& audioTrackId, bool keepWindowVisible)
 {
-    if ( !m_isOpen ) {
+    if ( keepWindowVisible && !m_isOpen ) {
         restoreUserPreferences();
     }
-    m_isOpen = true;
-    (void)ensureMetronomeSoundEffects();
+    m_isOpen                         = true;
+    m_backgroundAutomaticMeasurement = !keepWindowVisible;
+    if ( keepWindowVisible ) {
+        (void)ensureMetronomeSoundEffects();
+    }
 
     const std::string targetAudioTrackId =
         audioTrackId.empty() ? defaultAudioTrackId() : audioTrackId;
@@ -544,12 +549,28 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     const bool projectTransition =
         sourceManager && sourceManager->isProjectTransitionInProgress();
     if ( !projectTransition ) {
-        refreshPlaybackRoute();
-        if ( m_selectedAudioIdentityNeedsAnalysis ) {
+        if ( !m_backgroundAutomaticMeasurement ) {
+            refreshPlaybackRoute();
+        }
+        if ( m_selectedAudioIdentityNeedsAnalysis &&
+             !m_backgroundAutomaticMeasurement ) {
             requestAnalyzeSelectedTrack();
         }
         consumePendingAnalysis();
+        if ( m_backgroundAutomaticMeasurement ) {
+            const bool analysisPending =
+                m_analysisRunning.load(std::memory_order_relaxed) ||
+                m_analysisFinished.load(std::memory_order_acquire);
+            if ( !analysisPending ) {
+                m_backgroundAutomaticMeasurement = false;
+                m_isOpen                         = false;
+            }
+            return;
+        }
         updateMetronomePlayback();
+    }
+    if ( m_backgroundAutomaticMeasurement ) {
+        return;
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();

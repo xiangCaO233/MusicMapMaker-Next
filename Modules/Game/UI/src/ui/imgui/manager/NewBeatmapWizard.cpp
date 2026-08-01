@@ -854,11 +854,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                     applyMeasuredTimingsFromTool(audioTrackId, timings);
                 });
             if ( autoMeasure ) {
-                tool->openWithAutoMeasurement(m_selectedAudioTrackId);
+                tool->requestAutomaticMeasurement(m_selectedAudioTrackId,
+                                                  wasOpen);
             } else {
                 tool->openWithAudioTrack(m_selectedAudioTrackId);
             }
-            if ( !wasOpen ) {
+            if ( !autoMeasure && !wasOpen ) {
                 ::MMM::UI::PlayPopupOpenFeedback();
             }
         }

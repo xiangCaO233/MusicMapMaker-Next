@@ -52,9 +52,11 @@ public:
     /// @param audioTrackId 项目内音频资源 ID；为空时选择活动谱面的默认音频。
     void openWithAudioTrack(const std::string& audioTrackId);
 
-    /// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。
+    /// @brief 对指定或默认项目音频轨道执行自动 BPM 测量。
     /// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
-    void openWithAutoMeasurement(const std::string& audioTrackId);
+    /// @param keepWindowVisible 测量前窗口已打开时保持可见；否则仅在后台运行。
+    void requestAutomaticMeasurement(const std::string& audioTrackId,
+                                     bool               keepWindowVisible);
 
     /// @brief 获取当前选中的项目音频资源 ID。
     /// @return 当前选中的音频资源 ID，未选择时为空。
@@ -636,6 +638,9 @@ private:
 
     /// @brief 是否在下一帧打开自动测偏移应用确认弹窗。
     bool m_shouldOpenAutoApplyPopup{ false };
+
+    /// @brief 自动测偏是否仅在后台运行，不绘制 BPM 工具窗口。
+    bool m_backgroundAutomaticMeasurement{ false };
 
     /// @brief 是否在下一帧打开应用到谱面弹窗。
     bool m_shouldOpenApplyTimingPopup{ false };
