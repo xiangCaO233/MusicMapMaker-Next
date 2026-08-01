@@ -1212,6 +1212,36 @@ bool testObjectSampleVolumeCommand()
                 0.25);
 }
 
+/// @brief 验证物件音量命令经 BeatmapSession 队列分发后真正写入组件。
+/// @return 队列命令更新自动采样且生成一个撤销步骤时返回 true。
+bool testObjectSampleVolumeCommandRoutesThroughSession()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    const auto                 entity  = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        entity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "effect.wav",
+            .m_volume          = 1.0F,
+        });
+
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateObjectSampleVolume{
+            .entity = entity,
+            .kind   = MMM::Logic::ChartObjectKind::AudioSample,
+            .volume = 0.4F,
+        } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    return near(context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity)
+                    .m_volume,
+                0.4) &&
+           context.actionStack.getUndoStackSize() == 1;
+}
+
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
 /// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
 bool testSampleEraseTargetsTypedRegistry()
@@ -2064,6 +2094,7 @@ int main()
                    testSampleRegistryLoadAndSync() &&
                    testNoteSampleBindingRoundTrip() &&
                    testObjectSampleVolumeCommand() &&
+                   testObjectSampleVolumeCommandRoutesThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
                    testBoundNoteHoverInspectAudioPreview() &&

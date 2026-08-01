@@ -1138,34 +1138,33 @@ bool BeatmapSession::processCommands()
                     m_playback->handleCommand(arg);
                 }
                 // --- Interaction 处理的命令 ---
-                else if constexpr ( std::is_same_v<T, CmdSetHoveredEntity> ||
-                                    std::is_same_v<T, CmdSelectEntity> ||
-                                    std::is_same_v<T, CmdStartDrag> ||
-                                    std::is_same_v<T, CmdUpdateDrag> ||
-                                    std::is_same_v<T, CmdEndDrag> ||
-                                    std::is_same_v<T, CmdCreateAudioSample> ||
-                                    std::is_same_v<
-                                        T,
-                                        CmdUpdateAudioSampleProperties> ||
-                                    std::is_same_v<T, CmdChangeTool> ||
-                                    std::is_same_v<T, CmdSetMousePosition> ||
-                                    std::is_same_v<T, CmdUpdateTrackCount> ||
-                                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
-                                    std::is_same_v<T, CmdSetBrushNoteColor> ||
-                                    std::is_same_v<T, CmdSetBrushNotePalette> ||
-                                    std::is_same_v<T,
-                                                   CmdSetBrushAudioResource> ||
-                                    std::is_same_v<T, CmdStartMarquee> ||
-                                    std::is_same_v<T, CmdUpdateMarquee> ||
-                                    std::is_same_v<T, CmdEndMarquee> ||
-                                    std::is_same_v<T, CmdRemoveMarqueeAt> ||
-                                    std::is_same_v<T, CmdStartBrush> ||
-                                    std::is_same_v<T, CmdUpdateBrush> ||
-                                    std::is_same_v<T, CmdEndBrush> ||
-                                    std::is_same_v<T, CmdStartErase> ||
-                                    std::is_same_v<T, CmdUpdateErase> ||
-                                    std::is_same_v<T, CmdEndErase> ||
-                                    std::is_same_v<T, CmdSelectAll> ) {
+                else if constexpr (
+                    std::is_same_v<T, CmdSetHoveredEntity> ||
+                    std::is_same_v<T, CmdSelectEntity> ||
+                    std::is_same_v<T, CmdStartDrag> ||
+                    std::is_same_v<T, CmdUpdateDrag> ||
+                    std::is_same_v<T, CmdEndDrag> ||
+                    std::is_same_v<T, CmdCreateAudioSample> ||
+                    std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdChangeTool> ||
+                    std::is_same_v<T, CmdSetMousePosition> ||
+                    std::is_same_v<T, CmdUpdateTrackCount> ||
+                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdSetBrushNoteColor> ||
+                    std::is_same_v<T, CmdSetBrushNotePalette> ||
+                    std::is_same_v<T, CmdSetBrushAudioResource> ||
+                    std::is_same_v<T, CmdStartMarquee> ||
+                    std::is_same_v<T, CmdUpdateMarquee> ||
+                    std::is_same_v<T, CmdEndMarquee> ||
+                    std::is_same_v<T, CmdRemoveMarqueeAt> ||
+                    std::is_same_v<T, CmdStartBrush> ||
+                    std::is_same_v<T, CmdUpdateBrush> ||
+                    std::is_same_v<T, CmdEndBrush> ||
+                    std::is_same_v<T, CmdStartErase> ||
+                    std::is_same_v<T, CmdUpdateErase> ||
+                    std::is_same_v<T, CmdEndErase> ||
+                    std::is_same_v<T, CmdSelectAll> ) {
                     m_interaction->handleCommand(arg);
                 }
                 // --- Action 处理的命令 ---

@@ -832,6 +832,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdUpdateDrag>(cmd) ||
          std::holds_alternative<CmdCreateAudioSample>(cmd) ||
          std::holds_alternative<CmdUpdateAudioSampleProperties>(cmd) ||
+         std::holds_alternative<CmdUpdateObjectSampleVolume>(cmd) ||
          std::holds_alternative<CmdUpdateTrackCount>(cmd) ||
          std::holds_alternative<CmdUpdateBgmTrackCount>(cmd) ||
          std::holds_alternative<CmdUndo>(cmd) ||
