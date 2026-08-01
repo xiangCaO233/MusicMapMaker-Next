@@ -146,6 +146,25 @@ bool testBoundSampleVolume()
     return true;
 }
 
+/// @brief 验证仅非空资源绑定会进入已绑定打击音效分组。
+/// @return 无绑定和空绑定为未绑定，非空绑定为已绑定时返回 true。
+bool testBoundSoundClassification()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+
+    auto emptyBindingEvent          = makeEvent(MMM::NoteType::NOTE, 0);
+    emptyBindingEvent.sampleBinding = MMM::AudioSampleBinding{ "", 0.5F };
+    auto boundEvent                 = makeEvent(MMM::NoteType::NOTE, 0);
+    boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.5F };
+    if ( HitFXSystem::hasBoundSoundEffect(makeEvent(MMM::NoteType::NOTE, 0)) ||
+         HitFXSystem::hasBoundSoundEffect(emptyBindingEvent) ||
+         !HitFXSystem::hasBoundSoundEffect(boundEvent) ) {
+        XERROR("Hit sound binding groups were classified incorrectly");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证旧皮肤的固定模式仍在判定线中心按原尺寸绘制。
 /// @return 固定矩形的中心、宽高与旧算法一致时返回 true。
 bool testFixedHitEffectBounds()
@@ -206,8 +225,8 @@ int main()
                    testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo() &&
                    testBoundSoundOverridesDefault() &&
-                   testBoundSampleVolume() && testFixedHitEffectBounds() &&
-                   testTrackFillHitEffectBounds()
+                   testBoundSampleVolume() && testBoundSoundClassification() &&
+                   testFixedHitEffectBounds() && testTrackFillHitEffectBounds()
                ? 0
                : 1;
 }

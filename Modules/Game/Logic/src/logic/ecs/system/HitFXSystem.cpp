@@ -20,14 +20,7 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
 void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
                                const Config::EditorConfig& config)
 {
-    if ( !config.settings.sfxConfig.enableHitSfx ) return;
-
     auto& audioManager = Audio::AudioManager::instance();
-    if ( ev.trackIndex >= 0 &&
-         audioManager.isPlayerKeySoundTrackMuted(
-             static_cast<std::uint32_t>(ev.trackIndex)) ) {
-        return;
-    }
 
     // 1. 根据策略确定最终播放类型
     ::MMM::NoteType effectiveType = ev.type;
@@ -64,14 +57,23 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
         ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
+    const auto playbackControl = Audio::KeySoundPlaybackControl{
+        .enabled          = true,
+        .playerTrackIndex = ev.trackIndex >= 0
+                                ? static_cast<std::uint32_t>(ev.trackIndex)
+                                : Audio::KEY_SOUND_INVALID_TRACK_INDEX,
+        .effectGroup      = hasBoundSoundEffect(ev)
+                                ? Audio::KeySoundEffectGroup::Bound
+                                : Audio::KeySoundEffectGroup::Unbound,
+    };
     audioManager.playSoundEffectScheduled(
-        sfxKey, ev.timestamp, volumeFactor, stereoEnvelope);
+        sfxKey, ev.timestamp, volumeFactor, stereoEnvelope, playbackControl);
 }
 
 const std::string& HitFXSystem::soundEffectKeyForEvent(
     const HitEvent& ev, ::MMM::NoteType effectiveType)
 {
-    if ( ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty() ) {
+    if ( hasBoundSoundEffect(ev) ) {
         return ev.sampleBinding->m_audioResourceId;
     }
 
@@ -81,11 +83,14 @@ const std::string& HitFXSystem::soundEffectKeyForEvent(
                                                    : NOTE_SOUND_EFFECT_KEY;
 }
 
+bool HitFXSystem::hasBoundSoundEffect(const HitEvent& ev) noexcept
+{
+    return ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty();
+}
+
 float HitFXSystem::sampleVolumeForEvent(const HitEvent& ev)
 {
-    return ev.sampleBinding && !ev.sampleBinding->m_audioResourceId.empty()
-               ? ev.sampleBinding->m_volume
-               : 1.0F;
+    return hasBoundSoundEffect(ev) ? ev.sampleBinding->m_volume : 1.0F;
 }
 
 HitEffectRenderBounds HitFXSystem::calculateRenderBounds(

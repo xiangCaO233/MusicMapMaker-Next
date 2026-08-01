@@ -1,6 +1,7 @@
 #include "audio/AudioManager.h"
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -166,6 +167,7 @@ AudioManager& AudioManager::instance()
 
 /// @brief 构造音频管理器并从编辑器配置初始化音量状态。
 AudioManager::AudioManager()
+    : m_keySoundControls(std::make_unique<KeySoundControlBank>())
 {
     // 从配置初始化音量
     auto& settings       = Config::AppConfig::instance().getEditorSettings();
@@ -182,6 +184,15 @@ AudioManager::AudioManager()
     m_sdlOutputDeviceName     = settings.sdlAudioOutputDeviceName;
     m_openALOutputDeviceName  = settings.openALAudioOutputDeviceName;
     m_openALSpatialConfig     = settings.openALSpatialConfig;
+    m_keySoundControls->setPlayerAreaMuted(!settings.sfxConfig.enableHitSfx);
+    m_keySoundControls->setEffectGroupMuted(
+        KeySoundEffectGroup::Unbound, !settings.sfxConfig.enableUnboundHitSfx);
+    m_keySoundControls->setEffectGroupGain(
+        KeySoundEffectGroup::Unbound, settings.sfxConfig.unboundHitSfxGain);
+    m_keySoundControls->setEffectGroupMuted(
+        KeySoundEffectGroup::Bound, !settings.sfxConfig.enableBoundHitSfx);
+    m_keySoundControls->setEffectGroupGain(KeySoundEffectGroup::Bound,
+                                           settings.sfxConfig.boundHitSfxGain);
 
     // 初始化常驻音效静音状态
     for ( const auto& [key, muted] : settings.sfxConfig.permanentSfxMutes ) {
@@ -214,7 +225,10 @@ void AudioManager::init()
     m_hitEffectMixer->prepare(ice::ICEConfig::internal_format,
                               maximumBlockFrames);
     m_audioTimelineNode = std::make_shared<AudioTimelineMixerNode>(
-        std::vector<PreparedTimelineClip>{}, 0, maximumBlockFrames);
+        std::vector<PreparedTimelineClip>{},
+        0,
+        maximumBlockFrames,
+        m_keySoundControls.get());
     m_bgmSpectrumCapture =
         std::make_shared<BackgroundSpectrumCaptureNode>(m_audioTimelineNode);
     m_stretcher = std::make_shared<ice::TimeStretcher>();

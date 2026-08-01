@@ -650,12 +650,12 @@ void ToolbarView::update(UIManager* sourceManager)
                                        ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
-                m_showDivisorPopup  = false;
-                m_showKeyPopup      = false;
-                m_showSpeedPopup    = false;
-                m_showBeatLinePopup = false;
-                m_showMagnetPopup   = false;
-                m_showKeySoundTool  = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
             }
         }
         {
@@ -732,12 +732,12 @@ void ToolbarView::update(UIManager* sourceManager)
                             showToolLabels) ) {
             m_showMagnetPopup = !m_showMagnetPopup;
             if ( m_showMagnetPopup ) {
-                m_showColorPopup    = false;
-                m_showDivisorPopup  = false;
-                m_showKeyPopup      = false;
-                m_showSpeedPopup    = false;
-                m_showBeatLinePopup = false;
-                m_showKeySoundTool  = false;
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showSoundEffectTool = false;
             }
         }
         m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
@@ -776,12 +776,12 @@ void ToolbarView::update(UIManager* sourceManager)
                             showToolLabels) ) {
             m_showBeatLinePopup = !m_showBeatLinePopup;
             if ( m_showBeatLinePopup ) {
-                m_showColorPopup   = false;
-                m_showDivisorPopup = false;
-                m_showKeyPopup     = false;
-                m_showSpeedPopup   = false;
-                m_showMagnetPopup  = false;
-                m_showKeySoundTool = false;
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
             }
         }
         m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
@@ -806,24 +806,26 @@ void ToolbarView::update(UIManager* sourceManager)
                          });
 
         pushBtnStyle(true);
-        ImGui::PushID("KeySoundTool");
+        ImGui::PushID("SoundEffectTool");
         if ( drawIconButton(ICON_MMM_HIT_SFX,
-                            "##ToolbarKeySoundTool",
+                            "##ToolbarSoundEffectTool",
                             TR("ui.toolbar.short.key_sound_tool").data(),
                             btnSize,
                             btnHeight,
                             showToolLabels) ) {
-            m_showKeySoundTool = !m_showKeySoundTool;
-            if ( m_showKeySoundTool ) {
-                m_showColorPopup    = false;
-                m_showDivisorPopup  = false;
-                m_showKeyPopup      = false;
-                m_showSpeedPopup    = false;
-                m_showBeatLinePopup = false;
-                m_showMagnetPopup   = false;
+            m_showSoundEffectTool = !m_showSoundEffectTool;
+            if ( m_showSoundEffectTool ) {
+                m_soundEffectGainDraftInitialized = false;
+                m_showLayoutPopup                 = false;
+                m_showColorPopup                  = false;
+                m_showDivisorPopup                = false;
+                m_showKeyPopup                    = false;
+                m_showSpeedPopup                  = false;
+                m_showBeatLinePopup               = false;
+                m_showMagnetPopup                 = false;
             }
         }
-        m_lastKeySoundToolBtnY = ImGui::GetItemRectMin().y;
+        m_lastSoundEffectToolBtnY = ImGui::GetItemRectMin().y;
         ImGui::PopID();
         {
             std::string tooltipText = TR("ui.toolbar.key_sound_tool").data();
@@ -913,11 +915,11 @@ void ToolbarView::update(UIManager* sourceManager)
                                                 ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
-                        m_showKeyPopup      = false;
-                        m_showDivisorPopup  = false;
-                        m_showBeatLinePopup = false;
-                        m_showMagnetPopup   = false;
-                        m_showKeySoundTool  = false;
+                        m_showKeyPopup        = false;
+                        m_showDivisorPopup    = false;
+                        m_showBeatLinePopup   = false;
+                        m_showMagnetPopup     = false;
+                        m_showSoundEffectTool = false;
                     }
                 }
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
@@ -979,11 +981,11 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
-                    m_showDivisorPopup  = false;
-                    m_showSpeedPopup    = false;
-                    m_showBeatLinePopup = false;
-                    m_showMagnetPopup   = false;
-                    m_showKeySoundTool  = false;
+                    m_showDivisorPopup    = false;
+                    m_showSpeedPopup      = false;
+                    m_showBeatLinePopup   = false;
+                    m_showMagnetPopup     = false;
+                    m_showSoundEffectTool = false;
                 }
             }
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
@@ -1032,11 +1034,11 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
-                    m_showKeyPopup      = false;
-                    m_showSpeedPopup    = false;
-                    m_showBeatLinePopup = false;
-                    m_showMagnetPopup   = false;
-                    m_showKeySoundTool  = false;
+                    m_showKeyPopup        = false;
+                    m_showSpeedPopup      = false;
+                    m_showBeatLinePopup   = false;
+                    m_showMagnetPopup     = false;
+                    m_showSoundEffectTool = false;
                 }
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
@@ -1077,7 +1079,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderLayoutPopup(dpiScale);
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
-    renderKeySoundTool(dpiScale);
+    renderSoundEffectTool(dpiScale);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {
@@ -1419,12 +1421,12 @@ void ToolbarView::update(UIManager* sourceManager)
     }
 }
 
-/// @brief 绘制锚定在工具栏按钮旁的 Key 音逐轨控制弹层。
+/// @brief 绘制锚定在工具栏按钮旁的音效逐轨与分类控制弹层。
 /// @param dpiScale 当前 DPI 缩放。
-/// @warning UI 热路径：弹层打开时每帧执行，仅绘制滚动区可见轨道行。
-void ToolbarView::renderKeySoundTool(float dpiScale)
+/// @warning UI 热路径：弹层打开时每帧执行，仅绘制滚动区可见控制行。
+void ToolbarView::renderSoundEffectTool(float dpiScale)
 {
-    if ( !m_showKeySoundTool ) return;
+    if ( !m_showSoundEffectTool ) return;
 
     ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
     if ( !toolbarWindow ) return;
@@ -1453,31 +1455,32 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
         std::floor(aesthetics.windowRounding * dpiScale);
     const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
     const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
+    const int   playerRows    = std::max(1, playerTrackCount);
     const int   bgmRows       = std::max(1, bgmTrackCount);
-    const int   totalRows     = hasBeatmap ? 4 + playerTrackCount + bgmRows : 1;
+    const int   totalRows     = 7 + playerRows + bgmRows;
 
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
     const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
     const float    viewportLeft   = mainViewport->Pos.x;
     const float    edgePadding    = std::floor(8.0F * dpiScale);
-    const float    popupWidth     = std::floor(320.0F * dpiScale);
+    const float    popupWidth     = std::floor(420.0F * dpiScale);
     const float    titleHeight =
         ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     const float desiredHeight = windowPadding * 2.0F + titleHeight +
                                 static_cast<float>(totalRows) * rowHeight;
     const float availableHeight =
-        std::max(std::floor(140.0F * dpiScale),
+        std::max(std::floor(180.0F * dpiScale),
                  viewportBottom - viewportTop - edgePadding * 2.0F);
     const float maximumHeight =
-        std::min(availableHeight, std::floor(420.0F * dpiScale));
+        std::min(availableHeight, std::floor(480.0F * dpiScale));
     const float minimumHeight =
-        std::min(maximumHeight, std::floor(140.0F * dpiScale));
+        std::min(maximumHeight, std::floor(180.0F * dpiScale));
     const float popupHeight =
         std::clamp(desiredHeight, minimumHeight, maximumHeight);
 
     float targetX = toolbarWindow->Pos.x - std::floor(4.0F * dpiScale);
-    float targetY = m_lastKeySoundToolBtnY;
+    float targetY = m_lastSoundEffectToolBtnY;
     targetX       = std::max(targetX, viewportLeft + popupWidth + edgePadding);
     targetY = std::clamp(targetY,
                          viewportTop + edgePadding,
@@ -1499,7 +1502,7 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
                         ImVec2(windowPadding, windowPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRounding);
 
-    if ( !ImGui::Begin("##KeySoundToolPopup", nullptr, popupFlags) ) {
+    if ( !ImGui::Begin("##SoundEffectToolPopup", nullptr, popupFlags) ) {
         ImGui::End();
         ImGui::PopStyleVar(3);
         return;
@@ -1508,75 +1511,128 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
     ImGui::TextUnformatted(TR("ui.key_sound_tool.title").data());
     ImGui::Separator();
 
-    if ( !hasBeatmap ) {
-        ImGui::TextDisabled("%s", TR("ui.key_sound_tool.no_beatmap").data());
-        ImGui::End();
-        ImGui::PopStyleVar(3);
-        return;
+    auto&      audio        = Audio::AudioManager::instance();
+    const auto editorConfig = engine.getEditorConfig();
+    if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
+        m_unboundHitSoundGainDraft =
+            editorConfig.settings.sfxConfig.unboundHitSfxGain;
+        m_boundHitSoundGainDraft =
+            editorConfig.settings.sfxConfig.boundHitSfxGain;
+        m_soundEffectGainDraftInitialized = true;
     }
-
-    auto&       audio            = Audio::AudioManager::instance();
-    const float stateButtonWidth = std::floor(92.0F * dpiScale);
+    const float muteButtonSize  = std::floor(ImGui::GetFrameHeight());
+    const float gainSliderWidth = std::floor(170.0F * dpiScale);
+    const float controlSpacing  = ImGui::GetStyle().ItemSpacing.x;
     const float trackViewportHeight =
         std::max(1.0F, ImGui::GetContentRegionAvail().y);
-    ImGui::BeginChild("##KeySoundTrackScroller",
+    ImGui::BeginChild("##SoundEffectControlScroller",
                       { 0.0F, trackViewportHeight },
                       ImGuiChildFlags_None,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-    const auto drawMuteStateButton =
-        [&](const char* id, bool muted, const auto& applyChange) {
-            ImGui::PushID(id);
-            const auto color =
-                muted ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive)
-                      : ImGui::GetStyleColorVec4(ImGuiCol_Button);
-            ImGui::PushStyleColor(ImGuiCol_Button, color);
-            const char* label = muted ? TR("ui.key_sound_tool.muted").data()
-                                      : TR("ui.key_sound_tool.playing").data();
-            char        buttonLabel[128];
-            std::snprintf(
-                buttonLabel, sizeof(buttonLabel), "%s###MuteState", label);
-            const bool clicked = ::MMM::UI::FeedbackButton(
-                buttonLabel, ImVec2(stateButtonWidth, ImGui::GetFrameHeight()));
-            ImGui::PopStyleColor();
-            ImGui::PopID();
-            if ( clicked ) applyChange(!muted);
-        };
+    const auto drawMuteStateButton = [&](bool        muted,
+                                         float       gain,
+                                         const auto& applyChange) {
+        const char* icon = ICON_MMM_VOLUME_MUTE;
+        if ( !muted ) {
+            if ( gain <= 0.0F )
+                icon = ICON_MMM_VOLUME_OFF;
+            else if ( gain < 1.0F )
+                icon = ICON_MMM_VOLUME_LOW;
+            else
+                icon = ICON_MMM_VOLUME_HIGH;
+        }
 
-    const auto alignStateButton = [stateButtonWidth]() {
+        char buttonLabel[64];
+        std::snprintf(buttonLabel, sizeof(buttonLabel), "%s##MuteState", icon);
+        if ( muted ) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  Utils::UIThemeUtils::getDangerColor());
+        }
+        Utils::pushFixedButtonStyleVars();
+        const bool clicked = ::MMM::UI::FeedbackButton(
+            buttonLabel, ImVec2(muteButtonSize, muteButtonSize));
+        Utils::popFixedButtonStyleVars();
+        if ( muted ) ImGui::PopStyleColor();
+
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(muted ? TR("ui.audio_manager.unmute").data()
+                                       : TR("ui.audio_manager.mute").data());
+        }
+        if ( clicked ) applyChange(!muted);
+    };
+
+    const auto drawMuteOnlyRow = [&](const char* label,
+                                     const char* id,
+                                     bool        muted,
+                                     const auto& applyMute) {
+        ImGui::PushID(id);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
         ImGui::SameLine();
         ImGui::SetCursorPosX(
             std::max(ImGui::GetCursorPosX(),
-                     ImGui::GetWindowContentRegionMax().x - stateButtonWidth));
+                     ImGui::GetWindowContentRegionMax().x - muteButtonSize));
+        drawMuteStateButton(muted, 1.0F, applyMute);
+        ImGui::PopID();
     };
 
-    const auto drawLabelAndButton = [&](const char* label,
-                                        const char* id,
-                                        bool        muted,
-                                        const auto& applyChange) {
+    const auto drawMixRow = [&](const char* label,
+                                const char* id,
+                                bool        muted,
+                                float       gain,
+                                const auto& applyMute,
+                                const auto& applyGain,
+                                const auto& persistGain) {
+        ImGui::PushID(id);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
-        alignStateButton();
-        drawMuteStateButton(id, muted, applyChange);
+        ImGui::SameLine();
+        const float controlWidth =
+            muteButtonSize + controlSpacing + gainSliderWidth;
+        ImGui::SetCursorPosX(
+            std::max(ImGui::GetCursorPosX(),
+                     ImGui::GetWindowContentRegionMax().x - controlWidth));
+        drawMuteStateButton(muted, gain, applyMute);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(gainSliderWidth);
+        float gainPercent = std::clamp(gain * 100.0F, 0.0F, 200.0F);
+        if ( ::MMM::UI::FeedbackSliderFloat(
+                 "##Gain", &gainPercent, 0.0F, 200.0F, "%.0f%%") ) {
+            applyGain(gainPercent * 0.01F);
+        }
+        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+            persistGain(gainPercent * 0.01F);
+        }
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(TR("ui.key_sound_tool.gain").data());
+        }
+        ImGui::PopID();
     };
 
-    const int    playerHeaderRow  = 0;
-    const int    playerMasterRow  = 1;
-    const int    playerTrackBegin = 2;
-    const int    bgmHeaderRow     = playerTrackBegin + playerTrackCount;
-    const int    bgmMasterRow     = bgmHeaderRow + 1;
-    const int    bgmTrackBegin    = bgmMasterRow + 1;
-    const ImVec2 contentStart     = ImGui::GetCursorPos();
-    const float  scrollY          = ImGui::GetScrollY();
-    const float  visibleHeight    = std::max(
+    const int    playerHeaderRow    = 0;
+    const int    playerMasterRow    = 1;
+    const int    playerTrackBegin   = 2;
+    const int    bgmHeaderRow       = playerTrackBegin + playerRows;
+    const int    bgmMasterRow       = bgmHeaderRow + 1;
+    const int    bgmTrackBegin      = bgmMasterRow + 1;
+    const int    hitSoundHeaderRow  = bgmTrackBegin + bgmRows;
+    const int    unboundHitSoundRow = hitSoundHeaderRow + 1;
+    const int    boundHitSoundRow   = hitSoundHeaderRow + 2;
+    const ImVec2 contentStart       = ImGui::GetCursorPos();
+    const float  scrollY            = ImGui::GetScrollY();
+    const float  visibleHeight      = std::max(
         1.0F,
         ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y * 2.0F);
+    const float visibleStart = std::max(0.0F, scrollY - contentStart.y);
+    const float visibleEnd =
+        std::max(visibleStart, scrollY + visibleHeight - contentStart.y);
     const int firstVisibleRow = std::clamp(
-        static_cast<int>(std::floor(scrollY / rowHeight)), 0, totalRows);
-    const int lastVisibleRow = std::clamp(
-        static_cast<int>(std::ceil((scrollY + visibleHeight) / rowHeight)) + 1,
-        firstVisibleRow,
-        totalRows);
+        static_cast<int>(std::floor(visibleStart / rowHeight)), 0, totalRows);
+    const int lastVisibleRow =
+        std::clamp(static_cast<int>(std::ceil(visibleEnd / rowHeight)) + 1,
+                   firstVisibleRow,
+                   totalRows);
 
     for ( int row = firstVisibleRow; row < lastVisibleRow; ++row ) {
         ImGui::SetCursorPos(
@@ -1588,21 +1644,27 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
             continue;
         }
         if ( row == playerMasterRow ) {
-            const bool playerAreaMuted =
-                !engine.getEditorConfig().settings.sfxConfig.enableHitSfx;
-            drawLabelAndButton(TR("ui.key_sound_tool.area_master").data(),
-                               "PlayerArea",
-                               playerAreaMuted,
-                               [&engine](bool muted) {
-                                   auto config = engine.getEditorConfig();
-                                   config.settings.sfxConfig.enableHitSfx =
-                                       !muted;
-                                   engine.setEditorConfig(config);
-                               });
+            drawMuteOnlyRow(TR("ui.key_sound_tool.area_master").data(),
+                            "PlayerArea",
+                            !editorConfig.settings.sfxConfig.enableHitSfx,
+                            [&engine](bool muted) {
+                                auto config = engine.getEditorConfig();
+                                config.settings.sfxConfig.enableHitSfx = !muted;
+                                engine.setEditorConfig(config);
+                            });
             continue;
         }
         if ( row < bgmHeaderRow ) {
             const int track = row - playerTrackBegin;
+            if ( track >= playerTrackCount ) {
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(hasBeatmap ? "ui.key_sound_tool.no_player_tracks"
+                                  : "ui.key_sound_tool.no_beatmap")
+                        .data());
+                continue;
+            }
+
             ImGui::PushID("PlayerTrack");
             ImGui::PushID(track);
             char label[64];
@@ -1610,16 +1672,27 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
                           sizeof(label),
                           TR("ui.key_sound_tool.player_track").data(),
                           track + 1);
-            const bool muted = audio.isPlayerKeySoundTrackMuted(
-                static_cast<std::uint32_t>(track));
-            drawLabelAndButton(
-                label, "MuteState", muted, [&engine, track](bool nextMuted) {
+            const auto trackIndex = static_cast<std::uint32_t>(track);
+            drawMixRow(
+                label,
+                "MixState",
+                audio.isPlayerKeySoundTrackMuted(trackIndex),
+                audio.getPlayerKeySoundTrackGain(trackIndex),
+                [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Player,
-                        .trackIndex = static_cast<std::uint32_t>(track),
-                        .muted      = nextMuted,
+                        .trackIndex = trackIndex,
+                        .muted      = muted,
                     });
-                });
+                },
+                [&engine, trackIndex](float gain) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
+                        .area       = Logic::KeySoundTrackArea::Player,
+                        .trackIndex = trackIndex,
+                        .gain       = gain,
+                    });
+                },
+                [](float) {});
             ImGui::PopID();
             ImGui::PopID();
             continue;
@@ -1629,23 +1702,29 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
             continue;
         }
         if ( row == bgmMasterRow ) {
-            const bool bgmAreaMuted = audio.isBgmKeySoundAreaMuted();
-            drawLabelAndButton(
+            if ( !hasBeatmap || bgmTrackCount == 0 ) ImGui::BeginDisabled();
+            drawMuteOnlyRow(
                 TR("ui.key_sound_tool.area_master").data(),
                 "BgmArea",
-                bgmAreaMuted,
+                audio.isBgmKeySoundAreaMuted(),
                 [&engine](bool muted) {
                     engine.pushCommand(
                         Logic::CmdSetBgmKeySoundAreaMute{ .muted = muted });
                 });
+            if ( !hasBeatmap || bgmTrackCount == 0 ) ImGui::EndDisabled();
             continue;
         }
+        if ( row < hitSoundHeaderRow ) {
+            const int track = row - bgmTrackBegin;
+            if ( track >= bgmTrackCount ) {
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(hasBeatmap ? "ui.key_sound_tool.no_bgm_tracks"
+                                  : "ui.key_sound_tool.no_beatmap")
+                        .data());
+                continue;
+            }
 
-        const int track = row - bgmTrackBegin;
-        if ( bgmTrackCount == 0 ) {
-            ImGui::TextDisabled("%s",
-                                TR("ui.key_sound_tool.no_bgm_tracks").data());
-        } else {
             ImGui::PushID("BgmTrack");
             ImGui::PushID(track);
             char label[64];
@@ -1653,18 +1732,83 @@ void ToolbarView::renderKeySoundTool(float dpiScale)
                           sizeof(label),
                           TR("ui.key_sound_tool.bgm_track").data(),
                           track + 1);
-            const bool muted = audio.isBgmKeySoundTrackMuted(
-                static_cast<std::uint32_t>(track));
-            drawLabelAndButton(
-                label, "MuteState", muted, [&engine, track](bool nextMuted) {
+            const auto trackIndex = static_cast<std::uint32_t>(track);
+            drawMixRow(
+                label,
+                "MixState",
+                audio.isBgmKeySoundTrackMuted(trackIndex),
+                audio.getBgmKeySoundTrackGain(trackIndex),
+                [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Bgm,
-                        .trackIndex = static_cast<std::uint32_t>(track),
-                        .muted      = nextMuted,
+                        .trackIndex = trackIndex,
+                        .muted      = muted,
                     });
+                },
+                [&engine, trackIndex](float gain) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
+                        .area       = Logic::KeySoundTrackArea::Bgm,
+                        .trackIndex = trackIndex,
+                        .gain       = gain,
+                    });
+                },
+                [](float) {});
+            ImGui::PopID();
+            ImGui::PopID();
+            continue;
+        }
+        if ( row == hitSoundHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
+            continue;
+        }
+        if ( row == unboundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.unbound_hit_sound").data(),
+                "UnboundHitSound",
+                !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
+                m_unboundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableUnboundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_unboundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Unbound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.unboundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
                 });
-            ImGui::PopID();
-            ImGui::PopID();
+            continue;
+        }
+        if ( row == boundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.bound_hit_sound").data(),
+                "BoundHitSound",
+                !editorConfig.settings.sfxConfig.enableBoundHitSfx,
+                m_boundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableBoundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_boundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Bound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.boundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
+                });
         }
     }
 
@@ -2880,8 +3024,9 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
                                     : m_toolBeforeLayout;
             m_showLayoutPopup = false;
         } else {
-            m_toolBeforeLayout = m_currentTool;
-            m_showLayoutPopup  = true;
+            m_toolBeforeLayout    = m_currentTool;
+            m_showLayoutPopup     = true;
+            m_showSoundEffectTool = false;
         }
         m_currentTool = nextTool;
         Logic::EditorEngine::instance().pushCommand(

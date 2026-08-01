@@ -1,4 +1,5 @@
 #include "logic/session/CanvasCamera.h"
+#include "common/LogicCommands.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"

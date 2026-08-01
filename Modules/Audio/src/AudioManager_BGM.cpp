@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/AudioTimelineResourceProcessor.h"
+#include "audio/KeySoundControl.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
@@ -274,7 +275,10 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
         secondsToTimelineFrame(normalizedChartEnd);
     m_audioTimelineMaximumProcessFrames =
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
-    refreshAudioTimelineTrackMutes();
+    result.scheduleGeneration = m_audioTimelineNode->replaceSchedule(
+        m_audioTimelineBaseClips,
+        m_audioTimelineRequestedEndFrame,
+        m_audioTimelineMaximumProcessFrames);
     resetMainTimeStretcher();
     m_audioTimelineLoaded           = true;
     m_audioTimelineFingerprint      = fingerprint;
@@ -358,111 +362,124 @@ bool AudioManager::hasLoadedAudioTimeline() const
     return m_audioTimelineLoaded;
 }
 
+/// @brief 设置整个玩家打击音区的运行时静音覆盖。
+void AudioManager::setPlayerKeySoundAreaMuted(bool muted) noexcept
+{
+    m_keySoundControls->setPlayerAreaMuted(muted);
+}
+
+/// @brief 查询整个玩家打击音区的运行时静音覆盖。
+bool AudioManager::isPlayerKeySoundAreaMuted() const noexcept
+{
+    return m_keySoundControls->isPlayerAreaMuted();
+}
+
 /// @brief 设置指定玩家轨道的 Key 音静音状态。
-/// @param trackIndex 零基玩家轨道索引。
-/// @param muted 是否静音。
 void AudioManager::setPlayerKeySoundTrackMuted(std::uint32_t trackIndex,
                                                bool          muted) noexcept
 {
-    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
-    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
-    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
-    const auto bit       = std::uint64_t{ 1U } << bitIndex;
-    if ( muted ) {
-        m_playerKeySoundTrackMutes[wordIndex].fetch_or(
-            bit, std::memory_order_relaxed);
-    } else {
-        m_playerKeySoundTrackMutes[wordIndex].fetch_and(
-            ~bit, std::memory_order_relaxed);
-    }
+    m_keySoundControls->setPlayerTrackMuted(trackIndex, muted);
 }
 
 /// @brief 查询指定玩家轨道是否已静音。
-/// @param trackIndex 零基玩家轨道索引。
-/// @return 静音时返回 true。
-/// @warning 打击判定热路径：只读取一个 lock-free 原子字。
 bool AudioManager::isPlayerKeySoundTrackMuted(
     std::uint32_t trackIndex) const noexcept
 {
-    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return false;
-    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
-    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
-    const auto bit       = std::uint64_t{ 1U } << bitIndex;
-    return (m_playerKeySoundTrackMutes[wordIndex].load(
-                std::memory_order_relaxed) &
-            bit) != 0U;
+    return m_keySoundControls->isPlayerTrackMuted(trackIndex);
+}
+
+/// @brief 设置指定玩家轨道的 Key 音线性增益。
+void AudioManager::setPlayerKeySoundTrackGain(std::uint32_t trackIndex,
+                                              float         gain) noexcept
+{
+    m_keySoundControls->setPlayerTrackGain(trackIndex, gain);
+}
+
+/// @brief 查询指定玩家轨道的 Key 音线性增益。
+float AudioManager::getPlayerKeySoundTrackGain(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->getPlayerTrackGain(trackIndex);
 }
 
 /// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
-/// @param muted 是否静音。
-/// @warning 低频控制路径：会复制当前片段表并提交一次调度替换。
-void AudioManager::setBgmKeySoundAreaMuted(bool muted)
+void AudioManager::setBgmKeySoundAreaMuted(bool muted) noexcept
 {
-    if ( m_bgmKeySoundAreaMuted.exchange(muted, std::memory_order_relaxed) ==
-         muted ) {
-        return;
-    }
-    refreshAudioTimelineTrackMutes();
+    m_keySoundControls->setBgmAreaMuted(muted);
 }
 
 /// @brief 查询整个 BGM 轨道区是否已静音。
-/// @return 静音时返回 true。
 bool AudioManager::isBgmKeySoundAreaMuted() const noexcept
 {
-    return m_bgmKeySoundAreaMuted.load(std::memory_order_relaxed);
+    return m_keySoundControls->isBgmAreaMuted();
+}
+
+/// @brief 设置整个 BGM Key 音区的线性增益。
+void AudioManager::setBgmKeySoundAreaGain(float gain) noexcept
+{
+    m_keySoundControls->setBgmAreaGain(gain);
+}
+
+/// @brief 查询整个 BGM Key 音区的线性增益。
+float AudioManager::getBgmKeySoundAreaGain() const noexcept
+{
+    return m_keySoundControls->getBgmAreaGain();
 }
 
 /// @brief 设置指定 BGM 轨道的 Key 音静音状态。
-/// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
-/// @param muted 是否静音。
-/// @warning 低频控制路径：会复制当前片段表并提交一次调度替换。
 void AudioManager::setBgmKeySoundTrackMuted(std::uint32_t trackIndex,
-                                            bool          muted)
+                                            bool          muted) noexcept
 {
-    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
-    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
-    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
-    const auto bit       = std::uint64_t{ 1U } << bitIndex;
-    const auto previous  = muted ? m_bgmKeySoundTrackMutes[wordIndex].fetch_or(
-                                       bit, std::memory_order_relaxed)
-                                 : m_bgmKeySoundTrackMutes[wordIndex].fetch_and(
-                                       ~bit, std::memory_order_relaxed);
-    const bool changed =
-        muted ? (previous & bit) == 0U : (previous & bit) != 0U;
-    if ( changed ) refreshAudioTimelineTrackMutes();
+    m_keySoundControls->setBgmTrackMuted(trackIndex, muted);
 }
 
 /// @brief 查询指定 BGM 轨道是否已静音。
-/// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
-/// @return 静音时返回 true。
 bool AudioManager::isBgmKeySoundTrackMuted(
     std::uint32_t trackIndex) const noexcept
 {
-    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return false;
-    const auto wordIndex = trackIndex / KEY_SOUND_TRACKS_PER_WORD;
-    const auto bitIndex  = trackIndex % KEY_SOUND_TRACKS_PER_WORD;
-    const auto bit       = std::uint64_t{ 1U } << bitIndex;
-    return (m_bgmKeySoundTrackMutes[wordIndex].load(std::memory_order_relaxed) &
-            bit) != 0U;
+    return m_keySoundControls->isBgmTrackMuted(trackIndex);
 }
 
-/// @brief 将当前 BGM 区域和逐轨静音状态应用到不可变调度表。
-/// @warning 低频控制路径：复制片段表并在音频 block 边界原子替换。
-void AudioManager::refreshAudioTimelineTrackMutes()
+/// @brief 设置指定 BGM 轨道的 Key 音线性增益。
+void AudioManager::setBgmKeySoundTrackGain(std::uint32_t trackIndex,
+                                           float         gain) noexcept
 {
-    if ( !m_audioTimelineNode ) return;
+    m_keySoundControls->setBgmTrackGain(trackIndex, gain);
+}
 
-    auto       audibleClips = m_audioTimelineBaseClips;
-    const bool areaMuted =
-        m_bgmKeySoundAreaMuted.load(std::memory_order_relaxed);
-    for ( auto& clip : audibleClips ) {
-        if ( areaMuted || isBgmKeySoundTrackMuted(clip.bgmTrackIndex) ) {
-            clip.volume = 0.0F;
-        }
-    }
-    m_audioTimelineNode->replaceSchedule(std::move(audibleClips),
-                                         m_audioTimelineRequestedEndFrame,
-                                         m_audioTimelineMaximumProcessFrames);
+/// @brief 查询指定 BGM 轨道的 Key 音线性增益。
+float AudioManager::getBgmKeySoundTrackGain(
+    std::uint32_t trackIndex) const noexcept
+{
+    return m_keySoundControls->getBgmTrackGain(trackIndex);
+}
+
+/// @brief 设置未绑定或绑定打击音效类别的运行时静音覆盖。
+void AudioManager::setKeySoundEffectGroupMuted(KeySoundEffectGroup group,
+                                               bool muted) noexcept
+{
+    m_keySoundControls->setEffectGroupMuted(group, muted);
+}
+
+/// @brief 查询未绑定或绑定打击音效类别的运行时静音覆盖。
+bool AudioManager::isKeySoundEffectGroupMuted(
+    KeySoundEffectGroup group) const noexcept
+{
+    return m_keySoundControls->isEffectGroupMuted(group);
+}
+
+/// @brief 设置未绑定或绑定打击音效类别的线性增益。
+void AudioManager::setKeySoundEffectGroupGain(KeySoundEffectGroup group,
+                                              float               gain) noexcept
+{
+    m_keySoundControls->setEffectGroupGain(group, gain);
+}
+
+/// @brief 查询未绑定或绑定打击音效类别的线性增益。
+float AudioManager::getKeySoundEffectGroupGain(
+    KeySoundEffectGroup group) const noexcept
+{
+    return m_keySoundControls->getEffectGroupGain(group);
 }
 
 /// @brief 提交主时间线半开循环范围。

@@ -1,9 +1,16 @@
 #pragma once
 
-#include "common/LogicCommands.h"
-
 namespace MMM::Logic
 {
+struct CmdPanCanvas;
+struct CmdScroll;
+struct CmdSeek;
+struct CmdSetBgmKeySoundAreaMute;
+struct CmdSetKeySoundEffectGroupGain;
+struct CmdSetKeySoundTrackGain;
+struct CmdSetKeySoundTrackMute;
+struct CmdSetPlaybackSpeed;
+struct CmdSetPlayState;
 struct SessionContext;
 
 /// @brief 播放控制器，负责处理音频播放、时间轴滚动以及视听同步相关逻辑。
@@ -29,6 +36,14 @@ public:
     /// @brief 处理单条玩家或 BGM 轨道的 Key 音静音命令。
     /// @param cmd 目标区域、轨道索引和静音状态。
     void handleCommand(const CmdSetKeySoundTrackMute& cmd);
+
+    /// @brief 处理单条玩家或 BGM 轨道的 Key 音增益命令。
+    /// @param cmd 目标区域、轨道索引和线性增益。
+    void handleCommand(const CmdSetKeySoundTrackGain& cmd);
+
+    /// @brief 处理绑定或未绑定打击音效类别的实时增益命令。
+    /// @param cmd 目标类别和线性增益。
+    void handleCommand(const CmdSetKeySoundEffectGroupGain& cmd);
 
     /// @brief 处理整个 BGM 轨道区的 Key 音静音命令。
     /// @param cmd BGM 区静音状态。

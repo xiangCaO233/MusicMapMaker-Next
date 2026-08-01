@@ -1,4 +1,5 @@
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/KeySoundControl.h"
 
 #include "log/colorful-log.h"
 
@@ -665,6 +666,98 @@ bool testRetiredScheduleReclamation(
     return node.reclaimRetiredSchedules() == 0U;
 }
 
+/// @brief 验证 BGM 区域与逐轨控制在下一 block 生效且不替换调度。
+bool testLiveBgmTrackControlsKeepSchedule()
+{
+    constexpr std::size_t   BLOCK_FRAMES = 8U;
+    constexpr std::size_t   TOTAL_FRAMES = BLOCK_FRAMES * 4U;
+    constexpr std::uint32_t TRACK_INDEX  = 5U;
+
+    std::vector<std::vector<float>> channels(
+        ice::ICEConfig::internal_format.channels,
+        std::vector<float>(TOTAL_FRAMES));
+    for ( std::size_t channel = 0U; channel < channels.size(); ++channel ) {
+        for ( std::size_t frame = 0U; frame < TOTAL_FRAMES; ++frame ) {
+            channels[channel][frame] = 0.1F * static_cast<float>(channel + 1U) +
+                                       0.001F * static_cast<float>(frame);
+        }
+    }
+    const auto audio = MMM::Audio::PreparedTimelineAudio::fromOwnedChannels(
+        std::move(channels));
+    if ( !audio ) return false;
+
+    MMM::Audio::KeySoundControlBank    controls;
+    MMM::Audio::AudioTimelineMixerNode node(
+        {
+            {
+                .eventId       = 91U,
+                .sourceKey     = "live-control",
+                .startFrame    = 0,
+                .bgmTrackIndex = TRACK_INDEX,
+                .volume        = 1.0F,
+                .audio         = audio,
+            },
+        },
+        static_cast<MMM::Audio::AudioTimelineFrame>(TOTAL_FRAMES),
+        BLOCK_FRAMES,
+        &controls);
+    node.play();
+
+    ice::AudioBuffer first(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    node.process(first);
+    const auto scheduleGeneration = node.clockSnapshot().scheduleGeneration;
+    for ( std::size_t channel = 0U; channel < first.num_channels();
+          ++channel ) {
+        const auto source = audio->channel(channel);
+        for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+            if ( std::abs(first.raw_ptrs()[channel][frame] - source[frame]) >
+                 SAMPLE_EPSILON ) {
+                XERROR("Default BGM track control changed the source sample");
+                return false;
+            }
+        }
+    }
+
+    controls.setBgmAreaGain(0.5F);
+    controls.setBgmTrackGain(TRACK_INDEX, 0.5F);
+    ice::AudioBuffer gained(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    node.process(gained);
+    for ( std::size_t channel = 0U; channel < gained.num_channels();
+          ++channel ) {
+        const auto source = audio->channel(channel);
+        for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+            const float expected = source[BLOCK_FRAMES + frame] * 0.25F;
+            if ( std::abs(gained.raw_ptrs()[channel][frame] - expected) >
+                 SAMPLE_EPSILON ) {
+                XERROR("BGM gain control did not apply on the next block");
+                return false;
+            }
+        }
+    }
+
+    if ( node.clockSnapshot().scheduleGeneration != scheduleGeneration ) {
+        XERROR("BGM gain control unexpectedly replaced the timeline schedule");
+        return false;
+    }
+
+    controls.setBgmTrackMuted(TRACK_INDEX, true);
+    ice::AudioBuffer muted(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    node.process(muted);
+    for ( std::size_t channel = 0U; channel < muted.num_channels();
+          ++channel ) {
+        for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+            if ( muted.raw_ptrs()[channel][frame] != 0.0F ) {
+                XERROR("BGM track mute did not apply on the next block");
+                return false;
+            }
+        }
+    }
+
+    const auto afterMute = node.clockSnapshot();
+    return afterMute.scheduleGeneration == scheduleGeneration &&
+           node.clipCount() == 1U;
+}
+
 }  // namespace
 
 /// @brief 运行实时多采样时间线混音测试。
@@ -697,6 +790,7 @@ int main(int argc, char** argv)
         testClockSnapshotLoopAndScheduleGeneration() &&
         testPreparedBoundarySealsNextPull() &&
         testAtomicScheduleReplacement(track, audio) &&
-        testRetiredScheduleReclamation(track);
+        testRetiredScheduleReclamation(track) &&
+        testLiveBgmTrackControlsKeepSchedule();
     return passed ? 0 : 1;
 }

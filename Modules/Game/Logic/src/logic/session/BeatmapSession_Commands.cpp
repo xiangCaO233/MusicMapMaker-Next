@@ -1,6 +1,5 @@
 #include "logic/BeatmapSession.h"
 
-#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -1126,15 +1125,16 @@ bool BeatmapSession::processCommands()
                     this->handleCommand(arg);
                 }
                 // --- Playback 处理的命令 ---
-                else if constexpr ( std::is_same_v<T, CmdSetPlayState> ||
-                                    std::is_same_v<T, CmdSeek> ||
-                                    std::is_same_v<T, CmdSetPlaybackSpeed> ||
-                                    std::is_same_v<T,
-                                                   CmdSetKeySoundTrackMute> ||
-                                    std::is_same_v<T,
-                                                   CmdSetBgmKeySoundAreaMute> ||
-                                    std::is_same_v<T, CmdScroll> ||
-                                    std::is_same_v<T, CmdPanCanvas> ) {
+                else if constexpr (
+                    std::is_same_v<T, CmdSetPlayState> ||
+                    std::is_same_v<T, CmdSeek> ||
+                    std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                    std::is_same_v<T, CmdSetKeySoundTrackMute> ||
+                    std::is_same_v<T, CmdSetKeySoundTrackGain> ||
+                    std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                    std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
+                    std::is_same_v<T, CmdScroll> ||
+                    std::is_same_v<T, CmdPanCanvas> ) {
                     m_playback->handleCommand(arg);
                 }
                 // --- Interaction 处理的命令 ---

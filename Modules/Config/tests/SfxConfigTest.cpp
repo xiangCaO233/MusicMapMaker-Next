@@ -4,6 +4,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <limits>
+
 namespace
 {
 
@@ -61,15 +63,104 @@ bool testNewStereoSettingTakesPriority()
     return true;
 }
 
+/// @brief 验证绑定与未绑定打击音效控制可以完整持久化。
+/// @return 四个字段写出并按原值恢复时返回 true。
+bool testHitSoundGroupControlsRoundTrip()
+{
+    MMM::Config::SfxConfig source;
+    source.enableUnboundHitSfx = false;
+    source.unboundHitSfxGain   = 0.35F;
+    source.enableBoundHitSfx   = false;
+    source.boundHitSfxGain     = 1.75F;
+
+    nlohmann::json encoded;
+    to_json(encoded, source);
+    MMM::Config::SfxConfig restored;
+    from_json(encoded, restored);
+
+    if ( restored.enableUnboundHitSfx || restored.enableBoundHitSfx ||
+         restored.unboundHitSfxGain != source.unboundHitSfxGain ||
+         restored.boundHitSfxGain != source.boundHitSfxGain ||
+         !encoded.contains("enableUnboundHitSfx") ||
+         !encoded.contains("unboundHitSfxGain") ||
+         !encoded.contains("enableBoundHitSfx") ||
+         !encoded.contains("boundHitSfxGain") ) {
+        XERROR("Hit sound group controls did not round trip");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧配置缺少分组控制字段时保持全部启用和单位增益。
+/// @return 四个新增字段均恢复兼容默认值时返回 true。
+bool testLegacyHitSoundGroupDefaults()
+{
+    const nlohmann::json legacy{
+        { "enableHitSfx", true },
+    };
+    MMM::Config::SfxConfig restored;
+    from_json(legacy, restored);
+    if ( !restored.enableUnboundHitSfx || !restored.enableBoundHitSfx ||
+         restored.unboundHitSfxGain != 1.0F ||
+         restored.boundHitSfxGain != 1.0F ) {
+        XERROR("Legacy hit sound group controls did not use safe defaults");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证持久化增益不会越过约定的线性范围。
+/// @return 低于零和高于二的增益分别收敛到边界时返回 true。
+bool testHitSoundGroupGainBounds()
+{
+    const nlohmann::json encoded{
+        { "unboundHitSfxGain", -0.5F },
+        { "boundHitSfxGain", 2.5F },
+    };
+    MMM::Config::SfxConfig restored;
+    from_json(encoded, restored);
+    if ( restored.unboundHitSfxGain != 0.0F ||
+         restored.boundHitSfxGain != 2.0F ) {
+        XERROR("Hit sound group gains escaped the supported range");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证非有限持久化增益不会传播到实时音频路径。
+/// @return NaN 和正无穷在写出和读取时均收敛为零则返回 true。
+bool testNonFiniteHitSoundGroupGains()
+{
+    MMM::Config::SfxConfig source;
+    source.unboundHitSfxGain = std::numeric_limits<float>::quiet_NaN();
+    source.boundHitSfxGain   = std::numeric_limits<float>::infinity();
+    nlohmann::json encoded;
+    to_json(encoded, source);
+    MMM::Config::SfxConfig restored;
+    from_json(encoded, restored);
+    if ( encoded.at("unboundHitSfxGain").get<float>() != 0.0F ||
+         encoded.at("boundHitSfxGain").get<float>() != 0.0F ||
+         restored.unboundHitSfxGain != 0.0F ||
+         restored.boundHitSfxGain != 0.0F ) {
+        XERROR("Non-finite hit sound group gains were not sanitized");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
-/// @brief 运行立体打击音效设置兼容性测试。
+/// @brief 运行打击音效设置序列化与兼容性测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
     return testStereoHitEffectsRoundTrip() &&
                    testLegacyDirectionalFlickMigration() &&
-                   testNewStereoSettingTakesPriority()
+                   testNewStereoSettingTakesPriority() &&
+                   testHitSoundGroupControlsRoundTrip() &&
+                   testLegacyHitSoundGroupDefaults() &&
+                   testHitSoundGroupGainBounds() &&
+                   testNonFiniteHitSoundGroupGains()
                ? 0
                : 1;
 }

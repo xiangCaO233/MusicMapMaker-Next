@@ -62,6 +62,23 @@ constexpr double RENDER_SNAPSHOT_MAIN_MAX_HZ = 480.0;
 /// @brief 辅助画布 RenderSnapshot 自适应预算的最高刷新率。
 constexpr double RENDER_SNAPSHOT_SECONDARY_MAX_HZ = 240.0;
 
+/// @brief 将持久化打击音效配置同步到全局实时混音控制库。
+/// @param config 当前打击音效配置快照。
+/// @warning 低频配置路径：只写入固定数量的 lock-free 原子控制字。
+void syncKeySoundControls(const Config::SfxConfig& config)
+{
+    auto& audio = Audio::AudioManager::instance();
+    audio.setPlayerKeySoundAreaMuted(!config.enableHitSfx);
+    audio.setKeySoundEffectGroupMuted(Audio::KeySoundEffectGroup::Unbound,
+                                      !config.enableUnboundHitSfx);
+    audio.setKeySoundEffectGroupGain(Audio::KeySoundEffectGroup::Unbound,
+                                     config.unboundHitSfxGain);
+    audio.setKeySoundEffectGroupMuted(Audio::KeySoundEffectGroup::Bound,
+                                      !config.enableBoundHitSfx);
+    audio.setKeySoundEffectGroupGain(Audio::KeySoundEffectGroup::Bound,
+                                     config.boundHitSfxGain);
+}
+
 /// @brief 没有可用 FPS 统计时的 RenderSnapshot 回退刷新率。
 constexpr double RENDER_SNAPSHOT_FALLBACK_HZ = 240.0;
 
@@ -2737,6 +2754,11 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     updatedConfig.settings.colorPalettes = globalColorPalettes;
     updatedConfig.settings.defaultColorPaletteSchemeName =
         globalDefaultColorPalette;
+    auto& sfxConfig = updatedConfig.settings.sfxConfig;
+    sfxConfig.unboundHitSfxGain =
+        Config::sanitizeHitSfxGain(sfxConfig.unboundHitSfxGain);
+    sfxConfig.boundHitSfxGain =
+        Config::sanitizeHitSfxGain(sfxConfig.boundHitSfxGain);
     preserveGlobalAppManagedSettings(updatedConfig, globalConfig);
     m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
@@ -2755,6 +2777,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     // 同步回全局 AppConfig 实例
     Config::AppConfig::instance().getEditorConfig() = updatedConfig;
+    syncKeySoundControls(updatedConfig.settings.sfxConfig);
 
     // 向所有 Session 广播配置变更
     {

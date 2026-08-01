@@ -13,6 +13,7 @@ add_library(
   src/AudioManager_Playback.cpp
   src/AudioManager_SFX.cpp
   src/AudioSpeedExportService.cpp
+  src/KeySoundControl.cpp
   src/SoundEffectPool.cpp)
 
 target_link_libraries(
@@ -41,6 +42,11 @@ if(WIN32)
 endif()
 
 target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Key 音控制测试覆盖默认值、增益组合、越界和并发完整快照。
+mmm_add_test_executable(Audio KeySoundControlTest tests/KeySoundControlTest.cpp)
+target_link_libraries(KeySoundControlTest PRIVATE Audio Log)
+add_test(NAME KeySoundControlTest COMMAND KeySoundControlTest)
 
 mmm_add_test_executable(Audio AudioSpeedExportServiceTest
                         tests/AudioSpeedExportServiceTest.cpp)

@@ -1,5 +1,7 @@
 #include "audio/AudioTimelineMixerNode.h"
 
+#include "audio/KeySoundControl.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -211,7 +213,9 @@ std::size_t PreparedTimelineAudio::read(ice::AudioBuffer& buffer,
 AudioTimelineMixerNode::AudioTimelineMixerNode(
     std::vector<PreparedTimelineClip> clips,
     AudioTimelineFrame                requestedTimelineEndFrame,
-    std::size_t                       maximumProcessFrames)
+    std::size_t                       maximumProcessFrames,
+    const KeySoundControlBank*        keySoundControls)
+    : m_keySoundControls(keySoundControls)
 {
     static_assert(std::atomic<ScheduleState*>::is_always_lock_free);
     static_assert(std::atomic<AudioTimelineFrame>::is_always_lock_free);
@@ -256,17 +260,18 @@ AudioTimelineMixerNode::ScheduleState::ScheduleState(
 {
 }
 
-void AudioTimelineMixerNode::replaceSchedule(
+std::uint64_t AudioTimelineMixerNode::replaceSchedule(
     std::vector<PreparedTimelineClip> clips,
     AudioTimelineFrame                requestedTimelineEndFrame,
     std::size_t                       maximumProcessFrames)
 {
     static_cast<void>(reclaimRetiredSchedules());
-    auto replacement =
+    const auto generation = m_nextScheduleGeneration++;
+    auto       replacement =
         std::make_unique<ScheduleState>(prepareClips(std::move(clips)),
                                         requestedTimelineEndFrame,
                                         maximumProcessFrames,
-                                        m_nextScheduleGeneration++);
+                                        generation);
     m_publishedTimelineEndFrame.store(replacement->timelineEndFrame,
                                       std::memory_order_relaxed);
     m_publishedClipCount.store(replacement->clips.size(),
@@ -275,6 +280,7 @@ void AudioTimelineMixerNode::replaceSchedule(
     ScheduleState*                 rawReplacement = replacement.release();
     std::unique_ptr<ScheduleState> superseded(
         m_pendingSchedule.exchange(rawReplacement, std::memory_order_acq_rel));
+    return generation;
 }
 
 std::size_t AudioTimelineMixerNode::reclaimRetiredSchedules() noexcept
@@ -965,7 +971,12 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
           ++spanIndex ) {
         const auto& span = schedule.activeSpanScratch[spanIndex];
         const auto& clip = schedule.clips[span.clipIndex];
-        if ( span.volume <= 0.0F ) continue;
+        const float runtimeGain =
+            m_keySoundControls
+                ? m_keySoundControls->effectiveBgmTrackGain(clip.bgmTrackIndex)
+                : 1.0F;
+        const float effectiveVolume = span.volume * runtimeGain;
+        if ( effectiveVolume <= 0.0F ) continue;
 
         schedule.sourceScratch.clear();
         const auto requestedFrames = static_cast<std::size_t>(span.frameCount);
@@ -983,7 +994,7 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
             float* destination  = output.raw_ptrs()[channel] + destinationStart;
             const float* source = schedule.sourceScratch.raw_ptrs()[channel];
             for ( std::size_t frame = 0U; frame < readFrames; ++frame ) {
-                destination[frame] += source[frame] * span.volume;
+                destination[frame] += source[frame] * effectiveVolume;
             }
         }
     }

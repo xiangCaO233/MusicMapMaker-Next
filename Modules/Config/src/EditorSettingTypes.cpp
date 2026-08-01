@@ -3,12 +3,20 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
 #include <vector>
 
 namespace MMM::Config
 {
+/// @brief 将持久化打击音效增益限制为音频控制层支持的有限范围。
+/// @param gain 配置文件读取的线性增益。
+/// @return 0.0~2.0 的有限值；非有限输入按静音增益处理。
+float sanitizeHitSfxGain(float gain) noexcept
+{
+    return std::isfinite(gain) ? std::clamp(gain, 0.0F, 2.0F) : 0.0F;
+}
 
 void to_json(nlohmann::json& json, const SyncMode& mode)
 {
@@ -86,7 +94,11 @@ void to_json(nlohmann::json& json, const SfxConfig& config)
         { "permanentSfxVolumes", config.permanentSfxVolumes },
         { "permanentSfxMutes", config.permanentSfxMutes },
         { "hitSfxSyncSpeed", config.hitSfxSyncSpeed },
-        { "enableHitSfx", config.enableHitSfx }
+        { "enableHitSfx", config.enableHitSfx },
+        { "enableUnboundHitSfx", config.enableUnboundHitSfx },
+        { "unboundHitSfxGain", sanitizeHitSfxGain(config.unboundHitSfxGain) },
+        { "enableBoundHitSfx", config.enableBoundHitSfx },
+        { "boundHitSfxGain", sanitizeHitSfxGain(config.boundHitSfxGain) }
     };
 }
 
@@ -105,8 +117,14 @@ void from_json(const nlohmann::json& json, SfxConfig& config)
         json.value("permanentSfxVolumes", std::map<std::string, float>());
     config.permanentSfxMutes =
         json.value("permanentSfxMutes", std::map<std::string, bool>());
-    config.hitSfxSyncSpeed = json.value("hitSfxSyncSpeed", true);
-    config.enableHitSfx    = json.value("enableHitSfx", true);
+    config.hitSfxSyncSpeed     = json.value("hitSfxSyncSpeed", true);
+    config.enableHitSfx        = json.value("enableHitSfx", true);
+    config.enableUnboundHitSfx = json.value("enableUnboundHitSfx", true);
+    config.unboundHitSfxGain =
+        sanitizeHitSfxGain(json.value("unboundHitSfxGain", 1.0F));
+    config.enableBoundHitSfx = json.value("enableBoundHitSfx", true);
+    config.boundHitSfxGain =
+        sanitizeHitSfxGain(json.value("boundHitSfxGain", 1.0F));
 }
 
 void to_json(nlohmann::json& json, const FilePickerStyle& style)

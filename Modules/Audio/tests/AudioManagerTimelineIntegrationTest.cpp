@@ -140,10 +140,10 @@ bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
     return true;
 }
 
-/// @brief 验证玩家与 BGM 逐轨静音状态及调度替换保持时间线结构。
+/// @brief 验证玩家与 BGM 逐轨静音、增益不会重建时间线调度。
 /// @param manager 已初始化音频管理器。
 /// @param samplePath 可解码短音频路径。
-/// @return 状态可独立切换且 BGM 调度替换不改变时长和片段数量时返回 true。
+/// @return 状态可独立切换且调度代次、时长和片段数不变时返回 true。
 bool testKeySoundTrackMutes(MMM::Audio::AudioManager& manager,
                             const std::string&        samplePath)
 {
@@ -164,29 +164,61 @@ bool testKeySoundTrackMutes(MMM::Audio::AudioManager& manager,
                                     } },
                                   0.08,
                                   "key-sound-track-mutes");
-    if ( !result.success || result.loadedClipCount != 2U ) return false;
-
-    const double totalTime = manager.getTotalTime();
-    manager.setPlayerKeySoundTrackMuted(1U, true);
-    manager.setBgmKeySoundTrackMuted(2U, true);
-    manager.setBgmKeySoundAreaMuted(true);
-    if ( !manager.isPlayerKeySoundTrackMuted(1U) ||
-         manager.isPlayerKeySoundTrackMuted(2U) ||
-         !manager.isBgmKeySoundTrackMuted(2U) ||
-         manager.isBgmKeySoundTrackMuted(1U) ||
-         !manager.isBgmKeySoundAreaMuted() ||
-         manager.getLoadedAudioTimelineClipCount() != 2U ||
-         std::abs(manager.getTotalTime() - totalTime) > 0.002 ) {
-        XERROR("Key sound track mute state changed timeline structure");
+    if ( !result.success || result.loadedClipCount != 2U ||
+         result.scheduleGeneration == 0U ) {
+        return false;
+    }
+    if ( !waitUntil(
+             [&manager, scheduleGeneration = result.scheduleGeneration]() {
+                 const auto snapshot = manager.getAudioTimelineClockSnapshot();
+                 return snapshot.valid &&
+                        snapshot.scheduleGeneration == scheduleGeneration;
+             }) ) {
+        XERROR("Key sound timeline schedule was not applied by the backend");
         return false;
     }
 
+    const double totalTime          = manager.getTotalTime();
+    const auto   scheduleGeneration = result.scheduleGeneration;
+    manager.setPlayerKeySoundAreaMuted(true);
+    manager.setPlayerKeySoundTrackMuted(1U, true);
+    manager.setPlayerKeySoundTrackGain(1U, 1.25F);
+    manager.setBgmKeySoundTrackMuted(2U, true);
+    manager.setBgmKeySoundTrackGain(2U, 0.5F);
+    manager.setBgmKeySoundAreaMuted(true);
+    manager.setBgmKeySoundAreaGain(0.75F);
+    std::this_thread::sleep_for(30ms);
+    if ( !manager.isPlayerKeySoundAreaMuted() ||
+         !manager.isPlayerKeySoundTrackMuted(1U) ||
+         manager.isPlayerKeySoundTrackMuted(2U) ||
+         std::abs(manager.getPlayerKeySoundTrackGain(1U) - 1.25F) > 1.0e-4F ||
+         !manager.isBgmKeySoundTrackMuted(2U) ||
+         manager.isBgmKeySoundTrackMuted(1U) ||
+         std::abs(manager.getBgmKeySoundTrackGain(2U) - 0.5F) > 1.0e-4F ||
+         !manager.isBgmKeySoundAreaMuted() ||
+         std::abs(manager.getBgmKeySoundAreaGain() - 0.75F) > 1.0e-4F ||
+         manager.getLoadedAudioTimelineClipCount() != 2U ||
+         std::abs(manager.getTotalTime() - totalTime) > 0.002 ||
+         manager.getAudioTimelineClockSnapshot().scheduleGeneration !=
+             scheduleGeneration ) {
+        XERROR("Key sound runtime control changed timeline schedule");
+        return false;
+    }
+
+    manager.setPlayerKeySoundAreaMuted(false);
     manager.setPlayerKeySoundTrackMuted(1U, false);
+    manager.setPlayerKeySoundTrackGain(1U, 1.0F);
     manager.setBgmKeySoundTrackMuted(2U, false);
+    manager.setBgmKeySoundTrackGain(2U, 1.0F);
     manager.setBgmKeySoundAreaMuted(false);
-    return !manager.isPlayerKeySoundTrackMuted(1U) &&
+    manager.setBgmKeySoundAreaGain(1.0F);
+    return !manager.isPlayerKeySoundAreaMuted() &&
+           !manager.isPlayerKeySoundTrackMuted(1U) &&
+           std::abs(manager.getPlayerKeySoundTrackGain(1U) - 1.0F) < 1.0e-4F &&
            !manager.isBgmKeySoundTrackMuted(2U) &&
-           !manager.isBgmKeySoundAreaMuted();
+           std::abs(manager.getBgmKeySoundTrackGain(2U) - 1.0F) < 1.0e-4F &&
+           !manager.isBgmKeySoundAreaMuted() &&
+           std::abs(manager.getBgmKeySoundAreaGain() - 1.0F) < 1.0e-4F;
 }
 
 /// @brief 验证同一文件的不同资源倍率可并存且全局预览倍率不改写资源时长。

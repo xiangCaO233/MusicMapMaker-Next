@@ -1,5 +1,6 @@
 #include "audio/SoundEffectPool.h"
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/KeySoundControl.h"
 
 #include <algorithm>
 #include <atomic>
@@ -407,9 +408,13 @@ public:
     /// @brief 构造与播放实例生命周期绑定的双声道增益节点。
     /// @param input 已完成实例内变调处理的稳定输入节点。
     /// @param source 提供原始音效播放进度的稳定源节点。
+    /// @param keySoundControls 生命周期覆盖节点的 Key 音控制库。
     StereoGainNode(std::shared_ptr<ice::TimeStretcher>       input,
-                   std::shared_ptr<PreparedSampleSourceNode> source)
-        : m_input(std::move(input)), m_source(std::move(source))
+                   std::shared_ptr<PreparedSampleSourceNode> source,
+                   const KeySoundControlBank*                keySoundControls)
+        : m_input(std::move(input))
+        , m_source(std::move(source))
+        , m_keySoundControls(keySoundControls)
     {
         if ( m_source ) {
             m_source->set_final_input_listener(this, &notifySourceFinalInput);
@@ -439,8 +444,10 @@ public:
     /// @brief 为下一次播放配置双声道包络和预计预定等待帧数。
     /// @param envelope 本次播放的左右声道增益包络。
     /// @param scheduledDelayFrames 当前参考位置到目标播放位置的预计帧数。
-    void prepare(const StereoGainEnvelope& envelope,
-                 std::size_t               scheduledDelayFrames)
+    /// @param playbackControl 玩家轨道与打击音类别的运行时控制。
+    void prepare(const StereoGainEnvelope&      envelope,
+                 std::size_t                    scheduledDelayFrames,
+                 const KeySoundPlaybackControl& playbackControl)
     {
         m_startLeft.store(std::clamp(envelope.startLeft, 0.0F, 1.0F),
                           std::memory_order_relaxed);
@@ -454,6 +461,7 @@ public:
                                      std::memory_order_relaxed);
         m_audioStarted.store(false, std::memory_order_relaxed);
         m_finalRequested.store(false, std::memory_order_relaxed);
+        m_keySoundPlaybackControl = playbackControl;
         static_cast<void>(m_input->request_discontinuity());
         m_playbackState.store(PlaybackState::Playing,
                               std::memory_order_release);
@@ -528,6 +536,12 @@ public:
             const std::size_t sourceFrame =
                 totalFrames > bufferFrames ? totalFrames - bufferFrames : 0U;
             applyEnvelope(buffer, 0U, bufferFrames, sourceFrame);
+        }
+
+        if ( m_keySoundControls ) {
+            applyRuntimeGain(buffer,
+                             m_keySoundControls->effectivePlayerGain(
+                                 m_keySoundPlaybackControl));
         }
 
         if ( totalFrames > 0U && playPositionAfter >= totalFrames &&
@@ -612,10 +626,39 @@ private:
         }
     }
 
+    /// @brief 在变调缓存之后对当前输出 block 应用运行时 Key 音增益。
+    /// @warning 音频回调热路径：只执行预分配缓冲的有界逐样本乘法。
+    static void applyRuntimeGain(ice::AudioBuffer& buffer, float gain) noexcept
+    {
+        if ( std::abs(gain - 1.0F) <= std::numeric_limits<float>::epsilon() ) {
+            return;
+        }
+        if ( gain <= 0.0F ) {
+            buffer.clear();
+            return;
+        }
+
+        float** samples = buffer.raw_ptrs();
+        if ( !samples ) return;
+        for ( std::uint16_t channel = 0U; channel < buffer.num_channels();
+              ++channel ) {
+            for ( std::size_t frame = 0U; frame < buffer.num_frames();
+                  ++frame ) {
+                samples[channel][frame] *= gain;
+            }
+        }
+    }
+
     /// @brief 实例内变调器的稳定非空输入。
     std::shared_ptr<ice::TimeStretcher> m_input;
     /// @brief 提供原始采样进度并由所属播放实例稳定持有的源节点。
     std::shared_ptr<PreparedSampleSourceNode> m_source;
+    /// @brief 每 block 读取的运行时 Key 音控制库观察指针。
+    const KeySoundControlBank* m_keySoundControls{ nullptr };
+    /// @brief 当前播放周期的玩家轨道与打击音类别。
+    /// @warning 由 m_playbackState 的 release/acquire 顺序发布，播放期间
+    /// 不可修改。
+    KeySoundPlaybackControl m_keySoundPlaybackControl;
     /// @brief 本次包络的起始左声道增益。
     /// @warning 逻辑线程写、音频线程读；由 m_playbackState 的 release/acquire
     /// 发布后仅需 relaxed 访问。
@@ -668,14 +711,17 @@ struct SoundEffectPool::SFXPlayInstance {
     float volumeFactor{ 1.0F };
 };
 
-SoundEffectPool::SoundEffectPool(std::shared_ptr<ice::AudioTrack> track)
-    : SoundEffectPool(PreparedTimelineAudio::fromTrack(std::move(track)))
+SoundEffectPool::SoundEffectPool(std::shared_ptr<ice::AudioTrack> track,
+                                 const KeySoundControlBank* keySoundControls)
+    : SoundEffectPool(PreparedTimelineAudio::fromTrack(std::move(track)),
+                      keySoundControls)
 {
 }
 
 SoundEffectPool::SoundEffectPool(
-    std::shared_ptr<const PreparedTimelineAudio> audio)
-    : m_audio(std::move(audio))
+    std::shared_ptr<const PreparedTimelineAudio> audio,
+    const KeySoundControlBank*                   keySoundControls)
+    : m_audio(std::move(audio)), m_keySoundControls(keySoundControls)
 {
     m_localMixer = std::make_shared<ice::MixBus>();
 }
@@ -710,7 +756,7 @@ SoundEffectPool::createInstance()
     instance->pitchStretcher = std::make_shared<ice::TimeStretcher>();
     instance->channelMixer   = std::make_shared<ice::MixBus>();
     instance->stereoGainNode = std::make_shared<StereoGainNode>(
-        instance->pitchStretcher, instance->source);
+        instance->pitchStretcher, instance->source, m_keySoundControls);
     instance->pitchStretcher->set_inputnode(instance->source);
     instance->channelMixer->add_source(instance->stereoGainNode);
 
@@ -782,7 +828,8 @@ void SoundEffectPool::play(float volumeFactor, double pitchSemitones)
         node->set_playpos(static_cast<size_t>(0));
         node->setvolume(playbackVolume);
         if ( instance->stereoGainNode ) {
-            instance->stereoGainNode->prepare(StereoGainEnvelope{}, 0U);
+            instance->stereoGainNode->prepare(
+                StereoGainEnvelope{}, 0U, KeySoundPlaybackControl{});
         }
         node->play();
         {
@@ -792,11 +839,11 @@ void SoundEffectPool::play(float volumeFactor, double pitchSemitones)
     }
 }
 
-void SoundEffectPool::playScheduled(float volumeFactor, std::size_t targetFrame,
-                                    const void*               referenceContext,
-                                    ReferencePositionReader   referenceReader,
-                                    const StereoGainEnvelope& stereoEnvelope,
-                                    std::size_t scheduledDelayFrames)
+void SoundEffectPool::playScheduled(
+    float volumeFactor, std::size_t targetFrame, const void* referenceContext,
+    ReferencePositionReader   referenceReader,
+    const StereoGainEnvelope& stereoEnvelope, std::size_t scheduledDelayFrames,
+    const KeySoundPlaybackControl& playbackControl)
 {
     auto instance = acquireInstance();
     auto node     = instance ? instance->source : nullptr;
@@ -822,8 +869,8 @@ void SoundEffectPool::playScheduled(float volumeFactor, std::size_t targetFrame,
         node->set_reference_pos_provider(referenceContext, referenceReader);
         node->setvolume(playbackVolume);
         if ( instance->stereoGainNode ) {
-            instance->stereoGainNode->prepare(stereoEnvelope,
-                                              scheduledDelayFrames);
+            instance->stereoGainNode->prepare(
+                stereoEnvelope, scheduledDelayFrames, playbackControl);
         }
         node->play();
         {
@@ -835,7 +882,8 @@ void SoundEffectPool::playScheduled(float volumeFactor, std::size_t targetFrame,
 
 void SoundEffectPool::playScheduledRelative(
     float volumeFactor, std::size_t outputDelayFrames,
-    const StereoGainEnvelope& stereoEnvelope)
+    const StereoGainEnvelope&      stereoEnvelope,
+    const KeySoundPlaybackControl& playbackControl)
 {
     auto instance = acquireInstance();
     auto node     = instance ? instance->source : nullptr;
@@ -861,8 +909,8 @@ void SoundEffectPool::playScheduledRelative(
         node->clear_reference_pos_provider();
         node->setvolume(playbackVolume);
         if ( instance->stereoGainNode ) {
-            instance->stereoGainNode->prepare(stereoEnvelope,
-                                              outputDelayFrames);
+            instance->stereoGainNode->prepare(
+                stereoEnvelope, outputDelayFrames, playbackControl);
         }
         node->play();
         {

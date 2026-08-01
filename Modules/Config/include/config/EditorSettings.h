@@ -74,7 +74,24 @@ struct SfxConfig {
 
     /// @brief 是否启用打击音效
     bool enableHitSfx{ true };
+
+    /// @brief 是否播放未绑定音效文件的物件所使用的默认打击音效。
+    bool enableUnboundHitSfx{ true };
+
+    /// @brief 未绑定音效文件的默认打击音效线性增益，范围为 0.0~2.0。
+    float unboundHitSfxGain{ 1.0F };
+
+    /// @brief 是否播放已经绑定音效文件的物件打击音效。
+    bool enableBoundHitSfx{ true };
+
+    /// @brief 已绑定音效文件的物件打击音效线性增益，范围为 0.0~2.0。
+    float boundHitSfxGain{ 1.0F };
 };
+
+/// @brief 将打击音效线性增益规范到持久化与实时混音的共同范围。
+/// @param gain 待规范的线性增益。
+/// @return 0.0~2.0 的有限值；非有限输入按静音增益处理。
+[[nodiscard]] float sanitizeHitSfxGain(float gain) noexcept;
 
 /// @brief 将音效配置序列化为 JSON。
 void to_json(nlohmann::json& json, const SfxConfig& config);

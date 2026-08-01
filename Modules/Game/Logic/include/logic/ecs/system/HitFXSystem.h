@@ -99,6 +99,12 @@ public:
     [[nodiscard]] static const std::string& soundEffectKeyForEvent(
         const HitEvent& ev, ::MMM::NoteType effectiveType);
 
+    /// @brief 判断打击事件是否绑定了可用的物件音效资源。
+    /// @param ev 待检查的打击事件。
+    /// @return 绑定存在且资源标识非空时返回 true。
+    /// @warning 逻辑预测播放热路径：只读取事件内存，不得访问资源容器。
+    [[nodiscard]] static bool hasBoundSoundEffect(const HitEvent& ev) noexcept;
+
     /// @brief 获取打击事件的物件采样音量倍率。
     /// @param ev 待解析的打击事件。
     /// @return 自定义绑定存在时返回物件音量，否则返回 1。

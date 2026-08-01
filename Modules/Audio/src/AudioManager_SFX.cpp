@@ -396,7 +396,8 @@ bool AudioManager::attachSoundEffectPool(
         }
     }
 
-    auto pool = std::make_shared<SoundEffectPool>(std::move(preparedAudio));
+    auto pool = std::make_shared<SoundEffectPool>(std::move(preparedAudio),
+                                                  m_keySoundControls.get());
     pool->init(registration->second.m_isBoundNoteSound ? 1 : 8);
     pool->setVolume(activeVolume);
     pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
@@ -777,7 +778,8 @@ void AudioManager::stopSoundEffect(const std::string& key)
 /// @param stereoEnvelope 本次播放的线性双声道增益包络。
 void AudioManager::playSoundEffectScheduled(
     const std::string& key, double targetTime, float volumeFactor,
-    const StereoGainEnvelope& stereoEnvelope)
+    const StereoGainEnvelope&      stereoEnvelope,
+    const KeySoundPlaybackControl& playbackControl)
 {
     if ( getSFXPoolMute(key) ) return;
 
@@ -818,10 +820,11 @@ void AudioManager::playSoundEffectScheduled(
                                   timelineClock,
                                   &readTimelineBlockStart,
                                   effectiveEnvelope,
-                                  scheduledDelayFrames);
+                                  scheduledDelayFrames,
+                                  playbackControl);
     } else {
         it->second->playScheduledRelative(
-            volumeFactor, schedule.frame, effectiveEnvelope);
+            volumeFactor, schedule.frame, effectiveEnvelope, playbackControl);
     }
 }
 

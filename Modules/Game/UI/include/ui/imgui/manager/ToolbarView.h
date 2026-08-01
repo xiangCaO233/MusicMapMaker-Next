@@ -99,10 +99,16 @@ private:
     float m_speedPopupWidth{ 160.0f };
     /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
     float m_speedPopupHeight{ 120.0f };
-    /// @brief 是否显示 Key 音分区与逐轨控制工具。
-    bool m_showKeySoundTool{ false };
-    /// @brief 上一帧 Key 音工具按钮的屏幕 Y 坐标，用于定位弹层。
-    float m_lastKeySoundToolBtnY{ 0.0f };
+    /// @brief 是否显示音效分区与逐轨混音控制工具。
+    bool m_showSoundEffectTool{ false };
+    /// @brief 上一帧音效工具按钮的屏幕 Y 坐标，用于定位弹层。
+    float m_lastSoundEffectToolBtnY{ 0.0f };
+    /// @brief 绑定分类增益草稿是否已从配置初始化。
+    bool m_soundEffectGainDraftInitialized{ false };
+    /// @brief 未绑定音效文件的实时增益草稿。
+    float m_unboundHitSoundGainDraft{ 1.0f };
+    /// @brief 已绑定音效文件的实时增益草稿。
+    float m_boundHitSoundGainDraft{ 1.0f };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
     /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -202,11 +208,11 @@ private:
     /// @warning UI 热路径：仅在弹窗打开时绘制固定数量控件。
     void renderMagnetPopup(float dpiScale);
 
-    /// @brief 绘制锚定在工具栏按钮旁的 Key 音逐轨控制弹层。
+    /// @brief 绘制锚定在工具栏按钮旁的音效逐轨与分类控制弹层。
     /// @param dpiScale 当前 DPI 缩放。
     /// @warning UI
     /// 热路径：弹层打开时每帧执行，仅绘制滚动区可见轨道行并提交命令。
-    void renderKeySoundTool(float dpiScale);
+    void renderSoundEffectTool(float dpiScale);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。

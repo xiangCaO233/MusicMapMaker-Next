@@ -1,4 +1,7 @@
+#include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -6,6 +9,8 @@
 #include "mmm/project/Project.h"
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <memory>
 
 namespace
@@ -15,6 +20,12 @@ namespace
 bool near(double lhs, double rhs)
 {
     return std::abs(lhs - rhs) < 1e-6;
+}
+
+/// @brief 使用覆盖 16 位运行时增益量化误差的容差比较增益。
+bool nearGain(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 4e-5F;
 }
 
 /// @brief 验证自然结束标志会在下一次播放请求前先回到零点。
@@ -237,6 +248,96 @@ bool testBackgroundSessionCannotControlTransport()
     return true;
 }
 
+/// @brief 验证后台会话不能改写全局玩家轨道音效增益。
+/// @return 后台命令被忽略且活动会话命令生效时返回 true。
+bool testBackgroundSessionCannotControlKeySoundGain()
+{
+    auto&                   audio       = MMM::Audio::AudioManager::instance();
+    constexpr std::uint32_t TRACK_INDEX = 7U;
+    const float originalGain = audio.getPlayerKeySoundTrackGain(TRACK_INDEX);
+
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.isActiveSession = false;
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackGain{
+        .area       = MMM::Logic::KeySoundTrackArea::Player,
+        .trackIndex = TRACK_INDEX,
+        .gain       = 0.25F,
+    });
+    if ( !nearGain(audio.getPlayerKeySoundTrackGain(TRACK_INDEX),
+                   originalGain) ) {
+        audio.setPlayerKeySoundTrackGain(TRACK_INDEX, originalGain);
+        XERROR("Background session unexpectedly changed player track gain");
+        return false;
+    }
+
+    context.isActiveSession = true;
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackGain{
+        .area       = MMM::Logic::KeySoundTrackArea::Player,
+        .trackIndex = TRACK_INDEX,
+        .gain       = 0.25F,
+    });
+    const bool applied =
+        nearGain(audio.getPlayerKeySoundTrackGain(TRACK_INDEX), 0.25F);
+    audio.setPlayerKeySoundTrackGain(TRACK_INDEX, originalGain);
+    if ( !applied ) {
+        XERROR("Active session did not change player track gain");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证无活动会话时配置更新仍会同步全局打击音效控制库。
+/// @return 玩家总控和两个绑定类别均按配置更新时返回 true。
+bool testEditorConfigSynchronizesGlobalKeySoundControls()
+{
+    auto&      engine         = MMM::Logic::EditorEngine::instance();
+    auto&      audio          = MMM::Audio::AudioManager::instance();
+    const auto originalConfig = engine.getEditorConfig();
+
+    auto updatedConfig                                   = originalConfig;
+    updatedConfig.settings.sfxConfig.enableHitSfx        = false;
+    updatedConfig.settings.sfxConfig.enableUnboundHitSfx = false;
+    updatedConfig.settings.sfxConfig.unboundHitSfxGain   = 0.4F;
+    updatedConfig.settings.sfxConfig.enableBoundHitSfx   = true;
+    updatedConfig.settings.sfxConfig.boundHitSfxGain     = 1.6F;
+    engine.setEditorConfig(updatedConfig);
+
+    const bool synchronized =
+        audio.isPlayerKeySoundAreaMuted() &&
+        audio.isKeySoundEffectGroupMuted(
+            MMM::Audio::KeySoundEffectGroup::Unbound) &&
+        nearGain(audio.getKeySoundEffectGroupGain(
+                     MMM::Audio::KeySoundEffectGroup::Unbound),
+                 0.4F) &&
+        !audio.isKeySoundEffectGroupMuted(
+            MMM::Audio::KeySoundEffectGroup::Bound) &&
+        nearGain(audio.getKeySoundEffectGroupGain(
+                     MMM::Audio::KeySoundEffectGroup::Bound),
+                 1.6F);
+
+    updatedConfig.settings.sfxConfig.unboundHitSfxGain =
+        std::numeric_limits<float>::quiet_NaN();
+    updatedConfig.settings.sfxConfig.boundHitSfxGain = 9.0F;
+    engine.setEditorConfig(updatedConfig);
+    const auto normalizedConfig = engine.getEditorConfig();
+    const bool normalized =
+        normalizedConfig.settings.sfxConfig.unboundHitSfxGain == 0.0F &&
+        normalizedConfig.settings.sfxConfig.boundHitSfxGain == 2.0F &&
+        nearGain(audio.getKeySoundEffectGroupGain(
+                     MMM::Audio::KeySoundEffectGroup::Unbound),
+                 0.0F) &&
+        nearGain(audio.getKeySoundEffectGroupGain(
+                     MMM::Audio::KeySoundEffectGroup::Bound),
+                 2.0F);
+    engine.setEditorConfig(originalConfig);
+    if ( !synchronized || !normalized ) {
+        XERROR("Editor config did not synchronize global hit sound controls");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证手动跳转取消自然结束后的自动回到开头。
 bool testSeekCancelsPendingRestart()
 {
@@ -267,6 +368,8 @@ int main()
                    testFinishedTimelineRewindsBeforeActivation() &&
                    testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&
+                   testBackgroundSessionCannotControlKeySoundGain() &&
+                   testEditorConfigSynchronizesGlobalKeySoundControls() &&
                    testSeekCancelsPendingRestart()
                ? 0
                : 1;

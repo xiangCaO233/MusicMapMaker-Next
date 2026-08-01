@@ -1,11 +1,10 @@
 #pragma once
 
 #include "audio/AudioTimelineClock.h"
+#include "audio/KeySoundTypes.h"
 #include "audio/StereoGainEnvelope.h"
 #include "config/AudioPlaybackConfig.h"
 #include "mmm/project/AudioResource.h"
-#include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -34,6 +33,7 @@ namespace MMM::Audio
 {
 
 class SoundEffectPool;
+class KeySoundControlBank;
 class AudioTimelineMixerNode;
 class PreparedTimelineAudio;
 struct PreparedTimelineClip;
@@ -155,6 +155,9 @@ struct AudioTimelineLoadResult {
     /// @brief 成功载入调度表的采样物件数量。
     std::size_t loadedClipCount{ 0U };
 
+    /// @brief 本次发布的时间线调度代次；未发布时为零。
+    std::uint64_t scheduleGeneration{ 0U };
+
     /// @brief 因资源缺失而未进入调度表的采样物件数量。
     std::size_t missingClipCount{ 0U };
 
@@ -249,6 +252,13 @@ public:
     /// @brief 判断当前是否存在已构造的时间线时钟。
     [[nodiscard]] bool hasLoadedAudioTimeline() const;
 
+    /// @brief 设置整个玩家打击音区的运行时静音覆盖。
+    /// @param muted 是否静音。
+    void setPlayerKeySoundAreaMuted(bool muted) noexcept;
+
+    /// @brief 查询整个玩家打击音区的运行时静音覆盖。
+    [[nodiscard]] bool isPlayerKeySoundAreaMuted() const noexcept;
+
     /// @brief 设置指定玩家轨道的 Key 音静音状态。
     /// @param trackIndex 零基玩家轨道索引。
     /// @param muted 是否静音。
@@ -259,28 +269,79 @@ public:
     /// @param trackIndex 零基玩家轨道索引。
     /// @return 轨道超出支持范围或未静音时返回 false。
     /// @warning
-    /// 打击判定热路径会读取一个 lock-free 原子字；禁止改为锁或动态容器查询。
+    /// 音效工具 UI 热路径可读取；只允许一次 lock-free 原子字查询。
     [[nodiscard]] bool isPlayerKeySoundTrackMuted(
+        std::uint32_t trackIndex) const noexcept;
+
+    /// @brief 设置指定玩家轨道的 Key 音线性增益。
+    /// @param trackIndex 零基玩家轨道索引。
+    /// @param gain 目标线性增益，限制到 0.0~2.0。
+    void setPlayerKeySoundTrackGain(std::uint32_t trackIndex,
+                                    float         gain) noexcept;
+
+    /// @brief 查询指定玩家轨道的 Key 音线性增益。
+    /// @param trackIndex 零基玩家轨道索引。
+    /// @return 越界轨道返回 1。
+    [[nodiscard]] float getPlayerKeySoundTrackGain(
         std::uint32_t trackIndex) const noexcept;
 
     /// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
     /// @param muted 是否静音。
-    /// @warning 低频控制路径：会复制当前不可变调度表并在音频 block 边界替换。
-    void setBgmKeySoundAreaMuted(bool muted);
+    void setBgmKeySoundAreaMuted(bool muted) noexcept;
 
     /// @brief 查询整个 BGM 轨道区是否已静音。
     [[nodiscard]] bool isBgmKeySoundAreaMuted() const noexcept;
 
+    /// @brief 设置整个 BGM Key 音区的线性增益。
+    /// @param gain 目标线性增益，限制到 0.0~2.0。
+    void setBgmKeySoundAreaGain(float gain) noexcept;
+
+    /// @brief 查询整个 BGM Key 音区的线性增益。
+    [[nodiscard]] float getBgmKeySoundAreaGain() const noexcept;
+
     /// @brief 设置指定 BGM 轨道的 Key 音静音状态。
     /// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
     /// @param muted 是否静音。
-    /// @warning 低频控制路径：会复制当前不可变调度表并在音频 block 边界替换。
-    void setBgmKeySoundTrackMuted(std::uint32_t trackIndex, bool muted);
+    void setBgmKeySoundTrackMuted(std::uint32_t trackIndex,
+                                  bool          muted) noexcept;
 
     /// @brief 查询指定 BGM 轨道是否已静音。
     /// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
     [[nodiscard]] bool isBgmKeySoundTrackMuted(
         std::uint32_t trackIndex) const noexcept;
+
+    /// @brief 设置指定 BGM 轨道的 Key 音线性增益。
+    /// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
+    /// @param gain 目标线性增益，限制到 0.0~2.0。
+    void setBgmKeySoundTrackGain(std::uint32_t trackIndex, float gain) noexcept;
+
+    /// @brief 查询指定 BGM 轨道的 Key 音线性增益。
+    /// @param trackIndex 相对玩家轨道区的零基 BGM 轨道索引。
+    /// @return 越界轨道返回 1。
+    [[nodiscard]] float getBgmKeySoundTrackGain(
+        std::uint32_t trackIndex) const noexcept;
+
+    /// @brief 设置未绑定或绑定打击音效类别的运行时静音覆盖。
+    /// @param group 未绑定或已绑定打击音效类别。
+    /// @param muted 是否静音。
+    void setKeySoundEffectGroupMuted(KeySoundEffectGroup group,
+                                     bool                muted) noexcept;
+
+    /// @brief 查询未绑定或绑定打击音效类别的运行时静音覆盖。
+    /// @param group 未绑定或已绑定打击音效类别。
+    [[nodiscard]] bool isKeySoundEffectGroupMuted(
+        KeySoundEffectGroup group) const noexcept;
+
+    /// @brief 设置未绑定或绑定打击音效类别的线性增益。
+    /// @param group 未绑定或已绑定打击音效类别。
+    /// @param gain 目标线性增益，限制到 0.0~2.0。
+    void setKeySoundEffectGroupGain(KeySoundEffectGroup group,
+                                    float               gain) noexcept;
+
+    /// @brief 查询未绑定或绑定打击音效类别的线性增益。
+    /// @param group 未绑定或已绑定打击音效类别。
+    [[nodiscard]] float getKeySoundEffectGroupGain(
+        KeySoundEffectGroup group) const noexcept;
 
     /// @brief 启用主时间线半开区间循环。
     /// @param startSeconds 循环起点，单位为秒。
@@ -701,9 +762,12 @@ public:
     /// @param volumeFactor 额外音量倍率
     /// @param stereoEnvelope 本次播放的线性双声道增益包络；仅 SDL
     /// 后端应用。
+    /// @param playbackControl 玩家轨道及绑定类别运行时控制；普通 SFX
+    /// 保持默认禁用。
     void playSoundEffectScheduled(
         const std::string& key, double targetTime, float volumeFactor = 1.0f,
-        const StereoGainEnvelope& stereoEnvelope = {});
+        const StereoGainEnvelope&      stereoEnvelope  = {},
+        const KeySoundPlaybackControl& playbackControl = {});
 
     /// @brief 清空并停止所有正在播放和预定的音效
     void clearAllScheduledSoundEffects();
@@ -803,10 +867,6 @@ private:
     /// @brief 刷新自动采样时间线的主总线有效音量。
     void refreshAudioTimelineVolume();
 
-    /// @brief 将 BGM 轨道静音状态应用到当前不可变调度表。
-    /// @warning 低频控制路径：复制片段表并提交一次 block 边界原子替换。
-    void refreshAudioTimelineTrackMutes();
-
     /// @brief 清除主时间拉伸器的历史样本。
     /// @warning
     /// 低频播放控制路径：只写入 lock-free discontinuity 邮箱，禁止每帧调用。
@@ -875,6 +935,9 @@ private:
     /// @brief 当前主音轨文件的规范化绝对路径键。
     std::string m_bgmSyncKey;
 
+    /// @brief UI、逻辑线程和音频线程共享的固定容量 Key 音控制库。
+    std::unique_ptr<KeySoundControlBank> m_keySoundControls;
+
     /// @brief 当前自动采样时间线的唯一传输和混音节点。
     std::shared_ptr<AudioTimelineMixerNode> m_audioTimelineNode;
 
@@ -898,30 +961,6 @@ private:
 
     /// @brief 上次加载时缺失的自动采样片段数量。
     std::size_t m_missingAudioTimelineClipCount{ 0U };
-
-    /// @brief 逐轨 Key 音静音表支持的最大轨道数。
-    static constexpr std::size_t KEY_SOUND_TRACK_LIMIT = 4096U;
-
-    /// @brief 每个静音原子字包含的轨道位数。
-    static constexpr std::size_t KEY_SOUND_TRACKS_PER_WORD = 64U;
-
-    /// @brief 逐轨静音表的原子字数量。
-    static constexpr std::size_t KEY_SOUND_TRACK_WORD_COUNT =
-        KEY_SOUND_TRACK_LIMIT / KEY_SOUND_TRACKS_PER_WORD;
-
-    /// @brief 玩家轨道逐轨静音位图。
-    ///
-    /// @warning UI/逻辑控制线程写入，打击判定热路径读取；每次查询只允许读取一个
-    /// lock-free 原子字。
-    std::array<std::atomic<std::uint64_t>, KEY_SOUND_TRACK_WORD_COUNT>
-        m_playerKeySoundTrackMutes{};
-
-    /// @brief BGM 轨道逐轨静音位图。
-    std::array<std::atomic<std::uint64_t>, KEY_SOUND_TRACK_WORD_COUNT>
-        m_bgmKeySoundTrackMutes{};
-
-    /// @brief 整个 BGM 轨道区的运行时静音覆盖。
-    std::atomic<bool> m_bgmKeySoundAreaMuted{ false };
 
     /// @brief 跨相邻时间线提交复用的资源级 DSP 弱缓存项。
     struct CachedTimelineResourceAudio {

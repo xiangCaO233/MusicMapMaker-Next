@@ -1,5 +1,6 @@
 #include "logic/session/PlaybackController.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
@@ -209,7 +210,7 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 
 /// @brief 应用单条玩家或 BGM 轨道的运行时 Key 音静音状态。
 /// @param cmd 目标区域、轨道索引和静音状态。
-/// @warning 低频 UI 控制路径；BGM 轨道修改会在音频 block 边界替换调度表。
+/// @warning 低频 UI 控制路径；只发布固定大小原子控制状态。
 void PlaybackController::handleCommand(const CmdSetKeySoundTrackMute& cmd)
 {
     if ( !m_ctx.isActiveSession ) return;
@@ -222,9 +223,37 @@ void PlaybackController::handleCommand(const CmdSetKeySoundTrackMute& cmd)
     audio.setPlayerKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
 }
 
+/// @brief 应用单条玩家或 BGM 轨道的运行时 Key 音增益。
+/// @param cmd 目标区域、轨道索引和线性增益。
+/// @warning 低频 UI 控制路径；只发布固定大小原子控制状态。
+void PlaybackController::handleCommand(const CmdSetKeySoundTrackGain& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( cmd.area == KeySoundTrackArea::Bgm ) {
+        audio.setBgmKeySoundTrackGain(cmd.trackIndex, cmd.gain);
+        return;
+    }
+    audio.setPlayerKeySoundTrackGain(cmd.trackIndex, cmd.gain);
+}
+
+/// @brief 应用绑定或未绑定打击音效类别的实时增益。
+/// @param cmd 目标类别和线性增益。
+/// @warning 低频 UI 控制路径；只发布一个固定大小原子控制字。
+void PlaybackController::handleCommand(const CmdSetKeySoundEffectGroupGain& cmd)
+{
+    if ( !m_ctx.isActiveSession ) return;
+
+    const auto group = cmd.group == KeySoundEffectGroup::Bound
+                           ? Audio::KeySoundEffectGroup::Bound
+                           : Audio::KeySoundEffectGroup::Unbound;
+    Audio::AudioManager::instance().setKeySoundEffectGroupGain(group, cmd.gain);
+}
+
 /// @brief 应用整个 BGM 轨道区的运行时 Key 音静音状态。
 /// @param cmd BGM 区静音状态。
-/// @warning 低频 UI 控制路径；会在音频 block 边界替换调度表。
+/// @warning 低频 UI 控制路径；只发布一个固定大小原子控制字。
 void PlaybackController::handleCommand(const CmdSetBgmKeySoundAreaMute& cmd)
 {
     if ( !m_ctx.isActiveSession ) return;

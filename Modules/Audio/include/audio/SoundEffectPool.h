@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/KeySoundTypes.h"
 #include "audio/StereoGainEnvelope.h"
 
 #include <cstddef>
@@ -19,6 +20,7 @@ namespace MMM::Audio
 {
 
 class PreparedTimelineAudio;
+class KeySoundControlBank;
 
 /// @brief 音效预定起播采用的帧时钟域。
 enum class SoundEffectScheduleMode : std::uint8_t {
@@ -59,12 +61,16 @@ public:
 
     /// @brief 构造音效池
     /// @param track 音轨资源
-    SoundEffectPool(std::shared_ptr<ice::AudioTrack> track);
+    /// @param keySoundControls 生命周期覆盖本池的 Key 音控制库。
+    SoundEffectPool(std::shared_ptr<ice::AudioTrack> track,
+                    const KeySoundControlBank* keySoundControls = nullptr);
 
     /// @brief 从已完成资源级 DSP 的只读 PCM 构造音效池。
     /// @param audio 与自动采样时间线共享的预处理 PCM。
+    /// @param keySoundControls 生命周期覆盖本池的 Key 音控制库。
     explicit SoundEffectPool(
-        std::shared_ptr<const PreparedTimelineAudio> audio);
+        std::shared_ptr<const PreparedTimelineAudio> audio,
+        const KeySoundControlBank* keySoundControls = nullptr);
 
     ~SoundEffectPool();
 
@@ -91,19 +97,23 @@ public:
     /// @param referenceReader 无异常、无阻塞、无分配的参考位置读取函数。
     /// @param stereoEnvelope 本次播放的线性双声道增益包络。
     /// @param scheduledDelayFrames 从当前参考位置到目标帧的预计间隔。
+    /// @param playbackControl 玩家轨道与打击音类别的运行时控制。
     void playScheduled(float volumeFactor, std::size_t targetFrame,
-                       const void*               referenceContext,
-                       ReferencePositionReader   referenceReader,
-                       const StereoGainEnvelope& stereoEnvelope,
-                       std::size_t               scheduledDelayFrames);
+                       const void*                    referenceContext,
+                       ReferencePositionReader        referenceReader,
+                       const StereoGainEnvelope&      stereoEnvelope,
+                       std::size_t                    scheduledDelayFrames,
+                       const KeySoundPlaybackControl& playbackControl = {});
 
     /// @brief 按节点输出帧域中的相对延迟播放音效。
     /// @param volumeFactor 本次播放相对资源基础音量的额外倍率。
     /// @param outputDelayFrames 起播前需要经过的设备输出帧数。
     /// @param stereoEnvelope 本次播放的线性双声道增益包络。
-    void playScheduledRelative(float                     volumeFactor,
-                               std::size_t               outputDelayFrames,
-                               const StereoGainEnvelope& stereoEnvelope = {});
+    /// @param playbackControl 玩家轨道与打击音类别的运行时控制。
+    void playScheduledRelative(
+        float volumeFactor, std::size_t outputDelayFrames,
+        const StereoGainEnvelope&      stereoEnvelope  = {},
+        const KeySoundPlaybackControl& playbackControl = {});
 
     /// @brief 停止所有正在播放或预定的音效，并重置状态
     void stopAll();
@@ -153,7 +163,13 @@ private:
 
     /// @brief 与自动采样时间线共享的已预处理 PCM。
     std::shared_ptr<const PreparedTimelineAudio> m_audio;
-    std::shared_ptr<ice::MixBus>                 m_localMixer;
+
+    /// @brief 音频回调读取的稳定 Key 音控制库观察指针。
+    /// @warning AudioManager 持有者生命周期必须覆盖本池及其所有
+    /// 实例；回调每个活跃实例每 block 解引用。
+    const KeySoundControlBank* m_keySoundControls{ nullptr };
+
+    std::shared_ptr<ice::MixBus> m_localMixer;
 
     std::vector<std::shared_ptr<SFXPlayInstance>> m_allInstances;
     std::shared_ptr<SFXPlayInstance>              m_latestInstance;

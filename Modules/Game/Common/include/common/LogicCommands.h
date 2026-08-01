@@ -9,6 +9,7 @@
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include <array>
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
@@ -294,6 +295,12 @@ enum class KeySoundTrackArea : std::uint8_t {
     Bgm      ///< 自动采样 BGM 轨道区。
 };
 
+/// @brief 玩家打击音效的资源绑定类别。
+enum class KeySoundEffectGroup : std::uint8_t {
+    Unbound,  ///< 未绑定音效文件，使用皮肤默认音效。
+    Bound     ///< 已绑定项目音效文件。
+};
+
 /// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音静音状态。
 struct CmdSetKeySoundTrackMute {
     /// @brief 目标轨道区域。
@@ -304,6 +311,27 @@ struct CmdSetKeySoundTrackMute {
 
     /// @brief 是否静音。
     bool muted{ false };
+};
+
+/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音增益。
+struct CmdSetKeySoundTrackGain {
+    /// @brief 目标轨道区域。
+    KeySoundTrackArea area{ KeySoundTrackArea::Player };
+
+    /// @brief 区域内零基轨道索引。
+    std::uint32_t trackIndex{ 0U };
+
+    /// @brief 非负线性增益；音频层负责限制到支持范围。
+    float gain{ 1.0F };
+};
+
+/// @brief 设置一类玩家打击音效的实时线性增益。
+struct CmdSetKeySoundEffectGroupGain {
+    /// @brief 目标资源绑定类别。
+    KeySoundEffectGroup group{ KeySoundEffectGroup::Unbound };
+
+    /// @brief 非负线性增益；音频层负责限制到支持范围。
+    float gain{ 1.0F };
 };
 
 /// @brief 设置整个 BGM 轨道区的运行时 Key 音静音状态。
@@ -722,7 +750,8 @@ using LogicCommand = std::variant<
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
     CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
-    CmdSetKeySoundTrackMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
     CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
     CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
     CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,

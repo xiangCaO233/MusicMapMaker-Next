@@ -1,6 +1,9 @@
+#include "audio/AudioTimelineMixerNode.h"
+#include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "log/colorful-log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -12,6 +15,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <memory>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace
@@ -217,6 +221,109 @@ bool testFinalDrainReturnsVoiceToPool(
     }
     return valid;
 }
+
+/// @brief 验证已排程实例每个输出 block 重新读取轨道和类别控制。
+/// @return 排程后修改增益或静音可在下一 block 生效时返回 true。
+bool testScheduledVoiceReadsLiveKeySoundControls()
+{
+    constexpr std::size_t   BLOCK_FRAMES   = 128U;
+    constexpr std::size_t   TOTAL_FRAMES   = BLOCK_FRAMES * 64U;
+    constexpr std::uint32_t TRACK_INDEX    = 7U;
+    constexpr float         SAMPLE_EPSILON = 2.0e-4F;
+
+    std::vector<std::vector<float>> channels(
+        ice::ICEConfig::internal_format.channels,
+        std::vector<float>(TOTAL_FRAMES));
+    for ( std::size_t channel = 0U; channel < channels.size(); ++channel ) {
+        const float sample = 0.125F * static_cast<float>(channel + 1U);
+        std::fill(channels[channel].begin(), channels[channel].end(), sample);
+    }
+    const auto audio = MMM::Audio::PreparedTimelineAudio::fromOwnedChannels(
+        std::move(channels));
+    if ( !audio ) return false;
+
+    MMM::Audio::KeySoundControlBank controls;
+    controls.setPlayerTrackGain(TRACK_INDEX, 0.5F);
+    controls.setEffectGroupGain(MMM::Audio::KeySoundEffectGroup::Bound, 1.5F);
+    MMM::Audio::SoundEffectPool reference(audio);
+    MMM::Audio::SoundEffectPool controlled(audio, &controls);
+    reference.init(1);
+    controlled.init(1);
+
+    const auto playbackControl = MMM::Audio::KeySoundPlaybackControl{
+        .enabled          = true,
+        .playerTrackIndex = TRACK_INDEX,
+        .effectGroup      = MMM::Audio::KeySoundEffectGroup::Bound,
+    };
+    reference.playScheduledRelative(1.0F, 0U);
+    controlled.playScheduledRelative(1.0F, 0U, {}, playbackControl);
+
+    ice::AudioBuffer referenceBlock(ice::ICEConfig::internal_format,
+                                    BLOCK_FRAMES);
+    ice::AudioBuffer controlledBlock(ice::ICEConfig::internal_format,
+                                     BLOCK_FRAMES);
+    bool             foundAudibleBlock = false;
+    for ( std::size_t block = 0U; block < 32U; ++block ) {
+        reference.getMixer()->process(referenceBlock);
+        controlled.getMixer()->process(controlledBlock);
+
+        float referencePeak = 0.0F;
+        for ( std::size_t channel = 0U; channel < referenceBlock.num_channels();
+              ++channel ) {
+            for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+                referencePeak = std::max(
+                    referencePeak,
+                    std::abs(referenceBlock.raw_ptrs()[channel][frame]));
+                const float expected =
+                    referenceBlock.raw_ptrs()[channel][frame] * 0.75F;
+                if ( std::abs(controlledBlock.raw_ptrs()[channel][frame] -
+                              expected) > SAMPLE_EPSILON ) {
+                    XERROR("Scheduled Key sound gain did not match reference");
+                    return false;
+                }
+            }
+        }
+        if ( referencePeak > SAMPLE_EPSILON ) {
+            foundAudibleBlock = true;
+            break;
+        }
+    }
+    if ( !foundAudibleBlock ) {
+        XERROR("Scheduled Key sound test never produced an audible block");
+        return false;
+    }
+
+    controls.setPlayerTrackMuted(TRACK_INDEX, true);
+    reference.getMixer()->process(referenceBlock);
+    controlled.getMixer()->process(controlledBlock);
+    for ( std::size_t channel = 0U; channel < controlledBlock.num_channels();
+          ++channel ) {
+        for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+            if ( controlledBlock.raw_ptrs()[channel][frame] != 0.0F ) {
+                XERROR("Scheduled Key sound mute leaked into the next block");
+                return false;
+            }
+        }
+    }
+
+    controls.setPlayerTrackMuted(TRACK_INDEX, false);
+    controls.setEffectGroupGain(MMM::Audio::KeySoundEffectGroup::Bound, 0.5F);
+    reference.getMixer()->process(referenceBlock);
+    controlled.getMixer()->process(controlledBlock);
+    for ( std::size_t channel = 0U; channel < controlledBlock.num_channels();
+          ++channel ) {
+        for ( std::size_t frame = 0U; frame < BLOCK_FRAMES; ++frame ) {
+            const float expected =
+                referenceBlock.raw_ptrs()[channel][frame] * 0.25F;
+            if ( std::abs(controlledBlock.raw_ptrs()[channel][frame] -
+                          expected) > SAMPLE_EPSILON ) {
+                XERROR("Scheduled Key sound did not resume with live gain");
+                return false;
+            }
+        }
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 运行绑定采样多声部并发测试。
@@ -242,6 +349,7 @@ int main(int argc, char** argv)
                         testPreviewSpeedScheduleRouting() &&
                         testZeroFrameTrackDoesNotOccupyVoice(samplePath) &&
                         testStopThenImmediatePlayKeepsNewVoice(track) &&
-                        testFinalDrainReturnsVoiceToPool(track);
+                        testFinalDrainReturnsVoiceToPool(track) &&
+                        testScheduledVoiceReadsLiveKeySoundControls();
     return passed ? 0 : 1;
 }

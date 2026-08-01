@@ -21,6 +21,8 @@ class AudioTrack;
 namespace MMM::Audio
 {
 
+class KeySoundControlBank;
+
 /// @brief 下一段时间线输入结束处的语义。
 enum class AudioTimelineInputBoundaryKind : std::uint8_t {
     None,
@@ -147,9 +149,12 @@ public:
     /// 谱面物件决定的排除结束帧；最终结束帧还会
     ///        自动包含所有片段的实际结束位置。
     /// @param maximumProcessFrames 回调内单次缓存读取的最大帧数。
-    AudioTimelineMixerNode(std::vector<PreparedTimelineClip> clips,
-                           AudioTimelineFrame requestedTimelineEndFrame,
-                           std::size_t        maximumProcessFrames);
+    /// @param keySoundControls 生命周期覆盖本节点的运行时 Key 音控制库。
+    AudioTimelineMixerNode(
+        std::vector<PreparedTimelineClip> clips,
+        AudioTimelineFrame                requestedTimelineEndFrame,
+        std::size_t                       maximumProcessFrames,
+        const KeySoundControlBank*        keySoundControls = nullptr);
     /// @brief 回收控制线程延迟释放的调度状态。
     ~AudioTimelineMixerNode() override;
 
@@ -162,12 +167,13 @@ public:
     /// @param clips 已完整缓存的新片段。
     /// @param requestedTimelineEndFrame 谱面物件决定的排除结束帧。
     /// @param maximumProcessFrames 回调内单次缓存读取的最大帧数。
+    /// @return 本次发布的单调调度代次。
     /// @warning
     /// 低频控制路径：允许分配和排序；音频线程只在下一个 block
     /// 起点交换指针，旧状态由控制线程延迟回收。
-    void replaceSchedule(std::vector<PreparedTimelineClip> clips,
-                         AudioTimelineFrame requestedTimelineEndFrame,
-                         std::size_t        maximumProcessFrames);
+    std::uint64_t replaceSchedule(std::vector<PreparedTimelineClip> clips,
+                                  AudioTimelineFrame requestedTimelineEndFrame,
+                                  std::size_t        maximumProcessFrames);
 
     /// @brief 在非实时控制线程释放全部已由音频线程退役的调度状态。
     /// @return 本次完成释放的调度状态数量。
@@ -390,6 +396,11 @@ private:
 
     /// @brief 请求播放命令并发布一个完整序列锁写入。
     void requestPlaybackCommand(PlaybackCommand command) noexcept;
+
+    /// @brief 运行时 BGM 区域与逐轨控制的稳定观察指针。
+    /// @warning AudioManager 持有者生命周期必须覆盖本节点；音频回调
+    /// 每个活跃片段每 block 解引用，禁止替换为共享所有权。
+    const KeySoundControlBank* m_keySoundControls{ nullptr };
 
     /// @brief 当前只由音频线程访问的调度状态。
     ScheduleState* m_scheduleState{ nullptr };
