@@ -1338,6 +1338,43 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                     ImGui::EndDragDropSource();
                 }
+                if ( isProjectAudioResource ) {
+                    const std::string contextMenuId =
+                        fmt::format("AudioTrackContext_{}_{}_{}",
+                                    rowData.m_id,
+                                    rowData.m_path,
+                                    rowIndex);
+                    if ( ImGui::BeginPopupContextItem(
+                             contextMenuId.c_str(),
+                             ImGuiPopupFlags_MouseButtonRight) ) {
+                        auto changeTrackType = [&](AudioTrackType targetType,
+                                                   const char*    label) {
+                            const bool selected = rowData.m_type == targetType;
+                            if ( ::MMM::UI::FeedbackMenuItem(
+                                     label, nullptr, selected) &&
+                                 !selected ) {
+                                m_audioTableSortCacheDirty = true;
+                                engine.pushCommand(
+                                    Logic::CmdUpdateAudioResource{
+                                        rowData.m_id, targetType });
+                            }
+                        };
+                        changeTrackType(
+                            AudioTrackType::Main,
+                            TR("ui.audio_manager.type_main_track").data());
+                        changeTrackType(
+                            AudioTrackType::Effect,
+                            TR("ui.audio_manager.type_project_sfx").data());
+
+                        ImGui::Separator();
+                        if ( ::MMM::UI::FeedbackMenuItem(
+                                 TR("ui.audio_manager.remove_track").data()) ) {
+                            m_removeTrackId   = rowData.m_id;
+                            m_openRemoveModal = true;
+                        }
+                        ImGui::EndPopup();
+                    }
+                }
                 if ( clicked ) {
                     const auto controllerType =
                         rowData.m_type == AudioTrackType::Main
@@ -1347,12 +1384,6 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         rowData.m_id, rowData.m_id, controllerType);
                 }
 
-                if ( hovered && isProjectAudioResource &&
-                     ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
-                    m_manageTrackId   = rowData.m_id;
-                    m_manageTrackType = rowData.m_type;
-                    m_openManageModal = true;
-                }
                 if ( hovered ) {
                     std::string tooltipText =
                         fmt::format("{}\n{}: {}",
@@ -1813,193 +1844,31 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     bottomBtnHBox.renderInCurrent(
         btnPos, { layoutContext.m_avail.x, layoutMetrics.importButtonHeight });
 
-    // --- 5. 音轨管理窗口 ---
-    bool showManageModal = !m_manageTrackId.empty();
-    if ( showManageModal ) {
-        std::string windowTitle =
-            fmt::format("{} {}###AudioTrackManageWindow",
-                        TR("ui.audio_manager.manage_title").data(),
-                        m_manageTrackId);
-        if ( m_openManageModal ) {
-            ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
-            m_openManageModal = false;
-        }
-        Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
-        const bool                     manageWindowOpened =
-            manageWindowScope.begin(windowTitle.c_str(),
-                                    &showManageModal,
-                                    ImGuiWindowFlags_NoCollapse,
-                                    { 420 * dpiScale, 0.0f });
-        bool closeManageModal = !showManageModal;
-        if ( manageWindowOpened ) {
-            // --- 使用 Clay 重构对话框内容 ---
-            CLayVBox    modalLayout;
-            const auto& modalStyle = ImGui::GetStyle();
-            float       padding =
-                std::max(16.0f * dpiScale, modalStyle.WindowPadding.x);
-            const float modalGap =
-                std::max(12.0f * dpiScale, modalStyle.ItemSpacing.y);
-            const float rowGap =
-                std::max(8.0f * dpiScale, modalStyle.ItemSpacing.x);
-            const float modalButtonH =
-                std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
-            const float modalComboH =
-                std::max(28.0f * dpiScale, ImGui::GetFrameHeight());
-            const float typeLabelW =
-                std::max(100.0f * dpiScale,
-                         measureAudioManagerText(
-                             TR("ui.audio_manager.track_type").data()) +
-                             modalStyle.FramePadding.x * 2.0f);
-            const float removeButtonW =
-                std::max(140.0f * dpiScale,
-                         measureAudioManagerText(
-                             TR("ui.audio_manager.remove_track").data()) +
-                             modalStyle.FramePadding.x * 2.0f);
-            const float cancelButtonW = std::max(
-                100.0f * dpiScale,
-                measureAudioManagerText(TR("ui.common.cancel").data()) +
-                    modalStyle.FramePadding.x * 2.0f);
-            const uint16_t modalPaddingPx = toLayoutPixels(padding);
-            const uint16_t modalGapPx     = toLayoutPixels(modalGap);
-            const uint16_t rowGapPx       = toLayoutPixels(rowGap);
-            modalLayout.setPadding(
-                modalPaddingPx, modalPaddingPx, modalPaddingPx, modalPaddingPx);
-            modalLayout.setSpacing(modalGapPx);
-
-            // 1. 标题与分隔线 (移除了冗余的 Text，仅保留分隔线)
-            modalLayout.addElement(
-                "ModalSep1",
-                Sizing::Grow(),
-                Sizing::Fixed(1),
-                [=, this](Clay_BoundingBox r, bool) {
-                    ImGui::GetWindowDrawList()->AddLine(
-                        { r.x, r.y },
-                        { r.x + r.width, r.y },
-                        ImGui::GetColorU32(ImGuiCol_Separator));
-                });
-
-            // 2. 配置项 (音轨类型)
-            CLayHBox typeRow;
-            typeRow.setAlignment(Alignment::Center());
-            typeRow.setSpacing(rowGapPx);
-            typeRow.addElement(
-                "TypeLabel",
-                Sizing::Fixed(typeLabelW),
-                Sizing::Grow(),
-                [=, this](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%s:",
-                                TR("ui.audio_manager.track_type").data());
-                });
-            typeRow.addElement(
-                "TypeCombo",
-                Sizing::Grow(),
-                Sizing::Fixed(modalComboH),
-                [=, this, &engine](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    int currentType =
-                        (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
-                    const char* typeNames[] = { "Main", "Effect" };
-                    ImGui::SetNextItemWidth(r.width);
-                    if ( ::MMM::UI::FeedbackCombo(
-                             "##TrackType", &currentType, typeNames, 2) ) {
-                        m_manageTrackType =
-                            (currentType == 0 ? AudioTrackType::Main
-                                              : AudioTrackType::Effect);
-                        m_audioTableSortCacheDirty = true;
-                        engine.pushCommand(Logic::CmdUpdateAudioResource{
-                            m_manageTrackId, m_manageTrackType });
-                    }
-                });
-            modalLayout.addLayout("TypeRow",
-                                  typeRow,
-                                  Sizing::Grow(),
-                                  Sizing::Fixed(modalButtonH));
-
-            modalLayout.addElement(
-                "ModalSep2",
-                Sizing::Grow(),
-                Sizing::Fixed(1),
-                [=, this](Clay_BoundingBox r, bool) {
-                    ImGui::GetWindowDrawList()->AddLine(
-                        { r.x, r.y },
-                        { r.x + r.width, r.y },
-                        ImGui::GetColorU32(ImGuiCol_Separator));
-                });
-
-            // 3. 操作按钮
-            CLayHBox btnRow;
-            btnRow.setAlignment(Alignment::Center());
-            btnRow.setSpacing(modalGapPx);
-            btnRow.addElement(
-                "RemoveBtn",
-                Sizing::Fixed(removeButtonW),
-                Sizing::Fixed(modalButtonH),
-                [=](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ::MMM::UI::FeedbackButton(
-                             TR("ui.audio_manager.remove_track").data(),
-                             { r.width, r.height }) ) {
-                        ::MMM::UI::FeedbackOpenPopup("RemoveTrackConfirm");
-                    }
-                });
-            btnRow.addElement(
-                "CancelBtn",
-                Sizing::Fixed(cancelButtonW),
-                Sizing::Fixed(modalButtonH),
-                [=, this, &closeManageModal](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ::MMM::UI::FeedbackButton(
-                             TR("ui.common.cancel").data(),
-                             { r.width, r.height }) ) {
-                        closeManageModal = true;
-                    }
-                });
-            modalLayout.addLayout(
-                "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(modalButtonH));
-
-            // 渲染布局
-            // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算
-            ImVec2 modalSize = modalLayout.renderInCurrent(
-                ImGui::GetCursorScreenPos(),
-                { ImGui::GetContentRegionAvail().x, 0 });
-            ImGui::Dummy(modalSize);
-
-            // 二次确认弹窗
-            {
-                Utils::CenteredModalPopupScope removeModalScope(dpiScale);
-                if ( removeModalScope.begin("RemoveTrackConfirm") ) {
-                    ImGui::Text("%s",
-                                TR("ui.audio_manager.remove_confirm").data());
-                    ImGui::Spacing();
-                    if ( ::MMM::UI::FeedbackButton(
-                             TR("ui.common.confirm").data(),
-                             { 100 * dpiScale, 0 }) ) {
-                        m_audioTableSortCacheDirty = true;
-                        engine.pushCommand(
-                            Logic::CmdRemoveAudioResource{ m_manageTrackId });
-                        closeManageModal = true;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::SameLine();
-                    if ( ::MMM::UI::FeedbackButton(
-                             TR("ui.common.cancel").data(),
-                             { 100 * dpiScale, 0 }) ) {
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
-                }
+    // --- 5. 移除音轨二次确认 ---
+    if ( m_openRemoveModal ) {
+        ::MMM::UI::FeedbackOpenPopup("RemoveTrackConfirm");
+        m_openRemoveModal = false;
+    }
+    if ( !m_removeTrackId.empty() ) {
+        Utils::CenteredModalPopupScope removeModalScope(dpiScale);
+        if ( removeModalScope.begin("RemoveTrackConfirm") ) {
+            ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());
+            ImGui::Spacing();
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.confirm").data(),
+                                           { 100 * dpiScale, 0 }) ) {
+                m_audioTableSortCacheDirty = true;
+                engine.pushCommand(
+                    Logic::CmdRemoveAudioResource{ m_removeTrackId });
+                m_removeTrackId.clear();
+                ImGui::CloseCurrentPopup();
             }
-
-            if ( closeManageModal ) {
-                showManageModal = false;
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           { 100 * dpiScale, 0 }) ) {
+                m_removeTrackId.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
-        }
-        if ( !showManageModal ) {
-            m_manageTrackId.clear();
         }
     }
 

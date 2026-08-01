@@ -299,10 +299,11 @@ private:
     /// @brief 输出设备列表是否需要重新枚举。
     bool m_outputDevicesDirty{ true };
 
-    // --- 音轨管理相关 ---
-    std::string    m_manageTrackId;
-    AudioTrackType m_manageTrackType;
-    bool           m_openManageModal{ false };
+    /// @brief 等待移除确认的项目音轨 ID。
+    std::string m_removeTrackId;
+
+    /// @brief 下一帧是否打开移除音轨确认窗口。
+    bool m_openRemoveModal{ false };
 
     // --- 布局池 (用于避免热路径堆分配) ---
     std::deque<CLayHBox> m_settingRows;
