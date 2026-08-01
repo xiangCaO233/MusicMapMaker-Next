@@ -1896,8 +1896,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 "TypeCombo",
                 Sizing::Grow(),
                 Sizing::Fixed(modalComboH),
-                [=, this, &engine, &closeManageModal](Clay_BoundingBox r,
-                                                      bool) {
+                [=, this, &engine](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     int currentType =
                         (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
@@ -1911,7 +1910,6 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(Logic::CmdUpdateAudioResource{
                             m_manageTrackId, m_manageTrackType });
-                        closeManageModal = true;
                     }
                 });
             modalLayout.addLayout("TypeRow",
