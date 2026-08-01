@@ -467,8 +467,8 @@ void test_audio_node_uses_canonical_fields()
                 "first BGM track should immediately follow four key tracks");
     TEST_ASSERT(audioNode->value("offset", -1.0) == 0.0,
                 "audio sample should keep zero offset");
-    TEST_ASSERT(audioNode->value("vol", -1.0) == 100.0,
-                "unit volume should serialize as 100");
+    TEST_ASSERT(audioNode->value("vol", -1.0) == 0.0,
+                "unit volume should serialize as neutral gain 0");
     TEST_ASSERT(!audioNode->contains("column"),
                 "audio sample must not use playable column");
 
@@ -586,7 +586,7 @@ void test_sound_track_does_not_expand_key_count()
     soundNote["type"]   = 1;
     soundNote["sound"]  = "audio.ogg";
     soundNote["offset"] = 0;
-    soundNote["vol"]    = 100;
+    soundNote["vol"]    = 0;
 
     fileData["note"] = json::array({ gameNote, soundNote });
 
@@ -643,25 +643,25 @@ void test_multiple_sound_objects_round_trip_without_global_shift()
     json playableNote{ { "beat", json::array({ 4, 0, 1 }) },
                        { "column", 2 },
                        { "sound", "hit.wav" },
-                       { "vol", 65 } };
+                       { "vol", -35 } };
     json earlyStem{ { "beat", json::array({ 1, 0, 1 }) },
                     { "type", 1.0 },
                     { "sound", "stem.ogg" },
                     { "offset", -125 },
                     { "x", 4 },
-                    { "vol", 80 } };
+                    { "vol", -20 } };
     json delayedEffect{ { "beat", json::array({ 2, 0, 1 }) },
                         { "type", "SOUND" },
                         { "sound", "effect.wav" },
                         { "offset", 250 },
                         { "x", 5 },
-                        { "vol", 35 } };
+                        { "vol", -65 } };
     json sameBeatLayer{ { "beat", json::array({ 2, 0, 1 }) },
                         { "type", 1 },
                         { "sound", "layer.wav" },
                         { "offset", 0 },
                         { "x", 5 },
-                        { "vol", 100 } };
+                        { "vol", 16 } };
     fileData["note"] =
         json::array({ playableNote, earlyStem, delayedEffect, sameBeatLayer });
 
@@ -733,8 +733,10 @@ void test_multiple_sound_objects_round_trip_without_global_shift()
                 "effect should remain on second BGM track");
     TEST_ASSERT(std::abs(effect->m_volume - 0.35F) < 1e-6F,
                 "effect volume should be normalized");
-    TEST_ASSERT(findSample("layer.wav") != nullptr,
-                "same-beat sample must not be deduplicated");
+    const MMM::AudioSampleEvent* layer = findSample("layer.wav");
+    TEST_ASSERT(layer != nullptr, "same-beat sample must not be deduplicated");
+    TEST_ASSERT(std::abs(layer->m_volume - 1.16F) < 1e-6F,
+                "positive Malody gain should increase internal volume");
 
     TEST_ASSERT(loaded.saveToFile(exportPath),
                 "multiple automatic samples should export");
@@ -752,9 +754,27 @@ void test_multiple_sound_objects_round_trip_without_global_shift()
                     "all exported automatic samples should keep BGM track x");
         TEST_ASSERT(!node.contains("column"),
                     "automatic samples must not use playable column");
+        const std::string sound = node.value("sound", "");
+        if ( sound == "stem.ogg" ) {
+            TEST_ASSERT(node.value("vol", 0) == -20,
+                        "80% internal volume should export as -20 gain");
+        } else if ( sound == "effect.wav" ) {
+            TEST_ASSERT(node.value("vol", 0) == -65,
+                        "35% internal volume should export as -65 gain");
+        } else if ( sound == "layer.wav" ) {
+            TEST_ASSERT(node.value("vol", 0) == 16,
+                        "116% internal volume should export as +16 gain");
+        }
     }
     TEST_ASSERT(canonicalSampleCount == 3,
                 "export should preserve every automatic sample");
+    const auto playableOutput = std::find_if(
+        exported["note"].begin(), exported["note"].end(), [](const json& node) {
+            return node.value("sound", "") == "hit.wav";
+        });
+    TEST_ASSERT(playableOutput != exported["note"].end() &&
+                    playableOutput->value("vol", 0) == -35,
+                "65% bound-note volume should export as -35 gain");
 
     MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
     TEST_ASSERT(reloaded.m_audioSamples.size() == 3,
@@ -1051,13 +1071,13 @@ void test_invalid_sample_track_and_song_hint_conflict()
                                        { "column", 0 },
                                        { "type", 0 },
                                        { "sound", "audio/shared.wav" },
-                                       { "vol", 55 } },
+                                       { "vol", -45 } },
                                      { { "beat", json::array({ 2, 0, 1 }) },
                                        { "type", 1 },
                                        { "sound", "effect.wav" },
                                        { "offset", -20 },
                                        { "x", 2 },
-                                       { "vol", 90 } } });
+                                       { "vol", -10 } } });
 
     std::ofstream source(sourcePath);
     TEST_ASSERT(source.good(), "should open invalid sample input");
@@ -1157,7 +1177,7 @@ void testEditedSampleTimestampOverridesImportedBeat()
                                        { "sound", "stem.ogg" },
                                        { "offset", 0 },
                                        { "x", 4 },
-                                       { "vol", 100 } } });
+                                       { "vol", 0 } } });
 
     std::ofstream source(sourcePath);
     TEST_ASSERT(source.good(), "should open moved sample input");
@@ -1241,6 +1261,10 @@ void testStringBpmInNearlyEmptyMapLoads()
                 "string BPM should become preferred BPM");
     TEST_ASSERT(reloaded.m_allNotes.size() == 1,
                 "SOUND node should not become a playable note");
+    TEST_ASSERT(
+        reloaded.m_audioSamples.size() == 1 &&
+            std::abs(reloaded.m_audioSamples.front().m_volume - 1.0F) < 1e-6F,
+        "missing Malody gain should default to unit volume");
 
     XINFO("PASS: Nearly empty Malody map with string BPM loaded");
 }

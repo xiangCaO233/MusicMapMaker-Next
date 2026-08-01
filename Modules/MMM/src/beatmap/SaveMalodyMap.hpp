@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MalodyVolume.h"
+
 #include "mmm/beatmap/MalodyMode.h"
 
 #include "config/Utf8Path.h"
@@ -867,8 +869,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             nj.erase("vol");
         } else {
             nj["sound"] = binding->m_audioResourceId;
-            nj["vol"]   = static_cast<std::int64_t>(
-                std::llround(binding->m_volume * 100));
+            nj["vol"] = Internal::volumeToMalodyGainPercent(binding->m_volume);
         }
         return nj;
     };
@@ -900,7 +901,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         sampleJson["offset"] = sample.m_offsetMs;
         sampleJson["x"]      = sample.m_track;
         sampleJson["vol"] =
-            static_cast<std::int64_t>(std::llround(sample.m_volume * 100));
+            Internal::volumeToMalodyGainPercent(sample.m_volume);
         return sampleJson;
     };
 

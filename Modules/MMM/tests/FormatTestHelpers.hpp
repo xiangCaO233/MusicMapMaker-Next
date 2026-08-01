@@ -532,8 +532,7 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         if ( lhsSound != rhsSound ) {
                             return lhsSound < rhsSound;
                         }
-                        return lhs.value("vol", 100.0) <
-                               rhs.value("vol", 100.0);
+                        return lhs.value("vol", 0.0) < rhs.value("vol", 0.0);
                     });
                 return array;
             };
@@ -567,8 +566,7 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         if ( std::abs(lhsOffset - rhsOffset) > 1e-5 ) {
                             return lhsOffset < rhsOffset;
                         }
-                        return lhs.value("vol", 100.0) <
-                               rhs.value("vol", 100.0);
+                        return lhs.value("vol", 0.0) < rhs.value("vol", 0.0);
                     });
                 return array;
             };
@@ -619,8 +617,8 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                     playableOk = false;
                 } else if ( original.value("sound", std::string{}) !=
                                 exported.value("sound", std::string{}) ||
-                            std::abs(original.value("vol", 100.0) -
-                                     exported.value("vol", 100.0)) > 1e-3 ) {
+                            std::abs(original.value("vol", 0.0) -
+                                     exported.value("vol", 0.0)) > 1e-3 ) {
                     XERROR(
                         "Playable note mismatch at index {}: sample binding "
                         "differs",
@@ -661,8 +659,8 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         exported.value("sound", std::string{}) &&
                     std::abs(original.value("offset", 0.0) -
                              exported.value("offset", 0.0)) <= 1e-3 &&
-                    std::abs(original.value("vol", 100.0) -
-                             exported.value("vol", 100.0)) <= 1e-3;
+                    std::abs(original.value("vol", 0.0) -
+                             exported.value("vol", 0.0)) <= 1e-3;
                 if ( !canonicalType || !canonicalTrack ||
                      exported.contains("column") || !matchingExplicitTrack ||
                      !matchingFields ) {

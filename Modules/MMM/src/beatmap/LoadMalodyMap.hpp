@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MalodyVolume.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
@@ -549,8 +551,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
                 sample.m_audioResourceId =
                     soundIt->get_ref<const std::string&>();
-                sample.m_volume = static_cast<float>(
-                    readMalodyJsonDouble(n, "vol", 100.0) / 100.0);
+                sample.m_volume = Internal::malodyGainPercentToVolume(
+                    readMalodyJsonDouble(n, "vol", 0.0));
 
                 auto& props =
                     sample.m_metadata
@@ -795,8 +797,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                      sound != n.end() && sound->is_string() ) {
                     notePtr->setSampleBinding(
                         { sound->get_ref<const std::string&>(),
-                          static_cast<float>(
-                              readMalodyJsonDouble(n, "vol", 100.0) / 100.0) });
+                          Internal::malodyGainPercentToVolume(
+                              readMalodyJsonDouble(n, "vol", 0.0)) });
                 }
 
                 auto& props = notePtr->m_metadata
