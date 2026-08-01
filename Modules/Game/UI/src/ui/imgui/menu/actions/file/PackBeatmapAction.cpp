@@ -518,6 +518,15 @@ struct PackageBeatmapInfo {
     bool hasStoreModeExtEligibleElements{ false };
 };
 
+/// @brief 等待按单谱面批量解析的音频引用。
+struct PackageAudioReference {
+    /// @brief 谱面中保存的音频资源 ID 或路径。
+    std::string m_audioReference;
+
+    /// @brief 缺失依赖诊断使用的引用字段名称。
+    std::string m_fieldLabel;
+};
+
 /// @brief 将单个 metadata 资源路径解析并追加到依赖列表。
 /// @param dependencies 依赖路径列表。
 /// @param projectRoot 项目根目录。
@@ -537,31 +546,19 @@ void appendPackageMetadataDependency(std::vector<std::string>&    dependencies,
         dependencies, makePackageProjectRelativeUtf8(projectRoot, resolved));
 }
 
-/// @brief 解析并追加一个谱面音频资源引用。
-/// @param result 接收依赖或缺失诊断的谱面扫描结果。
-/// @param project 当前项目。
-/// @param beatmapRelativePath 引用所在谱面的项目相对路径。
+/// @brief 暂存一个待批量解析的谱面音频资源引用。
+/// @param references 接收引用及诊断字段的列表。
 /// @param audioReference 谱面保存的音频资源 ID 或路径。
 /// @param fieldLabel 引用字段的人类可读名称。
-void appendPackageAudioResourceDependency(
-    PackageBeatmapInfo& result, const Project& project,
-    const std::string& beatmapRelativePath, const std::string& audioReference,
-    std::string_view fieldLabel)
+void appendPackageAudioReference(std::vector<PackageAudioReference>& references,
+                                 const std::string& audioReference,
+                                 std::string_view   fieldLabel)
 {
     if ( audioReference.empty() ) return;
-    const auto* resource =
-        Logic::ProjectResourceService::findAudioResourceForReference(
-            project, Config::utf8ToPath(beatmapRelativePath), audioReference);
-    if ( resource && !resource->m_path.empty() ) {
-        appendUniquePackageDependency(
-            result.dependencyRelativePaths,
-            normalizePackageRelativeUtf8(resource->m_path));
-        return;
-    }
-
-    const std::string diagnostic =
-        std::string(fieldLabel) + ": " + audioReference;
-    appendUniquePackageDependency(result.unresolvedAudioReferences, diagnostic);
+    references.push_back(PackageAudioReference{
+        .m_audioReference = audioReference,
+        .m_fieldLabel     = std::string(fieldLabel),
+    });
 }
 
 /// @brief 收集一个谱面打包时需要的资源和元素信息。
@@ -595,15 +592,18 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         !beatMap.m_noteData.flicks.empty() ||
         !beatMap.m_noteData.polylines.empty();
 
+    std::vector<PackageAudioReference> audioReferences;
+    audioReferences.reserve(
+        beatMap.m_noteData.notes.size() + beatMap.m_noteData.holds.size() +
+        beatMap.m_noteData.flicks.size() + beatMap.m_noteData.polylines.size() +
+        beatMap.m_audioSamples.size());
+
     /// @brief 收集一个玩家物件绑定的采样资源。
     auto appendNoteBinding = [&](const Note& note) {
         const auto binding = note.getSampleBinding();
         if ( !binding ) return;
-        appendPackageAudioResourceDependency(result,
-                                             project,
-                                             normalizedBeatmapPath,
-                                             binding->m_audioResourceId,
-                                             "Note sample");
+        appendPackageAudioReference(
+            audioReferences, binding->m_audioResourceId, "Note sample");
     };
     for ( const auto& note : beatMap.m_noteData.notes ) {
         appendNoteBinding(note);
@@ -618,11 +618,33 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         appendNoteBinding(polyline);
     }
     for ( const auto& sample : beatMap.m_audioSamples ) {
-        appendPackageAudioResourceDependency(result,
-                                             project,
-                                             normalizedBeatmapPath,
-                                             sample.m_audioResourceId,
-                                             "audio_samples");
+        appendPackageAudioReference(
+            audioReferences, sample.m_audioResourceId, "audio_samples");
+    }
+
+    std::vector<std::string_view> audioReferenceViews;
+    audioReferenceViews.reserve(audioReferences.size());
+    for ( const auto& reference : audioReferences ) {
+        audioReferenceViews.push_back(reference.m_audioReference);
+    }
+    const auto resolvedResources =
+        Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project,
+            Config::utf8ToPath(normalizedBeatmapPath),
+            audioReferenceViews);
+    for ( std::size_t index = 0; index < audioReferences.size(); ++index ) {
+        const auto* resource = resolvedResources[index];
+        if ( resource && !resource->m_path.empty() ) {
+            appendUniquePackageDependency(
+                result.dependencyRelativePaths,
+                normalizePackageRelativeUtf8(resource->m_path));
+            continue;
+        }
+
+        const auto& reference = audioReferences[index];
+        appendUniquePackageDependency(
+            result.unresolvedAudioReferences,
+            reference.m_fieldLabel + ": " + reference.m_audioReference);
     }
 
     appendPackageMetadataDependency(result.dependencyRelativePaths,

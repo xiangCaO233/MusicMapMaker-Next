@@ -51,8 +51,8 @@ struct PackageSupportedFileTypes {
 };
 
 /// @brief MCZ 支持的音频扩展名。
-inline constexpr std::array<std::string_view, 2> MCZ_PACKAGE_AUDIO_EXTENSIONS{
-    ".ogg", ".mp3"
+inline constexpr std::array<std::string_view, 3> MCZ_PACKAGE_AUDIO_EXTENSIONS{
+    ".ogg", ".mp3", ".wav"
 };
 
 /// @brief MCZ 支持的视频扩展名。

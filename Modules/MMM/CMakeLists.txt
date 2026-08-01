@@ -96,3 +96,8 @@ target_link_libraries(BeatmapSpeedTransformTest PRIVATE MMM Log)
 add_test(NAME Test_Beatmap_Speed_Transform
          COMMAND BeatmapSpeedTransformTest "${MMM_TEST_RESOURCE_DIR}/ma"
                  "${TEST_OUTPUT_DIR}/speed_transform_coverage")
+
+# 打包文件类型测试覆盖各目标格式的资源候选与写入扩展名规则。
+mmm_add_test_executable(MMM PackageFileTypesTest tests/PackageFileTypesTest.cpp)
+target_link_libraries(PackageFileTypesTest PRIVATE MMM Log)
+add_test(NAME Test_Package_File_Types COMMAND PackageFileTypesTest)
