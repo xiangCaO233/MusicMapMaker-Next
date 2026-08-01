@@ -5,6 +5,7 @@
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include <array>
@@ -437,6 +438,9 @@ struct CmdSaveBeatmap {
  * @brief 另存为谱面指令
  */
 struct CmdSaveBeatmapAs {
+    /// @brief 导出 MC 时临时覆盖的 Malody 模式；其它格式忽略。
+    std::optional<MMM::MalodyMode> malodyExportMode;
+
     /// @brief 导出 MC 时是否写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
@@ -471,6 +475,9 @@ struct CmdPackBeatmap {
 
     /// @brief MCZ 打包时是否为写出的 MC 谱面写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
+
+    /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
+    std::optional<MMM::MalodyMode> malodyExportMode;
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;

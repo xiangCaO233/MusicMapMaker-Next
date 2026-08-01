@@ -680,6 +680,13 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFileSelectionWindow(float dpiScale);
 
+    /// @brief 继续执行打包元数据补充或输出路径选择流程。
+    void continuePackageOutputFlow();
+
+    /// @brief 渲染 MCZ Key 模式自动转换兼容性警告。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageCompatibilityWarningPopup(float dpiScale);
+
     /// @brief 为选中的谱面准备打包转换前的元数据补充项。
     /// @param selectedRelativePaths 当前已选的项目相对路径列表。
     /// @return 需要展示补充窗口时返回 true。
@@ -775,6 +782,7 @@ void PackBeatmapAction::renderDeferred(MainMenuContext& context)
     m_statusMessageSink = &context.statusMessageSink;
     renderPackageFormatPickerPopup(context.dpiScale);
     renderPackageFileSelectionWindow(context.dpiScale);
+    renderPackageCompatibilityWarningPopup(context.dpiScale);
     renderPackageBeatmapMetadataWindow(context.dpiScale);
     renderPackageOutputFileDialog(context.dpiScale);
     renderPackageOverwriteWarningPopup(context.dpiScale);
@@ -825,10 +833,15 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
             shouldShowLegacyImdPackageOption(m_package.selectedFileType) &&
             m_package.includeLegacyImdBeatmaps,
         .addStoreModeExtForMalodyExport =
+            m_package.selectedMalodyMode == MalodyMode::Slide &&
             hasSelectedPackageStoreModeExtCandidates() &&
             Config::AppConfig::instance()
                 .getEditorSettings()
                 .autoAddStoreModeExtForMalodyExport,
+        .malodyExportMode =
+            m_package.selectedFileType == PackageFileType::Mcz
+                ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
+                : std::nullopt,
         .metadataOverrides = m_package.pendingMetadataOverrides,
     });
     m_package.pendingRelativePaths.clear();
@@ -951,6 +964,23 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 selectedCount,
                 static_cast<int>(m_package.candidateFiles.size()));
 
+            if ( m_package.selectedFileType == PackageFileType::Mcz ) {
+                ImGui::TextUnformatted("打包模式：");
+                ImGui::SameLine();
+                const bool selectedKey =
+                    m_package.selectedMalodyMode == MalodyMode::Key;
+                if ( ::MMM::UI::FeedbackRadioButton("Key 模式", selectedKey) ) {
+                    m_package.selectedMalodyMode = MalodyMode::Key;
+                }
+                ImGui::SameLine();
+                const bool selectedSlide =
+                    m_package.selectedMalodyMode == MalodyMode::Slide;
+                if ( ::MMM::UI::FeedbackRadioButton("Slide 模式",
+                                                    selectedSlide) ) {
+                    m_package.selectedMalodyMode = MalodyMode::Slide;
+                }
+            }
+
             const ImVec2 selectButtonSize(88.0f * dpiScale, 0.0f);
             if ( ::MMM::UI::FeedbackButton("全选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
@@ -1004,7 +1034,8 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 hasPackageStoreModeExtCandidates();
             const bool hasSelectedStoreModeExtCandidates =
                 hasSelectedPackageStoreModeExtCandidates();
-            if ( hasAnyStoreModeExtCandidates ) {
+            if ( hasAnyStoreModeExtCandidates &&
+                 m_package.selectedMalodyMode == MalodyMode::Slide ) {
                 constexpr const char* storeModeExtLabel =
                     "自动添加上架皮肤 mode_ext";
                 sameLineIfItemFits(getCheckboxDisplayWidth(storeModeExtLabel));
@@ -1156,9 +1187,10 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
             if ( ::MMM::UI::FeedbackButton("打包到...", footerButtonSize) ) {
                 m_package.pendingRelativePaths =
                     collectSelectedPackageRelativePaths();
-                if ( preparePackageBeatmapMetadataEdits(
-                         m_package.pendingRelativePaths) ) {
-                    m_package.showBeatmapMetadataWindow = true;
+                if ( m_package.selectedFileType == PackageFileType::Mcz &&
+                     m_package.selectedMalodyMode == MalodyMode::Key &&
+                     hasSelectedPackageStoreModeExtCandidates() ) {
+                    m_package.showMalodyCompatibilityWarning = true;
                 } else {
                     requestOutputPicker = true;
                 }
@@ -1181,7 +1213,75 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
     }
 
     if ( requestOutputPicker ) {
-        openPackageOutputFilePicker();
+        continuePackageOutputFlow();
+    }
+}
+
+/// @brief 继续执行打包元数据补充或输出路径选择流程。
+void PackBeatmapAction::continuePackageOutputFlow()
+{
+    if ( preparePackageBeatmapMetadataEdits(m_package.pendingRelativePaths) ) {
+        m_package.showBeatmapMetadataWindow = true;
+        return;
+    }
+    openPackageOutputFilePicker();
+}
+
+/// @brief 渲染 MCZ Key 模式自动转换兼容性警告。
+/// @param dpiScale 当前窗口内容缩放。
+void PackBeatmapAction::renderPackageCompatibilityWarningPopup(float dpiScale)
+{
+    constexpr const char* popupId =
+        "谱面兼容性警告###PackageMalodyCompatibilityWarningModal";
+    if ( m_package.showMalodyCompatibilityWarning ) {
+        ::MMM::UI::FeedbackOpenPopup(popupId);
+        m_package.showMalodyCompatibilityWarning = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    bool continuePacking = false;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextUnformatted("以 Key 模式打包前需要确认自动转换：");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            MenuUtil::drawWrappedBulletText(
+                "所选谱面包含 Flick 或 Polyline，而 Malody Key(0) "
+                "模式无法直接存储这些物件。");
+            MenuUtil::drawWrappedBulletText(
+                "继续后会将 Flick 作为普通 Note 写出，忽略 Polyline 中的 "
+                "subFlick，并将 subHold 作为普通 Hold 写出。");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            const float  buttonRowWidth =
+                buttonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            centerNextItem(buttonRowWidth);
+            if ( ::MMM::UI::FeedbackButton("继续打包", buttonSize) ) {
+                continuePacking = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           buttonSize) ) {
+                m_package.pendingRelativePaths.clear();
+                m_package.pendingMetadataOverrides.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if ( continuePacking ) {
+        continuePackageOutputFlow();
     }
 }
 
@@ -1717,11 +1817,13 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.pendingRelativePaths.clear();
     m_package.pendingMetadataOverrides.clear();
     m_package.beatmapMetadataEdits.clear();
-    m_package.showFileSelectionWindow   = false;
-    m_package.openFileSelectionWindow   = false;
-    m_package.showBeatmapMetadataWindow = false;
-    m_package.formatPickerOpen          = false;
-    m_package.showFormatPicker          = true;
+    m_package.showFileSelectionWindow        = false;
+    m_package.openFileSelectionWindow        = false;
+    m_package.showBeatmapMetadataWindow      = false;
+    m_package.showMalodyCompatibilityWarning = false;
+    m_package.selectedMalodyMode             = MalodyMode::Slide;
+    m_package.formatPickerOpen               = false;
+    m_package.showFormatPicker               = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;
     }

@@ -2,6 +2,7 @@
 
 #include "common/LogicCommands.h"
 #include "mmm/Metadata.h"
+#include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/PackageFileTypes.h"
 #include <array>
 #include <cstdint>
@@ -82,8 +83,14 @@ struct PackageDialogState {
     /// @brief 是否显示打包前目标谱面元数据补充窗口。
     bool showBeatmapMetadataWindow{ false };
 
+    /// @brief 是否等待显示 Key 模式自动转换兼容性警告。
+    bool showMalodyCompatibilityWarning{ false };
+
     /// @brief 当前打包目标格式。
     PackageFileType selectedFileType{ PackageFileType::Osz };
+
+    /// @brief MCZ 包内谱面统一使用的 Malody 模式。
+    MalodyMode selectedMalodyMode{ MalodyMode::Slide };
 
     /// @brief 当前打包格式下可选择的候选文件。
     std::vector<PackageCandidateFile> candidateFiles;

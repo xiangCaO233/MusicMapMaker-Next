@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/MalodyMode.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
@@ -135,7 +137,8 @@ inline std::optional<json> parseMalodyBeatJsonValue(const std::string& text)
 /// @return 支持 key(0) 或 slide(7) 时返回 true。
 inline bool isSupportedMalodyExportMode(int mode)
 {
-    return mode == 0 || mode == 7;
+    return mode == malodyModeValue(MalodyMode::Key) ||
+           mode == malodyModeValue(MalodyMode::Slide);
 }
 
 /// @brief 保存谱面为 Malody .mc JSON 文件。
@@ -212,8 +215,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             mode);
         return false;
     }
-    const bool saveAsKeyMode   = mode == 0;
-    const bool saveAsSlideMode = mode == 7;
+    const bool saveAsKeyMode   = mode == malodyModeValue(MalodyMode::Key);
+    const bool saveAsSlideMode = mode == malodyModeValue(MalodyMode::Slide);
     meta["mode"]               = mode;
 
     for ( const auto& polyline : beatMap.m_noteData.polylines ) {

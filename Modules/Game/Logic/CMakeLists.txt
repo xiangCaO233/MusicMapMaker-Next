@@ -96,6 +96,12 @@ mmm_add_test_executable(Logic ProjectAudioReferenceTest
 target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
 add_test(NAME ProjectAudioReferenceTest COMMAND ProjectAudioReferenceTest)
 
+# Malody 导出模式测试覆盖临时模式覆盖、Key 自动转换与会话元数据恢复。
+mmm_add_test_executable(Logic MalodyExportModeTest
+                        tests/MalodyExportModeTest.cpp)
+target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
+add_test(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
+
 mmm_add_test_executable(Logic AudioTimelineDescriptorTest
                         tests/AudioTimelineDescriptorTest.cpp)
 target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
