@@ -45,6 +45,26 @@ bool writeTestSkin(const std::filesystem::path& path,
     return file.good();
 }
 
+/// @brief 写入发光被关闭的旧版内置 IVM 测试皮肤。
+/// @param path 输出文件路径；父目录必须使用内置皮肤目录名 ivm。
+/// @return 文件成功写入时返回 true。
+bool writeLegacyIvmSkin(const std::filesystem::path& path)
+{
+    std::ofstream file(path, std::ios::binary);
+    if ( !file ) return false;
+    file << "return {\n"
+            "  meta = { name = 'IVM', author = 'Test', version = '1.0' },\n"
+            "  langs = {},\n"
+            "  fonts = {},\n"
+            "  assets = {},\n"
+            "  audios = {},\n"
+            "  layout = {},\n"
+            "  theme = 'IVM',\n"
+            "  effects = { glow = { passes = 0, intensity = 0.0 } }\n"
+            "}\n";
+    return file.good();
+}
+
 /// @brief 加载测试皮肤并核对亮暗主题绑定。
 /// @param path 测试皮肤入口路径。
 /// @param expectedLight 期望亮色主题。
@@ -66,6 +86,21 @@ bool verifyThemeBinding(const std::filesystem::path& path,
     ok &= check(skinManager.getHitEffectLayoutMode() ==
                     MMM::Config::HitEffectLayoutMode::Fixed,
                 "未声明布局的旧皮肤必须保持固定尺寸打击特效");
+    return ok;
+}
+
+/// @brief 验证旧版内置 IVM 在资源文件未更新时仍恢复交互发光。
+/// @param path 位于 ivm 目录内的旧版测试皮肤路径。
+/// @return 悬浮与选中共用的发光配置已迁移时返回 true。
+bool verifyLegacyIvmGlowMigration(const std::filesystem::path& path)
+{
+    auto& skinManager = MMM::Config::SkinManager::instance();
+    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
+                     "旧版 IVM 测试皮肤应成功加载");
+    ok &= check(skinManager.getGlowPasses() == 6,
+                "旧版 IVM 必须恢复交互发光轮次");
+    ok &= check(skinManager.getGlowIntensity() == 0.5F,
+                "旧版 IVM 必须恢复交互发光强度");
     return ok;
 }
 
@@ -323,6 +358,15 @@ int main(int argc, char* argv[])
         outputDirectory / "paired-skin.lua";
     const std::filesystem::path lightOnlySkinPath =
         outputDirectory / "light-only-skin.lua";
+    const std::filesystem::path legacyIvmDirectory = outputDirectory / "ivm";
+    std::filesystem::create_directories(legacyIvmDirectory, filesystemError);
+    if ( filesystemError ) {
+        XERROR("Failed to create legacy IVM test directory: {}",
+               filesystemError.message());
+        return 1;
+    }
+    const std::filesystem::path legacyIvmSkinPath =
+        legacyIvmDirectory / "skin.lua";
 
     bool ok = check(writeTestSkin(legacySkinPath, "'Cecilia'"),
                     "旧格式测试皮肤写入失败");
@@ -332,12 +376,15 @@ int main(int argc, char* argv[])
     ok &= check(
         writeTestSkin(lightOnlySkinPath, "{ light = 'ComfortableLight' }"),
         "单分支测试皮肤写入失败");
+    ok &= check(writeLegacyIvmSkin(legacyIvmSkinPath),
+                "旧版 IVM 测试皮肤写入失败");
     if ( !ok ) return 1;
 
     ok &= verifyThemeBinding(legacySkinPath, "Cecilia", "Cecilia");
     ok &= verifyThemeBinding(pairedSkinPath, "Cecilia", "Moonlight");
     ok &= verifyThemeBinding(
         lightOnlySkinPath, "ComfortableLight", "ComfortableLight");
+    ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath);
     ok &= verifyLegacyAppConfigSemantics();
     ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]));
     return ok ? 0 : 1;
