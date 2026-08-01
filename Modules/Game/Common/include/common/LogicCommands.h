@@ -274,7 +274,11 @@ struct CmdUpdateBgmTrackCount {
  * @brief 跳转时间指令
  */
 struct CmdSeek {
+    /// @brief 目标音频时间，单位为秒。
     double time;
+
+    /// @brief 是否为拖动进度条期间的连续预览请求。
+    bool isScrubbing{ false };
 };
 
 /**

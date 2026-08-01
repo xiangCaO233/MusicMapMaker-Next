@@ -77,9 +77,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -417,6 +417,10 @@ private:
     float m_speedTooltipTimer{ 0.0f };
     /// @brief 播放速度提示窗口显示的当前速度倍率。
     float m_speedTooltipValue{ 1.0f };
+    /// @brief 总时间进度条是否仍有等待松手提交的连续 seek。
+    bool m_isAudioTimeSliderScrubbing{ false };
+    /// @brief 总时间进度条最近一次连续 seek 的音频目标时间。
+    double m_audioTimeSliderScrubTarget{ 0.0 };
     /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
     ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。

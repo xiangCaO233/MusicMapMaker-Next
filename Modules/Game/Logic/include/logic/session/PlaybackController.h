@@ -56,6 +56,9 @@ public:
 
 private:
     SessionContext& m_ctx;  ///< 全局会话上下文引用
+
+    /// @brief 上一条 seek 是否来自仍在持续的进度条拖动。
+    bool m_isSeekScrubbing{ false };
 };
 
 }  // namespace MMM::Logic

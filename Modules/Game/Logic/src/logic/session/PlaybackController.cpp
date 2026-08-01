@@ -134,6 +134,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    const bool isContinuingScrub = cmd.isScrubbing && m_isSeekScrubbing;
     m_ctx.restartPlaybackAfterFinishPending = false;
     m_ctx.isAudioTimelineSyncFollower       = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
@@ -168,13 +169,16 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
                  m_ctx.audioTimelineDescriptor.m_fingerprint ) {
             (void)SessionUtils::activateAudioTimeline(m_ctx, m_ctx.isPlaying);
         } else {
-            audio.seek(m_ctx.currentTime);
+            audio.seek(m_ctx.currentTime,
+                       isContinuingScrub ? Audio::AudioSeekMode::ScrubUpdate
+                                         : Audio::AudioSeekMode::Commit);
             m_ctx.playbackVisualClock.rebase(m_ctx.currentTime,
                                              currentSteadySeconds(),
                                              audio.getPlaybackSpeed(),
                                              m_ctx.isPlaying);
         }
     }
+    m_isSeekScrubbing = cmd.isScrubbing;
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
 }

@@ -382,13 +382,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             ImGui::BeginGroup();
 
-            ImVec2 sliderSize(sliderWidth, sliderHeight);
-            if ( ::MMM::UI::FeedbackVSliderFloat("##AudioTimeSlider",
-                                                 sliderSize,
-                                                 &time,
-                                                 0.0f,
-                                                 total,
-                                                 "") ) {
+            ImVec2     sliderSize(sliderWidth, sliderHeight);
+            const bool sliderChanged = ::MMM::UI::FeedbackVSliderFloat(
+                "##AudioTimeSlider", sliderSize, &time, 0.0f, total, "");
+            const bool sliderActive = ImGui::IsItemActive();
+            const bool sliderDeactivatedAfterEdit =
+                ImGui::IsItemDeactivatedAfterEdit();
+            if ( sliderChanged ) {
                 float  visualOffset = Config::AppConfig::instance()
                                           .getVisualConfig()
                                           .getEffectiveVisualOffset();
@@ -399,12 +399,26 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                             static_cast<double>(total));
                     time       = static_cast<float>(targetTime);
                 }
+                const double commandTime =
+                    targetTime - static_cast<double>(visualOffset);
+                m_isAudioTimeSliderScrubbing = sliderActive;
+                m_audioTimeSliderScrubTarget = commandTime;
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdSeek{
-                        targetTime - static_cast<double>(visualOffset) }));
+                        .time        = commandTime,
+                        .isScrubbing = sliderActive,
+                    }));
+            }
+            if ( sliderDeactivatedAfterEdit && m_isAudioTimeSliderScrubbing ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSeek{
+                        .time        = m_audioTimeSliderScrubTarget,
+                        .isScrubbing = false,
+                    }));
+                m_isAudioTimeSliderScrubbing = false;
             }
 
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+            if ( sliderActive || ImGui::IsItemHovered() ) {
                 const auto timeText =
                     formatCanvasTimePair(static_cast<double>(time),
                                          static_cast<double>(total),

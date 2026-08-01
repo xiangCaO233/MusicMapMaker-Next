@@ -97,10 +97,18 @@ void AudioManager::stop()
 
 /// @brief 跳转复合音频时间线播放位置。
 /// @param seconds 目标时间，单位为秒。
-void AudioManager::seek(double seconds)
+/// @param mode 完整提交或连续拖动中间更新。
+/// @warning 逻辑控制路径：连续拖动中间更新只写入无锁 seek 邮箱；完整提交
+/// 才允许遍历并停止音效池。
+void AudioManager::seek(double seconds, AudioSeekMode mode)
 {
     if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
         m_audioTimelineNode->seek(playbackSecondsToFrame(seconds));
+        if ( mode == AudioSeekMode::ScrubUpdate ) {
+            // 时间线应用 seek 时会增加 epoch，主拉伸器的代际读取器会在音频
+            // block 边界清理历史；中间帧无需重复发送手动 discontinuity。
+            return;
+        }
         resetMainTimeStretcher();
         clearAllScheduledSoundEffects();
     }

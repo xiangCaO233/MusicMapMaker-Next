@@ -55,6 +55,12 @@ enum class PlaybackStatus {
     Paused
 };
 
+/// @brief 主时间线跳转时需要执行的清理级别。
+enum class AudioSeekMode : std::uint8_t {
+    Commit,      ///< 完整跳转，并清理拉伸器历史与已调度音效。
+    ScrubUpdate  ///< 连续拖动的中间位置，仅更新无锁时间线 seek 邮箱。
+};
+
 /**
  * @brief EQ 频段预设
  */
@@ -307,9 +313,12 @@ public:
     /// @brief 停止播放并回到起始位置
     void stop();
 
-    /// @brief 跳转到指定时间
-    /// @param seconds 秒
-    void seek(double seconds);
+    /// @brief 跳转到指定时间。
+    /// @param seconds 目标时间，单位为秒。
+    /// @param mode 完整提交或连续拖动中间更新。
+    /// @warning 逻辑控制路径：ScrubUpdate 只写入无锁时间线邮箱；Commit
+    /// 会遍历并停止已调度音效，只能用于离散跳转或拖动边界。
+    void seek(double seconds, AudioSeekMode mode = AudioSeekMode::Commit);
 
     /// @brief 获取当前播放状态
     PlaybackStatus getStatus() const;

@@ -1079,12 +1079,14 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.category.action"),
                                     TR("ui.tools.align_beats"));
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
-                    const auto timeText = formatStatusTime(arg.time);
-                    m_ctx->lastActionMessage =
-                        fmt::format("{} {} {}",
-                                    TR("ui.status.category.playback"),
-                                    TR("ui.status.playback.seek"),
-                                    timeText);
+                    if ( !arg.isScrubbing ) {
+                        const auto timeText = formatStatusTime(arg.time);
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {} {}",
+                                        TR("ui.status.category.playback"),
+                                        TR("ui.status.playback.seek"),
+                                        timeText);
+                    }
                 } else if constexpr ( std::is_same_v<T, CmdSetPlaybackSpeed> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}: {:.2f}x",

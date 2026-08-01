@@ -320,6 +320,27 @@ bool testDualUseEffectSharesPreparedAudio(MMM::Audio::AudioManager& manager,
         return false;
     }
 
+    manager.setSFXPoolMute(EFFECT_KEY, false, false);
+    manager.seek(0.0);
+    manager.playSoundEffectScheduled(EFFECT_KEY, 60.0);
+    if ( !manager.isSFXPlaying(EFFECT_KEY) ) {
+        XERROR("Scrub seek setup did not schedule the dual-use Effect");
+        manager.unloadSoundEffect(EFFECT_KEY);
+        return false;
+    }
+    manager.seek(0.01, MMM::Audio::AudioSeekMode::ScrubUpdate);
+    if ( !manager.isSFXPlaying(EFFECT_KEY) ) {
+        XERROR("Scrub update unexpectedly traversed and cleared SFX pools");
+        manager.unloadSoundEffect(EFFECT_KEY);
+        return false;
+    }
+    manager.seek(0.01);
+    if ( manager.isSFXPlaying(EFFECT_KEY) ) {
+        XERROR("Committed seek did not clear scheduled SFX pools");
+        manager.unloadSoundEffect(EFFECT_KEY);
+        return false;
+    }
+
     manager.setPlaybackSpeed(1.0);
     manager.unloadSoundEffect(EFFECT_KEY);
     return true;
