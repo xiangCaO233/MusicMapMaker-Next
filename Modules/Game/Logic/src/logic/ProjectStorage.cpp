@@ -115,6 +115,9 @@ nlohmann::json assembleProjectJson(const nlohmann::json& projectJson,
         "m_projectAudioToolSelectedResourceId", std::string{});
     workspaceJson["m_projectAudioToolBrushVolume"] =
         audioToolJson.value("m_projectAudioToolBrushVolume", 1.0F);
+    workspaceJson["m_projectAudioToolPreviewEffectOnSelection"] =
+        audioToolJson.value("m_projectAudioToolPreviewEffectOnSelection",
+                            false);
     workspaceJson["m_projectAudioToolOpen"] =
         audioToolJson.value("m_projectAudioToolOpen", false);
     workspaceJson["m_projectAudioToolPlacements"] = audioToolJson.value(
@@ -300,6 +303,7 @@ bool ProjectStorage::save(const Project&               project,
     nlohmann::json workspaceJson = project.m_settings.m_workspace;
     workspaceJson.erase("m_projectAudioToolSelectedResourceId");
     workspaceJson.erase("m_projectAudioToolBrushVolume");
+    workspaceJson.erase("m_projectAudioToolPreviewEffectOnSelection");
     workspaceJson.erase("m_projectAudioToolOpen");
     workspaceJson.erase("m_projectAudioToolPlacements");
 
@@ -324,6 +328,8 @@ bool ProjectStorage::save(const Project&               project,
           audioTool.m_projectAudioToolSelectedResourceId },
         { "m_projectAudioToolBrushVolume",
           audioTool.m_projectAudioToolBrushVolume },
+        { "m_projectAudioToolPreviewEffectOnSelection",
+          audioTool.m_projectAudioToolPreviewEffectOnSelection },
         { "m_projectAudioToolOpen", audioTool.m_projectAudioToolOpen },
         { "m_projectAudioToolPlacements",
           audioTool.m_projectAudioToolPlacements },

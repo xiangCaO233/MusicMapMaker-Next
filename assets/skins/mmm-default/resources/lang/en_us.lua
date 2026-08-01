@@ -451,6 +451,7 @@ return {
 	["ui.audio_manager.initial_hint"] = "No project, no audio resources",
 	["ui.project_audio_tool.no_project"] = "Open a project first",
 	["ui.project_audio_tool.hint"] = "Left-click to select and drag blocks; click the selected block again to clear it. Drag from empty space to marquee-select blocks for batch movement. With no selection, BGM lanes create silent sample drafts. Main audio can only be placed on BGM lanes; FX can bind player notes or become automatic samples.",
+	["ui.project_audio_tool.preview_effect_on_selection"] = "Play sample once when selecting an effect track",
 	["ui.project_audio_tool.search_hint"] = "Search file name or resource ID",
 	["ui.project_audio_tool.search_results"] = "Similar results",
 	["ui.project_audio_tool.status_none"] = "No project audio selected (silent sample drafts enabled)",

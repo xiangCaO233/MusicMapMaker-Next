@@ -454,6 +454,7 @@ return {
 	["ui.audio_manager.initial_hint"] = "暂未打开项目, 无音频资源",
 	["ui.project_audio_tool.no_project"] = "请先打开项目",
 	["ui.project_audio_tool.hint"] = "左键选择并拖动方块，再次单击已选方块可取消；从空白处框选可批量移动；未选择时可在 BGM 轨道放置空采样草稿，Main 只能放置到 BGM 轨道，FX 可绑定玩家物件或放置为自动采样",
+	["ui.project_audio_tool.preview_effect_on_selection"] = "选中效果轨道时播放一次采样",
 	["ui.project_audio_tool.search_hint"] = "搜索文件名或资源 ID",
 	["ui.project_audio_tool.search_results"] = "相似结果",
 	["ui.project_audio_tool.status_none"] = "当前未选择项目音频（可放置空采样草稿）",

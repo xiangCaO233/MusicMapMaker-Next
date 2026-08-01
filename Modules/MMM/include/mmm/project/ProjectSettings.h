@@ -291,6 +291,9 @@ struct ProjectWorkspaceState {
     /// @brief 项目音频工具为后续新建物件设置的音量倍率。
     float m_projectAudioToolBrushVolume{ 1.0F };
 
+    /// @brief 选中 Effect 音频资源时是否自动试听一次采样。
+    bool m_projectAudioToolPreviewEffectOnSelection{ false };
+
     /// @brief 上次是否打开了项目音频工具窗口。
     bool m_projectAudioToolOpen{ false };
 
@@ -337,6 +340,8 @@ struct ProjectWorkspaceState {
               workspace.m_projectAudioToolSelectedResourceId },
             { "m_projectAudioToolBrushVolume",
               workspace.m_projectAudioToolBrushVolume },
+            { "m_projectAudioToolPreviewEffectOnSelection",
+              workspace.m_projectAudioToolPreviewEffectOnSelection },
             { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
             { "m_projectAudioToolPlacements",
               workspace.m_projectAudioToolPlacements },
@@ -381,6 +386,8 @@ struct ProjectWorkspaceState {
         }
         workspace.m_projectAudioToolBrushVolume =
             std::max(0.0F, workspace.m_projectAudioToolBrushVolume);
+        workspace.m_projectAudioToolPreviewEffectOnSelection =
+            j.value("m_projectAudioToolPreviewEffectOnSelection", false);
         workspace.m_projectAudioToolOpen =
             j.value("m_projectAudioToolOpen", false);
         workspace.m_projectAudioToolPlacements =

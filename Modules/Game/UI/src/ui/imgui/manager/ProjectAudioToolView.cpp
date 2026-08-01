@@ -640,6 +640,27 @@ std::optional<std::size_t> ProjectAudioToolView::activateItem(
     return activeIndex;
 }
 
+/// @brief 按项目选项试听一次新选中的 Effect 音频资源。
+/// @param item 本次完成选择的资源方块。
+/// @warning 低频用户操作路径：首次试听可能同步加载音频，只允许在明确的
+/// 选择动作完成后调用。
+void ProjectAudioToolView::previewEffectSelection(const Item& item) const
+{
+    if ( item.type != AudioTrackType::Effect ) return;
+
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project || !project->m_settings.m_workspace
+                          .m_projectAudioToolPreviewEffectOnSelection ) {
+        return;
+    }
+
+    (void)controlProjectAudioPreview(*project,
+                                     item.audioResourceId,
+                                     item.previewPoolKey,
+                                     ProjectAudioPreviewAction::Play,
+                                     m_brushAudioVolume);
+}
+
 void ProjectAudioToolView::clearActiveItem()
 {
     m_selectedAudioResourceId.clear();
@@ -1141,6 +1162,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
     ImGui::TextWrapped("%s", TR("ui.project_audio_tool.hint").data());
 
+    auto& previewEffectOnSelection =
+        project->m_settings.m_workspace
+            .m_projectAudioToolPreviewEffectOnSelection;
+    if ( ::MMM::UI::FeedbackCheckbox(
+             TR("ui.project_audio_tool.preview_effect_on_selection").data(),
+             &previewEffectOnSelection) ) {
+        Logic::EditorEngine::instance().saveProject();
+    }
+
     ImGui::SetNextItemWidth(-1.0F);
     const bool searchSubmitted =
         ImGui::InputTextWithHint("##ProjectAudioToolSearch",
@@ -1266,9 +1296,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 return item.audioResourceId == m_searchFocusRequestId;
             });
         if ( requestedItem != m_items.end() ) {
+            const bool selectionChanged =
+                requestedItem->audioResourceId != m_selectedAudioResourceId;
             const auto activeIndex = activateItem(static_cast<std::size_t>(
                 std::distance(m_items.begin(), requestedItem)));
             if ( activeIndex ) {
+                if ( selectionChanged ) {
+                    previewEffectSelection(m_items[*activeIndex]);
+                }
                 const auto& activeRect = m_items[*activeIndex].rect;
                 const float targetScrollX =
                     (activeRect.x + activeRect.width * 0.5F) * dpiScale -
@@ -1549,6 +1584,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             m_interactionBaseLabelRects.clear();
             if ( m_itemDragStartedSelected && !m_itemDragMoved ) {
                 clearActiveItem();
+            } else if ( !m_itemDragMoved ) {
+                previewEffectSelection(item);
             }
             persistWorkspace();
             m_draggingItem.reset();

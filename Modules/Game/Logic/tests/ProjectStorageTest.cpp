@@ -48,7 +48,9 @@ MMM::Project makeProject()
     project.m_settings.m_workspace.m_projectAudioToolOpen = true;
     project.m_settings.m_workspace.m_projectAudioToolSelectedResourceId = "hit";
     project.m_settings.m_workspace.m_projectAudioToolBrushVolume        = 0.65F;
-    project.m_settings.m_workspace.m_projectAudioToolPlacements         = {
+    project.m_settings.m_workspace.m_projectAudioToolPreviewEffectOnSelection =
+        true;
+    project.m_settings.m_workspace.m_projectAudioToolPlacements = {
         MMM::ProjectAudioToolItemPlacement{
             .m_audioResourceId = "hit",
             .m_x               = 12.0F,
@@ -129,10 +131,17 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                 "workspace should not remain in general settings") ||
          !check(!workspaceJson.contains("m_projectAudioToolPlacements"),
                 "audio tool layout should not remain in general workspace") ||
+         !check(!workspaceJson.contains(
+                    "m_projectAudioToolPreviewEffectOnSelection"),
+                "audio tool preferences should not remain in general "
+                "workspace") ||
          !check(std::abs(
                     audioToolJson.value("m_projectAudioToolBrushVolume", 0.0F) -
                     0.65F) < 1e-6F,
                 "audio tool brush volume should use its own file") ||
+         !check(audioToolJson.value(
+                    "m_projectAudioToolPreviewEffectOnSelection", false),
+                "audio tool selection preview should use its own file") ||
          !check(audioToolJson["m_projectAudioToolPlacements"].size() == 1,
                 "audio tool layout should use its own file") ) {
         return false;
@@ -155,6 +164,9 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                               .m_projectAudioToolBrushVolume -
                           0.65F) < 1e-6F,
                  "audio tool brush volume should round trip") &&
+           check(loaded.m_project.m_settings.m_workspace
+                     .m_projectAudioToolPreviewEffectOnSelection,
+                 "audio tool selection preview should round trip") &&
            check(std::abs(loaded.m_project.m_settings.m_workspace
                               .m_projectAudioToolPlacements.front()
                               .m_width -

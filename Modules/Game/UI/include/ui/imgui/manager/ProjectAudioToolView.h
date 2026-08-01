@@ -137,6 +137,12 @@ private:
     [[nodiscard]] std::optional<std::size_t> activateItem(
         std::size_t itemIndex);
 
+    /// @brief 按项目选项试听一次新选中的 Effect 音频资源。
+    /// @param item 本次完成选择的资源方块。
+    /// @warning 低频用户操作路径：首次试听可能同步加载音频，只允许在明确的
+    /// 选择动作完成后调用。
+    void previewEffectSelection(const Item& item) const;
+
     /// @brief 清除当前项目音频选择，并同步为空资源画笔。
     void clearActiveItem();
 
