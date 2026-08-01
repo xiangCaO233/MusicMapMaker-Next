@@ -427,6 +427,44 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
 
     m_measuredTimings = std::move(bpmTimings);
     m_bpm             = m_measuredTimings.front().m_bpm;
+    if ( m_manualBpmMeasurementActive ) {
+        m_manualBpmMeasurementExported = true;
+    }
+}
+
+/// @brief 开始手动 BPM 测量并暂时收起向导模态弹窗。
+/// @param tool 即将显示在前层的 BPM 测量工具。
+void NewBeatmapWizard::beginManualBpmMeasurement(BpmMeasurementToolView& tool)
+{
+    m_manualBpmMeasurementActive   = true;
+    m_manualBpmMeasurementExported = false;
+    tool.requestFocus();
+    ImGui::CloseCurrentPopup();
+}
+
+/// @brief 在手动测量工具关闭或导出后恢复向导。
+/// @param sourceManager 当前 UI 管理器。
+/// @return 仍应等待手动测量工具时返回 true。
+bool NewBeatmapWizard::shouldWaitForManualBpmMeasurement(
+    UIManager* sourceManager)
+{
+    if ( !m_manualBpmMeasurementActive ) {
+        return false;
+    }
+
+    auto* tool = sourceManager ? sourceManager->getView<BpmMeasurementToolView>(
+                                     BPM_MEASUREMENT_TOOL_VIEW_NAME)
+                               : nullptr;
+    const bool toolOpen = tool && tool == m_boundBpmToolView && tool->isOpen();
+    if ( toolOpen && !m_manualBpmMeasurementExported ) {
+        return true;
+    }
+
+    m_manualBpmMeasurementActive   = false;
+    m_manualBpmMeasurementExported = false;
+    m_shouldOpen                   = true;
+    unbindBpmMeasurementTool();
+    return false;
 }
 
 /// @brief 从当前绑定的 BPM 测量工具安全解除导出回调。
@@ -696,6 +734,7 @@ void NewBeatmapWizard::renderTemplateSourceControls(
 void NewBeatmapWizard::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) return;
+    if ( shouldWaitForManualBpmMeasurement(sourceManager) ) return;
 
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope windowScope(dpiScale);
@@ -858,6 +897,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                                                   wasOpen);
             } else {
                 tool->openWithAudioTrack(m_selectedAudioTrackId);
+                beginManualBpmMeasurement(*tool);
             }
             if ( !autoMeasure && !wasOpen ) {
                 ::MMM::UI::PlayPopupOpenFeedback();
@@ -1005,7 +1045,9 @@ void NewBeatmapWizard::open()
 void NewBeatmapWizard::close()
 {
     unbindBpmMeasurementTool();
-    m_isOpen = false;
+    m_manualBpmMeasurementActive   = false;
+    m_manualBpmMeasurementExported = false;
+    m_isOpen                       = false;
 }
 
 void NewBeatmapWizard::reset()
@@ -1034,9 +1076,11 @@ void NewBeatmapWizard::reset()
     m_templateCameraId.clear();
     m_templateDisplayName.clear();
     m_templateBeatmap.reset();
-    m_templateOptions           = {};
-    m_shouldOpenTemplatePicker  = false;
-    m_shouldOpenTemplateOptions = false;
+    m_templateOptions              = {};
+    m_shouldOpenTemplatePicker     = false;
+    m_shouldOpenTemplateOptions    = false;
+    m_manualBpmMeasurementActive   = false;
+    m_manualBpmMeasurementExported = false;
     unbindBpmMeasurementTool();
 }
 

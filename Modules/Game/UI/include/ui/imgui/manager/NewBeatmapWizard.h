@@ -121,6 +121,15 @@ private:
         const std::string&                audioTrackId,
         const std::vector<::MMM::Timing>& timings);
 
+    /// @brief 开始手动 BPM 测量并暂时收起向导模态弹窗。
+    /// @param tool 即将显示在前层的 BPM 测量工具。
+    void beginManualBpmMeasurement(BpmMeasurementToolView& tool);
+
+    /// @brief 在手动测量工具关闭或导出后恢复向导。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @return 仍应等待手动测量工具时返回 true。
+    bool shouldWaitForManualBpmMeasurement(UIManager* sourceManager);
+
     /// @brief 从当前绑定的 BPM 测量工具安全解除导出回调。
     void unbindBpmMeasurementTool();
 
@@ -201,6 +210,12 @@ private:
 
     /// @brief 当前 BPM 测量工具视图所属的 UI 管理器，非拥有指针。
     UIManager* m_boundBpmToolManager{ nullptr };
+
+    /// @brief 当前是否已暂时收起向导并等待手动 BPM 测量。
+    bool m_manualBpmMeasurementActive{ false };
+
+    /// @brief 手动 BPM 测量是否已导出结果并请求恢复向导。
+    bool m_manualBpmMeasurementExported{ false };
 };
 
 }  // namespace MMM::UI

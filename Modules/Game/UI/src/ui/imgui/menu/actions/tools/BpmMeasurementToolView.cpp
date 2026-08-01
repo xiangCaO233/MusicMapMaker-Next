@@ -509,6 +509,12 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
     }
 }
 
+/// @brief 请求 BPM 工具窗口在下一次绘制时获得焦点并置于前层。
+void BpmMeasurementToolView::requestFocus()
+{
+    m_requestFocus = true;
+}
+
 /// @brief 对指定或默认项目音频轨道执行自动 BPM 测量。
 /// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
 /// @param keepWindowVisible 测量前窗口已打开时保持可见；否则仅在后台运行。
@@ -571,6 +577,11 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     }
     if ( m_backgroundAutomaticMeasurement ) {
         return;
+    }
+
+    if ( m_requestFocus ) {
+        ImGui::SetNextWindowFocus();
+        m_requestFocus = false;
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
