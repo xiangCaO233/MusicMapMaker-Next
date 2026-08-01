@@ -1610,15 +1610,15 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         ImGui::PopID();
     };
 
-    const int    playerHeaderRow    = 0;
-    const int    playerMasterRow    = 1;
-    const int    playerTrackBegin   = 2;
+    const int    hitSoundHeaderRow  = 0;
+    const int    unboundHitSoundRow = 1;
+    const int    boundHitSoundRow   = 2;
+    const int    playerHeaderRow    = 3;
+    const int    playerMasterRow    = 4;
+    const int    playerTrackBegin   = 5;
     const int    bgmHeaderRow       = playerTrackBegin + playerRows;
     const int    bgmMasterRow       = bgmHeaderRow + 1;
     const int    bgmTrackBegin      = bgmMasterRow + 1;
-    const int    hitSoundHeaderRow  = bgmTrackBegin + bgmRows;
-    const int    unboundHitSoundRow = hitSoundHeaderRow + 1;
-    const int    boundHitSoundRow   = hitSoundHeaderRow + 2;
     const ImVec2 contentStart       = ImGui::GetCursorPos();
     const float  scrollY            = ImGui::GetScrollY();
     const float  visibleHeight      = std::max(
@@ -1639,6 +1639,60 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             { contentStart.x,
               contentStart.y + static_cast<float>(row) * rowHeight });
 
+        if ( row == hitSoundHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
+            continue;
+        }
+        if ( row == unboundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.unbound_hit_sound").data(),
+                "UnboundHitSound",
+                !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
+                m_unboundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableUnboundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_unboundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Unbound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.unboundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
+                });
+            continue;
+        }
+        if ( row == boundHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.bound_hit_sound").data(),
+                "BoundHitSound",
+                !editorConfig.settings.sfxConfig.enableBoundHitSfx,
+                m_boundHitSoundGainDraft,
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.enableBoundHitSfx = !muted;
+                    engine.setEditorConfig(config);
+                },
+                [this, &engine](float gain) {
+                    m_boundHitSoundGainDraft = gain;
+                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
+                        .group = Logic::KeySoundEffectGroup::Bound,
+                        .gain  = gain,
+                    });
+                },
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
+                    config.settings.sfxConfig.boundHitSfxGain = gain;
+                    engine.setEditorConfig(config);
+                });
+            continue;
+        }
         if ( row == playerHeaderRow ) {
             ImGui::SeparatorText(TR("ui.key_sound_tool.player_area").data());
             continue;
@@ -1714,7 +1768,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             if ( !hasBeatmap || bgmTrackCount == 0 ) ImGui::EndDisabled();
             continue;
         }
-        if ( row < hitSoundHeaderRow ) {
+        if ( row >= bgmTrackBegin ) {
             const int track = row - bgmTrackBegin;
             if ( track >= bgmTrackCount ) {
                 ImGui::TextDisabled(
@@ -1756,59 +1810,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             ImGui::PopID();
             ImGui::PopID();
             continue;
-        }
-        if ( row == hitSoundHeaderRow ) {
-            ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
-            continue;
-        }
-        if ( row == unboundHitSoundRow ) {
-            drawMixRow(
-                TR("ui.key_sound_tool.unbound_hit_sound").data(),
-                "UnboundHitSound",
-                !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
-                m_unboundHitSoundGainDraft,
-                [&engine](bool muted) {
-                    auto config = engine.getEditorConfig();
-                    config.settings.sfxConfig.enableUnboundHitSfx = !muted;
-                    engine.setEditorConfig(config);
-                },
-                [this, &engine](float gain) {
-                    m_unboundHitSoundGainDraft = gain;
-                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
-                        .group = Logic::KeySoundEffectGroup::Unbound,
-                        .gain  = gain,
-                    });
-                },
-                [&engine](float gain) {
-                    auto config = engine.getEditorConfig();
-                    config.settings.sfxConfig.unboundHitSfxGain = gain;
-                    engine.setEditorConfig(config);
-                });
-            continue;
-        }
-        if ( row == boundHitSoundRow ) {
-            drawMixRow(
-                TR("ui.key_sound_tool.bound_hit_sound").data(),
-                "BoundHitSound",
-                !editorConfig.settings.sfxConfig.enableBoundHitSfx,
-                m_boundHitSoundGainDraft,
-                [&engine](bool muted) {
-                    auto config = engine.getEditorConfig();
-                    config.settings.sfxConfig.enableBoundHitSfx = !muted;
-                    engine.setEditorConfig(config);
-                },
-                [this, &engine](float gain) {
-                    m_boundHitSoundGainDraft = gain;
-                    engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
-                        .group = Logic::KeySoundEffectGroup::Bound,
-                        .gain  = gain,
-                    });
-                },
-                [&engine](float gain) {
-                    auto config = engine.getEditorConfig();
-                    config.settings.sfxConfig.boundHitSfxGain = gain;
-                    engine.setEditorConfig(config);
-                });
         }
     }
 
