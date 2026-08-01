@@ -46,6 +46,15 @@ MMM::Project makeProject()
     project.m_settings.m_lastOpenedBeatmap                = "Hard";
     project.m_settings.m_workspace.m_activeBeatmapPath    = "hard.mmm";
     project.m_settings.m_workspace.m_projectAudioToolOpen = true;
+    project.m_settings.m_workspace.m_openBeatmaps         = {
+        MMM::ProjectWorkspaceBeatmapState{
+            .m_filePath                    = "hard.mmm",
+            .m_cameraId                    = "Canvas_7",
+            .m_displayName                 = "Hard",
+            .m_playbackTime                = 12.5,
+            .m_canvasHorizontalOffsetRatio = 0.125F,
+        },
+    };
     project.m_settings.m_workspace.m_projectAudioToolSelectedResourceId = "hit";
     project.m_settings.m_workspace.m_projectAudioToolBrushVolume        = 0.65F;
     project.m_settings.m_workspace.m_projectAudioToolPreviewEffectOnSelection =
@@ -157,6 +166,15 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                  "audio resources should round trip") &&
            check(loaded.m_project.m_beatmaps.size() == 1,
                  "beatmaps should round trip") &&
+           check(
+               loaded.m_project.m_settings.m_workspace.m_openBeatmaps.size() ==
+                   1,
+               "open beatmaps should round trip") &&
+           check(std::abs(loaded.m_project.m_settings.m_workspace.m_openBeatmaps
+                              .front()
+                              .m_canvasHorizontalOffsetRatio -
+                          0.125F) < 1e-6F,
+                 "canvas horizontal offset should round trip") &&
            check(loaded.m_project.m_settings.m_workspace
                          .m_projectAudioToolPlacements.size() == 1,
                  "audio tool layout should round trip") &&

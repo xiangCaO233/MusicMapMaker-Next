@@ -1067,6 +1067,14 @@ void EditorEngine::captureProjectWorkspaceState()
         beatmapState.m_cameraId     = entry.cameraId;
         beatmapState.m_displayName  = entry.displayName;
         beatmapState.m_playbackTime = ctx.currentTime;
+        const auto camera           = ctx.cameras.find(entry.cameraId);
+        if ( camera != ctx.cameras.end() &&
+             std::isfinite(camera->second.horizontalOffsetX) &&
+             std::isfinite(camera->second.viewportWidth) &&
+             camera->second.viewportWidth > 0.0F ) {
+            beatmapState.m_canvasHorizontalOffsetRatio =
+                camera->second.horizontalOffsetX / camera->second.viewportWidth;
+        }
         if ( i == activeIndex && ctx.isPlaying ) {
             beatmapState.m_playbackTime =
                 resolveContinuousSessionTime(ctx, workspaceCaptureTime);
@@ -1174,16 +1182,34 @@ void EditorEngine::restoreProjectWorkspace(
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
+        std::string                     restoredCameraId;
         {
             std::lock_guard<std::recursive_mutex> lock(
                 m_sessionRegistry.mutex());
             auto& sessions = m_sessionRegistry.entriesUnsafe();
             if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
-                restoredSession = sessions[index].session;
+                restoredSession  = sessions[index].session;
+                restoredCameraId = sessions[index].cameraId;
             }
         }
 
         if ( restoredSession ) {
+            if ( !restoredCameraId.empty() &&
+                 std::isfinite(state.m_canvasHorizontalOffsetRatio) &&
+                 std::abs(state.m_canvasHorizontalOffsetRatio) > 1e-6F ) {
+                auto& context           = restoredSession->getContextMutable();
+                auto [camera, inserted] = context.cameras.try_emplace(
+                    restoredCameraId,
+                    CameraInfo{ restoredCameraId, 1.0F, 1.0F });
+                (void)inserted;
+                const float viewportWidth =
+                    std::isfinite(camera->second.viewportWidth) &&
+                            camera->second.viewportWidth > 0.0F
+                        ? camera->second.viewportWidth
+                        : 1.0F;
+                camera->second.horizontalOffsetX =
+                    state.m_canvasHorizontalOffsetRatio * viewportWidth;
+            }
             restoredSession->pushCommand(
                 LogicCommand(CmdSeek{ state.m_playbackTime }));
         }
@@ -1395,6 +1421,7 @@ bool EditorEngine::closeProject()
             "cancelled");
         return false;
     }
+    captureProjectWorkspaceState();
     if ( !ProjectController::instance().saveProject() ) {
         XERROR(
             "EditorEngine: project configuration save failed; project "

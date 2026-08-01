@@ -26,14 +26,21 @@ struct ProjectWorkspaceBeatmapState {
     /// @brief 该谱面上次停留的逻辑播放时间（秒）。
     double m_playbackTime{ 0.0 };
 
+    /// @brief 主画布横向平移量相对保存时视口宽度的比例。
+    float m_canvasHorizontalOffsetRatio{ 0.0F };
+
     /// @brief 序列化项目工作区谱面状态。
     friend void to_json(nlohmann::json&                     j,
                         const ProjectWorkspaceBeatmapState& state)
     {
-        j = nlohmann::json{ { "m_filePath", state.m_filePath },
-                            { "m_cameraId", state.m_cameraId },
-                            { "m_displayName", state.m_displayName },
-                            { "m_playbackTime", state.m_playbackTime } };
+        j = nlohmann::json{
+            { "m_filePath", state.m_filePath },
+            { "m_cameraId", state.m_cameraId },
+            { "m_displayName", state.m_displayName },
+            { "m_playbackTime", state.m_playbackTime },
+            { "m_canvasHorizontalOffsetRatio",
+              state.m_canvasHorizontalOffsetRatio },
+        };
     }
 
     /// @brief 反序列化项目工作区谱面状态，并兼容旧项目文件。
@@ -44,6 +51,11 @@ struct ProjectWorkspaceBeatmapState {
         state.m_cameraId     = j.value("m_cameraId", std::string{});
         state.m_displayName  = j.value("m_displayName", std::string{});
         state.m_playbackTime = j.value("m_playbackTime", 0.0);
+        state.m_canvasHorizontalOffsetRatio =
+            j.value("m_canvasHorizontalOffsetRatio", 0.0F);
+        if ( !std::isfinite(state.m_canvasHorizontalOffsetRatio) ) {
+            state.m_canvasHorizontalOffsetRatio = 0.0F;
+        }
     }
 };
 
