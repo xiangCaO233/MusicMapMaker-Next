@@ -24,7 +24,7 @@ namespace MMM::Logic
 /// @param note 待转换的玩家物件。
 /// @param targetTrack BGM 区统一绝对轨道。
 /// @param resource 已解析的项目音频资源。
-/// @return 仅绑定 Effect 的普通 Tap 返回转换结果。
+/// @return 未绑定音频或绑定 Effect 的普通 Tap 返回转换结果。
 [[nodiscard]] std::optional<SampleComponent> makeAudioSampleFromPlayerNote(
     const NoteComponent& note, std::uint32_t targetTrack,
     const ::MMM::AudioResource* resource);

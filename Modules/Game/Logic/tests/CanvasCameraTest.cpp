@@ -1581,13 +1581,17 @@ bool testCrossAreaConversionRules()
     hold.m_type  = MMM::NoteType::HOLD;
     auto unbound = *note;
     unbound.m_sampleBinding.reset();
+    const auto silentSample =
+        MMM::Logic::makeAudioSampleFromPlayerNote(unbound, 6, nullptr);
     if ( !convertedSample || convertedSample->m_track != 5 ||
          convertedSample->m_offsetMs != 0 ||
          convertedSample->m_audioResourceId != "effect.wav" ||
-         !near(convertedSample->m_volume, 0.35) ||
+         !near(convertedSample->m_volume, 0.35) || !silentSample ||
+         silentSample->m_track != 6 ||
+         !silentSample->m_audioResourceId.empty() ||
+         !near(silentSample->m_volume, 1.0) ||
          MMM::Logic::makeAudioSampleFromPlayerNote(*note, 5, &main) ||
-         MMM::Logic::makeAudioSampleFromPlayerNote(hold, 5, &effect) ||
-         MMM::Logic::makeAudioSampleFromPlayerNote(unbound, 5, &effect) ) {
+         MMM::Logic::makeAudioSampleFromPlayerNote(hold, 5, &effect) ) {
         XERROR("Note-to-Sample conversion accepted an invalid source");
         return false;
     }
@@ -1665,6 +1669,78 @@ bool testSilentSampleDragConvertsToUnboundNote()
     return samples.empty() && notes.size() == 1 &&
            !notes.get<MMM::Logic::NoteComponent>(*notes.begin())
                 .m_sampleBinding;
+}
+
+/// @brief 验证未绑定 Tap 拖入 BGM 轨道后成为可撤销的空采样草稿。
+/// @return 转换、Undo 与 Redo 均保持未绑定音频语义时返回 true。
+bool testUnboundNoteDragConvertsToSilentSample()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto noteEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        noteEntity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        noteEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    context.hoveredEntity     = noteEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             noteEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::PlayerNote,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              550.0F,
+                              300.0F,
+                              true,
+                          });
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    auto notes   = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    auto samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( !notes.empty() || samples.size() != 1 ||
+         context.actionStack.getUndoStackSize() != 1 ) {
+        XERROR("Unbound Note drag did not commit one cross-area conversion");
+        return false;
+    }
+    const auto& sample =
+        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
+    if ( sample.m_track != 4 || !sample.m_audioResourceId.empty() ||
+         !near(sample.m_volume, 1.0) ) {
+        XERROR("Unbound Note drag created a bound or misplaced sample");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    notes   = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( notes.size() != 1 || !samples.empty() ||
+         notes.get<MMM::Logic::NoteComponent>(*notes.begin())
+             .m_sampleBinding ) {
+        XERROR("Unbound Note conversion undo did not restore the Tap");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    notes   = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    return notes.empty() && samples.size() == 1 &&
+           samples.get<MMM::Logic::SampleComponent>(*samples.begin())
+               .m_audioResourceId.empty();
 }
 
 /// @brief 验证跨 Registry 的同值实体 ID 在复合转换及 Undo 中不会串对象。
@@ -1996,6 +2072,7 @@ int main()
                    testSampleOffsetHandleDrag() &&
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
+                   testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
                    testMixedChartObjectClipboardAcrossSessions() &&

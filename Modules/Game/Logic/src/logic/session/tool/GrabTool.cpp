@@ -489,16 +489,21 @@ std::optional<SampleComponent> makeAudioSampleFromPlayerNote(
 {
     if ( note.m_isSubNote || note.m_type != ::MMM::NoteType::NOTE ||
          note.m_duration != 0.0 || note.m_dtrack != 0 ||
-         !note.m_subNotes.empty() || !note.m_sampleBinding ||
-         note.m_sampleBinding->m_audioResourceId.empty() || !resource ||
-         resource->m_type != ::MMM::AudioTrackType::Effect ) {
+         !note.m_subNotes.empty() ) {
         return std::nullopt;
     }
 
     SampleComponent sample;
-    sample.m_timestamp       = note.m_timestamp;
-    sample.m_offsetMs        = 0;
-    sample.m_track           = targetTrack;
+    sample.m_timestamp = note.m_timestamp;
+    sample.m_offsetMs  = 0;
+    sample.m_track     = targetTrack;
+    if ( !note.m_sampleBinding ||
+         note.m_sampleBinding->m_audioResourceId.empty() ) {
+        return sample;
+    }
+    if ( !resource || resource->m_type != ::MMM::AudioTrackType::Effect ) {
+        return std::nullopt;
+    }
     sample.m_audioResourceId = note.m_sampleBinding->m_audioResourceId;
     sample.m_volume          = note.m_sampleBinding->m_volume;
     return sample;
@@ -1312,7 +1317,8 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             static_cast<std::uint32_t>(current->m_trackIndex),
             resource);
         if ( !converted ) {
-            rejectionReason = "只有绑定 Effect 的普通 Tap 才能拖入 BGM 轨道区";
+            rejectionReason =
+                "只有未绑定音频或绑定 Effect 的普通 Tap 才能拖入 BGM 轨道区";
             break;
         }
         noteConversions.push_back({ entity, *converted, state.selected });
