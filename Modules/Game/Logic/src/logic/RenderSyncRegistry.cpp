@@ -177,20 +177,20 @@ void RenderSyncRegistry::setAtlasUVMap(
 }
 
 /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
-const std::unordered_map<uint32_t, glm::vec4>&
+std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
 RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
 {
-    const auto* snapshot =
-        m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
+    auto snapshot = m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
     if ( snapshot ) {
-        if ( auto* state =
+        if ( const auto* state =
                  findAtlasUVMapStateInSnapshot(*snapshot, cameraId) ) {
-            return state->uvMap;
+            return { snapshot, &state->uvMap };
         }
     }
 
     /// @brief 空 UV 映射回退值，用于没有任何可用图集时返回稳定引用。
-    static const std::unordered_map<uint32_t, glm::vec4> emptyMap;
+    static const auto emptyMap =
+        std::make_shared<const std::unordered_map<uint32_t, glm::vec4>>();
     return emptyMap;
 }
 
@@ -203,7 +203,7 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
     Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    const auto* snapshot =
+    const auto snapshot =
         m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
     const auto* state =
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
@@ -305,12 +305,10 @@ RenderSyncRegistry::findAtlasUVMapStateInSnapshot(
 /// @brief 将当前图集 UV 映射发布为新的逻辑线程只读快照。
 void RenderSyncRegistry::publishAtlasUVSnapshotUnsafe()
 {
-    auto snapshot          = std::make_unique<PublishedAtlasUVSnapshot>();
+    auto snapshot          = std::make_shared<PublishedAtlasUVSnapshot>();
     snapshot->cameraUVMaps = m_cameraUVMaps;
 
-    const auto* publishedSnapshot = snapshot.get();
-    m_atlasUVSnapshotStorage.push_back(std::move(snapshot));
-    m_publishedAtlasUVSnapshot.store(publishedSnapshot,
+    m_publishedAtlasUVSnapshot.store(std::move(snapshot),
                                      std::memory_order_release);
 }
 

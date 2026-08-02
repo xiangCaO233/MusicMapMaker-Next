@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -544,6 +545,36 @@ bool testCompositePlayback(MMM::Audio::AudioManager& manager,
     return true;
 }
 
+/// @brief 验证卸载时间线会释放音频池中已无使用者的完整解码音轨。
+/// @param manager 已初始化音频管理器。
+/// @param samplePath 可解码短音频路径。
+/// @return 时间线卸载后原始音轨不再被缓存强引用保活时返回 true。
+bool testTimelineUnloadReleasesDecodedTrack(MMM::Audio::AudioManager& manager,
+                                            const std::string& samplePath)
+{
+    const auto result =
+        manager.loadAudioTimeline({ MMM::Audio::AudioTimelineLoadEvent{
+                                      .eventId               = 601U,
+                                      .resourceKey           = "release-track",
+                                      .filePath              = samplePath,
+                                      .effectiveStartSeconds = 0.0,
+                                  } },
+                                  0.0,
+                                  "release-decoded-track");
+    std::weak_ptr<ice::AudioTrack> decodedTrack = manager.getBGMTrack();
+    if ( !result.success || decodedTrack.expired() ) {
+        XERROR("Decoded track was unavailable before timeline unload");
+        return false;
+    }
+
+    manager.unloadAudioTimeline();
+    if ( !decodedTrack.expired() ) {
+        XERROR("Timeline unload left decoded track retained by AudioPool");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -577,7 +608,8 @@ int main(int argc, char** argv)
         testIndependentResourceAndGlobalSpeed(manager, samplePath) &&
         testDualUseEffectSharesPreparedAudio(manager, samplePath) &&
         testLegacyBgmWrapper(manager, samplePath) &&
-        testCompositePlayback(manager, samplePath);
+        testCompositePlayback(manager, samplePath) &&
+        testTimelineUnloadReleasesDecodedTrack(manager, samplePath);
 
     manager.shutdown();
     MMM::Runtime::AppThreadPool::instance().shutdown();

@@ -36,6 +36,10 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(__GLIBC__)
+#    include <malloc.h>
+#endif
+
 namespace MMM::Logic
 {
 
@@ -58,6 +62,16 @@ constexpr double RENDER_SNAPSHOT_MIN_HZ = 60.0;
 
 /// @brief 主画布 RenderSnapshot 自适应预算的最高刷新率。
 constexpr double RENDER_SNAPSHOT_MAIN_MAX_HZ = 480.0;
+
+/// @brief 将项目卸载后已空闲的堆页尽快归还操作系统。
+/// @warning 项目关闭低频路径：glibc 会遍历分配器空闲区，禁止放入逻辑、
+/// UI 或渲染热路径；其他运行库保持默认回收策略。
+void releaseUnusedHeapPages() noexcept
+{
+#if defined(__GLIBC__)
+    static_cast<void>(malloc_trim(0));
+#endif
+}
 
 /// @brief 辅助画布 RenderSnapshot 自适应预算的最高刷新率。
 constexpr double RENDER_SNAPSHOT_SECONDARY_MAX_HZ = 240.0;
@@ -1446,6 +1460,9 @@ bool EditorEngine::closeProject()
             audio.unloadSoundEffect(res.m_id);
         }
     }
+    closeResult.m_project.reset();
+    static_cast<void>(audio.releaseUnusedTrackCache());
+    releaseUnusedHeapPages();
 
     XINFO("Project '{}' closed.", closeResult.m_projectTitle);
     return true;
@@ -2000,8 +2017,8 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     return m_renderSyncRegistry.getSyncBuffer(cameraId);
 }
 
-const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
-    const std::string& cameraId) const
+std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
+EditorEngine::getAtlasUVMap(const std::string& cameraId) const
 {
     return m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
@@ -2260,7 +2277,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
     }
 
     {
-        const auto& sessions = m_sessionRegistry.publishedSnapshot().sessions;
+        const auto  publishedSnapshot = m_sessionRegistry.publishedSnapshot();
+        const auto& sessions          = publishedSnapshot->sessions;
         const auto  sourceEntry =
             std::find_if(sessions.begin(),
                          sessions.end(),
@@ -2769,6 +2787,8 @@ bool EditorEngine::refreshEditorConfigSnapshot(
 
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 {
+    std::lock_guard<std::recursive_mutex> updateLock(m_editorConfigUpdateMutex);
+
     // 关键修复：从全局 AppConfig 中同步软件级状态，防止被
     // UI/项目工作区恢复覆盖。
     const auto& globalConfig = Config::AppConfig::instance().getEditorConfig();
@@ -2972,11 +2992,14 @@ void EditorEngine::loop()
                                           editorConfigSnapshotRevision);
 
         // 多 Session 轮询更新
-        /// @brief 当前已发布的 Session 快照，避免每 update 获取注册表锁。
-        /// @warning 逻辑热路径/原子：只读取发布快照指针；快照自身保留
-        /// shared_ptr 所有权，不在本轮循环复制引用计数。
+        /// @brief 当前已发布的 Session 快照读取句柄，避免每 update
+        /// 获取注册表锁。
+        /// @warning 逻辑热路径/原子：每轮只做一次 acquire shared_ptr
+        /// 读取，以保证 UI 替换快照后本轮会话生命周期仍然有效。
+        const auto publishedSessionUpdateSnapshot =
+            m_sessionRegistry.publishedSnapshot();
         const auto& sessionUpdateSnapshot =
-            m_sessionRegistry.publishedSnapshot().sessions;
+            publishedSessionUpdateSnapshot->sessions;
 
         if ( !sessionUpdateSnapshot.empty() ) {
             int32_t activeIndex     = m_sessionRegistry.activeIndex();

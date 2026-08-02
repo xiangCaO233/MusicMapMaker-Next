@@ -649,6 +649,7 @@ void AudioManager::unloadSoundEffect(const std::string& key)
     m_pendingSoundEffectLoads.erase(key);
     m_sfxLeadInSeconds.erase(key);
     m_sfxMutes.erase(key);
+    static_cast<void>(releaseUnusedTrackCache());
 }
 
 /// @brief 停止并释放所有已加载音效池。

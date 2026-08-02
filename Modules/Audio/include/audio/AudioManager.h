@@ -791,6 +791,12 @@ public:
     /// @param filePath UTF-8 音频文件绝对路径。
     void invalidateTrackCache(const std::string& filePath);
 
+    /// @brief 释放已经没有播放器、时间线或分析任务使用的解码音轨缓存。
+    /// @return 本次释放的缓存音轨数量。
+    /// @warning 低频资源卸载路径：可能析构完整 PCM，禁止在音频回调、UI
+    /// 渲染或逻辑热路径中调用。
+    [[nodiscard]] std::size_t releaseUnusedTrackCache();
+
     /// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。
     /// @param filePath 音频文件绝对路径。
     /// @return 加载成功时返回音频轨道；失败时返回空指针。

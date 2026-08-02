@@ -161,10 +161,12 @@ public:
         std::vector<SessionSnapshotEntry>& sessions) const;
 
     /// @brief 获取当前发布给逻辑线程的不可变 Session 快照。
-    /// @return 当前已发布快照。
-    /// @warning 逻辑热路径原子：loop 每 update 读取一次；只做 acquire
-    /// 指针读取，不获取 SessionRegistry 互斥锁，也不复制 shared_ptr。
-    const PublishedSessionSnapshot& publishedSnapshot() const;
+    /// @return 当前已发布快照的共享读取句柄。
+    /// @warning 逻辑热路径原子：loop 每 update 读取一次；acquire
+    /// 读取会产生一次 shared_ptr
+    /// 引用计数变更，用于在 UI
+    /// 并发替换快照时保证本轮逻辑访问安全，并让旧项目会话在最后一个读者离开后及时释放。
+    std::shared_ptr<const PublishedSessionSnapshot> publishedSnapshot() const;
 
     /// @brief 查找第一个 Logo 占位 Session。
     /// @return Logo 占位 Session 索引；不存在时返回 -1。
@@ -194,7 +196,7 @@ public:
 
     /// @brief 将当前 SessionEntry 列表发布为新的逻辑线程只读快照。
     /// @warning 调用者必须持有 mutex()；低频结构/可见性变更路径使用。
-    /// 旧快照保留到注册表析构，避免热路径读侧原子引用计数。
+    /// 旧快照仅保留到最后一个并发读句柄释放。
     void publishSnapshotUnsafe();
 
 private:
@@ -223,11 +225,10 @@ private:
 
     /// @brief 逻辑线程当前可读取的不可变 Session 快照。
     /// @warning 逻辑热路径原子：loop 每 update acquire 读取；写侧在持有
-    /// m_mutex 后 release 发布新快照。原子只承载快照指针。
-    std::atomic<const PublishedSessionSnapshot*> m_publishedSnapshot{ nullptr };
-
-    /// @brief 已发布快照的所有权存储，旧快照延迟到注册表析构释放。
-    std::vector<std::unique_ptr<PublishedSessionSnapshot>> m_snapshotStorage;
+    /// m_mutex 后 release 发布新快照。shared_ptr
+    /// 所有权用于解决读写并发时的快照生命周期。
+    std::atomic<std::shared_ptr<const PublishedSessionSnapshot>>
+        m_publishedSnapshot;
 };
 
 }  // namespace MMM::Logic

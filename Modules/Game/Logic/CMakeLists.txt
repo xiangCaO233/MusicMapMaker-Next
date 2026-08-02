@@ -162,6 +162,12 @@ mmm_add_test_executable(Logic BrushPaletteSessionStateTest
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
 add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
 
+# 注册表快照生命周期测试确保关闭会话和替换图集后旧快照可回收。
+mmm_add_test_executable(Logic RegistrySnapshotLifetimeTest
+                        tests/RegistrySnapshotLifetimeTest.cpp)
+target_link_libraries(RegistrySnapshotLifetimeTest PRIVATE Logic Log)
+add_test(NAME RegistrySnapshotLifetimeTest COMMAND RegistrySnapshotLifetimeTest)
+
 # 打击音效立体声测试覆盖普通物件固定声像和 Flick 全程线性移动。
 mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
 target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
