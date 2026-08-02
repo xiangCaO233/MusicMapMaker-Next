@@ -280,6 +280,9 @@ private:
     /// @brief 当前键盘或鼠标预选的搜索结果下标。
     std::size_t m_searchHighlightedIndex{ 0 };
 
+    /// @brief 用户拖动选择的搜索结果区域高度；零表示使用默认高度。
+    float m_searchResultPaneHeight{ 0.0F };
+
     /// @brief 搜索输入或资源列表变化后需要低频重新评分。
     bool m_searchResultsDirty{ true };
 

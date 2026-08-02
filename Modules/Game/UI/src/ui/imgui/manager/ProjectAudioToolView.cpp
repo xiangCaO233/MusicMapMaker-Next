@@ -1205,6 +1205,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
     const std::string_view searchQuery =
         ProjectAudioToolSearch::trimAsciiWhitespace(m_searchBuffer.data());
+    const float statusHeight =
+        ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     if ( !searchQuery.empty() ) {
         if ( m_searchResults.empty() ) {
             ImGui::TextDisabled("%s", TR("ui.search.no_results").data());
@@ -1213,13 +1215,25 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 "%s: %zu",
                 TR("ui.project_audio_tool.search_results").data(),
                 m_searchResults.size());
-            constexpr std::size_t MAX_VISIBLE_SEARCH_RESULTS = 5;
-            const std::size_t     visibleResultCount =
-                std::min(MAX_VISIBLE_SEARCH_RESULTS, m_searchResults.size());
-            const float resultRowHeight = ImGui::GetFrameHeight();
+            const ImGuiStyle& style           = ImGui::GetStyle();
+            const float       resultRowHeight = ImGui::GetFrameHeight();
+            const float       splitterHeight =
+                std::max(6.0F * dpiScale, style.SeparatorSize * 4.0F);
+            const float minimumCanvasHeight =
+                resultRowHeight * 3.0F + style.WindowPadding.y * 2.0F;
+            const float reservedHeight = minimumCanvasHeight + statusHeight +
+                                         splitterHeight +
+                                         style.ItemSpacing.y * 3.0F;
+            const float searchLayoutAvailableHeight =
+                ImGui::GetContentRegionAvail().y;
             const float resultListHeight =
-                resultRowHeight * static_cast<float>(visibleResultCount) +
-                ImGui::GetStyle().WindowPadding.y * 2.0F;
+                ProjectAudioToolSearch::calculateResultPaneHeight(
+                    m_searchResultPaneHeight,
+                    resultRowHeight,
+                    m_searchResults.size(),
+                    style.WindowPadding.y,
+                    searchLayoutAvailableHeight,
+                    reservedHeight);
             ImGui::BeginChild("ProjectAudioToolSearchResults",
                               { 0.0F, resultListHeight },
                               true);
@@ -1260,11 +1274,41 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 }
             }
             ImGui::EndChild();
+
+            const ImVec2 splitterStart = ImGui::GetCursorScreenPos();
+            const float  splitterWidth =
+                std::max(1.0F, ImGui::GetContentRegionAvail().x);
+            ImGui::InvisibleButton("##ProjectAudioToolSearchResultSplitter",
+                                   { splitterWidth, splitterHeight });
+            const bool splitterActive  = ImGui::IsItemActive();
+            const bool splitterHovered = ImGui::IsItemHovered();
+            if ( splitterActive ) {
+                m_searchResultPaneHeight =
+                    ProjectAudioToolSearch::calculateResultPaneHeight(
+                        resultListHeight + ImGui::GetIO().MouseDelta.y,
+                        resultRowHeight,
+                        m_searchResults.size(),
+                        style.WindowPadding.y,
+                        searchLayoutAvailableHeight,
+                        reservedHeight);
+            }
+            if ( splitterHovered || splitterActive ) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            }
+
+            const ImU32 splitterColor = ImGui::GetColorU32(
+                splitterActive ? ImGuiCol_SeparatorActive
+                               : (splitterHovered ? ImGuiCol_SeparatorHovered
+                                                  : ImGuiCol_Separator));
+            const float splitterLineY = splitterStart.y + splitterHeight * 0.5F;
+            ImGui::GetWindowDrawList()->AddLine(
+                { splitterStart.x, splitterLineY },
+                { splitterStart.x + splitterWidth, splitterLineY },
+                splitterColor,
+                std::max(1.0F, style.SeparatorSize));
         }
     }
     ImGui::Separator();
-    const float statusHeight =
-        ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     ImVec2 childSize = ImGui::GetContentRegionAvail();
     childSize.y      = std::max(1.0F, childSize.y - statusHeight);
     ImGui::BeginChild(
