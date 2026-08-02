@@ -436,8 +436,15 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     return rect;
 }
 
-/// @brief 同尺寸方块堆叠后为下层方块保留的可见比例。
-inline constexpr float STACK_VISIBLE_RATIO = 0.35F;
+/// @brief 同尺寸方块堆叠后为下层方块保留的最小可见比例。
+inline constexpr float STACK_MINIMUM_VISIBLE_RATIO = 0.35F;
+
+/// @brief 同尺寸方块可自由组合的精确堆叠可见比例，对应覆盖 65%、50%、25%。
+inline constexpr std::array<float, 3> STACK_VISIBLE_RATIOS{
+    STACK_MINIMUM_VISIBLE_RATIO,
+    0.50F,
+    0.75F,
+};
 
 /// @brief 判断两个方块是否可视为同尺寸方块。
 [[nodiscard]] inline bool hasMatchingSize(const Rect& lhs, const Rect& rhs)
@@ -535,18 +542,30 @@ inline constexpr float STACK_VISIBLE_RATIO = 0.35F;
         if ( !hasMatchingSize(rawRect, *target) ) continue;
 
         const float stackedX = target->x;
-        const float stackedY = target->y + target->height * STACK_VISIBLE_RATIO;
-        if ( !axisCanAttach(rawRect.x, stackedX, locks.x) ||
-             !axisCanAttach(rawRect.y, stackedY, locks.y) ) {
+        if ( !axisCanAttach(rawRect.x, stackedX, locks.x) ) {
             continue;
         }
 
+        std::optional<float> stackedY;
+        float                bestVerticalDistance = snapThreshold;
+        for ( const float visibleRatio : STACK_VISIBLE_RATIOS ) {
+            const float candidateY = target->y + target->height * visibleRatio;
+            if ( !axisCanAttach(rawRect.y, candidateY, locks.y) ) continue;
+
+            const float distance =
+                locks.y.position ? 0.0F : std::abs(rawRect.y - candidateY);
+            if ( distance > bestVerticalDistance ) continue;
+            bestVerticalDistance = distance;
+            stackedY             = candidateY;
+        }
+        if ( !stackedY ) continue;
+
         rawRect.x          = stackedX;
-        rawRect.y          = stackedY;
+        rawRect.y          = *stackedY;
         locks.x.position   = stackedX;
         locks.x.targetLine = target->x;
-        locks.y.position   = stackedY;
-        locks.y.targetLine = stackedY;
+        locks.y.position   = *stackedY;
+        locks.y.targetLine = *stackedY;
         return rawRect;
     }
 
