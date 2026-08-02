@@ -436,26 +436,33 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     return rect;
 }
 
-/// @brief 收集矩形单轴的边缘、中心和 35%/65% 叠层锚点。
-[[nodiscard]] inline std::array<float, 5> horizontalTargets(const Rect& rect)
+/// @brief 同尺寸方块堆叠后为下层方块保留的可见比例。
+inline constexpr float STACK_VISIBLE_RATIO = 0.35F;
+
+/// @brief 判断两个方块是否可视为同尺寸方块。
+[[nodiscard]] inline bool hasMatchingSize(const Rect& lhs, const Rect& rhs)
+{
+    constexpr float SIZE_TOLERANCE = 0.5F;
+    return std::abs(lhs.width - rhs.width) <= SIZE_TOLERANCE &&
+           std::abs(lhs.height - rhs.height) <= SIZE_TOLERANCE;
+}
+
+/// @brief 收集矩形水平方向的边缘与中心锚点。
+[[nodiscard]] inline std::array<float, 3> horizontalTargets(const Rect& rect)
 {
     return {
         rect.x,
-        rect.x + rect.width * 0.35F,
         rect.x + rect.width * 0.5F,
-        rect.x + rect.width * 0.65F,
         rect.right(),
     };
 }
 
-/// @brief 收集矩形单轴的边缘、中心和 35%/65% 叠层锚点。
-[[nodiscard]] inline std::array<float, 5> verticalTargets(const Rect& rect)
+/// @brief 收集矩形垂直方向的边缘与中心锚点。
+[[nodiscard]] inline std::array<float, 3> verticalTargets(const Rect& rect)
 {
     return {
         rect.y,
-        rect.y + rect.height * 0.35F,
         rect.y + rect.height * 0.5F,
-        rect.y + rect.height * 0.65F,
         rect.bottom(),
     };
 }
@@ -496,16 +503,63 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     return bestPosition;
 }
 
-/// @brief 将拖动方块吸附到其他方块和当前可见工具画布的边缘与中心。
+/// @brief 将拖动方块吸附到同尺寸堆叠位置、其它方块和可见画布的锚点。
+/// @warning 拖动热路径：按缓存的图层顺序检查方块，禁止查询项目资源或重建布局。
 [[nodiscard]] inline Rect snapRect(Rect rawRect, const Rect& visibleCanvas,
                                    std::span<const Rect> otherRects,
                                    float snapThreshold, float releaseThreshold,
                                    SnapLocks& locks)
 {
+    const auto retainLock = [releaseThreshold](float         rawPosition,
+                                               AxisSnapLock& lock) {
+        if ( !lock.position ||
+             std::abs(rawPosition - *lock.position) <= releaseThreshold ) {
+            return;
+        }
+        lock.position.reset();
+        lock.targetLine.reset();
+    };
+    retainLock(rawRect.x, locks.x);
+    retainLock(rawRect.y, locks.y);
+
+    const auto axisCanAttach = [snapThreshold](float rawPosition,
+                                               float stackedPosition,
+                                               const AxisSnapLock& lock) {
+        if ( lock.position ) {
+            return std::abs(*lock.position - stackedPosition) <= 1e-4F;
+        }
+        return std::abs(rawPosition - stackedPosition) <= snapThreshold;
+    };
+    for ( auto target = otherRects.rbegin(); target != otherRects.rend();
+          ++target ) {
+        if ( !hasMatchingSize(rawRect, *target) ) continue;
+
+        const float stackedX = target->x;
+        const float stackedY = target->y + target->height * STACK_VISIBLE_RATIO;
+        if ( !axisCanAttach(rawRect.x, stackedX, locks.x) ||
+             !axisCanAttach(rawRect.y, stackedY, locks.y) ) {
+            continue;
+        }
+
+        rawRect.x          = stackedX;
+        rawRect.y          = stackedY;
+        locks.x.position   = stackedX;
+        locks.x.targetLine = target->x;
+        locks.y.position   = stackedY;
+        locks.y.targetLine = stackedY;
+        return rawRect;
+    }
+
+    if ( locks.x.position && locks.y.position ) {
+        rawRect.x = *locks.x.position;
+        rawRect.y = *locks.y.position;
+        return rawRect;
+    }
+
     std::vector<float> xTargets;
     std::vector<float> yTargets;
-    xTargets.reserve(otherRects.size() * 5 + 3);
-    yTargets.reserve(otherRects.size() * 5 + 3);
+    xTargets.reserve(otherRects.size() * 3 + 3);
+    yTargets.reserve(otherRects.size() * 3 + 3);
     xTargets.push_back(visibleCanvas.x);
     xTargets.push_back(visibleCanvas.x + visibleCanvas.width * 0.5F);
     xTargets.push_back(visibleCanvas.right());
@@ -540,7 +594,7 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     std::span<const Rect> otherRects)
 {
     std::vector<float> targets;
-    targets.reserve(otherRects.size() * 5 + 3);
+    targets.reserve(otherRects.size() * 3 + 3);
     if ( horizontal ) {
         targets.push_back(visibleCanvas.x);
         targets.push_back(visibleCanvas.x + visibleCanvas.width * 0.5F);
@@ -613,7 +667,7 @@ inline void appendSubtractedRect(const Rect& source, const Rect& occluder,
     return bestEdge;
 }
 
-/// @brief 将缩放中的活动边吸附到方块及可见画布的边缘、中心和叠层锚点。
+/// @brief 将缩放中的活动边吸附到方块及可见画布的边缘和中心锚点。
 [[nodiscard]] inline Rect snapResizeRect(
     Rect rawRect, ResizeEdge horizontalEdge, ResizeEdge verticalEdge,
     const Rect& visibleCanvas, std::span<const Rect> otherRects,

@@ -207,7 +207,7 @@ private:
     /// @brief 排除当前移动对象后，各方块可用于增量裁切的标签区域基线。
     std::vector<ProjectAudioToolLayout::Rect> m_interactionBaseLabelRects;
 
-    /// @brief 当前拖动方块可吸附的其它方块矩形。
+    /// @brief 当前拖动方块可吸附的其它方块矩形，按图层从低到高排列。
     std::vector<ProjectAudioToolLayout::Rect> m_dragSnapTargets;
 
     /// @brief 当前拖动方块必须满足的下层可见性约束。

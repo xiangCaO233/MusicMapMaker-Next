@@ -46,7 +46,8 @@ constexpr float ITEM_GAP = 18.0F;
 constexpr float CANVAS_PADDING = 24.0F;
 
 /// @brief 任一下层方块必须保留的最小可见比例。
-constexpr float MINIMUM_VISIBLE_RATIO = 0.35F;
+constexpr float MINIMUM_VISIBLE_RATIO =
+    ProjectAudioToolLayout::STACK_VISIBLE_RATIO;
 
 /// @brief 方块开始吸附的逻辑像素距离。
 constexpr float SNAP_THRESHOLD = 8.0F;
