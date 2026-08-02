@@ -1127,22 +1127,25 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
     if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleStartDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleStartDrag(m_ctx, cmd);
     }
 }
 
 void InteractionController::handleCommand(const CmdUpdateDrag& cmd)
 {
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleUpdateDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleUpdateDrag(m_ctx, cmd);
     }
 }
 
 void InteractionController::handleCommand(const CmdEndDrag& cmd)
 {
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleEndDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleEndDrag(m_ctx, cmd);
     }
 }
 

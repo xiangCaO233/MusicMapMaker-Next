@@ -2398,7 +2398,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( m_isMiddleCanvasPanning ) {
         if ( middleClicked ) {
             // 中键取得当前手势所有权前先结束已存在的左/右键编辑，避免工具状态悬空。
-            if ( m_leftPressStartedOnCanvas &&
+            if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
                  currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
@@ -2407,9 +2407,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Logic::EditTool::Draw ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-            } else if ( m_leftPressStartedOnEntity &&
-                        currentSnapshot->currentTool ==
-                            Logic::EditTool::Move ) {
+            } else if ( m_leftPressStartedObjectDrag ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
             }
@@ -2427,6 +2425,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_leftPressStartedOnCanvas      = false;
             m_leftPressStartedInTrackLayout = false;
             m_leftPressStartedOnEntity      = false;
+            m_leftPressStartedObjectDrag    = false;
             m_leftPressDragged              = false;
             m_colorStrokeEntities.clear();
             resetContinuousEditCommands();
@@ -2475,6 +2474,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnCanvas      = false;
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
+        m_leftPressStartedObjectDrag    = false;
         m_leftPressDragged              = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
@@ -2885,6 +2885,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnCanvas      = false;
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
+        m_leftPressStartedObjectDrag    = false;
         m_leftPressDragged              = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
@@ -2893,6 +2894,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnCanvas      = isHovered;
         m_leftPressStartedInTrackLayout = isMouseInTrackLayout;
         m_leftPressStartedOnEntity      = hoveredEntity != entt::null;
+        m_leftPressStartedObjectDrag    = false;
         m_leftPressDragged              = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
@@ -2905,6 +2907,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Logic::CmdSelectEntity{ hoveredEntity,
                                                     !ImGui::GetIO().KeyCtrl,
                                                     hoveredObjectKind }));
+                    if ( !currentSnapshot->isPlaying ) {
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdStartDrag{ hoveredEntity,
+                                                     m_cameraId,
+                                                     ImGui::GetIO().KeyCtrl,
+                                                     hoveredObjectKind }));
+                        m_leftPressStartedObjectDrag = true;
+                    }
                 } else {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
@@ -2924,6 +2935,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                  m_cameraId,
                                                  ImGui::GetIO().KeyCtrl,
                                                  hoveredObjectKind }));
+                    m_leftPressStartedObjectDrag = true;
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -2949,7 +2961,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( ImGui::IsMouseDragging(0) ) {
         m_leftPressDragged = true;
 
-        if ( m_leftPressStartedOnCanvas &&
+        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             bool autoScrolled = false;
             if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying ) {
@@ -3007,8 +3019,10 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            ImGui::GetIO().KeyShift,
                                            ImGui::GetIO().KeyCtrl }));
             }
-        } else if ( m_leftPressStartedOnEntity &&
-                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
+        } else if ( m_leftPressStartedObjectDrag &&
+                    (currentSnapshot->currentTool == Logic::EditTool::Move ||
+                     currentSnapshot->currentTool ==
+                         Logic::EditTool::Marquee) ) {
             const glm::vec2 autoPanDelta =
                 currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying
                     ? objectDragAutoPanDelta(
@@ -3068,7 +3082,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
             currentSnapshot->currentTool == Logic::EditTool::Move;
 
-        if ( m_leftPressStartedOnCanvas &&
+        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
@@ -3076,8 +3090,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-        } else if ( m_leftPressStartedOnEntity &&
-                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
+        } else if ( m_leftPressStartedObjectDrag ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
         }
@@ -3098,6 +3111,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnCanvas      = false;
         m_leftPressStartedInTrackLayout = false;
         m_leftPressStartedOnEntity      = false;
+        m_leftPressStartedObjectDrag    = false;
         m_leftPressDragged              = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();

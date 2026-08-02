@@ -91,6 +91,50 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.isActive           = false;
 }
 
+/// @brief 将当前绘制手势切换到鼠标所在的统一画布轨道区域。
+/// @param ctx 会话上下文。
+/// @param lane 当前鼠标命中的统一轨道地址。
+/// @param time 当前鼠标对应的逻辑时间。
+/// @param mouseY 当前鼠标纵坐标。
+/// @param isShiftDown 是否正在进行 Shift 拖绘。
+/// @warning 绘制更新热路径：只重置当前笔刷的小型状态，不得访问文件系统或遍历
+/// ECS。
+void retargetBrushToLane(SessionContext& ctx, CanvasLaneAddress lane,
+                         double time, float mouseY, bool isShiftDown)
+{
+    const bool createsAudioSample     = lane.kind == CanvasLaneKind::Bgm;
+    ctx.brushState.createsAudioSample = createsAudioSample;
+    ctx.brushState.time               = time;
+    ctx.brushState.track              = static_cast<int>(lane.absoluteTrack(
+        static_cast<std::uint32_t>(std::max(0, ctx.trackCount))));
+    ctx.brushState.type               = ::MMM::NoteType::NOTE;
+    ctx.brushState.duration           = 0.0;
+    ctx.brushState.dtrack             = 0;
+    ctx.brushState.holdStartTime      = -1.0;
+    ctx.brushState.startTrack         = ctx.brushState.track;
+    ctx.brushState.startMouseY        = mouseY;
+    ctx.brushState.segmentStartMouseY = mouseY;
+    ctx.brushState.polylineSegments.clear();
+    ctx.brushState.activeAudioResourceId.clear();
+    ctx.brushState.activeSampleBinding.reset();
+
+    if ( createsAudioSample ) {
+        ctx.brushState.activeAudioResourceId =
+            ctx.brushState.selectedAudioResourceId;
+        return;
+    }
+
+    if ( !ctx.brushState.selectedAudioResourceId.empty() ) {
+        ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
+            ctx.brushState.selectedAudioResourceId,
+            ctx.brushState.selectedAudioVolume,
+        };
+    }
+    if ( isShiftDown ) {
+        ctx.brushState.holdStartTime = time;
+    }
+}
+
 /// @brief 判断批量操作条目中是否已经包含指定实体。
 bool hasBatchEntryForEntity(const std::vector<BatchNoteAction::Entry>& entries,
                             entt::entity                               entity)
@@ -505,10 +549,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     }
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
 
-    if ( ctx.brushState.createsAudioSample ) {
-        if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
-            return;
-        }
+    const bool isPreview =
+        cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas";
+    std::optional<CanvasLaneAddress> currentLane;
+    if ( !isPreview ) {
         const auto laneProjection = calculateCanvasLaneProjection(
             itCamera->second.viewportWidth,
             ctx.trackCount,
@@ -517,9 +561,29 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             ctx.lastConfig.visual.trackLayout.right,
             itCamera->second.horizontalOffsetX,
             true);
-        const auto lane = laneProjection.laneAt(cmd.mouseX);
-        if ( lane && lane->kind == CanvasLaneKind::Bgm ) {
-            ctx.brushState.track = static_cast<int>(lane->absoluteTrack(
+        currentLane = laneProjection.laneAt(cmd.mouseX);
+        if ( !currentLane ) return;
+
+        const bool targetCreatesAudioSample =
+            currentLane->kind == CanvasLaneKind::Bgm;
+        if ( targetCreatesAudioSample != ctx.brushState.createsAudioSample ) {
+            if ( !targetCreatesAudioSample &&
+                 !ctx.brushState.selectedAudioResourceId.empty() &&
+                 ctx.brushState.selectedAudioTrackType ==
+                     ::MMM::AudioTrackType::Main ) {
+                resetBrushState(ctx);
+                ctx.lastActionMessage = "主音轨不能绑定到玩家物件";
+                return;
+            }
+            retargetBrushToLane(
+                ctx, *currentLane, currentPosTime, cmd.mouseY, cmd.isShiftDown);
+            return;
+        }
+    }
+
+    if ( ctx.brushState.createsAudioSample ) {
+        if ( currentLane && currentLane->kind == CanvasLaneKind::Bgm ) {
+            ctx.brushState.track = static_cast<int>(currentLane->absoluteTrack(
                 static_cast<std::uint32_t>(ctx.trackCount)));
             ctx.brushState.time  = currentPosTime;
         }
@@ -542,7 +606,9 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float trackAreaW   = rightX - leftX;
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
-        static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
+        currentLane
+            ? static_cast<int>(currentLane->index)
+            : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     currentTrack = std::clamp(currentTrack, 0, ctx.trackCount - 1);
 
     if ( cmd.isShiftDown && !ctx.lastConfig.settings.enablePolylineEditing ) {

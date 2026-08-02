@@ -246,6 +246,8 @@ private:
     bool m_leftPressStartedInTrackLayout{ false };
     /// @brief 左键按下时是否命中实体。
     bool m_leftPressStartedOnEntity{ false };
+    /// @brief 当前左键手势是否已经向逻辑线程发起物件拖拽。
+    bool m_leftPressStartedObjectDrag{ false };
     /// @brief 当前左键手势是否已经发生拖动。
     bool m_leftPressDragged{ false };
     /// @brief 当前中键手势是否正在二维平移主画布。
