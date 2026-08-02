@@ -256,9 +256,6 @@ private:
     /// @brief 当前单方块拖动手势是否已经越过拖动阈值。
     bool m_itemDragMoved{ false };
 
-    /// @brief 当前手势是否从已选方块开始，用于短按释放时反选。
-    bool m_itemDragStartedSelected{ false };
-
     /// @brief 当前移动或缩放的水平和垂直吸附滞回状态。
     ProjectAudioToolLayout::SnapLocks m_snapLocks;
 

@@ -677,9 +677,6 @@ void ProjectAudioToolView::clearActiveItem()
 void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
                                          ImVec2      mousePosition)
 {
-    m_itemDragStartedSelected =
-        itemIndex < m_items.size() &&
-        m_items[itemIndex].audioResourceId == m_selectedAudioResourceId;
     const auto activeIndex = activateItem(itemIndex);
     if ( !activeIndex ) return;
 
@@ -1296,14 +1293,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 return item.audioResourceId == m_searchFocusRequestId;
             });
         if ( requestedItem != m_items.end() ) {
-            const bool selectionChanged =
-                requestedItem->audioResourceId != m_selectedAudioResourceId;
             const auto activeIndex = activateItem(static_cast<std::size_t>(
                 std::distance(m_items.begin(), requestedItem)));
             if ( activeIndex ) {
-                if ( selectionChanged ) {
-                    previewEffectSelection(m_items[*activeIndex]);
-                }
+                previewEffectSelection(m_items[*activeIndex]);
                 const auto& activeRect = m_items[*activeIndex].rect;
                 const float targetScrollX =
                     (activeRect.x + activeRect.width * 0.5F) * dpiScale -
@@ -1517,6 +1510,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 beginItemDrag(*hoveredItem, mouseLogical);
             }
         } else {
+            if ( !m_selectedAudioResourceId.empty() ) {
+                clearActiveItem();
+                persistWorkspace();
+            }
             const bool additiveSelection =
                 ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
             m_marqueeSelecting = true;
@@ -1582,15 +1579,12 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         } else {
             rebuildLabelRects();
             m_interactionBaseLabelRects.clear();
-            if ( m_itemDragStartedSelected && !m_itemDragMoved ) {
-                clearActiveItem();
-            } else if ( !m_itemDragMoved ) {
+            if ( !m_itemDragMoved ) {
                 previewEffectSelection(item);
             }
             persistWorkspace();
             m_draggingItem.reset();
-            m_itemDragMoved           = false;
-            m_itemDragStartedSelected = false;
+            m_itemDragMoved = false;
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};
