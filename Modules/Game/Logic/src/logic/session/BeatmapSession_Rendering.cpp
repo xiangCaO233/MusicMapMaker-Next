@@ -20,6 +20,7 @@
 #include "mmm/project/Project.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <numeric>
@@ -38,6 +39,73 @@ struct BeatmapStatusStats {
     /// @brief 当前谱面的最大连击数。
     size_t maxCombo{ 0 };
 };
+
+/// @brief 查询当前检视类型实际对应的悬浮部件拍位。
+/// @param inspect 当前结构化悬浮检视信息。
+/// @return 存在可显示拍位时返回对应部件，否则返回空指针。
+/// @warning 快照热路径：仅执行固定分支选择，不得扫描 ECS 或分配内存。
+const HoverBeatPoint* inspectedHoverBeatPoint(const HoverInspectInfo& inspect)
+{
+    switch ( inspect.kind ) {
+    case HoverInspectKind::Note:
+    case HoverInspectKind::HoldHead:
+    case HoverInspectKind::FlickHead: return &inspect.head;
+    case HoverInspectKind::HoldEnd:
+    case HoverInspectKind::FlickEnd:
+    case HoverInspectKind::PolylineHoldEnd:
+    case HoverInspectKind::PolylineFlickEnd: return &inspect.end;
+    case HoverInspectKind::FlickBody:
+    case HoverInspectKind::PolylineHead:
+    case HoverInspectKind::PolylineNode:
+    case HoverInspectKind::PolylineFlickBody: return &inspect.body;
+    case HoverInspectKind::AudioSampleAnchor: return &inspect.head;
+    case HoverInspectKind::AudioSampleTrigger:
+        return inspect.end.show ? &inspect.end : &inspect.head;
+    case HoverInspectKind::HoldBody:
+    case HoverInspectKind::PolylineHoldBody:
+    case HoverInspectKind::None: return nullptr;
+    }
+    return nullptr;
+}
+
+/// @brief 根据悬浮 Note 拍位生成单轨单拍临时分拍预览。
+/// @param snapshot 待写入的渲染快照。
+/// @param inspect 当前结构化悬浮检视信息。
+/// @param currentBeatDivisor 当前全局分拍数。
+/// @warning 快照热路径：仅执行常数次整数与浮点运算，不得访问完整注册表。
+void updateHoverSubdivisionPreview(RenderSnapshot&         snapshot,
+                                   const HoverInspectInfo& inspect,
+                                   int                     currentBeatDivisor)
+{
+    snapshot.hoverSubdivisionPreview = HoverSubdivisionPreview{};
+    if ( inspect.objectKind != ChartObjectKind::PlayerNote ) return;
+
+    const auto* point = inspectedHoverBeatPoint(inspect);
+    if ( !point || !point->show || point->track < 0 ||
+         point->track >= snapshot.trackCount || point->denominator <= 1 ||
+         !std::isfinite(point->beatStartTime) ||
+         !std::isfinite(point->beatEndTime) ||
+         !std::isfinite(point->beatDuration) ||
+         point->beatEndTime <= point->beatStartTime ||
+         point->beatDuration <= 0.0 ) {
+        return;
+    }
+
+    const int  divisor = currentBeatDivisor > 0 ? currentBeatDivisor : 4;
+    const auto scaledNumerator =
+        static_cast<std::int64_t>(point->numerator) * divisor;
+    if ( scaledNumerator % point->denominator == 0 ) return;
+
+    snapshot.hoverSubdivisionPreview = {
+        .show          = true,
+        .track         = point->track,
+        .numerator     = point->numerator,
+        .denominator   = point->denominator,
+        .beatStartTime = point->beatStartTime,
+        .beatEndTime   = point->beatEndTime,
+        .beatDuration  = point->beatDuration,
+    };
+}
 
 /// @brief 判断视图是否属于播放态可背压的辅助画布。
 /// @param cameraId 当前画布 ID。
@@ -717,6 +785,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->acceptsInteraction = isActiveSession;
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
+        snapshot->trackCount         = m_ctx->trackCount;
         snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
         snapshot->bmsEditingEnabled =
             m_ctx->lastConfig.settings.enableBmsEditing;
@@ -843,10 +912,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     point.time  = time;
                     point.track = track;
 
-                    const TimelineComponent* activeBpm = nullptr;
-                    for ( const auto& bpmEv : bpmEvents ) {
+                    const TimelineComponent* activeBpm      = nullptr;
+                    size_t                   activeBpmIndex = 0;
+                    for ( size_t bpmIndex = 0; bpmIndex < bpmEvents.size();
+                          ++bpmIndex ) {
+                        const auto* bpmEv = bpmEvents[bpmIndex];
                         if ( bpmEv->m_timestamp <= time + 1e-4 ) {
-                            activeBpm = bpmEv;
+                            activeBpm      = bpmEv;
+                            activeBpmIndex = bpmIndex;
                         } else {
                             break;
                         }
@@ -945,6 +1018,20 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                              beatsInActive + 1);
                     point.numerator = bestNum;
                     point.denominator = bestDen;
+                    point.beatStartTime =
+                        activeBpm->m_timestamp +
+                        static_cast<double>(beatsInActive) * beatDuration;
+                    point.beatEndTime  = point.beatStartTime + beatDuration;
+                    point.beatDuration = beatDuration;
+                    if ( !isBeforeFirstBpm &&
+                         activeBpmIndex + 1 < bpmEvents.size() ) {
+                        const double nextBpmTime =
+                            bpmEvents[activeBpmIndex + 1]->m_timestamp;
+                        if ( nextBpmTime > point.beatStartTime &&
+                             nextBpmTime < point.beatEndTime ) {
+                            point.beatEndTime = nextBpmTime;
+                        }
+                    }
                     return point;
                 };
 
@@ -1121,6 +1208,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     }
 
                     snapshot->hoverInspect = inspect;
+                    if ( !m_ctx->isDragging ) {
+                        updateHoverSubdivisionPreview(
+                            *snapshot, inspect, config.settings.beatDivisor);
+                    }
                     if ( inspect.head.show ) {
                         setLegacyPoint(inspect.head);
                     } else if ( inspect.body.show ) {
@@ -1214,8 +1305,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         if ( mainCameraFinal ) {
             finalMainHeight = mainCameraFinal->viewportHeight;
         }
-
-        snapshot->trackCount = m_ctx->trackCount;
 
         // --- 注入画笔预览状态 ---
         if ( isActiveSession && m_ctx->brushState.isActive ) {

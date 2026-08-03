@@ -117,15 +117,19 @@ private:
                                  float singleTrackW, float trackAreaW,
                                  const Config::EditorConfig& config);
 
+    /// @param allowHoverSubdivisionPreview
+    /// 是否允许绘制主画布玩家轨道的悬浮检视分拍预览。
     /// @warning 热路径：可见拍线每次动态快照生成时执行；BPM
-    /// 列表必须由调用方提供缓存，禁止此处完整遍历或排序 timeline registry。
+    /// 列表必须由调用方提供缓存，禁止此处完整遍历或排序 timeline registry；临时
+    /// 分拍预览的单拍切分数必须限制在 128 以内。
     static void drawBeatLines(
         Batcher& batcher, float viewportHeight, float judgmentLineY,
         const Config::EditorConfig&                  config,
         const std::vector<const TimelineComponent*>& bpmEvents,
         double currentTime, const ScrollCache* cache, float leftX, float topY,
         float bottomY, float trackAreaW, float renderScaleY,
-        bool revealNearCursor, float opacityScale);
+        bool revealNearCursor, float opacityScale,
+        bool allowHoverSubdivisionPreview);
 
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。

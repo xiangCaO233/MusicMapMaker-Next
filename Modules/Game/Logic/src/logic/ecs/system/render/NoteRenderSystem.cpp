@@ -407,7 +407,8 @@ void NoteRenderSystem::generateSnapshot(
                                             trackAreaW,
                                             renderScaleY,
                                             revealBeatLinesNearCursor,
-                                            1.0F);
+                                            1.0F,
+                                            isMainCanvas);
         }
 
         if ( isMainCanvas && shouldDrawBeatLines ) {
@@ -441,7 +442,8 @@ void NoteRenderSystem::generateSnapshot(
                                                 visibleRight - visibleLeft,
                                                 renderScaleY,
                                                 revealBeatLinesNearCursor,
-                                                0.28F);
+                                                0.28F,
+                                                false);
                 batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
             }
         }

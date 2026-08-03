@@ -1553,6 +1553,94 @@ bool testSampleHoverInspectDetails()
     return true;
 }
 
+/// @brief 验证离开当前分拍网格的悬浮 Note 只生成单轨单拍临时预览。
+/// @return 1/3 Note 在 1/4 网格触发预览且在兼容的 1/6 网格关闭时返回 true。
+bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
+{
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 6;
+    beatmap->m_baseMapMetadata.preference_bpm = 120.0;
+
+    MMM::Timing timing;
+    timing.m_timestamp             = 0.0;
+    timing.m_bpm                   = 120.0;
+    timing.m_beat_length           = 500.0;
+    timing.m_timingEffect          = MMM::TimingEffect::BPM;
+    timing.m_timingEffectParameter = 120.0;
+    beatmap->m_timings.push_back(timing);
+
+    MMM::Note note;
+    note.m_timestamp = 1166.6666666667;
+    note.m_track     = 5;
+    beatmap->m_noteData.notes.push_back(note);
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+    configureObjectEditingCanvas(context);
+    context.currentBeatmap->m_baseMapMetadata.track_count = 6;
+    context.trackCount                                    = 6;
+    context.lastConfig.settings.beatDivisor               = 4;
+
+    const auto view = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( view.size() != 1 ) {
+        XERROR("Hover subdivision preview setup did not load one Note");
+        return false;
+    }
+    const auto entity = *view.begin();
+    auto&      interaction =
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    interaction.isHovered = true;
+    interaction.hoveredPart =
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head);
+    context.hoveredEntity     = entity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+    context.mouseCameraId   = "Basic2DCanvas";
+    context.isMouseInCanvas = true;
+    context.lastMousePos    = { 350.0F, 200.0F };
+
+    auto config = context.lastConfig;
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Hover subdivision preview did not publish a canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot ) return false;
+    const auto& preview = snapshot->hoverSubdivisionPreview;
+    if ( !preview.show || preview.track != 5 || preview.numerator != 1 ||
+         preview.denominator != 3 || !near(preview.beatStartTime, 1.0) ||
+         !near(preview.beatEndTime, 1.5) || !near(preview.beatDuration, 0.5) ) {
+        XERROR("Hover subdivision preview escaped the inspected track or beat");
+        return false;
+    }
+
+    context.isDragging        = true;
+    context.draggedEntity     = entity;
+    context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.draggedPart       = MMM::Logic::HoverPart::Head;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR("Dragging did not restore the configured beat grid preview");
+        return false;
+    }
+    context.isDragging    = false;
+    context.draggedEntity = entt::null;
+
+    config.settings.beatDivisor = 6;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR("Compatible current beat grid still enabled hover preview");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证绑定采样的玩家物件会向主画布公开独立试听字段。
 /// @return 悬浮信息保留实体类型、资源 ID 和物件音量时返回 true。
 bool testBoundNoteHoverInspectAudioPreview()
@@ -2347,6 +2435,7 @@ int main()
                    testObjectSampleVolumeCommandRoutesThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
+                   testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&

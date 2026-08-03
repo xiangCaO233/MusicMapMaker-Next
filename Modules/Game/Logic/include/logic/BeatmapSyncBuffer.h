@@ -129,6 +129,12 @@ struct HoverBeatPoint {
     int denominator{ 1 };
     /// @brief 部位精确时间戳，单位秒
     double time{ 0.0 };
+    /// @brief 部位所在拍的起点时间，单位秒。
+    double beatStartTime{ 0.0 };
+    /// @brief 部位所在拍的终点时间，单位秒。
+    double beatEndTime{ 0.0 };
+    /// @brief 当前 BPM 下完整一拍的名义时长，单位秒。
+    double beatDuration{ 0.0 };
     /// @brief 部位所在轨道
     int32_t track{ 0 };
 };
@@ -176,6 +182,24 @@ struct HoverInspectInfo {
 
     /// @brief 当前悬浮位置按重叠检测规则命中的物件数量。
     int overlapCount{ 1 };
+};
+
+/// @brief 悬浮检视物件触发的单轨单拍临时分拍预览。
+struct HoverSubdivisionPreview {
+    /// @brief 是否需要替换目标轨道当前拍内的分拍线。
+    bool show{ false };
+    /// @brief 临时预览所属的玩家轨道。
+    int32_t track{ 0 };
+    /// @brief 悬浮部件在目标拍内的最简分拍分子。
+    int numerator{ 0 };
+    /// @brief 临时预览使用的分拍分母。
+    int denominator{ 1 };
+    /// @brief 目标拍起点时间，单位秒。
+    double beatStartTime{ 0.0 };
+    /// @brief 目标拍终点时间，单位秒。
+    double beatEndTime{ 0.0 };
+    /// @brief 生成临时分拍线所用的完整拍时长，单位秒。
+    double beatDuration{ 0.0 };
 };
 
 /**
@@ -457,6 +481,8 @@ struct RenderSnapshot {
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
     HoverInspectInfo hoverInspect;
+    /// @brief 当前悬浮 Note 的单轨单拍临时分拍预览。
+    HoverSubdivisionPreview hoverSubdivisionPreview;
 
     bool   isPreviewHovered{ false };
     float  previewHoverY{ 0.0f };
@@ -654,6 +680,7 @@ struct RenderSnapshot {
         hoveredNoteTime          = 0.0;
         hoveredNoteTrack         = 0;
         hoverInspect             = HoverInspectInfo{};
+        hoverSubdivisionPreview  = HoverSubdivisionPreview{};
         isPreviewHovered         = false;
         previewHoverY            = 0.0f;
         previewHoverTime         = 0.0;
