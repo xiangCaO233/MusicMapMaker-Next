@@ -8,13 +8,27 @@
 namespace MMM::Logic::System
 {
 
-bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
-                                           size_t frameCount) const
+bool HitFXSystem::isNonHoldEffectFinished(double elapsed,
+                                          float  duration) noexcept
 {
-    if ( isLooping )
-        return false;  // Hold 在持续时间内不视为完成（由 update 外部控制）
-    double totalDuration = static_cast<double>(frameCount) / baseFps;
-    return (currentTime - startTime) >= totalDuration;
+    if ( !std::isfinite(elapsed) || !std::isfinite(duration) ) return true;
+    if ( elapsed < 0.0 ) return false;
+    return elapsed >= static_cast<double>(std::max(duration, 0.0F));
+}
+
+std::optional<std::size_t> HitFXSystem::loopingEffectFrameIndex(
+    double elapsed, float baseFps, std::size_t frameCount) noexcept
+{
+    if ( !std::isfinite(elapsed) || elapsed < 0.0 || !std::isfinite(baseFps) ||
+         baseFps <= 0.0F || frameCount == 0U ) {
+        return std::nullopt;
+    }
+
+    const double absoluteFrame = std::floor(elapsed * baseFps);
+    if ( !std::isfinite(absoluteFrame) ) return std::nullopt;
+    const double wrappedFrame =
+        std::fmod(absoluteFrame, static_cast<double>(frameCount));
+    return static_cast<std::size_t>(wrappedFrame);
 }
 
 void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
@@ -180,13 +194,13 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
     }
 
     ActiveEffect newEffect;
-    newEffect.startTime   = ev.timestamp;
-    newEffect.duration    = ev.duration;
-    newEffect.trackIndex  = ev.trackIndex;
-    newEffect.trackSpan   = ev.trackSpan;
-    newEffect.trackOffset = ev.trackOffset;
-    newEffect.isLooping   = (ev.type == ::MMM::NoteType::HOLD);
-    newEffect.effectKey   = effectKey;
+    newEffect.startTime    = ev.timestamp;
+    newEffect.holdDuration = ev.duration;
+    newEffect.trackIndex   = ev.trackIndex;
+    newEffect.trackSpan    = ev.trackSpan;
+    newEffect.trackOffset  = ev.trackOffset;
+    newEffect.isHold       = (ev.type == ::MMM::NoteType::HOLD);
+    newEffect.effectKey    = effectKey;
 
     m_trackActiveEffects[ev.trackIndex] = newEffect;
 }
@@ -210,30 +224,31 @@ void HitFXSystem::update(double                       animateTime,
         triggerVisual(ev, config);
     }
 
-    auto& skinManager = Config::SkinManager::instance();
-    // 4. 清理已经播放完成的非循环特效
-    float baseFps = skinManager.getEffectBaseFps();
+    // 4. 清理已经播放完成的特效
     for ( auto it = m_trackActiveEffects.begin();
           it != m_trackActiveEffects.end(); ) {
         auto& active = it->second;
 
-        const auto* seq =
-            skinManager.getEffectSequence("note.effect." + active.effectKey);
-        size_t frameCount = seq ? seq->frames.size() : 0;
-
-        if ( active.isLooping ) {
+        if ( active.isHold ) {
+            auto&       skinManager = Config::SkinManager::instance();
+            const auto* seq = skinManager.getEffectSequence("note.effect." +
+                                                            active.effectKey);
+            const std::size_t frameCount = seq ? seq->frames.size() : 0U;
+            const float       baseFps    = skinManager.getEffectBaseFps();
             // 对于 Hold，如果当前时间超过了 Hold
             // 结束时间，且至少播放完一个完整的普通动画周期，则结束
             // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
             double animDuration = static_cast<double>(frameCount) / baseFps;
-            if ( animateTime > (active.startTime + active.duration) &&
+            if ( animateTime > (active.startTime + active.holdDuration) &&
                  animateTime >= (active.startTime + animDuration) ) {
                 it = m_trackActiveEffects.erase(it);
                 continue;
             }
         } else {
-            // 普通物件播放一次即结束
-            if ( active.isFinished(animateTime, baseFps, frameCount) ) {
+            // 普通物件服从视觉配置的固定寿命，与皮肤帧数解耦。
+            if ( isNonHoldEffectFinished(
+                     animateTime - active.startTime,
+                     config.visual.nonHoldHitEffectDuration) ) {
                 it = m_trackActiveEffects.erase(it);
                 continue;
             }
@@ -325,19 +340,17 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         if ( elapsed < 0 )
             continue;  // 尚未到达触发点（虽然 logic 逻辑应该保证触发）
 
-        size_t frameIndex = 0;
-        if ( active.isLooping ) {
-            // Hold 循环播放动画
-            frameIndex =
-                static_cast<size_t>(std::floor(elapsed * baseFps)) % frameCount;
-        } else {
-            // 普通/Flick 播放一次
-            frameIndex = static_cast<size_t>(std::floor(elapsed * baseFps));
-            if ( frameIndex >= frameCount ) continue;  // 已播放完（防御性判断）
+        if ( !active.isHold &&
+             isNonHoldEffectFinished(elapsed,
+                                     config.visual.nonHoldHitEffectDuration) ) {
+            continue;
         }
+        const auto frameIndex =
+            loopingEffectFrameIndex(elapsed, baseFps, frameCount);
+        if ( !frameIndex ) continue;
 
         // 使用 SkinManager 统一分配好的起始 ID
-        uint32_t textureId = seq->startId + static_cast<uint32_t>(frameIndex);
+        uint32_t textureId = seq->startId + static_cast<uint32_t>(*frameIndex);
 
         // 获取特效序列帧的 UV 信息以计算比例
         auto itTex = snapshot->uvMap.find(textureId);

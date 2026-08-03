@@ -23,12 +23,15 @@ struct EditorConfig {
 
     /// @brief 将物件渲染选项恢复为应用默认配置。
     /// @details
-    /// 恢复横纵缩放、绑定音效标签、长条填充模式和打开项目时的默认调色方案。
+    /// 恢复横纵缩放、非 Hold 打击特效时长、绑定音效标签、长条填充模式和
+    /// 打开项目时的默认调色方案。
     void resetNoteRenderingToDefaults()
     {
         const EditorConfig defaults;
-        visual.noteScaleX            = defaults.visual.noteScaleX;
-        visual.noteScaleY            = defaults.visual.noteScaleY;
+        visual.noteScaleX = defaults.visual.noteScaleX;
+        visual.noteScaleY = defaults.visual.noteScaleY;
+        visual.nonHoldHitEffectDuration =
+            defaults.visual.nonHoldHitEffectDuration;
         visual.showBoundSampleLabels = defaults.visual.showBoundSampleLabels;
         visual.noteFillMode          = defaults.visual.noteFillMode;
         settings.defaultColorPaletteSchemeName =

@@ -109,6 +109,35 @@ bool testBoundSampleLabelConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证非 Hold 打击特效时长能够持久化并兼容旧配置。
+/// @return 当前值往返无损、旧配置使用默认值且越界值被限制时返回 true。
+bool testNonHoldHitEffectDurationConfig()
+{
+    MMM::Config::VisualConfig source;
+    source.nonHoldHitEffectDuration = 0.48F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    const auto tooShort = nlohmann::json{ { "nonHoldHitEffectDuration", 0.0F } }
+                              .get<MMM::Config::VisualConfig>();
+    const auto tooLong  = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
+                              .get<MMM::Config::VisualConfig>();
+    if ( !near(restored.nonHoldHitEffectDuration, 0.48F) ||
+         !near(
+             legacy.nonHoldHitEffectDuration,
+             MMM::Config::VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION) ||
+         !near(tooShort.nonHoldHitEffectDuration,
+               MMM::Config::VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION) ||
+         !near(tooLong.nonHoldHitEffectDuration,
+               MMM::Config::VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION) ) {
+        XERROR("Non-Hold hit effect duration did not preserve safe bounds");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证折线编辑开关可持久化且旧配置保持现有完整编辑行为。
 /// @return 关闭状态往返不变且缺失字段默认开启时返回 true。
 bool testPolylineEditingConfigRoundTrip()
@@ -133,9 +162,10 @@ bool testPolylineEditingConfigRoundTrip()
 bool testRenderingDefaultsReset()
 {
     MMM::Config::EditorConfig config;
-    config.visual.noteScaleX            = 2.4F;
-    config.visual.noteScaleY            = 0.7F;
-    config.visual.showBoundSampleLabels = true;
+    config.visual.noteScaleX               = 2.4F;
+    config.visual.noteScaleY               = 0.7F;
+    config.visual.nonHoldHitEffectDuration = 0.76F;
+    config.visual.showBoundSampleLabels    = true;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
     config.settings.defaultColorPaletteSchemeName = "Custom";
     config.visual.background.fillMode =
@@ -149,6 +179,8 @@ bool testRenderingDefaultsReset()
     const MMM::Config::EditorConfig defaults;
     if ( !near(config.visual.noteScaleX, defaults.visual.noteScaleX) ||
          !near(config.visual.noteScaleY, defaults.visual.noteScaleY) ||
+         !near(config.visual.nonHoldHitEffectDuration,
+               defaults.visual.nonHoldHitEffectDuration) ||
          config.visual.showBoundSampleLabels !=
              defaults.visual.showBoundSampleLabels ||
          config.visual.noteFillMode != defaults.visual.noteFillMode ||
@@ -285,6 +317,7 @@ int main()
                    testBeatLineAutoRatioClamping() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
+                   testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&

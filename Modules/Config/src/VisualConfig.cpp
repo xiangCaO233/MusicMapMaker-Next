@@ -530,6 +530,7 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
           config.beatLineDisplayMode != BeatLineDisplayMode::Hidden },
         { "spectrumDetailLevel", config.spectrumDetailLevel },
         { "enableHitEffects", config.enableHitEffects },
+        { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
         { "debugDrawHitboxes", config.debugDrawHitboxes }
     };
 }
@@ -590,7 +591,18 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         j.value("drawBeatLinesBeforeFirstTiming", true);
     config.spectrumDetailLevel =
         j.value("spectrumDetailLevel", SpectrumDetailLevel::Balanced);
-    config.enableHitEffects  = j.value("enableHitEffects", true);
+    config.enableHitEffects = j.value("enableHitEffects", true);
+    config.nonHoldHitEffectDuration =
+        j.value("nonHoldHitEffectDuration",
+                VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION);
+    if ( !std::isfinite(config.nonHoldHitEffectDuration) ) {
+        config.nonHoldHitEffectDuration =
+            VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION;
+    }
+    config.nonHoldHitEffectDuration =
+        std::clamp(config.nonHoldHitEffectDuration,
+                   VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
+                   VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
 }
 

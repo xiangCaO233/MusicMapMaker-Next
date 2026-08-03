@@ -223,6 +223,8 @@ return {
 	["ui.settings.visual.note"] = "Note Rendering",
 	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",
 	["ui.settings.visual.note_scale_y"] = "Note Vertical Scale",
+	["ui.settings.visual.non_hold_hit_effect_duration"] = "Non-Hold Hit Effect Duration",
+	["ui.settings.visual.non_hold_hit_effect_duration_tooltip"] = "Controls how long Note, Flick, and polyline sub-note hit effects remain visible. Frames loop when the duration exceeds one animation cycle. Hold effects are unchanged.",
 	["ui.settings.visual.note_bound_sample_labels"] = "Show Bound Audio Filenames",
 	["ui.settings.visual.note_fill_mode"] = "Hold Texture Fill Mode",
 	["ui.settings.visual.note_palette_default"] = "Default Palette on Project Open",
