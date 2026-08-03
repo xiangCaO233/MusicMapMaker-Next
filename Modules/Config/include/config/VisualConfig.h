@@ -6,7 +6,10 @@
 #include "config/visual/PreviewAreaConfig.h"
 #include "config/visual/SpectrumConfig.h"
 #include "config/visual/TrackLayoutConfig.h"
+
+#include <cstdint>
 #include <nlohmann/json_fwd.hpp>
+#include <vector>
 
 namespace MMM::Config
 {
@@ -23,6 +26,23 @@ void to_json(nlohmann::json& json, const BeatLineDisplayMode& mode);
 /// @brief 从稳定文本读取分拍线显示模式。
 void from_json(const nlohmann::json& json, BeatLineDisplayMode& mode);
 
+/// @brief 单个 Key 数独立使用的轨道与画布组件布局。
+struct KeyCountLayoutConfig {
+    /// @brief 正整数玩家轨道数量。
+    std::int32_t keyCount{ 0 };
+    /// @brief 该 Key 数的玩家轨道区域。
+    TrackLayout trackLayout;
+    /// @brief 该 Key 数的判定线纵向位置。
+    float judgmentLinePosition{ 0.85f };
+    /// @brief 该 Key 数的全部可选画布组件布局。
+    CanvasComponentLayoutConfig canvasComponents;
+};
+
+/// @brief 将单个 Key 数布局序列化为 JSON。
+void to_json(nlohmann::json& json, const KeyCountLayoutConfig& config);
+/// @brief 从 JSON 读取单个 Key 数布局。
+void from_json(const nlohmann::json& json, KeyCountLayoutConfig& config);
+
 /// @brief 视觉与渲染相关的整体配置。
 struct VisualConfig {
     /// @brief 非 Hold 打击特效持续时间的默认值，单位秒。
@@ -32,15 +52,69 @@ struct VisualConfig {
     /// @brief 非 Hold 打击特效持续时间的最大值，单位秒。
     static constexpr float MAX_NON_HOLD_HIT_EFFECT_DURATION{ 5.0f };
 
-    TrackLayout                 trackLayout;
+    /// @brief 旧版或无有效 Key 数时使用的轨道布局模板。
+    TrackLayout trackLayout;
+    /// @brief 旧版或无有效 Key 数时使用的画布组件布局模板。
     CanvasComponentLayoutConfig canvasComponents;
-    BackgroundConfig            background;
-    PreviewAreaConfig           previewConfig;
+    /// @brief 按 Key 数升序保存的独立布局。
+    std::vector<KeyCountLayoutConfig> keyCountLayouts;
+    BackgroundConfig                  background;
+    PreviewAreaConfig                 previewConfig;
 
     /// @brief 轨道线线宽。
     float trackBoxLineWidth{ 1.5f };
-    /// @brief 判定线位置。
+    /// @brief 旧版或无有效 Key 数时使用的判定线位置模板。
     float judgeline_pos{ 0.85f };
+
+    /// @brief 查找指定 Key 数的独立布局。
+    /// @param keyCount 玩家轨道数量。
+    /// @return 已保存布局；不存在或 Key 数无效时返回 nullptr。
+    /// @warning 渲染热路径：每个 Session update 至多调用一次，只允许有序查找。
+    [[nodiscard]] const KeyCountLayoutConfig* findKeyCountLayout(
+        std::int32_t keyCount) const;
+
+    /// @brief 取得指定 Key 数实际使用的轨道布局。
+    /// @param keyCount 玩家轨道数量。
+    /// @return 独立布局或旧版布局模板。
+    /// @warning UI 与渲染热路径：只允许有序查找，不得分配内存。
+    [[nodiscard]] const TrackLayout& trackLayoutForKeyCount(
+        std::int32_t keyCount) const;
+
+    /// @brief 取得指定 Key 数实际使用的判定线位置。
+    /// @param keyCount 玩家轨道数量。
+    /// @return 独立位置或旧版位置模板。
+    /// @warning UI 与渲染热路径：只允许有序查找，不得分配内存。
+    [[nodiscard]] float judgmentLinePositionForKeyCount(
+        std::int32_t keyCount) const;
+
+    /// @brief 取得指定 Key 数实际使用的画布组件布局。
+    /// @param keyCount 玩家轨道数量。
+    /// @return 独立布局或旧版布局模板。
+    /// @warning UI 与渲染热路径：只允许有序查找，不得分配内存。
+    [[nodiscard]] const CanvasComponentLayoutConfig&
+    canvasComponentsForKeyCount(std::int32_t keyCount) const;
+
+    /// @brief 取得指定 Key 数的可写轨道布局，首次编辑时复制旧版模板。
+    /// @param keyCount 玩家轨道数量；非正数继续编辑旧版模板。
+    /// @return 对应的可写轨道布局。
+    TrackLayout& editableTrackLayoutForKeyCount(std::int32_t keyCount);
+
+    /// @brief 取得指定 Key 数的可写判定线位置，首次编辑时复制旧版模板。
+    /// @param keyCount 玩家轨道数量；非正数继续编辑旧版模板。
+    /// @return 对应的可写判定线位置。
+    float& editableJudgmentLinePositionForKeyCount(std::int32_t keyCount);
+
+    /// @brief 取得指定 Key 数的可写组件布局，首次编辑时复制旧版模板。
+    /// @param keyCount 玩家轨道数量；非正数继续编辑旧版模板。
+    /// @return 对应的可写组件布局。
+    CanvasComponentLayoutConfig& editableCanvasComponentsForKeyCount(
+        std::int32_t keyCount);
+
+    /// @brief 将指定 Key 数布局写入旧版直接字段，供单个 Session 使用。
+    /// @param keyCount 当前 Session 的玩家轨道数量。
+    /// @warning 逻辑热路径：配置刷新时调用；仅在存在独立布局时执行值复制。
+    void applyKeyCountLayout(std::int32_t keyCount);
+
     /// @brief 音符 X 轴缩放。
     float noteScaleX{ 1.2f };
     /// @brief 音符 Y 轴缩放。

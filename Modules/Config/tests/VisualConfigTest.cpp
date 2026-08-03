@@ -327,6 +327,87 @@ bool testBackgroundSpectrumClamping()
     return true;
 }
 
+/// @brief 验证不同 Key 数的轨道、判定线与组件布局独立保存。
+/// @return 独立编辑、旧配置继承和 JSON 往返均正确时返回 true。
+bool testKeyCountLayoutIsolationAndMigration()
+{
+    MMM::Config::VisualConfig source;
+    source.trackLayout.left                    = 0.11F;
+    source.judgeline_pos                       = 0.81F;
+    source.canvasComponents.beatNumber.anchorX = 0.13F;
+
+    auto& fourTrackLayout = source.editableTrackLayoutForKeyCount(4);
+    fourTrackLayout.left  = 0.21F;
+    fourTrackLayout.right = 0.61F;
+    source.editableJudgmentLinePositionForKeyCount(4) = 0.74F;
+    auto& fourComponents = source.editableCanvasComponentsForKeyCount(4);
+    fourComponents.beatNumber.visible = true;
+    fourComponents.beatNumber.anchorX = 0.24F;
+
+    auto& sevenTrackLayout = source.editableTrackLayoutForKeyCount(7);
+    sevenTrackLayout.left  = 0.31F;
+    sevenTrackLayout.right = 0.91F;
+    source.editableJudgmentLinePositionForKeyCount(7) = 0.88F;
+    auto& sevenComponents = source.editableCanvasComponentsForKeyCount(7);
+    sevenComponents.beatNumber.visible = false;
+    sevenComponents.beatNumber.anchorX = 0.67F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto&          restoredFourTrack = restored.trackLayoutForKeyCount(4);
+    const auto& restoredSevenTrack         = restored.trackLayoutForKeyCount(7);
+    const auto& restoredLegacyTrack        = restored.trackLayoutForKeyCount(5);
+    const auto& restoredFourComponents =
+        restored.canvasComponentsForKeyCount(4);
+    const auto& restoredSevenComponents =
+        restored.canvasComponentsForKeyCount(7);
+    const auto& restoredLegacyComponents =
+        restored.canvasComponentsForKeyCount(5);
+
+    auto materialized = restored;
+    materialized.applyKeyCountLayout(7);
+    const auto legacy =
+        nlohmann::json{
+            { "trackLayout",
+              { { "left", 0.17F },
+                { "top", 0.05F },
+                { "right", 0.77F },
+                { "bottom", 0.95F } } },
+            { "judgeline_pos", 0.79F },
+            { "canvasComponents",
+              { { "beatNumber", { { "anchorX", 0.29F } } } } },
+        }
+            .get<MMM::Config::VisualConfig>();
+
+    if ( source.keyCountLayouts.size() != 2U ||
+         restored.keyCountLayouts.size() != 2U ||
+         !near(restoredFourTrack.left, 0.21F) ||
+         !near(restoredFourTrack.right, 0.61F) ||
+         !near(restoredSevenTrack.left, 0.31F) ||
+         !near(restoredSevenTrack.right, 0.91F) ||
+         !near(restoredLegacyTrack.left, 0.11F) ||
+         !near(restored.judgmentLinePositionForKeyCount(4), 0.74F) ||
+         !near(restored.judgmentLinePositionForKeyCount(7), 0.88F) ||
+         !near(restored.judgmentLinePositionForKeyCount(5), 0.81F) ||
+         !restoredFourComponents.beatNumber.visible ||
+         !near(restoredFourComponents.beatNumber.anchorX, 0.24F) ||
+         restoredSevenComponents.beatNumber.visible ||
+         !near(restoredSevenComponents.beatNumber.anchorX, 0.67F) ||
+         !near(restoredLegacyComponents.beatNumber.anchorX, 0.13F) ||
+         !near(materialized.trackLayout.left, 0.31F) ||
+         !near(materialized.judgeline_pos, 0.88F) ||
+         !near(materialized.canvasComponents.beatNumber.anchorX, 0.67F) ||
+         !legacy.keyCountLayouts.empty() ||
+         !near(legacy.trackLayoutForKeyCount(4).left, 0.17F) ||
+         !near(legacy.judgmentLinePositionForKeyCount(7), 0.79F) ||
+         !near(legacy.canvasComponentsForKeyCount(9).beatNumber.anchorX,
+               0.29F) ) {
+        XERROR("Key-count layouts were shared or legacy migration failed");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行视觉配置兼容性与默认值测试。
@@ -344,7 +425,8 @@ int main()
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&
-                   testBackgroundSpectrumClamping()
+                   testBackgroundSpectrumClamping() &&
+                   testKeyCountLayoutIsolationAndMigration()
                ? 0
                : 1;
 }

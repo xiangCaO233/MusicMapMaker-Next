@@ -644,6 +644,68 @@ bool testTrackCountActionMigratesAllSamples()
     return true;
 }
 
+/// @brief 验证 Session 按当前 Key 数选择独立轨道与组件布局。
+/// @return 切换 Key 数后直接字段均物化为对应独立布局时返回 true。
+bool testSessionSelectsKeyCountLayout()
+{
+    MMM::Config::EditorConfig config;
+    auto& fourTrack = config.visual.editableTrackLayoutForKeyCount(4);
+    fourTrack.left  = 0.14F;
+    fourTrack.right = 0.54F;
+    config.visual.editableJudgmentLinePositionForKeyCount(4) = 0.74F;
+    config.visual.editableCanvasComponentsForKeyCount(4).beatNumber.anchorX =
+        0.24F;
+
+    auto& sevenTrack = config.visual.editableTrackLayoutForKeyCount(7);
+    sevenTrack.left  = 0.27F;
+    sevenTrack.right = 0.87F;
+    config.visual.editableJudgmentLinePositionForKeyCount(7) = 0.87F;
+    config.visual.editableCanvasComponentsForKeyCount(7).beatNumber.anchorX =
+        0.67F;
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.trackCount                 = 4;
+    session.update(0.0, config, false);
+    if ( !near(context.lastConfig.visual.trackLayout.left, 0.14) ||
+         !near(context.lastConfig.visual.trackLayout.right, 0.54) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.74) ||
+         !near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+               0.24) ) {
+        XERROR("Four-key Session did not select its independent layout");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.update(0.0, config, false);
+    if ( context.trackCount != 7 ||
+         !near(context.lastConfig.visual.trackLayout.left, 0.27) ||
+         !near(context.lastConfig.visual.trackLayout.right, 0.87) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.87) ||
+         !near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+               0.67) ) {
+        XERROR("Seven-key Session reused another Key-count layout");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateEditorConfig{ .config = config },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 5 },
+    });
+    session.update(0.0, config, false);
+    return context.trackCount == 5 &&
+           near(context.lastConfig.visual.trackLayout.left,
+                config.visual.trackLayout.left) &&
+           near(context.lastConfig.visual.judgeline_pos,
+                config.visual.judgeline_pos) &&
+           near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+                config.visual.canvasComponents.beatNumber.anchorX);
+}
+
 /// @brief 验证玩家轨道数变化不会把超出 uint32 的自动采样轨道静默截断。
 /// @return 溢出时轨道数、采样和撤销栈均保持原状时返回 true。
 bool testTrackCountOverflowIsRejectedAtomically()
@@ -2271,6 +2333,7 @@ int main()
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
+                   testSessionSelectsKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&

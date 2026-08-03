@@ -294,8 +294,9 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
         return 0.0;
     }
 
-    auto&       visual        = Config::AppConfig::instance().getVisualConfig();
-    float       judgmentLineY = size.y * visual.judgeline_pos;
+    const auto& visual        = Config::AppConfig::instance().getVisualConfig();
+    const float judgmentLineY = size.y * visual.judgmentLinePositionForKeyCount(
+                                             m_currentSnapshot->trackCount);
     const float compensatedMouseY = localMouseY - m_lastAppliedYOffset;
     const auto& segments          = m_currentSnapshot->scrollSegments;
     if ( segments.empty() ) {
@@ -356,8 +357,9 @@ double TimelineCanvas::canvasYAtTime(const ImVec2& size, double time) const
         return 0.0;
     }
 
-    auto&       visual        = Config::AppConfig::instance().getVisualConfig();
-    float       judgmentLineY = size.y * visual.judgeline_pos;
+    const auto& visual        = Config::AppConfig::instance().getVisualConfig();
+    const float judgmentLineY = size.y * visual.judgmentLinePositionForKeyCount(
+                                             m_currentSnapshot->trackCount);
     const auto& segments      = m_currentSnapshot->scrollSegments;
     if ( segments.empty() ) {
         float  zoom  = visual.timelineZoom;

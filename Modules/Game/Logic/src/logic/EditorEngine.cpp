@@ -166,9 +166,9 @@ void publishProjectOpenStarted(const std::filesystem::path& path,
 /// hitEvents；播放不连续的低频重置分支允许扫描事件序列补建持续 Hold，只有
 /// 音符变更后的脏分支允许重建事件序列。
 void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
-                              const Config::EditorConfig& config,
-                              bool                        resetHitIndex)
+                              bool resetHitIndex)
 {
+    const auto& config = ctx.lastConfig;
     SessionUtils::ensureHitEvents(ctx);
 
     if ( resetHitIndex ) {
@@ -2373,10 +2373,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
                 ctx.hitFXSystem.clearActiveEffects();
             }
             if ( ctx.isAudioTimelineSyncFollower && entry.isCanvasVisible ) {
-                updateFollowerHitEffects(ctx,
-                                         previousAnimateTime,
-                                         editorConfig,
-                                         shouldClearHitEffects);
+                updateFollowerHitEffects(
+                    ctx, previousAnimateTime, shouldClearHitEffects);
             }
         }
         return;
