@@ -26,6 +26,9 @@ namespace MMM::Logic::System
 namespace
 {
 
+/// @brief BGM 轨道标题使用的画布字体像素高度。
+constexpr float BGM_LANE_LABEL_FONT_PIXEL_HEIGHT = 16.0F;
+
 /// @brief 判断皮肤颜色是否为缺省的洋红哨兵。
 /// @param color 皮肤颜色。
 /// @return 颜色为缺省哨兵时返回 true。
@@ -179,7 +182,7 @@ void SampleRenderSystem::renderLaneLayout(
                               labelText,
                               bounds->leftX + 4.0F,
                               topY + 4.0F,
-                              12.0F,
+                              BGM_LANE_LABEL_FONT_PIXEL_HEIGHT,
                               projection.player.singleTrackWidth - 8.0F,
                               label);
     }

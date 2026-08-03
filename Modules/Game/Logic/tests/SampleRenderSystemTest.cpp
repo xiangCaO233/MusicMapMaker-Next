@@ -96,9 +96,9 @@ void configureUnicodeFont(MMM::Logic::RenderSnapshot& snapshot)
     }
 }
 
-/// @brief 验证每条 BGM 轨道底色都使用纯白纹理像素。
-/// @return 所有轨道底色均未复用上一条轨道标签字形 UV 时返回 true。
-bool testLaneBackgroundUsesSolidColorUv()
+/// @brief 验证 BGM 轨道底色纹理与标题字号。
+/// @return 底色未复用标签 UV 且标题按 16 像素字号绘制时返回 true。
+bool testLaneLayoutVisuals()
 {
     MMM::Logic::RenderSnapshot snapshot;
     constexpr glm::vec4        solidUv{ 0.1F, 0.2F, 0.04F, 0.06F };
@@ -164,6 +164,22 @@ bool testLaneBackgroundUsesSolidColorUv()
             XERROR("BGM lane {} background quad was not generated", laneIndex);
             return false;
         }
+    }
+
+    float maxLabelGlyphHeight = 0.0F;
+    for ( std::size_t vertexIndex = 0U;
+          vertexIndex + 3U < snapshot.vertices.size();
+          vertexIndex += 4U ) {
+        const auto* quad = snapshot.vertices.data() + vertexIndex;
+        if ( quad[0].uv.u < 0.6F ) continue;
+        maxLabelGlyphHeight = std::max(maxLabelGlyphHeight,
+                                       std::abs(quad[0].pos.y - quad[3].pos.y));
+    }
+    // 测试字形高度为字号的 0.75，16 像素字号应生成 12 像素字形。
+    if ( !near(maxLabelGlyphHeight, 12.0F) ) {
+        XERROR("BGM lane label font size is too small: glyph height={}",
+               maxLabelGlyphHeight);
+        return false;
     }
     return true;
 }
@@ -573,7 +589,7 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testLaneBackgroundUsesSolidColorUv() &&
+    return testLaneLayoutVisuals() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleLabelMarquee() &&
