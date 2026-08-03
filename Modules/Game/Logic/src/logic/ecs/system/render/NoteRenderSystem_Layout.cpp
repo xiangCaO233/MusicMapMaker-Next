@@ -298,7 +298,11 @@ void NoteRenderSystem::drawBeatLines(
         leftX +
         static_cast<float>(subdivisionPreview.track) * subdivisionTrackWidth;
     const float subdivisionRight = subdivisionLeft + subdivisionTrackWidth;
-    const auto  timeToCanvasY    = [&](double time) {
+    const float subdivisionLineLeft =
+        std::max(leftX, subdivisionLeft - subdivisionTrackWidth * 0.5F);
+    const float subdivisionLineRight = std::min(
+        leftX + trackAreaW, subdivisionRight + subdivisionTrackWidth * 0.5F);
+    const auto timeToCanvasY = [&](double time) {
         return judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                                    time, currentAbsY, time)) *
                                    renderScaleY;
@@ -353,21 +357,29 @@ void NoteRenderSystem::drawBeatLines(
         const float highlightBottom =
             std::min(visibleBottom, std::max(beatStartY, beatEndY));
         if ( highlightBottom > highlightTop ) {
-            auto [highlightColor, unusedWidth] =
+            auto [highlightColor, outlineWidth] =
                 getBeatLineConfig(subdivisionPreview.denominator);
-            static_cast<void>(unusedWidth);
             const double inspectedTime =
                 subdivisionPreview.beatStartTime +
                 subdivisionPreview.beatDuration *
                     static_cast<double>(subdivisionPreview.numerator) /
                     static_cast<double>(subdivisionPreview.denominator);
-            highlightColor.a *=
-                0.18F * revealAlphaAt(timeToCanvasY(inspectedTime));
+            const float highlightReveal =
+                revealAlphaAt(timeToCanvasY(inspectedTime));
+            glm::vec4 outlineColor = highlightColor;
+            highlightColor.a *= 0.38F * highlightReveal;
+            outlineColor.a *= 0.95F * highlightReveal;
             batcher.pushQuad(subdivisionLeft,
                              highlightBottom,
                              subdivisionTrackWidth,
                              highlightBottom - highlightTop,
                              highlightColor);
+            batcher.pushStrokeRect(subdivisionLeft,
+                                   highlightTop,
+                                   subdivisionRight,
+                                   highlightBottom,
+                                   std::max(2.0F, outlineWidth),
+                                   outlineColor);
         }
 
         const double subdivisionStep =
@@ -384,8 +396,12 @@ void NoteRenderSystem::drawBeatLines(
             const int denominator = subdivisionPreview.denominator / common;
             auto [color, width]   = getBeatLineConfig(denominator);
             color.a *= revealAlphaAt(y);
-            drawBeatLineSegment(
-                subdivisionLeft, subdivisionTrackWidth, y, width, color, false);
+            drawBeatLineSegment(subdivisionLineLeft,
+                                subdivisionLineRight - subdivisionLineLeft,
+                                y,
+                                width,
+                                color,
+                                false);
         }
     }
 
