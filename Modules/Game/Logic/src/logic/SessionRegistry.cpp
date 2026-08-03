@@ -223,7 +223,8 @@ void SessionRegistry::fillIndexedSessionSnapshot(
 std::shared_ptr<const PublishedSessionSnapshot>
 SessionRegistry::publishedSnapshot() const
 {
-    auto snapshot = m_publishedSnapshot.load(std::memory_order_acquire);
+    auto snapshot = std::atomic_load_explicit(&m_publishedSnapshot,
+                                              std::memory_order_acquire);
     if ( snapshot ) {
         return snapshot;
     }
@@ -320,7 +321,10 @@ void SessionRegistry::publishSnapshotUnsafe()
         }
     }
 
-    m_publishedSnapshot.store(std::move(snapshot), std::memory_order_release);
+    std::atomic_store_explicit(
+        &m_publishedSnapshot,
+        std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
+        std::memory_order_release);
 }
 
 /// @brief 在调用者已持锁时判断索引是否有效。

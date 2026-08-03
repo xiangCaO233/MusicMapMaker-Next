@@ -180,7 +180,8 @@ void RenderSyncRegistry::setAtlasUVMap(
 std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
 RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
 {
-    auto snapshot = m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
+    auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
+                                              std::memory_order_acquire);
     if ( snapshot ) {
         if ( const auto* state =
                  findAtlasUVMapStateInSnapshot(*snapshot, cameraId) ) {
@@ -203,8 +204,8 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
     Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    const auto snapshot =
-        m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
+    const auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
+                                                    std::memory_order_acquire);
     const auto* state =
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
     if ( !state ) {
@@ -308,8 +309,10 @@ void RenderSyncRegistry::publishAtlasUVSnapshotUnsafe()
     auto snapshot          = std::make_shared<PublishedAtlasUVSnapshot>();
     snapshot->cameraUVMaps = m_cameraUVMaps;
 
-    m_publishedAtlasUVSnapshot.store(std::move(snapshot),
-                                     std::memory_order_release);
+    std::atomic_store_explicit(
+        &m_publishedAtlasUVSnapshot,
+        std::shared_ptr<const PublishedAtlasUVSnapshot>(std::move(snapshot)),
+        std::memory_order_release);
 }
 
 /// @brief 判断画布是否为需要同步给新 Session 的共享视口。
