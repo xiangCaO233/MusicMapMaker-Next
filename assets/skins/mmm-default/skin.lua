@@ -140,12 +140,6 @@ local Skin = {
 		},
 	},
 
-	-- 翻译配置
-	langs = {
-		en_us = "lang/en_us.lua",
-		zh_cn = "lang/zh_cn.lua",
-	},
-
 	-- 字体文件定义
 	fonts = {
 		ascii = f0x_ascii_reg,

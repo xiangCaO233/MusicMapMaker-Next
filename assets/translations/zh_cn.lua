@@ -1,5 +1,5 @@
 return {
-	-- [ Translation Key ] = "翻译后的目标文本"
+	-- [Translation Key] = "翻译后的目标文本"
 
 	-- 普通文本
 	["ui.file"] = "文件(&F)",

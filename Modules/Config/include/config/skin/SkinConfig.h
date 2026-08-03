@@ -44,8 +44,13 @@ struct SkinData {
     // 颜色表
     std::unordered_map<std::string, Color> colors;
 
-    // 语言表
-    std::unordered_map<std::string, std::filesystem::path> langLuaPaths;
+    /// @brief 皮肤按语言 ID 声明的可选翻译覆写文件。
+    std::unordered_map<std::string, std::filesystem::path> langOverrideLuaPaths;
+
+    /// @brief 皮肤覆写中默认语言字典不存在、启动时需要提示的字段。
+    std::vector<std::string> missingTranslationOverrideFields;
+
+    /// @brief 默认语言不可用时切换的语言 ID。
     std::string fallBackLang{ "zh_cn" };
 
     /// @brief 皮肤为系统亮暗外观分别推荐的 UI 主题。
@@ -137,8 +142,18 @@ public:
     ///@brief 获取翻译器
     inline Translation::Translator& getTranslator() { return m_translator; }
 
-    ///@brief 载入皮肤
+    /// @brief 使用应用默认翻译资源载入皮肤。
+    /// @param luaFilePath 皮肤入口 Lua 文件路径。
+    /// @return 皮肤及默认翻译均载入成功时返回 true。
     bool loadSkin(const std::string& luaFilePath);
+
+    /// @brief 使用指定默认翻译资源目录载入皮肤。
+    /// @param luaFilePath 皮肤入口 Lua 文件路径。
+    /// @param translationsRoot 默认翻译文件所在目录。
+    /// @return 皮肤及默认翻译均载入成功时返回 true。
+    /// @warning 该重载用于测试和受控资源环境，常规调用应使用单参数入口。
+    bool loadSkin(const std::string&           luaFilePath,
+                  const std::filesystem::path& translationsRoot);
 
     ///@brief 直接获取皮肤数据
     const SkinData& getData() const { return m_data; }

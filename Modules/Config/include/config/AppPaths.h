@@ -33,6 +33,10 @@ public:
     /// @return skins 目录在用户资源包根目录下的完整路径。
     static std::filesystem::path skinsRootPath();
 
+    /// @brief 获取默认翻译资源根目录。
+    /// @return translations 目录在用户资源包根目录下的完整路径。
+    static std::filesystem::path translationsRootPath();
+
     /// @brief 获取用户插件根目录。
     /// @return plugins 目录在用户配置根目录下的完整路径。
     static std::filesystem::path pluginsRootPath();

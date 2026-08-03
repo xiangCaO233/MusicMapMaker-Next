@@ -3,6 +3,7 @@
 #include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/TranslationResourceMigration.h"
 #include "config/skin/translation/Translation.h"
 #include "game/GameLoop.h"
 #include "graphic/glfw/window/NativeWindow.h"
@@ -26,6 +27,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace MMM::Main
 {
@@ -201,6 +203,9 @@ constexpr int STARTUP_PROGRESS_WINDOW_HEIGHT = 270;
 /// @brief 启动资源检查错误状态的逻辑高度。
 constexpr int STARTUP_ERROR_WINDOW_HEIGHT = 320;
 
+/// @brief 启动翻译覆写提示状态的逻辑高度。
+constexpr int STARTUP_WARNING_WINDOW_HEIGHT = 440;
+
 /// @brief 正式主窗口的默认逻辑宽度。
 constexpr int APPLICATION_WINDOW_WIDTH = 1400;
 
@@ -329,6 +334,44 @@ bool waitForStartupRetry(Graphic::VKContext&    context,
     return false;
 }
 
+/// @brief 启动提示状态下等待用户选择继续或退出。
+/// @param context bootstrap 图形上下文。
+/// @param window 独立的启动资源准备窗口。
+/// @param progressDialog 当前提示界面。
+/// @return 用户确认并继续时返回 true，退出或关闭窗口时返回 false。
+/// @warning 启动低频循环：只渲染提示界面并读取按钮状态。
+bool waitForStartupContinue(Graphic::VKContext&    context,
+                            Graphic::NativeWindow& window,
+                            StartupProgressDialog& progressDialog)
+{
+    std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{
+        &progressDialog
+    };
+    while ( !window.shouldClose() && !progressDialog.isExitRequested() ) {
+        context.getRenderer().render(window, graphicUserHooks);
+        if ( progressDialog.consumeContinueRequest() ) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    return false;
+}
+
+/// @brief 生成皮肤翻译覆写未知字段的启动提示内容。
+/// @param fields 带语言 ID 的未知字段列表。
+/// @return 可完整展示给用户的多行提示文本。
+std::string buildTranslationOverrideWarning(
+    const std::vector<std::string>& fields)
+{
+    std::string message =
+        "当前皮肤包含默认语言字典中不存在的翻译覆写字段。以下字段已被忽略，"
+        "其他有效覆写仍会正常使用：\n\n";
+    for ( const auto& field : fields ) {
+        message += "- ";
+        message += field;
+        message += '\n';
+    }
+    return message;
+}
+
 /// @brief 使用独立窗口和独立图形上下文完成启动资源校验与皮肤加载。
 /// @return 资源准备结果；只有 Ready 状态允许继续创建正式主窗口。
 /// @warning 启动低频路径：内部创建并完整释放一套 GLFW、Vulkan 与 ImGui
@@ -394,31 +437,48 @@ StartupPreparationResult prepareStartupAssets()
                 Config::pathToUtf8(assetPath) + "\n\n错误详情：" +
                 assetSyncResult.errorMessage;
         } else {
-            std::error_code defaultSkinExistsError;
-            if ( !std::filesystem::exists(defaultSkinPath,
-                                          defaultSkinExistsError) ) {
-                startupErrorTitle = "缺少应用资源";
+            const auto migrationResult =
+                Config::migrateLegacySkinTranslationFiles();
+            if ( !migrationResult.completed ) {
+                startupErrorTitle = "翻译资源迁移失败";
                 startupErrorMessage =
-                    "资源同步完成后仍未找到默认皮肤。请从网站下载 "
-                    "assets.zip 并解压到：\n\n" +
+                    migrationResult.errorMessage +
+                    "\n\n请重试资源同步，或重新下载 assets.zip 后解压到：\n\n" +
                     Config::pathToUtf8(Config::AppPaths::assetsRootPath());
             } else {
-                const auto startupSkinPath =
-                    resolveStartupSkinPath(defaultSkinPath);
-                skinLoaded = Config::SkinManager::instance().loadSkin(
-                    Config::pathToUtf8(startupSkinPath));
-                if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
-                    XWARN("Fallback to default skin: {}",
-                          Config::pathToUtf8(defaultSkinPath));
-                    skinLoaded = Config::SkinManager::instance().loadSkin(
-                        Config::pathToUtf8(defaultSkinPath));
+                if ( !migrationResult.removedFiles.empty() ) {
+                    XINFO("Removed {} legacy skin translation file(s)",
+                          migrationResult.removedFiles.size());
                 }
-                if ( !skinLoaded ) {
-                    startupErrorTitle = "皮肤资源加载失败";
+
+                std::error_code defaultSkinExistsError;
+                if ( !std::filesystem::exists(defaultSkinPath,
+                                              defaultSkinExistsError) ) {
+                    startupErrorTitle = "缺少应用资源";
                     startupErrorMessage =
-                        "默认皮肤文件存在，但无法完成解析。可以重试资源同步，"
-                        "或重新下载 assets.zip 后解压到：\n\n" +
+                        "资源同步完成后仍未找到默认皮肤。请从网站下载 "
+                        "assets.zip 并解压到：\n\n" +
                         Config::pathToUtf8(Config::AppPaths::assetsRootPath());
+                } else {
+                    const auto startupSkinPath =
+                        resolveStartupSkinPath(defaultSkinPath);
+                    skinLoaded = Config::SkinManager::instance().loadSkin(
+                        Config::pathToUtf8(startupSkinPath));
+                    if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
+                        XWARN("Fallback to default skin: {}",
+                              Config::pathToUtf8(defaultSkinPath));
+                        skinLoaded = Config::SkinManager::instance().loadSkin(
+                            Config::pathToUtf8(defaultSkinPath));
+                    }
+                    if ( !skinLoaded ) {
+                        startupErrorTitle = "皮肤资源加载失败";
+                        startupErrorMessage =
+                            "默认皮肤文件存在，但无法完成解析。可以重试资源同步"
+                            "，"
+                            "或重新下载 assets.zip 后解压到：\n\n" +
+                            Config::pathToUtf8(
+                                Config::AppPaths::assetsRootPath());
+                    }
                 }
             }
         }
@@ -441,6 +501,22 @@ StartupPreparationResult prepareStartupAssets()
         startupWindow.resizeAndCenter(
             scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
             scaledStartupWindowDimension(STARTUP_PROGRESS_WINDOW_HEIGHT));
+    }
+
+    const auto& unknownOverrideFields = Config::SkinManager::instance()
+                                            .getData()
+                                            .missingTranslationOverrideFields;
+    if ( !unknownOverrideFields.empty() ) {
+        startupProgressDialog.showWarning(
+            "皮肤翻译覆写包含未知字段",
+            buildTranslationOverrideWarning(unknownOverrideFields));
+        startupWindow.resizeAndCenter(
+            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
+            scaledStartupWindowDimension(STARTUP_WARNING_WINDOW_HEIGHT));
+        if ( !waitForStartupContinue(
+                 startupContext, startupWindow, startupProgressDialog) ) {
+            return StartupPreparationResult::Cancelled;
+        }
     }
 
     return startupWindow.shouldClose() ? StartupPreparationResult::Cancelled

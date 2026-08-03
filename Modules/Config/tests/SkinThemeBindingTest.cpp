@@ -73,11 +73,13 @@ bool writeLegacyIvmSkin(const std::filesystem::path& path)
 /// @return 加载与两个分支断言均成功时返回 true。
 bool verifyThemeBinding(const std::filesystem::path& path,
                         std::string_view             expectedLight,
-                        std::string_view             expectedDark)
+                        std::string_view             expectedDark,
+                        const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
-                     "皮肤应成功加载");
+    bool  ok          = check(
+        skinManager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot),
+        "皮肤应成功加载");
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Light) == expectedLight,
                 "亮色主题绑定不匹配");
@@ -93,11 +95,13 @@ bool verifyThemeBinding(const std::filesystem::path& path,
 /// @brief 验证旧版内置 IVM 在资源文件未更新时仍恢复交互发光。
 /// @param path 位于 ivm 目录内的旧版测试皮肤路径。
 /// @return 悬浮与选中共用的发光配置已迁移时返回 true。
-bool verifyLegacyIvmGlowMigration(const std::filesystem::path& path)
+bool verifyLegacyIvmGlowMigration(const std::filesystem::path& path,
+                                  const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
-                     "旧版 IVM 测试皮肤应成功加载");
+    bool  ok          = check(
+        skinManager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot),
+        "旧版 IVM 测试皮肤应成功加载");
     ok &= check(skinManager.getGlowPasses() == 6,
                 "旧版 IVM 必须恢复交互发光轮次");
     ok &= check(skinManager.getGlowIntensity() == 0.5F,
@@ -199,10 +203,12 @@ bool readPngDimensions(const std::filesystem::path& path, std::uint32_t& width,
 /// @brief 验证 IVM 内置皮肤的固定主题、颜色和纹理几何约束。
 /// @param skinPath 仓库中 IVM 皮肤入口路径。
 /// @return 皮肤配置与全部自维护资源符合设计时返回 true。
-bool verifyIvmSkin(const std::filesystem::path& skinPath)
+bool verifyIvmSkin(const std::filesystem::path& skinPath,
+                   const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath)),
+    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                          translationsRoot),
                      "IVM 内置皮肤应成功加载");
     ok &= check(skinManager.getData().themeName == "IVM", "IVM 皮肤名称不匹配");
     ok &= check(skinManager.getDefaultTheme(
@@ -336,8 +342,10 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
 /// @return 全部断言通过时返回 0。
 int main(int argc, char* argv[])
 {
-    if ( argc < 3 || !argv[1] || !argv[2] ) {
-        XERROR("SkinThemeBindingTest requires output and IVM skin entry paths");
+    if ( argc < 4 || !argv[1] || !argv[2] || !argv[3] ) {
+        XERROR(
+            "SkinThemeBindingTest requires output, IVM skin and translation "
+            "paths");
         return 1;
     }
 
@@ -355,6 +363,8 @@ int main(int argc, char* argv[])
 
     const std::filesystem::path legacySkinPath =
         outputDirectory / "legacy-skin.lua";
+    const std::filesystem::path translationsRoot =
+        MMM::Config::utf8ToPath(argv[3]);
     const std::filesystem::path pairedSkinPath =
         outputDirectory / "paired-skin.lua";
     const std::filesystem::path lightOnlySkinPath =
@@ -381,12 +391,16 @@ int main(int argc, char* argv[])
                 "旧版 IVM 测试皮肤写入失败");
     if ( !ok ) return 1;
 
-    ok &= verifyThemeBinding(legacySkinPath, "Cecilia", "Cecilia");
-    ok &= verifyThemeBinding(pairedSkinPath, "Cecilia", "Moonlight");
     ok &= verifyThemeBinding(
-        lightOnlySkinPath, "ComfortableLight", "ComfortableLight");
-    ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath);
+        legacySkinPath, "Cecilia", "Cecilia", translationsRoot);
+    ok &= verifyThemeBinding(
+        pairedSkinPath, "Cecilia", "Moonlight", translationsRoot);
+    ok &= verifyThemeBinding(lightOnlySkinPath,
+                             "ComfortableLight",
+                             "ComfortableLight",
+                             translationsRoot);
+    ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath, translationsRoot);
     ok &= verifyLegacyAppConfigSemantics();
-    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]));
+    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]), translationsRoot);
     return ok ? 0 : 1;
 }

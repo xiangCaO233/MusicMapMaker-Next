@@ -32,11 +32,15 @@ void StartupProgressDialog::beginSync()
     }
     m_visibleProgress = initialProgress;
     m_progressDirty.store(false, std::memory_order_release);
-    m_hasError       = false;
-    m_retryRequested = false;
-    m_exitRequested  = false;
+    m_hasError          = false;
+    m_hasWarning        = false;
+    m_retryRequested    = false;
+    m_continueRequested = false;
+    m_exitRequested     = false;
     m_errorTitle.clear();
     m_errorMessage.clear();
+    m_warningTitle.clear();
+    m_warningMessage.clear();
 }
 
 void StartupProgressDialog::update(const Network::AssetSyncProgress& progress)
@@ -51,16 +55,36 @@ void StartupProgressDialog::update(const Network::AssetSyncProgress& progress)
 void StartupProgressDialog::showError(std::string title, std::string message)
 {
     consumePendingProgress();
-    m_hasError       = true;
-    m_errorTitle     = std::move(title);
-    m_errorMessage   = std::move(message);
-    m_retryRequested = false;
+    m_hasError          = true;
+    m_hasWarning        = false;
+    m_errorTitle        = std::move(title);
+    m_errorMessage      = std::move(message);
+    m_retryRequested    = false;
+    m_continueRequested = false;
+}
+
+void StartupProgressDialog::showWarning(std::string title, std::string message)
+{
+    consumePendingProgress();
+    m_hasError          = false;
+    m_hasWarning        = true;
+    m_warningTitle      = std::move(title);
+    m_warningMessage    = std::move(message);
+    m_retryRequested    = false;
+    m_continueRequested = false;
 }
 
 bool StartupProgressDialog::consumeRetryRequest()
 {
     const bool requested = m_retryRequested;
     m_retryRequested     = false;
+    return requested;
+}
+
+bool StartupProgressDialog::consumeContinueRequest()
+{
+    const bool requested = m_continueRequested;
+    m_continueRequested  = false;
     return requested;
 }
 
@@ -145,6 +169,41 @@ void StartupProgressDialog::onUpdateUI()
         if ( UI::FeedbackButton("重试###StartupRetry",
                                 ImVec2(buttonWidth, 0.0f)) ) {
             m_retryRequested = true;
+        }
+    } else if ( m_hasWarning ) {
+        ImGui::TextColored(
+            ImVec4(1.0f, 0.78f, 0.36f, 1.0f), "%s", m_warningTitle.c_str());
+        ImGui::Separator();
+
+        const float buttonHeight = ImGui::GetFrameHeight();
+        const float messageHeight =
+            std::max(ImGui::GetContentRegionAvail().y - buttonHeight -
+                         ImGui::GetStyle().ItemSpacing.y,
+                     80.0f * scale);
+        if ( ImGui::BeginChild("TranslationOverrideWarningDetails",
+                               ImVec2(0.0f, messageHeight),
+                               ImGuiChildFlags_Borders) ) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                                   ImGui::GetContentRegionAvail().x);
+            ImGui::TextUnformatted(m_warningMessage.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndChild();
+
+        const float buttonWidth = 118.0f * scale;
+        const float buttonGap   = 12.0f * scale;
+        const float rowWidth    = buttonWidth * 2.0f + buttonGap;
+        ImGui::SetCursorPosX(
+            ImGui::GetCursorPosX() +
+            std::max(ImGui::GetContentRegionAvail().x - rowWidth, 0.0f));
+        if ( UI::FeedbackButton("退出###StartupWarningExit",
+                                ImVec2(buttonWidth, 0.0f)) ) {
+            m_exitRequested = true;
+        }
+        ImGui::SameLine(0.0f, buttonGap);
+        if ( UI::FeedbackButton("继续###StartupWarningContinue",
+                                ImVec2(buttonWidth, 0.0f)) ) {
+            m_continueRequested = true;
         }
     } else {
         ImGui::TextUnformatted("正在准备应用资源");

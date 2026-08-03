@@ -1,5 +1,5 @@
 return {
-	-- [ Translation Key ] = "Translated text"
+	-- [Translation Key] = "Translated text"
 
 	-- Common Text
 	["ui.file"] = "&File",

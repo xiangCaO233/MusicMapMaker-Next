@@ -150,11 +150,6 @@ return {
 		},
 	},
 
-	langs = {
-		en_us = default_resource("lang/en_us.lua"),
-		zh_cn = default_resource("lang/zh_cn.lua"),
-	},
-
 	-- Liberation Sans 与 Windows Arial 指标兼容，提供经典 Windows 工具软件观感。
 	fonts = {
 		ascii = resource("font/LiberationSans-Regular.ttf"),

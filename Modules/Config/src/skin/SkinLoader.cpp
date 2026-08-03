@@ -1,13 +1,18 @@
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <regex>
 #include <sol/sol.hpp>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace MMM
@@ -21,6 +26,54 @@ constexpr int IVM_INTERACTION_GLOW_PASSES = 6;
 /// @brief 旧版内置 IVM 皮肤迁移后使用的交互发光强度。
 constexpr float IVM_INTERACTION_GLOW_INTENSITY = 0.5F;
 
+namespace
+{
+/// @brief 应用资源包内固定提供的默认语言文件。
+constexpr std::array<std::pair<std::string_view, std::string_view>, 2>
+    DEFAULT_TRANSLATIONS{ std::pair{ "en_us", "en_us.lua" },
+                          std::pair{ "zh_cn", "zh_cn.lua" } };
+
+/// @brief 判断候选路径是否位于指定根目录内。
+/// @param root 已规范化的根目录。
+/// @param candidate 已规范化的候选路径。
+/// @return 候选路径等于根目录或属于其后代时返回 true。
+bool isPathWithinRoot(const std::filesystem::path& root,
+                      const std::filesystem::path& candidate)
+{
+    auto rootIt      = root.begin();
+    auto candidateIt = candidate.begin();
+    for ( ; rootIt != root.end() && candidateIt != candidate.end();
+          ++rootIt, ++candidateIt ) {
+        if ( *rootIt != *candidateIt ) return false;
+    }
+    return rootIt == root.end();
+}
+
+/// @brief 将皮肤翻译覆写路径解析为皮肤包内部文件。
+/// @param skinPath 皮肤入口所在根目录。
+/// @param configuredPath 皮肤 Lua 声明的相对或绝对路径。
+/// @return 路径未逃逸皮肤根目录时返回规范化结果。
+std::optional<std::filesystem::path> resolveSkinOverridePath(
+    const std::filesystem::path& skinPath, const std::string& configuredPath)
+{
+    namespace fs = std::filesystem;
+    if ( configuredPath.empty() ) return std::nullopt;
+
+    std::error_code canonicalError;
+    const fs::path  canonicalRoot =
+        fs::weakly_canonical(skinPath, canonicalError);
+    if ( canonicalError ) return std::nullopt;
+
+    fs::path candidate = Config::utf8ToPath(configuredPath);
+    if ( !candidate.is_absolute() ) candidate = skinPath / candidate;
+    candidate = fs::weakly_canonical(candidate, canonicalError);
+    if ( canonicalError || !isPathWithinRoot(canonicalRoot, candidate) ) {
+        return std::nullopt;
+    }
+    return candidate;
+}
+}  // namespace
+
 SkinManager& SkinManager::instance()
 {
     static SkinManager inst;
@@ -28,6 +81,12 @@ SkinManager& SkinManager::instance()
 }
 
 bool SkinManager::loadSkin(const std::string& luaFilePath)
+{
+    return loadSkin(luaFilePath, AppPaths::translationsRootPath());
+}
+
+bool SkinManager::loadSkin(const std::string&           luaFilePath,
+                           const std::filesystem::path& translationsRoot)
 {
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table);
@@ -76,6 +135,21 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     m_data.skinPath = skinPath;
     m_translator.clear();
 
+    std::size_t loadedTranslationCount = 0;
+    for ( const auto& [languageId, fileName] : DEFAULT_TRANSLATIONS ) {
+        const fs::path translationPath =
+            translationsRoot / Config::utf8ToPath(std::string(fileName));
+        if ( !m_translator.loadLanguage(std::string(languageId),
+                                        pathToUtf8(translationPath)) ) {
+            XERROR("Failed to load default translation: {}",
+                   pathToUtf8(translationPath));
+            return false;
+        }
+        ++loadedTranslationCount;
+    }
+    XINFO("Default translations loaded: {} language(s)",
+          loadedTranslationCount);
+
     // 解析 Meta
     m_data.themeName =
         skinTable["meta"]["name"].get_or<std::string>("Custom Skin");
@@ -91,19 +165,44 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         parseColorsRecursive(colorsTableOpt.value(), "");
     }
 
-    // 解析 langs
-    sol::table langsTable = skinTable["langs"];
-    for ( const auto& kv : langsTable ) {
-        std::string key          = kv.first.as<std::string>();
-        std::string rpath        = kv.second.as<std::string>();
-        m_data.langLuaPaths[key] = makeResPath(rpath);
-    }
+    // 皮肤只允许覆写默认字典中已存在的字段，旧 langs 配置不再参与加载。
+    sol::optional<sol::table> langOverridesTableOpt =
+        skinTable["lang_overrides"];
+    if ( langOverridesTableOpt ) {
+        for ( const auto& kv : langOverridesTableOpt.value() ) {
+            if ( !kv.first.is<std::string>() || !kv.second.is<std::string>() ) {
+                continue;
+            }
 
-    // 载入所有语言
-    for ( auto& [langName, langLuaPath] : m_data.langLuaPaths ) {
-        m_translator.loadLanguage(pathToUtf8(langLuaPath));
+            const std::string languageId     = kv.first.as<std::string>();
+            const std::string configuredPath = kv.second.as<std::string>();
+            const auto        overridePath =
+                resolveSkinOverridePath(skinPath, configuredPath);
+            if ( !overridePath ) {
+                XERROR("Skin language override escapes skin root: {}",
+                       configuredPath);
+                continue;
+            }
+
+            m_data.langOverrideLuaPaths[languageId] = *overridePath;
+            auto overrideResult = m_translator.applyLanguageOverride(
+                languageId, pathToUtf8(*overridePath));
+            if ( !overrideResult.loaded ) continue;
+
+            for ( auto& field : overrideResult.unknownFields ) {
+                m_data.missingTranslationOverrideFields.push_back(
+                    languageId + ":" + std::move(field));
+            }
+        }
     }
-    XINFO("Translations loaded: {} language(s)", m_data.langLuaPaths.size());
+    std::sort(m_data.missingTranslationOverrideFields.begin(),
+              m_data.missingTranslationOverrideFields.end());
+    m_data.missingTranslationOverrideFields.erase(
+        std::unique(m_data.missingTranslationOverrideFields.begin(),
+                    m_data.missingTranslationOverrideFields.end()),
+        m_data.missingTranslationOverrideFields.end());
+    XINFO("Skin translation overrides loaded: {} file(s)",
+          m_data.langOverrideLuaPaths.size());
 
     // 从 AppConfig 获取保存的语言设置，如果未设置则回退
     auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
