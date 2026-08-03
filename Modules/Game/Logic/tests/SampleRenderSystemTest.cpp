@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -179,6 +180,63 @@ bool testLaneLayoutVisuals()
     if ( !near(maxLabelGlyphHeight, 12.0F) ) {
         XERROR("BGM lane label font size is too small: glyph height={}",
                maxLabelGlyphHeight);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证窄 BGM 轨道标题会在轨道范围内自动滚动。
+/// @return 同一字形随单调时钟左移且始终受轨道宽度裁剪时返回 true。
+bool testNarrowLaneLabelMarquee()
+{
+    constexpr float viewportWidth = 800.0F;
+    const auto      projection    = MMM::Logic::calculateCanvasLaneProjection(
+        viewportWidth, 4, 3, 0.1F, 0.3F, 0.0F);
+    const auto firstLane =
+        projection.bounds({ MMM::Logic::CanvasLaneKind::Bgm, 0U });
+    if ( !firstLane ) {
+        XERROR("Unable to resolve narrow BGM lane bounds");
+        return false;
+    }
+
+    const auto renderGlyphLeft =
+        [&](double monotonicSeconds) -> std::optional<float> {
+        MMM::Logic::RenderSnapshot snapshot;
+        snapshot.snapshotSysTime = monotonicSeconds;
+        snapshot.uvMap.emplace(
+            static_cast<std::uint32_t>(MMM::Logic::TextureID::None),
+            glm::vec4{ 0.1F, 0.2F, 0.04F, 0.06F });
+        configureAsciiFont(snapshot);
+
+        MMM::Logic::System::Batcher batcher(&snapshot);
+        MMM::Logic::System::SampleRenderSystem::renderLaneLayout(
+            batcher, projection, 3, firstLane->rightX, 10.0F, 590.0F);
+        batcher.flush();
+
+        constexpr float glyphU =
+            0.6F +
+            static_cast<float>('G' - MMM::Common::ASCII_GLYPH_FIRST) * 0.001F;
+        for ( std::size_t vertexIndex = 0U;
+              vertexIndex + 3U < snapshot.vertices.size();
+              vertexIndex += 4U ) {
+            const auto* quad = snapshot.vertices.data() + vertexIndex;
+            if ( !near(quad[0].uv.u, glyphU) ) continue;
+            const float glyphLeft  = quad[0].pos.x;
+            const float glyphRight = quad[1].pos.x;
+            if ( glyphLeft < firstLane->leftX + 4.0F ||
+                 glyphRight > firstLane->rightX - 4.0F ) {
+                XERROR("Scrolling BGM lane label escaped its lane");
+                return std::nullopt;
+            }
+            return glyphLeft;
+        }
+        return std::nullopt;
+    };
+
+    const auto pausedX   = renderGlyphLeft(1.0);
+    const auto scrolledX = renderGlyphLeft(1.5);
+    if ( !pausedX || !scrolledX || !(*scrolledX < *pausedX) ) {
+        XERROR("Narrow BGM lane label did not scroll with the monotonic clock");
         return false;
     }
     return true;
@@ -589,7 +647,7 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testLaneLayoutVisuals() &&
+    return testLaneLayoutVisuals() && testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleLabelMarquee() &&

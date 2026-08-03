@@ -178,13 +178,14 @@ void SampleRenderSystem::renderLaneLayout(
                 labelBuffer.data(),
                 static_cast<std::size_t>(result.out - labelBuffer.data()));
         }
-        renderCanvasAsciiText(batcher,
-                              labelText,
-                              bounds->leftX + 4.0F,
-                              topY + 4.0F,
-                              BGM_LANE_LABEL_FONT_PIXEL_HEIGHT,
-                              projection.player.singleTrackWidth - 8.0F,
-                              label);
+        renderMarqueeCanvasAsciiText(batcher,
+                                     labelText,
+                                     bounds->leftX + 4.0F,
+                                     topY + 4.0F,
+                                     BGM_LANE_LABEL_FONT_PIXEL_HEIGHT,
+                                     projection.player.singleTrackWidth - 8.0F,
+                                     label,
+                                     batcher.snapshot->snapshotSysTime);
     }
 
     if ( projection.bgmLeftX >= 0.0F && projection.bgmLeftX <= viewportWidth ) {
