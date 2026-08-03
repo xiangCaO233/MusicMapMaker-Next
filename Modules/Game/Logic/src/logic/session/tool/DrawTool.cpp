@@ -238,7 +238,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             ctx.lastConfig.visual.trackLayout.left,
             ctx.lastConfig.visual.trackLayout.right,
             itCamera->second.horizontalOffsetX,
-            true);
+            true,
+            ctx.lastConfig.settings.enableBmsEditing);
         targetLane = laneProjection.laneAt(cmd.mouseX);
     }
 
@@ -560,7 +561,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             ctx.lastConfig.visual.trackLayout.left,
             ctx.lastConfig.visual.trackLayout.right,
             itCamera->second.horizontalOffsetX,
-            true);
+            true,
+            ctx.lastConfig.settings.enableBmsEditing);
         currentLane = laneProjection.laneAt(cmd.mouseX);
         if ( !currentLane ) return;
 

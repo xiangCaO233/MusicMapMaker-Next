@@ -33,6 +33,7 @@ return {
 	["ui.edit.beatmap_settings"] = "Beatmap Settings",
 	["ui.edit.select_all"] = "Select All",
 	["ui.edit.note_metadata"] = "Edit Metadata",
+	["ui.edit.bms_editing"] = "BMS Editing",
 	["ui.edit.polyline_editing"] = "Polyline Editing",
 	["ui.edit.note_metadata.title"] = "Edit Selected Object Properties###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "{} object(s) selected, {} group(s)",

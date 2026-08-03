@@ -1183,15 +1183,16 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         return;
     }
 
-    const auto& camera = cameraIterator->second;
-    const auto  projection =
-        calculateCanvasLaneProjection(camera.viewportWidth,
-                                      m_ctx.trackCount,
-                                      m_ctx.bgmTrackCount,
-                                      m_ctx.lastConfig.visual.trackLayout.left,
-                                      m_ctx.lastConfig.visual.trackLayout.right,
-                                      camera.horizontalOffsetX,
-                                      true);
+    const auto& camera     = cameraIterator->second;
+    const auto  projection = calculateCanvasLaneProjection(
+        camera.viewportWidth,
+        m_ctx.trackCount,
+        m_ctx.bgmTrackCount,
+        m_ctx.lastConfig.visual.trackLayout.left,
+        m_ctx.lastConfig.visual.trackLayout.right,
+        camera.horizontalOffsetX,
+        true,
+        m_ctx.lastConfig.settings.enableBmsEditing);
     const auto lane = projection.laneAt(cmd.mouseX);
     if ( !lane || lane->kind != CanvasLaneKind::Bgm ) {
         m_ctx.lastActionMessage = "音频资源只能放置到 BGM 轨道区";

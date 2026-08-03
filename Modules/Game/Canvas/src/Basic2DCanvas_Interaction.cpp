@@ -2287,7 +2287,8 @@ void Basic2DCanvasInteraction::handleInteractions(
             layout.left,
             layout.right,
             currentSnapshot->canvasHorizontalOffsetX,
-            true);
+            true,
+            currentSnapshot->bmsEditingEnabled);
         const float dropLeft =
             std::clamp(projection.bgmLeftX, 0.0F, targetWidth);
         const float dropRight =
@@ -2337,10 +2338,13 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     const float trackLeftX =
         targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
-    const auto runtimeBgmTrackCount = std::min<std::int64_t>(
-        static_cast<std::int64_t>(std::max(0, currentSnapshot->bgmTrackCount)) +
-            1,
-        std::numeric_limits<std::int32_t>::max());
+    const auto runtimeBgmTrackCount =
+        currentSnapshot->bmsEditingEnabled
+            ? std::min<std::int64_t>(static_cast<std::int64_t>(std::max(
+                                         0, currentSnapshot->bgmTrackCount)) +
+                                         1,
+                                     std::numeric_limits<std::int32_t>::max())
+            : std::int64_t{ 0 };
     const float trackRightX =
         targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX +
         (currentSnapshot->trackCount > 0

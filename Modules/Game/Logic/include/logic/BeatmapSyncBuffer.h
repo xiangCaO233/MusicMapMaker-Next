@@ -466,11 +466,13 @@ struct RenderSnapshot {
     int32_t trackCount{ 4 };  ///< 谱面轨道数量
     /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
     int32_t bgmTrackCount{ 0 };
-    float   renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
-    double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
-    double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
-    size_t  noteCount{ 0 };           ///< 当前谱面的可计数物件数量
-    size_t  maxCombo{ 0 };            ///< 当前谱面的最大连击数
+    /// @brief 当前快照是否显示并允许交互 BGM 轨道区。
+    bool   bmsEditingEnabled{ true };
+    float  renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
+    double visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
+    double visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
+    size_t noteCount{ 0 };           ///< 当前谱面的可计数物件数量
+    size_t maxCombo{ 0 };            ///< 当前谱面的最大连击数
 
     // 笔刷预览状态
     struct BrushSnapshot {
@@ -675,6 +677,7 @@ struct RenderSnapshot {
         noteCount          = 0;
         maxCombo           = 0;
         bgmTrackCount      = 0;
+        bmsEditingEnabled  = true;
     }
 };
 

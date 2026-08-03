@@ -1201,6 +1201,9 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     const bool disablePolylineEditing =
         m_ctx->lastConfig.settings.enablePolylineEditing &&
         !cmd.config.settings.enablePolylineEditing;
+    const bool disableBmsEditing =
+        m_ctx->lastConfig.settings.enableBmsEditing &&
+        !cmd.config.settings.enableBmsEditing;
     m_ctx->lastConfig = cmd.config;
     if ( disablePolylineEditing ) {
         auto view =
@@ -1232,6 +1235,30 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             m_ctx->hoveredEntity   = entt::null;
             m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
             m_ctx->hoveredSubIndex = -1;
+        }
+    }
+    if ( disableBmsEditing ) {
+        auto view = m_ctx->sampleRegistry.view<InteractionComponent>();
+        for ( const auto entity : view ) {
+            auto& interaction      = view.get<InteractionComponent>(entity);
+            interaction.isSelected = false;
+            interaction.isHovered  = false;
+            interaction.isDragging = false;
+            interaction.isCut      = false;
+            interaction.hoveredPart =
+                static_cast<std::uint8_t>(HoverPart::None);
+            interaction.hoveredSubIndex = -1;
+        }
+        m_ctx->selectedSampleEntities.clear();
+        if ( m_ctx->hoveredObjectKind == ChartObjectKind::AudioSample ) {
+            m_ctx->hoveredEntity     = entt::null;
+            m_ctx->hoveredObjectKind = ChartObjectKind::PlayerNote;
+            m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
+            m_ctx->hoveredSubIndex = -1;
+        }
+        if ( m_ctx->brushState.createsAudioSample ) {
+            m_ctx->brushState.isActive           = false;
+            m_ctx->brushState.createsAudioSample = false;
         }
     }
     auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();

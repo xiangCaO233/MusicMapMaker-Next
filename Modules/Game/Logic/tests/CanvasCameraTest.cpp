@@ -164,6 +164,37 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
+/// @brief 验证关闭 BMS 编辑后 BGM 区不参与投影与画笔交互。
+/// @return 玩家轨道仍可寻址且 BGM 区不会创建自动采样时返回 true。
+bool testBmsEditingHidesBgmLanes()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enableBmsEditing = false;
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 1, 0.1F, 0.5F, 0.0F, true, false);
+    const auto playerLane = projection.laneAt(150.0F);
+    if ( !projection.valid || projection.bgmLaneCount != 0 || !playerLane ||
+         playerLane->kind != MMM::Logic::CanvasLaneKind::Player ||
+         projection.laneAt(550.0F).has_value() ) {
+        XERROR("Disabled BMS editing still exposed a BGM lane projection");
+        return false;
+    }
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    const auto samples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    return !context.brushState.isActive && samples.size() == 0 &&
+           context.bgmTrackCount == 1;
+}
+
 /// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
 /// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样，空选择
 /// 可创建静音采样草稿时返回 true。
@@ -2231,6 +2262,7 @@ int main()
 {
     return testKeyModeInteractionRestriction() &&
                    testKeyModeBrushCreatesOnlyHold() &&
+                   testBmsEditingHidesBgmLanes() &&
                    testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
                    testBrushCrossesPlayerAndBgmLanes() &&

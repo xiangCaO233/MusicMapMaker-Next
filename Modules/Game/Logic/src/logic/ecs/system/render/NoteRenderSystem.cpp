@@ -411,13 +411,15 @@ void NoteRenderSystem::generateSnapshot(
         }
 
         if ( isMainCanvas && shouldDrawBeatLines ) {
-            const auto laneProjection = calculateCanvasLaneProjection(
-                viewportWidth,
-                trackCount,
-                bgmTrackCount,
-                config.visual.trackLayout.left,
-                config.visual.trackLayout.right,
-                snapshot->canvasHorizontalOffsetX);
+            const auto laneProjection =
+                calculateCanvasLaneProjection(viewportWidth,
+                                              trackCount,
+                                              bgmTrackCount,
+                                              config.visual.trackLayout.left,
+                                              config.visual.trackLayout.right,
+                                              snapshot->canvasHorizontalOffsetX,
+                                              true,
+                                              config.settings.enableBmsEditing);
             const float visibleLeft = std::max(0.0F, laneProjection.bgmLeftX);
             const float visibleRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
@@ -461,13 +463,15 @@ void NoteRenderSystem::generateSnapshot(
         float noteRenderRightX = rightX;
         if ( isMainCanvas &&
              hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
-            const auto laneProjection = calculateCanvasLaneProjection(
-                viewportWidth,
-                trackCount,
-                bgmTrackCount,
-                config.visual.trackLayout.left,
-                config.visual.trackLayout.right,
-                snapshot->canvasHorizontalOffsetX);
+            const auto laneProjection =
+                calculateCanvasLaneProjection(viewportWidth,
+                                              trackCount,
+                                              bgmTrackCount,
+                                              config.visual.trackLayout.left,
+                                              config.visual.trackLayout.right,
+                                              snapshot->canvasHorizontalOffsetX,
+                                              true,
+                                              config.settings.enableBmsEditing);
             noteRenderRightX = laneProjection.bgmRightX;
             batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
         } else {
@@ -488,13 +492,15 @@ void NoteRenderSystem::generateSnapshot(
                                       singleTrackW,
                                       renderScaleY);
         if ( isMainCanvas ) {
-            const auto laneProjection = calculateCanvasLaneProjection(
-                viewportWidth,
-                trackCount,
-                bgmTrackCount,
-                config.visual.trackLayout.left,
-                config.visual.trackLayout.right,
-                snapshot->canvasHorizontalOffsetX);
+            const auto laneProjection =
+                calculateCanvasLaneProjection(viewportWidth,
+                                              trackCount,
+                                              bgmTrackCount,
+                                              config.visual.trackLayout.left,
+                                              config.visual.trackLayout.right,
+                                              snapshot->canvasHorizontalOffsetX,
+                                              true,
+                                              config.settings.enableBmsEditing);
             SampleRenderSystem::renderSamples(sampleRegistry,
                                               sortedSampleEntities,
                                               sortedSampleMaxEndPrefix,
@@ -1180,7 +1186,9 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           bgmTrackCount,
                                           config.visual.trackLayout.left,
                                           config.visual.trackLayout.right,
-                                          snapshot->canvasHorizontalOffsetX);
+                                          snapshot->canvasHorizontalOffsetX,
+                                          true,
+                                          config.settings.enableBmsEditing);
         SampleRenderSystem::renderLaneLayout(batcher,
                                              laneProjection,
                                              bgmTrackCount,

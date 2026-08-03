@@ -36,6 +36,11 @@ std::unique_ptr<IMainMenuItemActionHandler> createSelectAllAction();
 std::unique_ptr<IMainMenuToggleItemActionHandler>
 createPolylineEditingToggleAction();
 
+/// @brief 创建 BMS 编辑开关处理器。
+/// @return 新建的 BMS 编辑开关处理器。
+std::unique_ptr<IMainMenuToggleItemActionHandler>
+createBmsEditingToggleAction();
+
 /// @brief 创建打开音符元数据编辑器动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenNoteMetadataAction();
 

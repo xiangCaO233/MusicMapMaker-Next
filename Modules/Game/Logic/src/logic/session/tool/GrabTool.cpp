@@ -347,7 +347,8 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         ctx.lastConfig.visual.trackLayout.left,
         ctx.lastConfig.visual.trackLayout.right,
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
-        isMainCanvas);
+        isMainCanvas,
+        isMainCanvas && ctx.lastConfig.settings.enableBmsEditing);
     if ( !projection.valid ) return std::nullopt;
 
     CanvasLaneAddress address;
