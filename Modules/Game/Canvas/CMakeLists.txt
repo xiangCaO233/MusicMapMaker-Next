@@ -51,3 +51,11 @@ mmm_add_test_executable(Canvas CanvasTabTitleTest tests/CanvasTabTitleTest.cpp)
 target_include_directories(CanvasTabTitleTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
+
+# Timeline Timing 悬浮提示使用纯映射，独立覆盖界面术语与数值单位。
+mmm_add_test_executable(Canvas TimelineTimingTooltipTest
+                        tests/TimelineTimingTooltipTest.cpp)
+target_include_directories(TimelineTimingTooltipTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimelineTimingTooltipTest PRIVATE MMM)
+add_test(NAME TimelineTimingTooltipTest COMMAND TimelineTimingTooltipTest)
