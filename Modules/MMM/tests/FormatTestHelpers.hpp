@@ -635,19 +635,27 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                 sortSamples(filterNodes(orig["note"], true));
             const json exportedSamples =
                 sortSamples(filterNodes(expo["note"], true));
-            sampleCount   = originalSamples.size();
+            const bool exportsSlideMode = expo.contains("meta") &&
+                                          expo["meta"].is_object() &&
+                                          expo["meta"].value("mode", -1) == 7;
+            sampleCount                 = originalSamples.size();
             bool sampleOk = originalSamples.size() == exportedSamples.size();
             for ( size_t i = 0; sampleOk && i < originalSamples.size(); ++i ) {
                 const auto& original = originalSamples[i];
                 const auto& exported = exportedSamples[i];
                 const bool  canonicalType =
                     exported.contains("type") &&
-                    exported["type"].is_number_integer() &&
-                    exported["type"].get<int>() == 1;
+                    ((exportsSlideMode && exported["type"].is_string() &&
+                      exported["type"].get<std::string>() == "SOUND") ||
+                     (!exportsSlideMode &&
+                      exported["type"].is_number_integer() &&
+                      exported["type"].get<int>() == 1));
                 const bool canonicalTrack =
-                    exported.contains("x") && exported["x"].is_number();
+                    exportsSlideMode
+                        ? !exported.contains("x")
+                        : exported.contains("x") && exported["x"].is_number();
                 const bool matchingExplicitTrack =
-                    !original.contains("x") ||
+                    exportsSlideMode || !original.contains("x") ||
                     (exported.contains("x") &&
                      original.value("x", -1) == exported.value("x", -1));
                 const bool matchingFields =

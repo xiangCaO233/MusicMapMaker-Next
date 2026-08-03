@@ -431,10 +431,10 @@ void test_key_mode_flick_exports_single_note()
     XINFO("PASS: Key mode Flick exports as single Note");
 }
 
-/// @brief 确认 Malody 自动采样对象使用数值 type=1 和绝对 BGM 轨道。
-void test_audio_node_uses_canonical_fields()
+/// @brief 确认 Malody Key 自动采样对象使用数值 type=1 和绝对 BGM 轨道。
+void testKeyAudioNodeUsesNumericType()
 {
-    XINFO("=== Test: Audio node uses canonical fields ===");
+    XINFO("=== Test: Key audio node uses numeric type ===");
 
     auto bm = makeMinimalBeatMap(0 /*Key*/, 4);
 
@@ -472,7 +472,40 @@ void test_audio_node_uses_canonical_fields()
     TEST_ASSERT(!audioNode->contains("column"),
                 "audio sample must not use playable column");
 
-    XINFO("PASS: Audio node uses canonical fields");
+    XINFO("PASS: Key audio node uses numeric type");
+}
+
+/// @brief 确认 Malody Slide 主音轨使用游戏可识别的字符串 SOUND 类型。
+void testSlideAudioNodeUsesSoundType()
+{
+    XINFO("=== Test: Slide audio node uses SOUND type ===");
+
+    auto bm = makeMinimalBeatMap(7 /*Slide*/, 4);
+
+    const fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_slide_audio_type.mc";
+    TEST_ASSERT(bm.saveToFile(outPath), "slide audio sample should save");
+
+    std::ifstream ifs(outPath);
+    json          j;
+    ifs >> j;
+
+    TEST_ASSERT(j.contains("note") && !j["note"].empty(),
+                "slide note array should not be empty");
+    const auto audioNode =
+        std::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
+    TEST_ASSERT(audioNode != j["note"].end(),
+                "slide audio sample should be present");
+    TEST_ASSERT((*audioNode)["type"].is_string(),
+                "slide audio sample type should be a string");
+    TEST_ASSERT((*audioNode)["type"].get<std::string>() == "SOUND",
+                "slide audio sample type should be SOUND");
+    TEST_ASSERT(audioNode->value("sound", "") == "audio.ogg",
+                "slide audio sample should keep its resource id");
+    TEST_ASSERT(!audioNode->contains("x"),
+                "slide audio sample should not export x");
+
+    XINFO("PASS: Slide audio node uses SOUND type");
 }
 
 /// @brief 确认内部兼容 offset 元数据不会导出到 Malody meta。
@@ -1454,7 +1487,8 @@ int main()
     test_unsupported_malody_mode_rejected();
     test_key_mode_polyline_exports_key_fields();
     test_key_mode_flick_exports_single_note();
-    test_audio_node_uses_canonical_fields();
+    testKeyAudioNodeUsesNumericType();
+    testSlideAudioNodeUsesSoundType();
     test_internal_offset_metadata_not_exported();
     test_empty_version_exports_default_metadata();
     test_sound_track_does_not_expand_key_count();
