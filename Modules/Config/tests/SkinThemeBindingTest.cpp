@@ -226,6 +226,20 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
                     holdColor.b == nodeColor.b && holdColor.a == nodeColor.a,
                 "IVM 节点颜色必须与 Body 完全一致");
 
+    const auto tapColor       = skinManager.getColor("note_tap");
+    const auto bgmSampleColor = skinManager.getColor("bgm_tracks.sample");
+    const auto hoveredSampleColor =
+        skinManager.getColor("bgm_tracks.sample_hovered");
+    ok &= check(
+        bgmSampleColor.r < tapColor.r && bgmSampleColor.g < tapColor.g &&
+            bgmSampleColor.b < tapColor.b && bgmSampleColor.a == tapColor.a,
+        "IVM 普通 BGM 物件必须使用更暗的独立配色");
+    ok &= check(hoveredSampleColor.r == tapColor.r &&
+                    hoveredSampleColor.g == tapColor.g &&
+                    hoveredSampleColor.b == tapColor.b &&
+                    hoveredSampleColor.a == tapColor.a,
+                "IVM BGM 物件悬浮时必须恢复原有亮青色反馈");
+
     const auto beatHead = skinManager.getColor("beat_lines.beat_1");
     ok &= check(beatHead.r == 1.0f && beatHead.g == 0.0f &&
                     beatHead.b == 0.0f && beatHead.a == 1.0f,
