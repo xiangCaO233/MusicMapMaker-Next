@@ -706,6 +706,43 @@ bool testSessionSelectsKeyCountLayout()
                 config.visual.canvasComponents.beatNumber.anchorX);
 }
 
+/// @brief 验证交互命令执行前已经物化当前 Key 数的轨道与判定线布局。
+/// @return 画笔在专属布局中的鼠标位置生成同轨同时间预览时返回 true。
+bool testQueuedBrushUsesKeyCountLayout()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    context.currentTool = MMM::Logic::EditTool::Draw;
+
+    auto config                     = context.lastConfig;
+    config.visual.trackLayout.left  = 0.1F;
+    config.visual.trackLayout.right = 0.5F;
+    config.visual.judgeline_pos     = 0.5F;
+    auto& fourTrackLayout = config.visual.editableTrackLayoutForKeyCount(4);
+    fourTrackLayout.left  = 0.4F;
+    fourTrackLayout.right = 0.8F;
+    config.visual.editableJudgmentLinePositionForKeyCount(4) = 0.75F;
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas",
+            .mouseX   = 450.0F,
+            .mouseY   = 450.0F,
+        },
+    });
+    session.update(0.0, config, true);
+
+    if ( !context.brushState.isActive || context.brushState.track != 0 ||
+         !near(context.brushState.time, 1.0) ||
+         !near(context.lastConfig.visual.trackLayout.left, 0.4) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.75) ) {
+        XERROR("Queued brush command used the legacy global canvas layout");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证玩家轨道数变化不会把超出 uint32 的自动采样轨道静默截断。
 /// @return 溢出时轨道数、采样和撤销栈均保持原状时返回 true。
 bool testTrackCountOverflowIsRejectedAtomically()
@@ -2473,6 +2510,7 @@ int main()
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
+                   testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&

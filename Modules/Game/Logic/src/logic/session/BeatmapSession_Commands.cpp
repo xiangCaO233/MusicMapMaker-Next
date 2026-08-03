@@ -997,9 +997,24 @@ bool BeatmapSession::processCommands()
     LogicCommand cmd;
     bool         processed = false;
     while ( m_commandQueue.try_dequeue(cmd) ) {
+        // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
+        // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
+        // 布局。画布组件仍在 update 末尾一次性物化，避免连续输入复制内部向量。
+        auto&       visual                   = m_ctx->lastConfig.visual;
+        const auto  baseTrackLayout          = visual.trackLayout;
+        const float baseJudgmentLinePosition = visual.judgeline_pos;
+        const auto  effectiveTrackLayout =
+            visual.trackLayoutForKeyCount(m_ctx->trackCount);
+        visual.trackLayout = effectiveTrackLayout;
+        visual.judgeline_pos =
+            visual.judgmentLinePositionForKeyCount(m_ctx->trackCount);
+        bool replacedEditorConfig = false;
         std::visit(
-            [this, &processed](auto&& arg) {
+            [this, &processed, &replacedEditorConfig](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
+                if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
+                    replacedEditorConfig = true;
+                }
                 if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
@@ -1190,6 +1205,10 @@ bool BeatmapSession::processCommands()
                 }
             },
             cmd);
+        if ( !replacedEditorConfig ) {
+            visual.trackLayout   = baseTrackLayout;
+            visual.judgeline_pos = baseJudgmentLinePosition;
+        }
     }
     return processed;
 }
