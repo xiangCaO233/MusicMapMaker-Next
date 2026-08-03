@@ -96,6 +96,78 @@ void configureUnicodeFont(MMM::Logic::RenderSnapshot& snapshot)
     }
 }
 
+/// @brief 验证每条 BGM 轨道底色都使用纯白纹理像素。
+/// @return 所有轨道底色均未复用上一条轨道标签字形 UV 时返回 true。
+bool testLaneBackgroundUsesSolidColorUv()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    constexpr glm::vec4        solidUv{ 0.1F, 0.2F, 0.04F, 0.06F };
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::None), solidUv);
+    configureAsciiFont(snapshot);
+
+    constexpr float        viewportWidth           = 800.0F;
+    constexpr float        topY                    = 10.0F;
+    constexpr float        bottomY                 = 590.0F;
+    constexpr std::int32_t persistentBgmTrackCount = 3;
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        viewportWidth, 4, persistentBgmTrackCount, 0.1F, 0.5F, 0.0F);
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    MMM::Logic::System::SampleRenderSystem::renderLaneLayout(
+        batcher,
+        projection,
+        persistentBgmTrackCount,
+        viewportWidth,
+        topY,
+        bottomY);
+    batcher.flush();
+
+    const float expectedU = solidUv.x + solidUv.z * 0.5F;
+    const float expectedV = solidUv.y + solidUv.w * 0.5F;
+    for ( std::uint32_t laneIndex = 0U; laneIndex < projection.bgmLaneCount;
+          ++laneIndex ) {
+        const auto bounds =
+            projection.bounds({ MMM::Logic::CanvasLaneKind::Bgm, laneIndex });
+        if ( !bounds ) {
+            XERROR("Unable to resolve BGM lane {} bounds", laneIndex);
+            return false;
+        }
+
+        bool foundBackground = false;
+        for ( std::size_t vertexIndex = 0U;
+              vertexIndex + 3U < snapshot.vertices.size();
+              vertexIndex += 4U ) {
+            const auto* quad = snapshot.vertices.data() + vertexIndex;
+            if ( !near(quad[0].pos.x, bounds->leftX) ||
+                 !near(quad[0].pos.y, bottomY) ||
+                 !near(quad[1].pos.x, bounds->rightX) ||
+                 !near(quad[1].pos.y, bottomY) ||
+                 !near(quad[2].pos.x, bounds->rightX) ||
+                 !near(quad[2].pos.y, topY) ||
+                 !near(quad[3].pos.x, bounds->leftX) ||
+                 !near(quad[3].pos.y, topY) ) {
+                continue;
+            }
+
+            foundBackground = true;
+            for ( std::size_t corner = 0U; corner < 4U; ++corner ) {
+                if ( !near(quad[corner].uv.u, expectedU) ||
+                     !near(quad[corner].uv.v, expectedV) ) {
+                    XERROR("BGM lane {} background reused a label glyph UV",
+                           laneIndex);
+                    return false;
+                }
+            }
+            break;
+        }
+        if ( !foundBackground ) {
+            XERROR("BGM lane {} background quad was not generated", laneIndex);
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 为单个零 offset 自动采样生成测试快照。
 /// @param snapshot 输出快照。
 /// @param resourceId 音频资源 ID。
@@ -501,7 +573,8 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testSampleBodyMatchesTapTextureAndSize() &&
+    return testLaneBackgroundUsesSolidColorUv() &&
+                   testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleLabelMarquee() &&
                    testSampleLabelScaleAndFixedLaneWidth() &&

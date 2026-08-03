@@ -146,12 +146,12 @@ void SampleRenderSystem::renderLaneLayout(
     const float visibleRight = std::min(viewportWidth, projection.bgmRightX);
     batcher.setScissor(
         visibleLeft, topY, visibleRight - visibleLeft, bottomY - topY);
-    batcher.setTexture(TextureID::None);
 
     const auto [begin, end] = *visibleRange;
     for ( std::uint32_t index = begin; index < end; ++index ) {
         const auto bounds = projection.bounds({ CanvasLaneKind::Bgm, index });
         if ( !bounds ) continue;
+        batcher.setTexture(TextureID::None);
         batcher.pushQuad(bounds->leftX,
                          bottomY,
                          projection.player.singleTrackWidth,
