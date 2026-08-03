@@ -3598,6 +3598,20 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.beat_line_alpha").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBeatLineAlpha",
+                                                &visual.beatLineAlpha,
+                                                0.0f,
+                                                1.0f,
+                                                "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());

@@ -38,8 +38,9 @@ struct EditorConfig {
             defaults.settings.defaultColorPaletteSchemeName;
     }
 
-    /// @brief 将背景图像渲染选项恢复为应用默认配置。
-    /// @details 仅恢复填充模式、不透明度和暗化程度，保留背景电平图配置。
+    /// @brief 将背景与画布渲染选项恢复为应用默认配置。
+    /// @details 恢复填充模式、背景不透明度、暗化程度和分拍线透明度，
+    /// 保留背景电平图配置。
     void resetBackgroundRenderingToDefaults()
     {
         const EditorConfig defaults;
@@ -48,6 +49,7 @@ struct EditorConfig {
             defaults.visual.background.opaque_ratio;
         visual.background.darken_ratio =
             defaults.visual.background.darken_ratio;
+        visual.beatLineAlpha = defaults.visual.beatLineAlpha;
     }
 };
 
