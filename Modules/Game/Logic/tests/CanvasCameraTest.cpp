@@ -1553,8 +1553,8 @@ bool testSampleHoverInspectDetails()
     return true;
 }
 
-/// @brief 验证离开当前分拍网格的悬浮 Note 只生成单轨单拍临时预览。
-/// @return 1/3 Note 在 1/4 网格触发预览且在兼容的 1/6 网格关闭时返回 true。
+/// @brief 验证悬浮检视与常用分拍编辑手势只生成单轨单拍临时预览。
+/// @return 悬浮、拖动与绘制状态均使用正确轨道、拍区间和分拍来源时返回 true。
 bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
 {
     auto beatmap                           = std::make_shared<MMM::BeatMap>();
@@ -1628,6 +1628,27 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
         XERROR("Dragging did not restore the configured beat grid preview");
         return false;
     }
+
+    std::uint32_t commonBeatDivisorMask = 0U;
+    MMM::Config::setCommonBeatDivisorEnabled(commonBeatDivisorMask, 3, true);
+    MMM::Config::setCommonBeatDivisorEnabled(commonBeatDivisorMask, 5, true);
+    config.settings.objectPlacementSnap = true;
+    config.settings.objectPlacementSnapMode =
+        MMM::Config::ObjectPlacementSnapMode::CommonBeatDivisors;
+    config.settings.commonBeatDivisorMask = commonBeatDivisorMask;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
+         snapshot->hoverSubdivisionPreview.track != 5 ||
+         snapshot->hoverSubdivisionPreview.commonBeatDivisorMask !=
+             commonBeatDivisorMask ||
+         !near(snapshot->hoverSubdivisionPreview.focusTime,
+               note.m_timestamp / 1000.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatStartTime, 1.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatEndTime, 1.5) ) {
+        XERROR("Common-divisor drag preview did not follow the dragged Note");
+        return false;
+    }
     context.isDragging    = false;
     context.draggedEntity = entt::null;
 
@@ -1636,6 +1657,36 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
         XERROR("Compatible current beat grid still enabled hover preview");
+        return false;
+    }
+
+    interaction.isHovered                 = false;
+    context.hoveredEntity                 = entt::null;
+    context.brushState.isActive           = true;
+    context.brushState.createsAudioSample = false;
+    context.brushState.type               = MMM::NoteType::HOLD;
+    context.brushState.time               = 1.0;
+    context.brushState.duration           = 0.1;
+    context.brushState.track              = 4;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
+         snapshot->hoverSubdivisionPreview.track != 4 ||
+         snapshot->hoverSubdivisionPreview.commonBeatDivisorMask !=
+             commonBeatDivisorMask ||
+         !near(snapshot->hoverSubdivisionPreview.focusTime, 1.1) ||
+         !near(snapshot->hoverSubdivisionPreview.beatStartTime, 1.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatEndTime, 1.5) ) {
+        XERROR("Common-divisor draw preview did not follow the brush tip");
+        return false;
+    }
+
+    context.brushState.createsAudioSample = true;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR(
+            "BGM sample brush unexpectedly enabled player subdivision preview");
         return false;
     }
     return true;

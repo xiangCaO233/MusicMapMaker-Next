@@ -184,7 +184,7 @@ struct HoverInspectInfo {
     int overlapCount{ 1 };
 };
 
-/// @brief 悬浮检视物件触发的单轨单拍临时分拍预览。
+/// @brief 悬浮检视或编辑手势触发的单轨单拍临时分拍预览。
 struct HoverSubdivisionPreview {
     /// @brief 是否需要替换目标轨道当前拍内的分拍线。
     bool show{ false };
@@ -194,6 +194,10 @@ struct HoverSubdivisionPreview {
     int numerator{ 0 };
     /// @brief 临时预览使用的分拍分母。
     int denominator{ 1 };
+    /// @brief 常用分拍线并集位掩码；为零时仅绘制 denominator 对应分拍线。
+    std::uint32_t commonBeatDivisorMask{ 0U };
+    /// @brief 触发临时预览的物件部件时间，单位秒。
+    double focusTime{ 0.0 };
     /// @brief 目标拍起点时间，单位秒。
     double beatStartTime{ 0.0 };
     /// @brief 目标拍终点时间，单位秒。

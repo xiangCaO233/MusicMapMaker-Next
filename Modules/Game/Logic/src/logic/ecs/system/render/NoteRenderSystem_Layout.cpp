@@ -6,6 +6,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -282,11 +283,15 @@ void NoteRenderSystem::drawBeatLines(
     };
 
     const auto& subdivisionPreview = batcher.snapshot->hoverSubdivisionPreview;
-    const bool  hasSubdivisionPreview =
+    const auto  commonBeatDivisorMask =
+        subdivisionPreview.commonBeatDivisorMask &
+        Config::COMMON_BEAT_DIVISOR_MASK_ALL;
+    const bool usesCommonBeatDivisors = commonBeatDivisorMask != 0U;
+    const bool hasSubdivisionPreview =
         allowHoverSubdivisionPreview && subdivisionPreview.show &&
         batcher.snapshot->trackCount > 0 && subdivisionPreview.track >= 0 &&
         subdivisionPreview.track < batcher.snapshot->trackCount &&
-        subdivisionPreview.denominator > 1 &&
+        (usesCommonBeatDivisors || subdivisionPreview.denominator > 1) &&
         subdivisionPreview.denominator <= 128 &&
         subdivisionPreview.beatEndTime > subdivisionPreview.beatStartTime &&
         subdivisionPreview.beatDuration > 0.0;
@@ -366,10 +371,9 @@ void NoteRenderSystem::drawBeatLines(
             auto [highlightColor, outlineWidth] =
                 getBeatLineConfig(subdivisionPreview.denominator);
             const double inspectedTime =
-                subdivisionPreview.beatStartTime +
-                subdivisionPreview.beatDuration *
-                    static_cast<double>(subdivisionPreview.numerator) /
-                    static_cast<double>(subdivisionPreview.denominator);
+                std::clamp(subdivisionPreview.focusTime,
+                           subdivisionPreview.beatStartTime,
+                           subdivisionPreview.beatEndTime);
             const float highlightReveal =
                 revealAlphaAt(timeToCanvasY(inspectedTime));
             glm::vec4 outlineColor = highlightColor;
@@ -388,19 +392,19 @@ void NoteRenderSystem::drawBeatLines(
                                    outlineColor);
         }
 
-        const double subdivisionStep =
-            subdivisionPreview.beatDuration /
-            static_cast<double>(subdivisionPreview.denominator);
-        for ( int step = 1; step < subdivisionPreview.denominator; ++step ) {
-            const double lineTime = subdivisionPreview.beatStartTime +
-                                    static_cast<double>(step) * subdivisionStep;
-            if ( lineTime >= subdivisionPreview.beatEndTime - 1e-6 ) break;
+        const auto drawSubdivisionLine = [&](int step, int divisor) {
+            const int    common      = std::gcd(step, divisor);
+            const int    numerator   = step / common;
+            const int    denominator = divisor / common;
+            const double lineTime    = subdivisionPreview.beatStartTime +
+                                       subdivisionPreview.beatDuration *
+                                           static_cast<double>(numerator) /
+                                           static_cast<double>(denominator);
+            if ( lineTime >= subdivisionPreview.beatEndTime - 1e-6 ) return;
             const float y = timeToCanvasY(lineTime);
-            if ( y < visibleTop || y > visibleBottom ) continue;
+            if ( y < visibleTop || y > visibleBottom ) return;
 
-            const int common = std::gcd(step, subdivisionPreview.denominator);
-            const int denominator = subdivisionPreview.denominator / common;
-            auto [color, width]   = getBeatLineConfig(denominator);
+            auto [color, width] = getBeatLineConfig(denominator);
             color.a *= revealAlphaAt(y);
             drawBeatLineSegment(subdivisionLineLeft,
                                 subdivisionLineRight - subdivisionLineLeft,
@@ -408,6 +412,33 @@ void NoteRenderSystem::drawBeatLines(
                                 width,
                                 color,
                                 false);
+        };
+
+        if ( usesCommonBeatDivisors ) {
+            std::array<std::array<bool, Config::COMMON_BEAT_DIVISOR_MAX + 1>,
+                       Config::COMMON_BEAT_DIVISOR_MAX + 1>
+                renderedFractions{};
+            for ( int divisor = Config::COMMON_BEAT_DIVISOR_MIN;
+                  divisor <= Config::COMMON_BEAT_DIVISOR_MAX;
+                  ++divisor ) {
+                if ( !Config::isCommonBeatDivisorEnabled(commonBeatDivisorMask,
+                                                         divisor) ) {
+                    continue;
+                }
+                for ( int step = 1; step < divisor; ++step ) {
+                    const int common      = std::gcd(step, divisor);
+                    const int numerator   = step / common;
+                    const int denominator = divisor / common;
+                    if ( renderedFractions[denominator][numerator] ) continue;
+                    renderedFractions[denominator][numerator] = true;
+                    drawSubdivisionLine(step, divisor);
+                }
+            }
+        } else {
+            for ( int step = 1; step < subdivisionPreview.denominator;
+                  ++step ) {
+                drawSubdivisionLine(step, subdivisionPreview.denominator);
+            }
         }
     }
 
