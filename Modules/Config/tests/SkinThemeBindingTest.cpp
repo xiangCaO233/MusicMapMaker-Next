@@ -24,6 +24,15 @@ bool check(bool condition, std::string_view message)
     return condition;
 }
 
+/// @brief 判断两个皮肤颜色是否完全一致。
+/// @param lhs 左侧颜色。
+/// @param rhs 右侧颜色。
+/// @return 四个颜色通道均相同时返回 true。
+bool sameColor(const MMM::Config::Color& lhs, const MMM::Config::Color& rhs)
+{
+    return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.a == rhs.a;
+}
+
 /// @brief 写入用于皮肤主题解析测试的最小 Lua 文件。
 /// @param path 输出文件路径。
 /// @param themeExpression theme 字段对应的 Lua 表达式。
@@ -204,14 +213,29 @@ bool readPngDimensions(const std::filesystem::path& path, std::uint32_t& width,
 
 /// @brief 验证 IVM 内置皮肤的固定主题、颜色和纹理几何约束。
 /// @param skinPath 仓库中 IVM 皮肤入口路径。
+/// @param referenceSkinPath mmm-default 老皮肤入口路径。
+/// @param translationsRoot 默认翻译资源目录。
 /// @return 皮肤配置与全部自维护资源符合设计时返回 true。
 bool verifyIvmSkin(const std::filesystem::path& skinPath,
+                   const std::filesystem::path& referenceSkinPath,
                    const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
-                                          translationsRoot),
-                     "IVM 内置皮肤应成功加载");
+    bool  ok =
+        check(skinManager.loadSkin(MMM::Config::pathToUtf8(referenceSkinPath),
+                                   translationsRoot),
+              "mmm-default 老皮肤应成功加载");
+    const auto referenceSample = skinManager.getColor("bgm_tracks.sample");
+    const auto referenceSelectedSample =
+        skinManager.getColor("bgm_tracks.sample_selected");
+    const auto referenceHoveredSample =
+        skinManager.getColor("bgm_tracks.sample_hovered");
+    const auto referenceOffset = skinManager.getColor("bgm_tracks.offset");
+    const auto referenceText   = skinManager.getColor("bgm_tracks.text");
+
+    ok &= check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                     translationsRoot),
+                "IVM 内置皮肤应成功加载");
     ok &= check(skinManager.getData().themeName == "IVM", "IVM 皮肤名称不匹配");
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Light) == "IVM" &&
@@ -230,19 +254,23 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
                     holdColor.b == nodeColor.b && holdColor.a == nodeColor.a,
                 "IVM 节点颜色必须与 Body 完全一致");
 
-    const auto tapColor       = skinManager.getColor("note_tap");
     const auto bgmSampleColor = skinManager.getColor("bgm_tracks.sample");
+    const auto selectedSampleColor =
+        skinManager.getColor("bgm_tracks.sample_selected");
     const auto hoveredSampleColor =
         skinManager.getColor("bgm_tracks.sample_hovered");
-    ok &= check(
-        bgmSampleColor.r < tapColor.r && bgmSampleColor.g < tapColor.g &&
-            bgmSampleColor.b < tapColor.b && bgmSampleColor.a == tapColor.a,
-        "IVM 普通 BGM 物件必须使用更暗的独立配色");
-    ok &= check(hoveredSampleColor.r == tapColor.r &&
-                    hoveredSampleColor.g == tapColor.g &&
-                    hoveredSampleColor.b == tapColor.b &&
-                    hoveredSampleColor.a == tapColor.a,
-                "IVM BGM 物件悬浮时必须恢复原有亮青色反馈");
+    const auto offsetColor = skinManager.getColor("bgm_tracks.offset");
+    const auto textColor   = skinManager.getColor("bgm_tracks.text");
+    ok &= check(sameColor(bgmSampleColor, referenceSample),
+                "IVM 普通 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(selectedSampleColor, referenceSelectedSample),
+                "IVM 选中 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(hoveredSampleColor, referenceHoveredSample),
+                "IVM 悬浮 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(offsetColor, referenceOffset),
+                "IVM BGM 物件偏移提示必须沿用老皮肤配色");
+    ok &= check(sameColor(textColor, referenceText),
+                "IVM BGM 物件文字必须沿用老皮肤配色");
 
     const auto beatHead = skinManager.getColor("beat_lines.beat_1");
     ok &= check(beatHead.r == 1.0f && beatHead.g == 0.0f &&
@@ -438,6 +466,8 @@ int main(int argc, char* argv[])
     ok &= verifyLegacyAppConfigSemantics();
     ok &= verifyDefaultSkinEffectFrameRate(MMM::Config::utf8ToPath(argv[4]),
                                            translationsRoot);
-    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]), translationsRoot);
+    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]),
+                        MMM::Config::utf8ToPath(argv[4]),
+                        translationsRoot);
     return ok ? 0 : 1;
 }
