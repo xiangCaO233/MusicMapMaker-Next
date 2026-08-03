@@ -75,6 +75,33 @@ bool testBeatLineAutoRatioClamping()
     return true;
 }
 
+/// @brief 验证悬浮检视分拍线单侧延伸比例能够持久化并限制到允许范围。
+/// @return 当前值往返、旧配置默认值和上下界限制均正确时返回 true。
+bool testHoverSubdivisionLineExtensionRatioConfig()
+{
+    MMM::Config::VisualConfig source;
+    source.hoverSubdivisionLineExtensionRatio = 0.75F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    const auto belowMinimum =
+        nlohmann::json{ { "hoverSubdivisionLineExtensionRatio", -0.4F } }
+            .get<MMM::Config::VisualConfig>();
+    const auto aboveMaximum =
+        nlohmann::json{ { "hoverSubdivisionLineExtensionRatio", 1.8F } }
+            .get<MMM::Config::VisualConfig>();
+    if ( !near(restored.hoverSubdivisionLineExtensionRatio, 0.75F) ||
+         !near(legacy.hoverSubdivisionLineExtensionRatio, 0.5F) ||
+         !near(belowMinimum.hoverSubdivisionLineExtensionRatio, 0.0F) ||
+         !near(aboveMaximum.hoverSubdivisionLineExtensionRatio, 1.0F) ) {
+        XERROR("Hover subdivision line extension ratio was not normalized");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证预览区默认隐藏分拍线并继续显示 Timing 线。
 /// @return 默认构造和缺省 JSON 均使用相同的安全显示状态时返回 true。
 bool testPreviewAreaLineDefaults()
@@ -189,11 +216,12 @@ bool testRenderingDefaultsReset()
     config.settings.defaultColorPaletteSchemeName = "Custom";
     config.visual.background.fillMode =
         MMM::Config::BackgroundFillMode::Stretch;
-    config.visual.background.opaque_ratio       = 0.2F;
-    config.visual.background.darken_ratio       = 0.1F;
-    config.visual.beatLineAlpha                 = 0.2F;
-    config.visual.background.spectrum.bandCount = 64;
-    config.visual.background.spectrum.opacity   = 0.8F;
+    config.visual.background.opaque_ratio            = 0.2F;
+    config.visual.background.darken_ratio            = 0.1F;
+    config.visual.beatLineAlpha                      = 0.2F;
+    config.visual.hoverSubdivisionLineExtensionRatio = 0.9F;
+    config.visual.background.spectrum.bandCount      = 64;
+    config.visual.background.spectrum.opacity        = 0.8F;
 
     config.resetNoteRenderingToDefaults();
     const MMM::Config::EditorConfig defaults;
@@ -220,6 +248,8 @@ bool testRenderingDefaultsReset()
          !near(config.visual.background.darken_ratio,
                defaults.visual.background.darken_ratio) ||
          !near(config.visual.beatLineAlpha, defaults.visual.beatLineAlpha) ||
+         !near(config.visual.hoverSubdivisionLineExtensionRatio,
+               defaults.visual.hoverSubdivisionLineExtensionRatio) ||
          config.visual.background.spectrum.bandCount != 64 ||
          !near(config.visual.background.spectrum.opacity, 0.8F) ) {
         XERROR("Background rendering reset escaped its configuration boundary");
@@ -417,6 +447,7 @@ int main()
     return testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
+                   testHoverSubdivisionLineExtensionRatioConfig() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
                    testNonHoldHitEffectDurationConfig() &&

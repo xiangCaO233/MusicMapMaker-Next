@@ -220,6 +220,7 @@ return {
 	["ui.settings.visual.judgeline_width"] = "Judge Line Width",
 	["ui.settings.visual.beat_line"] = "Beat Line",
 	["ui.settings.visual.beat_line_alpha"] = "Beat Line Alpha",
+	["ui.settings.visual.hover_subdivision_line_extension"] = "Inspect Beat Line Extension per Side",
 	["ui.settings.visual.beat_line_before_first_timing"] = "Before First Timing Line",
 	["ui.settings.visual.note"] = "Note Rendering",
 	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",

@@ -656,6 +656,8 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "enableLinearScrollMapping", config.enableLinearScrollMapping },
         { "snapThreshold", config.snapThreshold },
         { "beatLineAlpha", config.beatLineAlpha },
+        { "hoverSubdivisionLineExtensionRatio",
+          config.hoverSubdivisionLineExtensionRatio },
         { "beatLineDisplayMode", config.beatLineDisplayMode },
         { "beatLineCursorVisibleRatio", config.beatLineCursorVisibleRatio },
         { "beatLineCursorFadeRatio", config.beatLineCursorFadeRatio },
@@ -722,8 +724,10 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.scrollAnimationDuration = j.value("scrollAnimationDuration", 0.12f);
     config.enableLinearScrollMapping =
         j.value("enableLinearScrollMapping", false);
-    config.snapThreshold = j.value("snapThreshold", 16.0f);
-    config.beatLineAlpha = j.value("beatLineAlpha", 0.75f);
+    config.snapThreshold                      = j.value("snapThreshold", 16.0f);
+    config.beatLineAlpha                      = j.value("beatLineAlpha", 0.75f);
+    config.hoverSubdivisionLineExtensionRatio = std::clamp(
+        j.value("hoverSubdivisionLineExtensionRatio", 0.5f), 0.0f, 1.0f);
     if ( j.contains("beatLineDisplayMode") ) {
         config.beatLineDisplayMode =
             j.value("beatLineDisplayMode", BeatLineDisplayMode::Always);

@@ -223,6 +223,7 @@ return {
 	["ui.settings.visual.judgeline_width"] = "判定线线宽",
 	["ui.settings.visual.beat_line"] = "分拍线",
 	["ui.settings.visual.beat_line_alpha"] = "分拍线透明度",
+	["ui.settings.visual.hover_subdivision_line_extension"] = "检视分拍线单侧延伸比例",
 	["ui.settings.visual.beat_line_before_first_timing"] = "首个红线前分拍线",
 	["ui.settings.visual.note"] = "物件渲染",
 	["ui.settings.visual.note_scale_x"] = "物件横向缩放",

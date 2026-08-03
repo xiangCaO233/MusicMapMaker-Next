@@ -3625,6 +3625,22 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.hover_subdivision_line_extension")
+                    .data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutHoverSubdivisionLineExtension",
+                     &visual.hoverSubdivisionLineExtensionRatio,
+                     0.0f,
+                     1.0f,
+                     "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());

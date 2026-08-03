@@ -163,6 +163,8 @@ struct VisualConfig {
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度。
     float beatLineAlpha{ 0.75f };
+    /// @brief 悬浮检视分拍线向目标轨道每侧额外延伸的轨道宽度比例。
+    float hoverSubdivisionLineExtensionRatio{ 0.5f };
     /// @brief 主画布分拍线显示模式。
     BeatLineDisplayMode beatLineDisplayMode{ BeatLineDisplayMode::Always };
     /// @brief 自动模式下完全显示区域占画布垂直范围的比例。

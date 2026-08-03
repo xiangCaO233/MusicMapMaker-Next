@@ -298,10 +298,16 @@ void NoteRenderSystem::drawBeatLines(
         leftX +
         static_cast<float>(subdivisionPreview.track) * subdivisionTrackWidth;
     const float subdivisionRight = subdivisionLeft + subdivisionTrackWidth;
+    const float subdivisionLineExtensionRatio = std::clamp(
+        config.visual.hoverSubdivisionLineExtensionRatio, 0.0F, 1.0F);
     const float subdivisionLineLeft =
-        std::max(leftX, subdivisionLeft - subdivisionTrackWidth * 0.5F);
-    const float subdivisionLineRight = std::min(
-        leftX + trackAreaW, subdivisionRight + subdivisionTrackWidth * 0.5F);
+        std::max(leftX,
+                 subdivisionLeft -
+                     subdivisionTrackWidth * subdivisionLineExtensionRatio);
+    const float subdivisionLineRight =
+        std::min(leftX + trackAreaW,
+                 subdivisionRight +
+                     subdivisionTrackWidth * subdivisionLineExtensionRatio);
     const auto timeToCanvasY = [&](double time) {
         return judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                                    time, currentAbsY, time)) *
