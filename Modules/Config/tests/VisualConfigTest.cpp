@@ -191,6 +191,7 @@ bool testRenderingDefaultsReset()
         MMM::Config::BackgroundFillMode::Stretch;
     config.visual.background.opaque_ratio       = 0.2F;
     config.visual.background.darken_ratio       = 0.1F;
+    config.visual.beatLineAlpha                 = 0.2F;
     config.visual.background.spectrum.bandCount = 64;
     config.visual.background.spectrum.opacity   = 0.8F;
 
@@ -218,6 +219,7 @@ bool testRenderingDefaultsReset()
                defaults.visual.background.opaque_ratio) ||
          !near(config.visual.background.darken_ratio,
                defaults.visual.background.darken_ratio) ||
+         !near(config.visual.beatLineAlpha, defaults.visual.beatLineAlpha) ||
          config.visual.background.spectrum.bandCount != 64 ||
          !near(config.visual.background.spectrum.opacity, 0.8F) ) {
         XERROR("Background rendering reset escaped its configuration boundary");
