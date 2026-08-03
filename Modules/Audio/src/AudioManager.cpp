@@ -281,9 +281,9 @@ void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
     waitForQueuedSoundEffectLoads();
+    unloadAudioTimeline();
     destroyPlaybackBackend();
     clearSoundEffects();
-    unloadAudioTimeline();
     unloadAuditionTrack();
 
     m_bgmTrack.reset();

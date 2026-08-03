@@ -46,7 +46,8 @@ constexpr float ITEM_GAP = 18.0F;
 constexpr float CANVAS_PADDING = 24.0F;
 
 /// @brief 任一下层方块必须保留的最小可见比例。
-constexpr float MINIMUM_VISIBLE_RATIO = 0.35F;
+constexpr float MINIMUM_VISIBLE_RATIO =
+    ProjectAudioToolLayout::STACK_MINIMUM_VISIBLE_RATIO;
 
 /// @brief 方块开始吸附的逻辑像素距离。
 constexpr float SNAP_THRESHOLD = 8.0F;
@@ -677,9 +678,6 @@ void ProjectAudioToolView::clearActiveItem()
 void ProjectAudioToolView::beginItemDrag(std::size_t itemIndex,
                                          ImVec2      mousePosition)
 {
-    m_itemDragStartedSelected =
-        itemIndex < m_items.size() &&
-        m_items[itemIndex].audioResourceId == m_selectedAudioResourceId;
     const auto activeIndex = activateItem(itemIndex);
     if ( !activeIndex ) return;
 
@@ -1207,6 +1205,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
     const std::string_view searchQuery =
         ProjectAudioToolSearch::trimAsciiWhitespace(m_searchBuffer.data());
+    const float statusHeight =
+        ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     if ( !searchQuery.empty() ) {
         if ( m_searchResults.empty() ) {
             ImGui::TextDisabled("%s", TR("ui.search.no_results").data());
@@ -1215,13 +1215,25 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 "%s: %zu",
                 TR("ui.project_audio_tool.search_results").data(),
                 m_searchResults.size());
-            constexpr std::size_t MAX_VISIBLE_SEARCH_RESULTS = 5;
-            const std::size_t     visibleResultCount =
-                std::min(MAX_VISIBLE_SEARCH_RESULTS, m_searchResults.size());
-            const float resultRowHeight = ImGui::GetFrameHeight();
+            const ImGuiStyle& style           = ImGui::GetStyle();
+            const float       resultRowHeight = ImGui::GetFrameHeight();
+            const float       splitterHeight =
+                std::max(6.0F * dpiScale, style.SeparatorSize * 4.0F);
+            const float minimumCanvasHeight =
+                resultRowHeight * 3.0F + style.WindowPadding.y * 2.0F;
+            const float reservedHeight = minimumCanvasHeight + statusHeight +
+                                         splitterHeight +
+                                         style.ItemSpacing.y * 3.0F;
+            const float searchLayoutAvailableHeight =
+                ImGui::GetContentRegionAvail().y;
             const float resultListHeight =
-                resultRowHeight * static_cast<float>(visibleResultCount) +
-                ImGui::GetStyle().WindowPadding.y * 2.0F;
+                ProjectAudioToolSearch::calculateResultPaneHeight(
+                    m_searchResultPaneHeight,
+                    resultRowHeight,
+                    m_searchResults.size(),
+                    style.WindowPadding.y,
+                    searchLayoutAvailableHeight,
+                    reservedHeight);
             ImGui::BeginChild("ProjectAudioToolSearchResults",
                               { 0.0F, resultListHeight },
                               true);
@@ -1262,11 +1274,41 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 }
             }
             ImGui::EndChild();
+
+            const ImVec2 splitterStart = ImGui::GetCursorScreenPos();
+            const float  splitterWidth =
+                std::max(1.0F, ImGui::GetContentRegionAvail().x);
+            ImGui::InvisibleButton("##ProjectAudioToolSearchResultSplitter",
+                                   { splitterWidth, splitterHeight });
+            const bool splitterActive  = ImGui::IsItemActive();
+            const bool splitterHovered = ImGui::IsItemHovered();
+            if ( splitterActive ) {
+                m_searchResultPaneHeight =
+                    ProjectAudioToolSearch::calculateResultPaneHeight(
+                        resultListHeight + ImGui::GetIO().MouseDelta.y,
+                        resultRowHeight,
+                        m_searchResults.size(),
+                        style.WindowPadding.y,
+                        searchLayoutAvailableHeight,
+                        reservedHeight);
+            }
+            if ( splitterHovered || splitterActive ) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            }
+
+            const ImU32 splitterColor = ImGui::GetColorU32(
+                splitterActive ? ImGuiCol_SeparatorActive
+                               : (splitterHovered ? ImGuiCol_SeparatorHovered
+                                                  : ImGuiCol_Separator));
+            const float splitterLineY = splitterStart.y + splitterHeight * 0.5F;
+            ImGui::GetWindowDrawList()->AddLine(
+                { splitterStart.x, splitterLineY },
+                { splitterStart.x + splitterWidth, splitterLineY },
+                splitterColor,
+                std::max(1.0F, style.SeparatorSize));
         }
     }
     ImGui::Separator();
-    const float statusHeight =
-        ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     ImVec2 childSize = ImGui::GetContentRegionAvail();
     childSize.y      = std::max(1.0F, childSize.y - statusHeight);
     ImGui::BeginChild(
@@ -1296,14 +1338,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 return item.audioResourceId == m_searchFocusRequestId;
             });
         if ( requestedItem != m_items.end() ) {
-            const bool selectionChanged =
-                requestedItem->audioResourceId != m_selectedAudioResourceId;
             const auto activeIndex = activateItem(static_cast<std::size_t>(
                 std::distance(m_items.begin(), requestedItem)));
             if ( activeIndex ) {
-                if ( selectionChanged ) {
-                    previewEffectSelection(m_items[*activeIndex]);
-                }
+                previewEffectSelection(m_items[*activeIndex]);
                 const auto& activeRect = m_items[*activeIndex].rect;
                 const float targetScrollX =
                     (activeRect.x + activeRect.width * 0.5F) * dpiScale -
@@ -1517,6 +1555,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 beginItemDrag(*hoveredItem, mouseLogical);
             }
         } else {
+            if ( !m_selectedAudioResourceId.empty() ) {
+                clearActiveItem();
+                persistWorkspace();
+            }
             const bool additiveSelection =
                 ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
             m_marqueeSelecting = true;
@@ -1582,15 +1624,12 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         } else {
             rebuildLabelRects();
             m_interactionBaseLabelRects.clear();
-            if ( m_itemDragStartedSelected && !m_itemDragMoved ) {
-                clearActiveItem();
-            } else if ( !m_itemDragMoved ) {
+            if ( !m_itemDragMoved ) {
                 previewEffectSelection(item);
             }
             persistWorkspace();
             m_draggingItem.reset();
-            m_itemDragMoved           = false;
-            m_itemDragStartedSelected = false;
+            m_itemDragMoved = false;
             m_dragSnapTargets.clear();
             m_dragVisibilityConstraints.clear();
             m_snapLocks = {};

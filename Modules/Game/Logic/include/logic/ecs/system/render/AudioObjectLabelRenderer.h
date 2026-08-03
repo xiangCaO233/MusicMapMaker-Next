@@ -28,6 +28,24 @@ void renderCanvasAsciiText(Batcher& batcher, std::string_view text, float x,
                            float y, float fontPixelHeight, float maxWidth,
                            glm::vec4 color, bool centerHorizontally = false);
 
+/// @brief 在固定水平裁剪范围内绘制可循环滚动的单行 ASCII 文本。
+/// @param batcher 目标批处理器。
+/// @param text 文本。
+/// @param x 文本区域左边界。
+/// @param y 文本区域上边界。
+/// @param fontPixelHeight 字体像素高度。
+/// @param maxWidth 最大可用宽度。
+/// @param color 文字颜色。
+/// @param monotonicSeconds 单调时钟秒数。
+/// @param centerHorizontally 文本可完整显示时是否水平居中。
+/// @warning 主画布热路径：只绘制至多两份有界短文本，不得分配堆内存、
+/// 创建独立裁剪命令或访问文件系统。
+void renderMarqueeCanvasAsciiText(Batcher& batcher, std::string_view text,
+                                  float x, float y, float fontPixelHeight,
+                                  float maxWidth, glm::vec4 color,
+                                  double monotonicSeconds,
+                                  bool   centerHorizontally = false);
+
 /// @brief 绘制与自动采样一致的音频资源标签。
 /// @param batcher 目标批处理器。
 /// @param audioResourceId 音频资源标识。

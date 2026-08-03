@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace MMM
 {
@@ -23,6 +24,15 @@ constexpr uint32_t hash_str(std::string_view str)
 
 namespace Translation
 {
+/// @brief 皮肤翻译覆写文件的合并结果。
+struct LanguageOverrideResult {
+    /// @brief 覆写文件是否成功解析。
+    bool loaded{ false };
+
+    /// @brief 默认语言字典中不存在、因而被忽略的字段名。
+    std::vector<std::string> unknownFields;
+};
+
 class Translator
 {
 public:
@@ -34,9 +44,21 @@ public:
     ~Translator();
 
     /// @brief 载入一个 Lua 语言字典。
+    /// @param langID 默认语言字典的稳定标识。
     /// @param langLuaFile 语言文件路径。
+    /// @return 文件成功解析并发布时返回 true。
     /// @warning 解析在锁外执行，发布字典时短暂持有独占锁。
-    void loadLanguage(const std::string& langLuaFile);
+    bool loadLanguage(const std::string& langID,
+                      const std::string& langLuaFile);
+
+    /// @brief 将皮肤翻译覆写合并到已加载的默认语言字典。
+    /// @param langID 要覆写的默认语言标识。
+    /// @param langLuaFile 皮肤覆写文件路径。
+    /// @return 文件解析状态及默认字典中不存在的字段。
+    /// @warning 解析在锁外执行，合并字典时短暂持有独占锁；未知字段不会
+    /// 插入默认字典。
+    LanguageOverrideResult applyLanguageOverride(
+        const std::string& langID, const std::string& langLuaFile);
 
     /// @brief 切换当前语言。
     /// @param langID 语言文件名对应的稳定标识。

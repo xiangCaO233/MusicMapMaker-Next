@@ -531,6 +531,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
           settings.disableScrollAccelerationWhileDrawing },
         { "removeObjectsOnPolylinePath", settings.removeObjectsOnPolylinePath },
         { "enablePolylineEditing", settings.enablePolylineEditing },
+        { "enableBmsEditing", settings.enableBmsEditing },
         { "selectPastedObjects", settings.selectPastedObjects },
         { "copyPasteTimeBasis", settings.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm",
@@ -638,6 +639,7 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.removeObjectsOnPolylinePath =
         json.value("removeObjectsOnPolylinePath", false);
     settings.enablePolylineEditing = json.value("enablePolylineEditing", true);
+    settings.enableBmsEditing      = json.value("enableBmsEditing", true);
     settings.selectPastedObjects   = json.value("selectPastedObjects", false);
     settings.copyPasteTimeBasis =
         json.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);

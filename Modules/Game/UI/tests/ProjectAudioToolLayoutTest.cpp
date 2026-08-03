@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/ProjectAudioToolLayout.h"
 
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -69,7 +70,7 @@ bool testEdgeAndCenterSnapping()
     return near(snapped.x, 350.0F) && near(snapped.y, 260.0F);
 }
 
-/// @brief 验证 35% 叠层锚点可吸附并在拖过释放阈值前保持锁定。
+/// @brief 验证同尺寸方块精确垂直堆叠并在拖过释放阈值前保持锁定。
 bool testStackingSnapAndHysteresis()
 {
     const Rect              canvas{ 0.0F, 0.0F, 400.0F, 300.0F };
@@ -78,31 +79,113 @@ bool testStackingSnapAndHysteresis()
     };
     MMM::UI::ProjectAudioToolLayout::SnapLocks locks;
     auto snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
-        Rect{ 133.0F, 80.0F, 50.0F, 50.0F },
+        Rect{ 102.0F, 50.0F, 100.0F, 100.0F },
         canvas,
         targets,
         4.0F,
         12.0F,
         locks);
-    if ( !near(snapped.x, 135.0F) ) return false;
+    if ( !near(snapped.x, 100.0F) || near(snapped.y, 115.0F) ) return false;
 
     snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
-        Rect{ 143.0F, 80.0F, 50.0F, 50.0F },
+        Rect{ 102.0F, 113.0F, 100.0F, 100.0F },
         canvas,
         targets,
         4.0F,
         12.0F,
         locks);
-    if ( !near(snapped.x, 135.0F) ) return false;
+    if ( !near(snapped.x, 100.0F) || !near(snapped.y, 115.0F) ) return false;
 
     snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
-        Rect{ 150.0F, 80.0F, 50.0F, 50.0F },
+        Rect{ 110.0F, 125.0F, 100.0F, 100.0F },
         canvas,
         targets,
         4.0F,
         12.0F,
         locks);
-    return !near(snapped.x, 135.0F);
+    if ( !near(snapped.x, 100.0F) || !near(snapped.y, 115.0F) ) return false;
+
+    snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
+        Rect{ 113.0F, 128.0F, 100.0F, 100.0F },
+        canvas,
+        targets,
+        4.0F,
+        12.0F,
+        locks);
+    return !near(snapped.x, 100.0F) && !near(snapped.y, 115.0F);
+}
+
+/// @brief 验证同尺寸方块支持覆盖 65%、50% 和 25% 的精确堆叠等级。
+bool testStackingSnapLevels()
+{
+    const Rect              canvas{ 0.0F, 0.0F, 400.0F, 300.0F };
+    const std::vector<Rect> targets{
+        Rect{ 100.0F, 80.0F, 100.0F, 100.0F },
+    };
+    constexpr std::array<float, 3> RAW_VERTICAL_POSITIONS{
+        114.0F,
+        129.0F,
+        154.0F,
+    };
+    constexpr std::array<float, 3> EXPECTED_VERTICAL_POSITIONS{
+        115.0F,
+        130.0F,
+        155.0F,
+    };
+    for ( std::size_t index = 0; index < RAW_VERTICAL_POSITIONS.size();
+          ++index ) {
+        MMM::UI::ProjectAudioToolLayout::SnapLocks locks;
+        const auto snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
+            Rect{ 101.0F, RAW_VERTICAL_POSITIONS[index], 100.0F, 100.0F },
+            canvas,
+            targets,
+            4.0F,
+            12.0F,
+            locks);
+        if ( !near(snapped.x, 100.0F) ||
+             !near(snapped.y, EXPECTED_VERTICAL_POSITIONS[index]) ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证连续堆叠可在不同方块之间自由组合精确覆盖等级。
+bool testStackingSnapLevelsCanCombine()
+{
+    const Rect              canvas{ 0.0F, 0.0F, 400.0F, 360.0F };
+    const std::vector<Rect> targets{
+        Rect{ 100.0F, 80.0F, 100.0F, 100.0F },
+        Rect{ 100.0F, 115.0F, 100.0F, 100.0F },
+    };
+    MMM::UI::ProjectAudioToolLayout::SnapLocks locks;
+    const auto snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
+        Rect{ 101.0F, 164.0F, 100.0F, 100.0F },
+        canvas,
+        targets,
+        4.0F,
+        12.0F,
+        locks);
+    return near(snapped.x, 100.0F) && near(snapped.y, 165.0F);
+}
+
+/// @brief 验证多个同尺寸目标都可吸附时优先使用最高图层。
+bool testStackingSnapUsesTopmostLayer()
+{
+    const Rect              canvas{ 0.0F, 0.0F, 400.0F, 300.0F };
+    const std::vector<Rect> targets{
+        Rect{ 100.0F, 80.0F, 100.0F, 100.0F },
+        Rect{ 102.0F, 78.0F, 100.0F, 100.0F },
+    };
+    MMM::UI::ProjectAudioToolLayout::SnapLocks locks;
+    const auto snapped = MMM::UI::ProjectAudioToolLayout::snapRect(
+        Rect{ 101.0F, 114.0F, 100.0F, 100.0F },
+        canvas,
+        targets,
+        4.0F,
+        12.0F,
+        locks);
+    return near(snapped.x, 102.0F) && near(snapped.y, 113.0F);
 }
 
 /// @brief 验证缩放活动边可通过自身边缘或中心吸附到目标锚点。
@@ -310,13 +393,16 @@ int main()
     if ( !testControlDrivenMinimumSize() ) return 2;
     if ( !testEdgeAndCenterSnapping() ) return 3;
     if ( !testStackingSnapAndHysteresis() ) return 4;
-    if ( !testResizeSnapping() ) return 5;
-    if ( !testMinimumVisibleRatio() ) return 6;
-    if ( !testVisibleLabelCell() ) return 7;
-    if ( !testIncrementalVisibleLabelCell() ) return 8;
-    if ( !testResizeVisibilityConstraint() ) return 9;
-    if ( !testPreparedVisibilityConstraint() ) return 10;
-    if ( !testExistingVisibilityDeficitIsBaseline() ) return 11;
-    if ( !testBatchMoveVisibilityConstraint() ) return 12;
+    if ( !testStackingSnapLevels() ) return 5;
+    if ( !testStackingSnapLevelsCanCombine() ) return 6;
+    if ( !testStackingSnapUsesTopmostLayer() ) return 7;
+    if ( !testResizeSnapping() ) return 8;
+    if ( !testMinimumVisibleRatio() ) return 9;
+    if ( !testVisibleLabelCell() ) return 10;
+    if ( !testIncrementalVisibleLabelCell() ) return 11;
+    if ( !testResizeVisibilityConstraint() ) return 12;
+    if ( !testPreparedVisibilityConstraint() ) return 13;
+    if ( !testExistingVisibilityDeficitIsBaseline() ) return 14;
+    if ( !testBatchMoveVisibilityConstraint() ) return 15;
     return 0;
 }

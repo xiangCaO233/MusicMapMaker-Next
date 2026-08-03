@@ -36,9 +36,19 @@ public:
     /// @warning 启动低频路径：只能由渲染主线程调用。
     void showError(std::string title, std::string message);
 
+    /// @brief 在启动界面中展示需要用户确认的提示。
+    /// @param title 提示标题。
+    /// @param message 提示详情。
+    /// @warning 启动低频路径：只能由渲染主线程调用。
+    void showWarning(std::string title, std::string message);
+
     /// @brief 消耗用户本帧发出的重试请求。
     /// @return 用户点击重试时返回 true，并清除请求。
     bool consumeRetryRequest();
+
+    /// @brief 消耗用户本帧发出的继续请求。
+    /// @return 用户确认提示并点击继续时返回 true，并清除请求。
+    bool consumeContinueRequest();
 
     /// @brief 判断用户是否请求退出启动流程。
     /// @return 用户点击退出时返回 true。
@@ -97,8 +107,14 @@ private:
     /// @brief 当前是否展示错误状态。
     bool m_hasError{ false };
 
+    /// @brief 当前是否展示需要用户确认的提示状态。
+    bool m_hasWarning{ false };
+
     /// @brief 用户是否请求重新同步资源。
     bool m_retryRequested{ false };
+
+    /// @brief 用户是否确认提示并继续启动。
+    bool m_continueRequested{ false };
 
     /// @brief 用户是否请求退出程序。
     bool m_exitRequested{ false };
@@ -108,6 +124,12 @@ private:
 
     /// @brief 当前错误详情。
     std::string m_errorMessage;
+
+    /// @brief 当前提示标题。
+    std::string m_warningTitle;
+
+    /// @brief 当前提示详情。
+    std::string m_warningMessage;
 };
 
 }  // namespace MMM::Main

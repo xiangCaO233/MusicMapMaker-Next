@@ -355,11 +355,11 @@ public:
             cameraId, uvMap, asciiFontAtlasMetrics, unicodeFontMetrics);
     }
 
-    /**
-     * @brief 获取当前全局图集 UV 映射
-     */
-    const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
-        const std::string& cameraId) const;
+    /// @brief 获取当前全局图集 UV 映射共享读取句柄。
+    /// @param cameraId 目标画布 cameraId。
+    /// @return 保证图集快照在本轮交互计算中有效的 UV 映射句柄。
+    std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
+    getAtlasUVMap(const std::string& cameraId) const;
 
     /// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
     /// @param cameraId 目标画布 cameraId。
@@ -601,6 +601,10 @@ private:
     /// @brief 保护编辑器配置完整对象的读写，防止 UI
     /// 拖拽更新与逻辑线程复制并发。
     mutable std::mutex m_editorConfigMutex;
+
+    /// @brief 串行化完整的配置提交流程，避免不同事件线程并发改写
+    /// AppConfig 中含动态容器的配置对象。
+    std::recursive_mutex m_editorConfigUpdateMutex;
 
     /// @brief 编辑器配置，由 m_editorConfigMutex 保护。
     Config::EditorConfig m_editorConfig;

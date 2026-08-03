@@ -81,13 +81,13 @@ json makeMalodyMap()
     map["note"] = json::array({ { { "beat", json::array({ 1, 0, 1 }) },
                                   { "column", 2 },
                                   { "sound", "sample.wav" },
-                                  { "vol", 65 } },
+                                  { "vol", -35 } },
                                 { { "beat", json::array({ 0, 0, 1 }) },
                                   { "type", 1 },
                                   { "sound", "audio.ogg" },
                                   { "offset", -125 },
                                   { "x", 4 },
-                                  { "vol", 80 } } });
+                                  { "vol", -20 } } });
     return map;
 }
 

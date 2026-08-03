@@ -718,9 +718,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
-        snapshot->isHoveringCanvas   = isActiveSession &&
-                                       m_ctx->isMouseInCanvas &&
-                                       (m_ctx->mouseCameraId == cameraId);
+        snapshot->bmsEditingEnabled =
+            m_ctx->lastConfig.settings.enableBmsEditing;
+        snapshot->isHoveringCanvas = isActiveSession &&
+                                     m_ctx->isMouseInCanvas &&
+                                     (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。

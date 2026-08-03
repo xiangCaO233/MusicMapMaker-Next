@@ -1,5 +1,5 @@
 return {
-	-- [ Translation Key ] = "翻译后的目标文本"
+	-- [Translation Key] = "翻译后的目标文本"
 
 	-- 普通文本
 	["ui.file"] = "文件(&F)",
@@ -32,6 +32,7 @@ return {
 	["ui.edit.beatmap_settings"] = "谱面设置",
 	["ui.edit.select_all"] = "全选",
 	["ui.edit.note_metadata"] = "编辑元数据",
+	["ui.edit.bms_editing"] = "BMS 编辑",
 	["ui.edit.polyline_editing"] = "折线编辑",
 	["ui.edit.note_metadata.title"] = "编辑选中物件属性###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "已选中 {} 个物件，分为 {} 组",
@@ -226,6 +227,8 @@ return {
 	["ui.settings.visual.note"] = "物件渲染",
 	["ui.settings.visual.note_scale_x"] = "物件横向缩放",
 	["ui.settings.visual.note_scale_y"] = "物件纵向缩放",
+	["ui.settings.visual.non_hold_hit_effect_duration"] = "非 Hold 打击特效时长",
+	["ui.settings.visual.non_hold_hit_effect_duration_tooltip"] = "控制 Note、Flick 与折线子物件打击特效的显示时间；超过一轮序列帧时循环播放，Hold 不受影响。",
 	["ui.settings.visual.note_bound_sample_labels"] = "显示绑定音效文件名",
 	["ui.settings.visual.note_fill_mode"] = "长条纹理填充模式",
 	["ui.settings.visual.note_palette_default"] = "打开项目默认调色方案",

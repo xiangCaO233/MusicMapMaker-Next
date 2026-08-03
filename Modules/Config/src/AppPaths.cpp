@@ -38,6 +38,9 @@ constexpr const char* kAssetsDirectoryName = "assets";
 /// @brief 用户资源包中的皮肤目录名。
 constexpr const char* kSkinsDirectoryName = "skins";
 
+/// @brief 用户资源包中的默认翻译目录名。
+constexpr const char* kTranslationsDirectoryName = "translations";
+
 /// @brief 用户插件目录名。
 constexpr const char* kPluginsDirectoryName = "plugins";
 
@@ -205,6 +208,13 @@ std::filesystem::path AppPaths::skinsRootPath()
 {
     std::filesystem::path path = assetsRootPath();
     path /= kSkinsDirectoryName;
+    return path;
+}
+
+std::filesystem::path AppPaths::translationsRootPath()
+{
+    std::filesystem::path path = assetsRootPath();
+    path /= kTranslationsDirectoryName;
     return path;
 }
 

@@ -22,7 +22,7 @@ return {
 		name = "IVM",
 		author = "MusicMapMaker-Next",
 		version = "1.0",
-		effectbasefps = 60,
+		effectbasefps = 120,
 	},
 
 	beat_divisors = { 1, 2, 3, 4, 6, 8, 12, 16 },
@@ -53,11 +53,12 @@ return {
 			border = { 0.40, 0.40, 0.40, 0.72 },
 			separator = { 0.92, 0.08, 0.08, 0.96 },
 			label = { 0.82, 0.82, 0.82, 0.94 },
-			sample = { 0.078, 0.784, 0.769, 1.0 },
-			sample_selected = { 1.0, 0.72, 0.12, 1.0 },
-			sample_hovered = { 0.42, 1.0, 0.96, 1.0 },
-			offset = { 0.92, 0.08, 0.08, 0.92 },
-			text = { 0.94, 0.94, 0.94, 0.96 },
+			-- 自动采样物件沿用 mmm-default 配色，与 IVM 玩家物件明确区分。
+			sample = { 0.36, 0.72, 0.92, 0.96 },
+			sample_selected = { 1.0, 0.78, 0.24, 1.0 },
+			sample_hovered = { 0.58, 0.90, 1.0, 1.0 },
+			offset = { 0.96, 0.56, 0.28, 0.92 },
+			text = { 0.90, 0.96, 1.0, 0.96 },
 		},
 
 		beat_lines = {
@@ -148,11 +149,6 @@ return {
 			passes = 6,
 			intensity = 0.5,
 		},
-	},
-
-	langs = {
-		en_us = default_resource("lang/en_us.lua"),
-		zh_cn = default_resource("lang/zh_cn.lua"),
 	},
 
 	-- Liberation Sans 与 Windows Arial 指标兼容，提供经典 Windows 工具软件观感。

@@ -215,6 +215,67 @@ bool testTrackFillHitEffectBounds()
     return true;
 }
 
+/// @brief 验证非 Hold 特效按视觉时长结束并循环序列帧。
+/// @return 时长边界正确且超过一轮后回到对应帧时返回 true。
+bool testNonHoldHitEffectPlayback()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    if ( HitFXSystem::isNonHoldEffectFinished(0.119, 0.12F) ||
+         !HitFXSystem::isNonHoldEffectFinished(0.12, 0.12F) ) {
+        XERROR("Non-Hold hit effect duration boundary was not respected");
+        return false;
+    }
+
+    const auto firstLoopFrame =
+        HitFXSystem::loopingEffectFrameIndex(0.125, 60.0F, 6U);
+    const auto invalidFrame =
+        HitFXSystem::loopingEffectFrameIndex(0.125, 0.0F, 6U);
+    if ( !firstLoopFrame || *firstLoopFrame != 1U || invalidFrame ) {
+        XERROR("Non-Hold hit effect frames did not loop safely");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证从持续区间中段播放时补建普通 Hold 与 Polyline subHold 特效。
+/// @return 两类有效 Hold 均补建且已结束或未开始的事件被忽略时返回 true。
+bool testRestoreActiveHoldEffectsFromMiddle()
+{
+    using HitFXSystem = MMM::Logic::System::HitFXSystem;
+    using HitEvent    = HitFXSystem::HitEvent;
+
+    const std::vector<HitEvent> events{
+        { 0.5,
+          MMM::NoteType::HOLD,
+          HitEvent::Role::None,
+          1,
+          3,
+          0,
+          0.25,
+          false },
+        { 1.0, MMM::NoteType::HOLD, HitEvent::Role::None, 1, 0, 0, 4.0, false },
+        { 2.0,
+          MMM::NoteType::HOLD,
+          HitEvent::Role::Internal,
+          1,
+          1,
+          0,
+          2.0,
+          true },
+        { 2.5, MMM::NoteType::NOTE, HitEvent::Role::None, 1, 2, 0, 0.0, false },
+        { 4.0, MMM::NoteType::HOLD, HitEvent::Role::None, 1, 2, 0, 1.0, false },
+    };
+    MMM::Config::EditorConfig config;
+    HitFXSystem               system;
+    const std::size_t         restoredCount =
+        system.restoreActiveHoldEffects(3.0, events, config);
+    if ( restoredCount != 2U ) {
+        XERROR("Playback middle did not restore Hold and subHold effects");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
@@ -226,7 +287,10 @@ int main()
                    testDisabledKeepsOriginalStereo() &&
                    testBoundSoundOverridesDefault() &&
                    testBoundSampleVolume() && testBoundSoundClassification() &&
-                   testFixedHitEffectBounds() && testTrackFillHitEffectBounds()
+                   testFixedHitEffectBounds() &&
+                   testTrackFillHitEffectBounds() &&
+                   testNonHoldHitEffectPlayback() &&
+                   testRestoreActiveHoldEffectsFromMiddle()
                ? 0
                : 1;
 }

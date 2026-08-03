@@ -197,11 +197,13 @@ void renderCanvasTextRunAt(Batcher&                          batcher,
 /// @param maxWidth 最大可用宽度。
 /// @param color 文字颜色。
 /// @param monotonicSeconds 单调时钟秒数。
+/// @param centerHorizontally 文本可完整显示时是否水平居中。
 /// @warning 主画布热路径：只绘制至多两份有界短文本，不得分配内存或创建
 /// 独立 DrawCall 裁剪区。
 void renderMarqueeCanvasTextAt(Batcher& batcher, std::string_view text, float x,
                                float y, float fontPixelHeight, float maxWidth,
-                               glm::vec4 color, double monotonicSeconds)
+                               glm::vec4 color, double monotonicSeconds,
+                               bool centerHorizontally)
 {
     const auto selection = Common::selectAsciiFont(
         batcher.snapshot->asciiFontAtlasMetrics, fontPixelHeight);
@@ -210,15 +212,16 @@ void renderMarqueeCanvasTextAt(Batcher& batcher, std::string_view text, float x,
     const float textWidth = measureCanvasTextWidth(
         selection, *batcher.snapshot, text, fontPixelHeight);
     if ( textWidth <= maxWidth ) {
-        renderCanvasTextRunAt(batcher,
-                              selection,
-                              text,
-                              x + (maxWidth - textWidth) * 0.5F,
-                              y,
-                              fontPixelHeight,
-                              x,
-                              x + maxWidth,
-                              color);
+        renderCanvasTextRunAt(
+            batcher,
+            selection,
+            text,
+            x + (centerHorizontally ? (maxWidth - textWidth) * 0.5F : 0.0F),
+            y,
+            fontPixelHeight,
+            x,
+            x + maxWidth,
+            color);
         return;
     }
 
@@ -299,6 +302,23 @@ void renderCanvasAsciiText(Batcher& batcher, std::string_view text, float x,
                           color);
 }
 
+void renderMarqueeCanvasAsciiText(Batcher& batcher, std::string_view text,
+                                  float x, float y, float fontPixelHeight,
+                                  float maxWidth, glm::vec4 color,
+                                  double monotonicSeconds,
+                                  bool   centerHorizontally)
+{
+    renderMarqueeCanvasTextAt(batcher,
+                              text,
+                              x,
+                              y,
+                              fontPixelHeight,
+                              maxWidth,
+                              color,
+                              monotonicSeconds,
+                              centerHorizontally);
+}
+
 void renderAudioObjectLabel(Batcher& batcher, std::string_view audioResourceId,
                             float volume, float laneLeftX, float objectTopY,
                             float laneWidth, float objectScaleY,
@@ -336,7 +356,8 @@ void renderAudioObjectLabel(Batcher& batcher, std::string_view audioResourceId,
         fontPixelHeight,
         laneWidth - 4.0F,
         color,
-        monotonicSeconds);
+        monotonicSeconds,
+        true);
 }
 
 }  // namespace MMM::Logic::System

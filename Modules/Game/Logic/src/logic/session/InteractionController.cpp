@@ -22,6 +22,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -55,8 +56,8 @@ struct SelectionScreenContext {
     /// @brief 当前框选所在视口的 ScrollCache。
     const System::ScrollCache* cache{ nullptr };
 
-    /// @brief 当前视口图集 UV 表。
-    const std::unordered_map<uint32_t, glm::vec4>* uvMap{ nullptr };
+    /// @brief 当前视口图集 UV 表读取句柄。
+    std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>> uvMap;
 
     /// @brief 当前视口判定线 Y 坐标。
     float judgmentLineY{ 0.0f };
@@ -344,8 +345,8 @@ SelectionScreenContext makeSelectionScreenContext(
         return screen;
     }
 
-    const auto& uvMap      = EditorEngine::instance().getAtlasUVMap(cameraId);
-    const float baseAspect = getTextureAspect(uvMap, TextureID::Note, 1.0f);
+    auto        uvMap      = EditorEngine::instance().getAtlasUVMap(cameraId);
+    const float baseAspect = getTextureAspect(*uvMap, TextureID::Note, 1.0f);
     const float singleTrackW =
         (rightX - leftX) / static_cast<float>(ctx.trackCount);
     if ( singleTrackW <= 0.0f || std::abs(baseAspect) < 1e-6f ) {
@@ -353,7 +354,7 @@ SelectionScreenContext makeSelectionScreenContext(
     }
 
     screen.cache = cache;
-    screen.uvMap = &uvMap;
+    screen.uvMap = std::move(uvMap);
     screen.judgmentLineY =
         cameraIt->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
     screen.leftX        = leftX;
@@ -1127,22 +1128,25 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
     if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleStartDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleStartDrag(m_ctx, cmd);
     }
 }
 
 void InteractionController::handleCommand(const CmdUpdateDrag& cmd)
 {
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleUpdateDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleUpdateDrag(m_ctx, cmd);
     }
 }
 
 void InteractionController::handleCommand(const CmdEndDrag& cmd)
 {
-    if ( m_tools.count(m_ctx.currentTool) ) {
-        m_tools[m_ctx.currentTool]->handleEndDrag(m_ctx, cmd);
+    const auto tool = m_tools.find(EditTool::Move);
+    if ( tool != m_tools.end() ) {
+        tool->second->handleEndDrag(m_ctx, cmd);
     }
 }
 
@@ -1179,15 +1183,16 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         return;
     }
 
-    const auto& camera = cameraIterator->second;
-    const auto  projection =
-        calculateCanvasLaneProjection(camera.viewportWidth,
-                                      m_ctx.trackCount,
-                                      m_ctx.bgmTrackCount,
-                                      m_ctx.lastConfig.visual.trackLayout.left,
-                                      m_ctx.lastConfig.visual.trackLayout.right,
-                                      camera.horizontalOffsetX,
-                                      true);
+    const auto& camera     = cameraIterator->second;
+    const auto  projection = calculateCanvasLaneProjection(
+        camera.viewportWidth,
+        m_ctx.trackCount,
+        m_ctx.bgmTrackCount,
+        m_ctx.lastConfig.visual.trackLayout.left,
+        m_ctx.lastConfig.visual.trackLayout.right,
+        camera.horizontalOffsetX,
+        true,
+        m_ctx.lastConfig.settings.enableBmsEditing);
     const auto lane = projection.laneAt(cmd.mouseX);
     if ( !lane || lane->kind != CanvasLaneKind::Bgm ) {
         m_ctx.lastActionMessage = "音频资源只能放置到 BGM 轨道区";

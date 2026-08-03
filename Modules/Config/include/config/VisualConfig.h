@@ -25,6 +25,13 @@ void from_json(const nlohmann::json& json, BeatLineDisplayMode& mode);
 
 /// @brief 视觉与渲染相关的整体配置。
 struct VisualConfig {
+    /// @brief 非 Hold 打击特效持续时间的默认值，单位秒。
+    static constexpr float DEFAULT_NON_HOLD_HIT_EFFECT_DURATION{ 0.12f };
+    /// @brief 非 Hold 打击特效持续时间的最小值，单位秒。
+    static constexpr float MIN_NON_HOLD_HIT_EFFECT_DURATION{ 0.01f };
+    /// @brief 非 Hold 打击特效持续时间的最大值，单位秒。
+    static constexpr float MAX_NON_HOLD_HIT_EFFECT_DURATION{ 5.0f };
+
     TrackLayout                 trackLayout;
     CanvasComponentLayoutConfig canvasComponents;
     BackgroundConfig            background;
@@ -98,6 +105,8 @@ struct VisualConfig {
     SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画。
     bool enableHitEffects{ true };
+    /// @brief 非 Hold 打击特效的持续时间，超过序列帧周期时循环播放。
+    float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。
     bool debugDrawHitboxes{ false };
 };

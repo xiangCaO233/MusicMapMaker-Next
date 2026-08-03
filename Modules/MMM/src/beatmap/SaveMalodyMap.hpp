@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MalodyVolume.h"
+
 #include "mmm/beatmap/MalodyMode.h"
 
 #include "config/Utf8Path.h"
@@ -867,8 +869,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             nj.erase("vol");
         } else {
             nj["sound"] = binding->m_audioResourceId;
-            nj["vol"]   = static_cast<std::int64_t>(
-                std::llround(binding->m_volume * 100));
+            nj["vol"] = Internal::volumeToMalodyGainPercent(binding->m_volume);
         }
         return nj;
     };
@@ -876,7 +877,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     auto& noteArr = fileData["note"];
     noteArr       = json::array();
 
-    /// @brief 将自动采样对象序列化为 Malody type=1 节点。
+    /// @brief 按当前模式序列化 Malody 自动采样对象。
     auto serializeAudioSample = [&](const AudioSampleEvent& sample) {
         json sampleJson;
 
@@ -895,12 +896,20 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         // 覆盖编辑器已经移动过的锚点。
         sampleJson["beat"] = timeToBeat(sample.m_timestamp);
 
-        sampleJson["type"]   = 1;
+        // Malody Slide 游戏逻辑只识别字符串 SOUND；Key 模式保留数值 1，
+        // 兼容 BMS 编辑与既有 Key 谱面。
+        if ( saveAsSlideMode ) {
+            sampleJson["type"] = "SOUND";
+        } else {
+            sampleJson["type"] = 1;
+        }
         sampleJson["sound"]  = sample.m_audioResourceId;
         sampleJson["offset"] = sample.m_offsetMs;
-        sampleJson["x"]      = sample.m_track;
+        if ( !saveAsSlideMode ) {
+            sampleJson["x"] = sample.m_track;
+        }
         sampleJson["vol"] =
-            static_cast<std::int64_t>(std::llround(sample.m_volume * 100));
+            Internal::volumeToMalodyGainPercent(sample.m_volume);
         return sampleJson;
     };
 

@@ -207,7 +207,7 @@ private:
     /// @brief 排除当前移动对象后，各方块可用于增量裁切的标签区域基线。
     std::vector<ProjectAudioToolLayout::Rect> m_interactionBaseLabelRects;
 
-    /// @brief 当前拖动方块可吸附的其它方块矩形。
+    /// @brief 当前拖动方块可吸附的其它方块矩形，按图层从低到高排列。
     std::vector<ProjectAudioToolLayout::Rect> m_dragSnapTargets;
 
     /// @brief 当前拖动方块必须满足的下层可见性约束。
@@ -256,9 +256,6 @@ private:
     /// @brief 当前单方块拖动手势是否已经越过拖动阈值。
     bool m_itemDragMoved{ false };
 
-    /// @brief 当前手势是否从已选方块开始，用于短按释放时反选。
-    bool m_itemDragStartedSelected{ false };
-
     /// @brief 当前移动或缩放的水平和垂直吸附滞回状态。
     ProjectAudioToolLayout::SnapLocks m_snapLocks;
 
@@ -282,6 +279,9 @@ private:
 
     /// @brief 当前键盘或鼠标预选的搜索结果下标。
     std::size_t m_searchHighlightedIndex{ 0 };
+
+    /// @brief 用户拖动选择的搜索结果区域高度；零表示使用默认高度。
+    float m_searchResultPaneHeight{ 0.0F };
 
     /// @brief 搜索输入或资源列表变化后需要低频重新评分。
     bool m_searchResultsDirty{ true };

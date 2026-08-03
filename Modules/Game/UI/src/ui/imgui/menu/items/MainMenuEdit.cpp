@@ -73,6 +73,10 @@ MainMenuEdit::MainMenuEdit()
         createOpenNoteMetadataAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
+        "ui.edit.bms_editing",
+        MainMenuItemTextKind::TranslationKey,
+        createBmsEditingToggleAction()));
+    registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.polyline_editing",
         MainMenuItemTextKind::TranslationKey,
         createPolylineEditingToggleAction()));

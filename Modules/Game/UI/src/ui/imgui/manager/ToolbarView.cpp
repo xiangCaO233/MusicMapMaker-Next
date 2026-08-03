@@ -3453,6 +3453,27 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             saveVisualAfterEdit();
 
             visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.non_hold_hit_effect_duration").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutNonHoldHitEffectDuration",
+                     &visual.nonHoldHitEffectDuration,
+                     Config::VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
+                     Config::VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION,
+                     "%.3f s") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            const bool hitEffectDurationHovered = ImGui::IsItemHovered();
+            saveVisualAfterEdit();
+            if ( hitEffectDurationHovered ) {
+                drawTooltip(TR("ui.settings.visual.non_hold_hit_effect_"
+                               "duration_tooltip")
+                                .data());
+            }
+
+            visual = appConfig.getVisualConfig();
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.settings.visual.note_bound_sample_labels").data(),
                      &visual.showBoundSampleLabels) ) {

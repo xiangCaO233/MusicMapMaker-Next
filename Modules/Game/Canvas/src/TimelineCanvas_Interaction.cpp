@@ -1,6 +1,7 @@
 #include "canvas/TimelineCanvas.h"
 
 #include "canvas/MarqueeAutoScroll.h"
+#include "canvas/TimelineTimingTooltip.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -1119,8 +1120,16 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     m_hoveredTimingEntity = hoveredTarget ? hoveredTarget->entity : entt::null;
 
     if ( isHovered && hoveredTarget ) {
+        const auto descriptor =
+            timelineTimingTooltipDescriptor(hoveredTarget->effect);
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::SetTooltip("%.3fs", hoveredTarget->time);
+        ImGui::SetTooltip("%.*s: %.6g%.*s\n%.3fs",
+                          static_cast<int>(descriptor.label.size()),
+                          descriptor.label.data(),
+                          hoveredTarget->value,
+                          static_cast<int>(descriptor.valueSuffix.size()),
+                          descriptor.valueSuffix.data(),
+                          hoveredTarget->time);
     }
 
     const auto updateTimingDragPreview = [&]() {

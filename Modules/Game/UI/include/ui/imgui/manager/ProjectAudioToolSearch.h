@@ -2,11 +2,43 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <optional>
 #include <string_view>
 
 namespace MMM::UI::ProjectAudioToolSearch
 {
+
+/// @brief 计算可拖动搜索结果区域在当前窗口内的实际高度。
+/// @param preferredHeight 用户上次拖动选择的高度；非正值表示使用默认五行。
+/// @param rowHeight 单条搜索结果的高度。
+/// @param resultCount 当前搜索结果数量。
+/// @param verticalPadding 搜索结果子窗口的单侧垂直内边距。
+/// @param availableHeight 当前光标到窗口内容底部的可用高度。
+/// @param reservedHeight 分隔条、状态栏和主画布必须保留的总高度。
+[[nodiscard]] inline float calculateResultPaneHeight(
+    float preferredHeight, float rowHeight, std::size_t resultCount,
+    float verticalPadding, float availableHeight, float reservedHeight)
+{
+    if ( resultCount == 0 ) return 0.0F;
+
+    constexpr std::size_t DEFAULT_VISIBLE_ROWS = 5;
+    const float paddingHeight = std::max(0.0F, verticalPadding) * 2.0F;
+    const float safeRowHeight = std::max(1.0F, rowHeight);
+    const float minimumHeight = safeRowHeight + paddingHeight;
+    const float contentHeight =
+        safeRowHeight * static_cast<float>(resultCount) + paddingHeight;
+    const float availablePaneHeight =
+        std::max(minimumHeight, availableHeight - reservedHeight);
+    const float maximumHeight = std::min(contentHeight, availablePaneHeight);
+    const float defaultHeight =
+        safeRowHeight *
+            static_cast<float>(std::min(DEFAULT_VISIBLE_ROWS, resultCount)) +
+        paddingHeight;
+    return std::clamp(preferredHeight > 0.0F ? preferredHeight : defaultHeight,
+                      minimumHeight,
+                      maximumHeight);
+}
 
 /// @brief 去除搜索词首尾的 ASCII 空白且不产生新字符串。
 [[nodiscard]] inline std::string_view trimAsciiWhitespace(

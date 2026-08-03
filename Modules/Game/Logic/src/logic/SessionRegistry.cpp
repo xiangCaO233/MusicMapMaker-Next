@@ -219,16 +219,19 @@ void SessionRegistry::fillIndexedSessionSnapshot(
 }
 
 /// @brief 获取当前发布给逻辑线程的不可变 Session 快照。
-/// @warning 逻辑热路径原子：只做 acquire 指针读取，不获取注册表锁。
-const PublishedSessionSnapshot& SessionRegistry::publishedSnapshot() const
+/// @warning 逻辑热路径原子：只做 acquire shared_ptr 读取，不获取注册表锁。
+std::shared_ptr<const PublishedSessionSnapshot>
+SessionRegistry::publishedSnapshot() const
 {
-    const auto* snapshot = m_publishedSnapshot.load(std::memory_order_acquire);
+    auto snapshot = std::atomic_load_explicit(&m_publishedSnapshot,
+                                              std::memory_order_acquire);
     if ( snapshot ) {
-        return *snapshot;
+        return snapshot;
     }
 
     /// @brief 极早期访问时使用的空快照兜底。
-    static const PublishedSessionSnapshot emptySnapshot;
+    static const auto emptySnapshot =
+        std::make_shared<const PublishedSessionSnapshot>();
     return emptySnapshot;
 }
 
@@ -304,7 +307,7 @@ const std::vector<SessionEntry>& SessionRegistry::entriesUnsafe() const
 /// @brief 将当前 SessionEntry 列表发布为新的逻辑线程只读快照。
 void SessionRegistry::publishSnapshotUnsafe()
 {
-    auto snapshot = std::make_unique<PublishedSessionSnapshot>();
+    auto snapshot = std::make_shared<PublishedSessionSnapshot>();
     snapshot->sessions.reserve(m_entries.size());
     for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
           ++index ) {
@@ -318,9 +321,10 @@ void SessionRegistry::publishSnapshotUnsafe()
         }
     }
 
-    const auto* publishedSnapshot = snapshot.get();
-    m_snapshotStorage.push_back(std::move(snapshot));
-    m_publishedSnapshot.store(publishedSnapshot, std::memory_order_release);
+    std::atomic_store_explicit(
+        &m_publishedSnapshot,
+        std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
+        std::memory_order_release);
 }
 
 /// @brief 在调用者已持锁时判断索引是否有效。

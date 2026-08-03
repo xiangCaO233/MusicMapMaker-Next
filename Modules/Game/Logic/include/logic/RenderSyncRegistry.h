@@ -12,7 +12,6 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace MMM::Logic
 {
@@ -63,9 +62,11 @@ public:
 
     /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
     /// @param cameraId 目标画布 cameraId。
-    /// @return 当前可用的图集 UV 映射引用。
-    const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
-        const std::string& cameraId) const;
+    /// @return 当前可用的图集 UV 映射共享读取句柄。
+    /// @warning 逻辑交互路径使用；acquire 读取会产生一次 shared_ptr
+    /// 引用计数变更，用于保证 UI 线程替换图集快照时返回的 UV 表不悬空。
+    std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
+    getAtlasUVMap(const std::string& cameraId) const;
 
     /// @brief 按修订号将指定画布的图集 UV 映射同步到快照。
     /// @param cameraId 目标画布 cameraId。
@@ -129,7 +130,7 @@ private:
 
     /// @brief 将当前图集 UV 映射发布为新的逻辑线程只读快照。
     /// @warning 调用者必须持有
-    /// m_mutex；低频图集变更路径使用。旧快照保留到注册表析构。
+    /// m_mutex；低频图集变更路径使用。旧快照仅保留到最后一个并发读句柄释放。
     void publishAtlasUVSnapshotUnsafe();
 
     /// @brief 判断画布是否为需要同步给新 Session 的共享视口。
@@ -155,14 +156,9 @@ private:
 
     /// @brief 逻辑线程当前可读取的不可变图集 UV 快照。
     /// @warning 逻辑热路径原子：每个快照生成时 acquire 读取；写侧在持有
-    /// m_mutex 后 release 发布新快照。原子只承载快照指针。
-    std::atomic<const PublishedAtlasUVSnapshot*> m_publishedAtlasUVSnapshot{
-        nullptr
-    };
-
-    /// @brief 已发布图集快照的所有权存储，旧快照延迟到注册表析构释放。
-    std::vector<std::unique_ptr<PublishedAtlasUVSnapshot>>
-        m_atlasUVSnapshotStorage;
+    /// m_mutex 后 release 发布新快照。shared_ptr
+    /// 所有权用于解决读写并发时的快照生命周期。
+    std::shared_ptr<const PublishedAtlasUVSnapshot> m_publishedAtlasUVSnapshot;
 };
 
 }  // namespace MMM::Logic

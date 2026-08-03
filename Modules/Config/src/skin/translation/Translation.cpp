@@ -5,6 +5,7 @@
 
 #include <sol/sol.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +20,57 @@ namespace MMM
 {
 namespace Translation
 {
+namespace
+{
+/// @brief 从 Lua 文件解析字符串键值翻译项。
+/// @param langLuaFile Lua 翻译文件路径。
+/// @param entries 成功时接收翻译字段及文本。
+/// @return 文件成功读取且返回 Lua table 时返回 true。
+bool parseLanguageFile(
+    const std::string&                                langLuaFile,
+    std::vector<std::pair<std::string, std::string>>& entries)
+{
+    const std::filesystem::path path = Config::utf8ToPath(langLuaFile);
+
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+
+    std::ifstream file(path, std::ios::in | std::ios::binary);
+    if ( !file ) {
+        XERROR("Failed to open lang file: {}", langLuaFile);
+        return false;
+    }
+    std::string script((std::istreambuf_iterator<char>(file)),
+                       std::istreambuf_iterator<char>());
+    auto        result =
+        lua.safe_script(script, sol::script_pass_on_error, langLuaFile);
+
+    if ( !result.valid() ) {
+        sol::error err = result;
+        XERROR("Error loading lang: {}", err.what());
+        return false;
+    }
+
+    sol::object resultObject = result;
+    if ( !resultObject.is<sol::table>() ) {
+        XERROR("Language file did not return a table: {}", langLuaFile);
+        return false;
+    }
+
+    sol::table langTable = resultObject.as<sol::table>();
+    entries.clear();
+    entries.reserve(langTable.size());
+    for ( const auto& kv : langTable ) {
+        if ( !kv.first.is<std::string>() || !kv.second.is<std::string>() ) {
+            continue;
+        }
+        entries.emplace_back(kv.first.as<std::string>(),
+                             kv.second.as<std::string>());
+    }
+    return true;
+}
+}  // namespace
+
 /// @brief 翻译器私有并发字典、指针缓存与稳定字符串池。
 struct Translator::Impl {
     /// @brief 单个语言字典。
@@ -34,6 +86,10 @@ struct Translator::Impl {
 
     /// @brief 按语言 ID 保存的全部字典。
     std::unordered_map<std::string, Dictionary> dictionaries;
+
+    /// @brief 按语言 ID 保存默认字典的原始字段名，用于精确校验皮肤覆写。
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        defaultFieldNames;
 
     /// @brief 当前语言字典观察指针。
     Dictionary* currentDictionary{ nullptr };
@@ -57,66 +113,82 @@ Translator& getActiveTranslator()
     return Config::SkinManager::instance().getTranslator();
 }
 
-// 载入语言文件
-void Translator::loadLanguage(const std::string& langLuaFile)
+bool Translator::loadLanguage(const std::string& langID,
+                              const std::string& langLuaFile)
 {
-    std::filesystem::path path   = Config::utf8ToPath(langLuaFile);
-    std::string           langID = Config::pathToUtf8(path.stem());
-
     XINFO("Loading language: {}", langID);
 
-    sol::state lua;
-    lua.open_libraries(sol::lib::base, sol::lib::table);
-
-    std::ifstream file(path, std::ios::in | std::ios::binary);
-    if ( !file ) {
-        XERROR("Failed to open lang file: {}", langLuaFile);
-        return;
-    }
-    std::string script((std::istreambuf_iterator<char>(file)),
-                       std::istreambuf_iterator<char>());
-    auto        result =
-        lua.safe_script(script, sol::script_pass_on_error, langLuaFile);
-
-    if ( !result.valid() ) {
-        sol::error err = result;
-        XERROR("Error loading lang: {}", err.what());
-        return;
+    std::vector<std::pair<std::string, std::string>> entries;
+    if ( langID.empty() || !parseLanguageFile(langLuaFile, entries) ) {
+        return false;
     }
 
-    sol::object resultObject = result;
-    if ( !resultObject.is<sol::table>() ) {
-        XERROR("Language file did not return a table: {}", langLuaFile);
-        return;
-    }
-
-    sol::table       langTable = resultObject.as<sol::table>();
-    Impl::Dictionary newDict;
-
-    // 遍历 Lua 表，将字符串键转换为 uint32 Hash 存入 Map。
-    for ( const auto& kv : langTable ) {
-        if ( !kv.first.is<std::string>() || !kv.second.is<std::string>() ) {
-            continue;
-        }
-
-        std::string keyStr = kv.first.as<std::string>();
-        std::string valStr = kv.second.as<std::string>();
-
-        // 运行时计算 Hash，只在加载时发生一次。
-        uint32_t keyHash = MMM::Hash::hash_str(keyStr);
-
-        newDict[keyHash] = valStr;
+    Impl::Dictionary                newDictionary;
+    std::unordered_set<std::string> newFieldNames;
+    newDictionary.reserve(entries.size());
+    newFieldNames.reserve(entries.size());
+    for ( auto& [key, value] : entries ) {
+        newDictionary[MMM::Hash::hash_str(key)] = std::move(value);
+        newFieldNames.insert(std::move(key));
     }
 
     std::unique_lock lock(m_impl->mutex);
     auto&            dictionary = m_impl->dictionaries[langID];
     const bool       wasCurrent = m_impl->currentDictionary == &dictionary;
-    dictionary                  = std::move(newDict);
+    dictionary                  = std::move(newDictionary);
+    m_impl->defaultFieldNames[langID] = std::move(newFieldNames);
     if ( m_impl->currentDictionary == nullptr || wasCurrent ) {
         m_impl->currentDictionary = &dictionary;
         m_impl->pointerCache.clear();
         m_impl->version.fetch_add(1, std::memory_order_release);
     }
+    return true;
+}
+
+LanguageOverrideResult Translator::applyLanguageOverride(
+    const std::string& langID, const std::string& langLuaFile)
+{
+    LanguageOverrideResult                           result;
+    std::vector<std::pair<std::string, std::string>> entries;
+    if ( !parseLanguageFile(langLuaFile, entries) ) return result;
+    result.loaded = true;
+
+    std::unique_lock lock(m_impl->mutex);
+    const auto       dictionaryIt = m_impl->dictionaries.find(langID);
+    const auto       fieldNamesIt = m_impl->defaultFieldNames.find(langID);
+    if ( dictionaryIt == m_impl->dictionaries.end() ||
+         fieldNamesIt == m_impl->defaultFieldNames.end() ) {
+        result.unknownFields.reserve(entries.size());
+        for ( const auto& [key, value] : entries ) {
+            static_cast<void>(value);
+            result.unknownFields.push_back(key);
+        }
+        std::sort(result.unknownFields.begin(), result.unknownFields.end());
+        result.unknownFields.erase(std::unique(result.unknownFields.begin(),
+                                               result.unknownFields.end()),
+                                   result.unknownFields.end());
+        return result;
+    }
+
+    bool changed = false;
+    for ( auto& [key, value] : entries ) {
+        if ( !fieldNamesIt->second.contains(key) ) {
+            result.unknownFields.push_back(key);
+            continue;
+        }
+        dictionaryIt->second[MMM::Hash::hash_str(key)] = std::move(value);
+        changed                                        = true;
+    }
+
+    std::sort(result.unknownFields.begin(), result.unknownFields.end());
+    result.unknownFields.erase(
+        std::unique(result.unknownFields.begin(), result.unknownFields.end()),
+        result.unknownFields.end());
+    if ( changed && m_impl->currentDictionary == &dictionaryIt->second ) {
+        m_impl->pointerCache.clear();
+        m_impl->version.fetch_add(1, std::memory_order_release);
+    }
+    return result;
 }
 
 // 切换语言
@@ -138,6 +210,7 @@ void Translator::clear()
 {
     std::unique_lock lock(m_impl->mutex);
     m_impl->dictionaries.clear();
+    m_impl->defaultFieldNames.clear();
     m_impl->currentDictionary = nullptr;
     m_impl->pointerCache.clear();
     m_impl->version.fetch_add(1, std::memory_order_release);

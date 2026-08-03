@@ -8,10 +8,12 @@
 #include "mmm/project/AudioResource.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -112,6 +114,30 @@ float sanitizedResourceVolume(float volume) noexcept
 float sanitizedEventVolume(float volume) noexcept
 {
     return std::isfinite(volume) ? std::max(volume, 0.0F) : 0.0F;
+}
+
+/// @brief 等待音频回调接管指定时间线调度，并回收被替换的旧调度。
+/// @param node 持有新旧调度的时间线节点。
+/// @param generation 需要等待发布的调度代次。
+/// @return 在超时前观察到目标代次时返回 true。
+/// @warning 项目卸载低频路径：最多阻塞 500 毫秒等待音频 block 边界，禁止
+/// 在音频回调、UI 渲染或逻辑热路径中调用。
+bool waitForTimelineScheduleRetirement(AudioTimelineMixerNode& node,
+                                       std::uint64_t           generation)
+{
+    using namespace std::chrono_literals;
+    constexpr auto TIMEOUT  = 500ms;
+    const auto     deadline = std::chrono::steady_clock::now() + TIMEOUT;
+    while ( std::chrono::steady_clock::now() < deadline ) {
+        if ( const auto snapshot = node.clockSnapshot();
+             snapshot.valid && snapshot.scheduleGeneration == generation ) {
+            static_cast<void>(node.reclaimRetiredSchedules());
+            return true;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    static_cast<void>(node.reclaimRetiredSchedules());
+    return false;
 }
 
 }  // namespace
@@ -318,8 +344,11 @@ void AudioManager::unloadAudioTimeline()
     m_audioTimelineNode->stop();
     m_audioTimelineNode->clearLoop();
     clearAllScheduledSoundEffects();
-    m_audioTimelineNode->replaceSchedule(
-        {}, 0, std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    const std::uint64_t emptyScheduleGeneration =
+        m_audioTimelineNode->replaceSchedule(
+            {},
+            0,
+            std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
     m_audioTimelineBaseClips.clear();
     m_audioTimelineRequestedEndFrame    = 0;
     m_audioTimelineMaximumProcessFrames = 1U;
@@ -331,6 +360,21 @@ void AudioManager::unloadAudioTimeline()
     m_bgmTrack.reset();
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
+    if ( m_stretcher ) {
+        // 停止状态下拉伸器不会拉取上游；短暂恢复空时间线分支，确保音频
+        // 回调能在下一 block 接管空调度，期间不会产生可听输出。
+        m_stretcher->set_paused(false);
+    }
+    if ( !waitForTimelineScheduleRetirement(*m_audioTimelineNode,
+                                            emptyScheduleGeneration) ) {
+        XWARN(
+            "Timed out waiting for the audio callback to retire the unloaded "
+            "timeline schedule.");
+    }
+    if ( m_stretcher ) {
+        m_stretcher->set_paused(true);
+    }
+    static_cast<void>(releaseUnusedTrackCache());
     XINFO("Audio timeline unloaded.");
 }
 
@@ -643,6 +687,25 @@ void AudioManager::invalidateTrackCache(const std::string& filePath)
         return;
     }
     m_audioPool->invalidate(filePath);
+}
+
+/// @brief 释放只剩音频池自身持有的完整解码音轨。
+/// @return 本次释放的缓存音轨数量。
+/// @warning 低频资源卸载路径：可能析构完整 PCM，禁止在音频回调、UI
+/// 渲染或逻辑热路径中调用。
+std::size_t AudioManager::releaseUnusedTrackCache()
+{
+    if ( !m_audioPool ) return 0U;
+
+    std::erase_if(m_audioTimelineResourceCache, [](const auto& cacheEntry) {
+        return cacheEntry.second.sourceTrack.expired() ||
+               cacheEntry.second.preparedAudio.expired();
+    });
+    const std::size_t releasedCount = m_audioPool->release_unused();
+    if ( releasedCount > 0U ) {
+        XDEBUG("Released {} unused decoded audio track(s).", releasedCount);
+    }
+    return releasedCount;
 }
 
 /// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。

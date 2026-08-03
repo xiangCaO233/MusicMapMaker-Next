@@ -26,6 +26,9 @@ namespace MMM::Logic::System
 namespace
 {
 
+/// @brief BGM 轨道标题使用的画布字体像素高度。
+constexpr float BGM_LANE_LABEL_FONT_PIXEL_HEIGHT = 16.0F;
+
 /// @brief 判断皮肤颜色是否为缺省的洋红哨兵。
 /// @param color 皮肤颜色。
 /// @return 颜色为缺省哨兵时返回 true。
@@ -146,12 +149,12 @@ void SampleRenderSystem::renderLaneLayout(
     const float visibleRight = std::min(viewportWidth, projection.bgmRightX);
     batcher.setScissor(
         visibleLeft, topY, visibleRight - visibleLeft, bottomY - topY);
-    batcher.setTexture(TextureID::None);
 
     const auto [begin, end] = *visibleRange;
     for ( std::uint32_t index = begin; index < end; ++index ) {
         const auto bounds = projection.bounds({ CanvasLaneKind::Bgm, index });
         if ( !bounds ) continue;
+        batcher.setTexture(TextureID::None);
         batcher.pushQuad(bounds->leftX,
                          bottomY,
                          projection.player.singleTrackWidth,
@@ -175,13 +178,14 @@ void SampleRenderSystem::renderLaneLayout(
                 labelBuffer.data(),
                 static_cast<std::size_t>(result.out - labelBuffer.data()));
         }
-        renderCanvasAsciiText(batcher,
-                              labelText,
-                              bounds->leftX + 4.0F,
-                              topY + 4.0F,
-                              12.0F,
-                              projection.player.singleTrackWidth - 8.0F,
-                              label);
+        renderMarqueeCanvasAsciiText(batcher,
+                                     labelText,
+                                     bounds->leftX + 4.0F,
+                                     topY + 4.0F,
+                                     BGM_LANE_LABEL_FONT_PIXEL_HEIGHT,
+                                     projection.player.singleTrackWidth - 8.0F,
+                                     label,
+                                     batcher.snapshot->snapshotSysTime);
     }
 
     if ( projection.bgmLeftX >= 0.0F && projection.bgmLeftX <= viewportWidth ) {

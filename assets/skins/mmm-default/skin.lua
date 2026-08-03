@@ -30,7 +30,7 @@ local Skin = {
 		name = "Cecilia",
 		author = "xiang",
 		version = "1.0",
-		effectbasefps = 60,
+		effectbasefps = 120,
 	},
 
 	basePath = ressPath .. "resources/",
@@ -138,12 +138,6 @@ local Skin = {
 			passes = 6,
 			intensity = 0.5,
 		},
-	},
-
-	-- 翻译配置
-	langs = {
-		en_us = "lang/en_us.lua",
-		zh_cn = "lang/zh_cn.lua",
 	},
 
 	-- 字体文件定义

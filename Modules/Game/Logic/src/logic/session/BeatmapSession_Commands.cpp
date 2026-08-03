@@ -1138,34 +1138,33 @@ bool BeatmapSession::processCommands()
                     m_playback->handleCommand(arg);
                 }
                 // --- Interaction 处理的命令 ---
-                else if constexpr ( std::is_same_v<T, CmdSetHoveredEntity> ||
-                                    std::is_same_v<T, CmdSelectEntity> ||
-                                    std::is_same_v<T, CmdStartDrag> ||
-                                    std::is_same_v<T, CmdUpdateDrag> ||
-                                    std::is_same_v<T, CmdEndDrag> ||
-                                    std::is_same_v<T, CmdCreateAudioSample> ||
-                                    std::is_same_v<
-                                        T,
-                                        CmdUpdateAudioSampleProperties> ||
-                                    std::is_same_v<T, CmdChangeTool> ||
-                                    std::is_same_v<T, CmdSetMousePosition> ||
-                                    std::is_same_v<T, CmdUpdateTrackCount> ||
-                                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
-                                    std::is_same_v<T, CmdSetBrushNoteColor> ||
-                                    std::is_same_v<T, CmdSetBrushNotePalette> ||
-                                    std::is_same_v<T,
-                                                   CmdSetBrushAudioResource> ||
-                                    std::is_same_v<T, CmdStartMarquee> ||
-                                    std::is_same_v<T, CmdUpdateMarquee> ||
-                                    std::is_same_v<T, CmdEndMarquee> ||
-                                    std::is_same_v<T, CmdRemoveMarqueeAt> ||
-                                    std::is_same_v<T, CmdStartBrush> ||
-                                    std::is_same_v<T, CmdUpdateBrush> ||
-                                    std::is_same_v<T, CmdEndBrush> ||
-                                    std::is_same_v<T, CmdStartErase> ||
-                                    std::is_same_v<T, CmdUpdateErase> ||
-                                    std::is_same_v<T, CmdEndErase> ||
-                                    std::is_same_v<T, CmdSelectAll> ) {
+                else if constexpr (
+                    std::is_same_v<T, CmdSetHoveredEntity> ||
+                    std::is_same_v<T, CmdSelectEntity> ||
+                    std::is_same_v<T, CmdStartDrag> ||
+                    std::is_same_v<T, CmdUpdateDrag> ||
+                    std::is_same_v<T, CmdEndDrag> ||
+                    std::is_same_v<T, CmdCreateAudioSample> ||
+                    std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdChangeTool> ||
+                    std::is_same_v<T, CmdSetMousePosition> ||
+                    std::is_same_v<T, CmdUpdateTrackCount> ||
+                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdSetBrushNoteColor> ||
+                    std::is_same_v<T, CmdSetBrushNotePalette> ||
+                    std::is_same_v<T, CmdSetBrushAudioResource> ||
+                    std::is_same_v<T, CmdStartMarquee> ||
+                    std::is_same_v<T, CmdUpdateMarquee> ||
+                    std::is_same_v<T, CmdEndMarquee> ||
+                    std::is_same_v<T, CmdRemoveMarqueeAt> ||
+                    std::is_same_v<T, CmdStartBrush> ||
+                    std::is_same_v<T, CmdUpdateBrush> ||
+                    std::is_same_v<T, CmdEndBrush> ||
+                    std::is_same_v<T, CmdStartErase> ||
+                    std::is_same_v<T, CmdUpdateErase> ||
+                    std::is_same_v<T, CmdEndErase> ||
+                    std::is_same_v<T, CmdSelectAll> ) {
                     m_interaction->handleCommand(arg);
                 }
                 // --- Action 处理的命令 ---
@@ -1202,6 +1201,9 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     const bool disablePolylineEditing =
         m_ctx->lastConfig.settings.enablePolylineEditing &&
         !cmd.config.settings.enablePolylineEditing;
+    const bool disableBmsEditing =
+        m_ctx->lastConfig.settings.enableBmsEditing &&
+        !cmd.config.settings.enableBmsEditing;
     m_ctx->lastConfig = cmd.config;
     if ( disablePolylineEditing ) {
         auto view =
@@ -1233,6 +1235,30 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             m_ctx->hoveredEntity   = entt::null;
             m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
             m_ctx->hoveredSubIndex = -1;
+        }
+    }
+    if ( disableBmsEditing ) {
+        auto view = m_ctx->sampleRegistry.view<InteractionComponent>();
+        for ( const auto entity : view ) {
+            auto& interaction      = view.get<InteractionComponent>(entity);
+            interaction.isSelected = false;
+            interaction.isHovered  = false;
+            interaction.isDragging = false;
+            interaction.isCut      = false;
+            interaction.hoveredPart =
+                static_cast<std::uint8_t>(HoverPart::None);
+            interaction.hoveredSubIndex = -1;
+        }
+        m_ctx->selectedSampleEntities.clear();
+        if ( m_ctx->hoveredObjectKind == ChartObjectKind::AudioSample ) {
+            m_ctx->hoveredEntity     = entt::null;
+            m_ctx->hoveredObjectKind = ChartObjectKind::PlayerNote;
+            m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
+            m_ctx->hoveredSubIndex = -1;
+        }
+        if ( m_ctx->brushState.createsAudioSample ) {
+            m_ctx->brushState.isActive           = false;
+            m_ctx->brushState.createsAudioSample = false;
         }
     }
     auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();

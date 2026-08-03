@@ -139,8 +139,7 @@ jobs:
           set -euo pipefail
           bash scripts/ci/macos-build.sh \
             --arch arm64 \
-            --build-dir build_ci_macos_arm64 \
-            --fresh
+            --build-dir build_ci_macos_arm64
 
       - name: ci->macOS CTest
         run: |

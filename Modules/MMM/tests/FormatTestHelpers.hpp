@@ -532,8 +532,7 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         if ( lhsSound != rhsSound ) {
                             return lhsSound < rhsSound;
                         }
-                        return lhs.value("vol", 100.0) <
-                               rhs.value("vol", 100.0);
+                        return lhs.value("vol", 0.0) < rhs.value("vol", 0.0);
                     });
                 return array;
             };
@@ -567,8 +566,7 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         if ( std::abs(lhsOffset - rhsOffset) > 1e-5 ) {
                             return lhsOffset < rhsOffset;
                         }
-                        return lhs.value("vol", 100.0) <
-                               rhs.value("vol", 100.0);
+                        return lhs.value("vol", 0.0) < rhs.value("vol", 0.0);
                     });
                 return array;
             };
@@ -619,8 +617,8 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                     playableOk = false;
                 } else if ( original.value("sound", std::string{}) !=
                                 exported.value("sound", std::string{}) ||
-                            std::abs(original.value("vol", 100.0) -
-                                     exported.value("vol", 100.0)) > 1e-3 ) {
+                            std::abs(original.value("vol", 0.0) -
+                                     exported.value("vol", 0.0)) > 1e-3 ) {
                     XERROR(
                         "Playable note mismatch at index {}: sample binding "
                         "differs",
@@ -637,19 +635,27 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                 sortSamples(filterNodes(orig["note"], true));
             const json exportedSamples =
                 sortSamples(filterNodes(expo["note"], true));
-            sampleCount   = originalSamples.size();
+            const bool exportsSlideMode = expo.contains("meta") &&
+                                          expo["meta"].is_object() &&
+                                          expo["meta"].value("mode", -1) == 7;
+            sampleCount                 = originalSamples.size();
             bool sampleOk = originalSamples.size() == exportedSamples.size();
             for ( size_t i = 0; sampleOk && i < originalSamples.size(); ++i ) {
                 const auto& original = originalSamples[i];
                 const auto& exported = exportedSamples[i];
                 const bool  canonicalType =
                     exported.contains("type") &&
-                    exported["type"].is_number_integer() &&
-                    exported["type"].get<int>() == 1;
+                    ((exportsSlideMode && exported["type"].is_string() &&
+                      exported["type"].get<std::string>() == "SOUND") ||
+                     (!exportsSlideMode &&
+                      exported["type"].is_number_integer() &&
+                      exported["type"].get<int>() == 1));
                 const bool canonicalTrack =
-                    exported.contains("x") && exported["x"].is_number();
+                    exportsSlideMode
+                        ? !exported.contains("x")
+                        : exported.contains("x") && exported["x"].is_number();
                 const bool matchingExplicitTrack =
-                    !original.contains("x") ||
+                    exportsSlideMode || !original.contains("x") ||
                     (exported.contains("x") &&
                      original.value("x", -1) == exported.value("x", -1));
                 const bool matchingFields =
@@ -661,8 +667,8 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                         exported.value("sound", std::string{}) &&
                     std::abs(original.value("offset", 0.0) -
                              exported.value("offset", 0.0)) <= 1e-3 &&
-                    std::abs(original.value("vol", 100.0) -
-                             exported.value("vol", 100.0)) <= 1e-3;
+                    std::abs(original.value("vol", 0.0) -
+                             exported.value("vol", 0.0)) <= 1e-3;
                 if ( !canonicalType || !canonicalTrack ||
                      exported.contains("column") || !matchingExplicitTrack ||
                      !matchingFields ) {

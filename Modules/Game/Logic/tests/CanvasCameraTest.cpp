@@ -164,6 +164,37 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
+/// @brief 验证关闭 BMS 编辑后 BGM 区不参与投影与画笔交互。
+/// @return 玩家轨道仍可寻址且 BGM 区不会创建自动采样时返回 true。
+bool testBmsEditingHidesBgmLanes()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enableBmsEditing = false;
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 1, 0.1F, 0.5F, 0.0F, true, false);
+    const auto playerLane = projection.laneAt(150.0F);
+    if ( !projection.valid || projection.bgmLaneCount != 0 || !playerLane ||
+         playerLane->kind != MMM::Logic::CanvasLaneKind::Player ||
+         projection.laneAt(550.0F).has_value() ) {
+        XERROR("Disabled BMS editing still exposed a BGM lane projection");
+        return false;
+    }
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    const auto samples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    return !context.brushState.isActive && samples.size() == 0 &&
+           context.bgmTrackCount == 1;
+}
+
 /// @brief 验证项目音频选择按资源类型决定画笔在玩家区和 BGM 区的产物。
 /// @return Effect 可创建绑定 Note 与自动采样，Main 只允许创建自动采样，空选择
 /// 可创建静音采样草稿时返回 true。
@@ -348,6 +379,98 @@ bool testSampleBrushFollowsPointerBeforeCommit()
     const auto& sample =
         samples.get<MMM::Logic::SampleComponent>(*samples.begin());
     return sample.m_track == 5 && near(sample.m_timestamp, draggedTime);
+}
+
+/// @brief 验证绘制工具按住左键跨区时会按当前落点切换 Note 与自动采样。
+/// @return 玩家区到 BGM 区及反向拖绘均生成正确物件时返回 true。
+bool testBrushCrossesPlayerAndBgmLanes()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    MMM::Logic::InteractionController controller(context);
+    MMM::Logic::DrawTool              drawTool;
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "effect.wav",
+        .audioTrackType  = MMM::AudioTrackType::Effect,
+        .volume          = 0.6F,
+    });
+
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 150.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId   = "Basic2DCanvas",
+                                   .mouseX     = 550.0F,
+                                   .mouseY     = 300.0F,
+                                   .isCtrlDown = true,
+                               });
+    if ( !context.brushState.isActive ||
+         !context.brushState.createsAudioSample ||
+         context.brushState.track != 4 ||
+         context.brushState.activeAudioResourceId != "effect.wav" ||
+         context.brushState.activeSampleBinding ) {
+        XERROR("Player-to-BGM brush did not switch its preview to a sample");
+        return false;
+    }
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    const auto samples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 1 ||
+         context.noteRegistry.view<MMM::Logic::NoteComponent>().size() != 0 ) {
+        XERROR("Player-to-BGM brush committed the wrong object kind");
+        return false;
+    }
+    const auto& sample =
+        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
+    if ( sample.m_track != 4 || sample.m_audioResourceId != "effect.wav" ||
+         !near(sample.m_volume, 0.6) ) {
+        XERROR("Player-to-BGM brush committed the wrong sample properties");
+        return false;
+    }
+
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 550.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId   = "Basic2DCanvas",
+                                   .mouseX     = 250.0F,
+                                   .mouseY     = 300.0F,
+                                   .isCtrlDown = true,
+                               });
+    if ( !context.brushState.isActive ||
+         context.brushState.createsAudioSample ||
+         context.brushState.track != 1 ||
+         context.brushState.activeAudioResourceId.size() != 0 ||
+         !context.brushState.activeSampleBinding ||
+         context.brushState.activeSampleBinding->m_audioResourceId !=
+             "effect.wav" ||
+         !near(context.brushState.activeSampleBinding->m_volume, 0.6) ) {
+        XERROR("BGM-to-player brush did not switch its preview to a Note");
+        return false;
+    }
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( notes.size() != 1 ) {
+        XERROR("BGM-to-player brush did not commit one Note");
+        return false;
+    }
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    return note.m_type == MMM::NoteType::NOTE && note.m_trackIndex == 1 &&
+           note.m_sampleBinding &&
+           note.m_sampleBinding->m_audioResourceId == "effect.wav" &&
+           near(note.m_sampleBinding->m_volume, 0.6);
 }
 
 /// @brief 验证横向相机偏移被渲染和拾取共用的轨道投影正确应用。
@@ -1212,6 +1335,36 @@ bool testObjectSampleVolumeCommand()
                 0.25);
 }
 
+/// @brief 验证物件音量命令经 BeatmapSession 队列分发后真正写入组件。
+/// @return 队列命令更新自动采样且生成一个撤销步骤时返回 true。
+bool testObjectSampleVolumeCommandRoutesThroughSession()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    const auto                 entity  = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        entity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "effect.wav",
+            .m_volume          = 1.0F,
+        });
+
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateObjectSampleVolume{
+            .entity = entity,
+            .kind   = MMM::Logic::ChartObjectKind::AudioSample,
+            .volume = 0.4F,
+        } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    return near(context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity)
+                    .m_volume,
+                0.4) &&
+           context.actionStack.getUndoStackSize() == 1;
+}
+
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
 /// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
 bool testSampleEraseTargetsTypedRegistry()
@@ -1671,6 +1824,68 @@ bool testSilentSampleDragConvertsToUnboundNote()
                 .m_sampleBinding;
 }
 
+/// @brief 验证选取工具按住已选物件时复用统一抓取并允许跨入 BGM 区。
+/// @return 未绑定 Note 经选取工具命令路由转换为静音采样且可撤销时返回 true。
+bool testMarqueeToolEntityDragCrossesCanvasAreas()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.currentTool = MMM::Logic::EditTool::Marquee;
+
+    const auto noteEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        noteEntity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(noteEntity);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSelectEntity{
+        noteEntity,
+        true,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        noteEntity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        noteEntity,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        550.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto samples =
+        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( !context.noteRegistry.view<MMM::Logic::NoteComponent>().empty() ||
+         samples.size() != 1 || context.actionStack.getUndoStackSize() != 1 ) {
+        XERROR("Marquee tool did not commit one cross-area conversion");
+        return false;
+    }
+    const auto& sample =
+        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
+    if ( sample.m_track != 4 || !sample.m_audioResourceId.empty() ) {
+        XERROR("Marquee tool produced the wrong BGM sample");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    return context.noteRegistry.view<MMM::Logic::NoteComponent>().size() == 1 &&
+           context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty();
+}
+
 /// @brief 验证未绑定 Tap 拖入 BGM 轨道后成为可撤销的空采样草稿。
 /// @return 转换、Undo 与 Redo 均保持未绑定音频语义时返回 true。
 bool testUnboundNoteDragConvertsToSilentSample()
@@ -2047,8 +2262,10 @@ int main()
 {
     return testKeyModeInteractionRestriction() &&
                    testKeyModeBrushCreatesOnlyHold() &&
+                   testBmsEditingHidesBgmLanes() &&
                    testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
+                   testBrushCrossesPlayerAndBgmLanes() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
                    testResizePreservesNormalizedOffset() &&
@@ -2064,6 +2281,7 @@ int main()
                    testSampleRegistryLoadAndSync() &&
                    testNoteSampleBindingRoundTrip() &&
                    testObjectSampleVolumeCommand() &&
+                   testObjectSampleVolumeCommandRoutesThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
                    testBoundNoteHoverInspectAudioPreview() &&
@@ -2072,6 +2290,7 @@ int main()
                    testSampleOffsetHandleDrag() &&
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
+                   testMarqueeToolEntityDragCrossesCanvasAreas() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&

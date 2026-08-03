@@ -1,11 +1,39 @@
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 
+#include <cmath>
 #include <optional>
 
 namespace
 {
 
 using MMM::UI::ProjectAudioToolSearch::scoreCandidate;
+
+/// @brief 使用小容差比较搜索布局高度。
+bool near(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 1e-4F;
+}
+
+/// @brief 验证搜索结果区域默认显示五行并服从内容和主画布空间上限。
+bool testResultPaneHeight()
+{
+    using MMM::UI::ProjectAudioToolSearch::calculateResultPaneHeight;
+    return near(calculateResultPaneHeight(
+                    100.0F, 20.0F, 0, 4.0F, 500.0F, 100.0F),
+                0.0F) &&
+           near(
+               calculateResultPaneHeight(0.0F, 20.0F, 12, 4.0F, 500.0F, 100.0F),
+               108.0F) &&
+           near(calculateResultPaneHeight(
+                    300.0F, 20.0F, 3, 4.0F, 500.0F, 100.0F),
+                68.0F) &&
+           near(calculateResultPaneHeight(
+                    300.0F, 20.0F, 12, 4.0F, 180.0F, 100.0F),
+                80.0F) &&
+           near(
+               calculateResultPaneHeight(1.0F, 20.0F, 12, 4.0F, 500.0F, 100.0F),
+               28.0F);
+}
 
 /// @brief 验证精确、前缀、子串和顺序模糊匹配的优先级。
 bool testMatchPriority()
@@ -38,8 +66,9 @@ bool testUtf8Substring()
 /// @brief 运行项目音频工具实时相似搜索测试。
 int main()
 {
-    if ( !testMatchPriority() ) return 1;
-    if ( !testTrimAndMissingMatch() ) return 2;
-    if ( !testUtf8Substring() ) return 3;
+    if ( !testResultPaneHeight() ) return 1;
+    if ( !testMatchPriority() ) return 2;
+    if ( !testTrimAndMissingMatch() ) return 3;
+    if ( !testUtf8Substring() ) return 4;
     return 0;
 }

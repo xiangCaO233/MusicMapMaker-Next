@@ -4,6 +4,7 @@ add_library(
   Config STATIC
   src/skin/SkinLoader.cpp
   src/skin/SkinPackageService.cpp
+  src/skin/TranslationResourceMigration.cpp
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
@@ -37,7 +38,9 @@ add_test(
   NAME SkinThemeBindingTest
   COMMAND
     SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
-    "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua")
+    "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua"
+    "${CMAKE_SOURCE_DIR}/assets/translations"
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua")
 
 # MSK 皮肤包测试覆盖安全导入、目录定位、覆盖保护和导出往返。
 mmm_add_test_executable(Config SkinPackageServiceTest
@@ -72,3 +75,20 @@ mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)
 target_link_libraries(TranslationConcurrencyTest PRIVATE Config Log)
 add_test(NAME TranslationConcurrencyTest COMMAND TranslationConcurrencyTest)
+
+# 皮肤翻译覆写测试覆盖默认字典合并、未知字段及皮肤包路径边界。
+mmm_add_test_executable(Config SkinTranslationOverrideTest
+                        tests/SkinTranslationOverrideTest.cpp)
+target_link_libraries(SkinTranslationOverrideTest PRIVATE Config Log)
+add_test(NAME SkinTranslationOverrideTest
+         COMMAND SkinTranslationOverrideTest
+                 "${CMAKE_BINARY_DIR}/test_output/skin_translation_override")
+
+# 翻译资源迁移测试覆盖旧版固定路径文件的无条件清理与一次性标记。
+mmm_add_test_executable(Config TranslationResourceMigrationTest
+                        tests/TranslationResourceMigrationTest.cpp)
+target_link_libraries(TranslationResourceMigrationTest PRIVATE Config Log)
+add_test(
+  NAME TranslationResourceMigrationTest
+  COMMAND TranslationResourceMigrationTest
+          "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")

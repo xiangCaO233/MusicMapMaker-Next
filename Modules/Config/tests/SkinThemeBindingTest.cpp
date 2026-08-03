@@ -24,6 +24,15 @@ bool check(bool condition, std::string_view message)
     return condition;
 }
 
+/// @brief 判断两个皮肤颜色是否完全一致。
+/// @param lhs 左侧颜色。
+/// @param rhs 右侧颜色。
+/// @return 四个颜色通道均相同时返回 true。
+bool sameColor(const MMM::Config::Color& lhs, const MMM::Config::Color& rhs)
+{
+    return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.a == rhs.a;
+}
+
 /// @brief 写入用于皮肤主题解析测试的最小 Lua 文件。
 /// @param path 输出文件路径。
 /// @param themeExpression theme 字段对应的 Lua 表达式。
@@ -73,11 +82,13 @@ bool writeLegacyIvmSkin(const std::filesystem::path& path)
 /// @return 加载与两个分支断言均成功时返回 true。
 bool verifyThemeBinding(const std::filesystem::path& path,
                         std::string_view             expectedLight,
-                        std::string_view             expectedDark)
+                        std::string_view             expectedDark,
+                        const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
-                     "皮肤应成功加载");
+    bool  ok          = check(
+        skinManager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot),
+        "皮肤应成功加载");
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Light) == expectedLight,
                 "亮色主题绑定不匹配");
@@ -87,17 +98,21 @@ bool verifyThemeBinding(const std::filesystem::path& path,
     ok &= check(skinManager.getHitEffectLayoutMode() ==
                     MMM::Config::HitEffectLayoutMode::Fixed,
                 "未声明布局的旧皮肤必须保持固定尺寸打击特效");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "未声明序列帧速率的旧皮肤必须默认使用 120 FPS");
     return ok;
 }
 
 /// @brief 验证旧版内置 IVM 在资源文件未更新时仍恢复交互发光。
 /// @param path 位于 ivm 目录内的旧版测试皮肤路径。
 /// @return 悬浮与选中共用的发光配置已迁移时返回 true。
-bool verifyLegacyIvmGlowMigration(const std::filesystem::path& path)
+bool verifyLegacyIvmGlowMigration(const std::filesystem::path& path,
+                                  const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(path)),
-                     "旧版 IVM 测试皮肤应成功加载");
+    bool  ok          = check(
+        skinManager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot),
+        "旧版 IVM 测试皮肤应成功加载");
     ok &= check(skinManager.getGlowPasses() == 6,
                 "旧版 IVM 必须恢复交互发光轮次");
     ok &= check(skinManager.getGlowIntensity() == 0.5F,
@@ -198,12 +213,29 @@ bool readPngDimensions(const std::filesystem::path& path, std::uint32_t& width,
 
 /// @brief 验证 IVM 内置皮肤的固定主题、颜色和纹理几何约束。
 /// @param skinPath 仓库中 IVM 皮肤入口路径。
+/// @param referenceSkinPath mmm-default 老皮肤入口路径。
+/// @param translationsRoot 默认翻译资源目录。
 /// @return 皮肤配置与全部自维护资源符合设计时返回 true。
-bool verifyIvmSkin(const std::filesystem::path& skinPath)
+bool verifyIvmSkin(const std::filesystem::path& skinPath,
+                   const std::filesystem::path& referenceSkinPath,
+                   const std::filesystem::path& translationsRoot)
 {
     auto& skinManager = MMM::Config::SkinManager::instance();
-    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath)),
-                     "IVM 内置皮肤应成功加载");
+    bool  ok =
+        check(skinManager.loadSkin(MMM::Config::pathToUtf8(referenceSkinPath),
+                                   translationsRoot),
+              "mmm-default 老皮肤应成功加载");
+    const auto referenceSample = skinManager.getColor("bgm_tracks.sample");
+    const auto referenceSelectedSample =
+        skinManager.getColor("bgm_tracks.sample_selected");
+    const auto referenceHoveredSample =
+        skinManager.getColor("bgm_tracks.sample_hovered");
+    const auto referenceOffset = skinManager.getColor("bgm_tracks.offset");
+    const auto referenceText   = skinManager.getColor("bgm_tracks.text");
+
+    ok &= check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                     translationsRoot),
+                "IVM 内置皮肤应成功加载");
     ok &= check(skinManager.getData().themeName == "IVM", "IVM 皮肤名称不匹配");
     ok &= check(skinManager.getDefaultTheme(
                     MMM::Config::SkinThemeAppearance::Light) == "IVM" &&
@@ -213,12 +245,32 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
     ok &= check(skinManager.getHitEffectLayoutMode() ==
                     MMM::Config::HitEffectLayoutMode::TrackFill,
                 "IVM 皮肤必须启用整轨填充打击特效");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "IVM 序列帧动画必须以 120 FPS 播放");
 
     const auto holdColor = skinManager.getColor("note_hold");
     const auto nodeColor = skinManager.getColor("note_node");
     ok &= check(holdColor.r == nodeColor.r && holdColor.g == nodeColor.g &&
                     holdColor.b == nodeColor.b && holdColor.a == nodeColor.a,
                 "IVM 节点颜色必须与 Body 完全一致");
+
+    const auto bgmSampleColor = skinManager.getColor("bgm_tracks.sample");
+    const auto selectedSampleColor =
+        skinManager.getColor("bgm_tracks.sample_selected");
+    const auto hoveredSampleColor =
+        skinManager.getColor("bgm_tracks.sample_hovered");
+    const auto offsetColor = skinManager.getColor("bgm_tracks.offset");
+    const auto textColor   = skinManager.getColor("bgm_tracks.text");
+    ok &= check(sameColor(bgmSampleColor, referenceSample),
+                "IVM 普通 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(selectedSampleColor, referenceSelectedSample),
+                "IVM 选中 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(hoveredSampleColor, referenceHoveredSample),
+                "IVM 悬浮 BGM 物件必须沿用老皮肤配色");
+    ok &= check(sameColor(offsetColor, referenceOffset),
+                "IVM BGM 物件偏移提示必须沿用老皮肤配色");
+    ok &= check(sameColor(textColor, referenceText),
+                "IVM BGM 物件文字必须沿用老皮肤配色");
 
     const auto beatHead = skinManager.getColor("beat_lines.beat_1");
     ok &= check(beatHead.r == 1.0f && beatHead.g == 0.0f &&
@@ -328,6 +380,23 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
                 "IVM 悬浮或选中物件必须启用发光");
     return ok;
 }
+
+/// @brief 验证默认内置皮肤使用统一的 120 FPS 序列帧速率。
+/// @param skinPath 默认内置皮肤入口路径。
+/// @param translationsRoot 默认翻译资源目录。
+/// @return 皮肤加载成功且序列帧速率为 120 FPS 时返回 true。
+bool verifyDefaultSkinEffectFrameRate(
+    const std::filesystem::path& skinPath,
+    const std::filesystem::path& translationsRoot)
+{
+    auto& skinManager = MMM::Config::SkinManager::instance();
+    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                          translationsRoot),
+                     "默认内置皮肤应成功加载");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "默认内置皮肤序列帧动画必须以 120 FPS 播放");
+    return ok;
+}
 }  // namespace
 
 /// @brief 皮肤亮暗主题绑定与旧配置兼容回归测试入口。
@@ -336,8 +405,10 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath)
 /// @return 全部断言通过时返回 0。
 int main(int argc, char* argv[])
 {
-    if ( argc < 3 || !argv[1] || !argv[2] ) {
-        XERROR("SkinThemeBindingTest requires output and IVM skin entry paths");
+    if ( argc < 5 || !argv[1] || !argv[2] || !argv[3] || !argv[4] ) {
+        XERROR(
+            "SkinThemeBindingTest requires output, IVM skin, translation and "
+            "default skin paths");
         return 1;
     }
 
@@ -355,6 +426,8 @@ int main(int argc, char* argv[])
 
     const std::filesystem::path legacySkinPath =
         outputDirectory / "legacy-skin.lua";
+    const std::filesystem::path translationsRoot =
+        MMM::Config::utf8ToPath(argv[3]);
     const std::filesystem::path pairedSkinPath =
         outputDirectory / "paired-skin.lua";
     const std::filesystem::path lightOnlySkinPath =
@@ -381,12 +454,20 @@ int main(int argc, char* argv[])
                 "旧版 IVM 测试皮肤写入失败");
     if ( !ok ) return 1;
 
-    ok &= verifyThemeBinding(legacySkinPath, "Cecilia", "Cecilia");
-    ok &= verifyThemeBinding(pairedSkinPath, "Cecilia", "Moonlight");
     ok &= verifyThemeBinding(
-        lightOnlySkinPath, "ComfortableLight", "ComfortableLight");
-    ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath);
+        legacySkinPath, "Cecilia", "Cecilia", translationsRoot);
+    ok &= verifyThemeBinding(
+        pairedSkinPath, "Cecilia", "Moonlight", translationsRoot);
+    ok &= verifyThemeBinding(lightOnlySkinPath,
+                             "ComfortableLight",
+                             "ComfortableLight",
+                             translationsRoot);
+    ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath, translationsRoot);
     ok &= verifyLegacyAppConfigSemantics();
-    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]));
+    ok &= verifyDefaultSkinEffectFrameRate(MMM::Config::utf8ToPath(argv[4]),
+                                           translationsRoot);
+    ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]),
+                        MMM::Config::utf8ToPath(argv[4]),
+                        translationsRoot);
     return ok ? 0 : 1;
 }

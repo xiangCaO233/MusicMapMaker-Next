@@ -586,6 +586,9 @@ struct EditorSettings {
     /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
     bool enablePolylineEditing{ true };
 
+    /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
+    bool enableBmsEditing{ true };
+
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 

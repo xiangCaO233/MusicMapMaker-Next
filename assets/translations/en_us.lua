@@ -1,5 +1,5 @@
 return {
-	-- [ Translation Key ] = "Translated text"
+	-- [Translation Key] = "Translated text"
 
 	-- Common Text
 	["ui.file"] = "&File",
@@ -33,6 +33,7 @@ return {
 	["ui.edit.beatmap_settings"] = "Beatmap Settings",
 	["ui.edit.select_all"] = "Select All",
 	["ui.edit.note_metadata"] = "Edit Metadata",
+	["ui.edit.bms_editing"] = "BMS Editing",
 	["ui.edit.polyline_editing"] = "Polyline Editing",
 	["ui.edit.note_metadata.title"] = "Edit Selected Object Properties###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "{} object(s) selected, {} group(s)",
@@ -223,6 +224,8 @@ return {
 	["ui.settings.visual.note"] = "Note Rendering",
 	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",
 	["ui.settings.visual.note_scale_y"] = "Note Vertical Scale",
+	["ui.settings.visual.non_hold_hit_effect_duration"] = "Non-Hold Hit Effect Duration",
+	["ui.settings.visual.non_hold_hit_effect_duration_tooltip"] = "Controls how long Note, Flick, and polyline sub-note hit effects remain visible. Frames loop when the duration exceeds one animation cycle. Hold effects are unchanged.",
 	["ui.settings.visual.note_bound_sample_labels"] = "Show Bound Audio Filenames",
 	["ui.settings.visual.note_fill_mode"] = "Hold Texture Fill Mode",
 	["ui.settings.visual.note_palette_default"] = "Default Palette on Project Open",

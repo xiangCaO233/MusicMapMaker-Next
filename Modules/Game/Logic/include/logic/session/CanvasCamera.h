@@ -251,12 +251,14 @@ struct CanvasLaneProjection {
 /// @param layoutRight 玩家轨道区右边界比例。
 /// @param horizontalOffsetX 相机产生的内容横向逻辑像素偏移。
 /// @param includeAppendLane 是否在持久轨道后显示一条运行时追加轨。
+/// @param includeBgmLanes 是否显示并允许访问 BGM 轨道区。
 /// @return 可供渲染、拾取、框选和拖动共用的统一投影。
 /// @warning 逻辑与渲染热路径可能每帧调用；只允许常量级数值运算。
 [[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
     float viewportWidth, std::int32_t playerTrackCount,
     std::int32_t persistentBgmTrackCount, float layoutLeft, float layoutRight,
-    float horizontalOffsetX, bool includeAppendLane = true)
+    float horizontalOffsetX, bool includeAppendLane = true,
+    bool includeBgmLanes = true)
 {
     CanvasLaneProjection result;
     result.player = calculatePlayerTrackProjection(viewportWidth,
@@ -266,11 +268,15 @@ struct CanvasLaneProjection {
                                                    horizontalOffsetX);
     if ( !result.player.valid ) return result;
 
-    result.playerLaneCount     = static_cast<std::uint32_t>(playerTrackCount);
-    const auto persistentCount = static_cast<std::uint32_t>(
-        std::max(std::int32_t{ 0 }, persistentBgmTrackCount));
+    result.playerLaneCount = static_cast<std::uint32_t>(playerTrackCount);
+    const auto persistentCount =
+        includeBgmLanes ? static_cast<std::uint32_t>(std::max(
+                              std::int32_t{ 0 }, persistentBgmTrackCount))
+                        : std::uint32_t{ 0 };
     result.bgmLaneCount =
-        persistentCount + static_cast<std::uint32_t>(includeAppendLane);
+        includeBgmLanes
+            ? persistentCount + static_cast<std::uint32_t>(includeAppendLane)
+            : std::uint32_t{ 0 };
     result.bgmLeftX = result.player.rightX;
     result.bgmRightX =
         result.bgmLeftX + static_cast<float>(result.bgmLaneCount) *

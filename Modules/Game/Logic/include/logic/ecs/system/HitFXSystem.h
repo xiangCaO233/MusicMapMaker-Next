@@ -4,6 +4,7 @@
 #include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -131,10 +132,38 @@ public:
         float leftX, float topY, float bottomY, float singleTrackWidth,
         float fixedWidth, float fixedHeight);
 
+    /// @brief 判断非 Hold 打击特效是否达到配置的持续时间。
+    /// @param elapsed 自触发起经过的时间，单位秒。
+    /// @param duration 配置的持续时间，单位秒。
+    /// @return 已到期或输入非法时返回 true；尚未触发时返回 false。
+    /// @warning 逻辑与渲染热路径：每个活跃特效调用一次，只允许常量时间算术。
+    [[nodiscard]] static bool isNonHoldEffectFinished(double elapsed,
+                                                      float  duration) noexcept;
+
+    /// @brief 计算循环播放的打击特效序列帧索引。
+    /// @param elapsed 自触发起经过的时间，单位秒。
+    /// @param baseFps 皮肤序列帧速率。
+    /// @param frameCount 序列帧数量。
+    /// @return 输入有效时返回按序列长度循环的帧索引，否则返回空值。
+    /// @warning 渲染热路径：每个活跃特效调用一次，只允许常量时间算术。
+    [[nodiscard]] static std::optional<std::size_t> loopingEffectFrameIndex(
+        double elapsed, float baseFps, std::size_t frameCount) noexcept;
+
     /**
      * @brief 触发视觉特效
      */
     void triggerVisual(const HitEvent& ev, const Config::EditorConfig& config);
+
+    /// @brief 在播放起点或跳转点补建仍覆盖当前位置的 Hold 视觉特效。
+    /// @param animateTime 当前动画时间。
+    /// @param events 已按触发时间升序排列的完整打击事件序列。
+    /// @param config 当前编辑器配置。
+    /// @return 实际补建的 Hold 与 Polyline subHold 事件数量。
+    /// @warning 低频播放不连续路径：允许线性扫描 hitEvents，禁止在普通 update
+    /// 热路径无条件调用。
+    std::size_t restoreActiveHoldEffects(double                    animateTime,
+                                         std::span<const HitEvent> events,
+                                         const Config::EditorConfig& config);
 
     // clang-format off
     /**
@@ -173,17 +202,20 @@ public:
 
 private:
     struct ActiveEffect {
-        double      startTime{ 0.0 };
-        double      duration{ 0.0 };
-        int         trackIndex{ 0 };
-        int         trackSpan{ 1 };
-        int         trackOffset{ 0 };  // 用于定位打击点（如 Flick 箭头）
-        bool        isLooping{ false };
-        std::string effectKey;  // "note" or "flick"
-
-        // 动画是否已播放完成
-        bool isFinished(double currentTime, float baseFps,
-                        size_t frameCount) const;
+        /// @brief 特效触发时间。
+        double startTime{ 0.0 };
+        /// @brief Hold 物件持续时间；非 Hold 的寿命由视觉配置控制。
+        double holdDuration{ 0.0 };
+        /// @brief 物件起始轨道。
+        int trackIndex{ 0 };
+        /// @brief 物件横跨轨道数。
+        int trackSpan{ 1 };
+        /// @brief 用于定位 Flick 等物件打击点的轨道偏移。
+        int trackOffset{ 0 };
+        /// @brief 是否为 Hold 物件。
+        bool isHold{ false };
+        /// @brief 皮肤特效序列标识，为 note 或 flick。
+        std::string effectKey;
     };
 
     // 每个轨道当前激活的特效 (用于新特效覆盖旧特效)
