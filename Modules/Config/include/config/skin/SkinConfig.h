@@ -26,6 +26,9 @@ enum class HitEffectLayoutMode : std::uint8_t {
     TrackFill  ///< 将纹理拉伸至对应单轨的完整可见区域。
 };
 
+/// @brief 皮肤未声明序列帧速率时使用的默认播放帧率。
+inline constexpr float DEFAULT_EFFECT_BASE_FPS = 120.0F;
+
 // 简单的颜色结构
 struct Color {
     float r, g, b, a;
@@ -88,8 +91,8 @@ struct SkinData {
     };
     std::unordered_map<std::string, EffectSequence> effectSequences;
 
-    // 特效基础帧率
-    float effectBaseFps{ 60.0f };
+    /// @brief 特效序列帧的基础播放帧率。
+    float effectBaseFps{ DEFAULT_EFFECT_BASE_FPS };
 
 
     struct EffectsConfig {

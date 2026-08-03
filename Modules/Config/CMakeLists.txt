@@ -39,7 +39,8 @@ add_test(
   COMMAND
     SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
     "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua"
-    "${CMAKE_SOURCE_DIR}/assets/translations")
+    "${CMAKE_SOURCE_DIR}/assets/translations"
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua")
 
 # MSK 皮肤包测试覆盖安全导入、目录定位、覆盖保护和导出往返。
 mmm_add_test_executable(Config SkinPackageServiceTest

@@ -30,7 +30,7 @@ local Skin = {
 		name = "Cecilia",
 		author = "xiang",
 		version = "1.0",
-		effectbasefps = 60,
+		effectbasefps = 120,
 	},
 
 	basePath = ressPath .. "resources/",

@@ -22,7 +22,7 @@ return {
 		name = "IVM",
 		author = "MusicMapMaker-Next",
 		version = "1.0",
-		effectbasefps = 60,
+		effectbasefps = 120,
 	},
 
 	beat_divisors = { 1, 2, 3, 4, 6, 8, 12, 16 },

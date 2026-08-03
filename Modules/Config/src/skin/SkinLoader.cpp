@@ -157,7 +157,8 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
         skinTable["meta"]["author"].get_or<std::string>("Various Artists");
     m_data.themeVersion =
         skinTable["meta"]["version"].get_or<std::string>("1.0");
-    m_data.effectBaseFps = skinTable["meta"]["effectbasefps"].get_or(60.0f);
+    m_data.effectBaseFps =
+        skinTable["meta"]["effectbasefps"].get_or(DEFAULT_EFFECT_BASE_FPS);
 
     // 解析 Colors
     sol::optional<sol::table> colorsTableOpt = skinTable["colors"];

@@ -89,6 +89,8 @@ bool verifyThemeBinding(const std::filesystem::path& path,
     ok &= check(skinManager.getHitEffectLayoutMode() ==
                     MMM::Config::HitEffectLayoutMode::Fixed,
                 "未声明布局的旧皮肤必须保持固定尺寸打击特效");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "未声明序列帧速率的旧皮肤必须默认使用 120 FPS");
     return ok;
 }
 
@@ -219,6 +221,8 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
     ok &= check(skinManager.getHitEffectLayoutMode() ==
                     MMM::Config::HitEffectLayoutMode::TrackFill,
                 "IVM 皮肤必须启用整轨填充打击特效");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "IVM 序列帧动画必须以 120 FPS 播放");
 
     const auto holdColor = skinManager.getColor("note_hold");
     const auto nodeColor = skinManager.getColor("note_node");
@@ -348,6 +352,23 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
                 "IVM 悬浮或选中物件必须启用发光");
     return ok;
 }
+
+/// @brief 验证默认内置皮肤使用统一的 120 FPS 序列帧速率。
+/// @param skinPath 默认内置皮肤入口路径。
+/// @param translationsRoot 默认翻译资源目录。
+/// @return 皮肤加载成功且序列帧速率为 120 FPS 时返回 true。
+bool verifyDefaultSkinEffectFrameRate(
+    const std::filesystem::path& skinPath,
+    const std::filesystem::path& translationsRoot)
+{
+    auto& skinManager = MMM::Config::SkinManager::instance();
+    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                          translationsRoot),
+                     "默认内置皮肤应成功加载");
+    ok &= check(skinManager.getEffectBaseFps() == 120.0F,
+                "默认内置皮肤序列帧动画必须以 120 FPS 播放");
+    return ok;
+}
 }  // namespace
 
 /// @brief 皮肤亮暗主题绑定与旧配置兼容回归测试入口。
@@ -356,10 +377,10 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
 /// @return 全部断言通过时返回 0。
 int main(int argc, char* argv[])
 {
-    if ( argc < 4 || !argv[1] || !argv[2] || !argv[3] ) {
+    if ( argc < 5 || !argv[1] || !argv[2] || !argv[3] || !argv[4] ) {
         XERROR(
-            "SkinThemeBindingTest requires output, IVM skin and translation "
-            "paths");
+            "SkinThemeBindingTest requires output, IVM skin, translation and "
+            "default skin paths");
         return 1;
     }
 
@@ -415,6 +436,8 @@ int main(int argc, char* argv[])
                              translationsRoot);
     ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath, translationsRoot);
     ok &= verifyLegacyAppConfigSemantics();
+    ok &= verifyDefaultSkinEffectFrameRate(MMM::Config::utf8ToPath(argv[4]),
+                                           translationsRoot);
     ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]), translationsRoot);
     return ok ? 0 : 1;
 }
