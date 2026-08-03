@@ -93,6 +93,20 @@ void cancelActiveEditingState(SessionContext& ctx)
     ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
     ctx.eraserState.targetEntities.clear();
 }
+
+/// @brief 在播放控制命令清空特效后补建当前位置仍有效的 Hold 特效。
+/// @param ctx 当前播放控制器所属的会话上下文。
+/// @warning 低频播放控制路径：仅在 Start、Seek 或滚动跳转后线性扫描
+/// hitEvents，禁止在普通 update 热路径调用。
+void restoreActiveHoldEffectsAfterPlaybackJump(SessionContext& ctx)
+{
+    if ( !ctx.isPlaying ) return;
+    SessionUtils::ensureHitEvents(ctx);
+    const double animateTime =
+        ctx.currentTime + ctx.lastConfig.visual.getEffectiveVisualOffset();
+    ctx.hitFXSystem.restoreActiveHoldEffects(
+        animateTime, ctx.hitEvents, ctx.lastConfig);
+}
 }  // namespace
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
@@ -122,6 +136,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
         }
         SessionUtils::syncHitIndex(m_ctx);
         m_ctx.hitFXSystem.clearActiveEffects();
+        restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);
     } else {
         m_ctx.restartPlaybackAfterFinishPending = false;
         auto& audio = Audio::AudioManager::instance();
@@ -183,6 +198,7 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
     m_isSeekScrubbing = cmd.isScrubbing;
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
+    restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);
 }
 
 /// @brief 处理全局预览播放倍率切换。
@@ -396,6 +412,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     }
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
+    restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);
 }
 
 /// @brief 处理主画布中键二维平移。

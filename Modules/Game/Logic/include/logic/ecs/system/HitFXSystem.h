@@ -154,6 +154,17 @@ public:
      */
     void triggerVisual(const HitEvent& ev, const Config::EditorConfig& config);
 
+    /// @brief 在播放起点或跳转点补建仍覆盖当前位置的 Hold 视觉特效。
+    /// @param animateTime 当前动画时间。
+    /// @param events 已按触发时间升序排列的完整打击事件序列。
+    /// @param config 当前编辑器配置。
+    /// @return 实际补建的 Hold 与 Polyline subHold 事件数量。
+    /// @warning 低频播放不连续路径：允许线性扫描 hitEvents，禁止在普通 update
+    /// 热路径无条件调用。
+    std::size_t restoreActiveHoldEffects(double                    animateTime,
+                                         std::span<const HitEvent> events,
+                                         const Config::EditorConfig& config);
+
     // clang-format off
     /**
      * @brief 生成打击特效的渲染指令

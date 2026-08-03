@@ -205,6 +205,31 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
     m_trackActiveEffects[ev.trackIndex] = newEffect;
 }
 
+std::size_t HitFXSystem::restoreActiveHoldEffects(
+    double animateTime, std::span<const HitEvent> events,
+    const Config::EditorConfig& config)
+{
+    if ( !config.visual.enableHitEffects || !std::isfinite(animateTime) ) {
+        return 0U;
+    }
+
+    std::size_t restoredCount = 0U;
+    for ( const auto& event : events ) {
+        if ( !std::isfinite(event.timestamp) ) continue;
+        if ( event.timestamp > animateTime ) break;
+        if ( event.type != ::MMM::NoteType::HOLD ||
+             !std::isfinite(event.duration) || event.duration < 0.0 ) {
+            continue;
+        }
+
+        const double endTime = event.timestamp + event.duration;
+        if ( !std::isfinite(endTime) || endTime < animateTime ) continue;
+        triggerVisual(event, config);
+        ++restoredCount;
+    }
+    return restoredCount;
+}
+
 /// @brief 更新打击特效状态。
 /// @warning 逻辑热路径：每个 Session update
 /// 执行；只处理本帧事件和当前活跃特效表。

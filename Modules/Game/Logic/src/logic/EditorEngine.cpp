@@ -163,7 +163,8 @@ void publishProjectOpenStarted(const std::filesystem::path& path,
 
 /// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
-/// hitEvents，只有音符变更后的脏分支允许重建事件序列。
+/// hitEvents；播放不连续的低频重置分支允许扫描事件序列补建持续 Hold，只有
+/// 音符变更后的脏分支允许重建事件序列。
 void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
                               const Config::EditorConfig& config,
                               bool                        resetHitIndex)
@@ -172,6 +173,8 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
 
     if ( resetHitIndex ) {
         SessionUtils::syncHitIndex(ctx);
+        ctx.hitFXSystem.restoreActiveHoldEffects(
+            ctx.animateTime, ctx.hitEvents, config);
         return;
     }
 

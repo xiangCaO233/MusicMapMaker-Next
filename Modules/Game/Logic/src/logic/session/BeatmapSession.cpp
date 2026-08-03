@@ -438,6 +438,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             }
             m_ctx->hitFXSystem.clearActiveEffects();
             SessionUtils::syncHitIndex(*m_ctx);
+            m_ctx->hitFXSystem.restoreActiveHoldEffects(
+                m_ctx->animateTime, m_ctx->hitEvents, config);
 
             if ( m_ctx->isPlaying ) {
                 // 核心修复：Jump/Start 后立即预测播放窗口内的所有音效
