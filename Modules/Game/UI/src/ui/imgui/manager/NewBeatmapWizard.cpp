@@ -741,7 +741,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     constexpr ImGuiWindowFlags     WINDOW_FLAGS =
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
     const std::string windowTitle =
-        std::string(TR("ui.wizard.new_beatmap.title").data()) +
+        TR("ui.wizard.new_beatmap.title").toString() +
         "###NewBeatmapWizardWindow";
     if ( m_shouldOpen ) {
         ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());

@@ -571,7 +571,7 @@ void SettingsView::update(UIManager* sourceManager)
     m_sourceManager = sourceManager;
 
     std::string windowName =
-        std::string(TR("title.settings_manager").data()) + "###SettingsWindow";
+        TR("title.settings_manager").toString() + "###SettingsWindow";
 
     ImGuiID dockId = 0;
     if ( m_dockToCenterNextFrame ) {

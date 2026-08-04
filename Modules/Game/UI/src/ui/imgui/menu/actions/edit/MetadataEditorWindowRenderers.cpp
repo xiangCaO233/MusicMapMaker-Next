@@ -2093,11 +2093,10 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
     ImFont* titleFont = skinMgr.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
-    std::string windowTitle =
-        std::string(TR("ui.edit.note_metadata.title").data()) +
-        "###NoteMetadataEditorWindow";
-    const bool wasOpenBeforeBegin = showWindow;
-    bool       opened =
+    std::string windowTitle = TR("ui.edit.note_metadata.title").toString() +
+                              "###NoteMetadataEditorWindow";
+    const bool  wasOpenBeforeBegin = showWindow;
+    bool        opened =
         ImGui::Begin(windowTitle.c_str(), &showWindow, ImGuiWindowFlags_None);
     FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &showWindow);
 

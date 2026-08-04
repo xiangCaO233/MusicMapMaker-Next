@@ -109,13 +109,13 @@ std::string TimelineAction::getName() const
     std::string typeStr;
     switch ( m_type ) {
     case Type::Create:
-        typeStr = TR("ui.status.action.create_event").pStr;
+        typeStr = TR("ui.status.action.create_event").data();
         break;
     case Type::Delete:
-        typeStr = TR("ui.status.action.delete_event").pStr;
+        typeStr = TR("ui.status.action.delete_event").data();
         break;
     case Type::Update:
-        typeStr = TR("ui.status.action.update_event").pStr;
+        typeStr = TR("ui.status.action.update_event").data();
         break;
     }
     if ( m_after )
@@ -281,9 +281,15 @@ std::string NoteAction::getName() const
 {
     std::string typeStr;
     switch ( m_type ) {
-    case Type::Create: typeStr = TR("ui.status.action.create_note").pStr; break;
-    case Type::Delete: typeStr = TR("ui.status.action.delete_note").pStr; break;
-    case Type::Update: typeStr = TR("ui.status.action.update_note").pStr; break;
+    case Type::Create:
+        typeStr = TR("ui.status.action.create_note").data();
+        break;
+    case Type::Delete:
+        typeStr = TR("ui.status.action.delete_note").data();
+        break;
+    case Type::Update:
+        typeStr = TR("ui.status.action.update_note").data();
+        break;
     }
     if ( m_after )
         return fmt::format("{} ({}: {:.3f}, {}: {})",

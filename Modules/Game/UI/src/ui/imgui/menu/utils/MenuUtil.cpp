@@ -233,7 +233,7 @@ void MenuUtil::openProjectFolderPicker()
         ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "ProjectFolderPicker",
-        TR("ui.file_manager.open_directory"),
+        TR("ui.file_manager.open_directory").data(),
         nullptr,
         fdConfig);
     if ( !wasOpen &&

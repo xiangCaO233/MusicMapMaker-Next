@@ -88,7 +88,7 @@ MainMenuId MainMenuFile::id() const
 const char* MainMenuFile::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.file");
+    return TR("ui.file").data();
 }
 
 /// @brief 遍历更新文件菜单项。

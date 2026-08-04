@@ -25,10 +25,11 @@ enum class SideBarTab {
 static std::string TabToSubViewId(SideBarTab tab)
 {
     switch ( tab ) {
-    case SideBarTab::Search: return TR("title.search_manager");
-    case SideBarTab::FileExplorer: return TR("title.file_manager");
-    case SideBarTab::AudioExplorer: return TR("title.audio_manager");
-    case SideBarTab::BeatMapExplorer: return TR("title.beatmap_manager");
+    case SideBarTab::Search: return TR("title.search_manager").toString();
+    case SideBarTab::FileExplorer: return TR("title.file_manager").toString();
+    case SideBarTab::AudioExplorer: return TR("title.audio_manager").toString();
+    case SideBarTab::BeatMapExplorer:
+        return TR("title.beatmap_manager").toString();
     default: return "";
     }
 }
@@ -36,11 +37,14 @@ static std::string TabToSubViewId(SideBarTab tab)
 static std::string TabToTooltip(SideBarTab tab)
 {
     switch ( tab ) {
-    case SideBarTab::Search: return TR("ui.sidebar.search");
-    case SideBarTab::FileExplorer: return TR("ui.sidebar.file_explorer");
-    case SideBarTab::AudioExplorer: return TR("ui.sidebar.audio_explorer");
-    case SideBarTab::BeatMapExplorer: return TR("ui.sidebar.beatmap_explorer");
-    case SideBarTab::Settings: return TR("ui.sidebar.settings");
+    case SideBarTab::Search: return TR("ui.sidebar.search").toString();
+    case SideBarTab::FileExplorer:
+        return TR("ui.sidebar.file_explorer").toString();
+    case SideBarTab::AudioExplorer:
+        return TR("ui.sidebar.audio_explorer").toString();
+    case SideBarTab::BeatMapExplorer:
+        return TR("ui.sidebar.beatmap_explorer").toString();
+    case SideBarTab::Settings: return TR("ui.sidebar.settings").toString();
     default: return "";
     }
 }
@@ -85,13 +89,13 @@ static std::string TabToShortLabel(SideBarTab tab)
 
 static SideBarTab SubViewIdToTab(const std::string& subViewId)
 {
-    if ( subViewId == TR("title.search_manager").view )
+    if ( subViewId == TR("title.search_manager").view() )
         return SideBarTab::Search;
-    if ( subViewId == TR("title.file_manager").view )
+    if ( subViewId == TR("title.file_manager").view() )
         return SideBarTab::FileExplorer;
-    if ( subViewId == TR("title.audio_manager").view )
+    if ( subViewId == TR("title.audio_manager").view() )
         return SideBarTab::AudioExplorer;
-    if ( subViewId == TR("title.beatmap_manager").view )
+    if ( subViewId == TR("title.beatmap_manager").view() )
         return SideBarTab::BeatMapExplorer;
     return SideBarTab::None;
 }

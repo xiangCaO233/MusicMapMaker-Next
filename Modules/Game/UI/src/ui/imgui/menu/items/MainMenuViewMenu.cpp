@@ -49,7 +49,7 @@ MainMenuId MainMenuViewMenu::id() const
 const char* MainMenuViewMenu::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.view");
+    return TR("ui.view").data();
 }
 
 /// @brief 遍历更新视图菜单项。

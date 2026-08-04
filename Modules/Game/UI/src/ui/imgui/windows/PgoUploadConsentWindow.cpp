@@ -22,8 +22,8 @@ void PgoUploadConsentWindow::render(float dpiScale) const
     auto& settings  = appConfig.getEditorSettings();
     if ( settings.pgoProfileUploadConsentAsked ) return;
 
-    const std::string popupId = std::string(TR("ui.pgo.consent.title").data()) +
-                                "###PgoUploadConsentModal";
+    const std::string popupId =
+        TR("ui.pgo.consent.title").toString() + "###PgoUploadConsentModal";
     ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
     Utils::CenteredModalPopupScope popupStyle(dpiScale);

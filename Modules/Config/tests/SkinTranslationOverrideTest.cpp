@@ -105,16 +105,26 @@ int main(int argc, char* argv[])
                 "包含翻译覆写的皮肤必须成功加载");
     ok &= check(skinManager.getTranslator().switchLang("zh_cn"),
                 "中文默认语言必须可切换");
-    ok &=
-        check(std::string(skinManager.getTranslator().translate(
-                  MMM::Hash::hash_str("ui.sample"), "ui.sample")) == "皮肤覆写",
-              "默认字典已有字段必须被皮肤覆写");
-    ok &= check(std::string(skinManager.getTranslator().translate(
-                    MMM::Hash::hash_str("ui.keep"), "ui.keep")) == "保留中文",
+    const auto cacheStats = skinManager.getTranslator().getCacheStats();
+    ok &= check(cacheStats.activeDictionaryEntryCount ==
+                    cacheStats.pointerCacheEntryCount,
+                "语言切换后必须预热全部当前字典缓存");
+    ok &= check(
+        cacheStats.stableStringCount >= cacheStats.activeDictionaryEntryCount,
+        "稳定字符串池必须覆盖当前语言字典");
+    ok &= check(
+        skinManager.getTranslator()
+                .translate(MMM::Hash::hashString("ui.sample"), "ui.sample")
+                .view() == "皮肤覆写",
+        "默认字典已有字段必须被皮肤覆写");
+    ok &= check(skinManager.getTranslator()
+                        .translate(MMM::Hash::hashString("ui.keep"), "ui.keep")
+                        .view() == "保留中文",
                 "未覆写字段必须保留默认翻译");
     ok &= check(
-        std::string(skinManager.getTranslator().translate(
-            MMM::Hash::hash_str("ui.missing"), "ui.missing")) == "ui.missing",
+        skinManager.getTranslator()
+                .translate(MMM::Hash::hashString("ui.missing"), "ui.missing")
+                .view() == "ui.missing",
         "默认字典不存在的字段不得被皮肤插入");
     ok &= check(skinManager.getData().missingTranslationOverrideFields ==
                     std::vector<std::string>{ "zh_cn:ui.missing" },
@@ -141,9 +151,10 @@ int main(int argc, char* argv[])
                 "皮肤包外的覆写路径必须被拒绝");
     ok &= check(skinManager.getTranslator().switchLang("zh_cn"),
                 "拒绝越界覆写后中文默认语言仍应可切换");
-    ok &=
-        check(std::string(skinManager.getTranslator().translate(
-                  MMM::Hash::hash_str("ui.sample"), "ui.sample")) == "默认中文",
-              "越界覆写不得修改默认字典");
+    ok &= check(
+        skinManager.getTranslator()
+                .translate(MMM::Hash::hashString("ui.sample"), "ui.sample")
+                .view() == "默认中文",
+        "越界覆写不得修改默认字典");
     return ok ? 0 : 1;
 }

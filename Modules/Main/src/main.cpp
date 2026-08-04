@@ -101,9 +101,8 @@ public:
     /// @warning 退出低频渲染路径：关闭软件时短暂执行，只读取进度快照并绘制 UI。
     void onUpdateUI() override
     {
-        const std::string popupId =
-            std::string(TR("ui.pgo.upload.title").data()) +
-            "###PgoShutdownUploadProgressModal";
+        const std::string popupId = TR("ui.pgo.upload.title").toString() +
+                                    "###PgoShutdownUploadProgressModal";
         ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
         const float dpiScale =

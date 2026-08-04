@@ -394,7 +394,7 @@ void NewProjectWizard::renderLocationStep()
 
     const std::string parentText =
         m_parentDirectory.empty()
-            ? std::string(TR("ui.wizard.new_project.parent.none").data())
+            ? TR("ui.wizard.new_project.parent.none").toString()
             : Config::pathToUtf8(m_parentDirectory);
     ImGui::TextUnformatted(TR("ui.wizard.new_project.parent").data());
     ImGui::Indent();
@@ -624,7 +624,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
     const std::string windowTitle =
-        std::string(TR("ui.wizard.new_project.title").data()) +
+        TR("ui.wizard.new_project.title").toString() +
         "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
         ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());

@@ -35,7 +35,7 @@ void CanvasTabManager::handlePendingProjectSwitch(
     }
 
     if ( entries.empty() ) {
-        engine.createSession(nullptr, TR("canvas.welcome").pStr, true);
+        engine.createSession(nullptr, TR("canvas.welcome").data(), true);
         return;
     }
 
@@ -202,7 +202,7 @@ void CanvasTabManager::update(UIManager* sourceManager)
                         "CanvasTabManager: All sessions closed. Creating "
                         "initial Logo placeholder session.");
                     engine.createSession(
-                        nullptr, TR("canvas.welcome").pStr, true);
+                        nullptr, TR("canvas.welcome").data(), true);
                 }
                 sessionClosed = true;
                 break;  // 逻辑会话列表已变动，跳出并在下一帧继续处理

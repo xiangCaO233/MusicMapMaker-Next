@@ -24,6 +24,19 @@ namespace MMM::UI
 namespace
 {
 
+/// @brief 使用翻译文本和稳定后缀构建 ImGui 显示标签并复用已有容量。
+/// @param destination 接收完整标签的缓存字符串。
+/// @param text 当前语言的显示文本。
+/// @param stableId 以 ### 开头的稳定 ImGui ID。
+void assignImGuiLabel(std::string& destination, Translation::TRResult text,
+                      const std::string_view stableId)
+{
+    destination.clear();
+    destination.reserve(text.size() + stableId.size());
+    destination.append(text.view());
+    destination.append(stableId);
+}
+
 /// @brief Effect 方块的默认逻辑边长。
 constexpr float DEFAULT_EFFECT_SIZE = 92.0F;
 
@@ -321,6 +334,49 @@ ProjectAudioToolView::~ProjectAudioToolView()
         eventBus.unsubscribe<Event::AudioResourceMutationResultEvent>(
             m_audioMutationSubId);
     }
+}
+
+void ProjectAudioToolView::refreshTranslationCache()
+{
+    auto&          translator = Translation::getActiveTranslator();
+    const uint32_t version    = translator.getVersion();
+    if ( m_translationCache.valid && m_translationCache.version == version ) {
+        return;
+    }
+
+    const auto translate = [&translator](const char* key) {
+        return translator.translate(Hash::hashString(key), key);
+    };
+    assignImGuiLabel(m_translationCache.windowTitle,
+                     translate("title.project_audio_tool"),
+                     "###ProjectAudioTool");
+    assignImGuiLabel(m_translationCache.renamePopupTitle,
+                     translate("ui.file_manager.rename_title"),
+                     "###ProjectAudioToolRenamePopup");
+    m_translationCache.renameLabel =
+        translate("ui.file_manager.rename_label").data();
+    m_translationCache.renameAction =
+        translate("ui.file_manager.context.rename").data();
+    m_translationCache.cancelAction = translate("ui.common.cancel").data();
+    m_translationCache.noProject =
+        translate("ui.project_audio_tool.no_project").data();
+    m_translationCache.hint = translate("ui.project_audio_tool.hint").data();
+    m_translationCache.previewEffectOnSelection =
+        translate("ui.project_audio_tool.preview_effect_on_selection").data();
+    m_translationCache.searchHint =
+        translate("ui.project_audio_tool.search_hint").data();
+    m_translationCache.noSearchResults =
+        translate("ui.search.no_results").data();
+    m_translationCache.searchResults =
+        translate("ui.project_audio_tool.search_results").data();
+    m_translationCache.statusNone =
+        translate("ui.project_audio_tool.status_none").data();
+    m_translationCache.statusSelected =
+        translate("ui.project_audio_tool.status_selected").data();
+    m_translationCache.statusBatchSelected =
+        translate("ui.project_audio_tool.status_batch_selected").data();
+    m_translationCache.version = version;
+    m_translationCache.valid   = translator.getVersion() == version;
 }
 
 void ProjectAudioToolView::requestFocus()
@@ -812,24 +868,21 @@ void ProjectAudioToolView::requestItemRename(std::size_t itemIndex)
 
 void ProjectAudioToolView::renderRenamePopup(float dpiScale)
 {
-    const std::string popupTitle =
-        std::string(TR("ui.file_manager.rename_title")) +
-        "###ProjectAudioToolRenamePopup";
     if ( m_shouldOpenRenamePopup ) {
-        FeedbackOpenPopup(popupTitle.c_str());
+        FeedbackOpenPopup(m_translationCache.renamePopupTitle.c_str());
         m_shouldOpenRenamePopup = false;
     }
 
     bool                           open = true;
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    if ( !modalScope.begin(popupTitle.c_str(),
+    if ( !modalScope.begin(m_translationCache.renamePopupTitle.c_str(),
                            &open,
                            ImGuiWindowFlags_NoCollapse,
                            { 380.0F * dpiScale, 0.0F }) ) {
         return;
     }
 
-    ImGui::TextUnformatted(TR("ui.file_manager.rename_label").data());
+    ImGui::TextUnformatted(m_translationCache.renameLabel);
     if ( m_shouldFocusRenameInput ) {
         ImGui::SetKeyboardFocusHere();
         m_shouldFocusRenameInput = false;
@@ -842,7 +895,7 @@ void ProjectAudioToolView::renderRenamePopup(float dpiScale)
                              ImGuiInputTextFlags_AutoSelectAll);
     const ImVec2 buttonSize{ 132.0F * dpiScale, 0.0F };
     const bool   confirmClicked =
-        FeedbackButton(TR("ui.file_manager.context.rename").data(), buttonSize);
+        FeedbackButton(m_translationCache.renameAction, buttonSize);
     if ( (enterPressed || confirmClicked) &&
          !m_renameAudioResourceId.empty() ) {
         Logic::EditorEngine::instance().pushCommand(
@@ -854,7 +907,7 @@ void ProjectAudioToolView::renderRenamePopup(float dpiScale)
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if ( FeedbackButton(TR("ui.common.cancel").data(), buttonSize) ) {
+    if ( FeedbackButton(m_translationCache.cancelAction, buttonSize) ) {
         m_renameAudioResourceId.clear();
         ImGui::CloseCurrentPopup();
     }
@@ -1135,6 +1188,7 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 
 void ProjectAudioToolView::update(UIManager* sourceManager)
 {
+    refreshTranslationCache();
     if ( m_requestFocus ) {
         ImGui::SetNextWindowFocus();
         m_requestFocus = false;
@@ -1143,10 +1197,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         Config::AppConfig::instance().getWindowContentScale();
     ImGui::SetNextWindowSize({ 720.0F * dpiScale, 520.0F * dpiScale },
                              ImGuiCond_FirstUseEver);
-    std::string title =
-        std::string(TR("title.project_audio_tool")) + "###ProjectAudioTool";
-    LayoutContext layoutContext(
-        m_layoutCtx, title, true, ImGuiWindowFlags_None, &m_isOpen);
+    LayoutContext layoutContext(m_layoutCtx,
+                                m_translationCache.windowTitle,
+                                true,
+                                ImGuiWindowFlags_None,
+                                &m_isOpen);
 
     if ( !sourceManager || sourceManager->isProjectTransitionInProgress() ) {
         Utils::renderProjectTransitionPlaceholder();
@@ -1154,17 +1209,17 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
-        ImGui::TextUnformatted(TR("ui.project_audio_tool.no_project").data());
+        ImGui::TextUnformatted(m_translationCache.noProject);
         return;
     }
 
-    ImGui::TextWrapped("%s", TR("ui.project_audio_tool.hint").data());
+    ImGui::TextWrapped("%s", m_translationCache.hint);
 
     auto& previewEffectOnSelection =
         project->m_settings.m_workspace
             .m_projectAudioToolPreviewEffectOnSelection;
     if ( ::MMM::UI::FeedbackCheckbox(
-             TR("ui.project_audio_tool.preview_effect_on_selection").data(),
+             m_translationCache.previewEffectOnSelection,
              &previewEffectOnSelection) ) {
         Logic::EditorEngine::instance().saveProject();
     }
@@ -1172,7 +1227,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     ImGui::SetNextItemWidth(-1.0F);
     const bool searchSubmitted =
         ImGui::InputTextWithHint("##ProjectAudioToolSearch",
-                                 TR("ui.project_audio_tool.search_hint").data(),
+                                 m_translationCache.searchHint,
                                  m_searchBuffer.data(),
                                  m_searchBuffer.size(),
                                  ImGuiInputTextFlags_EnterReturnsTrue |
@@ -1209,12 +1264,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     if ( !searchQuery.empty() ) {
         if ( m_searchResults.empty() ) {
-            ImGui::TextDisabled("%s", TR("ui.search.no_results").data());
+            ImGui::TextDisabled("%s", m_translationCache.noSearchResults);
         } else {
-            ImGui::TextDisabled(
-                "%s: %zu",
-                TR("ui.project_audio_tool.search_results").data(),
-                m_searchResults.size());
+            ImGui::TextDisabled("%s: %zu",
+                                m_translationCache.searchResults,
+                                m_searchResults.size());
             const ImGuiStyle& style           = ImGui::GetStyle();
             const float       resultRowHeight = ImGui::GetFrameHeight();
             const float       splitterHeight =
@@ -1868,11 +1922,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     renderRenamePopup(dpiScale);
     ImGui::Separator();
     if ( m_selectedAudioResourceId.empty() ) {
-        ImGui::TextUnformatted(TR("ui.project_audio_tool.status_none").data());
+        ImGui::TextUnformatted(m_translationCache.statusNone);
     } else {
         ImGui::Text(
             "%s: %s  %s",
-            TR("ui.project_audio_tool.status_selected").data(),
+            m_translationCache.statusSelected,
             m_selectedAudioTrackType == AudioTrackType::Main ? "MAIN" : "FX",
             m_selectedAudioLabel.c_str());
     }
@@ -1880,9 +1934,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     if ( batchCount > 0 ) {
         ImGui::SameLine();
         ImGui::TextDisabled(
-            "| %s: %zu",
-            TR("ui.project_audio_tool.status_batch_selected").data(),
-            batchCount);
+            "| %s: %zu", m_translationCache.statusBatchSelected, batchCount);
     }
 }
 

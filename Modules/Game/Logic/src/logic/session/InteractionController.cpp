@@ -1172,7 +1172,7 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
     if ( !resource || (resource->m_type != ::MMM::AudioTrackType::Main &&
                        resource->m_type != ::MMM::AudioTrackType::Effect) ) {
         m_ctx.lastActionMessage =
-            TR("ui.edit.sample_properties.invalid_resource").pStr;
+            TR("ui.edit.sample_properties.invalid_resource").data();
         return;
     }
 
@@ -1272,17 +1272,17 @@ void InteractionController::handleCommand(
         case SamplePropertyEditIssue::MissingResource:
         case SamplePropertyEditIssue::UnsupportedResourceType:
             m_ctx.lastActionMessage =
-                TR("ui.edit.sample_properties.invalid_resource").pStr;
+                TR("ui.edit.sample_properties.invalid_resource").data();
             break;
         case SamplePropertyEditIssue::InvalidPlayerTrackCount:
         case SamplePropertyEditIssue::InvalidBgmLane:
         case SamplePropertyEditIssue::AbsoluteTrackOverflow:
             m_ctx.lastActionMessage =
-                TR("ui.edit.sample_properties.invalid_lane").pStr;
+                TR("ui.edit.sample_properties.invalid_lane").data();
             break;
         case SamplePropertyEditIssue::InvalidVolume:
             m_ctx.lastActionMessage =
-                TR("ui.edit.sample_properties.invalid_volume").pStr;
+                TR("ui.edit.sample_properties.invalid_volume").data();
             break;
         case SamplePropertyEditIssue::None: break;
         }
@@ -1303,7 +1303,7 @@ void InteractionController::handleCommand(
                                        before,
                                        std::move(*result.m_sample)),
         m_ctx);
-    m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
+    m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").data();
 }
 
 /// @brief 以单个撤销步骤更新玩家绑定或自动采样的物件音量。
@@ -1314,7 +1314,7 @@ void InteractionController::handleCommand(
     if ( cmd.entity == entt::null || !std::isfinite(cmd.volume) ||
          cmd.volume < 0.0F ) {
         m_ctx.lastActionMessage =
-            TR("ui.edit.sample_properties.invalid_volume").pStr;
+            TR("ui.edit.sample_properties.invalid_volume").data();
         return;
     }
 
@@ -1335,7 +1335,8 @@ void InteractionController::handleCommand(
                                            before,
                                            std::move(after)),
             m_ctx);
-        m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
+        m_ctx.lastActionMessage =
+            TR("ui.edit.sample_properties.updated").data();
         return;
     }
 
@@ -1365,7 +1366,7 @@ void InteractionController::handleCommand(
         std::make_unique<NoteAction>(
             NoteAction::Type::Update, cmd.entity, before, std::move(after)),
         m_ctx);
-    m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").pStr;
+    m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").data();
 }
 
 /// @brief 处理视口鼠标位置、拖拽状态和边缘自动滚动速度。
@@ -1521,7 +1522,7 @@ void InteractionController::handleCommand(const CmdUpdateBgmTrackCount& cmd)
     const auto targetCount  = static_cast<std::int64_t>(cmd.bgmTrackCount);
     if ( std::abs(targetCount - currentCount) != 1 ) {
         m_ctx.lastActionMessage =
-            TR("ui.status.project.bgm_track_single_step").pStr;
+            TR("ui.status.project.bgm_track_single_step").data();
         return;
     }
 
@@ -1535,7 +1536,7 @@ void InteractionController::handleCommand(const CmdUpdateBgmTrackCount& cmd)
             if ( sampleView.get<const SampleComponent>(entity).m_track >=
                  firstRemovedTrack ) {
                 m_ctx.lastActionMessage =
-                    TR("ui.status.project.bgm_track_occupied").pStr;
+                    TR("ui.status.project.bgm_track_occupied").data();
                 return;
             }
         }

@@ -1037,25 +1037,25 @@ bool BeatmapSession::processCommands()
 
                 // --- 自动更新操作状态描述 ---
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
-                    std::string toolName = TR("ui.status.ready").pStr;
+                    std::string toolName = TR("ui.status.ready").data();
                     switch ( arg.tool ) {
                     case EditTool::Move:
-                        toolName = TR("ui.status.tool.select_move").pStr;
+                        toolName = TR("ui.status.tool.select_move").data();
                         break;
                     case EditTool::Marquee:
-                        toolName = TR("ui.status.tool.marquee").pStr;
+                        toolName = TR("ui.status.tool.marquee").data();
                         break;
                     case EditTool::Draw:
-                        toolName = TR("ui.status.tool.draw_brush").pStr;
+                        toolName = TR("ui.status.tool.draw_brush").data();
                         break;
                     case EditTool::ColorBrush:
-                        toolName = TR("ui.status.tool.color_brush").pStr;
+                        toolName = TR("ui.status.tool.color_brush").data();
                         break;
                     case EditTool::ColorEraser:
-                        toolName = TR("ui.status.tool.color_eraser").pStr;
+                        toolName = TR("ui.status.tool.color_eraser").data();
                         break;
                     case EditTool::Layout:
-                        toolName = TR("ui.status.tool.layout").pStr;
+                        toolName = TR("ui.status.tool.layout").data();
                         break;
                     }
                     m_ctx->lastActionMessage = fmt::format(

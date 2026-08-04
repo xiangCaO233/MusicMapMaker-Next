@@ -40,7 +40,7 @@ MainMenuId MainMenuHelp::id() const
 const char* MainMenuHelp::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.help");
+    return TR("ui.help").data();
 }
 
 /// @brief 遍历更新帮助菜单项。

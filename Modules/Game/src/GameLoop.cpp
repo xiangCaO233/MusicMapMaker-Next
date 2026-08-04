@@ -95,17 +95,19 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     auto sidebar_manager =
         m_uiManager.getView<UI::FloatingManagerUI>("SideBarManager");
     sidebar_manager->registerSubView(
-        TR("title.search_manager"),
-        std::make_unique<UI::SearchView>(TR("title.search_manager")));
+        TR("title.search_manager").toString(),
+        std::make_unique<UI::SearchView>(
+            TR("title.search_manager").toString()));
+    sidebar_manager->registerSubView(TR("title.file_manager").toString(),
+                                     std::make_unique<UI::FileManagerView>(
+                                         TR("title.file_manager").toString()));
+    sidebar_manager->registerSubView(TR("title.audio_manager").toString(),
+                                     std::make_unique<UI::AudioManagerView>(
+                                         TR("title.audio_manager").toString()));
     sidebar_manager->registerSubView(
-        TR("title.file_manager"),
-        std::make_unique<UI::FileManagerView>(TR("title.file_manager")));
-    sidebar_manager->registerSubView(
-        TR("title.audio_manager"),
-        std::make_unique<UI::AudioManagerView>(TR("title.audio_manager")));
-    sidebar_manager->registerSubView(
-        TR("title.beatmap_manager"),
-        std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
+        TR("title.beatmap_manager").toString(),
+        std::make_unique<UI::BeatMapManagerView>(
+            TR("title.beatmap_manager").toString()));
 
     // 注册新建向导
     m_uiManager.registerView("NewProjectWizard",
@@ -119,7 +121,7 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
                              std::make_unique<UI::CanvasTabManager>());
 
     // 默认创建一个初始 Logo 占位画布
-    engine.createSession(nullptr, TR("canvas.welcome").pStr, true);
+    engine.createSession(nullptr, TR("canvas.welcome").data(), true);
 
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(

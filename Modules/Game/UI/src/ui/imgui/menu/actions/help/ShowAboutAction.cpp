@@ -63,7 +63,7 @@ private:
     void renderAboutPopup()
     {
         if ( m_showPopup ) {
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.about_title"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.about_title").data());
             m_showPopup = false;
         }
 
@@ -86,7 +86,7 @@ private:
             availableAboutWindowSize);
 
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        bool popupOpen = modalScope.begin(TR("ui.help.about_title"),
+        bool popupOpen = modalScope.begin(TR("ui.help.about_title").data(),
                                           nullptr,
                                           ImGuiWindowFlags_None,
                                           aboutWindowSize,

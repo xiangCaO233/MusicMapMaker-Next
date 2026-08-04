@@ -109,7 +109,7 @@ MainMenuId MainMenuEdit::id() const
 const char* MainMenuEdit::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.edit");
+    return TR("ui.edit").data();
 }
 
 /// @brief 遍历更新编辑菜单项。

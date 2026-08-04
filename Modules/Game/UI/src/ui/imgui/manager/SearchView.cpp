@@ -13,8 +13,9 @@ SearchView::SearchView(const std::string& name) : ISubView(name) {}
 /// @brief 获取搜索面板中不可再换行控件所需的最小内容尺寸。
 ImVec2 SearchView::getMinContentSize(float dpiScale) const
 {
-    const float scale     = std::max(1.0f, dpiScale);
-    const float inputText = ImGui::CalcTextSize(TR("title.search_manager")).x;
+    const float scale = std::max(1.0f, dpiScale);
+    const float inputText =
+        ImGui::CalcTextSize(TR("title.search_manager").data()).x;
     const float emptyText =
         ImGui::CalcTextSize(TR("ui.search.no_results").data()).x;
     const float inputPad =
@@ -32,7 +33,7 @@ void SearchView::onUpdate(LayoutContext& layoutContext,
     // 搜索栏
     ImGui::SetNextItemWidth(-1);
     if ( ImGui::InputTextWithHint("##GlobalSearch",
-                                  TR("title.search_manager"),
+                                  TR("title.search_manager").data(),
                                   m_searchBuffer,
                                   sizeof(m_searchBuffer)) ) {
         // TODO: 实现搜索逻辑

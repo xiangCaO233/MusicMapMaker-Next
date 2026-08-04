@@ -15,19 +15,19 @@ void MainMenuNavigationController::handleShortcuts()
     if ( !io.KeyAlt ) return;
 
     if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
-        toggleMenu(MainMenuId::File, TR("ui.file"));
+        toggleMenu(MainMenuId::File, TR("ui.file").data());
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_E, false) ) {
-        toggleMenu(MainMenuId::Edit, TR("ui.edit"));
+        toggleMenu(MainMenuId::Edit, TR("ui.edit").data());
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_T, false) ) {
-        toggleMenu(MainMenuId::Tools, TR("ui.tools"));
+        toggleMenu(MainMenuId::Tools, TR("ui.tools").data());
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-        toggleMenu(MainMenuId::View, TR("ui.view"));
+        toggleMenu(MainMenuId::View, TR("ui.view").data());
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
-        toggleMenu(MainMenuId::Help, TR("ui.help"));
+        toggleMenu(MainMenuId::Help, TR("ui.help").data());
     }
 }
 

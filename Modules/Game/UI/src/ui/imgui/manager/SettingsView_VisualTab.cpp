@@ -336,12 +336,12 @@ void SettingsView::drawVisualSettings()
             Config::SpectrumDetailLevel::Experimental
         };
         const std::array<std::string_view, 6> detailNames = {
-            TR_CACHE("ui.settings.visual.spectrum_detail.performance").view,
-            TR_CACHE("ui.settings.visual.spectrum_detail.balanced").view,
-            TR_CACHE("ui.settings.visual.spectrum_detail.fine").view,
-            TR_CACHE("ui.settings.visual.spectrum_detail.ultra").view,
-            TR_CACHE("ui.settings.visual.spectrum_detail.extreme").view,
-            TR_CACHE("ui.settings.visual.spectrum_detail.experimental").view
+            TR_CACHE("ui.settings.visual.spectrum_detail.performance").view(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.balanced").view(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.fine").view(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.ultra").view(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.extreme").view(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.experimental").view()
         };
         auto bytesToMiB = [](std::uint64_t bytes) {
             return static_cast<double>(bytes) / (1024.0 * 1024.0);
@@ -356,18 +356,18 @@ void SettingsView::drawVisualSettings()
             const std::string_view segmentsText =
                 TR_CACHE(
                     "ui.settings.visual.spectrum_detail.segments_per_second")
-                    .view;
+                    .view();
             const std::string_view binsText =
-                TR_CACHE("ui.settings.visual.spectrum_detail.bins").view;
+                TR_CACHE("ui.settings.visual.spectrum_detail.bins").view();
             const std::string_view memoryPrefixText =
                 TR_CACHE("ui.settings.visual.spectrum_detail.memory_prefix")
-                    .view;
+                    .view();
             const std::string_view minuteText =
-                TR_CACHE("ui.settings.visual.spectrum_detail.minute").view;
+                TR_CACHE("ui.settings.visual.spectrum_detail.minute").view();
             const std::string_view stereoText =
-                TR_CACHE("ui.settings.visual.spectrum_detail.stereo").view;
+                TR_CACHE("ui.settings.visual.spectrum_detail.stereo").view();
             const std::string_view monoText =
-                TR_CACHE("ui.settings.visual.spectrum_detail.bpm_mono").view;
+                TR_CACHE("ui.settings.visual.spectrum_detail.bpm_mono").view();
             // 不把翻译文本作为 fmt 格式串解析，避免皮肤文案异常导致设置页崩溃。
             return fmt::format(
                 "{} - {:.0f} {} x {} {}; {} {:.2f} MiB/{} ({}), {:.2f} "

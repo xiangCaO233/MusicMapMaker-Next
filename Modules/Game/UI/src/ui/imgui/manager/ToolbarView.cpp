@@ -584,7 +584,7 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::BeginDisabled(isLayoutEditing);
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
-                       TR("ui.toolbar.move"),
+                       TR("ui.toolbar.move").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.move").data(),
@@ -593,7 +593,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_SQUARE_SELECT,
                        Logic::EditTool::Marquee,
-                       TR("ui.toolbar.marquee"),
+                       TR("ui.toolbar.marquee").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.marquee").data(),
@@ -602,7 +602,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_PEN,
                        Logic::EditTool::Draw,
-                       TR("ui.toolbar.draw"),
+                       TR("ui.toolbar.draw").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.draw").data(),
@@ -611,7 +611,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_PAINT_BRUSH,
                        Logic::EditTool::ColorBrush,
-                       TR("ui.toolbar.color_brush"),
+                       TR("ui.toolbar.color_brush").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_brush").data(),
@@ -620,7 +620,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_ERASER,
                        Logic::EditTool::ColorEraser,
-                       TR("ui.toolbar.color_eraser"),
+                       TR("ui.toolbar.color_eraser").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_eraser").data(),
@@ -1139,7 +1139,7 @@ void ToolbarView::update(UIManager* sourceManager)
             auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             int  currentDivisor = editorCfg.settings.beatDivisor;
 
-            ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor"));
+            ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor").data());
             ImGui::Separator();
 
             ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
@@ -2097,7 +2097,7 @@ void ToolbarView::openPaletteExportFilePicker()
         ImGuiFileDialog::Instance()->IsOpened("NotePaletteExportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "NotePaletteExportPicker",
-        TR("ui.toolbar.note_palette.export_dialog_title"),
+        TR("ui.toolbar.note_palette.export_dialog_title").data(),
         ".mmpalette",
         dialogConfig);
     if ( !wasOpen &&
@@ -2148,7 +2148,7 @@ void ToolbarView::openPaletteImportFilePicker()
         ImGuiFileDialog::Instance()->IsOpened("ColorPaletteImportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "ColorPaletteImportPicker",
-        TR("ui.toolbar.note_palette.import_dialog_title"),
+        TR("ui.toolbar.note_palette.import_dialog_title").data(),
         ".mmpalette",
         dialogConfig);
     if ( !wasOpen &&
@@ -3758,14 +3758,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             ImGui::PopID();
         };
 
-        drawComponentControl(Config::CanvasComponentType::JudgmentLineTime,
-                             TR("ui.toolbar.layout_current_judgment_time"));
+        drawComponentControl(
+            Config::CanvasComponentType::JudgmentLineTime,
+            TR("ui.toolbar.layout_current_judgment_time").view());
         drawComponentControl(Config::CanvasComponentType::BeatNumber,
-                             TR("ui.toolbar.layout_beat_number"));
+                             TR("ui.toolbar.layout_beat_number").view());
         drawComponentControl(Config::CanvasComponentType::BeatLineTime,
-                             TR("ui.toolbar.layout_beat_line_time"));
+                             TR("ui.toolbar.layout_beat_line_time").view());
         drawComponentControl(Config::CanvasComponentType::BackgroundSpectrum,
-                             TR("ui.toolbar.layout_background_spectrum"),
+                             TR("ui.toolbar.layout_background_spectrum").view(),
                              false);
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_background_spectrum_settings")
@@ -3901,11 +3902,13 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
 
             drawSpectrumColorControl(
-                TR("ui.settings.visual.background_spectrum.left_bar_color"),
+                TR("ui.settings.visual.background_spectrum.left_bar_color")
+                    .view(),
                 "BackgroundLevelLeft",
                 &Config::BackgroundSpectrumConfig::leftBarColor);
             drawSpectrumColorControl(
-                TR("ui.settings.visual.background_spectrum.right_bar_color"),
+                TR("ui.settings.visual.background_spectrum.right_bar_color")
+                    .view(),
                 "BackgroundLevelRight",
                 &Config::BackgroundSpectrumConfig::rightBarColor);
 
@@ -3936,7 +3939,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
         }
         drawComponentControl(Config::CanvasComponentType::Kps,
-                             TR("ui.toolbar.layout_kps"));
+                             TR("ui.toolbar.layout_kps").view());
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_kps_sync_settings").data(),
                  ImGuiTreeNodeFlags_DefaultOpen) ) {

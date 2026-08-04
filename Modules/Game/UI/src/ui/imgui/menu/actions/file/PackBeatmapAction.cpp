@@ -1889,8 +1889,10 @@ void PackBeatmapAction::openPackageOutputFilePicker()
             getUnifiedPackageOutputFilterText(m_package.selectedFileType);
         const bool wasOpen =
             ImGuiFileDialog::Instance()->IsOpened("PackFilePicker");
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "PackFilePicker", TR("ui.file.pack"), packageFilter, fdConfig);
+        ImGuiFileDialog::Instance()->OpenDialog("PackFilePicker",
+                                                TR("ui.file.pack").data(),
+                                                packageFilter,
+                                                fdConfig);
         if ( !wasOpen &&
              ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
             ::MMM::UI::PlayPopupOpenFeedback();

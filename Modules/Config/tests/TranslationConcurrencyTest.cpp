@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -21,17 +22,24 @@ bool testConcurrentTranslateAndClear()
     constexpr std::size_t CLEAR_ROUNDS = 2000;
 
     std::vector<std::string> fallbacks;
-    std::vector<uint32_t>    hashes;
+    std::vector<uint64_t>    hashes;
     fallbacks.reserve(KEY_COUNT);
     hashes.reserve(KEY_COUNT);
     for ( std::size_t index = 0; index < KEY_COUNT; ++index ) {
         fallbacks.push_back("translation.concurrent." + std::to_string(index));
-        hashes.push_back(MMM::Hash::hash_str(fallbacks.back()));
+        hashes.push_back(MMM::Hash::hashString(fallbacks.back()));
     }
 
     MMM::Translation::Translator translator;
     const char*                  stableBeforeClear =
-        translator.translate(hashes.front(), fallbacks.front().c_str());
+        translator.translate(hashes.front(), fallbacks.front().c_str()).data();
+    const auto initialStats = translator.getCacheStats();
+    if ( initialStats.pointerCacheEntryCount != 1 ||
+         initialStats.stableStringCount != 1 ||
+         initialStats.stableStringBytes != fallbacks.front().size() ) {
+        XERROR("Translation cache statistics did not record initial fallback");
+        return false;
+    }
 
     std::atomic<bool>        start{ false };
     std::atomic<bool>        failed{ false };
@@ -45,10 +53,9 @@ bool testConcurrentTranslateAndClear()
             for ( std::size_t round = 0; round < READ_ROUNDS; ++round ) {
                 const std::size_t index =
                     (round * 37U + worker * 53U) % KEY_COUNT;
-                const char* translated = translator.translate(
+                const auto translated = translator.translate(
                     hashes[index], fallbacks[index].c_str());
-                if ( !translated ||
-                     std::strcmp(translated, fallbacks[index].c_str()) != 0 ) {
+                if ( translated.view() != fallbacks[index] ) {
                     failed.store(true, std::memory_order_release);
                     return;
                 }
@@ -69,9 +76,19 @@ bool testConcurrentTranslateAndClear()
         worker.join();
     }
 
+    const auto populatedStats = translator.getCacheStats();
+    translator.clear();
+    const auto clearedStats = translator.getCacheStats();
     if ( failed.load(std::memory_order_acquire) ||
          std::strcmp(stableBeforeClear, fallbacks.front().c_str()) != 0 ) {
         XERROR("Concurrent translation invalidated a cached string pointer");
+        return false;
+    }
+    if ( populatedStats.stableStringCount != KEY_COUNT ||
+         clearedStats.pointerCacheEntryCount != 0 ||
+         clearedStats.stableStringCount != populatedStats.stableStringCount ||
+         clearedStats.stableStringBytes != populatedStats.stableStringBytes ) {
+        XERROR("Translation stable pool statistics changed unexpectedly");
         return false;
     }
     return true;
@@ -83,5 +100,10 @@ bool testConcurrentTranslateAndClear()
 /// @return 全部测试通过时返回 0。
 int main()
 {
+    static_assert(MMM::Hash::hashString("hello") == 0xA430D84680AABD0BULL);
+    static_assert(
+        !std::is_convertible_v<MMM::Translation::TRResult, std::string>);
+    static_assert(
+        !std::is_convertible_v<MMM::Translation::TRResult, const char*>);
     return testConcurrentTranslateAndClear() ? 0 : 1;
 }

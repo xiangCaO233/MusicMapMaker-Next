@@ -122,8 +122,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             m_showSaveConfirm = true;
         } else if ( shouldKeepOpenForLastSessionReset() ) {
             if ( int32_t myIdx = findSessionIndex(); myIdx != -1 ) {
-                engine.resetSessionToLogoPlaceholder(myIdx,
-                                                     TR("canvas.welcome").pStr);
+                engine.resetSessionToLogoPlaceholder(
+                    myIdx, TR("canvas.welcome").data());
             }
             m_isOpen         = true;
             m_closeConfirmed = false;
@@ -131,7 +131,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     }
 
     const std::string title = makeCanvasTabTitle(
-        TR("canvas.editor").pStr,
+        TR("canvas.editor").data(),
         m_currentSnapshot && m_currentSnapshot->hasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
         m_currentSnapshot && m_currentSnapshot->isDirty);

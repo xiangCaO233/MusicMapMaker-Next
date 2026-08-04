@@ -125,7 +125,8 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
     const uint16_t layoutGap     = toLayoutPixels(metrics.gap);
 
     CLayVBox    rootVBox;
-    const char* openDirectoryLabel = TR("ui.file_manager.open_directory");
+    const char* openDirectoryLabel =
+        TR("ui.file_manager.open_directory").data();
     const float openButtonWidth =
         std::ceil(ImGui::CalcTextSize(openDirectoryLabel).x +
                   ImGui::GetStyle().FramePadding.x * 2.0f + 2.0f);
@@ -138,7 +139,7 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
             Sizing::Grow(),
             Sizing::Fixed(metrics.buttonHeight),
             [=](Clay_BoundingBox r, bool isHovered) {
-                const char*  label     = TR("ui.file_manager.initial_hint");
+                const char*  label = TR("ui.file_manager.initial_hint").data();
                 const ImVec2 textSize  = ImGui::CalcTextSize(label);
                 const float  textLineH = ImGui::GetTextLineHeight();
                 const float  offsetX =
@@ -255,7 +256,7 @@ void FileManagerView::openFolderPicker()
             ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker");
         ImGuiFileDialog::Instance()->OpenDialog(
             "ProjectFolderPicker",
-            TR("ui.file_manager.open_directory"),
+            TR("ui.file_manager.open_directory").data(),
             nullptr,
             fdConfig);
         if ( !wasOpen &&

@@ -89,13 +89,13 @@ private:
     void renderUpdateCheckingPopup()
     {
         if ( m_showCheckingPopup ) {
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.check_update"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.check_update").data());
             m_showCheckingPopup = false;
         }
 
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        if ( modalScope.begin(TR("ui.help.check_update")) ) {
+        if ( modalScope.begin(TR("ui.help.check_update").data()) ) {
             auto info = m_updateChecker->getInfo();
 
             if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
@@ -149,17 +149,17 @@ private:
         auto info = m_updateChecker->getInfo();
 
         if ( m_showUpdatePopup ) {
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
             m_showUpdatePopup = false;
         } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound &&
                     !m_updatePopupCanceled ) {
-            if ( !ImGui::IsPopupOpen(TR("ui.help.update_found")) )
-                ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found"));
+            if ( !ImGui::IsPopupOpen(TR("ui.help.update_found").data()) )
+                ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
         }
 
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        if ( modalScope.begin(TR("ui.help.update_found")) ) {
+        if ( modalScope.begin(TR("ui.help.update_found").data()) ) {
             info = m_updateChecker->getInfo();
 
             if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
@@ -183,13 +183,13 @@ private:
     void renderUpdateSuccessPopup()
     {
         if ( m_showUpdateSuccessPopup ) {
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_success"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_success").data());
             m_showUpdateSuccessPopup = false;
         }
 
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        if ( !modalScope.begin(TR("ui.help.update_success")) ) return;
+        if ( !modalScope.begin(TR("ui.help.update_success").data()) ) return;
 
         ImVec4 greenColor(0.3f, 1.0f, 0.3f, 1.0f);
         float  textWidth =

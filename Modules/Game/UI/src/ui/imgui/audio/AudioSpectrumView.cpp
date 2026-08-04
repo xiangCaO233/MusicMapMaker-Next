@@ -126,10 +126,9 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     {
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        if ( modalScope.begin(
-                 (std::string(TR("ui.spectrum.calc_modal.title").data()) +
-                  "###SpectrumCalcModal")
-                     .c_str()) ) {
+        if ( modalScope.begin((TR("ui.spectrum.calc_modal.title").toString() +
+                               "###SpectrumCalcModal")
+                                  .c_str()) ) {
             float progress = m_calcProgress.load();
             ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
             ImGui::Spacing();
