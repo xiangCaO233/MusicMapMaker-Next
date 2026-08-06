@@ -17,6 +17,12 @@ mmm_add_test_executable(Collaboration CollaborationPeerTest
 target_link_libraries(CollaborationPeerTest PRIVATE NetworkCollaboration)
 add_test(NAME CollaborationPeerTest COMMAND CollaborationPeerTest)
 
+# 谱面文档测试覆盖全部对象类型、元数据、快照和分类增量往返。
+mmm_add_test_executable(Collaboration BeatmapDocumentCodecTest
+                        tests/BeatmapDocumentCodecTest.cpp)
+target_link_libraries(BeatmapDocumentCodecTest PRIVATE NetworkCollaboration)
+add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
+
 # 本机真实 WebRTC 集成测试覆盖信令、DataChannel、Creator 身份和增量提交。
 mmm_add_test_executable(Collaboration CollaborationRoomTest
                         tests/CollaborationRoomTest.cpp)

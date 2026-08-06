@@ -20,6 +20,7 @@ using MMM::Network::Collaboration::ParticipantIdentity;
 using MMM::Network::Collaboration::PeerId;
 using MMM::Network::Collaboration::ProtocolError;
 using MMM::Network::Collaboration::SubmitOperationResult;
+using MMM::Network::Collaboration::StateSnapshot;
 using MMM::Network::Collaboration::decodeCollaborationMessage;
 using MMM::Network::Collaboration::encodeCollaborationMessage;
 
@@ -294,6 +295,21 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    StateSnapshot snapshot{ 42, { 9, 8, 7, 6 } };
+    auto          snapshotEncoded = encodeCollaborationMessage(snapshot, 4);
+    if ( !snapshotEncoded.has_value() ) return false;
+    auto snapshotDecoded =
+        decodeCollaborationMessage(snapshotEncoded.value(), 4);
+    const auto* decodedSnapshot =
+        snapshotDecoded.has_value()
+            ? std::get_if<StateSnapshot>(&snapshotDecoded.value())
+            : nullptr;
+    if ( decodedSnapshot == nullptr ||
+         decodedSnapshot->revision != snapshot.revision ||
+         decodedSnapshot->payload != snapshot.payload ) {
+        return false;
+    }
+
     ByteBuffer invalidReserved = encoded.value();
     invalidReserved[7]         = 1;
     auto reservedResult        = decodeCollaborationMessage(invalidReserved, 4);
@@ -307,12 +323,65 @@ void pumpPeers(CollaborationPeer&                               host,
     return !truncated.has_value() &&
            truncated.error() == ProtocolError::InvalidMessageLength;
 }
+
+/// @brief 验证迟加入客户端可用房主完整快照直接越过已裁剪的增量日志。
+[[nodiscard]] bool testLateJoinStateSnapshot()
+{
+    constexpr PeerId        GUEST_ID = 2;
+    LoopbackTransportHub    hub;
+    std::vector<ByteBuffer> hostModel;
+    std::vector<ByteBuffer> guestModel;
+
+    CollaborationPeerConfig hostConfig;
+    hostConfig.clientId                    = HOST_ID;
+    hostConfig.hostId                      = HOST_ID;
+    hostConfig.creator                     = "Host";
+    hostConfig.isHost                      = true;
+    hostConfig.limits.maxJournalOperations = 2;
+    CollaborationPeer host(hostConfig,
+                           hub.createEndpoint(HOST_ID),
+                           [&hostModel](const CommittedOperation& operation) {
+                               hostModel.push_back(operation.payload);
+                           });
+    for ( std::uint8_t index = 1; index <= 5; ++index ) {
+        const auto operation = makeOperation(HOST_ID, index);
+        if ( host.submitOperation(operation) !=
+             SubmitOperationResult::Accepted ) {
+            return false;
+        }
+        host.update();
+    }
+    const ByteBuffer fullSnapshot{ 0xFA, 0xCE, 0x05 };
+    if ( host.appliedRevision() != 5 || !host.setStateSnapshot(fullSnapshot) ) {
+        return false;
+    }
+
+    CollaborationPeerConfig guestConfig;
+    guestConfig.clientId = GUEST_ID;
+    guestConfig.hostId   = HOST_ID;
+    guestConfig.creator  = "Late Guest";
+    guestConfig.isHost   = false;
+    CollaborationPeer guest(guestConfig,
+                            hub.createEndpoint(GUEST_ID),
+                            [&guestModel](const CommittedOperation& operation) {
+                                guestModel.push_back(operation.payload);
+                            });
+    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    for ( std::size_t round = 0; round < 4; ++round ) {
+        guest.update();
+        host.update();
+    }
+    return guest.appliedRevision() == host.appliedRevision() &&
+           guestModel.size() == 1U && guestModel.front() == fullSnapshot;
+}
 }  // namespace
 
 /// @brief 运行协作增量同步回归测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testProtocolBounds() && testEightPeerIncrementalConvergence() ? 0
-                                                                         : 1;
+    return testProtocolBounds() && testEightPeerIncrementalConvergence() &&
+                   testLateJoinStateSnapshot()
+               ? 0
+               : 1;
 }
