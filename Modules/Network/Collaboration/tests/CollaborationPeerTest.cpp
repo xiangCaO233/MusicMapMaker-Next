@@ -374,14 +374,64 @@ void pumpPeers(CollaborationPeer&                               host,
     return guest.appliedRevision() == host.appliedRevision() &&
            guestModel.size() == 1U && guestModel.front() == fullSnapshot;
 }
+
+/// @brief 验证在线访客缺失的版本已经裁剪时自动回退房主最新快照。
+[[nodiscard]] bool testTrimmedJournalSnapshotFallback()
+{
+    constexpr PeerId        GUEST_ID = 2;
+    LoopbackTransportHub    hub;
+    std::vector<ByteBuffer> guestModel;
+
+    CollaborationPeerConfig hostConfig;
+    hostConfig.clientId                    = HOST_ID;
+    hostConfig.hostId                      = HOST_ID;
+    hostConfig.creator                     = "Host";
+    hostConfig.isHost                      = true;
+    hostConfig.limits.maxJournalOperations = 2;
+    CollaborationPeer host(hostConfig, hub.createEndpoint(HOST_ID), nullptr);
+
+    CollaborationPeerConfig guestConfig;
+    guestConfig.clientId = GUEST_ID;
+    guestConfig.hostId   = HOST_ID;
+    guestConfig.creator  = "Slow Guest";
+    guestConfig.isHost   = false;
+    CollaborationPeer guest(guestConfig,
+                            hub.createEndpoint(GUEST_ID),
+                            [&guestModel](const CommittedOperation& operation) {
+                                guestModel.push_back(operation.payload);
+                            });
+    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    guest.update();
+
+    hub.dropNextPacket(HOST_ID, GUEST_ID);
+    for ( std::uint8_t index = 1; index <= 5; ++index ) {
+        const auto operation = makeOperation(HOST_ID, index);
+        if ( host.submitOperation(operation) !=
+             SubmitOperationResult::Accepted ) {
+            return false;
+        }
+        host.update();
+    }
+    const ByteBuffer fullSnapshot{ 0xFA, 0xCE, 0x55 };
+    if ( !host.setStateSnapshot(fullSnapshot) ) return false;
+
+    guest.update();
+    host.update();
+    guest.update();
+    host.update();
+    return host.stats().resyncUnavailable > 0U &&
+           guest.appliedRevision() == host.appliedRevision() &&
+           guestModel.size() == 1U && guestModel.front() == fullSnapshot;
+}
 }  // namespace
 
 /// @brief 运行协作增量同步回归测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testProtocolBounds() && testEightPeerIncrementalConvergence() &&
-                   testLateJoinStateSnapshot()
-               ? 0
-               : 1;
+    if ( !testProtocolBounds() ) return 1;
+    if ( !testEightPeerIncrementalConvergence() ) return 2;
+    if ( !testLateJoinStateSnapshot() ) return 3;
+    if ( !testTrimmedJournalSnapshotFallback() ) return 4;
+    return 0;
 }

@@ -299,6 +299,9 @@ void CollaborationPeer::handleResyncRequest(PeerId               senderId,
     if ( m_journal.empty() ||
          request.fromRevision < m_journal.front().revision ) {
         ++m_stats.resyncUnavailable;
+        if ( m_stateSnapshot ) {
+            static_cast<void>(sendMessage(senderId, *m_stateSnapshot));
+        }
         return;
     }
 
