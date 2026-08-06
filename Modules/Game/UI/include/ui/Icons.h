@@ -31,7 +31,8 @@ constexpr const char* ICON_MMM_PLUS = "\xef\x81\xa7";  ///< \uf067 plus
 constexpr const char* ICON_MMM_BUG  = "\xef\x86\x88";  ///< \uf188 bug
 constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
-constexpr const char* ICON_MMM_LINK = "\xef\x83\x81";  ///< \uf0c1 link
+constexpr const char* ICON_MMM_LINK  = "\xef\x83\x81";  ///< \uf0c1 link
+constexpr const char* ICON_MMM_USERS = "\xef\x83\x80";  ///< \uf0c0 users
 
 // --- 播放控制图标 ---
 constexpr const char* ICON_MMM_PLAY  = "\xef\x81\x8b";  ///< \uf04b play

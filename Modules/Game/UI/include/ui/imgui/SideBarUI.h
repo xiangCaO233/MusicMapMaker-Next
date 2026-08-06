@@ -18,6 +18,7 @@ enum class SideBarTab {
     FileExplorer,     // 选中文件浏览器
     AudioExplorer,    // 选中音频浏览器
     BeatMapExplorer,  // 选中谱面浏览器
+    Collaboration,    // 选中协作房间
     Settings          // 选中设置
 };
 
@@ -30,6 +31,8 @@ static std::string TabToSubViewId(SideBarTab tab)
     case SideBarTab::AudioExplorer: return TR("title.audio_manager").toString();
     case SideBarTab::BeatMapExplorer:
         return TR("title.beatmap_manager").toString();
+    case SideBarTab::Collaboration:
+        return TR("title.collaboration_manager").toString();
     default: return "";
     }
 }
@@ -44,6 +47,8 @@ static std::string TabToTooltip(SideBarTab tab)
         return TR("ui.sidebar.audio_explorer").toString();
     case SideBarTab::BeatMapExplorer:
         return TR("ui.sidebar.beatmap_explorer").toString();
+    case SideBarTab::Collaboration:
+        return TR("ui.sidebar.collaboration").toString();
     case SideBarTab::Settings: return TR("ui.sidebar.settings").toString();
     default: return "";
     }
@@ -68,6 +73,9 @@ static std::string TabToShortLabel(SideBarTab tab)
     case SideBarTab::BeatMapExplorer:
         label = TR("ui.sidebar.beatmap.short").data();
         break;
+    case SideBarTab::Collaboration:
+        label = TR("ui.sidebar.collaboration.short").data();
+        break;
     case SideBarTab::Settings:
         label = TR("ui.sidebar.settings.short").data();
         break;
@@ -79,6 +87,7 @@ static std::string TabToShortLabel(SideBarTab tab)
         case SideBarTab::FileExplorer: return "文件";
         case SideBarTab::AudioExplorer: return "音频";
         case SideBarTab::BeatMapExplorer: return "谱面";
+        case SideBarTab::Collaboration: return "协作";
         case SideBarTab::Settings: return "设置";
         default: return "";
         }
@@ -97,6 +106,8 @@ static SideBarTab SubViewIdToTab(const std::string& subViewId)
         return SideBarTab::AudioExplorer;
     if ( subViewId == TR("title.beatmap_manager").view() )
         return SideBarTab::BeatMapExplorer;
+    if ( subViewId == TR("title.collaboration_manager").view() )
+        return SideBarTab::Collaboration;
     return SideBarTab::None;
 }
 

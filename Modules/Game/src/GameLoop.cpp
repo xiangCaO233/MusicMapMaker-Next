@@ -15,6 +15,7 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "network/collaboration/CollaborationRoom.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/CanvasTabManager.h"
@@ -23,6 +24,8 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/BeatMapManagerView.h"
+#include "ui/imgui/manager/CollaborationLogWindow.h"
+#include "ui/imgui/manager/CollaborationView.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/NewProjectWizard.h"
@@ -108,6 +111,15 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         TR("title.beatmap_manager").toString(),
         std::make_unique<UI::BeatMapManagerView>(
             TR("title.beatmap_manager").toString()));
+    auto collaborationRoom =
+        std::make_shared<Network::Collaboration::CollaborationRoom>();
+    sidebar_manager->registerSubView(
+        TR("title.collaboration_manager").toString(),
+        std::make_unique<UI::CollaborationView>(
+            TR("title.collaboration_manager").toString(), collaborationRoom));
+    m_uiManager.registerView("CollaborationLogWindow",
+                             std::make_unique<UI::CollaborationLogWindow>(
+                                 "CollaborationLogWindow", collaborationRoom));
 
     // 注册新建向导
     m_uiManager.registerView("NewProjectWizard",

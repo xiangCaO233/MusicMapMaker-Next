@@ -81,6 +81,8 @@ add_library(
   src/ui/imgui/manager/AudioManagerView.cpp
   src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
+  src/ui/imgui/manager/CollaborationLogWindow.cpp
+  src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
@@ -133,6 +135,7 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
+target_link_libraries(UI PRIVATE NetworkCollaboration)
 
 # Windows 系统文件管理器调用 ShellExecuteW，需要显式链接 Shell32。
 if(WIN32)

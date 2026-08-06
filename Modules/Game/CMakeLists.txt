@@ -23,7 +23,8 @@ target_link_libraries(
          3rd_entt
          3rd_glm
          MMM
-         Network)
+         Network
+         NetworkCollaboration)
 
 if(WIN32)
   target_link_libraries(Game PUBLIC dbghelp)
