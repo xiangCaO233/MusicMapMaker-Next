@@ -33,13 +33,19 @@ pids=()
 for ((index = 1; index <= client_count; ++index)); do
     client_profile="$profile_root/client-$index"
     mkdir -p "$client_profile"
-    MMM_CONFIG_ROOT="$client_profile" \
-        MMM_CREATOR="Local Client $index" \
-        "$app_path" "$project_path" &
+    if ((index == 1)); then
+        MMM_CONFIG_ROOT="$client_profile" \
+            MMM_CREATOR="Local Client $index" \
+            "$app_path" "$project_path" &
+    else
+        MMM_CONFIG_ROOT="$client_profile" \
+            MMM_CREATOR="Local Client $index" \
+            "$app_path" &
+    fi
     pids+=("$!")
 done
 
-echo "已启动 $client_count 个隔离客户端。Client 1 可开启房间，其余客户端使用 127.0.0.1、显示端口和房间码连接。"
+echo "已启动 $client_count 个隔离客户端。Client 1 已打开项目并可开启房间，其余客户端无需打开项目，使用 127.0.0.1、显示端口和房间码连接。"
 
 exit_code=0
 for pid in "${pids[@]}"; do
