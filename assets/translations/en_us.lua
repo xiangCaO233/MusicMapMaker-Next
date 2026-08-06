@@ -141,6 +141,8 @@ return {
 	["ui.settings.software.short"] = "Software",
 	["ui.settings.software.general"] = "General Settings",
 	["ui.settings.software.language"] = "Language",
+	["ui.settings.software.default_creator"] = "Default Creator",
+	["ui.settings.software.default_creator.hint"] = "Required for collaboration and used as the new beatmap author",
 	["ui.settings.software.vsync"] = "Enable VSync",
 	["ui.settings.software.framelimit"] = "Frame Limit",
 	["ui.settings.software.framelimit.vsync"] = "VSync",

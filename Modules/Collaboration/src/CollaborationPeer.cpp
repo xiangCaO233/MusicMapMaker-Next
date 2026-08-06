@@ -1,4 +1,5 @@
 #include "collaboration/CollaborationPeer.h"
+#include "config/CreatorIdentity.h"
 
 #include <algorithm>
 #include <utility>
@@ -26,12 +27,17 @@ CollaborationPeer::CollaborationPeer(
         std::max<std::size_t>(1, m_config.limits.maxPendingRequests);
     m_config.limits.maxJournalOperations =
         std::max<std::size_t>(1, m_config.limits.maxJournalOperations);
+    m_config.creator = Config::normalizeCreatorIdentity(m_config.creator);
 
-    const bool identityValid = m_config.clientId != 0 && m_config.hostId != 0;
+    const bool identityValid = m_config.clientId != 0 && m_config.hostId != 0 &&
+                               !m_config.creator.empty();
     const bool roleValid     = m_config.isHost
                                    ? m_config.clientId == m_config.hostId
                                    : m_config.clientId != m_config.hostId;
     m_valid = identityValid && roleValid && m_transport != nullptr;
+    if ( m_valid ) {
+        m_participantCreators.emplace(m_config.clientId, m_config.creator);
+    }
 }
 
 CollaborationPeer::~CollaborationPeer() = default;
@@ -56,30 +62,56 @@ const CollaborationPeerStats& CollaborationPeer::stats() const
     return m_stats;
 }
 
-bool CollaborationPeer::addParticipant(PeerId peerId)
+const std::unordered_map<PeerId, std::string>&
+CollaborationPeer::participantCreators() const
 {
+    return m_participantCreators;
+}
+
+bool CollaborationPeer::addParticipant(PeerId peerId, std::string creator)
+{
+    creator = Config::normalizeCreatorIdentity(creator);
     if ( !m_valid || !m_config.isHost || peerId == 0 ||
-         peerId == m_config.clientId ) {
+         peerId == m_config.clientId || creator.empty() ) {
         return false;
     }
     if ( m_participants.contains(peerId) ) {
-        return true;
+        const auto creatorIterator = m_participantCreators.find(peerId);
+        return creatorIterator != m_participantCreators.end() &&
+               creatorIterator->second == creator;
     }
     if ( (m_participants.size() + 1) >= m_config.maxParticipants ) {
         return false;
     }
+    for ( const auto& [knownPeerId, knownCreator] : m_participantCreators ) {
+        static_cast<void>(sendMessage(
+            peerId, ParticipantIdentity{ knownPeerId, knownCreator }));
+    }
+
     m_participants.insert(peerId);
     m_lastAcknowledgedRevision.try_emplace(peerId, 0);
+    m_participantCreators.emplace(peerId, creator);
+    const ParticipantIdentity identity{ peerId, std::move(creator) };
+    for ( const PeerId participantId : m_participants ) {
+        static_cast<void>(sendMessage(participantId, identity));
+    }
     return true;
 }
 
 void CollaborationPeer::removeParticipant(PeerId peerId)
 {
-    if ( !m_config.isHost ) {
+    if ( !m_config.isHost || !m_participants.contains(peerId) ) {
         return;
     }
     m_participants.erase(peerId);
     m_lastAcknowledgedRevision.erase(peerId);
+    if ( m_participantCreators.erase(peerId) == 0 ) {
+        return;
+    }
+    const ParticipantLeft participantLeft{ peerId };
+    for ( const PeerId participantId : m_participants ) {
+        static_cast<void>(sendMessage(participantId, participantLeft));
+    }
 }
 
 SubmitOperationResult CollaborationPeer::submitOperation(
@@ -166,6 +198,12 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
 
     if ( const auto* committed = std::get_if<CommittedOperation>(&message) ) {
         handleCommittedOperation(senderId, *committed);
+    } else if ( const auto* identity =
+                    std::get_if<ParticipantIdentity>(&message) ) {
+        handleParticipantIdentity(senderId, *identity);
+    } else if ( const auto* participantLeft =
+                    std::get_if<ParticipantLeft>(&message) ) {
+        handleParticipantLeft(senderId, *participantLeft);
     } else {
         ++m_stats.invalidMessages;
     }
@@ -248,6 +286,32 @@ void CollaborationPeer::handleResyncRequest(PeerId               senderId,
             static_cast<void>(sendMessage(senderId, committed));
         }
     }
+}
+
+void CollaborationPeer::handleParticipantIdentity(
+    PeerId senderId, const ParticipantIdentity& identity)
+{
+    const auto creator = Config::normalizeCreatorIdentity(identity.creator);
+    if ( senderId != m_config.hostId || identity.clientId == 0 ||
+         creator.empty() ||
+         (identity.clientId == m_config.clientId &&
+          creator != m_config.creator) ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+    m_participantCreators.insert_or_assign(identity.clientId, creator);
+}
+
+void CollaborationPeer::handleParticipantLeft(
+    PeerId senderId, const ParticipantLeft& participantLeft)
+{
+    if ( senderId != m_config.hostId || participantLeft.clientId == 0 ||
+         participantLeft.clientId == m_config.hostId ||
+         participantLeft.clientId == m_config.clientId ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+    m_participantCreators.erase(participantLeft.clientId);
 }
 
 void CollaborationPeer::processHostRequests()

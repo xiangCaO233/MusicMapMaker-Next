@@ -1,4 +1,5 @@
 #include "collaboration/CollaborationProtocol.h"
+#include "config/CreatorIdentity.h"
 
 #include <limits>
 #include <type_traits>
@@ -49,6 +50,15 @@ void appendPayload(ByteBuffer& output, const ByteBuffer& payload)
 {
     appendUint32(output, static_cast<std::uint32_t>(payload.size()));
     output.insert(output.end(), payload.begin(), payload.end());
+}
+
+/// @brief 追加带 16 位长度的短 UTF-8 字符串。
+/// @param output 目标字节序列。
+/// @param value 待写入字符串。
+void appendShortString(ByteBuffer& output, std::string_view value)
+{
+    appendUint16(output, static_cast<std::uint16_t>(value.size()));
+    output.insert(output.end(), value.begin(), value.end());
 }
 
 /// @brief 对二进制帧执行有界小端读取。
@@ -131,6 +141,22 @@ public:
         return true;
     }
 
+    /// @brief 读取指定长度的 UTF-8 字符串字节。
+    /// @param length 读取字节数。
+    /// @param output 输出字符串。
+    /// @return 剩余字节足够时返回 true。
+    [[nodiscard]] bool readString(std::size_t length, std::string& output)
+    {
+        if ( remaining() < length ) {
+            return false;
+        }
+        const auto* begin = reinterpret_cast<const char*>(m_bytes.data()) +
+                            static_cast<std::ptrdiff_t>(m_offset);
+        output.assign(begin, length);
+        m_offset += length;
+        return true;
+    }
+
     /// @brief 返回尚未读取的字节数。
     /// @return 剩余字节数。
     [[nodiscard]] std::size_t remaining() const
@@ -191,6 +217,24 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
     } else if ( const auto* resync = std::get_if<ResyncRequest>(&message) ) {
         kind = CollaborationMessageKind::ResyncRequest;
         appendUint64(body, resync->fromRevision);
+    } else if ( const auto* identity =
+                    std::get_if<ParticipantIdentity>(&message) ) {
+        const auto creator =
+            Config::normalizeCreatorIdentity(identity->creator);
+        if ( identity->clientId == 0 || creator.empty() ) {
+            return std::unexpected(ProtocolError::InvalidCreatorIdentity);
+        }
+        kind = CollaborationMessageKind::ParticipantIdentity;
+        body.reserve(10U + creator.size());
+        appendUint64(body, identity->clientId);
+        appendShortString(body, creator);
+    } else if ( const auto* participantLeft =
+                    std::get_if<ParticipantLeft>(&message) ) {
+        if ( participantLeft->clientId == 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        kind = CollaborationMessageKind::ParticipantLeft;
+        appendUint64(body, participantLeft->clientId);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -297,6 +341,39 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidMessageLength);
         }
         return CollaborationMessage(resync);
+    }
+    case CollaborationMessageKind::ParticipantIdentity: {
+        ParticipantIdentity identity;
+        std::uint16_t       creatorBytes = 0;
+        if ( !reader.readUint64(identity.clientId) ||
+             !reader.readUint16(creatorBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( identity.clientId == 0 || creatorBytes == 0 ||
+             creatorBytes > Config::MAX_CREATOR_IDENTITY_BYTES ) {
+            return std::unexpected(ProtocolError::InvalidCreatorIdentity);
+        }
+        if ( !reader.readString(creatorBytes, identity.creator) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        identity.creator = Config::normalizeCreatorIdentity(identity.creator);
+        if ( identity.creator.empty() ) {
+            return std::unexpected(ProtocolError::InvalidCreatorIdentity);
+        }
+        if ( reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(std::move(identity));
+    }
+    case CollaborationMessageKind::ParticipantLeft: {
+        ParticipantLeft participantLeft;
+        if ( !reader.readUint64(participantLeft.clientId) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( participantLeft.clientId == 0 || reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(participantLeft);
     }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);

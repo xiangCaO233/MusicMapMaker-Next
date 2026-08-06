@@ -8,6 +8,7 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
   src/FontPreferenceValidator.cpp
   src/ColorPaletteFile.cpp
@@ -23,6 +24,12 @@ mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
 add_test(NAME FontPreferenceValidatorTest COMMAND FontPreferenceValidatorTest)
+
+# Creator 身份测试覆盖持久化、规范化和联机前置校验共同边界。
+mmm_add_test_executable(Config CreatorIdentityTest
+                        tests/CreatorIdentityTest.cpp)
+target_link_libraries(CreatorIdentityTest PRIVATE Config)
+add_test(NAME CreatorIdentityTest COMMAND CreatorIdentityTest)
 
 # 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
 mmm_add_test_executable(Config FrameLimitUtilsTest

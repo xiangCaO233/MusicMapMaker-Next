@@ -79,10 +79,16 @@ public:
     /// @return 当前累计统计。
     [[nodiscard]] const CollaborationPeerStats& stats() const;
 
+    /// @brief 返回全部已知客户端的 Creator 展示身份。
+    /// @return 以内部 PeerId 索引的只读身份表。
+    [[nodiscard]] const std::unordered_map<PeerId, std::string>&
+    participantCreators() const;
+
     /// @brief 房主登记一个可提交和接收增量操作的访客。
     /// @param peerId 访客标识。
+    /// @param creator 访客在连接阶段提交的 Creator 展示身份。
     /// @return 当前 Peer 是房主且标识合法时返回 true。
-    [[nodiscard]] bool addParticipant(PeerId peerId);
+    [[nodiscard]] bool addParticipant(PeerId peerId, std::string creator);
 
     /// @brief 房主移除一个访客及其确认状态。
     /// @param peerId 访客标识。
@@ -130,6 +136,18 @@ private:
     /// @param senderId 请求补发的访客标识。
     /// @param request 补发范围。
     void handleResyncRequest(PeerId senderId, const ResyncRequest& request);
+
+    /// @brief 访客接收房主广播的 Creator 展示身份。
+    /// @param senderId 传输层确认的发送方。
+    /// @param identity 已加入房间的身份。
+    void handleParticipantIdentity(PeerId                     senderId,
+                                   const ParticipantIdentity& identity);
+
+    /// @brief 访客接收房主广播的身份离开通知。
+    /// @param senderId 传输层确认的发送方。
+    /// @param participantLeft 已离开的内部客户端标识。
+    void handleParticipantLeft(PeerId                 senderId,
+                               const ParticipantLeft& participantLeft);
 
     /// @brief 房主提交本轮允许数量的待处理请求。
     void processHostRequests();
@@ -182,6 +200,8 @@ private:
     std::deque<CommittedOperation> m_journal;
     /// @brief 房主记录的各访客最高连续确认版本。
     std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
+    /// @brief 当前客户端已知的 PeerId 到 Creator 展示身份映射。
+    std::unordered_map<PeerId, std::string> m_participantCreators;
     /// @brief 当前 Peer 累计诊断统计。
     CollaborationPeerStats m_stats;
 };

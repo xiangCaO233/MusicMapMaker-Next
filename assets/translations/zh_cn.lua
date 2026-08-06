@@ -140,6 +140,8 @@ return {
 	["ui.settings.software.short"] = "软件",
 	["ui.settings.software.general"] = "通用设置",
 	["ui.settings.software.language"] = "界面语言",
+	["ui.settings.software.default_creator"] = "默认 Creator",
+	["ui.settings.software.default_creator.hint"] = "联机写谱必填，并作为新谱面的作者",
 	["ui.settings.software.vsync"] = "开启垂直同步",
 	["ui.settings.software.framelimit"] = "帧率限制",
 	["ui.settings.software.framelimit.vsync"] = "垂直同步 (VSync)",

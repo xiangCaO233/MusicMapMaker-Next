@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace MMM::Collaboration
@@ -39,6 +40,20 @@ struct CommittedOperation {
     ByteBuffer payload;
 };
 
+/// @brief 房间内可展示的客户端 Creator 身份。
+struct ParticipantIdentity {
+    /// @brief 传输、路由和操作去重继续使用的内部客户端标识。
+    PeerId clientId = 0;
+    /// @brief 展示给全部参与者的 Creator。
+    std::string creator;
+};
+
+/// @brief 通知访客移除一个已经离开的展示身份。
+struct ParticipantLeft {
+    /// @brief 已离开客户端的内部标识。
+    PeerId clientId = 0;
+};
+
 /// @brief 协作 Peer 的有界处理参数。
 struct CollaborationPeerLimits {
     /// @brief 单条增量操作允许的最大字节数。
@@ -59,6 +74,8 @@ struct CollaborationPeerConfig {
     PeerId clientId = 0;
     /// @brief 当前房间的房主标识。
     PeerId hostId = 0;
+    /// @brief 当前客户端的 Creator 展示身份；为空时禁止进入联机。
+    std::string creator;
     /// @brief 当前客户端是否承担权威排序职责。
     bool isHost = false;
     /// @brief 房间允许的总客户端数，构造时限制到 2～8。

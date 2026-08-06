@@ -1,10 +1,12 @@
 #include "collaboration/CollaborationPeer.h"
 #include "collaboration/LoopbackTransport.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace
@@ -14,6 +16,7 @@ using MMM::Collaboration::CollaborationPeer;
 using MMM::Collaboration::CollaborationPeerConfig;
 using MMM::Collaboration::CommittedOperation;
 using MMM::Collaboration::LoopbackTransportHub;
+using MMM::Collaboration::ParticipantIdentity;
 using MMM::Collaboration::PeerId;
 using MMM::Collaboration::ProtocolError;
 using MMM::Collaboration::SubmitOperationResult;
@@ -77,6 +80,22 @@ void pumpPeers(CollaborationPeer&                               host,
     return true;
 }
 
+/// @brief 判断房主与全部访客是否持有一致的 Creator 身份表。
+/// @param host 房主 Peer。
+/// @param guests 七个访客 Peer。
+/// @return 全部身份映射与房主一致时返回 true。
+[[nodiscard]] bool allCreatorIdentitiesConverged(
+    const CollaborationPeer&                               host,
+    const std::vector<std::unique_ptr<CollaborationPeer>>& guests)
+{
+    if ( host.participantCreators().size() != PEER_COUNT ) {
+        return false;
+    }
+    return std::all_of(guests.begin(), guests.end(), [&](const auto& guest) {
+        return guest->participantCreators() == host.participantCreators();
+    });
+}
+
 /// @brief 覆盖 8 Peer 并发提交、重复包去重和缺失版本日志补发。
 /// @return 全部断言通过时返回 true。
 [[nodiscard]] bool testEightPeerIncrementalConvergence()
@@ -87,6 +106,7 @@ void pumpPeers(CollaborationPeer&                               host,
     CollaborationPeerConfig hostConfig;
     hostConfig.clientId = HOST_ID;
     hostConfig.hostId   = HOST_ID;
+    hostConfig.creator  = "Host Creator";
     hostConfig.isHost   = true;
     CollaborationPeer host(hostConfig,
                            hub.createEndpoint(HOST_ID),
@@ -96,6 +116,22 @@ void pumpPeers(CollaborationPeer&                               host,
     if ( !host.isValid() ) {
         return false;
     }
+    if ( host.addParticipant(99, " \t") ) {
+        return false;
+    }
+
+    {
+        CollaborationPeerConfig invalidConfig;
+        invalidConfig.clientId = 99;
+        invalidConfig.hostId   = 99;
+        invalidConfig.creator  = "";
+        invalidConfig.isHost   = true;
+        CollaborationPeer invalidPeer(
+            invalidConfig, hub.createEndpoint(99), nullptr);
+        if ( invalidPeer.isValid() ) {
+            return false;
+        }
+    }
 
     std::vector<std::unique_ptr<CollaborationPeer>> guests;
     guests.reserve(PEER_COUNT - 1);
@@ -104,6 +140,7 @@ void pumpPeers(CollaborationPeer&                               host,
         CollaborationPeerConfig guestConfig;
         guestConfig.clientId = peerId;
         guestConfig.hostId   = HOST_ID;
+        guestConfig.creator  = "Guest " + std::to_string(peerId);
         guestConfig.isHost   = false;
         auto guest           = std::make_unique<CollaborationPeer>(
             guestConfig,
@@ -111,12 +148,18 @@ void pumpPeers(CollaborationPeer&                               host,
             [&models, index](const CommittedOperation& operation) {
                 models[index].push_back(operation.payload);
             });
-        if ( !guest->isValid() || !host.addParticipant(peerId) ) {
+        if ( !guest->isValid() ||
+             !host.addParticipant(peerId, guestConfig.creator) ) {
             return false;
         }
         guests.push_back(std::move(guest));
     }
-    if ( host.addParticipant(static_cast<PeerId>(PEER_COUNT + 1)) ) {
+    if ( host.addParticipant(static_cast<PeerId>(PEER_COUNT + 1),
+                             "Overflow Guest") ) {
+        return false;
+    }
+    pumpPeers(host, guests, 4);
+    if ( !allCreatorIdentitiesConverged(host, guests) ) {
         return false;
     }
 
@@ -169,10 +212,30 @@ void pumpPeers(CollaborationPeer&                               host,
     guests[0]->update();
     pumpPeers(host, guests, 16);
 
-    return guests[0]->stats().resyncRequests == 1 &&
-           host.stats().resyncUnavailable == 0 &&
-           host.appliedRevision() == 34 &&
-           allPeersConverged(host, guests, models);
+    if ( guests[0]->stats().resyncRequests != 1 ||
+         host.stats().resyncUnavailable != 0 || host.appliedRevision() != 34 ||
+         !allPeersConverged(host, guests, models) ) {
+        return false;
+    }
+
+    host.removeParticipant(HOST_ID);
+    if ( !host.participantCreators().contains(HOST_ID) ) {
+        return false;
+    }
+
+    constexpr PeerId DEPARTING_PEER_ID = PEER_COUNT;
+    host.removeParticipant(DEPARTING_PEER_ID);
+    pumpPeers(host, guests, 4);
+    if ( host.participantCreators().contains(DEPARTING_PEER_ID) ) {
+        return false;
+    }
+    for ( std::size_t index = 0; index + 1 < guests.size(); ++index ) {
+        if ( guests[index]->participantCreators().contains(
+                 DEPARTING_PEER_ID) ) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// @brief 覆盖二进制帧往返、长度上限和截断消息拒绝。
@@ -204,6 +267,30 @@ void pumpPeers(CollaborationPeer&                               host,
     auto oversized = encodeCollaborationMessage(request, 3);
     if ( oversized.has_value() ||
          oversized.error() != ProtocolError::OperationTooLarge ) {
+        return false;
+    }
+
+    ParticipantIdentity identity{ 7, "  Creator Test  " };
+    auto identityEncoded = encodeCollaborationMessage(identity, 4);
+    if ( !identityEncoded.has_value() ) {
+        return false;
+    }
+    auto identityDecoded =
+        decodeCollaborationMessage(identityEncoded.value(), 4);
+    const auto* decodedIdentity =
+        identityDecoded.has_value()
+            ? std::get_if<ParticipantIdentity>(&identityDecoded.value())
+            : nullptr;
+    if ( decodedIdentity == nullptr || decodedIdentity->clientId != 7 ||
+         decodedIdentity->creator != "Creator Test" ) {
+        return false;
+    }
+
+    ParticipantIdentity invalidIdentity{ 7, " \n" };
+    auto invalidIdentityResult = encodeCollaborationMessage(invalidIdentity, 4);
+    if ( invalidIdentityResult.has_value() ||
+         invalidIdentityResult.error() !=
+             ProtocolError::InvalidCreatorIdentity ) {
         return false;
     }
 

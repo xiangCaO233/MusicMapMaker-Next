@@ -5,7 +5,7 @@ add_library(
 
 target_include_directories(Collaboration
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(Collaboration PRIVATE 3rd_libdatachannel)
+target_link_libraries(Collaboration PRIVATE 3rd_libdatachannel Config)
 
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest

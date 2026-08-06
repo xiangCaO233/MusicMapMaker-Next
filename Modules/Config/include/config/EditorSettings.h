@@ -496,6 +496,9 @@ struct EditorSettings {
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
+    /// @brief 新建谱面的默认作者，同时作为联机写谱的客户端展示身份。
+    std::string defaultCreator;
+
     /// @brief 帧数限制模式偏好
     FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 

@@ -1,3 +1,4 @@
+#include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
 
 #include <nlohmann/json.hpp>
@@ -499,6 +500,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "commonBeatDivisorMask", settings.commonBeatDivisorMask },
         { "recentProjectsLimit", settings.recentProjectsLimit },
         { "language", settings.language },
+        { "defaultCreator", normalizeCreatorIdentity(settings.defaultCreator) },
         { "frameLimit", settings.frameLimit },
         { "audioPlaybackBackend", settings.audioPlaybackBackend },
         { "sdlAudioOutputDeviceName", settings.sdlAudioOutputDeviceName },
@@ -592,7 +594,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         COMMON_BEAT_DIVISOR_MASK_ALL;
     settings.recentProjectsLimit = json.value("recentProjectsLimit", 10);
     settings.language            = json.value("language", std::string("zh_cn"));
-    settings.frameLimit          = json.value(
+    settings.defaultCreator =
+        normalizeCreatorIdentity(json.value("defaultCreator", std::string()));
+    settings.frameLimit = json.value(
         "frameLimit",
         json.contains("vsync")
             ? (json.value("vsync", false) ? FrameLimitPreference::VSync

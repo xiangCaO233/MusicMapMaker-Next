@@ -1,5 +1,6 @@
 #include "logic/ProjectController.h"
 #include "config/AppConfig.h"
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
@@ -32,8 +33,13 @@ void applyProjectCreationOptions(
         options.m_title.empty() ? fallbackTitle : options.m_title;
     project.m_metadata.m_artist =
         options.m_artist.empty() ? "Unknown" : options.m_artist;
+    const auto defaultCreator = Config::normalizeCreatorIdentity(
+        Config::AppConfig::instance().getEditorSettings().defaultCreator);
     project.m_metadata.m_mapper =
-        options.m_mapper.empty() ? "Unknown" : options.m_mapper;
+        options.m_mapper.empty()
+            ? (defaultCreator.empty() ? std::string{ "Unknown" }
+                                      : defaultCreator)
+            : options.m_mapper;
     project.m_settings.m_colorPaletteSchemeName =
         options.m_colorPaletteSchemeName;
     project.m_settings.m_workspace.m_sidebarActiveTab =

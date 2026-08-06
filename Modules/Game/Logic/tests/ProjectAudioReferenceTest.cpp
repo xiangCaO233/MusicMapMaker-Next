@@ -1,6 +1,7 @@
 #include "logic/ProjectCommandService.h"
 #include "logic/ProjectResourceService.h"
 
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -15,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace
 {
@@ -58,6 +60,36 @@ public:
 private:
     /// @brief 本测试拥有的隔离项目目录。
     std::filesystem::path m_path;
+};
+
+/// @brief 在单个测试作用域内覆盖并恢复默认 Creator。
+class ScopedDefaultCreator
+{
+public:
+    /// @brief 写入测试 Creator 并保留原始设置。
+    /// @param creator 测试期间使用的默认 Creator。
+    explicit ScopedDefaultCreator(std::string creator)
+        : m_original(MMM::Config::AppConfig::instance()
+                         .getEditorSettings()
+                         .defaultCreator)
+    {
+        MMM::Config::AppConfig::instance().getEditorSettings().defaultCreator =
+            std::move(creator);
+    }
+
+    /// @brief 恢复测试前的默认 Creator。
+    ~ScopedDefaultCreator()
+    {
+        MMM::Config::AppConfig::instance().getEditorSettings().defaultCreator =
+            std::move(m_original);
+    }
+
+    ScopedDefaultCreator(const ScopedDefaultCreator&)            = delete;
+    ScopedDefaultCreator& operator=(const ScopedDefaultCreator&) = delete;
+
+private:
+    /// @brief 测试前的默认 Creator。
+    std::string m_original;
 };
 
 /// @brief 创建目录扫描所需的最小音频占位文件。
@@ -1117,6 +1149,7 @@ bool testInvalidTemplateObjectTracksAreRejectedAtomically()
 /// @return 新建谱面行为正确时返回 true。
 bool testCreateBeatmapMaterializesMainSample()
 {
+    ScopedDefaultCreator       creator("Creator Test");
     ScopedTestProjectDirectory directory;
     if ( directory.path().empty() ) return false;
 
@@ -1151,6 +1184,7 @@ bool testCreateBeatmapMaterializesMainSample()
          result.m_beatmap->m_baseMapMetadata.bgm_track_count < 1 ||
          result.m_beatmap->m_baseMapMetadata.song_file_hint !=
              std::filesystem::path("audio/song.ogg") ||
+         result.m_beatmap->m_baseMapMetadata.author != "Creator Test" ||
          !result.m_beatmap->m_baseMapMetadata.main_audio_path.empty() ) {
         XERROR("Materialized Main sample fields were incorrect");
         return false;

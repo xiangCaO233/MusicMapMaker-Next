@@ -1054,6 +1054,9 @@ void NewBeatmapWizard::reset()
 {
     m_meta = MMM::BaseMapMeta();
 
+    const auto& defaultCreator =
+        Config::AppConfig::instance().getEditorSettings().defaultCreator;
+
     m_bpm        = 120.0;
     m_trackCount = 4;
     m_measuredTimings.clear();
@@ -1063,7 +1066,9 @@ void NewBeatmapWizard::reset()
     copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), "");
     copyToBuffer(m_artistBuf, sizeof(m_artistBuf), "");
     copyToBuffer(m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), "");
-    copyToBuffer(m_authorBuf, sizeof(m_authorBuf), "Unknown");
+    copyToBuffer(m_authorBuf,
+                 sizeof(m_authorBuf),
+                 defaultCreator.empty() ? "Unknown" : defaultCreator);
     copyToBuffer(m_versionBuf, sizeof(m_versionBuf), "Easy");
 
     m_selectedAudioPath.clear();

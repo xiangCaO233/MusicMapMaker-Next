@@ -821,6 +821,7 @@ void applyToolbarWorkspaceState(
 void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
+    target.settings.defaultCreator     = source.settings.defaultCreator;
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
     target.settings.timelineProfessionalMode =
         source.settings.timelineProfessionalMode;

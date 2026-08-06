@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/CreatorIdentity.h"
 #include "event/ui/UISettingsTabEvent.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -7,6 +8,7 @@
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -190,6 +192,10 @@ private:
     /// @brief 上一次同步到元数据编辑副本的谱面路径。
     std::string m_lastBeatmapPath;
 
+    /// @brief 软件设置页默认 Creator 的固定长度 UTF-8 输入缓冲区。
+    std::array<char, Config::MAX_CREATOR_IDENTITY_BYTES + 1>
+        m_defaultCreatorInputBuffer{};
+
     /// @brief 新建停靠窗口首帧可能覆盖焦点请求，因此连续请求两帧。
     static constexpr uint8_t FOCUS_REQUEST_FRAME_COUNT = 2;
 
@@ -263,6 +269,9 @@ private:
     /// @warning 低频文件系统路径：只在设置窗口打开或缓存标脏时扫描
     /// AppPaths::skinsRootPath()，禁止每帧无条件调用。
     void refreshAvailableSkinDirectories();
+
+    /// @brief 从持久化设置刷新默认 Creator 输入缓冲区。
+    void refreshDefaultCreatorInputBuffer();
 
     /// @brief 应用皮肤选择并请求图形/音频资源热重载。
     /// @param skinDirectoryName skins 根目录下的皮肤目录名。
