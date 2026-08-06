@@ -994,8 +994,10 @@ namespace MMM::Logic
 
 bool BeatmapSession::processCommands()
 {
-    LogicCommand cmd;
-    bool         processed = false;
+    LogicCommand                cmd;
+    bool                        processed = false;
+    ::MMM::BeatmapMutationFlags mutationFlags =
+        ::MMM::BeatmapMutationFlags::None;
     while ( m_commandQueue.try_dequeue(cmd) ) {
         // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
         // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
@@ -1208,6 +1210,82 @@ bool BeatmapSession::processCommands()
         if ( !replacedEditorConfig ) {
             visual.trackLayout   = baseTrackLayout;
             visual.judgeline_pos = baseJudgmentLinePosition;
+        }
+
+        std::visit(
+            [this, &mutationFlags](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                constexpr bool isMutationCommand =
+                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
+                    std::is_same_v<T, CmdUpdateDrag> ||
+                    std::is_same_v<T, CmdEndDrag> ||
+                    std::is_same_v<T, CmdCreateAudioSample> ||
+                    std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateTrackCount> ||
+                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdPaste> ||
+                    std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdMirrorSelected> ||
+                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
+                    std::is_same_v<T, CmdApplyNoteColorToSelection> ||
+                    std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
+                    std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
+                    std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvents> ||
+                    std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                    std::is_same_v<T, CmdReplaceBeatmapData> ||
+                    std::is_same_v<T, CmdUpdateBrush> ||
+                    std::is_same_v<T, CmdEndBrush> ||
+                    std::is_same_v<T, CmdUpdateErase> ||
+                    std::is_same_v<T, CmdEndErase> ||
+                    std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                    std::is_same_v<T, CmdMarkBeatmapMetadataDirty>;
+                if constexpr ( !isMutationCommand ) {
+                    return;
+                }
+                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
+                    if ( !arg.notifyMutationObserver ) return;
+                }
+
+                if ( m_ctx->m_needsNotesSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
+                }
+                if ( m_ctx->m_needsTimingsSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Timelines;
+                }
+                if ( m_ctx->m_needsSamplesSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+                }
+                if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ||
+                               std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T,
+                                              CmdMarkBeatmapMetadataDirty> ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Metadata;
+                } else if constexpr ( std::is_same_v<T,
+                                                     CmdReplaceBeatmapData> ) {
+                    if ( arg.replaceMetadata ) {
+                        mutationFlags |= ::MMM::BeatmapMutationFlags::Metadata;
+                    }
+                    if ( arg.replaceAudioSamples ) {
+                        mutationFlags |=
+                            ::MMM::BeatmapMutationFlags::AudioSamples;
+                    }
+                }
+            },
+            cmd);
+    }
+
+    if ( mutationFlags != ::MMM::BeatmapMutationFlags::None ) {
+        auto observer = m_mutationObserver.load(std::memory_order_acquire);
+        if ( observer && m_ctx->currentBeatmap ) {
+            SessionUtils::syncBeatmap(*m_ctx);
+            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
         }
     }
     return processed;

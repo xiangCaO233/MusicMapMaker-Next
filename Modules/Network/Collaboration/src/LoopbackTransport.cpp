@@ -1,4 +1,4 @@
-#include "collaboration/LoopbackTransport.h"
+#include "network/collaboration/LoopbackTransport.h"
 
 #include <deque>
 #include <mutex>
@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 /// @brief 本地传输中心与所有端点共享的受锁队列状态。
 class LoopbackTransportState
@@ -133,4 +133,4 @@ void LoopbackTransportHub::dropNextPacket(PeerId senderId, PeerId recipientId)
     std::scoped_lock lock(m_state->mutex);
     m_state->dropNext = std::pair(senderId, recipientId);
 }
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

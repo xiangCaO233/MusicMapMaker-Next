@@ -1,10 +1,10 @@
-#include "collaboration/CollaborationPeer.h"
+#include "network/collaboration/CollaborationPeer.h"
 #include "config/CreatorIdentity.h"
 
 #include <algorithm>
 #include <utility>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 CollaborationPeer::CollaborationPeer(
     CollaborationPeerConfig                  config,
@@ -52,6 +52,11 @@ bool CollaborationPeer::isHost() const
     return m_config.isHost;
 }
 
+PeerId CollaborationPeer::localPeerId() const
+{
+    return m_config.clientId;
+}
+
 std::uint64_t CollaborationPeer::appliedRevision() const
 {
     return m_appliedRevision;
@@ -95,6 +100,20 @@ bool CollaborationPeer::addParticipant(PeerId peerId, std::string creator)
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, identity));
     }
+    if ( m_stateSnapshot ) {
+        static_cast<void>(sendMessage(peerId, *m_stateSnapshot));
+    }
+    return true;
+}
+
+bool CollaborationPeer::setStateSnapshot(ByteBuffer payload)
+{
+    if ( !m_valid || !m_config.isHost || m_appliedRevision == 0 ||
+         payload.empty() ||
+         payload.size() > m_config.limits.maxOperationBytes ) {
+        return false;
+    }
+    m_stateSnapshot = StateSnapshot{ m_appliedRevision, std::move(payload) };
     return true;
 }
 
@@ -204,6 +223,8 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
     } else if ( const auto* participantLeft =
                     std::get_if<ParticipantLeft>(&message) ) {
         handleParticipantLeft(senderId, *participantLeft);
+    } else if ( const auto* snapshot = std::get_if<StateSnapshot>(&message) ) {
+        handleStateSnapshot(senderId, *snapshot);
     } else {
         ++m_stats.invalidMessages;
     }
@@ -314,6 +335,28 @@ void CollaborationPeer::handleParticipantLeft(
     m_participantCreators.erase(participantLeft.clientId);
 }
 
+void CollaborationPeer::handleStateSnapshot(PeerId               senderId,
+                                            const StateSnapshot& snapshot)
+{
+    if ( senderId != m_config.hostId || snapshot.revision == 0 ||
+         snapshot.payload.empty() ||
+         snapshot.payload.size() > m_config.limits.maxOperationBytes ||
+         snapshot.revision < m_appliedRevision ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+    if ( snapshot.revision == m_appliedRevision ) return;
+
+    CommittedOperation committed;
+    committed.revision       = snapshot.revision;
+    committed.clientId       = m_config.hostId;
+    committed.clientSequence = snapshot.revision;
+    committed.payload        = snapshot.payload;
+    applyCommittedOperation(committed);
+    m_resyncTargetRevision.reset();
+    sendRevisionAck();
+}
+
 void CollaborationPeer::processHostRequests()
 {
     for ( std::size_t index = 0; index < m_config.limits.maxRequestsPerUpdate &&
@@ -391,4 +434,4 @@ void CollaborationPeer::requestResync(std::uint64_t observedRevision)
     static_cast<void>(
         sendMessage(m_config.hostId, ResyncRequest{ m_appliedRevision + 1 }));
 }
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

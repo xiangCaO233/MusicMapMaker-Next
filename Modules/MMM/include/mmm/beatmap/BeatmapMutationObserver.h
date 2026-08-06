@@ -1,0 +1,57 @@
+#pragma once
+
+#include <cstdint>
+
+namespace MMM
+{
+class BeatMap;
+
+/// @brief 谱面领域数据发生变化的类别位掩码。
+enum class BeatmapMutationFlags : std::uint8_t {
+    None         = 0,
+    Objects      = 1U << 0U,
+    Timelines    = 1U << 1U,
+    AudioSamples = 1U << 2U,
+    Metadata     = 1U << 3U,
+    All          = Objects | Timelines | AudioSamples | Metadata,
+};
+
+/// @brief 合并两个谱面变化类别。
+[[nodiscard]] constexpr BeatmapMutationFlags operator|(BeatmapMutationFlags lhs,
+                                                       BeatmapMutationFlags rhs)
+{
+    return static_cast<BeatmapMutationFlags>(static_cast<std::uint8_t>(lhs) |
+                                             static_cast<std::uint8_t>(rhs));
+}
+
+/// @brief 原位合并谱面变化类别。
+constexpr BeatmapMutationFlags& operator|=(BeatmapMutationFlags& lhs,
+                                           BeatmapMutationFlags  rhs)
+{
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+/// @brief 判断位掩码是否包含指定谱面变化类别。
+[[nodiscard]] constexpr bool hasBeatmapMutationFlag(BeatmapMutationFlags value,
+                                                    BeatmapMutationFlags flag)
+{
+    return (static_cast<std::uint8_t>(value) &
+            static_cast<std::uint8_t>(flag)) != 0U;
+}
+
+/// @brief 接收已经同步到 BeatMap 领域对象的低频编辑变化。
+class IBeatmapMutationObserver
+{
+public:
+    /// @brief 释放谱面变化观察者。
+    virtual ~IBeatmapMutationObserver() = default;
+
+    /// @brief 处理一次已经物化到领域对象的谱面变化。
+    /// @param beatmap 当前完整谱面数据。
+    /// @param flags 本轮实际变化的数据类别。
+    /// @warning 逻辑线程低频编辑分支调用；实现不得阻塞等待网络或访问文件系统。
+    virtual void onBeatmapMutated(const BeatMap&       beatmap,
+                                  BeatmapMutationFlags flags) = 0;
+};
+}  // namespace MMM

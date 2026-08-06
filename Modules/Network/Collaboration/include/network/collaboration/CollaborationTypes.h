@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 /// @brief 协作房间内的客户端稳定标识。
 using PeerId = std::uint64_t;
@@ -83,4 +83,4 @@ struct CollaborationPeerConfig {
     /// @brief 有界队列和消息大小限制。
     CollaborationPeerLimits limits;
 };
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

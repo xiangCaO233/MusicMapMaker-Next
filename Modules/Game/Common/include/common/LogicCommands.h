@@ -639,6 +639,12 @@ struct CmdReplaceBeatmapData {
 
     /// @brief 是否替换谱面元数据。
     bool replaceMetadata{ false };
+
+    /// @brief 是否替换自动采样对象。
+    bool replaceAudioSamples{ false };
+
+    /// @brief 是否把本次替换继续发布给外部谱面变化观察者。
+    bool notifyMutationObserver{ true };
 };
 
 /**

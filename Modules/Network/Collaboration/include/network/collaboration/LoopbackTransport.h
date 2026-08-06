@@ -1,10 +1,10 @@
 #pragma once
 
-#include "collaboration/ICollaborationTransport.h"
+#include "network/collaboration/ICollaborationTransport.h"
 
 #include <memory>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 class LoopbackTransportState;
 
@@ -39,4 +39,4 @@ private:
     /// @brief Hub 与端点共享的队列状态，仅在本地测试传输生命周期内持有。
     std::shared_ptr<LoopbackTransportState> m_state;
 };
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

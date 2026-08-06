@@ -1,0 +1,549 @@
+#include "network/collaboration/BeatmapDocumentCodec.h"
+
+#include "config/Utf8Path.h"
+#include "mmm/Metadata.h"
+#include "mmm/beatmap/BeatMap.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <nlohmann/json.hpp>
+#include <string>
+#include <string_view>
+#include <utility>
+
+namespace MMM::Network::Collaboration
+{
+namespace
+{
+using Json = nlohmann::json;
+
+constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 1;
+
+template<typename Enum>
+Json encodePropertyMap(
+    const std::unordered_map<
+        Enum, std::unordered_map<std::string, std::string, ::MMM::StringHash,
+                                 std::equal_to<>>>& properties)
+{
+    Json result = Json::array();
+    for ( const auto& [source, values] : properties ) {
+        Json encodedValues = Json::object();
+        for ( const auto& [key, value] : values ) {
+            encodedValues[key] = value;
+        }
+        result.push_back(Json{
+            { "source", static_cast<std::uint32_t>(source) },
+            { "values", std::move(encodedValues) },
+        });
+    }
+    return result;
+}
+
+template<typename Enum>
+bool decodePropertyMap(
+    const Json& source,
+    std::unordered_map<
+        Enum, std::unordered_map<std::string, std::string, ::MMM::StringHash,
+                                 std::equal_to<>>>& properties)
+{
+    if ( !source.is_array() ) return false;
+    properties.clear();
+    for ( const auto& entry : source ) {
+        if ( !entry.is_object() ) return false;
+        const auto sourceIt = entry.find("source");
+        const auto valuesIt = entry.find("values");
+        if ( sourceIt == entry.end() || !sourceIt->is_number_unsigned() ||
+             valuesIt == entry.end() || !valuesIt->is_object() ) {
+            return false;
+        }
+        auto& output =
+            properties[static_cast<Enum>(sourceIt->get<std::uint32_t>())];
+        for ( auto valueIt = valuesIt->begin(); valueIt != valuesIt->end();
+              ++valueIt ) {
+            if ( !valueIt.value().is_string() ) return false;
+            output.emplace(valueIt.key(), valueIt.value().get<std::string>());
+        }
+    }
+    return true;
+}
+
+Json encodeNoteMetadata(const ::MMM::NoteMetadata& metadata)
+{
+    return encodePropertyMap(metadata.note_properties);
+}
+
+Json encodeTimingMetadata(const ::MMM::TimingMetadata& metadata)
+{
+    return encodePropertyMap(metadata.timing_properties);
+}
+
+Json encodeSampleMetadata(const ::MMM::SampleMetadata& metadata)
+{
+    return encodePropertyMap(metadata.sample_properties);
+}
+
+Json encodeSampleBinding(
+    const std::optional<::MMM::AudioSampleBinding>& binding)
+{
+    if ( !binding ) return nullptr;
+    return Json{
+        { "resource", binding->m_audioResourceId },
+        { "volume", binding->m_volume },
+    };
+}
+
+bool decodeSampleBinding(const Json&                               source,
+                         std::optional<::MMM::AudioSampleBinding>& binding)
+{
+    if ( source.is_null() ) {
+        binding.reset();
+        return true;
+    }
+    if ( !source.is_object() ) return false;
+    const auto resourceIt = source.find("resource");
+    const auto volumeIt   = source.find("volume");
+    if ( resourceIt == source.end() || !resourceIt->is_string() ||
+         volumeIt == source.end() || !volumeIt->is_number() ) {
+        return false;
+    }
+    binding = ::MMM::AudioSampleBinding{ resourceIt->get<std::string>(),
+                                         volumeIt->get<float>() };
+    return true;
+}
+
+Json encodeNote(const ::MMM::Note& note)
+{
+    Json result{
+        { "type", static_cast<std::uint32_t>(note.m_type) },
+        { "timestamp", note.m_timestamp },
+        { "track", note.m_track },
+        { "binding", encodeSampleBinding(note.m_sampleBinding) },
+        { "metadata", encodeNoteMetadata(note.m_metadata) },
+    };
+    if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        result["duration"] = static_cast<const ::MMM::Hold&>(note).m_duration;
+    } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+        result["dtrack"] = static_cast<const ::MMM::Flick&>(note).m_dtrack;
+    }
+    return result;
+}
+
+Json encodeObjects(const ::MMM::BeatMap& beatmap)
+{
+    Json result = Json::array();
+    for ( const auto& note : beatmap.m_noteData.notes ) {
+        if ( !note.m_isSubNote ) result.push_back(encodeNote(note));
+    }
+    for ( const auto& hold : beatmap.m_noteData.holds ) {
+        if ( !hold.m_isSubNote ) result.push_back(encodeNote(hold));
+    }
+    for ( const auto& flick : beatmap.m_noteData.flicks ) {
+        if ( !flick.m_isSubNote ) result.push_back(encodeNote(flick));
+    }
+    for ( const auto& polyline : beatmap.m_noteData.polylines ) {
+        Json encoded         = encodeNote(polyline);
+        encoded["sub_notes"] = Json::array();
+        for ( const auto& subNote : polyline.m_subNotes ) {
+            encoded["sub_notes"].push_back(encodeNote(subNote.get()));
+        }
+        result.push_back(std::move(encoded));
+    }
+    return result;
+}
+
+Json encodeTimelines(const ::MMM::BeatMap& beatmap)
+{
+    Json result = Json::array();
+    for ( const auto& timing : beatmap.m_timings ) {
+        result.push_back(Json{
+            { "timestamp", timing.m_timestamp },
+            { "bpm", timing.m_bpm },
+            { "beat_length", timing.m_beat_length },
+            { "effect", static_cast<std::uint32_t>(timing.m_timingEffect) },
+            { "value", timing.m_timingEffectParameter },
+            { "metadata", encodeTimingMetadata(timing.m_metadata) },
+        });
+    }
+    return result;
+}
+
+Json encodeAudioSamples(const ::MMM::BeatMap& beatmap)
+{
+    Json result = Json::array();
+    for ( const auto& sample : beatmap.m_audioSamples ) {
+        result.push_back(Json{
+            { "timestamp", sample.m_timestamp },
+            { "offset_ms", sample.m_offsetMs },
+            { "track", sample.m_track },
+            { "resource", sample.m_audioResourceId },
+            { "volume", sample.m_volume },
+            { "metadata", encodeSampleMetadata(sample.m_metadata) },
+        });
+    }
+    return result;
+}
+
+Json encodeMetadata(const ::MMM::BeatMap& beatmap)
+{
+    const auto& base = beatmap.m_baseMapMetadata;
+    Json        result{
+        { "name", base.name },
+        { "title", base.title },
+        { "title_unicode", base.title_unicode },
+        { "artist", base.artist },
+        { "artist_unicode", base.artist_unicode },
+        { "map_path", Config::pathToUtf8(base.map_path) },
+        { "main_audio_path", Config::pathToUtf8(base.main_audio_path) },
+        { "song_file_hint", Config::pathToUtf8(base.song_file_hint) },
+        { "main_cover_path", Config::pathToUtf8(base.main_cover_path) },
+        { "cover_path", Config::pathToUtf8(base.cover_path) },
+        { "cover_type", static_cast<std::uint32_t>(base.cover_type) },
+        { "video_starttime", base.video_starttime },
+        { "bgxoffset", base.bgxoffset },
+        { "bgyoffset", base.bgyoffset },
+        { "version", base.version },
+        { "author", base.author },
+        { "preference_bpm", base.preference_bpm },
+        { "track_count", base.track_count },
+        { "bgm_track_count", base.bgm_track_count },
+        { "map_length", base.map_length },
+        { "extra", encodePropertyMap(beatmap.m_metadata.map_properties) },
+    };
+    return result;
+}
+
+template<typename Value>
+bool readValue(const Json& source, std::string_view key, Value& value)
+{
+    const auto iterator = source.find(key);
+    if ( iterator == source.end() ) return false;
+    if constexpr ( std::is_same_v<Value, bool> ) {
+        if ( !iterator->is_boolean() ) return false;
+    } else if constexpr ( std::is_same_v<Value, std::string> ) {
+        if ( !iterator->is_string() ) return false;
+    } else if constexpr ( std::is_floating_point_v<Value> ) {
+        if ( !iterator->is_number() ) return false;
+    } else if constexpr ( std::is_unsigned_v<Value> ) {
+        if ( !iterator->is_number_unsigned() ) return false;
+    } else if constexpr ( std::is_integral_v<Value> ) {
+        if ( !iterator->is_number_integer() ) return false;
+    }
+    value = iterator->get<Value>();
+    return true;
+}
+
+bool decodeCommonNote(const Json& source, ::MMM::Note& note)
+{
+    std::uint32_t rawType    = 0;
+    const auto    metadataIt = source.find("metadata");
+    const auto    bindingIt  = source.find("binding");
+    if ( !source.is_object() || !readValue(source, "type", rawType) ||
+         rawType > static_cast<std::uint32_t>(::MMM::NoteType::POLYLINE) ||
+         !readValue(source, "timestamp", note.m_timestamp) ||
+         !readValue(source, "track", note.m_track) ||
+         metadataIt == source.end() || bindingIt == source.end() ||
+         !decodePropertyMap(*metadataIt, note.m_metadata.note_properties) ||
+         !decodeSampleBinding(*bindingIt, note.m_sampleBinding) ) {
+        return false;
+    }
+    note.m_type = static_cast<::MMM::NoteType>(rawType);
+    return true;
+}
+
+bool appendDecodedNote(const Json& source, ::MMM::BeatMap& beatmap,
+                       ::MMM::Polyline* parent)
+{
+    std::uint32_t rawType = 0;
+    if ( !source.is_object() || !readValue(source, "type", rawType) ||
+         rawType > static_cast<std::uint32_t>(::MMM::NoteType::POLYLINE) ) {
+        return false;
+    }
+    const auto   type    = static_cast<::MMM::NoteType>(rawType);
+    ::MMM::Note* decoded = nullptr;
+    if ( type == ::MMM::NoteType::NOTE ) {
+        auto& note = beatmap.m_noteData.notes.emplace_back();
+        decoded    = &note;
+    } else if ( type == ::MMM::NoteType::HOLD ) {
+        auto& hold = beatmap.m_noteData.holds.emplace_back();
+        if ( !readValue(source, "duration", hold.m_duration) ) return false;
+        decoded = &hold;
+    } else if ( type == ::MMM::NoteType::FLICK ) {
+        auto& flick = beatmap.m_noteData.flicks.emplace_back();
+        if ( !readValue(source, "dtrack", flick.m_dtrack) ) return false;
+        decoded = &flick;
+    } else if ( parent == nullptr ) {
+        auto& polyline = beatmap.m_noteData.polylines.emplace_back();
+        decoded        = &polyline;
+    } else {
+        return false;
+    }
+    if ( !decodeCommonNote(source, *decoded) ) return false;
+    if ( parent != nullptr ) {
+        decoded->m_isSubNote = true;
+        parent->m_subNotes.emplace_back(*decoded);
+        if ( type == ::MMM::NoteType::HOLD ) {
+            parent->m_subHolds.emplace_back(
+                static_cast<::MMM::Hold&>(*decoded));
+        } else if ( type == ::MMM::NoteType::FLICK ) {
+            parent->m_subFlicks.emplace_back(
+                static_cast<::MMM::Flick&>(*decoded));
+        }
+        return true;
+    }
+    if ( type != ::MMM::NoteType::POLYLINE ) return true;
+
+    auto&      polyline   = static_cast<::MMM::Polyline&>(*decoded);
+    const auto subNotesIt = source.find("sub_notes");
+    if ( subNotesIt == source.end() || !subNotesIt->is_array() ) return false;
+    for ( const auto& subNote : *subNotesIt ) {
+        if ( !appendDecodedNote(subNote, beatmap, &polyline) ) return false;
+    }
+    if ( !polyline.m_subNotes.empty() ) {
+        polyline.m_timestamp = polyline.m_subNotes.front().get().m_timestamp;
+        polyline.m_track     = polyline.m_subNotes.front().get().m_track;
+    }
+    return true;
+}
+
+bool decodeObjects(const Json& source, ::MMM::BeatMap& beatmap)
+{
+    if ( !source.is_array() ) return false;
+    for ( const auto& note : source ) {
+        if ( !appendDecodedNote(note, beatmap, nullptr) ) return false;
+    }
+    return true;
+}
+
+bool decodeTimelines(const Json& source, ::MMM::BeatMap& beatmap)
+{
+    if ( !source.is_array() ) return false;
+    for ( const auto& entry : source ) {
+        auto&         timing     = beatmap.m_timings.emplace_back();
+        std::uint32_t effect     = 0;
+        const auto    metadataIt = entry.find("metadata");
+        if ( !entry.is_object() ||
+             !readValue(entry, "timestamp", timing.m_timestamp) ||
+             !readValue(entry, "bpm", timing.m_bpm) ||
+             !readValue(entry, "beat_length", timing.m_beat_length) ||
+             !readValue(entry, "effect", effect) || effect > 3U ||
+             !readValue(entry, "value", timing.m_timingEffectParameter) ||
+             metadataIt == entry.end() ||
+             !decodePropertyMap(*metadataIt,
+                                timing.m_metadata.timing_properties) ) {
+            return false;
+        }
+        timing.m_timingEffect = static_cast<::MMM::TimingEffect>(effect);
+    }
+    return true;
+}
+
+bool decodeAudioSamples(const Json& source, ::MMM::BeatMap& beatmap)
+{
+    if ( !source.is_array() ) return false;
+    for ( const auto& entry : source ) {
+        auto&      sample     = beatmap.m_audioSamples.emplace_back();
+        const auto metadataIt = entry.find("metadata");
+        if ( !entry.is_object() ||
+             !readValue(entry, "timestamp", sample.m_timestamp) ||
+             !readValue(entry, "offset_ms", sample.m_offsetMs) ||
+             !readValue(entry, "track", sample.m_track) ||
+             !readValue(entry, "resource", sample.m_audioResourceId) ||
+             !readValue(entry, "volume", sample.m_volume) ||
+             metadataIt == entry.end() ||
+             !decodePropertyMap(*metadataIt,
+                                sample.m_metadata.sample_properties) ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
+{
+    if ( !source.is_object() ) return false;
+    auto&         base = beatmap.m_baseMapMetadata;
+    std::string   mapPath;
+    std::string   mainAudioPath;
+    std::string   songFileHint;
+    std::string   mainCoverPath;
+    std::string   coverPath;
+    std::uint32_t coverType = 0;
+    const auto    extraIt   = source.find("extra");
+    if ( !readValue(source, "name", base.name) ||
+         !readValue(source, "title", base.title) ||
+         !readValue(source, "title_unicode", base.title_unicode) ||
+         !readValue(source, "artist", base.artist) ||
+         !readValue(source, "artist_unicode", base.artist_unicode) ||
+         !readValue(source, "map_path", mapPath) ||
+         !readValue(source, "main_audio_path", mainAudioPath) ||
+         !readValue(source, "song_file_hint", songFileHint) ||
+         !readValue(source, "main_cover_path", mainCoverPath) ||
+         !readValue(source, "cover_path", coverPath) ||
+         !readValue(source, "cover_type", coverType) || coverType > 1U ||
+         !readValue(source, "video_starttime", base.video_starttime) ||
+         !readValue(source, "bgxoffset", base.bgxoffset) ||
+         !readValue(source, "bgyoffset", base.bgyoffset) ||
+         !readValue(source, "version", base.version) ||
+         !readValue(source, "author", base.author) ||
+         !readValue(source, "preference_bpm", base.preference_bpm) ||
+         !readValue(source, "track_count", base.track_count) ||
+         !readValue(source, "bgm_track_count", base.bgm_track_count) ||
+         !readValue(source, "map_length", base.map_length) ||
+         extraIt == source.end() ||
+         !decodePropertyMap(*extraIt, beatmap.m_metadata.map_properties) ) {
+        return false;
+    }
+    base.map_path        = Config::utf8ToPath(mapPath);
+    base.main_audio_path = Config::utf8ToPath(mainAudioPath);
+    base.song_file_hint  = Config::utf8ToPath(songFileHint);
+    base.main_cover_path = Config::utf8ToPath(mainCoverPath);
+    base.cover_path      = Config::utf8ToPath(coverPath);
+    base.cover_type      = static_cast<::MMM::CoverType>(coverType);
+    return true;
+}
+
+Json makePatch(const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags,
+               bool snapshot)
+{
+    if ( snapshot ) flags = ::MMM::BeatmapMutationFlags::All;
+    Json patch{
+        { "version", DOCUMENT_FORMAT_VERSION },
+        { "snapshot", snapshot },
+    };
+    if ( hasBeatmapMutationFlag(flags, ::MMM::BeatmapMutationFlags::Objects) ) {
+        patch["objects"] = encodeObjects(beatmap);
+    }
+    if ( hasBeatmapMutationFlag(flags,
+                                ::MMM::BeatmapMutationFlags::Timelines) ) {
+        patch["timelines"] = encodeTimelines(beatmap);
+    }
+    if ( hasBeatmapMutationFlag(flags,
+                                ::MMM::BeatmapMutationFlags::AudioSamples) ) {
+        patch["audio_samples"] = encodeAudioSamples(beatmap);
+    }
+    if ( hasBeatmapMutationFlag(flags,
+                                ::MMM::BeatmapMutationFlags::Metadata) ) {
+        patch["metadata"] = encodeMetadata(beatmap);
+    }
+    return patch;
+}
+}  // namespace
+
+class BeatmapDocumentCodec::Impl
+{
+public:
+    Json document = Json::object();
+    bool hasDocument{ false };
+};
+
+BeatmapDocumentCodec::BeatmapDocumentCodec() : m_impl(std::make_unique<Impl>())
+{
+}
+
+BeatmapDocumentCodec::~BeatmapDocumentCodec() = default;
+
+std::expected<ByteBuffer, BeatmapDocumentError> BeatmapDocumentCodec::encode(
+    const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags,
+    bool snapshot) const
+{
+    if ( !snapshot && flags == ::MMM::BeatmapMutationFlags::None ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    return Json::to_cbor(makePatch(beatmap, flags, snapshot));
+}
+
+std::expected<BeatmapPatchResult, BeatmapDocumentError>
+BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
+{
+    if ( payload.empty() ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    const Json patch = Json::from_cbor(payload, true, false);
+    if ( patch.is_discarded() || !patch.is_object() ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+    std::uint32_t version  = 0;
+    bool          snapshot = false;
+    if ( !readValue(patch, "version", version) ||
+         version != DOCUMENT_FORMAT_VERSION ||
+         !readValue(patch, "snapshot", snapshot) ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+    if ( !snapshot && !m_impl->hasDocument ) {
+        return std::unexpected(BeatmapDocumentError::MissingSnapshot);
+    }
+
+    Json               next = snapshot ? Json::object() : m_impl->document;
+    BeatmapPatchResult result;
+    result.isSnapshot       = snapshot;
+    const auto copyCategory = [&](std::string_view            key,
+                                  ::MMM::BeatmapMutationFlags flag) {
+        const auto iterator = patch.find(key);
+        if ( iterator == patch.end() ) return;
+        next[std::string(key)] = *iterator;
+        result.flags |= flag;
+    };
+    copyCategory("objects", ::MMM::BeatmapMutationFlags::Objects);
+    copyCategory("timelines", ::MMM::BeatmapMutationFlags::Timelines);
+    copyCategory("audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples);
+    copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+
+    if ( snapshot && result.flags != ::MMM::BeatmapMutationFlags::All ) {
+        return std::unexpected(BeatmapDocumentError::InvalidDocument);
+    }
+    if ( result.flags == ::MMM::BeatmapMutationFlags::None ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    m_impl->document    = std::move(next);
+    m_impl->hasDocument = true;
+    return result;
+}
+
+std::shared_ptr<::MMM::BeatMap> BeatmapDocumentCodec::materialize() const
+{
+    if ( !m_impl->hasDocument ) return nullptr;
+    const auto objectsIt   = m_impl->document.find("objects");
+    const auto timelinesIt = m_impl->document.find("timelines");
+    const auto samplesIt   = m_impl->document.find("audio_samples");
+    const auto metadataIt  = m_impl->document.find("metadata");
+    if ( objectsIt == m_impl->document.end() ||
+         timelinesIt == m_impl->document.end() ||
+         samplesIt == m_impl->document.end() ||
+         metadataIt == m_impl->document.end() ) {
+        return nullptr;
+    }
+
+    auto beatmap = std::make_shared<::MMM::BeatMap>();
+    if ( !decodeMetadata(*metadataIt, *beatmap) ||
+         !decodeObjects(*objectsIt, *beatmap) ||
+         !decodeTimelines(*timelinesIt, *beatmap) ||
+         !decodeAudioSamples(*samplesIt, *beatmap) ) {
+        return nullptr;
+    }
+    beatmap->sync();
+    return beatmap;
+}
+
+std::expected<ByteBuffer, BeatmapDocumentError>
+BeatmapDocumentCodec::encodeCurrentSnapshot() const
+{
+    if ( !m_impl->hasDocument ) {
+        return std::unexpected(BeatmapDocumentError::MissingSnapshot);
+    }
+    Json snapshot        = m_impl->document;
+    snapshot["version"]  = DOCUMENT_FORMAT_VERSION;
+    snapshot["snapshot"] = true;
+    return Json::to_cbor(snapshot);
+}
+
+bool BeatmapDocumentCodec::hasDocument() const
+{
+    return m_impl->hasDocument;
+}
+
+void BeatmapDocumentCodec::reset()
+{
+    m_impl->document    = Json::object();
+    m_impl->hasDocument = false;
+}
+}  // namespace MMM::Network::Collaboration

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "collaboration/CollaborationTypes.h"
+#include "network/collaboration/CollaborationTypes.h"
 
 #include <cstdint>
 #include <expected>
 #include <span>
 #include <variant>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
 inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 2;
@@ -20,6 +20,7 @@ enum class CollaborationMessageKind : std::uint8_t {
     ResyncRequest       = 4,
     ParticipantIdentity = 5,
     ParticipantLeft     = 6,
+    StateSnapshot       = 7,
 };
 
 /// @brief 访客确认已经连续应用到的版本。
@@ -34,10 +35,18 @@ struct ResyncRequest {
     std::uint64_t fromRevision = 0;
 };
 
+/// @brief 房主向新加入客户端发送的当前完整谱面状态。
+struct StateSnapshot {
+    /// @brief 快照已经包含的最高房间版本。
+    std::uint64_t revision = 0;
+    /// @brief 可独立恢复的完整规范化谱面负载。
+    ByteBuffer payload;
+};
+
 /// @brief 可编码到协作线协议的消息联合体。
 using CollaborationMessage =
     std::variant<EditRequest, CommittedOperation, RevisionAck, ResyncRequest,
-                 ParticipantIdentity, ParticipantLeft>;
+                 ParticipantIdentity, ParticipantLeft, StateSnapshot>;
 
 /// @brief 协作消息编解码失败原因。
 enum class ProtocolError : std::uint8_t {
@@ -66,4 +75,4 @@ encodeCollaborationMessage(const CollaborationMessage& message,
 [[nodiscard]] std::expected<CollaborationMessage, ProtocolError>
 decodeCollaborationMessage(std::span<const std::uint8_t> bytes,
                            std::size_t                   maxOperationBytes);
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

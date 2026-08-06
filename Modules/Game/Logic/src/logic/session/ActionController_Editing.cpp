@@ -718,6 +718,66 @@ void replaceNoteComponents(SessionContext&                   ctx,
     markReplacementNoteOrderDirty(ctx);
 }
 
+/// @brief 收集当前会话中全部自动采样组件。
+/// @param ctx 当前会话上下文。
+/// @return 按时间和轨道稳定排序的自动采样快照。
+std::vector<SampleComponent> collectSampleComponents(SessionContext& ctx)
+{
+    std::vector<SampleComponent> samples;
+    const auto view = ctx.sampleRegistry.view<const SampleComponent>();
+    samples.reserve(view.size());
+    for ( const auto entity : view ) {
+        samples.push_back(view.get<const SampleComponent>(entity));
+    }
+    std::stable_sort(
+        samples.begin(), samples.end(), [](const auto& lhs, const auto& rhs) {
+            if ( lhs.m_timestamp != rhs.m_timestamp ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            if ( lhs.m_track != rhs.m_track ) return lhs.m_track < rhs.m_track;
+            return lhs.m_audioResourceId < rhs.m_audioResourceId;
+        });
+    return samples;
+}
+
+/// @brief 从谱面领域对象构建自动采样组件快照。
+/// @param beatMap 来源谱面。
+/// @return 可直接替换到 ECS 的自动采样组件。
+std::vector<SampleComponent> makeSampleComponentsFromBeatMap(
+    const ::MMM::BeatMap& beatMap)
+{
+    std::vector<SampleComponent> samples;
+    samples.reserve(beatMap.m_audioSamples.size());
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        samples.push_back(SampleComponent::fromAudioSample(sample));
+    }
+    return samples;
+}
+
+/// @brief 整体重建当前会话的自动采样 ECS。
+/// @param ctx 当前会话上下文。
+/// @param samples 替换后的自动采样组件列表。
+void replaceSampleComponents(SessionContext&                     ctx,
+                             const std::vector<SampleComponent>& samples)
+{
+    clearChartObjectSelectionIndex(ctx, ChartObjectKind::AudioSample);
+    ctx.sampleRegistry.clear();
+    for ( const auto& sample : samples ) {
+        const auto entity = ctx.sampleRegistry.create();
+        ctx.sampleRegistry.emplace<SampleComponent>(entity, sample);
+        ctx.sampleRegistry.emplace<InteractionComponent>(entity);
+    }
+    ctx.hoveredEntity = entt::null;
+    ctx.draggedEntity = entt::null;
+    ctx.dragInitialSample.reset();
+    ctx.isSampleOrderDirty               = true;
+    ctx.isSamplePruneDirty               = false;
+    ctx.m_needsSamplesSync               = true;
+    ctx.isPreviewDensityDirty            = true;
+    ctx.isAudioTimelineDescriptorDirty   = true;
+    ctx.isAudioTimelineActivationPending = true;
+}
+
 /// @brief 谱面元数据替换快照。
 struct BeatmapMetadataSnapshot {
     /// @brief 基础谱面元数据。
@@ -817,10 +877,12 @@ public:
     /// @param afterPreferenceBpm 替换后的首选 BPM。
     ReplaceBeatmapDataAction(
         bool replaceObjects, bool replaceTimelines, bool replaceMetadata,
-        std::vector<NoteComponent>                       beforeNotes,
+        bool replaceAudioSamples, std::vector<NoteComponent> beforeNotes,
         std::vector<NoteComponent>                       afterNotes,
         std::vector<TimelineComponent>                   beforeTimelines,
         std::vector<TimelineComponent>                   afterTimelines,
+        std::vector<SampleComponent>                     beforeSamples,
+        std::vector<SampleComponent>                     afterSamples,
         BeatmapMetadataSnapshot                          beforeMetadata,
         BeatmapMetadataSnapshot                          afterMetadata,
         std::vector<TrackCountAction::SampleTrackChange> sampleTrackChanges,
@@ -828,10 +890,13 @@ public:
         : m_replaceObjects(replaceObjects)
         , m_replaceTimelines(replaceTimelines)
         , m_replaceMetadata(replaceMetadata)
+        , m_replaceAudioSamples(replaceAudioSamples)
         , m_beforeNotes(std::move(beforeNotes))
         , m_afterNotes(std::move(afterNotes))
         , m_beforeTimelines(std::move(beforeTimelines))
         , m_afterTimelines(std::move(afterTimelines))
+        , m_beforeSamples(std::move(beforeSamples))
+        , m_afterSamples(std::move(afterSamples))
         , m_beforeMetadata(std::move(beforeMetadata))
         , m_afterMetadata(std::move(afterMetadata))
         , m_sampleTrackChanges(std::move(sampleTrackChanges))
@@ -872,6 +937,10 @@ private:
                     forward ? m_afterPreferenceBpm : m_beforePreferenceBpm;
             }
         }
+        if ( m_replaceAudioSamples ) {
+            replaceSampleComponents(ctx,
+                                    forward ? m_afterSamples : m_beforeSamples);
+        }
         if ( m_replaceMetadata ) {
             applyMetadataSnapshot(ctx,
                                   forward ? m_afterMetadata : m_beforeMetadata);
@@ -897,6 +966,9 @@ private:
     /// @brief 是否替换谱面元数据。
     bool m_replaceMetadata{ false };
 
+    /// @brief 是否替换自动采样对象。
+    bool m_replaceAudioSamples{ false };
+
     /// @brief 替换前物件组件。
     std::vector<NoteComponent> m_beforeNotes;
 
@@ -908,6 +980,12 @@ private:
 
     /// @brief 替换后 Timeline 组件。
     std::vector<TimelineComponent> m_afterTimelines;
+
+    /// @brief 替换前自动采样组件。
+    std::vector<SampleComponent> m_beforeSamples;
+
+    /// @brief 替换后自动采样组件。
+    std::vector<SampleComponent> m_afterSamples;
 
     /// @brief 替换前元数据。
     BeatmapMetadataSnapshot m_beforeMetadata;
@@ -1831,8 +1909,8 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
     if ( !m_ctx.currentBeatmap || !cmd.sourceBeatmap ) {
         return;
     }
-    if ( !cmd.replaceObjects && !cmd.replaceTimelines &&
-         !cmd.replaceMetadata ) {
+    if ( !cmd.replaceObjects && !cmd.replaceTimelines && !cmd.replaceMetadata &&
+         !cmd.replaceAudioSamples ) {
         return;
     }
 
@@ -1852,6 +1930,13 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
     if ( cmd.replaceTimelines ) {
         beforeTimelines = collectSortedTimelineComponents(m_ctx);
         afterTimelines  = makeTimelineComponentsFromBeatMap(*cmd.sourceBeatmap);
+    }
+
+    std::vector<SampleComponent> beforeSamples;
+    std::vector<SampleComponent> afterSamples;
+    if ( cmd.replaceAudioSamples ) {
+        beforeSamples = collectSampleComponents(m_ctx);
+        afterSamples  = makeSampleComponentsFromBeatMap(*cmd.sourceBeatmap);
     }
 
     BeatmapMetadataSnapshot beforeMetadata =
@@ -1907,10 +1992,13 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         cmd.replaceObjects,
         cmd.replaceTimelines,
         cmd.replaceMetadata,
+        cmd.replaceAudioSamples,
         std::move(beforeNotes),
         std::move(afterNotes),
         std::move(beforeTimelines),
         std::move(afterTimelines),
+        std::move(beforeSamples),
+        std::move(afterSamples),
         std::move(beforeMetadata),
         std::move(afterMetadata),
         std::move(sampleTrackChanges),

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "collaboration/CollaborationProtocol.h"
-#include "collaboration/ICollaborationTransport.h"
+#include "network/collaboration/CollaborationProtocol.h"
+#include "network/collaboration/ICollaborationTransport.h"
 
 #include <deque>
 #include <functional>
@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 /// @brief 本地操作提交结果。
 enum class SubmitOperationResult : std::uint8_t {
@@ -71,6 +71,10 @@ public:
     /// @return `isHost` 配置值。
     [[nodiscard]] bool isHost() const;
 
+    /// @brief 返回当前 Peer 的稳定客户端标识。
+    /// @return 当前客户端 PeerId。
+    [[nodiscard]] PeerId localPeerId() const;
+
     /// @brief 返回已经连续应用到本地模型的版本。
     /// @return 当前连续版本。
     [[nodiscard]] std::uint64_t appliedRevision() const;
@@ -89,6 +93,11 @@ public:
     /// @param creator 访客在连接阶段提交的 Creator 展示身份。
     /// @return 当前 Peer 是房主且标识合法时返回 true。
     [[nodiscard]] bool addParticipant(PeerId peerId, std::string creator);
+
+    /// @brief 更新房主供新加入客户端直接追平的完整状态快照。
+    /// @param payload 可独立恢复的完整谱面负载。
+    /// @return 仅房主且已经提交至少一个版本时返回 true。
+    [[nodiscard]] bool setStateSnapshot(ByteBuffer payload);
 
     /// @brief 房主移除一个访客及其确认状态。
     /// @param peerId 访客标识。
@@ -149,6 +158,9 @@ private:
     void handleParticipantLeft(PeerId                 senderId,
                                const ParticipantLeft& participantLeft);
 
+    /// @brief 访客应用房主提供的完整状态快照并直接追平版本。
+    void handleStateSnapshot(PeerId senderId, const StateSnapshot& snapshot);
+
     /// @brief 房主提交本轮允许数量的待处理请求。
     void processHostRequests();
 
@@ -202,7 +214,9 @@ private:
     std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
     /// @brief 当前客户端已知的 PeerId 到 Creator 展示身份映射。
     std::unordered_map<PeerId, std::string> m_participantCreators;
+    /// @brief 房主最近一次可独立恢复的完整谱面快照。
+    std::optional<StateSnapshot> m_stateSnapshot;
     /// @brief 当前 Peer 累计诊断统计。
     CollaborationPeerStats m_stats;
 };
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

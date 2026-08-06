@@ -1,10 +1,10 @@
 #pragma once
 
-#include "collaboration/CollaborationTypes.h"
+#include "network/collaboration/CollaborationTypes.h"
 
 #include <span>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 /// @brief 传输层交给协作状态机的一条完整可靠消息。
 struct TransportPacket {
@@ -33,4 +33,4 @@ public:
     /// @return 读取到消息时返回 true。
     [[nodiscard]] virtual bool receive(TransportPacket& packet) = 0;
 };
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "mmm/beatmap/BeatmapMutationObserver.h"
+#include <atomic>
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <memory>
@@ -37,6 +39,13 @@ public:
     /// @brief 推送指令到无锁队列（跨线程安全，由 UI 线程或事件系统调用）
     /// @param cmd 指令对象
     void pushCommand(LogicCommand&& cmd);
+
+    /// @brief 设置低频谱面领域变化观察者。
+    /// @param observer 新观察者；为空时恢复纯离线会话。
+    /// @warning 跨 UI/逻辑线程低频调用；原子 shared_ptr
+    /// 用于保证协作房间断开时回调对象仍存活，不得在普通 update 中复制。
+    void setMutationObserver(
+        std::shared_ptr<::MMM::IBeatmapMutationObserver> observer);
 
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
     /// @warning 逻辑热路径：每个逻辑 update
@@ -107,6 +116,11 @@ private:
     /// @return 如果处理了至少一个指令，则返回 true
     bool processCommands();
 
+    /// @brief 发布跨线程请求的完整谱面快照。
+    /// @warning 逻辑热路径：每 update 仅检查一个 relaxed 原子标志；只有新观察者
+    /// 绑定后的单次分支会同步完整 BeatMap 并回调。
+    void publishRequestedMutationSnapshot();
+
     /// @brief 判断本轮是否需要生成并发布渲染快照。
     /// @param currentSysTime 当前单调系统时间（秒）。
     /// @param forceImmediate 是否因命令、跳转、交互或脏缓存强制立即发布。
@@ -157,6 +171,17 @@ private:
 
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
+
+    /// @brief 当前低频谱面变化观察者。
+    /// @warning 跨线程 shared_ptr 原子：只在谱面发生实际变化或首次绑定时加载，
+    /// 用于避免观察者在逻辑回调期间被 UI 线程销毁。
+    std::atomic<std::shared_ptr<::MMM::IBeatmapMutationObserver>>
+        m_mutationObserver;
+
+    /// @brief 新观察者绑定后请求逻辑线程发布一次完整谱面快照。
+    /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed
+    /// 即可，因为观察者指针自身通过 acquire/release 原子传递。
+    std::atomic_bool m_mutationSnapshotRequested{ false };
 
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点

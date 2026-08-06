@@ -1,5 +1,5 @@
-#include "collaboration/CollaborationPeer.h"
-#include "collaboration/LoopbackTransport.h"
+#include "network/collaboration/CollaborationPeer.h"
+#include "network/collaboration/LoopbackTransport.h"
 
 #include <algorithm>
 #include <array>
@@ -11,17 +11,17 @@
 
 namespace
 {
-using MMM::Collaboration::ByteBuffer;
-using MMM::Collaboration::CollaborationPeer;
-using MMM::Collaboration::CollaborationPeerConfig;
-using MMM::Collaboration::CommittedOperation;
-using MMM::Collaboration::LoopbackTransportHub;
-using MMM::Collaboration::ParticipantIdentity;
-using MMM::Collaboration::PeerId;
-using MMM::Collaboration::ProtocolError;
-using MMM::Collaboration::SubmitOperationResult;
-using MMM::Collaboration::decodeCollaborationMessage;
-using MMM::Collaboration::encodeCollaborationMessage;
+using MMM::Network::Collaboration::ByteBuffer;
+using MMM::Network::Collaboration::CollaborationPeer;
+using MMM::Network::Collaboration::CollaborationPeerConfig;
+using MMM::Network::Collaboration::CommittedOperation;
+using MMM::Network::Collaboration::LoopbackTransportHub;
+using MMM::Network::Collaboration::ParticipantIdentity;
+using MMM::Network::Collaboration::PeerId;
+using MMM::Network::Collaboration::ProtocolError;
+using MMM::Network::Collaboration::SubmitOperationResult;
+using MMM::Network::Collaboration::decodeCollaborationMessage;
+using MMM::Network::Collaboration::encodeCollaborationMessage;
 
 /// @brief 测试中的客户端总数。
 constexpr std::size_t PEER_COUNT = 8;
@@ -242,7 +242,7 @@ void pumpPeers(CollaborationPeer&                               host,
 /// @return 全部协议断言通过时返回 true。
 [[nodiscard]] bool testProtocolBounds()
 {
-    MMM::Collaboration::EditRequest request;
+    MMM::Network::Collaboration::EditRequest request;
     request.clientId       = 7;
     request.clientSequence = 11;
     request.payload        = { 1, 2, 3, 4 };
@@ -256,7 +256,7 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
     const auto* decodedRequest =
-        std::get_if<MMM::Collaboration::EditRequest>(&decoded.value());
+        std::get_if<MMM::Network::Collaboration::EditRequest>(&decoded.value());
     if ( decodedRequest == nullptr ||
          decodedRequest->clientId != request.clientId ||
          decodedRequest->clientSequence != request.clientSequence ||

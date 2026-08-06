@@ -1,11 +1,11 @@
-#include "collaboration/CollaborationProtocol.h"
+#include "network/collaboration/CollaborationProtocol.h"
 #include "config/CreatorIdentity.h"
 
 #include <limits>
 #include <type_traits>
 #include <utility>
 
-namespace MMM::Collaboration
+namespace MMM::Network::Collaboration
 {
 namespace
 {
@@ -235,6 +235,16 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         }
         kind = CollaborationMessageKind::ParticipantLeft;
         appendUint64(body, participantLeft->clientId);
+    } else if ( const auto* snapshot = std::get_if<StateSnapshot>(&message) ) {
+        if ( snapshot->revision == 0 ||
+             !isOperationSizeValid(snapshot->payload.size(),
+                                   maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        kind = CollaborationMessageKind::StateSnapshot;
+        body.reserve(12U + snapshot->payload.size());
+        appendUint64(body, snapshot->revision);
+        appendPayload(body, snapshot->payload);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -375,7 +385,26 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
         }
         return CollaborationMessage(participantLeft);
     }
+    case CollaborationMessageKind::StateSnapshot: {
+        StateSnapshot snapshot;
+        std::uint32_t payloadBytes = 0;
+        if ( !reader.readUint64(snapshot.revision) ||
+             !reader.readUint32(payloadBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( snapshot.revision == 0 ||
+             !isOperationSizeValid(payloadBytes, maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        if ( !reader.readBytes(payloadBytes, snapshot.payload) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(std::move(snapshot));
+    }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);
 }
-}  // namespace MMM::Collaboration
+}  // namespace MMM::Network::Collaboration

@@ -115,6 +115,29 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
     m_commandQueue.enqueue(std::move(cmd));
 }
 
+void BeatmapSession::setMutationObserver(
+    std::shared_ptr<::MMM::IBeatmapMutationObserver> observer)
+{
+    const bool requestSnapshot = observer != nullptr;
+    m_mutationObserver.store(std::move(observer), std::memory_order_release);
+    m_mutationSnapshotRequested.store(requestSnapshot,
+                                      std::memory_order_relaxed);
+}
+
+void BeatmapSession::publishRequestedMutationSnapshot()
+{
+    if ( !m_mutationSnapshotRequested.exchange(false,
+                                               std::memory_order_relaxed) ) {
+        return;
+    }
+    auto observer = m_mutationObserver.load(std::memory_order_acquire);
+    if ( !observer || !m_ctx->currentBeatmap ) return;
+
+    SessionUtils::syncBeatmap(*m_ctx);
+    observer->onBeatmapMutated(*m_ctx->currentBeatmap,
+                               ::MMM::BeatmapMutationFlags::All);
+}
+
 /// @brief 判断会话是否存在等待逻辑线程消费的指令。
 bool BeatmapSession::hasPendingCommands() const
 {
@@ -330,6 +353,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         m_ctx->isPlaying = false;
     }
     bool processed = processCommands();
+    publishRequestedMutationSnapshot();
     m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
     const auto& effectiveConfig = m_ctx->lastConfig;
 
