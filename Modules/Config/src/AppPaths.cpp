@@ -107,10 +107,15 @@ std::filesystem::path userHomePath()
 }
 
 /// @brief 获取基础 .config 目录路径。
-/// @return Windows 下固定为 用户目录/.config，其他平台优先使用
-/// XDG_CONFIG_HOME。
+/// @return 优先使用 MMM_CONFIG_ROOT 测试隔离目录；否则 Windows 下固定为
+/// 用户目录/.config，其他平台优先使用 XDG_CONFIG_HOME。
 std::filesystem::path baseConfigPath()
 {
+    /// @brief 本机多客户端测试使用的应用配置隔离根目录。
+    const char* collaborationProfileRoot = std::getenv("MMM_CONFIG_ROOT");
+    if ( collaborationProfileRoot && collaborationProfileRoot[0] != '\0' ) {
+        return utf8ToPath(collaborationProfileRoot);
+    }
 #ifndef _WIN32
     /// @brief XDG 配置根目录环境变量值。
     const char* xdgConfigHome = std::getenv("XDG_CONFIG_HOME");

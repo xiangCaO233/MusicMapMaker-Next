@@ -31,6 +31,18 @@ mmm_add_test_executable(Config CreatorIdentityTest
 target_link_libraries(CreatorIdentityTest PRIVATE Config)
 add_test(NAME CreatorIdentityTest COMMAND CreatorIdentityTest)
 
+# 本机多客户端测试必须把每个进程的配置和 ImGui 状态隔离到独立目录。
+mmm_add_test_executable(Config AppPathsProfileOverrideTest
+                        tests/AppPathsProfileOverrideTest.cpp)
+target_link_libraries(AppPathsProfileOverrideTest PRIVATE Config)
+add_test(
+  NAME AppPathsProfileOverrideTest
+  COMMAND
+    "${CMAKE_COMMAND}" -E env
+    "MMM_CONFIG_ROOT=${CMAKE_BINARY_DIR}/test_output/collaboration_profile"
+    "$<TARGET_FILE:AppPathsProfileOverrideTest>"
+    "${CMAKE_BINARY_DIR}/test_output/collaboration_profile")
+
 # 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
 mmm_add_test_executable(Config FrameLimitUtilsTest
                         tests/FrameLimitUtilsTest.cpp)

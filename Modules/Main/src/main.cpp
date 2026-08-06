@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/CreatorIdentity.h"
 #include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -21,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fmt/core.h>
 #include <imgui.h>
@@ -531,6 +533,14 @@ int main(int argc, char* argv[])
 
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();
+    if ( const char* creatorOverride = std::getenv("MMM_CREATOR");
+         creatorOverride && creatorOverride[0] != '\0' ) {
+        const auto creator = normalizeCreatorIdentity(creatorOverride);
+        if ( !creator.empty() ) {
+            AppConfig::instance().getEditorSettings().defaultCreator = creator;
+            XINFO("Using isolated collaboration Creator: {}", creator);
+        }
+    }
 
     UI::SetInteractionFeedbackEnabled(false);
     const auto startupResult = Main::prepareStartupAssets();
