@@ -42,6 +42,7 @@ add_library(
   src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp
   src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp
   src/ui/imgui/menu/actions/help/CheckUpdateAction.cpp
+  src/ui/imgui/menu/actions/help/OpenHelpPathAction.cpp
   src/ui/imgui/menu/actions/help/ShowAboutAction.cpp
   src/ui/imgui/menu/actions/tools/AlignSelectedToCommonBeatsAction.cpp
   src/ui/imgui/menu/actions/tools/BpmAutoDetector.cpp

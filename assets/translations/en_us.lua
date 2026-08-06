@@ -75,6 +75,12 @@ return {
 
 	["ui.help"] = "&Help",
 	["ui.help.check_update"] = "Check for Updates",
+	["ui.help.open_software_configuration"] = "Reveal Software Configuration",
+	["ui.help.open_software_configuration_failed"] = "Failed to reveal the software configuration",
+	["ui.help.open_skins_directory"] = "Open Skins Directory",
+	["ui.help.open_skins_directory_failed"] = "Failed to open the skins directory",
+	["ui.help.open_plugins_directory"] = "Open Plugins Directory",
+	["ui.help.open_plugins_directory_failed"] = "Failed to open the plugins directory",
 	["ui.help.about"] = "About MusicMapMaker",
 	["ui.help.checking"] = "Checking for updates...",
 	["ui.help.up_to_date"] = "You're up to date!",

@@ -4,6 +4,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
+#include "ui/imgui/menu/items/MainMenuSeparatorItem.h"
 #include <memory>
 #include <utility>
 
@@ -19,6 +20,26 @@ MainMenuHelp::MainMenuHelp()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createCheckUpdateAction()));
+    registerItem(std::make_unique<MainMenuSeparatorItem>());
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COG,
+        "ui.help.open_software_configuration",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenSoftwareConfigurationAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_FOLDER_OPEN,
+        "ui.help.open_skins_directory",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenSkinsDirectoryAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_FOLDER_OPEN,
+        "ui.help.open_plugins_directory",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenPluginsDirectoryAction()));
+    registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_INFO_CIRCLE,
         "ui.help.about",

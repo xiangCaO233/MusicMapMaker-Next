@@ -74,6 +74,12 @@ return {
 
 	["ui.help"] = "帮助(&H)",
 	["ui.help.check_update"] = "检查更新",
+	["ui.help.open_software_configuration"] = "定位软件配置文件",
+	["ui.help.open_software_configuration_failed"] = "无法定位软件配置文件",
+	["ui.help.open_skins_directory"] = "打开皮肤目录",
+	["ui.help.open_skins_directory_failed"] = "无法打开皮肤目录",
+	["ui.help.open_plugins_directory"] = "打开插件目录",
+	["ui.help.open_plugins_directory_failed"] = "无法打开插件目录",
 	["ui.help.about"] = "关于 MusicMapMaker",
 	["ui.help.checking"] = "正在检查更新...",
 	["ui.help.up_to_date"] = "已是最新版本！",
