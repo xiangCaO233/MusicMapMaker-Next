@@ -132,6 +132,14 @@ stageMainSourceHeaders() {
     stageDirectoryPackage "${prebuiltRoot}" "nlohmann_json" "${sourceRoot}/nlohmann_json/include"
     stageDirectoryPackage "${prebuiltRoot}" "sol2" "${sourceRoot}/sol2/include"
     stageDirectoryPackage "${prebuiltRoot}" "IonCachyEngine" "${sourceRoot}/IonCachyEngine/include"
+    stageDirectoryPackage "${prebuiltRoot}" "mbedtls" "${sourceRoot}/mbedtls/include"
+    copyFile "${sourceRoot}/cmake/mbedtls-user-config.h" "${prebuiltRoot}/headers/mbedtls/include"
+    stageDirectoryPackage "${prebuiltRoot}" "libdatachannel" "${sourceRoot}/libdatachannel/include"
+    stageDirectoryPackage "${prebuiltRoot}" "libjuice" "${sourceRoot}/libdatachannel/deps/libjuice/include"
+
+    resetIncludeDir "${prebuiltRoot}" "usrsctp"
+    copyFile "${sourceRoot}/libdatachannel/deps/usrsctp/usrsctplib/usrsctp.h" "${prebuiltRoot}/headers/usrsctp/include"
+    printf "staged %s\n" "${prebuiltRoot#${projectRoot}/}/headers/usrsctp/include"
 
     resetIncludeDir "${prebuiltRoot}" "ImGuiFileDialog"
     includeDir="${prebuiltRoot}/headers/ImGuiFileDialog/include"

@@ -14,6 +14,7 @@ Options:
   --toolchain <name>      Prebuilt toolchain directory. Default: clang
   --compiler-tag <tag>    Prebuilt compiler tag. Default: detected clang major
   --scope <all|main|ice>  Staging scope. Default: all
+  --packages <list>       Comma-separated packages to stage. Default: all
   -h, --help              Show this help
 
 Environment overrides:
@@ -90,6 +91,10 @@ copyLib() {
     local outputName="$3"
     shift 3
 
+    if ! shouldStagePackage "${packageName}"; then
+        return 0
+    fi
+
     local sourcePath=""
     local candidatePath
     for candidatePath in "$@"; do
@@ -137,6 +142,12 @@ copyIceLib() {
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 projectRoot="$(cd "${scriptDir}/../.." && pwd)"
 
+shouldStagePackage() {
+    local packageName="$1"
+
+    [[ -z "${packageFilter}" || ",${packageFilter}," == *",${packageName},"* ]]
+}
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
     printf "error: scripts/ci/stage-macos-prebuilts.sh must run on macOS\n" >&2
     exit 1
@@ -153,6 +164,7 @@ targetArch="${MACOS_PREBUILT_ARCH:-$(uname -m)}"
 prebuiltToolchain="${MACOS_PREBUILT_TOOLCHAIN:-clang}"
 compilerTag="${MACOS_PREBUILT_COMPILER_TAG:-}"
 stageScope="all"
+packageFilter=""
 
 while (( $# > 0 )); do
     case "$1" in
@@ -202,6 +214,14 @@ while (( $# > 0 )); do
                 exit 1
             fi
             stageScope="$2"
+            shift 2
+            ;;
+        --packages)
+            if (( $# < 2 )); then
+                printf "error: --packages requires a value\n" >&2
+                exit 1
+            fi
+            packageFilter="$2"
             shift 2
             ;;
         -h | --help)
@@ -278,6 +298,14 @@ copyMainLib "luajit" "libluajit.a" "luajit/src/libluajit.a"
 copyMainLib "lunasvg" "liblunasvg.a" "lib/liblunasvg.a"
 copyMainLib "lunasvg" "libplutovg.a" "lib/libplutovg.a"
 copyMainLib "miniz" "lib3rd_miniz.a" "lib/lib3rd_miniz.a"
+copyMainLib "mbedtls" "libmbedcrypto.a" "lib/libmbedcrypto.a"
+copyMainLib "mbedtls" "libmbedx509.a" "lib/libmbedx509.a"
+copyMainLib "mbedtls" "libmbedtls.a" "lib/libmbedtls.a"
+copyMainLib "mbedtls" "libeverest.a" "lib/libeverest.a"
+copyMainLib "mbedtls" "libp256m.a" "lib/libp256m.a"
+copyMainLib "libjuice" "libjuice-static.a" "lib/libjuice-static.a"
+copyMainLib "usrsctp" "libusrsctp.a" "lib/libusrsctp.a"
+copyMainLib "libdatachannel" "libdatachannel-static.a" "lib/libdatachannel-static.a"
 copyMainLib "nativefiledialog-extended" "libnfd.a" "lib/libnfd.a"
 copyMainLib "openal" "libopenal.a" "lib/libopenal.a" "lib/libOpenAL.a"
 copyMainLib "rubberband" "librubberband.a" "rb_inst/lib/librubberband.a"

@@ -12,6 +12,7 @@ Options:
   --build-type <type>     Prebuilt config directory. Default: RelWithDebInfo
   --compiler-tag <tag>    Prebuilt compiler tag. Default: ucrt64
   --scope <all|main|ice>  Staging scope. Default: all
+  --packages <list>       Comma-separated packages to stage. Default: all
   -h, --help              Show this help
 EOF
 }
@@ -31,6 +32,10 @@ copyLib() {
     local packageName="$2"
     local sourceRelativePath="$3"
     local outputName="$4"
+
+    if ! shouldStagePackage "${packageName}"; then
+        return 0
+    fi
 
     local sourcePath="${buildDir}/${sourceRelativePath}"
     local outputPath="${prebuiltRoot}/binaries/windows/${packageName}/libs/x86_64/mingw/${compilerTag}/${buildType}/${outputName}"
@@ -63,10 +68,17 @@ copyIceLib() {
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 
+shouldStagePackage() {
+    local packageName="$1"
+
+    [[ -z "${packageFilter}" || ",${packageFilter}," == *",${packageName},"* ]]
+}
+
 buildDir="build_cross_mingw_gcc_sources"
 buildType="RelWithDebInfo"
 compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-ucrt64}"
 stageScope="all"
+packageFilter=""
 
 while (( $# > 0 )); do
     case "$1" in
@@ -100,6 +112,14 @@ while (( $# > 0 )); do
                 exit 1
             fi
             stageScope="$2"
+            shift 2
+            ;;
+        --packages)
+            if (( $# < 2 )); then
+                printf "error: --packages requires a value\n" >&2
+                exit 1
+            fi
+            packageFilter="$2"
             shift 2
             ;;
         -h | --help)
@@ -173,6 +193,14 @@ copyMainLib "luajit" "luajit/src/libluajit.a" "libluajit.a"
 copyMainLib "lunasvg" "lib/liblunasvg.a" "liblunasvg.a"
 copyMainLib "lunasvg" "lib/libplutovg.a" "libplutovg.a"
 copyMainLib "miniz" "lib/lib3rd_miniz.a" "lib3rd_miniz.a"
+copyMainLib "mbedtls" "lib/libmbedcrypto.a" "libmbedcrypto.a"
+copyMainLib "mbedtls" "lib/libmbedx509.a" "libmbedx509.a"
+copyMainLib "mbedtls" "lib/libmbedtls.a" "libmbedtls.a"
+copyMainLib "mbedtls" "lib/libeverest.a" "libeverest.a"
+copyMainLib "mbedtls" "lib/libp256m.a" "libp256m.a"
+copyMainLib "libjuice" "lib/libjuice-static.a" "libjuice-static.a"
+copyMainLib "usrsctp" "lib/libusrsctp.a" "libusrsctp.a"
+copyMainLib "libdatachannel" "lib/libdatachannel-static.a" "libdatachannel-static.a"
 copyMainLib "nativefiledialog-extended" "lib/libnfd.a" "libnfd.a"
 copyMainLib "openal" "lib/libOpenAL32.a" "libOpenAL32.a"
 copyMainLib "rubberband" "rb_inst/lib/librubberband.a" "librubberband.a"

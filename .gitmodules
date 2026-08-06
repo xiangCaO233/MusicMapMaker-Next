@@ -69,3 +69,9 @@
 	path = 3rdpty/sources/miniz
 	url = https://github.com/richgel999/miniz.git
 	branch = master
+[submodule "3rdpty/sources/mbedtls"]
+	path = 3rdpty/sources/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "3rdpty/sources/libdatachannel"]
+	path = 3rdpty/sources/libdatachannel
+	url = https://github.com/paullouisageneau/libdatachannel.git
