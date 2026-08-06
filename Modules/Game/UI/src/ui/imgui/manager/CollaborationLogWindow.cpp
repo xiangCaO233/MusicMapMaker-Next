@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
@@ -21,10 +22,25 @@ CollaborationLogWindow::CollaborationLogWindow(
 {
     if ( m_room ) {
         m_room->setApplyBeatmapCallback(
-            [this](std::shared_ptr<const ::MMM::BeatMap> beatmap,
-                   ::MMM::BeatmapMutationFlags           flags) {
+            [this](std::shared_ptr<::MMM::BeatMap> beatmap,
+                   ::MMM::BeatmapMutationFlags     flags) {
                 auto session = m_boundSession.lock();
-                if ( !session || !beatmap ) return;
+                if ( !beatmap ) return;
+                if ( !session && !m_room->isHost() ) {
+                    auto&             engine = Logic::EditorEngine::instance();
+                    const std::string displayName =
+                        beatmap->m_baseMapMetadata.name.empty()
+                            ? TR("title.collaboration_manager").toString()
+                            : beatmap->m_baseMapMetadata.name;
+                    static_cast<void>(
+                        engine.createSession(beatmap, displayName, false));
+                    session = engine.getActiveSession();
+                    if ( !session ) return;
+                    session->setMutationObserver(m_room, false);
+                    m_boundSession = session;
+                    return;
+                }
+                if ( !session ) return;
                 session->pushCommand(
                     Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
                         .sourceBeatmap  = std::move(beatmap),
@@ -112,9 +128,9 @@ void CollaborationLogWindow::updateSessionBinding()
     }
     if ( bound ) return;
 
-    auto active = Logic::EditorEngine::instance().getActiveSession();
+    auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
-    active->setMutationObserver(m_room);
+    active->setMutationObserver(m_room, m_room->isHost());
     m_boundSession = active;
 }
 

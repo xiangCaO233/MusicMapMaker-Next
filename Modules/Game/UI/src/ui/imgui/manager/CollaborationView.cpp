@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/manager/CollaborationEntryPolicy.h"
 #include "ui/imgui/manager/CollaborationLogWindow.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -140,7 +141,9 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         ImGui::InputInt(TR("ui.collaboration.port").data(), &m_port);
         m_port = std::clamp(m_port, 0, 65535);
 
-        ImGui::BeginDisabled(!creatorValid || !hasProject);
+        ImGui::BeginDisabled(
+            !creatorValid ||
+            !isCollaborationProjectRequirementSatisfied(true, hasProject));
         if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
                             ImVec2(-1.0f, 0.0f)) ) {
             Network::Collaboration::CollaborationHostRoomConfig config;
@@ -156,11 +159,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         ImGui::EndDisabled();
     } else {
         ImGui::TextWrapped("%s", TR("ui.collaboration.join_desc").data());
-        if ( !hasProject ) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.25f, 1.0f),
-                               "%s",
-                               TR("ui.collaboration.project_required").data());
-        }
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint(
@@ -179,7 +177,9 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
 
         const bool inputValid =
             m_hostAddress[0] != '\0' && m_roomCode[0] != '\0' && m_port > 0;
-        ImGui::BeginDisabled(!creatorValid || !hasProject || !inputValid);
+        ImGui::BeginDisabled(
+            !creatorValid || !inputValid ||
+            !isCollaborationProjectRequirementSatisfied(false, hasProject));
         if ( FeedbackButton(TR("ui.collaboration.connect").data(),
                             ImVec2(-1.0f, 0.0f)) ) {
             Network::Collaboration::CollaborationJoinRoomConfig config;

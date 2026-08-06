@@ -42,10 +42,13 @@ public:
 
     /// @brief 设置低频谱面领域变化观察者。
     /// @param observer 新观察者；为空时恢复纯离线会话。
+    /// @param publishCurrentSnapshot 是否在下一次逻辑更新发布当前完整谱面；
+    /// 访客从房主快照创建会话时应传 false，避免把刚收到的快照回传为本地编辑。
     /// @warning 跨 UI/逻辑线程低频调用；原子 shared_ptr
     /// 用于保证协作房间断开时回调对象仍存活，不得在普通 update 中复制。
     void setMutationObserver(
-        std::shared_ptr<::MMM::IBeatmapMutationObserver> observer);
+        std::shared_ptr<::MMM::IBeatmapMutationObserver> observer,
+        bool publishCurrentSnapshot = true);
 
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
     /// @warning 逻辑热路径：每个逻辑 update

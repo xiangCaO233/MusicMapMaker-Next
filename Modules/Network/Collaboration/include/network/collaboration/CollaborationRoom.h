@@ -81,7 +81,7 @@ class CollaborationRoom : public ::MMM::IBeatmapMutationObserver
 public:
     /// @brief 把房主已排序的谱面状态回灌到当前本地会话。
     using ApplyBeatmapCallback = std::function<void(
-        std::shared_ptr<const ::MMM::BeatMap>, ::MMM::BeatmapMutationFlags)>;
+        std::shared_ptr<::MMM::BeatMap>, ::MMM::BeatmapMutationFlags)>;
 
     /// @brief 创建离线房间控制器。
     CollaborationRoom();

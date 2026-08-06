@@ -134,6 +134,12 @@ public:
     /// @return 当前活跃 BeatmapSession；没有活跃会话时返回 nullptr。
     std::shared_ptr<BeatmapSession> activeSession() const;
 
+    /// @brief 获取当前活跃的非 Logo 谱面会话。
+    /// @return 当前活跃项已经载入谱面时返回对应 Session，否则返回 nullptr。
+    /// @warning UI 低频绑定路径：shared_ptr 拷贝用于保证锁外设置观察者时会话仍
+    /// 存活，只能用于项目或协作会话切换，不得在普通绘制分支反复调用。
+    std::shared_ptr<BeatmapSession> activeNonLogoSession() const;
+
     /// @brief 获取当前活跃画布的 cameraId。
     /// @return 当前活跃画布 cameraId；没有活跃画布时返回空字符串。
     std::string activeCameraId() const;

@@ -185,6 +185,14 @@ target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
 add_test(NAME CollaborationSelectableButtonTest
          COMMAND CollaborationSelectableButtonTest)
 
+# 协作入口策略测试确保只有房主开启房间要求预先打开项目。
+mmm_add_test_executable(UI CollaborationEntryPolicyTest
+                        tests/CollaborationEntryPolicyTest.cpp)
+target_include_directories(CollaborationEntryPolicyTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
+add_test(NAME CollaborationEntryPolicyTest COMMAND CollaborationEntryPolicyTest)
+
 # 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
 mmm_add_test_executable(UI ProjectAudioToolLayoutTest
                         tests/ProjectAudioToolLayoutTest.cpp)

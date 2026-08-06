@@ -116,9 +116,10 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
 }
 
 void BeatmapSession::setMutationObserver(
-    std::shared_ptr<::MMM::IBeatmapMutationObserver> observer)
+    std::shared_ptr<::MMM::IBeatmapMutationObserver> observer,
+    bool                                             publishCurrentSnapshot)
 {
-    const bool requestSnapshot = observer != nullptr;
+    const bool requestSnapshot = observer != nullptr && publishCurrentSnapshot;
     m_mutationObserver.store(std::move(observer), std::memory_order_release);
     m_mutationSnapshotRequested.store(requestSnapshot,
                                       std::memory_order_relaxed);

@@ -179,3 +179,10 @@ mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest
 target_link_libraries(BeatmapLoadDiagnosticPublisherTest PRIVATE Logic Log)
 add_test(NAME BeatmapLoadDiagnosticPublisherTest
          COMMAND BeatmapLoadDiagnosticPublisherTest)
+
+# 协作观察者绑定测试确保访客不会把收到的房主快照回传为本地编辑。
+mmm_add_test_executable(Logic BeatmapMutationObserverBindingTest
+                        tests/BeatmapMutationObserverBindingTest.cpp)
+target_link_libraries(BeatmapMutationObserverBindingTest PRIVATE Logic Log)
+add_test(NAME BeatmapMutationObserverBindingTest
+         COMMAND BeatmapMutationObserverBindingTest)
