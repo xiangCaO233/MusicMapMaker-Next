@@ -114,30 +114,18 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     const float spacing        = ImGui::GetStyle().ItemSpacing.x;
     const float buttonWidth    = (availableWidth - spacing) * 0.5f;
 
-    if ( m_entryMode == EntryMode::Host ) {
-        const ImVec4 active = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
-        ImGui::PushStyleColor(ImGuiCol_Button, active);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
-    }
-    if ( FeedbackButton(TR("ui.collaboration.host_room").data(),
-                        ImVec2(buttonWidth, 0.0f)) ) {
+    if ( FeedbackSelectableButton(TR("ui.collaboration.host_room").data(),
+                                  m_entryMode == EntryMode::Host,
+                                  ImVec2(buttonWidth, 0.0f)) ) {
         m_entryMode = EntryMode::Host;
     }
-    if ( m_entryMode == EntryMode::Host ) ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    if ( m_entryMode == EntryMode::Join ) {
-        const ImVec4 active = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
-        ImGui::PushStyleColor(ImGuiCol_Button, active);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
-    }
-    if ( FeedbackButton(TR("ui.collaboration.join_room").data(),
-                        ImVec2(buttonWidth, 0.0f)) ) {
+    if ( FeedbackSelectableButton(TR("ui.collaboration.join_room").data(),
+                                  m_entryMode == EntryMode::Join,
+                                  ImVec2(buttonWidth, 0.0f)) ) {
         m_entryMode = EntryMode::Join;
     }
-    if ( m_entryMode == EntryMode::Join ) ImGui::PopStyleColor(3);
 
     ImGui::Spacing();
     if ( m_entryMode == EntryMode::Host ) {

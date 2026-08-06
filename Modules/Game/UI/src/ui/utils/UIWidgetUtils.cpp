@@ -1840,6 +1840,27 @@ bool FeedbackButton(const char* label, const ImVec2& size)
     return clicked;
 }
 
+/// @brief 绘制带固定选中样式的统一反馈按钮。
+/// @param label 按钮显示文本和 ImGui ID。
+/// @param selected 调用开始时按钮是否处于选中状态。
+/// @param size 按钮尺寸，语义与 ImGui::Button 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：选中时固定压入和弹出三项颜色，点击产生的外部状态变化
+/// 不会破坏当前调用的样式栈配对。
+bool FeedbackSelectableButton(const char* label, bool selected,
+                              const ImVec2& size)
+{
+    if ( selected ) {
+        const ImVec4 active = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+        ImGui::PushStyleColor(ImGuiCol_Button, active);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
+    }
+    const bool clicked = FeedbackButton(label, size);
+    if ( selected ) ImGui::PopStyleColor(3);
+    return clicked;
+}
+
 /// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 小按钮。
 /// @param label 按钮显示文本和 ImGui ID。
 /// @return 按钮本帧被激活时返回 true。

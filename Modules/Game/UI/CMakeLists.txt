@@ -176,6 +176,15 @@ target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
 
+# 协作入口切换测试覆盖按钮点击改变选中状态时的 ImGui 颜色栈配对。
+mmm_add_test_executable(UI CollaborationSelectableButtonTest
+                        tests/CollaborationSelectableButtonTest.cpp)
+target_include_directories(CollaborationSelectableButtonTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
+add_test(NAME CollaborationSelectableButtonTest
+         COMMAND CollaborationSelectableButtonTest)
+
 # 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
 mmm_add_test_executable(UI ProjectAudioToolLayoutTest
                         tests/ProjectAudioToolLayoutTest.cpp)

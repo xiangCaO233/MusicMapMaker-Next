@@ -18,6 +18,16 @@ namespace MMM::UI
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 
+/// @brief 绘制带固定选中样式的统一反馈按钮。
+/// @param label 按钮显示文本和 ImGui ID。
+/// @param selected 调用开始时按钮是否处于选中状态，按值捕获以保证样式栈配对。
+/// @param size 按钮尺寸，语义与 ImGui::Button 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧按钮绘制路径调用，只操作 ImGui
+/// 样式栈和统一反馈按钮。
+bool FeedbackSelectableButton(const char* label, bool selected,
+                              const ImVec2& size = ImVec2(0, 0));
+
 /// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 小按钮。
 /// @param label 按钮显示文本和 ImGui ID。
 /// @return 按钮本帧被激活时返回 true。
