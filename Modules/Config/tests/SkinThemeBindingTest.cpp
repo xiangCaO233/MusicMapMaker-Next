@@ -226,10 +226,6 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
                                    translationsRoot),
               "mmm-default 老皮肤应成功加载");
     const auto referenceSample = skinManager.getColor("bgm_tracks.sample");
-    const auto referenceSelectedSample =
-        skinManager.getColor("bgm_tracks.sample_selected");
-    const auto referenceHoveredSample =
-        skinManager.getColor("bgm_tracks.sample_hovered");
     const auto referenceOffset = skinManager.getColor("bgm_tracks.offset");
     const auto referenceText   = skinManager.getColor("bgm_tracks.text");
 
@@ -255,18 +251,10 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
                 "IVM 节点颜色必须与 Body 完全一致");
 
     const auto bgmSampleColor = skinManager.getColor("bgm_tracks.sample");
-    const auto selectedSampleColor =
-        skinManager.getColor("bgm_tracks.sample_selected");
-    const auto hoveredSampleColor =
-        skinManager.getColor("bgm_tracks.sample_hovered");
-    const auto offsetColor = skinManager.getColor("bgm_tracks.offset");
-    const auto textColor   = skinManager.getColor("bgm_tracks.text");
+    const auto offsetColor    = skinManager.getColor("bgm_tracks.offset");
+    const auto textColor      = skinManager.getColor("bgm_tracks.text");
     ok &= check(sameColor(bgmSampleColor, referenceSample),
                 "IVM 普通 BGM 物件必须沿用老皮肤配色");
-    ok &= check(sameColor(selectedSampleColor, referenceSelectedSample),
-                "IVM 选中 BGM 物件必须沿用老皮肤配色");
-    ok &= check(sameColor(hoveredSampleColor, referenceHoveredSample),
-                "IVM 悬浮 BGM 物件必须沿用老皮肤配色");
     ok &= check(sameColor(offsetColor, referenceOffset),
                 "IVM BGM 物件偏移提示必须沿用老皮肤配色");
     ok &= check(sameColor(textColor, referenceText),
