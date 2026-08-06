@@ -9,10 +9,12 @@ namespace MMM::Network::Collaboration
 CollaborationPeer::CollaborationPeer(
     CollaborationPeerConfig                  config,
     std::unique_ptr<ICollaborationTransport> transport,
-    ApplyOperationCallback                   applyCallback)
+    ApplyOperationCallback                   applyCallback,
+    ResourceMessageCallback                  resourceCallback)
     : m_config(std::move(config))
     , m_transport(std::move(transport))
     , m_applyCallback(std::move(applyCallback))
+    , m_resourceCallback(std::move(resourceCallback))
 {
     m_config.maxParticipants = std::clamp(m_config.maxParticipants,
                                           MIN_COLLABORATION_PARTICIPANTS,
@@ -163,6 +165,23 @@ SubmitOperationResult CollaborationPeer::submitOperation(
     return SubmitOperationResult::Accepted;
 }
 
+bool CollaborationPeer::sendResourceMessage(PeerId recipientId,
+                                            const CollaborationMessage& message)
+{
+    if ( !m_valid ) return false;
+    if ( m_config.isHost ) {
+        if ( !m_participants.contains(recipientId) ||
+             (!std::holds_alternative<ResourceManifest>(message) &&
+              !std::holds_alternative<ResourceChunk>(message)) ) {
+            return false;
+        }
+    } else if ( recipientId != m_config.hostId ||
+                !std::holds_alternative<ResourceRequest>(message) ) {
+        return false;
+    }
+    return sendMessage(recipientId, message);
+}
+
 void CollaborationPeer::update()
 {
     if ( !m_valid ) {
@@ -209,6 +228,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
         } else if ( const auto* resync =
                         std::get_if<ResyncRequest>(&message) ) {
             handleResyncRequest(senderId, *resync);
+        } else if ( std::holds_alternative<ResourceRequest>(message) &&
+                    m_participants.contains(senderId) && m_resourceCallback ) {
+            m_resourceCallback(senderId, message);
         } else {
             ++m_stats.invalidMessages;
         }
@@ -225,6 +247,10 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
         handleParticipantLeft(senderId, *participantLeft);
     } else if ( const auto* snapshot = std::get_if<StateSnapshot>(&message) ) {
         handleStateSnapshot(senderId, *snapshot);
+    } else if ( (std::holds_alternative<ResourceManifest>(message) ||
+                 std::holds_alternative<ResourceChunk>(message)) &&
+                senderId == m_config.hostId && m_resourceCallback ) {
+        m_resourceCallback(senderId, message);
     } else {
         ++m_stats.invalidMessages;
     }

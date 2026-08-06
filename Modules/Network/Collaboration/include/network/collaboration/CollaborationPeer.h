@@ -49,13 +49,19 @@ public:
     using ApplyOperationCallback =
         std::function<void(const CommittedOperation&)>;
 
+    /// @brief 已通过角色与发送方校验的资源消息回调。
+    using ResourceMessageCallback =
+        std::function<void(PeerId, const CollaborationMessage&)>;
+
     /// @brief 创建统一房主或访客 Peer。
     /// @param config 身份和有界处理配置。
     /// @param transport 可靠有序字节传输实现。
     /// @param applyCallback 已提交操作的本地应用回调。
+    /// @param resourceCallback 资源清单、请求和分块的产品层回调。
     CollaborationPeer(CollaborationPeerConfig                  config,
                       std::unique_ptr<ICollaborationTransport> transport,
-                      ApplyOperationCallback                   applyCallback);
+                      ApplyOperationCallback                   applyCallback,
+                      ResourceMessageCallback resourceCallback = {});
 
     /// @brief 释放 Peer 和其独占传输端点。
     ~CollaborationPeer();
@@ -108,6 +114,13 @@ public:
     /// @return 请求入房主队列或访客传输队列后的结果。
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
+
+    /// @brief 发送一条已由资源同步状态机校验的资源消息。
+    /// @param recipientId 接收客户端；访客只能向房主发送请求。
+    /// @param message 资源清单、请求或分块。
+    /// @return 角色、接收方、编码和传输均合法时返回 true。
+    [[nodiscard]] bool sendResourceMessage(PeerId recipientId,
+                                           const CollaborationMessage& message);
 
     /// @brief 处理有界数量的网络消息和房主编辑请求。
     /// @warning
@@ -192,6 +205,8 @@ private:
     std::unique_ptr<ICollaborationTransport> m_transport;
     /// @brief 已提交操作的本地谱面应用入口。
     ApplyOperationCallback m_applyCallback;
+    /// @brief 已校验资源消息的产品层入口。
+    ResourceMessageCallback m_resourceCallback;
     /// @brief 当前身份和传输是否满足状态机前置条件。
     bool m_valid = false;
     /// @brief 当前客户端下一个本地请求序号。

@@ -24,7 +24,8 @@
 namespace MMM
 {
 class BeatMap;
-}
+class Project;
+}  // namespace MMM
 
 namespace MMM::Logic
 {
@@ -89,7 +90,11 @@ struct SessionContext {
     int32_t bgmTrackCount{ 0 };
 
     std::shared_ptr<MMM::BeatMap> currentBeatmap;  ///< 当前载入的谱面对象
-    Config::EditorConfig          lastConfig;      ///< 最近一次同步的编辑器配置
+    /// @brief 访客会话独占的已校验协作资源项目；离线与房主会话为空。
+    std::shared_ptr<MMM::Project> collaborationProject;
+    /// @brief 房主谱面资源路径到本机内容缓存相对路径的映射。
+    std::unordered_map<std::string, std::string> collaborationPathRemap;
+    Config::EditorConfig lastConfig;  ///< 最近一次同步的编辑器配置
     std::unordered_map<std::string, CameraInfo>
               cameras;               ///< 当前所有活跃视口的信息
     glm::vec2 bgSize{ 0.0f, 0.0f };  ///< 背景图原始尺寸

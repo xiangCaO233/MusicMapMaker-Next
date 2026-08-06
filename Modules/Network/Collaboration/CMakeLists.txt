@@ -1,9 +1,13 @@
 # 房主权威的增量协作内核；真实 WebRTC 与本地 Loopback 传输共用同一状态机。
 add_library(
   NetworkCollaboration STATIC
-  src/BeatmapDocumentCodec.cpp src/CollaborationPeer.cpp
-  src/CollaborationProtocol.cpp src/CollaborationRoom.cpp
-  src/LoopbackTransport.cpp src/WebRtcTransport.cpp)
+  src/BeatmapDocumentCodec.cpp
+  src/CollaborationPeer.cpp
+  src/CollaborationResourceSync.cpp
+  src/CollaborationProtocol.cpp
+  src/CollaborationRoom.cpp
+  src/LoopbackTransport.cpp
+  src/WebRtcTransport.cpp)
 
 target_include_directories(NetworkCollaboration
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -23,6 +27,14 @@ mmm_add_test_executable(Collaboration BeatmapDocumentCodecTest
                         tests/BeatmapDocumentCodecTest.cpp)
 target_link_libraries(BeatmapDocumentCodecTest PRIVATE NetworkCollaboration)
 add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
+
+# 资源状态机测试覆盖清单完整性、分块重组、缓存复用和单文件增量更新。
+mmm_add_test_executable(Collaboration CollaborationResourceSyncTest
+                        tests/CollaborationResourceSyncTest.cpp)
+target_link_libraries(CollaborationResourceSyncTest PRIVATE NetworkCollaboration
+                                                            3rd_nlohmann_json)
+add_test(NAME CollaborationResourceSyncTest
+         COMMAND CollaborationResourceSyncTest)
 
 # 本机真实 WebRTC 集成测试覆盖信令、DataChannel、Creator 身份和增量提交。
 mmm_add_test_executable(Collaboration CollaborationRoomTest

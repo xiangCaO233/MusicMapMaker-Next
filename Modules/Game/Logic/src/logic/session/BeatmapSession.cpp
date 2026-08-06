@@ -359,8 +359,11 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     const auto& effectiveConfig = m_ctx->lastConfig;
 
     if ( m_ctx->isAudioTimelineDescriptorDirty ) {
-        SessionUtils::rebuildAudioTimelineDescriptor(
-            *m_ctx, EditorEngine::instance().getCurrentProject());
+        const auto* project =
+            m_ctx->collaborationProject
+                ? m_ctx->collaborationProject.get()
+                : EditorEngine::instance().getCurrentProject();
+        SessionUtils::rebuildAudioTimelineDescriptor(*m_ctx, project);
     }
     if ( m_ctx->isAudioTimelineFingerprintPublishPending ) {
         EditorEngine::instance().refreshAudioTimelineFingerprints();

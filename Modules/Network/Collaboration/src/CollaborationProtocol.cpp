@@ -245,6 +245,39 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         body.reserve(12U + snapshot->payload.size());
         appendUint64(body, snapshot->revision);
         appendPayload(body, snapshot->payload);
+    } else if ( const auto* manifest =
+                    std::get_if<ResourceManifest>(&message) ) {
+        if ( manifest->generation == 0 || manifest->payload.empty() ||
+             !isOperationSizeValid(manifest->payload.size(),
+                                   maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        kind = CollaborationMessageKind::ResourceManifest;
+        body.reserve(12U + manifest->payload.size());
+        appendUint64(body, manifest->generation);
+        appendPayload(body, manifest->payload);
+    } else if ( const auto* request = std::get_if<ResourceRequest>(&message) ) {
+        if ( request->generation == 0 || request->requestedBytes == 0 ||
+             request->requestedBytes > maxOperationBytes ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        kind = CollaborationMessageKind::ResourceRequest;
+        body.reserve(24U);
+        appendUint64(body, request->generation);
+        appendUint32(body, request->resourceIndex);
+        appendUint64(body, request->offset);
+        appendUint32(body, request->requestedBytes);
+    } else if ( const auto* chunk = std::get_if<ResourceChunk>(&message) ) {
+        if ( chunk->generation == 0 || chunk->payload.empty() ||
+             !isOperationSizeValid(chunk->payload.size(), maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        kind = CollaborationMessageKind::ResourceChunk;
+        body.reserve(24U + chunk->payload.size());
+        appendUint64(body, chunk->generation);
+        appendUint32(body, chunk->resourceIndex);
+        appendUint64(body, chunk->offset);
+        appendPayload(body, chunk->payload);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -403,6 +436,63 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidMessageLength);
         }
         return CollaborationMessage(std::move(snapshot));
+    }
+    case CollaborationMessageKind::ResourceManifest: {
+        ResourceManifest manifest;
+        std::uint32_t    payloadBytes = 0;
+        if ( !reader.readUint64(manifest.generation) ||
+             !reader.readUint32(payloadBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( manifest.generation == 0 || payloadBytes == 0 ||
+             !isOperationSizeValid(payloadBytes, maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        if ( !reader.readBytes(payloadBytes, manifest.payload) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(std::move(manifest));
+    }
+    case CollaborationMessageKind::ResourceRequest: {
+        ResourceRequest request;
+        if ( !reader.readUint64(request.generation) ||
+             !reader.readUint32(request.resourceIndex) ||
+             !reader.readUint64(request.offset) ||
+             !reader.readUint32(request.requestedBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( request.generation == 0 || request.requestedBytes == 0 ||
+             request.requestedBytes > maxOperationBytes ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        if ( reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(request);
+    }
+    case CollaborationMessageKind::ResourceChunk: {
+        ResourceChunk chunk;
+        std::uint32_t payloadBytes = 0;
+        if ( !reader.readUint64(chunk.generation) ||
+             !reader.readUint32(chunk.resourceIndex) ||
+             !reader.readUint64(chunk.offset) ||
+             !reader.readUint32(payloadBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( chunk.generation == 0 || payloadBytes == 0 ||
+             !isOperationSizeValid(payloadBytes, maxOperationBytes) ) {
+            return std::unexpected(ProtocolError::OperationTooLarge);
+        }
+        if ( !reader.readBytes(payloadBytes, chunk.payload) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( reader.remaining() != 0 ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        return CollaborationMessage(std::move(chunk));
     }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);

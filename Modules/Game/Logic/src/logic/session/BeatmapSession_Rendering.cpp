@@ -691,12 +691,20 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         if ( !metadata.main_cover_path.empty() ) {
             std::filesystem::path bgPath;
-            auto*                 project = engine.getCurrentProject();
+            auto* project = m_ctx->collaborationProject
+                                ? m_ctx->collaborationProject.get()
+                                : engine.getCurrentProject();
+            std::filesystem::path resourcePath = metadata.main_cover_path;
+            const auto resourceKey = Config::pathToUtf8(resourcePath);
+            if ( const auto iterator =
+                     m_ctx->collaborationPathRemap.find(resourceKey);
+                 iterator != m_ctx->collaborationPathRemap.end() ) {
+                resourcePath = Config::utf8ToPath(iterator->second);
+            }
             if ( project ) {
-                bgPath = project->m_projectRoot / metadata.main_cover_path;
+                bgPath = project->m_projectRoot / resourcePath;
             } else {
-                bgPath =
-                    metadata.map_path.parent_path() / metadata.main_cover_path;
+                bgPath = metadata.map_path.parent_path() / resourcePath;
             }
             snapshotBackgroundPath = Config::pathToUtf8(bgPath);
         }

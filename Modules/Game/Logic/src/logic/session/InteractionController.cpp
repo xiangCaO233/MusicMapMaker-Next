@@ -1163,7 +1163,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         return;
     }
 
-    const auto* project     = EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const auto& beatmapPath = m_ctx.currentBeatmap->m_baseMapMetadata.map_path;
     const auto* resource =
         project ? ProjectResourceService::findAudioResourceForReference(
@@ -1250,7 +1252,9 @@ void InteractionController::handleCommand(
         return;
     }
 
-    const auto* project = EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const std::filesystem::path beatmapPath =
         m_ctx.currentBeatmap ? m_ctx.currentBeatmap->m_baseMapMetadata.map_path
                              : std::filesystem::path{};

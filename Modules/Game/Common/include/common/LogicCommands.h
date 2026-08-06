@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -22,7 +23,8 @@
 namespace MMM
 {
 class BeatMap;
-}
+class Project;
+}  // namespace MMM
 
 namespace MMM::Logic
 {
@@ -651,6 +653,15 @@ struct CmdReplaceBeatmapData {
     bool authoritativeRemote{ false };
 };
 
+/// @brief 将已经完整校验的协作资源绑定到当前访客会话。
+struct CmdSetCollaborationResources {
+    /// @brief 以协作缓存为根的只读临时项目。
+    std::shared_ptr<MMM::Project> project;
+
+    /// @brief 房主谱面路径到本机内容缓存路径的映射。
+    std::unordered_map<std::string, std::string> pathRemap;
+};
+
 /**
  * @brief 从模板创建谱面时可复制的数据类别。
  */
@@ -771,10 +782,11 @@ using LogicCommand = std::variant<
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetCollaborationResources, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 

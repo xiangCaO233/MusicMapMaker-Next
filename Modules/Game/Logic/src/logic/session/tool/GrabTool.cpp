@@ -441,7 +441,9 @@ bool sameDraggedSampleState(const SampleComponent& lhs,
 const ::MMM::AudioResource* resolveReferencedAudioResource(
     const SessionContext& ctx, const std::string& reference)
 {
-    const auto* project = EditorEngine::instance().getCurrentProject();
+    const auto* project = ctx.collaborationProject
+                              ? ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     if ( !project || reference.empty() ) return nullptr;
     const std::filesystem::path beatmapPath =
         ctx.currentBeatmap ? ctx.currentBeatmap->m_baseMapMetadata.map_path

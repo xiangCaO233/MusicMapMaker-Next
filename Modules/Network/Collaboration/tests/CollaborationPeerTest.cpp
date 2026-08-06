@@ -310,6 +310,87 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    MMM::Network::Collaboration::ResourceManifest manifest{
+        0x1234U, { 0xA1U, 0xB2U, 0xC3U }
+    };
+    auto manifestEncoded = encodeCollaborationMessage(manifest, 4U);
+    auto manifestDecoded =
+        manifestEncoded
+            ? decodeCollaborationMessage(*manifestEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidMessageLength));
+    const auto* decodedManifest =
+        manifestDecoded
+            ? std::get_if<MMM::Network::Collaboration::ResourceManifest>(
+                  &*manifestDecoded)
+            : nullptr;
+    if ( !decodedManifest ||
+         decodedManifest->generation != manifest.generation ||
+         decodedManifest->payload != manifest.payload ) {
+        return false;
+    }
+
+    MMM::Network::Collaboration::ResourceRequest resourceRequest{
+        0x1234U, 17U, 65536U, 4U
+    };
+    auto resourceRequestEncoded =
+        encodeCollaborationMessage(resourceRequest, 4U);
+    auto resourceRequestDecoded =
+        resourceRequestEncoded
+            ? decodeCollaborationMessage(*resourceRequestEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidMessageLength));
+    const auto* decodedResourceRequest =
+        resourceRequestDecoded
+            ? std::get_if<MMM::Network::Collaboration::ResourceRequest>(
+                  &*resourceRequestDecoded)
+            : nullptr;
+    if ( !decodedResourceRequest ||
+         decodedResourceRequest->generation != resourceRequest.generation ||
+         decodedResourceRequest->resourceIndex !=
+             resourceRequest.resourceIndex ||
+         decodedResourceRequest->offset != resourceRequest.offset ||
+         decodedResourceRequest->requestedBytes !=
+             resourceRequest.requestedBytes ) {
+        return false;
+    }
+
+    MMM::Network::Collaboration::ResourceChunk resourceChunk{
+        0x1234U, 17U, 65536U, { 4U, 3U, 2U, 1U }
+    };
+    auto resourceChunkEncoded = encodeCollaborationMessage(resourceChunk, 4U);
+    auto resourceChunkDecoded =
+        resourceChunkEncoded
+            ? decodeCollaborationMessage(*resourceChunkEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidMessageLength));
+    const auto* decodedResourceChunk =
+        resourceChunkDecoded
+            ? std::get_if<MMM::Network::Collaboration::ResourceChunk>(
+                  &*resourceChunkDecoded)
+            : nullptr;
+    if ( !decodedResourceChunk ||
+         decodedResourceChunk->generation != resourceChunk.generation ||
+         decodedResourceChunk->resourceIndex != resourceChunk.resourceIndex ||
+         decodedResourceChunk->offset != resourceChunk.offset ||
+         decodedResourceChunk->payload != resourceChunk.payload ) {
+        return false;
+    }
+    resourceChunk.payload.push_back(0U);
+    const auto oversizedResource =
+        encodeCollaborationMessage(resourceChunk, 4U);
+    resourceRequest.requestedBytes = 5U;
+    const auto oversizedRequest =
+        encodeCollaborationMessage(resourceRequest, 4U);
+    if ( oversizedResource || oversizedRequest ||
+         oversizedResource.error() != ProtocolError::OperationTooLarge ||
+         oversizedRequest.error() != ProtocolError::OperationTooLarge ) {
+        return false;
+    }
+
     ByteBuffer invalidReserved = encoded.value();
     invalidReserved[7]         = 1;
     auto reservedResult        = decodeCollaborationMessage(invalidReserved, 4);
@@ -322,6 +403,78 @@ void pumpPeers(CollaborationPeer&                               host,
     auto truncated = decodeCollaborationMessage(encoded.value(), 4);
     return !truncated.has_value() &&
            truncated.error() == ProtocolError::InvalidMessageLength;
+}
+
+/// @brief 验证资源消息只能按访客请求、房主响应的角色方向路由。
+[[nodiscard]] bool testResourceMessageRouting()
+{
+    constexpr PeerId     GUEST_ID = 2;
+    LoopbackTransportHub hub;
+    std::vector<MMM::Network::Collaboration::CollaborationMessage>
+        hostResources;
+    std::vector<MMM::Network::Collaboration::CollaborationMessage>
+        guestResources;
+
+    CollaborationPeerConfig hostConfig;
+    hostConfig.clientId = HOST_ID;
+    hostConfig.hostId   = HOST_ID;
+    hostConfig.creator  = "Host";
+    hostConfig.isHost   = true;
+    CollaborationPeer host(
+        hostConfig,
+        hub.createEndpoint(HOST_ID),
+        nullptr,
+        [&hostResources](
+            PeerId,
+            const MMM::Network::Collaboration::CollaborationMessage& message) {
+            hostResources.push_back(message);
+        });
+
+    CollaborationPeerConfig guestConfig;
+    guestConfig.clientId = GUEST_ID;
+    guestConfig.hostId   = HOST_ID;
+    guestConfig.creator  = "Guest";
+    guestConfig.isHost   = false;
+    CollaborationPeer guest(
+        guestConfig,
+        hub.createEndpoint(GUEST_ID),
+        nullptr,
+        [&guestResources](
+            PeerId,
+            const MMM::Network::Collaboration::CollaborationMessage& message) {
+            guestResources.push_back(message);
+        });
+    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    guest.update();
+
+    const MMM::Network::Collaboration::ResourceRequest request{
+        77U, 3U, 1024U, 4096U
+    };
+    const MMM::Network::Collaboration::ResourceManifest manifest{
+        77U, { 9U, 8U, 7U }
+    };
+    const MMM::Network::Collaboration::ResourceChunk chunk{
+        77U, 3U, 1024U, { 1U, 2U, 3U }
+    };
+    if ( !guest.sendResourceMessage(HOST_ID, request) ||
+         guest.sendResourceMessage(HOST_ID, chunk) ||
+         !host.sendResourceMessage(GUEST_ID, manifest) ||
+         !host.sendResourceMessage(GUEST_ID, chunk) ||
+         host.sendResourceMessage(GUEST_ID, request) ) {
+        return false;
+    }
+    host.update();
+    guest.update();
+    if ( hostResources.size() != 1U || guestResources.size() != 2U ||
+         !std::holds_alternative<MMM::Network::Collaboration::ResourceRequest>(
+             hostResources.front()) ||
+         !std::holds_alternative<MMM::Network::Collaboration::ResourceManifest>(
+             guestResources[0]) ||
+         !std::holds_alternative<MMM::Network::Collaboration::ResourceChunk>(
+             guestResources[1]) ) {
+        return false;
+    }
+    return true;
 }
 
 /// @brief 验证迟加入客户端可用房主完整快照直接越过已裁剪的增量日志。
@@ -430,8 +583,9 @@ void pumpPeers(CollaborationPeer&                               host,
 int main()
 {
     if ( !testProtocolBounds() ) return 1;
-    if ( !testEightPeerIncrementalConvergence() ) return 2;
-    if ( !testLateJoinStateSnapshot() ) return 3;
-    if ( !testTrimmedJournalSnapshotFallback() ) return 4;
+    if ( !testResourceMessageRouting() ) return 2;
+    if ( !testEightPeerIncrementalConvergence() ) return 3;
+    if ( !testLateJoinStateSnapshot() ) return 4;
+    if ( !testTrimmedJournalSnapshotFallback() ) return 5;
     return 0;
 }

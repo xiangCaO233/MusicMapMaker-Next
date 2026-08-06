@@ -21,6 +21,9 @@ enum class CollaborationMessageKind : std::uint8_t {
     ParticipantIdentity = 5,
     ParticipantLeft     = 6,
     StateSnapshot       = 7,
+    ResourceManifest    = 8,
+    ResourceRequest     = 9,
+    ResourceChunk       = 10,
 };
 
 /// @brief 访客确认已经连续应用到的版本。
@@ -43,10 +46,43 @@ struct StateSnapshot {
     ByteBuffer payload;
 };
 
+/// @brief 房主向访客发布的项目资源清单。
+struct ResourceManifest {
+    /// @brief 本次清单的非零稳定代次。
+    std::uint64_t generation = 0;
+    /// @brief 独立资源清单编解码器生成的规范负载。
+    ByteBuffer payload;
+};
+
+/// @brief 访客按偏移请求一个资源分块。
+struct ResourceRequest {
+    /// @brief 对应资源清单代次。
+    std::uint64_t generation = 0;
+    /// @brief 清单内的资源索引。
+    std::uint32_t resourceIndex = 0;
+    /// @brief 请求的文件字节偏移。
+    std::uint64_t offset = 0;
+    /// @brief 本次允许返回的最大字节数。
+    std::uint32_t requestedBytes = 0;
+};
+
+/// @brief 房主返回的一个连续资源分块。
+struct ResourceChunk {
+    /// @brief 对应资源清单代次。
+    std::uint64_t generation = 0;
+    /// @brief 清单内的资源索引。
+    std::uint32_t resourceIndex = 0;
+    /// @brief 分块在文件中的字节偏移。
+    std::uint64_t offset = 0;
+    /// @brief 分块原始字节。
+    ByteBuffer payload;
+};
+
 /// @brief 可编码到协作线协议的消息联合体。
 using CollaborationMessage =
     std::variant<EditRequest, CommittedOperation, RevisionAck, ResyncRequest,
-                 ParticipantIdentity, ParticipantLeft, StateSnapshot>;
+                 ParticipantIdentity, ParticipantLeft, StateSnapshot,
+                 ResourceManifest, ResourceRequest, ResourceChunk>;
 
 /// @brief 协作消息编解码失败原因。
 enum class ProtocolError : std::uint8_t {

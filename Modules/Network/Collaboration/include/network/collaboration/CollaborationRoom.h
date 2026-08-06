@@ -2,17 +2,21 @@
 
 #include "network/collaboration/BeatmapDocumentCodec.h"
 #include "network/collaboration/CollaborationPeer.h"
+#include "network/collaboration/CollaborationResourceSync.h"
 #include "network/collaboration/WebRtcTransport.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace MMM::Network::Collaboration
@@ -33,6 +37,8 @@ enum class CollaborationLogEventType {
     ParticipantJoined,
     ParticipantLeft,
     OperationCommitted,
+    ResourceManifest,
+    ResourceCompleted,
     Disconnected,
     Error,
 };
@@ -73,6 +79,8 @@ struct CollaborationJoinRoomConfig {
     std::uint16_t port = 24864;
     /// @brief 房间码。
     std::string roomCode;
+    /// @brief 访客内容寻址资源缓存根目录。
+    std::filesystem::path resourceCacheRoot;
 };
 
 /// @brief 协调 WebRTC 传输、房主权威 Peer 与实时协作日志。
@@ -82,6 +90,9 @@ public:
     /// @brief 把房主已排序的谱面状态回灌到当前本地会话。
     using ApplyBeatmapCallback = std::function<void(
         std::shared_ptr<::MMM::BeatMap>, ::MMM::BeatmapMutationFlags)>;
+    /// @brief 访客资源完整校验后绑定到协作会话的入口。
+    using ResourceBundleCallback =
+        std::function<void(CollaborationResourceBundle)>;
 
     /// @brief 创建离线房间控制器。
     CollaborationRoom();
@@ -106,6 +117,16 @@ public:
     /// @brief 设置远端提交谱面数据的本地逻辑命令入口。
     /// @param callback UI 线程调用的非阻塞回灌函数。
     void setApplyBeatmapCallback(ApplyBeatmapCallback callback);
+
+    /// @brief 设置访客资源完成回调。
+    /// @param callback UI 线程消费的资源包回调。
+    void setResourceBundleCallback(ResourceBundleCallback callback);
+
+    /// @brief 在开房前异步准备当前谱面引用的项目资源。
+    /// @param project 当前房主项目。
+    /// @param beatmap 当前房间谱面。
+    void prepareHostResources(const ::MMM::Project& project,
+                              const ::MMM::BeatMap& beatmap);
 
     /// @brief 接收逻辑线程已经物化的本地谱面变化并排队发送。
     /// @warning 逻辑线程低频编辑分支调用；只执行内存编码和有界入队，
@@ -148,6 +169,8 @@ public:
     [[nodiscard]] const std::vector<CollaborationLogEntry>& logs() const;
     /// @brief 获取最近错误；没有错误时为空。
     [[nodiscard]] const std::string& lastError() const;
+    /// @brief 获取资源同步进度快照。
+    [[nodiscard]] CollaborationResourceSyncProgress resourceProgress() const;
 
     /// @brief 生成便于人工输入的六位房间码。
     [[nodiscard]] static std::string generateRoomCode();
@@ -164,6 +187,13 @@ private:
     void handleCommittedOperation(const CommittedOperation& operation);
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
+    /// @brief 处理一个已校验的资源协议消息。
+    void handleResourceMessage(PeerId                      senderId,
+                               const CollaborationMessage& message);
+    /// @brief 将后台资源事件转为 P2P 消息、回调和协作日志。
+    void processResourceEvents();
+    /// @brief 向指定访客发送当前资源清单。
+    void sendResourceManifest(PeerId peerId);
     /// @brief 将当前连接切换为错误状态。
     void fail(std::string message);
 
@@ -191,6 +221,14 @@ private:
     BeatmapDocumentCodec m_documentCodec;
     /// @brief 远端提交数据的本地逻辑命令入口。
     ApplyBeatmapCallback m_applyBeatmapCallback;
+    /// @brief 访客完成资源校验后的会话绑定入口。
+    ResourceBundleCallback m_resourceBundleCallback;
+    /// @brief 后台资源清单和分块状态机。
+    CollaborationResourceSync m_resourceSync;
+    /// @brief 房主当前已经准备好的资源清单。
+    std::optional<ResourceManifest> m_resourceManifest;
+    /// @brief 已发送当前清单的访客集合。
+    std::unordered_set<PeerId> m_resourceManifestRecipients;
     /// @brief 逻辑线程等待 UI 网络循环提交的本地操作。
     std::deque<ByteBuffer> m_localOperationQueue;
     /// @brief 保护本地操作队列。

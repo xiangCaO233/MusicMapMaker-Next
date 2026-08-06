@@ -10,6 +10,7 @@ namespace MMM::Network::Collaboration
 {
 class CollaborationRoom;
 struct CollaborationLogEntry;
+struct CollaborationResourceBundle;
 }  // namespace MMM::Network::Collaboration
 
 namespace MMM::Logic
@@ -51,11 +52,16 @@ private:
 
     /// @brief 根据房间生命周期绑定或解除本次协作使用的固定谱面会话。
     void updateSessionBinding();
+    /// @brief 将已经完成的资源包排队绑定到固定协作会话。
+    void bindPendingResources();
 
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
     /// @brief 房间启动时固定绑定的谱面会话，切换标签不会改变协作目标。
     std::weak_ptr<Logic::BeatmapSession> m_boundSession;
+    /// @brief 早于首个谱面快照完成的访客资源包。
+    std::shared_ptr<Network::Collaboration::CollaborationResourceBundle>
+        m_pendingResourceBundle;
     /// @brief 独立日志窗口当前是否可见。
     bool m_windowVisible = false;
     /// @brief 上一帧房间是否处于活动状态。

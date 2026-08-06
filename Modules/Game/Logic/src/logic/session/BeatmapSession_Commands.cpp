@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 
+#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -21,6 +22,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -1133,6 +1135,8 @@ bool BeatmapSession::processCommands()
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ||
                                std::is_same_v<T, CmdUpdateViewport> ||
                                std::is_same_v<T, CmdLoadBeatmap> ||
+                               std::is_same_v<T,
+                                              CmdSetCollaborationResources> ||
                                std::is_same_v<T, CmdSaveBeatmap> ||
                                std::is_same_v<T, CmdSaveBeatmapAs> ||
                                std::is_same_v<T, CmdPackBeatmap> ||
@@ -1293,6 +1297,34 @@ bool BeatmapSession::processCommands()
 
 // --- Session 自己处理的 ---
 
+void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
+{
+    if ( !cmd.project || !m_ctx->currentBeatmap ) return;
+    m_ctx->collaborationProject                     = cmd.project;
+    m_ctx->collaborationPathRemap                   = cmd.pathRemap;
+    m_ctx->isAudioTimelineDescriptorDirty           = true;
+    m_ctx->isAudioTimelineActivationPending         = true;
+    m_ctx->isAudioTimelineFingerprintPublishPending = true;
+
+    for ( const auto& resource : cmd.project->m_audioResources ) {
+        if ( resource.m_type != ::MMM::AudioTrackType::Effect ) continue;
+        const auto absolutePath =
+            cmd.project->m_projectRoot / Config::utf8ToPath(resource.m_path);
+        Audio::AudioManager::instance().registerSoundEffect(
+            resource.m_id, Config::pathToUtf8(absolutePath), resource.m_config);
+    }
+
+    auto       backgroundMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+    const auto source = Config::pathToUtf8(backgroundMetadata.main_cover_path);
+    if ( const auto iterator = m_ctx->collaborationPathRemap.find(source);
+         iterator != m_ctx->collaborationPathRemap.end() ) {
+        backgroundMetadata.main_cover_path =
+            Config::utf8ToPath(iterator->second);
+    }
+    SessionUtils::updateBackgroundSize(
+        *m_ctx, backgroundMetadata, m_ctx->collaborationProject.get());
+}
+
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
     const bool disablePolylineEditing =
@@ -1388,6 +1420,8 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     }
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
+    m_ctx->collaborationProject.reset();
+    m_ctx->collaborationPathRemap.clear();
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     if ( m_ctx->currentBeatmap ) {
         publishBeatmapLoadDiagnostics(*m_ctx->currentBeatmap);
@@ -1628,10 +1662,21 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 路径或资源类型改变时，按图片/视频分支重新探测尺寸。
         if ( oldMetadata.main_cover_path != updatedMeta.main_cover_path ||
              oldMetadata.cover_type != updatedMeta.cover_type ) {
+            auto       backgroundMetadata = updatedMeta;
+            const auto source =
+                Config::pathToUtf8(backgroundMetadata.main_cover_path);
+            if ( const auto iterator =
+                     m_ctx->collaborationPathRemap.find(source);
+                 iterator != m_ctx->collaborationPathRemap.end() ) {
+                backgroundMetadata.main_cover_path =
+                    Config::utf8ToPath(iterator->second);
+            }
             SessionUtils::updateBackgroundSize(
                 *m_ctx,
-                updatedMeta,
-                EditorEngine::instance().getCurrentProject());
+                backgroundMetadata,
+                m_ctx->collaborationProject
+                    ? m_ctx->collaborationProject.get()
+                    : EditorEngine::instance().getCurrentProject());
         }
     }
 }

@@ -202,8 +202,11 @@ bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
     }
 
     if ( ctx.isAudioTimelineDescriptorDirty ) {
-        rebuildAudioTimelineDescriptor(
-            ctx, EditorEngine::instance().getCurrentProject());
+        const auto* project =
+            ctx.collaborationProject
+                ? ctx.collaborationProject.get()
+                : EditorEngine::instance().getCurrentProject();
+        rebuildAudioTimelineDescriptor(ctx, project);
     }
 
     auto& audio = Audio::AudioManager::instance();

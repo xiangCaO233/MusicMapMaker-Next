@@ -1,10 +1,16 @@
 #include "ui/imgui/manager/CollaborationView.h"
 
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/CreatorIdentity.h"
 #include "config/skin/translation/Translation.h"
 #include "event/ui/UISettingsTabEvent.h"
 #include "imgui.h"
+#include "logic/BeatmapSession.h"
+#include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
@@ -43,6 +49,29 @@ const char* roomStateText(Network::Collaboration::CollaborationRoomState state)
         return TR("ui.collaboration.state.error").data();
     case Network::Collaboration::CollaborationRoomState::Idle:
     default: return TR("ui.collaboration.state.idle").data();
+    }
+}
+
+/// @brief 返回资源同步阶段对应的本地化文本。
+const char* resourcePhaseText(
+    Network::Collaboration::CollaborationResourceSyncPhase phase)
+{
+    using Phase = Network::Collaboration::CollaborationResourceSyncPhase;
+    switch ( phase ) {
+    case Phase::Preparing:
+        return TR("ui.collaboration.resource.preparing").data();
+    case Phase::WaitingManifest:
+        return TR("ui.collaboration.resource.waiting_manifest").data();
+    case Phase::ComparingCache:
+        return TR("ui.collaboration.resource.comparing_cache").data();
+    case Phase::Downloading:
+        return TR("ui.collaboration.resource.downloading").data();
+    case Phase::Verifying:
+        return TR("ui.collaboration.resource.verifying").data();
+    case Phase::Ready: return TR("ui.collaboration.resource.ready").data();
+    case Phase::Error: return TR("ui.collaboration.resource.error").data();
+    case Phase::Idle:
+    default: return TR("ui.collaboration.resource.idle").data();
     }
 }
 }  // namespace
@@ -109,8 +138,13 @@ bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
 void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                         bool       creatorValid)
 {
-    const bool hasProject =
-        sourceManager && sourceManager->hasActiveProjectUiState();
+    auto&       engine        = Logic::EditorEngine::instance();
+    auto        activeSession = engine.getActiveNonLogoSession();
+    const auto* project       = engine.getCurrentProject();
+    const bool  hasProject =
+        sourceManager && sourceManager->hasActiveProjectUiState() && project;
+    const bool  hostReady      = hasProject && activeSession &&
+                                 activeSession->getContext().currentBeatmap;
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float spacing        = ImGui::GetStyle().ItemSpacing.x;
     const float buttonWidth    = (availableWidth - spacing) * 0.5f;
@@ -143,7 +177,7 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
 
         ImGui::BeginDisabled(
             !creatorValid ||
-            !isCollaborationProjectRequirementSatisfied(true, hasProject));
+            !isCollaborationProjectRequirementSatisfied(true, hostReady));
         if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
                             ImVec2(-1.0f, 0.0f)) ) {
             Network::Collaboration::CollaborationHostRoomConfig config;
@@ -151,6 +185,8 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                  .getEditorSettings()
                                  .defaultCreator;
             config.port    = static_cast<std::uint16_t>(m_port);
+            m_room->prepareHostResources(
+                *project, *activeSession->getContext().currentBeatmap);
             if ( m_room->startHost(std::move(config)) ) {
                 m_port = m_room->port();
             }
@@ -189,6 +225,8 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
             config.host     = m_hostAddress.data();
             config.port     = static_cast<std::uint16_t>(m_port);
             config.roomCode = m_roomCode.data();
+            config.resourceCacheRoot =
+                Config::AppPaths::configRootPath() / "collaboration-cache";
             static_cast<void>(m_room->join(std::move(config)));
             showLogWindow(sourceManager);
         }
@@ -230,6 +268,48 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                            "%s: %s",
                            TR("ui.collaboration.error").data(),
                            m_room->lastError().c_str());
+    }
+
+    const auto resource = m_room->resourceProgress();
+    using ResourcePhase =
+        Network::Collaboration::CollaborationResourceSyncPhase;
+    const bool showProgress = resource.phase == ResourcePhase::Preparing ||
+                              resource.phase == ResourcePhase::ComparingCache ||
+                              resource.phase == ResourcePhase::Downloading ||
+                              resource.phase == ResourcePhase::Verifying;
+    if ( resource.phase != ResourcePhase::Idle ) {
+        ImGui::Text("%s: %s",
+                    TR("ui.collaboration.resource.status").data(),
+                    resourcePhaseText(resource.phase));
+        if ( showProgress ) {
+            float fraction = 0.0F;
+            if ( (resource.phase == ResourcePhase::Preparing ||
+                  resource.phase == ResourcePhase::ComparingCache) &&
+                 resource.totalFiles > 0 ) {
+                const auto progressedFiles =
+                    resource.phase == ResourcePhase::Preparing
+                        ? resource.completedFiles
+                        : resource.comparedFiles;
+                fraction = static_cast<float>(progressedFiles) /
+                           static_cast<float>(resource.totalFiles);
+            } else if ( resource.totalBytes > 0 ) {
+                fraction = static_cast<float>(resource.transferredBytes) /
+                           static_cast<float>(resource.totalBytes);
+            }
+            fraction = std::clamp(fraction, 0.0F, 1.0F);
+            const std::string overlay =
+                std::to_string(resource.completedFiles) + "/" +
+                std::to_string(resource.totalFiles);
+            ImGui::ProgressBar(fraction, ImVec2(-1.0F, 0.0F), overlay.c_str());
+            if ( !resource.currentFile.empty() ) {
+                ImGui::TextWrapped("%s", resource.currentFile.c_str());
+            }
+        } else if ( resource.phase == ResourcePhase::Ready ) {
+            ImGui::TextDisabled(
+                TR("ui.collaboration.resource.summary").data(),
+                static_cast<unsigned int>(resource.completedFiles),
+                static_cast<unsigned int>(resource.cachedFiles));
+        }
     }
 
     const bool hostRoom = m_room->isHost();

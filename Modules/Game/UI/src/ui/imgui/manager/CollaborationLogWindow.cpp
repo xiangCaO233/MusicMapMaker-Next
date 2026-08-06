@@ -38,6 +38,7 @@ CollaborationLogWindow::CollaborationLogWindow(
                     if ( !session ) return;
                     session->setMutationObserver(m_room, false);
                     m_boundSession = session;
+                    bindPendingResources();
                     return;
                 }
                 if ( !session ) return;
@@ -56,6 +57,13 @@ CollaborationLogWindow::CollaborationLogWindow(
                         .authoritativeRemote    = true,
                     }));
             });
+        m_room->setResourceBundleCallback(
+            [this](Network::Collaboration::CollaborationResourceBundle bundle) {
+                m_pendingResourceBundle = std::make_shared<
+                    Network::Collaboration::CollaborationResourceBundle>(
+                    std::move(bundle));
+                bindPendingResources();
+            });
     }
 }
 
@@ -64,7 +72,10 @@ CollaborationLogWindow::~CollaborationLogWindow()
     if ( auto session = m_boundSession.lock() ) {
         session->setMutationObserver(nullptr);
     }
-    if ( m_room ) m_room->setApplyBeatmapCallback(nullptr);
+    if ( m_room ) {
+        m_room->setApplyBeatmapCallback(nullptr);
+        m_room->setResourceBundleCallback(nullptr);
+    }
 }
 
 void CollaborationLogWindow::update(UIManager*)
@@ -125,6 +136,7 @@ void CollaborationLogWindow::updateSessionBinding()
     if ( !m_room->isActive() ) {
         if ( bound ) bound->setMutationObserver(nullptr);
         m_boundSession.reset();
+        m_pendingResourceBundle.reset();
         return;
     }
     if ( bound ) return;
@@ -133,6 +145,21 @@ void CollaborationLogWindow::updateSessionBinding()
     if ( !active ) return;
     active->setMutationObserver(m_room, m_room->isHost());
     m_boundSession = active;
+    bindPendingResources();
+}
+
+void CollaborationLogWindow::bindPendingResources()
+{
+    if ( !m_pendingResourceBundle ) return;
+    auto session = m_boundSession.lock();
+    if ( !session ) return;
+    session->pushCommand(Logic::LogicCommand{
+        Logic::CmdSetCollaborationResources{
+            .project   = m_pendingResourceBundle->project,
+            .pathRemap = std::move(m_pendingResourceBundle->pathRemap),
+        },
+    });
+    m_pendingResourceBundle.reset();
 }
 
 bool CollaborationLogWindow::isOpen() const
@@ -175,6 +202,12 @@ std::string CollaborationLogWindow::formatEntry(
         break;
     case Network::Collaboration::CollaborationLogEventType::OperationCommitted:
         formatKey = "ui.collaboration.log.operation_fmt";
+        break;
+    case Network::Collaboration::CollaborationLogEventType::ResourceManifest:
+        formatKey = "ui.collaboration.log.resource_manifest_fmt";
+        break;
+    case Network::Collaboration::CollaborationLogEventType::ResourceCompleted:
+        formatKey = "ui.collaboration.log.resource_completed_fmt";
         break;
     case Network::Collaboration::CollaborationLogEventType::Disconnected:
         formatKey = "ui.collaboration.log.disconnected_fmt";

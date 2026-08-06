@@ -19,11 +19,13 @@
 #include "logic/session/tool/DrawTool.h"
 #include "logic/session/tool/GrabTool.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 
 namespace
 {
@@ -1593,6 +1595,43 @@ bool testObjectSampleVolumeCommandRoutesThroughSession()
            context.actionStack.getUndoStackSize() == 1;
 }
 
+/// @brief 验证协作资源命令由会话队列消费且换谱时不会泄漏到新谱面。
+/// @return 资源项目和路径映射完成绑定，并在加载新谱面后清空时返回 true。
+bool testCollaborationResourcesRouteThroughSession()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+
+    auto project           = std::make_shared<MMM::Project>();
+    project->m_projectRoot = "collaboration-cache";
+    const std::unordered_map<std::string, std::string> pathRemap{
+        { "images/cover.png", "files/cover-hash.png" },
+    };
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetCollaborationResources{
+            .project   = project,
+            .pathRemap = pathRemap,
+        },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    if ( context.collaborationProject != project ||
+         context.collaborationPathRemap != pathRemap ) {
+        XERROR("Collaboration resources command was not routed to session");
+        return false;
+    }
+
+    auto replacement = std::make_shared<MMM::BeatMap>();
+    replacement->m_baseMapMetadata.track_count = 4;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(replacement) },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    return !context.collaborationProject &&
+           context.collaborationPathRemap.empty();
+}
+
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
 /// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
 bool testSampleEraseTargetsTypedRegistry()
@@ -1996,6 +2035,73 @@ bool testAudioResourceDropRejectsMissingProjectResource()
     return context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty() &&
            context.actionStack.getUndoStackSize() == 0 &&
            !context.lastActionMessage.empty();
+}
+
+/// @brief 验证未打开本地项目的访客可使用已校验协作资源继续编辑。
+/// @return 资源拖放成功且跨区域转换保留资源绑定时返回 true。
+bool testGuestCollaborationResourcesSupportEditing()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.collaborationProject = std::make_shared<MMM::Project>();
+    context.collaborationProject->m_projectRoot = "collaboration-cache";
+    context.collaborationProject->m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "guest-effect-id",
+        .m_path = "files/effect-hash.wav",
+        .m_type = MMM::AudioTrackType::Effect,
+    });
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdCreateAudioSample{
+        .audioResourceId = "guest-effect-id",
+        .cameraId        = "Basic2DCanvas",
+        .mouseX          = 650.0F,
+        .mouseY          = 50.0F,
+        .isCtrlDown      = true,
+    });
+
+    auto samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 1 ||
+         samples.get<MMM::Logic::SampleComponent>(*samples.begin())
+                 .m_audioResourceId != "guest-effect-id" ) {
+        XERROR("Guest collaboration resource could not create a sample");
+        return false;
+    }
+
+    const auto sampleEntity = *samples.begin();
+    context.sampleRegistry.get<MMM::Logic::InteractionComponent>(sampleEntity)
+        .isSelected           = true;
+    context.hoveredEntity     = sampleEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             sampleEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::AudioSample,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              150.0F,
+                              300.0F,
+                              true,
+                          });
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( !context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty() ||
+         notes.size() != 1 ) {
+        XERROR("Guest sample did not convert through collaboration resources");
+        return false;
+    }
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    return note.m_sampleBinding &&
+           note.m_sampleBinding->m_audioResourceId == "guest-effect-id";
 }
 
 /// @brief 验证实际触发 handle 可产生有符号 offset 并完整撤销。
@@ -2653,12 +2759,14 @@ int main()
                    testNoteSampleBindingRoundTrip() &&
                    testObjectSampleVolumeCommand() &&
                    testObjectSampleVolumeCommandRoutesThroughSession() &&
+                   testCollaborationResourcesRouteThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
                    testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&
+                   testGuestCollaborationResourcesSupportEditing() &&
                    testSampleOffsetHandleDrag() &&
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&

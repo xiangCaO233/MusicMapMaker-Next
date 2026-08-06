@@ -161,6 +161,7 @@ private:
     void handleCommand(const CmdUpdateEditorConfig& cmd);
     void handleCommand(const CmdUpdateViewport& cmd);
     void handleCommand(const CmdLoadBeatmap& cmd);
+    void handleCommand(const CmdSetCollaborationResources& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);

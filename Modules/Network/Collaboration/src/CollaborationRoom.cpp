@@ -117,6 +117,9 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         std::move(transport),
         [this](const CommittedOperation& operation) {
             handleCommittedOperation(operation);
+        },
+        [this](PeerId senderId, const CollaborationMessage& message) {
+            handleResourceMessage(senderId, message);
         });
     if ( !m_peer->isValid() ) {
         fail("host_peer_create_failed");
@@ -171,6 +174,9 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(false, std::memory_order_relaxed);
     m_acceptLocalMutations.store(true, std::memory_order_release);
+    m_resourceSync.startGuest(std::move(config.resourceCacheRoot));
+    m_resourceManifest.reset();
+    m_resourceManifestRecipients.clear();
     {
         std::lock_guard lock(m_localOperationMutex);
         m_localOperationQueue.clear();
@@ -187,6 +193,20 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
 void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
 {
     m_applyBeatmapCallback = std::move(callback);
+}
+
+void CollaborationRoom::setResourceBundleCallback(
+    ResourceBundleCallback callback)
+{
+    m_resourceBundleCallback = std::move(callback);
+}
+
+void CollaborationRoom::prepareHostResources(const ::MMM::Project& project,
+                                             const ::MMM::BeatMap& beatmap)
+{
+    m_resourceManifest.reset();
+    m_resourceManifestRecipients.clear();
+    m_resourceSync.startHost(project, beatmap);
 }
 
 void CollaborationRoom::onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
@@ -233,6 +253,9 @@ void CollaborationRoom::disconnect()
     m_creator.clear();
     m_lastError.clear();
     m_documentCodec.reset();
+    m_resourceSync.reset();
+    m_resourceManifest.reset();
+    m_resourceManifestRecipients.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     {
@@ -257,6 +280,7 @@ void CollaborationRoom::update()
         submitQueuedLocalOperations();
         m_peer->update();
     }
+    processResourceEvents();
 }
 
 SubmitOperationResult CollaborationRoom::submitOperation(
@@ -318,6 +342,11 @@ const std::string& CollaborationRoom::lastError() const
     return m_lastError;
 }
 
+CollaborationResourceSyncProgress CollaborationRoom::resourceProgress() const
+{
+    return m_resourceSync.progress();
+}
+
 std::string CollaborationRoom::generateRoomCode()
 {
     static std::atomic<std::uint64_t> sequence{ 1 };
@@ -377,6 +406,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                           "participant_registration_failed");
                 break;
             }
+            sendResourceManifest(event.peerId);
         } else {
             m_state = CollaborationRoomState::Connected;
         }
@@ -388,6 +418,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
     case WebRtcTransportEventType::PeerDisconnected:
         if ( m_isHost && m_peer ) {
             m_peer->removeParticipant(event.peerId);
+            m_resourceManifestRecipients.erase(event.peerId);
         } else if ( !m_isHost ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
@@ -437,6 +468,9 @@ void CollaborationRoom::ensureGuestPeer()
         std::move(m_pendingTransport),
         [this](const CommittedOperation& operation) {
             handleCommittedOperation(operation);
+        },
+        [this](PeerId senderId, const CollaborationMessage& message) {
+            handleResourceMessage(senderId, message);
         });
     if ( !m_peer->isValid() ) {
         fail("guest_peer_create_failed");
@@ -507,6 +541,92 @@ void CollaborationRoom::submitQueuedLocalOperations()
                   m_creator,
                   "local_operation_submit_failed");
         return;
+    }
+}
+
+void CollaborationRoom::handleResourceMessage(
+    PeerId senderId, const CollaborationMessage& message)
+{
+    if ( const auto* manifest = std::get_if<ResourceManifest>(&message) ) {
+        m_resourceSync.receiveManifest(*manifest);
+    } else if ( const auto* request = std::get_if<ResourceRequest>(&message) ) {
+        m_resourceSync.receiveRequest(senderId, *request);
+    } else if ( const auto* chunk = std::get_if<ResourceChunk>(&message) ) {
+        m_resourceSync.receiveChunk(*chunk);
+    }
+}
+
+void CollaborationRoom::processResourceEvents()
+{
+    constexpr std::size_t MAX_RESOURCE_EVENTS_PER_UPDATE = 256U;
+    for ( std::size_t index = 0; index < MAX_RESOURCE_EVENTS_PER_UPDATE;
+          ++index ) {
+        CollaborationResourceSyncEvent event;
+        if ( !m_resourceSync.pollEvent(event) ) return;
+        switch ( event.type ) {
+        case CollaborationResourceSyncEvent::Type::ManifestReady: {
+            const auto* manifest =
+                std::get_if<ResourceManifest>(&event.message);
+            if ( !manifest ) break;
+            m_resourceManifest = *manifest;
+            for ( const auto& [peerId, creator] : participants() ) {
+                static_cast<void>(creator);
+                if ( peerId != localPeerId() ) sendResourceManifest(peerId);
+            }
+            appendLog(CollaborationLogEventType::ResourceManifest,
+                      localPeerId(),
+                      m_creator,
+                      event.detail);
+            break;
+        }
+        case CollaborationResourceSyncEvent::Type::SendRequest:
+            if ( !m_peer || !m_peer->sendResourceMessage(DEFAULT_HOST_ID,
+                                                         event.message) ) {
+                m_lastError = "resource_request_send_failed";
+                appendLog(CollaborationLogEventType::Error,
+                          localPeerId(),
+                          m_creator,
+                          m_lastError);
+            }
+            break;
+        case CollaborationResourceSyncEvent::Type::SendChunk:
+            if ( !m_peer ||
+                 !m_peer->sendResourceMessage(event.peerId, event.message) ) {
+                m_lastError = "resource_chunk_send_failed";
+                appendLog(CollaborationLogEventType::Error,
+                          event.peerId,
+                          {},
+                          m_lastError);
+            }
+            break;
+        case CollaborationResourceSyncEvent::Type::BundleReady:
+            appendLog(CollaborationLogEventType::ResourceCompleted,
+                      localPeerId(),
+                      m_creator,
+                      event.detail);
+            if ( m_resourceBundleCallback ) {
+                m_resourceBundleCallback(std::move(event.bundle));
+            }
+            break;
+        case CollaborationResourceSyncEvent::Type::Error:
+            m_lastError = event.detail;
+            appendLog(CollaborationLogEventType::Error,
+                      localPeerId(),
+                      m_creator,
+                      event.detail);
+            break;
+        }
+    }
+}
+
+void CollaborationRoom::sendResourceManifest(PeerId peerId)
+{
+    if ( !m_peer || !m_isHost || !m_resourceManifest ||
+         m_resourceManifestRecipients.contains(peerId) ) {
+        return;
+    }
+    if ( m_peer->sendResourceMessage(peerId, *m_resourceManifest) ) {
+        m_resourceManifestRecipients.insert(peerId);
     }
 }
 
