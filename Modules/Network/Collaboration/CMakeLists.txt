@@ -8,8 +8,9 @@ add_library(
 target_include_directories(NetworkCollaboration
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(NetworkCollaboration PUBLIC MMM)
-target_link_libraries(NetworkCollaboration PRIVATE 3rd_libdatachannel
-                                                   3rd_nlohmann_json Config)
+target_link_libraries(
+  NetworkCollaboration PRIVATE 3rd_libdatachannel 3rd_nlohmann_json 3rd_miniz
+                               Config)
 
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest

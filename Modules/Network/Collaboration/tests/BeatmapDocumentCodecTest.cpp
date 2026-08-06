@@ -157,12 +157,38 @@ bool testInvalidPayloads()
     return !malformedResult.has_value() &&
            malformedResult.error() == BeatmapDocumentError::InvalidPayload;
 }
+
+/// @brief 校验大谱面快照经过压缩后仍能在单条协作消息上限内往返。
+bool testLargeSnapshotCompression()
+{
+    BeatmapDocumentCodec  encoder;
+    BeatmapDocumentCodec  receiver;
+    auto                  beatmap = makeCompleteBeatmap("Large Creator");
+    constexpr std::size_t LARGE_NOTE_COUNT = 20000;
+    beatmap->m_noteData.notes.clear();
+    for ( std::size_t index = 0; index < LARGE_NOTE_COUNT; ++index ) {
+        auto& note       = beatmap->m_noteData.notes.emplace_back();
+        note.m_timestamp = static_cast<double>(index) * 25.0;
+        note.m_track     = static_cast<int>(index % 6U);
+    }
+    beatmap->sync();
+
+    auto snapshot = encoder.encode(*beatmap, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() || snapshot->size() >= 1024U * 1024U ) {
+        return false;
+    }
+    auto applied = receiver.apply(snapshot.value());
+    if ( !applied.has_value() || !applied->isSnapshot ) return false;
+    const auto restored = receiver.materialize();
+    return restored && restored->m_noteData.notes.size() == LARGE_NOTE_COUNT &&
+           restored->m_noteData.notes.back().m_track == 1;
+}
 }  // namespace
 
 int main()
 {
     return testCompleteSnapshotRoundTrip() && testCategoryDelta() &&
-                   testInvalidPayloads()
+                   testInvalidPayloads() && testLargeSnapshotCompression()
                ? 0
                : 1;
 }

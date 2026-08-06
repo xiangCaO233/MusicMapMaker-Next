@@ -28,6 +28,10 @@ constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
 /// @brief WebRTC 协商的数据通道消息上限。
 constexpr int MAX_DATA_CHANNEL_MESSAGE_BYTES = 2 * 1024 * 1024;
+/// @brief 回调线程允许积压的完整 DataChannel 消息数。
+constexpr std::size_t MAX_QUEUED_DATA_CHANNEL_PACKETS = 4096;
+/// @brief 产品层未及时消费时保留的连接事件数。
+constexpr std::size_t MAX_QUEUED_TRANSPORT_EVENTS = 1024;
 
 /// @brief 将人工输入的房间码规范化为大写 ASCII。
 /// @param value 输入房间码。
@@ -366,6 +370,9 @@ private:
     {
         std::scoped_lock lock(m_mutex);
         if ( m_stopping ) return;
+        if ( m_events.size() >= MAX_QUEUED_TRANSPORT_EVENTS ) {
+            m_events.pop_front();
+        }
         m_events.push_back(
             { type, peerId, std::move(creator), std::move(detail) });
     }
@@ -817,7 +824,8 @@ private:
                                      void* pointer)
     {
         auto* connection = static_cast<Connection*>(pointer);
-        if ( !connection || !connection->owner || !message || size <= 0 ) {
+        if ( !connection || !connection->owner || !message || size <= 0 ||
+             size > MAX_DATA_CHANNEL_MESSAGE_BYTES ) {
             return;
         }
         TransportPacket packet;
@@ -826,9 +834,13 @@ private:
             reinterpret_cast<const std::uint8_t*>(message),
             reinterpret_cast<const std::uint8_t*>(message) + size);
         std::scoped_lock lock(connection->owner->m_mutex);
-        if ( !connection->owner->m_stopping ) {
-            connection->owner->m_incomingPackets.push_back(std::move(packet));
+        if ( connection->owner->m_stopping || !connection->joined ||
+             !connection->connectedEventSent ||
+             connection->owner->m_incomingPackets.size() >=
+                 MAX_QUEUED_DATA_CHANNEL_PACKETS ) {
+            return;
         }
+        connection->owner->m_incomingPackets.push_back(std::move(packet));
     }
 
     /// @brief DataChannel 关闭回调。

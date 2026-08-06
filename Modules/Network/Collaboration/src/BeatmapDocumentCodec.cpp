@@ -5,7 +5,10 @@
 #include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <limits>
+#include <miniz.h>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
@@ -18,6 +21,125 @@ namespace
 using Json = nlohmann::json;
 
 constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 1;
+/// @brief 协作谱面负载固定魔数，对应 ASCII `MMBD`。
+constexpr std::array<std::uint8_t, 4> DOCUMENT_PAYLOAD_MAGIC{
+    'M', 'M', 'B', 'D'
+};
+/// @brief 谱面负载外层封装版本。
+constexpr std::uint8_t DOCUMENT_PAYLOAD_VERSION = 1;
+/// @brief 外层负载头长度。
+constexpr std::size_t DOCUMENT_PAYLOAD_HEADER_BYTES = 12;
+/// @brief 防止畸形压缩包声明过大的解压内存。
+constexpr std::size_t MAX_UNCOMPRESSED_DOCUMENT_BYTES = 64U * 1024U * 1024U;
+/// @brief 小负载不压缩，避免固定压缩开销反而增大消息。
+constexpr std::size_t DOCUMENT_COMPRESSION_THRESHOLD_BYTES = 1024U;
+/// @brief 外层负载压缩标志。
+constexpr std::uint8_t DOCUMENT_PAYLOAD_COMPRESSED = 1U;
+
+/// @brief 向负载头写入小端 32 位整数。
+void appendUint32(ByteBuffer& output, std::uint32_t value)
+{
+    for ( std::uint32_t shift = 0; shift < 32U; shift += 8U ) {
+        output.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+/// @brief 从负载头读取小端 32 位整数。
+std::uint32_t readUint32(std::span<const std::uint8_t> input,
+                         std::size_t                   offset)
+{
+    std::uint32_t value = 0;
+    for ( std::uint32_t shift = 0; shift < 32U; shift += 8U ) {
+        value |= static_cast<std::uint32_t>(input[offset++]) << shift;
+    }
+    return value;
+}
+
+/// @brief 将 CBOR 文档封装为可选 DEFLATE 压缩的有界二进制负载。
+std::expected<ByteBuffer, BeatmapDocumentError> encodeDocumentPayload(
+    const Json& document)
+{
+    const ByteBuffer raw = Json::to_cbor(document);
+    if ( raw.empty() || raw.size() > MAX_UNCOMPRESSED_DOCUMENT_BYTES ||
+         raw.size() > std::numeric_limits<std::uint32_t>::max() ) {
+        return std::unexpected(BeatmapDocumentError::InvalidDocument);
+    }
+
+    ByteBuffer body       = raw;
+    bool       compressed = false;
+    if ( raw.size() >= DOCUMENT_COMPRESSION_THRESHOLD_BYTES ) {
+        mz_ulong compressedSize =
+            mz_compressBound(static_cast<mz_ulong>(raw.size()));
+        ByteBuffer candidate(compressedSize);
+        if ( mz_compress2(candidate.data(),
+                          &compressedSize,
+                          raw.data(),
+                          static_cast<mz_ulong>(raw.size()),
+                          MZ_BEST_SPEED) == MZ_OK &&
+             compressedSize < raw.size() ) {
+            candidate.resize(static_cast<std::size_t>(compressedSize));
+            body       = std::move(candidate);
+            compressed = true;
+        }
+    }
+
+    ByteBuffer output;
+    output.reserve(DOCUMENT_PAYLOAD_HEADER_BYTES + body.size());
+    output.insert(output.end(),
+                  DOCUMENT_PAYLOAD_MAGIC.begin(),
+                  DOCUMENT_PAYLOAD_MAGIC.end());
+    output.push_back(DOCUMENT_PAYLOAD_VERSION);
+    output.push_back(compressed ? DOCUMENT_PAYLOAD_COMPRESSED : 0U);
+    output.push_back(0U);
+    output.push_back(0U);
+    appendUint32(output, static_cast<std::uint32_t>(raw.size()));
+    output.insert(output.end(), body.begin(), body.end());
+    return output;
+}
+
+/// @brief 校验外层头并解压 CBOR 文档。
+std::expected<Json, BeatmapDocumentError> decodeDocumentPayload(
+    std::span<const std::uint8_t> payload)
+{
+    if ( payload.size() <= DOCUMENT_PAYLOAD_HEADER_BYTES ||
+         !std::equal(DOCUMENT_PAYLOAD_MAGIC.begin(),
+                     DOCUMENT_PAYLOAD_MAGIC.end(),
+                     payload.begin()) ||
+         payload[4] != DOCUMENT_PAYLOAD_VERSION || payload[6] != 0U ||
+         payload[7] != 0U ||
+         (payload[5] & ~DOCUMENT_PAYLOAD_COMPRESSED) != 0U ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+    const std::size_t rawSize = readUint32(payload, 8);
+    if ( rawSize == 0 || rawSize > MAX_UNCOMPRESSED_DOCUMENT_BYTES ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+
+    const auto body = payload.subspan(DOCUMENT_PAYLOAD_HEADER_BYTES);
+    ByteBuffer raw;
+    if ( (payload[5] & DOCUMENT_PAYLOAD_COMPRESSED) != 0U ) {
+        raw.resize(rawSize);
+        mz_ulong decodedSize = static_cast<mz_ulong>(raw.size());
+        if ( mz_uncompress(raw.data(),
+                           &decodedSize,
+                           body.data(),
+                           static_cast<mz_ulong>(body.size())) != MZ_OK ||
+             decodedSize != rawSize ) {
+            return std::unexpected(BeatmapDocumentError::InvalidPayload);
+        }
+    } else {
+        if ( body.size() != rawSize ) {
+            return std::unexpected(BeatmapDocumentError::InvalidPayload);
+        }
+        raw.assign(body.begin(), body.end());
+    }
+
+    Json document = Json::from_cbor(raw, true, false);
+    if ( document.is_discarded() ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+    return document;
+}
 
 template<typename Enum>
 Json encodePropertyMap(
@@ -449,7 +571,7 @@ std::expected<ByteBuffer, BeatmapDocumentError> BeatmapDocumentCodec::encode(
     if ( !snapshot && flags == ::MMM::BeatmapMutationFlags::None ) {
         return std::unexpected(BeatmapDocumentError::EmptyPayload);
     }
-    return Json::to_cbor(makePatch(beatmap, flags, snapshot));
+    return encodeDocumentPayload(makePatch(beatmap, flags, snapshot));
 }
 
 std::expected<BeatmapPatchResult, BeatmapDocumentError>
@@ -458,10 +580,11 @@ BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
     if ( payload.empty() ) {
         return std::unexpected(BeatmapDocumentError::EmptyPayload);
     }
-    const Json patch = Json::from_cbor(payload, true, false);
-    if ( patch.is_discarded() || !patch.is_object() ) {
+    auto decoded = decodeDocumentPayload(payload);
+    if ( !decoded.has_value() || !decoded->is_object() ) {
         return std::unexpected(BeatmapDocumentError::InvalidPayload);
     }
+    const Json&   patch    = decoded.value();
     std::uint32_t version  = 0;
     bool          snapshot = false;
     if ( !readValue(patch, "version", version) ||
@@ -533,7 +656,7 @@ BeatmapDocumentCodec::encodeCurrentSnapshot() const
     Json snapshot        = m_impl->document;
     snapshot["version"]  = DOCUMENT_FORMAT_VERSION;
     snapshot["snapshot"] = true;
-    return Json::to_cbor(snapshot);
+    return encodeDocumentPayload(snapshot);
 }
 
 bool BeatmapDocumentCodec::hasDocument() const
