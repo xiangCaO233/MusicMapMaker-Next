@@ -974,6 +974,135 @@ bool testReplaceBeatmapMetadataOverflowIsRejected()
            !context.lastActionMessage.empty();
 }
 
+/// @brief 验证权威远端替换废弃旧实体历史与全部玩家物件交互状态。
+/// @return 替换后只保留权威对象且旧撤销和实体缓存不可再访问时返回 true。
+bool testAuthoritativeReplacementInvalidatesEntityState()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap                = std::make_shared<MMM::BeatMap>();
+    const auto                staleEntity = context.noteRegistry.create();
+    MMM::Logic::NoteComponent staleNote;
+    staleNote.m_timestamp = 1.0;
+    context.actionStack.pushAndExecute(std::make_unique<MMM::Logic::NoteAction>(
+                                           MMM::Logic::NoteAction::Type::Create,
+                                           staleEntity,
+                                           std::nullopt,
+                                           staleNote),
+                                       context);
+    context.sortedNoteEntities.push_back(staleEntity);
+    context.sortedNoteMaxEndPrefix.push_back(1.0);
+    context.dragRenderPinnedEntities.push_back(staleEntity);
+    context.brushState.isActive = true;
+    context.brushState.polylineSegments.push_back({});
+    context.eraserState.isActive = true;
+    context.eraserState.targetObjectKind =
+        MMM::Logic::ChartObjectKind::PlayerNote;
+    context.eraserState.targetEntities.insert(staleEntity);
+
+    auto  source     = std::make_shared<MMM::BeatMap>();
+    auto& note       = source->m_noteData.notes.emplace_back();
+    note.m_timestamp = 2500.0;
+    note.m_track     = 3;
+    source->sync();
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdReplaceBeatmapData{
+        .sourceBeatmap       = source,
+        .replaceObjects      = true,
+        .authoritativeRemote = true,
+    });
+
+    const auto view =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    if ( view.size() != 1U ||
+         !near(view.get<const MMM::Logic::NoteComponent>(*view.begin())
+                   .m_timestamp,
+               2.5) ||
+         context.actionStack.getUndoStackSize() != 0U ||
+         !context.actionStack.isDirty() || context.brushState.isActive ||
+         !context.brushState.polylineSegments.empty() ||
+         context.eraserState.isActive ||
+         !context.eraserState.targetEntities.empty() ||
+         !context.dragRenderPinnedEntities.empty() ||
+         !context.sortedNoteEntities.empty() ||
+         !context.sortedNoteMaxEndPrefix.empty() ||
+         !context.isNoteOrderDirty ) {
+        XERROR("Authoritative replacement retained stale entity state");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    const auto afterUndo =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    return afterUndo.size() == 1U &&
+           near(afterUndo
+                    .get<const MMM::Logic::NoteComponent>(*afterUndo.begin())
+                    .m_timestamp,
+                2.5);
+}
+
+/// @brief 验证 Polyline 子物件经过多轮领域对象与 ECS 往返仍保持身份和顺序。
+/// @return 子物件不会成为独立根对象且全部字段稳定时返回 true。
+bool testPolylineSubNoteIdentitySurvivesRepeatedEcsSync()
+{
+    auto  beatmap        = std::make_shared<MMM::BeatMap>();
+    auto& hold           = beatmap->m_noteData.holds.emplace_back();
+    hold.m_timestamp     = 1000.0;
+    hold.m_duration      = 375.0;
+    hold.m_track         = 1;
+    hold.m_isSubNote     = true;
+    hold.m_sampleBinding = MMM::AudioSampleBinding{ "hold.wav", 0.4F };
+    hold.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["child"] =
+        "hold";
+    auto& flick       = beatmap->m_noteData.flicks.emplace_back();
+    flick.m_timestamp = 1375.0;
+    flick.m_track     = 1;
+    flick.m_dtrack    = 2;
+    flick.m_isSubNote = true;
+    flick.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["child"] =
+        "flick";
+    auto& polyline = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_subNotes.emplace_back(hold);
+    polyline.m_subNotes.emplace_back(flick);
+    polyline.m_subHolds.emplace_back(hold);
+    polyline.m_subFlicks.emplace_back(flick);
+    beatmap->sync();
+
+    MMM::Logic::SessionContext context;
+    for ( std::size_t round = 0; round < 32U; ++round ) {
+        MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+        context.m_needsNotesSync = true;
+        MMM::Logic::SessionUtils::syncBeatmap(context);
+        if ( beatmap->m_noteData.notes.size() != 0U ||
+             beatmap->m_noteData.holds.size() != 1U ||
+             beatmap->m_noteData.flicks.size() != 1U ||
+             beatmap->m_noteData.polylines.size() != 1U ) {
+            XERROR("Polyline ECS round trip amplified child objects");
+            return false;
+        }
+        const auto& restoredHold     = beatmap->m_noteData.holds.front();
+        const auto& restoredFlick    = beatmap->m_noteData.flicks.front();
+        const auto& restoredPolyline = beatmap->m_noteData.polylines.front();
+        if ( !restoredHold.m_isSubNote || !restoredFlick.m_isSubNote ||
+             restoredPolyline.m_subNotes.size() != 2U ||
+             &restoredPolyline.m_subNotes[0].get() != &restoredHold ||
+             &restoredPolyline.m_subNotes[1].get() != &restoredFlick ||
+             restoredPolyline.m_subHolds.size() != 1U ||
+             restoredPolyline.m_subFlicks.size() != 1U ||
+             !near(restoredHold.m_duration, 375.0) ||
+             restoredFlick.m_dtrack != 2 || !restoredHold.m_sampleBinding ||
+             restoredHold.m_sampleBinding->m_audioResourceId != "hold.wav" ||
+             !near(restoredHold.m_sampleBinding->m_volume, 0.4) ||
+             restoredHold.m_metadata.note_properties
+                     .at(MMM::NoteMetadataType::MMM)
+                     .at("child") != "hold" ) {
+            XERROR("Polyline ECS round trip lost child semantics");
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证在运行时追加空轨放置采样会持久扩展 BGM 轨道数。
 /// @return 扩展及 Undo/Redo 均恢复完整状态时返回 true。
 bool testAppendLaneExpandsPersistentCount()
@@ -2515,6 +2644,8 @@ int main()
                    testMetadataTrackCountMigrationIsAtomic() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&
                    testReplaceBeatmapMetadataOverflowIsRejected() &&
+                   testAuthoritativeReplacementInvalidatesEntityState() &&
+                   testPolylineSubNoteIdentitySurvivesRepeatedEcsSync() &&
                    testAppendLaneExpandsPersistentCount() &&
                    testExplicitBgmTrackCountAction() &&
                    testSamplePropertyEditValidationAndAction() &&

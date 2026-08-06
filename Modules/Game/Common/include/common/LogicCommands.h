@@ -645,6 +645,10 @@ struct CmdReplaceBeatmapData {
 
     /// @brief 是否把本次替换继续发布给外部谱面变化观察者。
     bool notifyMutationObserver{ true };
+
+    /// @brief 是否为房主排序后下发的远端权威状态。
+    /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
+    bool authoritativeRemote{ false };
 };
 
 /**

@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 namespace MMM::Network::Collaboration
@@ -250,17 +251,33 @@ Json encodeNote(const ::MMM::Note& note)
     return result;
 }
 
+/// @brief 编码玩家物件，并按 Polyline 实际引用排除重复的根物件副本。
+/// @param beatmap 待编码谱面。
+/// @return 可写入协作文档的物件数组。
 Json encodeObjects(const ::MMM::BeatMap& beatmap)
 {
+    std::unordered_set<const ::MMM::Note*> polylineSubNotes;
+    for ( const auto& polyline : beatmap.m_noteData.polylines ) {
+        for ( const auto& subNote : polyline.m_subNotes ) {
+            polylineSubNotes.insert(&subNote.get());
+        }
+    }
+
     Json result = Json::array();
     for ( const auto& note : beatmap.m_noteData.notes ) {
-        if ( !note.m_isSubNote ) result.push_back(encodeNote(note));
+        if ( !note.m_isSubNote && !polylineSubNotes.contains(&note) ) {
+            result.push_back(encodeNote(note));
+        }
     }
     for ( const auto& hold : beatmap.m_noteData.holds ) {
-        if ( !hold.m_isSubNote ) result.push_back(encodeNote(hold));
+        if ( !hold.m_isSubNote && !polylineSubNotes.contains(&hold) ) {
+            result.push_back(encodeNote(hold));
+        }
     }
     for ( const auto& flick : beatmap.m_noteData.flicks ) {
-        if ( !flick.m_isSubNote ) result.push_back(encodeNote(flick));
+        if ( !flick.m_isSubNote && !polylineSubNotes.contains(&flick) ) {
+            result.push_back(encodeNote(flick));
+        }
     }
     for ( const auto& polyline : beatmap.m_noteData.polylines ) {
         Json encoded         = encodeNote(polyline);

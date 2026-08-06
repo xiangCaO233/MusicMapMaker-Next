@@ -482,7 +482,8 @@ void CollaborationRoom::handleCommittedOperation(
                 m_peer->setStateSnapshot(std::move(snapshot.value())));
         }
     }
-    if ( m_applyBeatmapCallback ) {
+    const bool originatedLocally = operation.clientId == localPeerId();
+    if ( m_applyBeatmapCallback && !originatedLocally ) {
         m_applyBeatmapCallback(std::move(beatmap), patch->flags);
     }
 }

@@ -3,8 +3,10 @@
 #include "mmm/beatmap/BeatMap.h"
 
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -115,6 +117,275 @@ bool testCompleteSnapshotRoundTrip()
            std::abs(restored->m_timings.front().m_bpm - 180.0) < 1e-9;
 }
 
+/// @brief 校验 Polyline 实际引用是子物件身份的权威来源。
+bool testPolylineReferencesPreventDuplicateRootObjects()
+{
+    BeatmapDocumentCodec encoder;
+    BeatmapDocumentCodec receiver;
+    const auto           source = makeCompleteBeatmap("Creator");
+    source->m_noteData.holds.front().m_isSubNote = false;
+    source->m_noteData.flicks.back().m_isSubNote = false;
+
+    auto snapshot = encoder.encode(*source, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() ||
+         !receiver.apply(snapshot.value()).has_value() ) {
+        return false;
+    }
+    const auto restored = receiver.materialize();
+    if ( !restored || restored->m_noteData.notes.size() != 1U ||
+         restored->m_noteData.holds.size() != 1U ||
+         restored->m_noteData.flicks.size() != 2U ||
+         restored->m_noteData.polylines.size() != 1U ) {
+        return false;
+    }
+    const auto& polyline = restored->m_noteData.polylines.front();
+    return polyline.m_subNotes.size() == 2U &&
+           polyline.m_subNotes[0].get().m_isSubNote &&
+           polyline.m_subNotes[1].get().m_isSubNote;
+}
+
+/// @brief 判断两个谱面的物件类别是否逐字段等价。
+bool sameObjects(const BeatMap& lhs, const BeatMap& rhs)
+{
+    const auto sameBinding = [](const auto& left, const auto& right) {
+        if ( left.has_value() != right.has_value() ) return false;
+        return !left || (left->m_audioResourceId == right->m_audioResourceId &&
+                         std::abs(left->m_volume - right->m_volume) < 1e-6F);
+    };
+    const auto sameNote = [&](const MMM::Note& left, const MMM::Note& right) {
+        if ( left.m_type != right.m_type ||
+             std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
+             left.m_track != right.m_track ||
+             left.m_isSubNote != right.m_isSubNote ||
+             left.m_metadata.note_properties !=
+                 right.m_metadata.note_properties ||
+             !sameBinding(left.m_sampleBinding, right.m_sampleBinding) ) {
+            return false;
+        }
+        if ( left.m_type == MMM::NoteType::HOLD ) {
+            return std::abs(static_cast<const MMM::Hold&>(left).m_duration -
+                            static_cast<const MMM::Hold&>(right).m_duration) <
+                   1e-9;
+        }
+        if ( left.m_type == MMM::NoteType::FLICK ) {
+            return static_cast<const MMM::Flick&>(left).m_dtrack ==
+                   static_cast<const MMM::Flick&>(right).m_dtrack;
+        }
+        return true;
+    };
+    const auto sameDeque = [&](const auto& left, const auto& right) {
+        if ( left.size() != right.size() ) return false;
+        for ( std::size_t index = 0; index < left.size(); ++index ) {
+            if ( !sameNote(left[index], right[index]) ) return false;
+        }
+        return true;
+    };
+    if ( !sameDeque(lhs.m_noteData.notes, rhs.m_noteData.notes) ||
+         !sameDeque(lhs.m_noteData.holds, rhs.m_noteData.holds) ||
+         !sameDeque(lhs.m_noteData.flicks, rhs.m_noteData.flicks) ||
+         lhs.m_noteData.polylines.size() != rhs.m_noteData.polylines.size() ) {
+        return false;
+    }
+    for ( std::size_t index = 0; index < lhs.m_noteData.polylines.size();
+          ++index ) {
+        const auto& left  = lhs.m_noteData.polylines[index];
+        const auto& right = rhs.m_noteData.polylines[index];
+        if ( !sameNote(left, right) ||
+             left.m_subNotes.size() != right.m_subNotes.size() ||
+             left.m_subHolds.size() != right.m_subHolds.size() ||
+             left.m_subFlicks.size() != right.m_subFlicks.size() ) {
+            return false;
+        }
+        for ( std::size_t subIndex = 0; subIndex < left.m_subNotes.size();
+              ++subIndex ) {
+            if ( !sameNote(left.m_subNotes[subIndex].get(),
+                           right.m_subNotes[subIndex].get()) ) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// @brief 判断两个谱面的时间线类别是否逐字段等价。
+bool sameTimelines(const BeatMap& lhs, const BeatMap& rhs)
+{
+    if ( lhs.m_timings.size() != rhs.m_timings.size() ) return false;
+    for ( std::size_t index = 0; index < lhs.m_timings.size(); ++index ) {
+        const auto& left  = lhs.m_timings[index];
+        const auto& right = rhs.m_timings[index];
+        if ( std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
+             std::abs(left.m_bpm - right.m_bpm) >= 1e-9 ||
+             std::abs(left.m_beat_length - right.m_beat_length) >= 1e-9 ||
+             left.m_timingEffect != right.m_timingEffect ||
+             std::abs(left.m_timingEffectParameter -
+                      right.m_timingEffectParameter) >= 1e-9 ||
+             left.m_metadata.timing_properties !=
+                 right.m_metadata.timing_properties ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 判断两个谱面的自动采样类别是否逐字段等价。
+bool sameAudioSamples(const BeatMap& lhs, const BeatMap& rhs)
+{
+    if ( lhs.m_audioSamples.size() != rhs.m_audioSamples.size() ) return false;
+    for ( std::size_t index = 0; index < lhs.m_audioSamples.size(); ++index ) {
+        const auto& left  = lhs.m_audioSamples[index];
+        const auto& right = rhs.m_audioSamples[index];
+        if ( std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
+             left.m_offsetMs != right.m_offsetMs ||
+             left.m_track != right.m_track ||
+             left.m_audioResourceId != right.m_audioResourceId ||
+             std::abs(left.m_volume - right.m_volume) >= 1e-6F ||
+             left.m_metadata.sample_properties !=
+                 right.m_metadata.sample_properties ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 判断两个谱面的元数据类别是否逐字段等价。
+bool sameMetadata(const BeatMap& lhs, const BeatMap& rhs)
+{
+    const auto& left  = lhs.m_baseMapMetadata;
+    const auto& right = rhs.m_baseMapMetadata;
+    return left.name == right.name && left.title == right.title &&
+           left.title_unicode == right.title_unicode &&
+           left.artist == right.artist &&
+           left.artist_unicode == right.artist_unicode &&
+           left.map_path == right.map_path &&
+           left.main_audio_path == right.main_audio_path &&
+           left.song_file_hint == right.song_file_hint &&
+           left.main_cover_path == right.main_cover_path &&
+           left.cover_path == right.cover_path &&
+           left.cover_type == right.cover_type &&
+           left.video_starttime == right.video_starttime &&
+           left.bgxoffset == right.bgxoffset &&
+           left.bgyoffset == right.bgyoffset && left.version == right.version &&
+           left.author == right.author &&
+           std::abs(left.preference_bpm - right.preference_bpm) < 1e-9 &&
+           left.track_count == right.track_count &&
+           left.bgm_track_count == right.bgm_track_count &&
+           std::abs(left.map_length - right.map_length) < 1e-9 &&
+           lhs.m_metadata.map_properties == rhs.m_metadata.map_properties;
+}
+
+/// @brief 校验每种增量只替换声明的类别，且全部字段与发送端一致。
+bool testStrictCategoryIsolation()
+{
+    constexpr std::array FLAGS{
+        BeatmapMutationFlags::Objects,
+        BeatmapMutationFlags::Timelines,
+        BeatmapMutationFlags::AudioSamples,
+        BeatmapMutationFlags::Metadata,
+    };
+    for ( const auto flag : FLAGS ) {
+        BeatmapDocumentCodec receiver;
+        BeatmapDocumentCodec encoder;
+        auto                 initial = makeCompleteBeatmap("Creator A");
+        auto                 edited  = makeCompleteBeatmap("Creator B");
+        edited->m_noteData.notes.front().m_timestamp = 12345.0;
+        edited->m_noteData.notes.front()
+            .m_metadata.note_properties[MMM::NoteMetadataType::MMM]["delta"] =
+            "objects";
+        edited->m_timings.front().m_timestamp             = 875.0;
+        edited->m_timings.front().m_timingEffectParameter = 90.0;
+        edited->m_audioSamples.front().m_offsetMs         = 321;
+        edited->m_audioSamples.front().m_volume           = 0.25F;
+        edited->m_baseMapMetadata.title                   = "Changed Title";
+        edited->m_baseMapMetadata.map_length              = 654321.0;
+        edited->sync();
+
+        auto snapshot =
+            encoder.encode(*initial, BeatmapMutationFlags::All, true);
+        auto delta = encoder.encode(*edited, flag, false);
+        if ( !snapshot.has_value() || !delta.has_value() ||
+             !receiver.apply(snapshot.value()).has_value() ||
+             !receiver.apply(delta.value()).has_value() ) {
+            return false;
+        }
+        const auto restored = receiver.materialize();
+        if ( !restored ) return false;
+        if ( sameObjects(
+                 *restored,
+                 flag == BeatmapMutationFlags::Objects ? *edited : *initial) ==
+                 false ||
+             sameTimelines(*restored,
+                           flag == BeatmapMutationFlags::Timelines
+                               ? *edited
+                               : *initial) == false ||
+             sameAudioSamples(*restored,
+                              flag == BeatmapMutationFlags::AudioSamples
+                                  ? *edited
+                                  : *initial) == false ||
+             sameMetadata(
+                 *restored,
+                 flag == BeatmapMutationFlags::Metadata ? *edited : *initial) ==
+                 false ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 校验多轮客户端、房主和广播端往返不会放大或丢失物件。
+bool testRepeatedBidirectionalObjectRoundTrips()
+{
+    BeatmapDocumentCodec guestDocument;
+    BeatmapDocumentCodec hostDocument;
+    BeatmapDocumentCodec broadcaster;
+    auto                 current = makeCompleteBeatmap("Creator");
+    auto                 snapshot =
+        guestDocument.encode(*current, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() ||
+         !guestDocument.apply(snapshot.value()).has_value() ||
+         !hostDocument.apply(snapshot.value()).has_value() ||
+         !broadcaster.apply(snapshot.value()).has_value() ) {
+        return false;
+    }
+
+    for ( std::uint32_t round = 0; round < 32U; ++round ) {
+        current = guestDocument.materialize();
+        if ( !current ) return false;
+        current->m_noteData.notes.front().m_timestamp += 1.0;
+        current->m_noteData.notes.front()
+            .m_metadata.note_properties[MMM::NoteMetadataType::MMM]["round"] =
+            std::to_string(round);
+        current->sync();
+
+        auto request = guestDocument.encode(
+            *current, BeatmapMutationFlags::Objects, false);
+        if ( !request.has_value() ||
+             !hostDocument.apply(request.value()).has_value() ) {
+            return false;
+        }
+        auto authoritative = hostDocument.materialize();
+        if ( !authoritative ) return false;
+        auto committed = hostDocument.encode(
+            *authoritative, BeatmapMutationFlags::Objects, false);
+        if ( !committed.has_value() ||
+             !guestDocument.apply(committed.value()).has_value() ||
+             !broadcaster.apply(committed.value()).has_value() ) {
+            return false;
+        }
+        auto guest      = guestDocument.materialize();
+        auto remotePeer = broadcaster.materialize();
+        if ( !guest || !remotePeer || !sameObjects(*guest, *remotePeer) ||
+             !sameObjects(*guest, *authoritative) ||
+             guest->m_noteData.notes.size() != 1U ||
+             guest->m_noteData.holds.size() != 1U ||
+             guest->m_noteData.flicks.size() != 2U ||
+             guest->m_noteData.polylines.size() != 1U ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 校验元数据增量小于完整快照且不会覆盖其它谱面类别。
 bool testCategoryDelta()
 {
@@ -187,8 +458,12 @@ bool testLargeSnapshotCompression()
 
 int main()
 {
-    return testCompleteSnapshotRoundTrip() && testCategoryDelta() &&
-                   testInvalidPayloads() && testLargeSnapshotCompression()
+    return testCompleteSnapshotRoundTrip() &&
+                   testPolylineReferencesPreventDuplicateRootObjects() &&
+                   testStrictCategoryIsolation() &&
+                   testRepeatedBidirectionalObjectRoundTrips() &&
+                   testCategoryDelta() && testInvalidPayloads() &&
+                   testLargeSnapshotCompression()
                ? 0
                : 1;
 }

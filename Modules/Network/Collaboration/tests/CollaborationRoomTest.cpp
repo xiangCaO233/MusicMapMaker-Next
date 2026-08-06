@@ -113,23 +113,33 @@ bool testEightClientLocalWebRtcRoom()
     if ( !host.startHost(hostConfig) || host.port() == 0 ) return false;
 
     std::shared_ptr<const BeatMap> hostModel;
+    std::size_t                    hostApplyCount = 0;
     host.setApplyBeatmapCallback(
-        [&hostModel](std::shared_ptr<const BeatMap> beatmap,
-                     BeatmapMutationFlags) { hostModel = std::move(beatmap); });
+        [&hostModel, &hostApplyCount](std::shared_ptr<const BeatMap> beatmap,
+                                      BeatmapMutationFlags) {
+            hostModel = std::move(beatmap);
+            ++hostApplyCount;
+        });
     auto initial = makeBeatmap(1000.0, "Host Creator");
+    hostModel    = initial;
     host.onBeatmapMutated(*initial, BeatmapMutationFlags::All);
     host.update();
-    if ( !hasExpectedState(hostModel, 1000.0, "Host Creator") ) return false;
+    if ( !hasExpectedState(hostModel, 1000.0, "Host Creator") ||
+         hostApplyCount != 0U ) {
+        return false;
+    }
 
     std::vector<std::unique_ptr<CollaborationRoom>> guests;
     std::vector<std::shared_ptr<const BeatMap>>     guestModels(GUEST_COUNT);
+    std::vector<std::size_t> guestApplyCounts(GUEST_COUNT);
     guests.reserve(GUEST_COUNT);
     for ( std::size_t index = 0; index < GUEST_COUNT; ++index ) {
         auto guest = std::make_unique<CollaborationRoom>();
         guest->setApplyBeatmapCallback(
-            [&guestModels, index](std::shared_ptr<const BeatMap> beatmap,
-                                  BeatmapMutationFlags) {
+            [&guestModels, &guestApplyCounts, index](
+                std::shared_ptr<const BeatMap> beatmap, BeatmapMutationFlags) {
                 guestModels[index] = std::move(beatmap);
+                ++guestApplyCounts[index];
             });
         CollaborationJoinRoomConfig guestConfig;
         guestConfig.creator  = "Guest " + std::to_string(index + 1);
@@ -154,7 +164,8 @@ bool testEightClientLocalWebRtcRoom()
     });
     if ( !connected ) return false;
 
-    auto guestEdit = makeBeatmap(1250.0, "Host Creator");
+    auto guestEdit      = makeBeatmap(1250.0, "Host Creator");
+    guestModels.front() = guestEdit;
     guests.front()->onBeatmapMutated(*guestEdit, BeatmapMutationFlags::Objects);
     const bool guestEditConverged = pumpUntil(host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Creator") ) {
@@ -168,6 +179,7 @@ bool testEightClientLocalWebRtcRoom()
     if ( !guestEditConverged ) return false;
 
     auto hostEdit = makeBeatmap(1250.0, "Host Revised");
+    hostModel     = hostEdit;
     host.onBeatmapMutated(*hostEdit, BeatmapMutationFlags::Metadata);
     const bool hostEditConverged = pumpUntil(host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Revised") ) {
@@ -178,7 +190,11 @@ bool testEightClientLocalWebRtcRoom()
                 return hasExpectedState(model, 1250.0, "Host Revised");
             });
     });
-    if ( !hostEditConverged ||
+    if ( !hostEditConverged || hostApplyCount != 1U ||
+         guestApplyCounts.front() != 2U ||
+         !std::all_of(guestApplyCounts.begin() + 1,
+                      guestApplyCounts.end(),
+                      [](std::size_t count) { return count == 3U; }) ||
          countLogs(host, CollaborationLogEventType::OperationCommitted) < 3U ) {
         return false;
     }

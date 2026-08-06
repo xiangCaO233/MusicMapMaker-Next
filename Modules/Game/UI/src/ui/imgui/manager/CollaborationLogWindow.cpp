@@ -53,6 +53,7 @@ CollaborationLogWindow::CollaborationLogWindow(
                         .replaceAudioSamples = hasBeatmapMutationFlag(
                             flags, ::MMM::BeatmapMutationFlags::AudioSamples),
                         .notifyMutationObserver = false,
+                        .authoritativeRemote    = true,
                     }));
             });
     }

@@ -311,8 +311,13 @@ void ensureReplacementNoteAuxiliaryComponents(entt::registry& registry,
 /// @param ctx 当前会话上下文。
 void markReplacementNoteOrderDirty(SessionContext& ctx)
 {
-    ctx.isNoteOrderDirty = true;
-    ctx.isNoteStatsDirty = true;
+    ctx.sortedNoteEntities.clear();
+    ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.previewDensityObjectTimes.clear();
+    ctx.isNoteOrderDirty      = true;
+    ctx.isNotePruneDirty      = false;
+    ctx.isNoteStatsDirty      = true;
+    ctx.isPreviewDensityDirty = true;
 }
 
 /// @brief 将折线子物件点击目标解析到父折线实体。
@@ -709,10 +714,25 @@ void replaceNoteComponents(SessionContext&                   ctx,
     ctx.draggedSubIndex   = -1;
     ctx.dragInitialNote.reset();
     ctx.dragInitialSample.reset();
+    ctx.dragRenderPinnedEntities.clear();
     ctx.isDragging          = false;
     ctx.isSelecting         = false;
     ctx.hasMarqueeSelection = false;
     ctx.marqueeBoxes.clear();
+    if ( ctx.brushState.isActive && !ctx.brushState.createsAudioSample ) {
+        ctx.brushState.isActive = false;
+        ctx.brushState.polylineSegments.clear();
+        ctx.brushState.activeAudioResourceId.clear();
+        ctx.brushState.activeSampleBinding.reset();
+        ctx.brushState.holdStartTime = -1.0;
+        ctx.brushState.duration      = 0.0;
+        ctx.brushState.dtrack        = 0;
+    }
+    if ( ctx.eraserState.isActive &&
+         ctx.eraserState.targetObjectKind == ChartObjectKind::PlayerNote ) {
+        ctx.eraserState.isActive = false;
+        ctx.eraserState.targetEntities.clear();
+    }
     ctx.m_needsNotesSync = true;
     SessionUtils::markHitEventsDirty(ctx);
     markReplacementNoteOrderDirty(ctx);
@@ -2004,7 +2024,13 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         std::move(sampleTrackChanges),
         beforePreferenceBpm,
         afterPreferenceBpm);
-    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    if ( cmd.authoritativeRemote ) {
+        m_ctx.actionStack.clear();
+        action->execute(m_ctx);
+        m_ctx.actionStack.markDirty();
+    } else {
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    }
 
     m_ctx.lastActionMessage =
         fmt::format("{} {}", TR("ui.status.category.action"), "数据来源替换");
