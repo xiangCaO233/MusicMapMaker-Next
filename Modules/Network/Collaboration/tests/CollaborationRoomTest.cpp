@@ -35,6 +35,7 @@ using MMM::Network::Collaboration::CollaborationRoom;
 using MMM::Network::Collaboration::CollaborationRoomState;
 using MMM::Network::Collaboration::CollaborationResourceBundle;
 using MMM::Network::Collaboration::CollaborationServerEndpoint;
+using MMM::Network::Collaboration::PeerId;
 using MMM::Network::CollaborationServer::CollaborationSignalingServer;
 using MMM::Network::CollaborationServer::CollaborationSignalingServerConfig;
 
@@ -292,6 +293,19 @@ bool testPublicDirectoryWebRtcRoom()
         guestConfig.endpoint = endpoint;
         if ( !guest->join(guestConfig) ) return false;
         guests.push_back(std::move(guest));
+        if ( !pumpUntil(
+                 server,
+                 host,
+                 guests,
+                 [&]() {
+                     return guests.back()->state() ==
+                                CollaborationRoomState::AwaitingApproval &&
+                            !host.pendingJoinRequests().empty();
+                 }) ||
+             !host.approveJoinRequest(
+                 host.pendingJoinRequests().front().requestId) ) {
+            return false;
+        }
         if ( !pumpUntil(server, host, guests, [&]() {
                  return guests.back()->state() ==
                         CollaborationRoomState::Connected;
@@ -408,6 +422,116 @@ bool testPublicDirectoryWebRtcRoom()
     });
 }
 
+/// @brief 验证房主可以拒绝待审批访客并移出已经获准的访客。
+bool testHostAdmissionControl()
+{
+    CollaborationSignalingServerConfig serverConfig;
+    serverConfig.port        = 0;
+    serverConfig.bindAddress = "127.0.0.1";
+    CollaborationSignalingServer server;
+    if ( !server.start(std::move(serverConfig)) ) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    CollaborationServerEndpoint endpoint;
+    endpoint.address       = "127.0.0.1";
+    endpoint.signalingPort = server.listeningPort();
+    endpoint.useTls        = false;
+
+    CollaborationRoom           host;
+    CollaborationHostRoomConfig hostConfig;
+    hostConfig.creator  = "Admission Host";
+    hostConfig.roomName = "Admission Test";
+    hostConfig.endpoint = endpoint;
+    if ( !host.startHost(hostConfig) ) return false;
+    std::vector<std::unique_ptr<CollaborationRoom>> guests;
+    const auto failAdmission = [&host, &guests](std::string_view phase) {
+        const CollaborationRoom* guest =
+            guests.empty() ? nullptr : guests.back().get();
+        XERROR(
+            "Admission control test failed at {}: host_state={}, "
+            "host_participants={}, pending={}, guest_state={}, guest_error={}",
+            phase,
+            static_cast<int>(host.state()),
+            host.participants().size(),
+            host.pendingJoinRequests().size(),
+            guest ? static_cast<int>(guest->state()) : -1,
+            guest ? guest->lastError() : std::string{});
+        return false;
+    };
+    if ( !pumpUntil(
+             server, host, guests, [&]() { return !host.roomId().empty(); }) ) {
+        return failAdmission("publish");
+    }
+
+    auto makeGuest = [&](std::string creator) {
+        auto guest = std::make_unique<CollaborationRoom>();
+        CollaborationJoinRoomConfig config;
+        config.creator  = std::move(creator);
+        config.roomId   = host.roomId();
+        config.roomName = host.roomName();
+        config.endpoint = endpoint;
+        if ( !guest->join(std::move(config)) ) {
+            return std::unique_ptr<CollaborationRoom>{};
+        }
+        return guest;
+    };
+
+    guests.push_back(makeGuest("Rejected Guest"));
+    if ( !guests.back() ||
+         !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return guests.back()->state() ==
+                                   CollaborationRoomState::AwaitingApproval &&
+                               host.pendingJoinRequests().size() == 1U;
+                    }) ||
+         host.participants().size() != 1U ||
+         !host.rejectJoinRequest(
+             host.pendingJoinRequests().front().requestId) ||
+         !pumpUntil(server, host, guests, [&]() {
+             return guests.back()->state() == CollaborationRoomState::Error &&
+                    guests.back()->lastError() == "host_rejected" &&
+                    host.pendingJoinRequests().empty();
+         }) ) {
+        return failAdmission("reject");
+    }
+    guests.back()->disconnect();
+    guests.clear();
+
+    guests.push_back(makeGuest("Approved Guest"));
+    if ( !guests.back() ||
+         !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return guests.back()->state() ==
+                                   CollaborationRoomState::AwaitingApproval &&
+                               host.pendingJoinRequests().size() == 1U;
+                    }) ||
+         !host.approveJoinRequest(
+             host.pendingJoinRequests().front().requestId) ||
+         !pumpUntil(server, host, guests, [&]() {
+             return guests.back()->state() ==
+                        CollaborationRoomState::Connected &&
+                    host.participants().size() == 2U;
+         }) ) {
+        return failAdmission("approve");
+    }
+
+    const PeerId guestPeerId = guests.back()->localPeerId();
+    if ( guestPeerId == 0 || !host.removeParticipant(guestPeerId) ) {
+        return failAdmission("remove_start");
+    }
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return host.participants().size() == 1U &&
+                    guests.back()->state() == CollaborationRoomState::Error;
+         }) ) {
+        return failAdmission("remove_complete");
+    }
+    return true;
+}
+
 /// @brief 验证资源清单和多分块通过真实 DataChannel 到达访客并完成校验。
 bool testOneGuestResourceSync()
 {
@@ -476,6 +600,18 @@ bool testOneGuestResourceSync()
     joinConfig.resourceCacheRoot = directory.path() / "cache";
     if ( !guest->join(joinConfig) ) return false;
     guests.push_back(std::move(guest));
+    if ( !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return guests.front()->state() ==
+                                   CollaborationRoomState::AwaitingApproval &&
+                               !host.pendingJoinRequests().empty();
+                    }) ||
+         !host.approveJoinRequest(
+             host.pendingJoinRequests().front().requestId) ) {
+        return false;
+    }
     if ( !pumpUntil(server, host, guests, [&]() {
              return receivedBundle.has_value() &&
                     guests.front()->state() ==
@@ -600,6 +736,20 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
     guestConfig.endpoint = endpoint;
     if ( !guest.join(guestConfig) ) return false;
 
+    if ( !pumpExternalUntil(
+             host,
+             guest,
+             directory,
+             [&]() {
+                 return guest.state() ==
+                            CollaborationRoomState::AwaitingApproval &&
+                        !host.pendingJoinRequests().empty();
+             }) ||
+         !host.approveJoinRequest(
+             host.pendingJoinRequests().front().requestId) ) {
+        return false;
+    }
+
     const bool connected = pumpExternalUntil(host, guest, directory, [&]() {
         return guest.state() == CollaborationRoomState::Connected &&
                host.participants().size() == 2U &&
@@ -643,7 +793,9 @@ int main(int argc, char** argv)
     if ( argc < 2 || !argv[1] ) return 3;
     const std::string_view mode(argv[1]);
     if ( mode == "p2p" && argc == 2 ) {
-        return testPublicDirectoryWebRtcRoom() ? 0 : 1;
+        return testPublicDirectoryWebRtcRoom() && testHostAdmissionControl()
+                   ? 0
+                   : 1;
     }
     if ( mode == "resource" && argc == 2 ) {
         return testOneGuestResourceSync() ? 0 : 2;

@@ -15,6 +15,7 @@
 #include <mutex>
 #include <random>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -145,6 +146,9 @@ public:
         bool remoteDataChannelReady = false;
         /// @brief 是否已经上报离开事件。
         bool disconnectedEventSent = false;
+        /// @brief
+        /// 是否已经把中心服务拒绝作为终止事件上报，避免关闭回调覆盖原因。
+        bool signalingTerminalEventSent = false;
     };
 
     /// @brief 停止并释放所有 libdatachannel 句柄。
@@ -223,6 +227,98 @@ public:
         return true;
     }
 
+    /// @brief 批准一个由中心服务暂存的访客加入请求。
+    bool approveJoinRequest(std::string_view requestId)
+    {
+        std::string request;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( !m_isHost || m_stopping || requestId.empty() ) return false;
+            const auto iterator =
+                m_pendingJoinRequests.find(std::string(requestId));
+            if ( iterator == m_pendingJoinRequests.end() ) return false;
+            request = iterator->first;
+        }
+        if ( !openHostPeerConnection(request) ) return false;
+        std::scoped_lock lock(m_mutex);
+        m_pendingJoinRequests.erase(request);
+        return true;
+    }
+
+    /// @brief 拒绝一个由中心服务暂存的访客加入请求。
+    bool rejectJoinRequest(std::string_view requestId)
+    {
+        Connection* control = nullptr;
+        std::string request;
+        std::string roomId;
+        std::string ownerToken;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( !m_isHost || m_stopping || requestId.empty() ) return false;
+            const auto iterator =
+                m_pendingJoinRequests.find(std::string(requestId));
+            if ( iterator == m_pendingJoinRequests.end() ) return false;
+            request    = iterator->first;
+            roomId     = m_roomId;
+            ownerToken = m_ownerToken;
+            for ( const auto& connection : m_connections ) {
+                if ( connection->role == ConnectionRole::HostControl ) {
+                    control = connection.get();
+                    break;
+                }
+            }
+        }
+        if ( !control ) return false;
+        const nlohmann::json rejected = {
+            { "type", "reject_join" },
+            { "version", SIGNALING_PROTOCOL_VERSION },
+            { "roomId", roomId },
+            { "requestId", request },
+            { "ownerToken", ownerToken },
+        };
+        if ( !sendSignal(*control, rejected) ) return false;
+        std::scoped_lock lock(m_mutex);
+        m_pendingJoinRequests.erase(request);
+        return true;
+    }
+
+    /// @brief 主动关闭一个已经建立的访客 P2P 连接。
+    bool disconnectPeer(PeerId peerId, std::string detail)
+    {
+        Connection* connection       = nullptr;
+        int         dataChannelId    = -1;
+        int         peerConnectionId = -1;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( !m_isHost || m_stopping || peerId == 0 ||
+                 peerId == m_localPeerId ) {
+                return false;
+            }
+            for ( const auto& candidate : m_connections ) {
+                if ( candidate->role == ConnectionRole::Peer &&
+                     candidate->remotePeerId == peerId &&
+                     candidate->connectedEventSent &&
+                     !candidate->disconnectedEventSent ) {
+                    connection       = candidate.get();
+                    dataChannelId    = candidate->dataChannelId;
+                    peerConnectionId = candidate->peerConnectionId;
+                    break;
+                }
+            }
+        }
+        if ( !connection ) return false;
+        notifyDisconnected(
+            *connection,
+            detail.empty() ? "removed_by_host" : std::move(detail));
+        if ( dataChannelId >= 0 ) {
+            static_cast<void>(rtcClose(dataChannelId));
+        }
+        if ( peerConnectionId >= 0 ) {
+            static_cast<void>(rtcClose(peerConnectionId));
+        }
+        return true;
+    }
+
     /// @brief 释放通道、PeerConnection 和中心 WebSocket。
     void stop()
     {
@@ -236,6 +332,7 @@ public:
             connections   = std::move(m_connections);
             m_incomingPackets.clear();
             m_events.clear();
+            m_pendingJoinRequests.clear();
         }
 
         for ( auto& connection : connections ) {
@@ -365,7 +462,7 @@ private:
     }
 
     /// @brief 创建房主接受单个访客所需的瞬时信令连接。
-    void openHostPeerConnection(std::string requestId)
+    bool openHostPeerConnection(std::string requestId)
     {
         auto connection       = std::make_unique<Connection>();
         connection->owner     = this;
@@ -374,7 +471,7 @@ private:
         Connection* pointer   = connection.get();
         {
             std::scoped_lock lock(m_mutex);
-            if ( m_stopping || !m_running ) return;
+            if ( m_stopping || !m_running ) return false;
             m_connections.push_back(std::move(connection));
         }
         if ( !openWebSocket(*pointer) ) {
@@ -382,20 +479,26 @@ private:
                       0,
                       {},
                       "peer_signaling_connect_start_failed");
+            return false;
         }
+        return true;
     }
 
     /// @brief 将连接事件压入线程安全队列。
     void pushEvent(WebRtcTransportEventType type, PeerId peerId,
-                   std::string creator, std::string detail)
+                   std::string creator, std::string detail,
+                   std::string requestId = {})
     {
         std::scoped_lock lock(m_mutex);
         if ( m_stopping ) return;
         if ( m_events.size() >= MAX_QUEUED_TRANSPORT_EVENTS ) {
             m_events.pop_front();
         }
-        m_events.push_back(
-            { type, peerId, std::move(creator), std::move(detail) });
+        m_events.push_back({ type,
+                             peerId,
+                             std::move(creator),
+                             std::move(detail),
+                             std::move(requestId) });
     }
 
     /// @brief 发送一条 JSON 信令消息。
@@ -688,8 +791,10 @@ private:
              connection.role == ConnectionRole::HostControl ) {
             std::string roomId;
             std::string requestId;
+            std::string guestCreator;
             if ( !readStringField(message, "roomId", roomId) ||
-                 !readStringField(message, "requestId", requestId) ) {
+                 !readStringField(message, "requestId", requestId) ||
+                 !readStringField(message, "guestCreator", guestCreator) ) {
                 pushEvent(WebRtcTransportEventType::Error,
                           0,
                           {},
@@ -700,10 +805,66 @@ private:
                 std::scoped_lock lock(m_mutex);
                 if ( roomId != m_roomId ) return true;
             }
-            openHostPeerConnection(std::move(requestId));
+            guestCreator = Config::normalizeCreatorIdentity(guestCreator);
+            if ( requestId.empty() || requestId.size() > 128U ||
+                 guestCreator.empty() ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          0,
+                          {},
+                          "invalid_join_request");
+                return true;
+            }
+            {
+                std::scoped_lock lock(m_mutex);
+                m_pendingJoinRequests.insert_or_assign(requestId, guestCreator);
+            }
+            pushEvent(WebRtcTransportEventType::JoinRequested,
+                      0,
+                      std::move(guestCreator),
+                      "approval_required",
+                      std::move(requestId));
             return true;
         }
-        if ( type == "join_pending" ) return true;
+        if ( type == "join_pending" ) {
+            std::string requestId;
+            if ( !readStringField(message, "requestId", requestId) ||
+                 requestId.empty() || requestId.size() > 128U ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          0,
+                          {},
+                          "invalid_join_pending");
+                return true;
+            }
+            pushEvent(WebRtcTransportEventType::JoinPending,
+                      m_hostId,
+                      {},
+                      "awaiting_host_approval",
+                      std::move(requestId));
+            return true;
+        }
+        if ( type == "join_cancelled" &&
+             connection.role == ConnectionRole::HostControl ) {
+            std::string requestId;
+            std::string guestCreator;
+            if ( !readStringField(message, "requestId", requestId) ||
+                 !readStringField(message, "guestCreator", guestCreator) ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          0,
+                          {},
+                          "invalid_join_cancellation");
+                return true;
+            }
+            {
+                std::scoped_lock lock(m_mutex);
+                m_pendingJoinRequests.erase(requestId);
+            }
+            pushEvent(WebRtcTransportEventType::JoinCancelled,
+                      0,
+                      std::move(guestCreator),
+                      "join_cancelled",
+                      std::move(requestId));
+            return true;
+        }
         if ( type == "relay_ready" &&
              connection.role == ConnectionRole::Peer ) {
             if ( !updateIceServers(message) ) {
@@ -735,9 +896,14 @@ private:
         if ( type == "error" ) {
             std::string reason;
             static_cast<void>(readStringField(message, "reason", reason));
-            pushEvent(connection.role == ConnectionRole::HostControl
-                          ? WebRtcTransportEventType::Error
-                          : WebRtcTransportEventType::Rejected,
+            const bool hostControl =
+                connection.role == ConnectionRole::HostControl;
+            if ( !hostControl ) {
+                std::scoped_lock lock(m_mutex);
+                connection.signalingTerminalEventSent = true;
+            }
+            pushEvent(hostControl ? WebRtcTransportEventType::Error
+                                  : WebRtcTransportEventType::Rejected,
                       connection.remotePeerId,
                       connection.remoteCreator,
                       reason.empty() ? "signaling_server_error" : reason);
@@ -771,6 +937,10 @@ private:
         } else if ( !m_isHost && type == "rejected" ) {
             std::string reason;
             static_cast<void>(readStringField(message, "reason", reason));
+            {
+                std::scoped_lock lock(m_mutex);
+                connection.signalingTerminalEventSent = true;
+            }
             pushEvent(WebRtcTransportEventType::Rejected,
                       0,
                       {},
@@ -814,6 +984,13 @@ private:
         std::scoped_lock lock(m_mutex);
         return connection.connectedEventSent &&
                !connection.disconnectedEventSent;
+    }
+
+    /// @brief 判断中心服务拒绝是否已经提供了更准确的终止原因。
+    bool hasSignalingTerminalEvent(const Connection& connection) const
+    {
+        std::scoped_lock lock(m_mutex);
+        return connection.signalingTerminalEventSent;
     }
 
     /// @brief 双方均确认 DataChannel 打开后释放瞬时信令连接。
@@ -900,7 +1077,8 @@ private:
                             owner.m_hostId,
                             owner.m_creator,
                             "room_directory_connection_closed");
-        } else if ( !owner.isPeerConnected(*connection) ) {
+        } else if ( !owner.isPeerConnected(*connection) &&
+                    !owner.hasSignalingTerminalEvent(*connection) ) {
             owner.notifyDisconnected(*connection, "signaling_closed");
         }
     }
@@ -911,7 +1089,8 @@ private:
         auto* connection = static_cast<Connection*>(pointer);
         if ( !connection || !connection->owner ) return;
         if ( connection->role == ConnectionRole::Peer &&
-             connection->owner->isPeerConnected(*connection) ) {
+             (connection->owner->isPeerConnected(*connection) ||
+              connection->owner->hasSignalingTerminalEvent(*connection)) ) {
             return;
         }
         connection->owner->pushEvent(WebRtcTransportEventType::Error,
@@ -1117,6 +1296,8 @@ private:
     std::size_t m_maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
     /// @brief 房主控制连接、房主访客连接或访客唯一连接。
     std::vector<std::unique_ptr<Connection>> m_connections;
+    /// @brief 等待产品层房主批准或拒绝的中心服务加入请求。
+    std::unordered_map<std::string, std::string> m_pendingJoinRequests;
     /// @brief DataChannel 收到的完整协作协议帧。
     std::deque<TransportPacket> m_incomingPackets;
     /// @brief 等待产品层消费的连接生命周期事件。
@@ -1135,6 +1316,21 @@ bool WebRtcTransport::startHost(const WebRtcHostConfig& config)
 bool WebRtcTransport::connectToHost(const WebRtcGuestConfig& config)
 {
     return m_impl->connectToHost(config);
+}
+
+bool WebRtcTransport::approveJoinRequest(std::string_view requestId)
+{
+    return m_impl->approveJoinRequest(requestId);
+}
+
+bool WebRtcTransport::rejectJoinRequest(std::string_view requestId)
+{
+    return m_impl->rejectJoinRequest(requestId);
+}
+
+bool WebRtcTransport::disconnectPeer(PeerId peerId, std::string detail)
+{
+    return m_impl->disconnectPeer(peerId, std::move(detail));
 }
 
 void WebRtcTransport::stop()

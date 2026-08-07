@@ -103,6 +103,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
     m_followedPeerId      = 0;
+    m_pendingJoinRequests.clear();
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
@@ -179,6 +180,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
     m_followedPeerId      = 0;
+    m_pendingJoinRequests.clear();
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
@@ -198,6 +200,57 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
               {},
               "connecting");
     return true;
+}
+
+bool CollaborationRoom::approveJoinRequest(std::string_view requestId)
+{
+    if ( !m_isHost || !m_transport || requestId.empty() ) return false;
+    const auto request = std::find_if(
+        m_pendingJoinRequests.begin(),
+        m_pendingJoinRequests.end(),
+        [requestId](const CollaborationPendingJoinRequest& candidate) {
+            return candidate.requestId == requestId;
+        });
+    if ( request == m_pendingJoinRequests.end() ||
+         !m_transport->approveJoinRequest(requestId) ) {
+        return false;
+    }
+    appendLog(CollaborationLogEventType::SignalingConnected,
+              0,
+              request->creator,
+              "join_approved");
+    m_pendingJoinRequests.erase(request);
+    return true;
+}
+
+bool CollaborationRoom::rejectJoinRequest(std::string_view requestId)
+{
+    if ( !m_isHost || !m_transport || requestId.empty() ) return false;
+    const auto request = std::find_if(
+        m_pendingJoinRequests.begin(),
+        m_pendingJoinRequests.end(),
+        [requestId](const CollaborationPendingJoinRequest& candidate) {
+            return candidate.requestId == requestId;
+        });
+    if ( request == m_pendingJoinRequests.end() ||
+         !m_transport->rejectJoinRequest(requestId) ) {
+        return false;
+    }
+    appendLog(CollaborationLogEventType::Disconnected,
+              0,
+              request->creator,
+              "join_rejected");
+    m_pendingJoinRequests.erase(request);
+    return true;
+}
+
+bool CollaborationRoom::removeParticipant(PeerId peerId)
+{
+    if ( !m_isHost || !m_transport || !m_peer || peerId == 0 ||
+         peerId == localPeerId() || !participants().contains(peerId) ) {
+        return false;
+    }
+    return m_transport->disconnectPeer(peerId, "removed_by_host");
 }
 
 bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
@@ -286,6 +339,7 @@ void CollaborationRoom::disconnect()
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_followedPeerId = 0;
+    m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     {
@@ -419,6 +473,12 @@ CollaborationRoom::participants() const
     return m_peer ? m_peer->participantCreators() : m_emptyParticipants;
 }
 
+const std::vector<CollaborationPendingJoinRequest>&
+CollaborationRoom::pendingJoinRequests() const
+{
+    return m_pendingJoinRequests;
+}
+
 const std::unordered_map<PeerId, ParticipantViewport>&
 CollaborationRoom::participantViewports() const
 {
@@ -512,6 +572,46 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                   event.peerId,
                   event.creator,
                   "room_published");
+        break;
+    case WebRtcTransportEventType::JoinPending:
+        if ( !m_isHost ) {
+            m_state = CollaborationRoomState::AwaitingApproval;
+            appendLog(CollaborationLogEventType::SignalingConnected,
+                      event.peerId,
+                      event.creator,
+                      event.detail);
+        }
+        break;
+    case WebRtcTransportEventType::JoinRequested:
+        if ( m_isHost && !event.requestId.empty() ) {
+            const bool known = std::any_of(
+                m_pendingJoinRequests.begin(),
+                m_pendingJoinRequests.end(),
+                [&event](const CollaborationPendingJoinRequest& request) {
+                    return request.requestId == event.requestId;
+                });
+            if ( !known ) {
+                m_pendingJoinRequests.push_back(
+                    { event.requestId, event.creator });
+                appendLog(CollaborationLogEventType::SignalingConnected,
+                          0,
+                          event.creator,
+                          event.detail);
+            }
+        }
+        break;
+    case WebRtcTransportEventType::JoinCancelled:
+        if ( m_isHost ) {
+            std::erase_if(
+                m_pendingJoinRequests,
+                [&event](const CollaborationPendingJoinRequest& request) {
+                    return request.requestId == event.requestId;
+                });
+            appendLog(CollaborationLogEventType::Disconnected,
+                      0,
+                      event.creator,
+                      event.detail);
+        }
         break;
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
@@ -769,6 +869,7 @@ void CollaborationRoom::sendResourceManifest(PeerId peerId)
 
 void CollaborationRoom::fail(std::string message)
 {
+    m_pendingJoinRequests.clear();
     m_state     = CollaborationRoomState::Error;
     m_lastError = message;
     appendLog(CollaborationLogEventType::Error, 0, {}, std::move(message));

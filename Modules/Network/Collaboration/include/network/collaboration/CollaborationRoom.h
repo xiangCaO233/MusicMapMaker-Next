@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -27,6 +28,7 @@ enum class CollaborationRoomState {
     Idle,
     Hosting,
     Joining,
+    AwaitingApproval,
     Connected,
     Error,
 };
@@ -84,6 +86,14 @@ struct CollaborationJoinRoomConfig {
     std::filesystem::path resourceCacheRoot;
 };
 
+/// @brief 等待房主决定的访客加入请求。
+struct CollaborationPendingJoinRequest {
+    /// @brief 中心服务生成的短期请求标识。
+    std::string requestId;
+    /// @brief 访客提交并经过规范化的 Creator 展示身份。
+    std::string creator;
+};
+
 /// @brief 协调 WebRTC 传输、房主权威 Peer 与实时协作日志。
 class CollaborationRoom : public ::MMM::IBeatmapMutationObserver
 {
@@ -114,6 +124,21 @@ public:
     /// @param config 访客参数。
     /// @return 成功开始连接时返回 true。
     [[nodiscard]] bool join(CollaborationJoinRoomConfig config);
+
+    /// @brief 房主批准一个等待中的访客加入请求。
+    /// @param requestId 待批准请求标识。
+    /// @return 当前为房主、请求仍有效且 P2P 信令开始建立时返回 true。
+    [[nodiscard]] bool approveJoinRequest(std::string_view requestId);
+
+    /// @brief 房主拒绝一个等待中的访客加入请求。
+    /// @param requestId 待拒绝请求标识。
+    /// @return 当前为房主且拒绝指令成功发出时返回 true。
+    [[nodiscard]] bool rejectJoinRequest(std::string_view requestId);
+
+    /// @brief 房主将一个已连接访客移出当前房间。
+    /// @param peerId 待移出的非房主 PeerId。
+    /// @return 目标是当前在线访客且已开始关闭 P2P 连接时返回 true。
+    [[nodiscard]] bool removeParticipant(PeerId peerId);
 
     /// @brief 设置离线房间浏览使用的中心服务器。
     /// @param endpoint 地址、信令端口和 TLS 配置。
@@ -197,6 +222,9 @@ public:
     /// @brief 获取当前已知参与者 Creator 表。
     [[nodiscard]] const std::unordered_map<PeerId, std::string>&
     participants() const;
+    /// @brief 获取等待房主批准或拒绝的访客请求。
+    [[nodiscard]] const std::vector<CollaborationPendingJoinRequest>&
+    pendingJoinRequests() const;
     /// @brief 获取已同步的各参与者主画布视口状态。
     /// @return 以 PeerId 索引的最新只读状态表。
     [[nodiscard]] const std::unordered_map<PeerId, ParticipantViewport>&
@@ -309,6 +337,8 @@ private:
     std::uint32_t m_viewportPublishRateHz = 10;
     /// @brief 用户列表选择的持续跟随目标，0 表示未跟随。
     PeerId m_followedPeerId = 0;
+    /// @brief 尚未获准建立 P2P 连接的访客请求。
+    std::vector<CollaborationPendingJoinRequest> m_pendingJoinRequests;
     /// @brief 无 Peer 时返回的空参与者表。
     std::unordered_map<PeerId, std::string> m_emptyParticipants;
     /// @brief 无 Peer 时返回的空视口状态表。

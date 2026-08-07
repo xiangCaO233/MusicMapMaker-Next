@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace MMM::Network::Collaboration
 {
@@ -14,6 +15,9 @@ namespace MMM::Network::Collaboration
 enum class WebRtcTransportEventType {
     SignalingConnected,
     RoomPublished,
+    JoinPending,
+    JoinRequested,
+    JoinCancelled,
     PeerConnected,
     PeerDisconnected,
     Rejected,
@@ -30,6 +34,8 @@ struct WebRtcTransportEvent {
     std::string creator;
     /// @brief 面向诊断日志的简短详情。
     std::string detail;
+    /// @brief 等待房主处理的服务端加入请求标识；其它事件为空。
+    std::string requestId;
 };
 
 /// @brief 房主通过公网目录发布房间所需配置。
@@ -84,6 +90,22 @@ public:
     /// @param config 访客配置。
     /// @return WebSocket 已开始连接时返回 true。
     [[nodiscard]] bool connectToHost(const WebRtcGuestConfig& config);
+
+    /// @brief 房主批准一个仍在中心服务等待的加入请求。
+    /// @param requestId 服务端生成并随 JoinRequested 事件提供的请求标识。
+    /// @return 请求存在且已开始创建专用 P2P 信令连接时返回 true。
+    [[nodiscard]] bool approveJoinRequest(std::string_view requestId);
+
+    /// @brief 房主拒绝一个仍在中心服务等待的加入请求。
+    /// @param requestId 服务端生成并随 JoinRequested 事件提供的请求标识。
+    /// @return 拒绝指令成功发送到房主控制连接时返回 true。
+    [[nodiscard]] bool rejectJoinRequest(std::string_view requestId);
+
+    /// @brief 房主主动关闭一个已建立的访客 P2P 连接。
+    /// @param peerId 待移出的远端 PeerId。
+    /// @param detail 房主侧离开事件使用的稳定原因码。
+    /// @return 找到在线访客并开始关闭时返回 true。
+    [[nodiscard]] bool disconnectPeer(PeerId peerId, std::string detail);
 
     /// @brief 停止当前传输；可重复调用。
     void stop();
