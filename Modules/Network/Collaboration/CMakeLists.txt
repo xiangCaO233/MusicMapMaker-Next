@@ -23,6 +23,14 @@ mmm_add_test_executable(Collaboration CollaborationPeerTest
 target_link_libraries(CollaborationPeerTest PRIVATE NetworkCollaboration)
 add_test(NAME CollaborationPeerTest COMMAND CollaborationPeerTest)
 
+# 视野同步设置测试覆盖默认频率以及 5～60 Hz 房间层边界限制。
+mmm_add_test_executable(Collaboration CollaborationViewportSettingsTest
+                        tests/CollaborationViewportSettingsTest.cpp)
+target_link_libraries(CollaborationViewportSettingsTest
+                      PRIVATE NetworkCollaboration)
+add_test(NAME CollaborationViewportSettingsTest
+         COMMAND CollaborationViewportSettingsTest)
+
 # 谱面文档测试覆盖全部对象类型、元数据、快照和分类增量往返。
 mmm_add_test_executable(Collaboration BeatmapDocumentCodecTest
                         tests/BeatmapDocumentCodecTest.cpp)

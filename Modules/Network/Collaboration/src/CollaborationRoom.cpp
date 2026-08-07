@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <utility>
 
 namespace MMM::Network::Collaboration
@@ -24,11 +25,36 @@ constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
 
 /// @brief 目录连接失败后的重试间隔。
 constexpr auto DIRECTORY_RECONNECT_INTERVAL = std::chrono::seconds(5);
+/// @brief 主画布状态允许的最低发送频率。
+constexpr std::uint32_t MIN_VIEWPORT_PUBLISH_RATE_HZ = 5;
+/// @brief 主画布状态允许的最高发送频率。
+constexpr std::uint32_t MAX_VIEWPORT_PUBLISH_RATE_HZ = 60;
+
+/// @brief 判断两个主画布状态是否存在值得发送的可见变化。
+/// @param previous 最近一次已发布状态。
+/// @param current 当前等待发布状态。
+/// @return 时间变化超过 1ms 或横向偏移变化超过万分之一时返回 true。
+[[nodiscard]] bool viewportChanged(const ParticipantViewport& previous,
+                                   const ParticipantViewport& current)
+{
+    constexpr double TIME_EPSILON   = 0.001;
+    constexpr double OFFSET_EPSILON = 0.0001;
+    return std::abs(previous.playbackTime - current.playbackTime) >
+               TIME_EPSILON ||
+           std::abs(previous.visualTime - current.visualTime) > TIME_EPSILON ||
+           std::abs(previous.visibleTimeStart - current.visibleTimeStart) >
+               TIME_EPSILON ||
+           std::abs(previous.visibleTimeEnd - current.visibleTimeEnd) >
+               TIME_EPSILON ||
+           std::abs(previous.horizontalOffsetRatio -
+                    current.horizontalOffsetRatio) > OFFSET_EPSILON;
+}
 }  // namespace
 
 CollaborationRoom::CollaborationRoom()
     : m_nextDirectoryReconnect(std::chrono::steady_clock::now())
     , m_startedAt(std::chrono::steady_clock::now())
+    , m_nextViewportPublish(std::chrono::steady_clock::now())
 {
 }
 
@@ -73,6 +99,10 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_pendingLocalViewport.reset();
+    m_lastPublishedLocalViewport.reset();
+    m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_followedPeerId      = 0;
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
@@ -145,6 +175,10 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_pendingLocalViewport.reset();
+    m_lastPublishedLocalViewport.reset();
+    m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_followedPeerId      = 0;
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
@@ -249,6 +283,9 @@ void CollaborationRoom::disconnect()
     m_resourceSync.reset();
     m_resourceManifest.reset();
     m_resourceManifestRecipients.clear();
+    m_pendingLocalViewport.reset();
+    m_lastPublishedLocalViewport.reset();
+    m_followedPeerId = 0;
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     {
@@ -273,6 +310,11 @@ void CollaborationRoom::update()
     if ( m_peer ) {
         submitQueuedLocalOperations();
         m_peer->update();
+        flushLocalViewport();
+        if ( m_followedPeerId != 0 &&
+             !m_peer->participantCreators().contains(m_followedPeerId) ) {
+            m_followedPeerId = 0;
+        }
     }
     processResourceEvents();
 }
@@ -282,6 +324,41 @@ SubmitOperationResult CollaborationRoom::submitOperation(
 {
     if ( !m_peer ) return SubmitOperationResult::InvalidPeer;
     return m_peer->submitOperation(payload);
+}
+
+void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport)
+{
+    if ( !m_peer || !std::isfinite(viewport.playbackTime) ||
+         !std::isfinite(viewport.visualTime) ||
+         !std::isfinite(viewport.visibleTimeStart) ||
+         !std::isfinite(viewport.visibleTimeEnd) ||
+         !std::isfinite(viewport.horizontalOffsetRatio) ) {
+        return;
+    }
+    viewport.clientId      = 0;
+    viewport.sequence      = 0;
+    m_pendingLocalViewport = viewport;
+}
+
+void CollaborationRoom::setViewportPublishRateHz(std::uint32_t rateHz)
+{
+    m_viewportPublishRateHz = std::clamp(
+        rateHz, MIN_VIEWPORT_PUBLISH_RATE_HZ, MAX_VIEWPORT_PUBLISH_RATE_HZ);
+    m_nextViewportPublish = std::chrono::steady_clock::now();
+}
+
+bool CollaborationRoom::setFollowedPeer(PeerId peerId)
+{
+    if ( peerId == 0 ) {
+        m_followedPeerId = 0;
+        return true;
+    }
+    if ( !m_peer || peerId == m_peer->localPeerId() ||
+         !m_peer->participantCreators().contains(peerId) ) {
+        return false;
+    }
+    m_followedPeerId = peerId;
+    return true;
 }
 
 CollaborationRoomState CollaborationRoom::state() const
@@ -340,6 +417,22 @@ const std::unordered_map<PeerId, std::string>&
 CollaborationRoom::participants() const
 {
     return m_peer ? m_peer->participantCreators() : m_emptyParticipants;
+}
+
+const std::unordered_map<PeerId, ParticipantViewport>&
+CollaborationRoom::participantViewports() const
+{
+    return m_peer ? m_peer->participantViewports() : m_emptyViewports;
+}
+
+PeerId CollaborationRoom::followedPeerId() const
+{
+    return m_followedPeerId;
+}
+
+std::uint32_t CollaborationRoom::viewportPublishRateHz() const
+{
+    return m_viewportPublishRateHz;
 }
 
 const std::vector<CollaborationLogEntry>& CollaborationRoom::logs() const
@@ -566,6 +659,26 @@ void CollaborationRoom::submitQueuedLocalOperations()
                   "local_operation_submit_failed");
         return;
     }
+}
+
+void CollaborationRoom::flushLocalViewport()
+{
+    if ( !m_peer || !m_pendingLocalViewport ) return;
+    if ( m_lastPublishedLocalViewport &&
+         !viewportChanged(*m_lastPublishedLocalViewport,
+                          *m_pendingLocalViewport) ) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if ( now < m_nextViewportPublish ) return;
+
+    ParticipantViewport viewport = *m_pendingLocalViewport;
+    if ( !m_peer->publishViewport(viewport) ) return;
+    m_lastPublishedLocalViewport = viewport;
+    const auto interval          = std::chrono::microseconds(
+        1'000'000 / std::max<std::uint32_t>(1, m_viewportPublishRateHz));
+    m_nextViewportPublish = now + interval;
 }
 
 void CollaborationRoom::handleResourceMessage(

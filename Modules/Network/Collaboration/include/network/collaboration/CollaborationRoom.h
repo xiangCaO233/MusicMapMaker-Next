@@ -158,6 +158,21 @@ public:
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
 
+    /// @brief 更新等待节流发布的本地主画布视口状态。
+    /// @param viewport 当前主画布的时间范围和横向偏移比例。
+    /// @warning UI 热路径：主画布每帧调用；只覆盖一个固定大小内存状态，
+    /// 实际网络发送由 update 按固定频率执行。
+    void publishLocalViewport(ParticipantViewport viewport);
+
+    /// @brief 设置 P2P 主画布状态的本地发送频率。
+    /// @param rateHz 目标频率；房间层限制到 5～60 Hz。
+    void setViewportPublishRateHz(std::uint32_t rateHz);
+
+    /// @brief 设置用户列表选择的持续跟随目标。
+    /// @param peerId 远端参与者标识；传入 0 停止跟随。
+    /// @return 目标是当前在线的非本机参与者或成功停止时返回 true。
+    bool setFollowedPeer(PeerId peerId);
+
     /// @brief 获取当前房间状态。
     [[nodiscard]] CollaborationRoomState state() const;
     /// @brief 查询当前客户端是否为房主。
@@ -182,6 +197,16 @@ public:
     /// @brief 获取当前已知参与者 Creator 表。
     [[nodiscard]] const std::unordered_map<PeerId, std::string>&
     participants() const;
+    /// @brief 获取已同步的各参与者主画布视口状态。
+    /// @return 以 PeerId 索引的最新只读状态表。
+    [[nodiscard]] const std::unordered_map<PeerId, ParticipantViewport>&
+    participantViewports() const;
+    /// @brief 获取用户列表当前选择的持续跟随目标。
+    /// @return 远端 PeerId；未跟随时为 0。
+    [[nodiscard]] PeerId followedPeerId() const;
+    /// @brief 获取当前 P2P 主画布状态发送频率。
+    /// @return 5～60 Hz 范围内的本地发送频率。
+    [[nodiscard]] std::uint32_t viewportPublishRateHz() const;
     /// @brief 获取实时协作日志。
     [[nodiscard]] const std::vector<CollaborationLogEntry>& logs() const;
     /// @brief 获取最近错误；没有错误时为空。
@@ -204,6 +229,10 @@ private:
     void handleCommittedOperation(const CommittedOperation& operation);
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
+    /// @brief 在节流周期到达时发布有变化的本地主画布状态。
+    /// @warning UI 热路径：每帧仅做时间点和固定大小数值比较，达到配置的
+    /// 5～60 Hz 周期后才编码并发送一个小消息。
+    void flushLocalViewport();
     /// @brief 处理一个已校验的资源协议消息。
     void handleResourceMessage(PeerId                      senderId,
                                const CollaborationMessage& message);
@@ -270,7 +299,19 @@ private:
     std::uint64_t m_nextLogSequence = 1;
     /// @brief 有界实时日志。
     std::vector<CollaborationLogEntry> m_logs;
+    /// @brief 主画布最近写入且等待节流发布的本地状态。
+    std::optional<ParticipantViewport> m_pendingLocalViewport;
+    /// @brief 最近一次成功交给 Peer 发布的本地状态。
+    std::optional<ParticipantViewport> m_lastPublishedLocalViewport;
+    /// @brief 允许下一次视口状态发送的时间点。
+    std::chrono::steady_clock::time_point m_nextViewportPublish;
+    /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。
+    std::uint32_t m_viewportPublishRateHz = 10;
+    /// @brief 用户列表选择的持续跟随目标，0 表示未跟随。
+    PeerId m_followedPeerId = 0;
     /// @brief 无 Peer 时返回的空参与者表。
     std::unordered_map<PeerId, std::string> m_emptyParticipants;
+    /// @brief 无 Peer 时返回的空视口状态表。
+    std::unordered_map<PeerId, ParticipantViewport> m_emptyViewports;
 };
 }  // namespace MMM::Network::Collaboration

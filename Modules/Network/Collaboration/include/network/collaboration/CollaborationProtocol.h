@@ -10,7 +10,7 @@
 namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
-inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 2;
+inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 3;
 
 /// @brief 线协议允许的消息类型。
 enum class CollaborationMessageKind : std::uint8_t {
@@ -24,6 +24,7 @@ enum class CollaborationMessageKind : std::uint8_t {
     ResourceManifest    = 8,
     ResourceRequest     = 9,
     ResourceChunk       = 10,
+    ParticipantViewport = 11,
 };
 
 /// @brief 访客确认已经连续应用到的版本。
@@ -82,7 +83,8 @@ struct ResourceChunk {
 using CollaborationMessage =
     std::variant<EditRequest, CommittedOperation, RevisionAck, ResyncRequest,
                  ParticipantIdentity, ParticipantLeft, StateSnapshot,
-                 ResourceManifest, ResourceRequest, ResourceChunk>;
+                 ResourceManifest, ResourceRequest, ResourceChunk,
+                 ParticipantViewport>;
 
 /// @brief 协作消息编解码失败原因。
 enum class ProtocolError : std::uint8_t {
@@ -94,6 +96,7 @@ enum class ProtocolError : std::uint8_t {
     InvalidMessageLength,
     OperationTooLarge,
     InvalidCreatorIdentity,
+    InvalidViewportState,
 };
 
 /// @brief 把一条协作消息编码为带版本和长度字段的二进制帧。

@@ -1,6 +1,9 @@
 #include "network/collaboration/CollaborationProtocol.h"
 #include "config/CreatorIdentity.h"
 
+#include <algorithm>
+#include <bit>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -41,6 +44,14 @@ void appendUint64(ByteBuffer& output, std::uint64_t value)
     for ( std::uint32_t shift = 0; shift < 64U; shift += 8U ) {
         output.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
     }
+}
+
+/// @brief 以 IEEE 754 位模式追加 64 位浮点数。
+/// @param output 目标字节序列。
+/// @param value 待写入数值。
+void appendDouble(ByteBuffer& output, double value)
+{
+    appendUint64(output, std::bit_cast<std::uint64_t>(value));
 }
 
 /// @brief 追加带 32 位长度的操作负载。
@@ -125,6 +136,17 @@ public:
         return true;
     }
 
+    /// @brief 读取 IEEE 754 位模式编码的 64 位浮点数。
+    /// @param value 输出数值。
+    /// @return 剩余字节足够时返回 true。
+    [[nodiscard]] bool readDouble(double& value)
+    {
+        std::uint64_t bits = 0;
+        if ( !readUint64(bits) ) return false;
+        value = std::bit_cast<double>(bits);
+        return true;
+    }
+
     /// @brief 读取指定长度的字节序列。
     /// @param length 读取字节数。
     /// @param output 输出缓冲区。
@@ -180,6 +202,32 @@ private:
 {
     return payloadBytes <= maxOperationBytes &&
            payloadBytes <= std::numeric_limits<std::uint32_t>::max();
+}
+
+/// @brief 校验远端主画布视口状态是否适合进入房间状态表。
+/// @param viewport 待校验状态。
+/// @return 标识、序号与全部数值有限且范围有界时返回 true。
+[[nodiscard]] bool isViewportStateValid(const ParticipantViewport& viewport)
+{
+    constexpr double MAX_TIME_MAGNITUDE = 7.0 * 24.0 * 60.0 * 60.0;
+    constexpr double MAX_VISIBLE_SPAN   = 24.0 * 60.0 * 60.0;
+    constexpr double MAX_OFFSET_RATIO   = 100.0;
+    const double     visibleMinimum =
+        std::min(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+    const double visibleMaximum =
+        std::max(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+    return viewport.clientId != 0 && viewport.sequence != 0 &&
+           std::isfinite(viewport.playbackTime) &&
+           std::isfinite(viewport.visualTime) &&
+           std::isfinite(viewport.visibleTimeStart) &&
+           std::isfinite(viewport.visibleTimeEnd) &&
+           std::isfinite(viewport.horizontalOffsetRatio) &&
+           std::abs(viewport.playbackTime) <= MAX_TIME_MAGNITUDE &&
+           std::abs(viewport.visualTime) <= MAX_TIME_MAGNITUDE &&
+           std::abs(visibleMinimum) <= MAX_TIME_MAGNITUDE &&
+           std::abs(visibleMaximum) <= MAX_TIME_MAGNITUDE &&
+           visibleMaximum - visibleMinimum <= MAX_VISIBLE_SPAN &&
+           std::abs(viewport.horizontalOffsetRatio) <= MAX_OFFSET_RATIO;
 }
 }  // namespace
 
@@ -278,6 +326,20 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         appendUint32(body, chunk->resourceIndex);
         appendUint64(body, chunk->offset);
         appendPayload(body, chunk->payload);
+    } else if ( const auto* viewport =
+                    std::get_if<ParticipantViewport>(&message) ) {
+        if ( !isViewportStateValid(*viewport) ) {
+            return std::unexpected(ProtocolError::InvalidViewportState);
+        }
+        kind = CollaborationMessageKind::ParticipantViewport;
+        body.reserve(56U);
+        appendUint64(body, viewport->clientId);
+        appendUint64(body, viewport->sequence);
+        appendDouble(body, viewport->playbackTime);
+        appendDouble(body, viewport->visualTime);
+        appendDouble(body, viewport->visibleTimeStart);
+        appendDouble(body, viewport->visibleTimeEnd);
+        appendDouble(body, viewport->horizontalOffsetRatio);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -493,6 +555,22 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidMessageLength);
         }
         return CollaborationMessage(std::move(chunk));
+    }
+    case CollaborationMessageKind::ParticipantViewport: {
+        ParticipantViewport viewport;
+        if ( !reader.readUint64(viewport.clientId) ||
+             !reader.readUint64(viewport.sequence) ||
+             !reader.readDouble(viewport.playbackTime) ||
+             !reader.readDouble(viewport.visualTime) ||
+             !reader.readDouble(viewport.visibleTimeStart) ||
+             !reader.readDouble(viewport.visibleTimeEnd) ||
+             !reader.readDouble(viewport.horizontalOffsetRatio) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( reader.remaining() != 0 || !isViewportStateValid(viewport) ) {
+            return std::unexpected(ProtocolError::InvalidViewportState);
+        }
+        return CollaborationMessage(viewport);
     }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);

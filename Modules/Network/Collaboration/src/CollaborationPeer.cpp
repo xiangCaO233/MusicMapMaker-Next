@@ -2,6 +2,7 @@
 #include "config/CreatorIdentity.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace MMM::Network::Collaboration
@@ -75,6 +76,12 @@ CollaborationPeer::participantCreators() const
     return m_participantCreators;
 }
 
+const std::unordered_map<PeerId, ParticipantViewport>&
+CollaborationPeer::participantViewports() const
+{
+    return m_participantViewports;
+}
+
 bool CollaborationPeer::addParticipant(PeerId peerId, std::string creator)
 {
     creator = Config::normalizeCreatorIdentity(creator);
@@ -93,6 +100,10 @@ bool CollaborationPeer::addParticipant(PeerId peerId, std::string creator)
     for ( const auto& [knownPeerId, knownCreator] : m_participantCreators ) {
         static_cast<void>(sendMessage(
             peerId, ParticipantIdentity{ knownPeerId, knownCreator }));
+    }
+    for ( const auto& [knownPeerId, viewport] : m_participantViewports ) {
+        static_cast<void>(knownPeerId);
+        static_cast<void>(sendMessage(peerId, viewport));
     }
 
     m_participants.insert(peerId);
@@ -126,6 +137,7 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     }
     m_participants.erase(peerId);
     m_lastAcknowledgedRevision.erase(peerId);
+    m_participantViewports.erase(peerId);
     if ( m_participantCreators.erase(peerId) == 0 ) {
         return;
     }
@@ -163,6 +175,29 @@ SubmitOperationResult CollaborationPeer::submitOperation(
 
     ++m_nextClientSequence;
     return SubmitOperationResult::Accepted;
+}
+
+bool CollaborationPeer::publishViewport(ParticipantViewport viewport)
+{
+    if ( !m_valid || !std::isfinite(viewport.playbackTime) ||
+         !std::isfinite(viewport.visualTime) ||
+         !std::isfinite(viewport.visibleTimeStart) ||
+         !std::isfinite(viewport.visibleTimeEnd) ||
+         !std::isfinite(viewport.horizontalOffsetRatio) ) {
+        return false;
+    }
+
+    viewport.clientId = m_config.clientId;
+    viewport.sequence = m_nextViewportSequence++;
+    m_participantViewports.insert_or_assign(m_config.clientId, viewport);
+    if ( m_config.isHost ) {
+        bool sent = true;
+        for ( const PeerId participantId : m_participants ) {
+            sent = sendMessage(participantId, viewport) && sent;
+        }
+        return sent;
+    }
+    return sendMessage(m_config.hostId, viewport);
 }
 
 bool CollaborationPeer::sendResourceMessage(PeerId recipientId,
@@ -228,6 +263,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
         } else if ( const auto* resync =
                         std::get_if<ResyncRequest>(&message) ) {
             handleResyncRequest(senderId, *resync);
+        } else if ( const auto* viewport =
+                        std::get_if<ParticipantViewport>(&message) ) {
+            handleParticipantViewport(senderId, *viewport);
         } else if ( std::holds_alternative<ResourceRequest>(message) &&
                     m_participants.contains(senderId) && m_resourceCallback ) {
             m_resourceCallback(senderId, message);
@@ -247,6 +285,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
         handleParticipantLeft(senderId, *participantLeft);
     } else if ( const auto* snapshot = std::get_if<StateSnapshot>(&message) ) {
         handleStateSnapshot(senderId, *snapshot);
+    } else if ( const auto* viewport =
+                    std::get_if<ParticipantViewport>(&message) ) {
+        handleParticipantViewport(senderId, *viewport);
     } else if ( (std::holds_alternative<ResourceManifest>(message) ||
                  std::holds_alternative<ResourceChunk>(message)) &&
                 senderId == m_config.hostId && m_resourceCallback ) {
@@ -362,6 +403,50 @@ void CollaborationPeer::handleParticipantLeft(
         return;
     }
     m_participantCreators.erase(participantLeft.clientId);
+    m_participantViewports.erase(participantLeft.clientId);
+}
+
+void CollaborationPeer::handleParticipantViewport(
+    PeerId senderId, const ParticipantViewport& viewport)
+{
+    const bool valuesValid = viewport.clientId != 0 && viewport.sequence != 0 &&
+                             std::isfinite(viewport.playbackTime) &&
+                             std::isfinite(viewport.visualTime) &&
+                             std::isfinite(viewport.visibleTimeStart) &&
+                             std::isfinite(viewport.visibleTimeEnd) &&
+                             std::isfinite(viewport.horizontalOffsetRatio);
+    if ( !valuesValid ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+
+    if ( m_config.isHost ) {
+        if ( !m_participants.contains(senderId) ||
+             viewport.clientId != senderId ) {
+            ++m_stats.invalidMessages;
+            return;
+        }
+    } else if ( senderId != m_config.hostId ||
+                !m_participantCreators.contains(viewport.clientId) ||
+                viewport.clientId == m_config.clientId ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+
+    const auto existing = m_participantViewports.find(viewport.clientId);
+    if ( existing != m_participantViewports.end() &&
+         viewport.sequence <= existing->second.sequence ) {
+        return;
+    }
+    m_participantViewports.insert_or_assign(viewport.clientId, viewport);
+
+    if ( m_config.isHost ) {
+        for ( const PeerId participantId : m_participants ) {
+            if ( participantId != senderId ) {
+                static_cast<void>(sendMessage(participantId, viewport));
+            }
+        }
+    }
 }
 
 void CollaborationPeer::handleStateSnapshot(PeerId               senderId,

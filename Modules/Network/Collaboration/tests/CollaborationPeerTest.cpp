@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@ using MMM::Network::Collaboration::CollaborationPeerConfig;
 using MMM::Network::Collaboration::CommittedOperation;
 using MMM::Network::Collaboration::LoopbackTransportHub;
 using MMM::Network::Collaboration::ParticipantIdentity;
+using MMM::Network::Collaboration::ParticipantViewport;
 using MMM::Network::Collaboration::PeerId;
 using MMM::Network::Collaboration::ProtocolError;
 using MMM::Network::Collaboration::SubmitOperationResult;
@@ -97,6 +99,33 @@ void pumpPeers(CollaborationPeer&                               host,
     });
 }
 
+/// @brief 判断房主与全部访客是否持有一致的主画布状态表。
+/// @param host 房主 Peer。
+/// @param guests 七个访客 Peer。
+/// @return 全部客户端都收敛到八个参与者的最新状态时返回 true。
+[[nodiscard]] bool allParticipantViewportsConverged(
+    const CollaborationPeer&                               host,
+    const std::vector<std::unique_ptr<CollaborationPeer>>& guests)
+{
+    if ( host.participantViewports().size() != PEER_COUNT ) return false;
+    return std::all_of(guests.begin(), guests.end(), [&](const auto& guest) {
+        const auto& guestViewports = guest->participantViewports();
+        if ( guestViewports.size() != PEER_COUNT ) return false;
+        for ( const auto& [peerId, hostViewport] :
+              host.participantViewports() ) {
+            const auto viewport = guestViewports.find(peerId);
+            if ( viewport == guestViewports.end() ||
+                 viewport->second.sequence != hostViewport.sequence ||
+                 viewport->second.playbackTime != hostViewport.playbackTime ||
+                 viewport->second.horizontalOffsetRatio !=
+                     hostViewport.horizontalOffsetRatio ) {
+                return false;
+            }
+        }
+        return true;
+    });
+}
+
 /// @brief 覆盖 8 Peer 并发提交、重复包去重和缺失版本日志补发。
 /// @return 全部断言通过时返回 true。
 [[nodiscard]] bool testEightPeerIncrementalConvergence()
@@ -164,6 +193,24 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    ParticipantViewport hostViewport;
+    hostViewport.playbackTime          = 12.5;
+    hostViewport.visualTime            = 12.6;
+    hostViewport.visibleTimeStart      = 9.0;
+    hostViewport.visibleTimeEnd        = 15.0;
+    hostViewport.horizontalOffsetRatio = 0.125;
+    if ( !host.publishViewport(hostViewport) ) return false;
+    for ( std::size_t index = 0; index < guests.size(); ++index ) {
+        ParticipantViewport guestViewport = hostViewport;
+        guestViewport.playbackTime        = 20.0 + static_cast<double>(index);
+        guestViewport.visualTime          = guestViewport.playbackTime + 0.1;
+        guestViewport.horizontalOffsetRatio =
+            -0.05 * static_cast<double>(index + 1);
+        if ( !guests[index]->publishViewport(guestViewport) ) return false;
+    }
+    pumpPeers(host, guests, 8);
+    if ( !allParticipantViewportsConverged(host, guests) ) return false;
+
     hub.setDuplicatePackets(true);
     for ( std::uint8_t localIndex = 1; localIndex <= 4; ++localIndex ) {
         const ByteBuffer hostOperation = makeOperation(HOST_ID, localIndex);
@@ -230,8 +277,15 @@ void pumpPeers(CollaborationPeer&                               host,
     if ( host.participantCreators().contains(DEPARTING_PEER_ID) ) {
         return false;
     }
+    if ( host.participantViewports().contains(DEPARTING_PEER_ID) ) {
+        return false;
+    }
     for ( std::size_t index = 0; index + 1 < guests.size(); ++index ) {
         if ( guests[index]->participantCreators().contains(
+                 DEPARTING_PEER_ID) ) {
+            return false;
+        }
+        if ( guests[index]->participantViewports().contains(
                  DEPARTING_PEER_ID) ) {
             return false;
         }
@@ -307,6 +361,40 @@ void pumpPeers(CollaborationPeer&                               host,
     if ( decodedSnapshot == nullptr ||
          decodedSnapshot->revision != snapshot.revision ||
          decodedSnapshot->payload != snapshot.payload ) {
+        return false;
+    }
+
+    ParticipantViewport viewport{
+        .clientId              = 7,
+        .sequence              = 19,
+        .playbackTime          = 18.25,
+        .visualTime            = 18.35,
+        .visibleTimeStart      = 15.0,
+        .visibleTimeEnd        = 22.0,
+        .horizontalOffsetRatio = -0.125,
+    };
+    const auto viewportEncoded = encodeCollaborationMessage(viewport, 4U);
+    const auto viewportDecoded =
+        viewportEncoded
+            ? decodeCollaborationMessage(*viewportEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidViewportState));
+    const auto* decodedViewport =
+        viewportDecoded ? std::get_if<ParticipantViewport>(&*viewportDecoded)
+                        : nullptr;
+    if ( !decodedViewport || decodedViewport->clientId != viewport.clientId ||
+         decodedViewport->sequence != viewport.sequence ||
+         decodedViewport->playbackTime != viewport.playbackTime ||
+         decodedViewport->visibleTimeStart != viewport.visibleTimeStart ||
+         decodedViewport->horizontalOffsetRatio !=
+             viewport.horizontalOffsetRatio ) {
+        return false;
+    }
+    viewport.visualTime        = std::numeric_limits<double>::quiet_NaN();
+    const auto invalidViewport = encodeCollaborationMessage(viewport, 4U);
+    if ( invalidViewport ||
+         invalidViewport.error() != ProtocolError::InvalidViewportState ) {
         return false;
     }
 
@@ -491,11 +579,18 @@ void pumpPeers(CollaborationPeer&                               host,
     hostConfig.creator                     = "Host";
     hostConfig.isHost                      = true;
     hostConfig.limits.maxJournalOperations = 2;
-    CollaborationPeer host(hostConfig,
-                           hub.createEndpoint(HOST_ID),
-                           [&hostModel](const CommittedOperation& operation) {
+    CollaborationPeer   host(hostConfig,
+                             hub.createEndpoint(HOST_ID),
+                             [&hostModel](const CommittedOperation& operation) {
                                hostModel.push_back(operation.payload);
-                           });
+                             });
+    ParticipantViewport hostViewport;
+    hostViewport.playbackTime          = 4.0;
+    hostViewport.visualTime            = 4.1;
+    hostViewport.visibleTimeStart      = 1.0;
+    hostViewport.visibleTimeEnd        = 8.0;
+    hostViewport.horizontalOffsetRatio = 0.2;
+    if ( !host.publishViewport(hostViewport) ) return false;
     for ( std::uint8_t index = 1; index <= 5; ++index ) {
         const auto operation = makeOperation(HOST_ID, index);
         if ( host.submitOperation(operation) !=
@@ -525,6 +620,7 @@ void pumpPeers(CollaborationPeer&                               host,
         host.update();
     }
     return guest.appliedRevision() == host.appliedRevision() &&
+           guest.participantViewports().contains(HOST_ID) &&
            guestModel.size() == 1U && guestModel.front() == fullSnapshot;
 }
 

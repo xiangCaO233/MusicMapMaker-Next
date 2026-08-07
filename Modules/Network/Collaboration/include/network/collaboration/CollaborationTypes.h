@@ -54,6 +54,24 @@ struct ParticipantLeft {
     PeerId clientId = 0;
 };
 
+/// @brief 协作参与者在主画布中的轻量视口状态。
+struct ParticipantViewport {
+    /// @brief 发布该状态的客户端标识。
+    PeerId clientId = 0;
+    /// @brief 发布客户端内严格递增的视口状态序号。
+    std::uint64_t sequence = 0;
+    /// @brief 可直接传给 CmdSeek 的原始谱面播放时间，单位为秒。
+    double playbackTime = 0.0;
+    /// @brief 主画布判定线对应的视觉时间，单位为秒。
+    double visualTime = 0.0;
+    /// @brief 发布端主画布可见时间范围的第一个边界，单位为秒。
+    double visibleTimeStart = 0.0;
+    /// @brief 发布端主画布可见时间范围的第二个边界，单位为秒。
+    double visibleTimeEnd = 0.0;
+    /// @brief 主画布横向像素偏移除以发布端视口宽度后的比例。
+    double horizontalOffsetRatio = 0.0;
+};
+
 /// @brief 协作 Peer 的有界处理参数。
 struct CollaborationPeerLimits {
     /// @brief 单条增量操作允许的最大字节数。

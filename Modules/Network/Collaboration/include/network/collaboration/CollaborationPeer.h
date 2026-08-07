@@ -94,6 +94,11 @@ public:
     [[nodiscard]] const std::unordered_map<PeerId, std::string>&
     participantCreators() const;
 
+    /// @brief 返回全部已经发布主画布位置的客户端状态。
+    /// @return 以 PeerId 索引的最新只读视口状态表。
+    [[nodiscard]] const std::unordered_map<PeerId, ParticipantViewport>&
+    participantViewports() const;
+
     /// @brief 房主登记一个可提交和接收增量操作的访客。
     /// @param peerId 访客标识。
     /// @param creator 访客在连接阶段提交的 Creator 展示身份。
@@ -114,6 +119,11 @@ public:
     /// @return 请求入房主队列或访客传输队列后的结果。
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
+
+    /// @brief 发布当前客户端最新的主画布视口状态。
+    /// @param viewport 不含客户端标识和序号的本地主画布状态。
+    /// @return 状态有效且已经写入本地状态表并发送时返回 true。
+    [[nodiscard]] bool publishViewport(ParticipantViewport viewport);
 
     /// @brief 发送一条已由资源同步状态机校验的资源消息。
     /// @param recipientId 接收客户端；访客只能向房主发送请求。
@@ -171,6 +181,12 @@ private:
     void handleParticipantLeft(PeerId                 senderId,
                                const ParticipantLeft& participantLeft);
 
+    /// @brief 校验、收敛并按房主拓扑转发一个参与者视口状态。
+    /// @param senderId 传输层确认的直接发送方。
+    /// @param viewport 消息声明的原始参与者状态。
+    void handleParticipantViewport(PeerId                     senderId,
+                                   const ParticipantViewport& viewport);
+
     /// @brief 访客应用房主提供的完整状态快照并直接追平版本。
     void handleStateSnapshot(PeerId senderId, const StateSnapshot& snapshot);
 
@@ -211,6 +227,8 @@ private:
     bool m_valid = false;
     /// @brief 当前客户端下一个本地请求序号。
     std::uint64_t m_nextClientSequence = 1;
+    /// @brief 当前客户端下一个本地视口状态序号。
+    std::uint64_t m_nextViewportSequence = 1;
     /// @brief 房主要分配的下一个全房间版本。
     std::uint64_t m_nextRevision = 1;
     /// @brief 当前客户端已经连续应用的最高版本。
@@ -229,6 +247,8 @@ private:
     std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
     /// @brief 当前客户端已知的 PeerId 到 Creator 展示身份映射。
     std::unordered_map<PeerId, std::string> m_participantCreators;
+    /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
+    std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
     /// @brief 房主最近一次可独立恢复的完整谱面快照。
     std::optional<StateSnapshot> m_stateSnapshot;
     /// @brief 当前 Peer 累计诊断统计。
