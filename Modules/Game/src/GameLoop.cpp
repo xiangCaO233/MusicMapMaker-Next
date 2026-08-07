@@ -113,6 +113,7 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
             TR("title.beatmap_manager").toString()));
     auto collaborationRoom =
         std::make_shared<Network::Collaboration::CollaborationRoom>();
+    m_uiManager.setCollaborationRoom(collaborationRoom.get());
     sidebar_manager->registerSubView(
         TR("title.collaboration_manager").toString(),
         std::make_unique<UI::CollaborationView>(

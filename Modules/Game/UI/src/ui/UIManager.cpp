@@ -420,6 +420,18 @@ Graphic::NativeWindow* UIManager::getNativeWindow() const
     return m_nativeWindow;
 }
 
+void UIManager::setCollaborationRoom(
+    Network::Collaboration::CollaborationRoom* room)
+{
+    m_collaborationRoom = room;
+}
+
+Network::Collaboration::CollaborationRoom*
+UIManager::getCollaborationRoom() const
+{
+    return m_collaborationRoom;
+}
+
 Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
 {
     return m_nativeWindow ? m_nativeWindow->getWindowFrameAdapter() : nullptr;

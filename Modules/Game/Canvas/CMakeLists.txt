@@ -20,6 +20,7 @@ target_link_libraries(
          UI
          Graphic
          Logic
+         NetworkCollaboration
          3rd_glm
          3rd_entt)
 target_include_directories(Canvas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

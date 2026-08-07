@@ -12,11 +12,18 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/CanvasCamera.h"
+#include "network/collaboration/CollaborationRoom.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fmt/format.h>
+#include <iterator>
+#include <limits>
+#include <string_view>
 #include <utility>
 
 namespace MMM::Canvas
@@ -74,6 +81,83 @@ bool isCurrentCanvasWindowVisible()
 
     const ImVec2 contentSize = ImGui::GetContentRegionAvail();
     return contentSize.x > 1.0f && contentSize.y > 1.0f;
+}
+
+/// @brief 计算没有滚动分段时使用的主画布绝对 Y 速度。
+/// @return 兜底绝对 Y 速度，单位为逻辑像素/秒。
+double defaultCollaborationAbsYSpeed()
+{
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    return 500.0 * static_cast<double>(std::max(0.01F, visual.timelineZoom));
+}
+
+/// @brief 从渲染快照估算指定视觉时间对应的绝对 Y。
+/// @param snapshot 当前主画布快照。
+/// @param time 远端视口边界的视觉时间。
+/// @return 与当前滚动分段一致的绝对 Y。
+/// @warning UI 热路径：每个远端用户最多调用两次，只执行一次二分查找。
+double collaborationAbsYAtTime(const Logic::RenderSnapshot& snapshot,
+                               double                       time)
+{
+    if ( snapshot.scrollSegments.empty() ) {
+        return time * defaultCollaborationAbsYSpeed();
+    }
+    const auto it = std::upper_bound(
+        snapshot.scrollSegments.begin(),
+        snapshot.scrollSegments.end(),
+        time,
+        [](double value, const Logic::System::ScrollSegment& segment) {
+            return value < segment.time;
+        });
+    const auto& segment = it == snapshot.scrollSegments.begin()
+                              ? snapshot.scrollSegments.front()
+                              : *std::prev(it);
+    return segment.absY + (time - segment.time) * segment.speed;
+}
+
+/// @brief 将协作视觉时间投影到当前主画布本地 Y 坐标。
+/// @param snapshot 当前主画布快照。
+/// @param time 待投影视觉时间。
+/// @param canvasHeight 当前画布高度。
+/// @return 以主画布左上角为原点的 Y 坐标。
+/// @warning UI 热路径：只执行常量数值计算和两次滚动分段二分查找。
+float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
+                                 double time, float canvasHeight)
+{
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const float judgmentLineY =
+        canvasHeight * visual.judgmentLinePositionForKeyCount(
+                           std::max(snapshot.trackCount, 1));
+    const double currentAbsY =
+        collaborationAbsYAtTime(snapshot, snapshot.currentTime);
+    const double targetAbsY = collaborationAbsYAtTime(snapshot, time);
+    const double scale      = std::isfinite(snapshot.renderScaleY) &&
+                                      std::abs(snapshot.renderScaleY) > 1e-6F
+                                  ? static_cast<double>(snapshot.renderScaleY)
+                                  : 1.0;
+    return judgmentLineY -
+           static_cast<float>((targetAbsY - currentAbsY) * scale);
+}
+
+/// @brief 根据 PeerId 选择稳定且醒目的覆盖层颜色。
+/// @param peerId 远端参与者标识。
+/// @param alpha 输出透明度。
+/// @return ImGui 使用的 RGBA 颜色。
+ImU32 collaborationPeerColor(Network::Collaboration::PeerId peerId,
+                             std::uint8_t                   alpha)
+{
+    constexpr std::array<ImVec4, 7> COLORS{
+        ImVec4{ 0.20F, 0.72F, 1.00F, 1.00F },
+        ImVec4{ 1.00F, 0.38F, 0.42F, 1.00F },
+        ImVec4{ 0.42F, 0.90F, 0.45F, 1.00F },
+        ImVec4{ 1.00F, 0.72F, 0.22F, 1.00F },
+        ImVec4{ 0.75F, 0.46F, 1.00F, 1.00F },
+        ImVec4{ 0.16F, 0.88F, 0.78F, 1.00F },
+        ImVec4{ 1.00F, 0.46F, 0.82F, 1.00F },
+    };
+    ImVec4 color = COLORS[peerId % COLORS.size()];
+    color.w      = static_cast<float>(alpha) / 255.0F;
+    return ImGui::ColorConvertFloat4ToU32(color);
 }
 }  // namespace
 
@@ -199,6 +283,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
 
         // 先提交离屏纹理，后续主画布物件控制按钮才能位于纹理之上并接收输入。
+        const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
+        const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
 
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
@@ -226,6 +312,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
 
         if ( isActiveCanvas ) {
+            updateCollaborationViewports(
+                sourceManager, canvasScreenPosition, canvasSize);
             m_interaction->update(sourceManager,
                                   m_currentSnapshot,
                                   m_logicalWidth,
@@ -295,6 +383,200 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
         ImGui::EndPopup();
     }
+}
+
+void Basic2DCanvas::updateCollaborationViewports(
+    UI::UIManager* sourceManager, const ImVec2& canvasScreenPosition,
+    const ImVec2& canvasSize)
+{
+    if ( !sourceManager || !m_currentSnapshot ||
+         !m_currentSnapshot->hasBeatmap || canvasSize.x <= 1.0F ||
+         canvasSize.y <= 1.0F ) {
+        return;
+    }
+    auto* room = sourceManager->getCollaborationRoom();
+    if ( !room || !room->isActive() || room->localPeerId() == 0 ) {
+        m_lastFollowedPeerId           = 0;
+        m_lastFollowedViewportSequence = 0;
+        return;
+    }
+
+    Network::Collaboration::ParticipantViewport localViewport;
+    localViewport.playbackTime     = m_currentSnapshot->playbackTime;
+    localViewport.visualTime       = m_currentSnapshot->currentTime;
+    localViewport.visibleTimeStart = m_currentSnapshot->visibleTimeStart;
+    localViewport.visibleTimeEnd   = m_currentSnapshot->visibleTimeEnd;
+    localViewport.horizontalOffsetRatio =
+        static_cast<double>(m_currentSnapshot->canvasHorizontalOffsetX) /
+        static_cast<double>(canvasSize.x);
+    room->publishLocalViewport(localViewport);
+
+    const auto followedPeerId = room->followedPeerId();
+    if ( followedPeerId != m_lastFollowedPeerId ) {
+        m_lastFollowedPeerId           = followedPeerId;
+        m_lastFollowedViewportSequence = 0;
+    }
+    const auto& viewports = room->participantViewports();
+    if ( followedPeerId != 0 ) {
+        const auto followed = viewports.find(followedPeerId);
+        if ( followed != viewports.end() &&
+             followed->second.sequence != m_lastFollowedViewportSequence ) {
+            const auto& viewport = followed->second;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSeek{ viewport.playbackTime }));
+            const float desiredHorizontalOffset =
+                static_cast<float>(viewport.horizontalOffsetRatio *
+                                   static_cast<double>(canvasSize.x));
+            const float horizontalDelta =
+                desiredHorizontalOffset -
+                m_currentSnapshot->canvasHorizontalOffsetX;
+            if ( std::isfinite(horizontalDelta) &&
+                 std::abs(horizontalDelta) > 0.05F ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                        .cameraId       = m_cameraId,
+                        .deltaX         = horizontalDelta,
+                        .deltaY         = 0.0F,
+                        .viewportWidth  = canvasSize.x,
+                        .viewportHeight = canvasSize.y,
+                        .renderScaleY   = m_currentSnapshot->renderScaleY,
+                    }));
+            }
+            m_lastFollowedViewportSequence = viewport.sequence;
+        }
+    }
+
+    const auto&  creators     = room->participants();
+    const auto   localId      = room->localPeerId();
+    const double localMinimum = std::min(m_currentSnapshot->visibleTimeStart,
+                                         m_currentSnapshot->visibleTimeEnd);
+    const double localMaximum = std::max(m_currentSnapshot->visibleTimeStart,
+                                         m_currentSnapshot->visibleTimeEnd);
+    if ( !std::isfinite(localMinimum) || !std::isfinite(localMaximum) ) return;
+
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout =
+        visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
+    ImDrawList*  drawList = ImGui::GetWindowDrawList();
+    const ImVec2 canvasMaximum{
+        canvasScreenPosition.x + canvasSize.x,
+        canvasScreenPosition.y + canvasSize.y,
+    };
+    drawList->PushClipRect(canvasScreenPosition, canvasMaximum, true);
+
+    for ( const auto& [peerId, viewport] : viewports ) {
+        if ( peerId == localId ) continue;
+        const auto creator = creators.find(peerId);
+        if ( creator == creators.end() ) continue;
+
+        const double remoteMinimum =
+            std::min(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+        const double remoteMaximum =
+            std::max(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+        if ( !std::isfinite(remoteMinimum) || !std::isfinite(remoteMaximum) ) {
+            continue;
+        }
+
+        const auto projection = Logic::calculateCanvasLaneProjection(
+            canvasSize.x,
+            m_currentSnapshot->trackCount,
+            m_currentSnapshot->bgmTrackCount,
+            layout.left,
+            layout.right,
+            static_cast<float>(viewport.horizontalOffsetRatio *
+                               static_cast<double>(canvasSize.x)),
+            true,
+            m_currentSnapshot->bmsEditingEnabled);
+        float leftX  = projection.valid ? projection.player.leftX
+                                        : canvasSize.x * layout.left;
+        float rightX = projection.valid ? projection.bgmRightX
+                                        : canvasSize.x * layout.right;
+        leftX        = std::clamp(leftX, 2.0F, canvasSize.x - 2.0F);
+        rightX       = std::clamp(rightX, 2.0F, canvasSize.x - 2.0F);
+        if ( rightX - leftX < 12.0F ) {
+            leftX = std::clamp(
+                canvasSize.x * layout.left, 2.0F, canvasSize.x - 2.0F);
+            rightX = std::clamp(
+                canvasSize.x * layout.right, 2.0F, canvasSize.x - 2.0F);
+        }
+        const float centerX   = (leftX + rightX) * 0.5F;
+        const ImU32 color     = collaborationPeerColor(peerId, 255);
+        const bool  following = followedPeerId == peerId;
+
+        if ( remoteMaximum >= localMinimum && remoteMinimum <= localMaximum ) {
+            float firstY = collaborationTimeToCanvasY(
+                *m_currentSnapshot, viewport.visibleTimeStart, canvasSize.y);
+            float secondY = collaborationTimeToCanvasY(
+                *m_currentSnapshot, viewport.visibleTimeEnd, canvasSize.y);
+            float topY = std::clamp(
+                std::min(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
+            float bottomY = std::clamp(
+                std::max(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
+            if ( bottomY - topY < 3.0F ) bottomY = topY + 3.0F;
+            const ImVec2 rectangleMinimum{
+                canvasScreenPosition.x + leftX,
+                canvasScreenPosition.y + topY,
+            };
+            const ImVec2 rectangleMaximum{
+                canvasScreenPosition.x + rightX,
+                canvasScreenPosition.y + std::min(bottomY, canvasSize.y - 1.0F),
+            };
+            drawList->AddRectFilled(rectangleMinimum,
+                                    rectangleMaximum,
+                                    collaborationPeerColor(peerId, 24));
+            drawList->AddRect(rectangleMinimum,
+                              rectangleMaximum,
+                              color,
+                              0.0F,
+                              0,
+                              following ? 3.0F : 2.0F);
+
+            const ImVec2 textSize =
+                ImGui::CalcTextSize(creator->second.c_str());
+            const float labelHeight = textSize.y + 6.0F;
+            float       labelY      = rectangleMinimum.y - labelHeight;
+            if ( labelY < canvasScreenPosition.y ) {
+                labelY = rectangleMinimum.y + 1.0F;
+            }
+            const float labelX =
+                std::clamp(rectangleMinimum.x,
+                           canvasScreenPosition.x,
+                           std::max(canvasScreenPosition.x,
+                                    canvasMaximum.x - textSize.x - 10.0F));
+            const ImVec2 labelMinimum{ labelX, labelY };
+            const ImVec2 labelMaximum{ labelX + textSize.x + 10.0F,
+                                       labelY + labelHeight };
+            drawList->AddRectFilled(labelMinimum,
+                                    labelMaximum,
+                                    collaborationPeerColor(peerId, 220),
+                                    3.0F);
+            drawList->AddText({ labelX + 5.0F, labelY + 3.0F },
+                              IM_COL32(255, 255, 255, 255),
+                              creator->second.c_str());
+            continue;
+        }
+
+        const bool remoteAhead =
+            viewport.visualTime > m_currentSnapshot->currentTime;
+        const float tipY   = remoteAhead ? canvasScreenPosition.y + 7.0F
+                                         : canvasMaximum.y - 7.0F;
+        const float baseY  = remoteAhead ? tipY + 13.0F : tipY - 13.0F;
+        const float arrowX = canvasScreenPosition.x + centerX;
+        drawList->AddTriangleFilled({ arrowX, tipY },
+                                    { arrowX - 8.0F, baseY },
+                                    { arrowX + 8.0F, baseY },
+                                    color);
+        const ImVec2 textSize = ImGui::CalcTextSize(creator->second.c_str());
+        const float  textX =
+            std::clamp(arrowX - textSize.x * 0.5F,
+                       canvasScreenPosition.x + 2.0F,
+                       std::max(canvasScreenPosition.x + 2.0F,
+                                canvasMaximum.x - textSize.x - 2.0F));
+        const float textY =
+            remoteAhead ? baseY + 2.0F : baseY - textSize.y - 2.0F;
+        drawList->AddText({ textX, textY }, color, creator->second.c_str());
+    }
+    drawList->PopClipRect();
 }
 
 void Basic2DCanvas::requestClose()

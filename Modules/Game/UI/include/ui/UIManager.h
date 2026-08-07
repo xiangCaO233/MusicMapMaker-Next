@@ -27,6 +27,11 @@ namespace MMM::Event
 enum class SettingsTab;
 }  // namespace MMM::Event
 
+namespace MMM::Network::Collaboration
+{
+class CollaborationRoom;
+}
+
 namespace MMM::UI
 {
 class IRenderableView;
@@ -63,6 +68,16 @@ public:
     /// @return 主原生窗口指针；未绑定时返回 nullptr。
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
     [[nodiscard]] Graphic::NativeWindow* getNativeWindow() const;
+
+    /// @brief 绑定应用级协作房间观察指针供主画布同步视口状态。
+    /// @param room 由 GameLoop 创建并由协作视图共同持有的房间对象。
+    void setCollaborationRoom(Network::Collaboration::CollaborationRoom* room);
+
+    /// @brief 获取应用级协作房间观察指针。
+    /// @return 已绑定房间；协作功能未初始化时返回 nullptr。
+    /// @warning UI 热路径：主画布每帧读取；只返回观察指针，不复制共享所有权。
+    [[nodiscard]] Network::Collaboration::CollaborationRoom*
+    getCollaborationRoom() const;
 
     /// @brief 获取无原生装饰窗口的平台行为适配器。
     /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
@@ -272,6 +287,10 @@ private:
 
     /// @brief 主原生窗口观察指针，不持有所有权。
     Graphic::NativeWindow* m_nativeWindow{ nullptr };
+
+    /// @brief 应用级协作房间观察指针，生命周期由注册视图持有的 shared_ptr
+    /// 保证。
+    Network::Collaboration::CollaborationRoom* m_collaborationRoom{ nullptr };
 
     /// @brief 上一次已应用项目工作区的项目路径。
     std::string m_workspaceProjectPath;
