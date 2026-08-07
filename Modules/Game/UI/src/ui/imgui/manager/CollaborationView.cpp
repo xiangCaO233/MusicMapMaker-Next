@@ -43,6 +43,8 @@ const char* roomStateText(Network::Collaboration::CollaborationRoomState state)
         return TR("ui.collaboration.state.hosting").data();
     case Network::Collaboration::CollaborationRoomState::Joining:
         return TR("ui.collaboration.state.joining").data();
+    case Network::Collaboration::CollaborationRoomState::AwaitingApproval:
+        return TR("ui.collaboration.state.awaiting_approval").data();
     case Network::Collaboration::CollaborationRoomState::Connected:
         return TR("ui.collaboration.state.connected").data();
     case Network::Collaboration::CollaborationRoomState::Error:
@@ -133,6 +135,13 @@ void drawParticipantRow(Network::Collaboration::CollaborationRoom& room,
                       : TR("ui.collaboration.follow").data();
         if ( FeedbackSmallButton(actionLabel) ) {
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
+        }
+        if ( room.isHost() ) {
+            ImGui::SameLine();
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.remove_participant").data()) ) {
+                static_cast<void>(room.removeParticipant(peerId));
+            }
         }
     }
     ImGui::PopID();
@@ -467,6 +476,70 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
         }
     }
 
+    if ( m_room->isHost() ) {
+        ImGui::Spacing();
+        if ( FeedbackCollapsingHeader(
+                 TR("ui.collaboration.join_requests").data(), headerFlags) ) {
+            const auto& requests = m_room->pendingJoinRequests();
+            if ( requests.empty() ) {
+                ImGui::TextDisabled(
+                    "%s", TR("ui.collaboration.no_join_requests").data());
+            } else {
+                const ImGuiTableFlags tableFlags =
+                    ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+                std::string approveRequest;
+                std::string rejectRequest;
+                if ( ImGui::BeginTable(
+                         "CollaborationJoinRequestsTable", 2, tableFlags) ) {
+                    const float approveWidth =
+                        ImGui::CalcTextSize(
+                            TR("ui.collaboration.approve").data())
+                            .x +
+                        style.FramePadding.x * 2.0F;
+                    const float rejectWidth =
+                        ImGui::CalcTextSize(
+                            TR("ui.collaboration.reject").data())
+                            .x +
+                        style.FramePadding.x * 2.0F;
+                    ImGui::TableSetupColumn(TR("ui.collaboration.user").data(),
+                                            ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn(
+                        TR("ui.collaboration.action").data(),
+                        ImGuiTableColumnFlags_WidthFixed,
+                        approveWidth + rejectWidth + style.ItemSpacing.x);
+                    ImGui::TableHeadersRow();
+                    for ( const auto& request : requests ) {
+                        ImGui::PushID(request.requestId.c_str());
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,
+                                            ImGui::GetFrameHeight());
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted(request.creator.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        if ( FeedbackSmallButton(
+                                 TR("ui.collaboration.approve").data()) ) {
+                            approveRequest = request.requestId;
+                        }
+                        ImGui::SameLine();
+                        if ( FeedbackSmallButton(
+                                 TR("ui.collaboration.reject").data()) ) {
+                            rejectRequest = request.requestId;
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTable();
+                }
+                if ( !approveRequest.empty() ) {
+                    static_cast<void>(
+                        m_room->approveJoinRequest(approveRequest));
+                } else if ( !rejectRequest.empty() ) {
+                    static_cast<void>(m_room->rejectJoinRequest(rejectRequest));
+                }
+            }
+        }
+    }
+
     const auto resource = m_room->resourceProgress();
     using ResourcePhase =
         Network::Collaboration::CollaborationResourceSyncPhase;
@@ -568,7 +641,13 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                 ImGui::CalcTextSize(
                     TR("ui.collaboration.stop_following").data())
                     .x +
-                style.FramePadding.x * 2.0F;
+                style.FramePadding.x * 2.0F +
+                (m_room->isHost()
+                     ? ImGui::CalcTextSize(
+                           TR("ui.collaboration.remove_participant").data())
+                               .x +
+                           style.FramePadding.x * 2.0F + style.ItemSpacing.x
+                     : 0.0F);
             ImGui::TableSetupColumn(TR("ui.collaboration.user").data(),
                                     ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn(TR("ui.collaboration.action").data(),
