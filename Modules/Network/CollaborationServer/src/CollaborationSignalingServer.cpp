@@ -34,7 +34,7 @@ constexpr std::size_t MAX_CALLBACK_EVENTS = 8192;
 /// @brief 未声明身份的连接保留时间。
 constexpr auto UNKNOWN_CLIENT_TIMEOUT = std::chrono::seconds(15);
 /// @brief 等待房主接受的加入请求保留时间。
-constexpr auto JOIN_REQUEST_TIMEOUT = std::chrono::seconds(20);
+constexpr auto JOIN_REQUEST_TIMEOUT = std::chrono::minutes(2);
 /// @brief 已关闭句柄延迟删除时间，避免 libdatachannel 立即复用整数句柄。
 constexpr auto RETIRED_WEBSOCKET_GRACE = std::chrono::seconds(5);
 /// @brief 随机标识使用的无歧义字符表。
@@ -545,6 +545,9 @@ private:
         } else if ( type == "accept_join" &&
                     client.role == ClientRole::Unknown ) {
             handleAcceptJoin(websocketId, message);
+        } else if ( type == "reject_join" &&
+                    client.role == ClientRole::HostControl ) {
+            handleRejectJoin(websocketId, message);
         } else if ( type == "ping" ) {
             nlohmann::json pong;
             pong["type"]    = "pong";
@@ -756,6 +759,58 @@ private:
         m_directoryDirty = true;
     }
 
+    /// @brief 校验房主控制令牌并拒绝仍在等待的访客。
+    void handleRejectJoin(int websocketId, const nlohmann::json& message)
+    {
+        std::string roomId;
+        std::string requestId;
+        std::string ownerToken;
+        if ( !readStringField(message, "roomId", roomId) ||
+             !readStringField(message, "requestId", requestId) ||
+             !readStringField(message, "ownerToken", ownerToken) ) {
+            rejectClient(websocketId, "invalid_reject");
+            return;
+        }
+
+        const auto roomIterator    = m_rooms.find(roomId);
+        const auto pendingIterator = m_pendingJoins.find(requestId);
+        if ( roomIterator == m_rooms.end() ||
+             pendingIterator == m_pendingJoins.end() ||
+             pendingIterator->second.roomId != roomId ||
+             roomIterator->second.controlWebSocketId != websocketId ||
+             roomIterator->second.ownerToken != ownerToken ) {
+            rejectClient(websocketId, "reject_not_authorized");
+            return;
+        }
+
+        const int guestWebSocketId = pendingIterator->second.guestWebSocketId;
+        m_pendingJoins.erase(pendingIterator);
+        const auto guestIterator = m_clients.find(guestWebSocketId);
+        if ( guestIterator == m_clients.end() ) return;
+        guestIterator->second.requestId.clear();
+
+        nlohmann::json rejected;
+        rejected["type"]    = "error";
+        rejected["version"] = DIRECTORY_PROTOCOL_VERSION;
+        rejected["reason"]  = "host_rejected";
+        static_cast<void>(sendJson(guestWebSocketId, rejected));
+        closeClient(guestWebSocketId);
+    }
+
+    /// @brief 通知房主一个等待请求已经由访客断开或超时取消。
+    void notifyJoinCancelled(const PendingJoin& pending)
+    {
+        const auto roomIterator = m_rooms.find(pending.roomId);
+        if ( roomIterator == m_rooms.end() ) return;
+        nlohmann::json cancelled;
+        cancelled["type"]         = "join_cancelled";
+        cancelled["version"]      = DIRECTORY_PROTOCOL_VERSION;
+        cancelled["requestId"]    = pending.requestId;
+        cancelled["guestCreator"] = pending.creator;
+        static_cast<void>(
+            sendJson(roomIterator->second.controlWebSocketId, cancelled));
+    }
+
     /// @brief 处理 WebSocket 关闭并同步清理房间或配对端。
     void processClosed(int websocketId, std::uint64_t generation)
     {
@@ -766,10 +821,16 @@ private:
         }
         const Client client = iterator->second;
 
+        if ( !client.requestId.empty() ) {
+            const auto pendingIterator = m_pendingJoins.find(client.requestId);
+            if ( pendingIterator != m_pendingJoins.end() ) {
+                notifyJoinCancelled(pendingIterator->second);
+                m_pendingJoins.erase(pendingIterator);
+            }
+        }
+
         if ( client.role == ClientRole::HostControl ) {
             removeRoom(client.roomId, websocketId);
-        } else if ( client.role == ClientRole::PendingGuest ) {
-            m_pendingJoins.erase(client.requestId);
         } else if ( client.role == ClientRole::Paired ) {
             const auto partnerIterator =
                 m_clients.find(client.partnerWebSocketId);

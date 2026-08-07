@@ -310,6 +310,56 @@ bool testDirectoryAndSignalingRelay()
          }) ) {
         return fail("guest_cleanup");
     }
+
+    auto rejectedGuest = connectSocket(server.listeningPort());
+    if ( !rejectedGuest ||
+         !pumpUntil(server,
+                    [&]() {
+                        return rejectedGuest->opened.load(
+                            std::memory_order_acquire);
+                    }) ||
+         !sendJson(*rejectedGuest,
+                   { { "type", "join_room" },
+                     { "version", 1 },
+                     { "roomId", roomId },
+                     { "creator", "Rejected Creator" } }) ) {
+        return fail("rejected_guest_join_send");
+    }
+    nlohmann::json rejectedPending;
+    nlohmann::json rejectedRequested;
+    bool           rejectedPendingReceived   = false;
+    bool           rejectedRequestedReceived = false;
+    if ( !pumpUntil(server, [&]() {
+             rejectedPendingReceived =
+                 rejectedPendingReceived ||
+                 takeMessage(*rejectedGuest, "join_pending", rejectedPending);
+             rejectedRequestedReceived =
+                 rejectedRequestedReceived ||
+                 takeMessage(*host, "join_requested", rejectedRequested);
+             return rejectedPendingReceived && rejectedRequestedReceived;
+         }) ) {
+        return fail("rejected_join_notifications");
+    }
+    const std::string rejectedRequestId =
+        rejectedRequested.value("requestId", "");
+    if ( rejectedRequestId.empty() ||
+         !sendJson(*host,
+                   { { "type", "reject_join" },
+                     { "version", 1 },
+                     { "roomId", roomId },
+                     { "requestId", rejectedRequestId },
+                     { "ownerToken", "0123456789abcdef0123456789abcdef" } }) ) {
+        return fail("host_reject_send");
+    }
+    nlohmann::json rejectedMessage;
+    if ( !pumpUntil(server,
+                    [&]() {
+                        return takeMessage(
+                            *rejectedGuest, "error", rejectedMessage);
+                    }) ||
+         rejectedMessage.value("reason", "") != "host_rejected" ) {
+        return fail("host_reject_delivery");
+    }
     return true;
 }
 }  // namespace
