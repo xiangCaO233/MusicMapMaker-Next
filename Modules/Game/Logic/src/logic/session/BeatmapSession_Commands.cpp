@@ -1286,7 +1286,8 @@ bool BeatmapSession::processCommands()
     }
 
     if ( mutationFlags != ::MMM::BeatmapMutationFlags::None ) {
-        auto observer = m_mutationObserver.load(std::memory_order_acquire);
+        auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                                  std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
             SessionUtils::syncBeatmap(*m_ctx);
             observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
