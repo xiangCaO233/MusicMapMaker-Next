@@ -339,13 +339,16 @@ public:
 
 private:
     /// @brief 创建并配置一个中心 WebSocket。
+    /// @warning libdatachannel C API 尚未暴露 CA 注入，当前 mbedTLS
+    /// 预编译库无法建立系统信任链，因此 WSS 暂时只提供传输加密。
     bool openWebSocket(Connection& connection)
     {
         rtcWsConfiguration config{};
-        config.connectionTimeoutMs = 10000;
-        config.pingIntervalMs      = 5000;
-        config.maxOutstandingPings = 3;
-        config.maxMessageSize      = MAX_SIGNALING_MESSAGE_BYTES;
+        config.disableTlsVerification = m_signalingUrl.starts_with("wss://");
+        config.connectionTimeoutMs    = 10000;
+        config.pingIntervalMs         = 5000;
+        config.maxOutstandingPings    = 3;
+        config.maxMessageSize         = MAX_SIGNALING_MESSAGE_BYTES;
         const int websocketId =
             rtcCreateWebSocketEx(m_signalingUrl.c_str(), &config);
         if ( websocketId < 0 ) return false;

@@ -70,6 +70,8 @@ public:
     ~Impl() { disconnect(); }
 
     /// @brief 开始连接目录入口。
+    /// @warning libdatachannel C API 尚未暴露 CA 注入，当前 mbedTLS
+    /// 预编译库无法建立系统信任链，因此 WSS 暂时只提供传输加密。
     bool connect(CollaborationServerEndpoint endpoint)
     {
         const std::string signalingUrl =
@@ -86,10 +88,11 @@ public:
         m_acceptCallbacks.store(true, std::memory_order_release);
 
         rtcWsConfiguration config{};
-        config.connectionTimeoutMs = 10000;
-        config.pingIntervalMs      = 10000;
-        config.maxOutstandingPings = 3;
-        config.maxMessageSize      = MAX_DIRECTORY_MESSAGE_BYTES;
+        config.disableTlsVerification = m_endpoint.useTls;
+        config.connectionTimeoutMs    = 10000;
+        config.pingIntervalMs         = 10000;
+        config.maxOutstandingPings    = 3;
+        config.maxMessageSize         = MAX_DIRECTORY_MESSAGE_BYTES;
         const int websocketId =
             rtcCreateWebSocketEx(m_signalingUrl.c_str(), &config);
         if ( websocketId < 0 ) {
