@@ -507,6 +507,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "openALAudioOutputDeviceName", settings.openALAudioOutputDeviceName },
         { "openALSpatialConfig", settings.openALSpatialConfig },
         { "renderProfileLogging", settings.renderProfileLogging },
+        { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
           settings.pgoProfileUploadConsentAsked },
@@ -611,6 +612,7 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.openALSpatialConfig =
         json.value("openALSpatialConfig", OpenALSpatialConfig());
     settings.renderProfileLogging  = json.value("renderProfileLogging", false);
+    settings.rtcDiagnosticLogging  = json.value("rtcDiagnosticLogging", false);
     settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
     settings.pgoProfileUploadConsentAsked = json.value(
         "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));

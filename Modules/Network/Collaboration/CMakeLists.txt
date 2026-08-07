@@ -8,6 +8,7 @@ add_library(
   src/CollaborationProtocol.cpp
   src/CollaborationRoom.cpp
   src/LoopbackTransport.cpp
+  src/RtcDiagnosticLogging.cpp
   src/WebRtcTransport.cpp)
 
 target_include_directories(NetworkCollaboration
@@ -15,7 +16,16 @@ target_include_directories(NetworkCollaboration
 target_link_libraries(NetworkCollaboration PUBLIC MMM)
 target_link_libraries(
   NetworkCollaboration PRIVATE 3rd_libdatachannel 3rd_nlohmann_json 3rd_miniz
-                               Config)
+                               Config Log)
+
+# RTC 诊断测试覆盖配置持久化以及 TURN 长期凭据脱敏。
+mmm_add_test_executable(Collaboration RtcDiagnosticLoggingTest
+                        tests/RtcDiagnosticLoggingTest.cpp)
+target_include_directories(RtcDiagnosticLoggingTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(RtcDiagnosticLoggingTest PRIVATE NetworkCollaboration
+                                                       Config)
+add_test(NAME RtcDiagnosticLoggingTest COMMAND RtcDiagnosticLoggingTest)
 
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest

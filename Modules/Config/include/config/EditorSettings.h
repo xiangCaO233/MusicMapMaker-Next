@@ -517,6 +517,9 @@ struct EditorSettings {
     /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
     bool renderProfileLogging{ false };
 
+    /// @brief 是否将 libdatachannel 的 WebRTC/ICE Debug 日志写入应用日志。
+    bool rtcDiagnosticLogging{ false };
+
     /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
     bool autoUploadPgoProfiles{ false };
 

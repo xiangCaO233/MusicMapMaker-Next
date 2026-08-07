@@ -225,9 +225,10 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Debug: {
-        const std::array<const char*, 2> labels{
+        const std::array<const char*, 3> labels{
             TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
-            TR_CACHE("ui.settings.debug.render_profile_logging").data()
+            TR_CACHE("ui.settings.debug.render_profile_logging").data(),
+            TR_CACHE("ui.settings.debug.rtc_diagnostic_logging").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }

@@ -836,6 +836,7 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
+    target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
 }

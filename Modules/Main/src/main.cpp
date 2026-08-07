@@ -15,7 +15,12 @@
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
+#include "network/collaboration/RtcDiagnosticLogging.h"
 #include "ui/utils/UIWidgetUtils.h"
+
+#include <fmt/core.h>
+#include <imgui.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -24,8 +29,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <fmt/core.h>
-#include <imgui.h>
 #include <string>
 #include <thread>
 #include <utility>
@@ -533,6 +536,8 @@ int main(int argc, char* argv[])
 
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();
+    Network::Collaboration::setRtcDiagnosticLoggingEnabled(
+        AppConfig::instance().getEditorSettings().rtcDiagnosticLogging);
     if ( const char* creatorOverride = std::getenv("MMM_CREATOR");
          creatorOverride && creatorOverride[0] != '\0' ) {
         const auto creator = normalizeCreatorIdentity(creatorOverride);
