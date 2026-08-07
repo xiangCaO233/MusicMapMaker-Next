@@ -1,5 +1,6 @@
 #pragma once
 
+#include "network/collaboration/CollaborationDirectoryClient.h"
 #include "network/collaboration/ICollaborationTransport.h"
 
 #include <cstddef>
@@ -12,6 +13,7 @@ namespace MMM::Network::Collaboration
 /// @brief WebRTC 传输层异步产生的连接生命周期事件类型。
 enum class WebRtcTransportEventType {
     SignalingConnected,
+    RoomPublished,
     PeerConnected,
     PeerDisconnected,
     Rejected,
@@ -30,12 +32,12 @@ struct WebRtcTransportEvent {
     std::string detail;
 };
 
-/// @brief 房主启动本机 WebSocket 信令入口所需配置。
+/// @brief 房主通过公网目录发布房间所需配置。
 struct WebRtcHostConfig {
-    /// @brief 监听端口；0 表示由系统自动选择可用端口。
-    std::uint16_t port = 24864;
-    /// @brief 加入房间时必须匹配的短房间码。
-    std::string roomCode;
+    /// @brief 公网目录与信令服务器配置。
+    CollaborationServerEndpoint endpoint;
+    /// @brief 在公网目录展示的房间名称。
+    std::string roomName;
     /// @brief 房主 Creator 展示身份。
     std::string creator;
     /// @brief 房主稳定 PeerId。
@@ -44,14 +46,12 @@ struct WebRtcHostConfig {
     std::size_t maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
 };
 
-/// @brief 访客连接房主信令入口所需配置。
+/// @brief 访客通过公网目录加入房间所需配置。
 struct WebRtcGuestConfig {
-    /// @brief 房主 IP 地址或主机名。
-    std::string host;
-    /// @brief 房主信令端口。
-    std::uint16_t port = 24864;
-    /// @brief 房主显示的短房间码。
-    std::string roomCode;
+    /// @brief 公网目录与信令服务器配置。
+    CollaborationServerEndpoint endpoint;
+    /// @brief 从目录列表选择的房间标识。
+    std::string roomId;
     /// @brief 当前访客 Creator 展示身份。
     std::string creator;
     /// @brief 房主稳定 PeerId。
@@ -60,8 +60,8 @@ struct WebRtcGuestConfig {
 
 /// @brief 基于 libdatachannel 的可靠有序 WebRTC DataChannel 传输。
 ///
-/// 房主在本地同时提供最小 WebSocket 信令入口；信令只交换身份、SDP 与
-/// ICE candidate，协作协议数据不经过 WebSocket。
+/// 双方通过中心服务发现房间并瞬时交换身份、SDP 与 ICE candidate；
+/// DataChannel 打开后关闭访客信令连接，协作协议数据不经过中心服务。
 class WebRtcTransport final : public ICollaborationTransport
 {
 public:
@@ -75,12 +75,12 @@ public:
     WebRtcTransport(WebRtcTransport&&)                 = delete;
     WebRtcTransport& operator=(WebRtcTransport&&)      = delete;
 
-    /// @brief 作为房主启动信令服务。
+    /// @brief 作为房主连接中心服务并发布房间。
     /// @param config 房主配置。
-    /// @return 成功监听时返回 true。
+    /// @return WebSocket 已开始连接时返回 true。
     [[nodiscard]] bool startHost(const WebRtcHostConfig& config);
 
-    /// @brief 作为访客连接房主信令服务。
+    /// @brief 作为访客通过中心服务加入公开房间。
     /// @param config 访客配置。
     /// @return WebSocket 已开始连接时返回 true。
     [[nodiscard]] bool connectToHost(const WebRtcGuestConfig& config);
@@ -94,8 +94,8 @@ public:
     [[nodiscard]] bool isHost() const;
     /// @brief 获取当前客户端 PeerId；访客等待房主分配期间为 0。
     [[nodiscard]] PeerId localPeerId() const;
-    /// @brief 获取房主实际监听端口。
-    [[nodiscard]] std::uint16_t listeningPort() const;
+    /// @brief 获取中心服务分配的公开房间标识。
+    [[nodiscard]] std::string roomId() const;
 
     /// @brief 非阻塞读取下一条连接生命周期事件。
     /// @param event 输出事件。

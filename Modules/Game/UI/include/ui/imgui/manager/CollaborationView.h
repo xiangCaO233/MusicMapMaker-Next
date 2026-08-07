@@ -35,12 +35,6 @@ public:
     ImVec2 getMinContentSize(float dpiScale) const override;
 
 private:
-    /// @brief 离线页面当前选择的操作模式。
-    enum class EntryMode {
-        Host,
-        Join,
-    };
-
     /// @brief 绘制 Creator 身份和前置条件。
     /// @return Creator 有效时返回 true。
     /// @warning UI 热路径：只读取内存配置并绘制控件。
@@ -51,18 +45,23 @@ private:
     /// @brief 绘制当前房间状态、连接信息和成员列表。
     /// @warning UI 热路径：最多遍历 8 个内存成员记录。
     void drawActiveRoom(UIManager* sourceManager);
+    /// @brief 将地址、信令端口和 TLS 控件应用到目录客户端。
+    /// @return 服务器配置有效并成功应用时返回 true。
+    bool applyServerEndpoint();
     /// @brief 请求显示独立协作日志窗口。
     void showLogWindow(UIManager* sourceManager) const;
 
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
-    /// @brief 离线入口模式。
-    EntryMode m_entryMode = EntryMode::Host;
-    /// @brief 房主或访客使用的信令端口输入。
-    int m_port = 24864;
-    /// @brief 访客输入的房主地址。
-    std::array<char, 256> m_hostAddress{};
-    /// @brief 访客输入的房间码。
-    std::array<char, 16> m_roomCode{};
+    /// @brief 中心服务器地址或域名输入。
+    std::array<char, 256> m_serverAddress{};
+    /// @brief 中心服务器信令端口输入。
+    int m_signalingPort = 443;
+    /// @brief 是否使用 TLS/WSS。
+    bool m_useTls = true;
+    /// @brief 公网目录展示的房间名称输入。
+    std::array<char, 160> m_roomName{};
+    /// @brief 是否已经从当前谱面初始化房间名称。
+    bool m_roomNameInitialized = false;
 };
 }  // namespace MMM::UI

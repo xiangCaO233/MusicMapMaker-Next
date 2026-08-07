@@ -1,6 +1,7 @@
 #pragma once
 
 #include "network/collaboration/BeatmapDocumentCodec.h"
+#include "network/collaboration/CollaborationDirectoryClient.h"
 #include "network/collaboration/CollaborationPeer.h"
 #include "network/collaboration/CollaborationResourceSync.h"
 #include "network/collaboration/WebRtcTransport.h"
@@ -63,22 +64,22 @@ struct CollaborationLogEntry {
 struct CollaborationHostRoomConfig {
     /// @brief 房主 Creator。
     std::string creator;
-    /// @brief 信令监听端口。
-    std::uint16_t port = 24864;
-    /// @brief 房间码；为空时自动生成。
-    std::string roomCode;
+    /// @brief 公网目录展示的房间名称。
+    std::string roomName;
+    /// @brief 中心服务器地址、信令端口与 TLS 配置。
+    CollaborationServerEndpoint endpoint;
 };
 
 /// @brief 访客加入房间所需的产品层参数。
 struct CollaborationJoinRoomConfig {
     /// @brief 访客 Creator。
     std::string creator;
-    /// @brief 房主 IP 地址或主机名。
-    std::string host;
-    /// @brief 房主信令端口。
-    std::uint16_t port = 24864;
-    /// @brief 房间码。
-    std::string roomCode;
+    /// @brief 从公网目录选择的房间标识。
+    std::string roomId;
+    /// @brief 目录中显示的房间名称。
+    std::string roomName;
+    /// @brief 中心服务器地址、信令端口与 TLS 配置。
+    CollaborationServerEndpoint endpoint;
     /// @brief 访客内容寻址资源缓存根目录。
     std::filesystem::path resourceCacheRoot;
 };
@@ -113,6 +114,15 @@ public:
     /// @param config 访客参数。
     /// @return 成功开始连接时返回 true。
     [[nodiscard]] bool join(CollaborationJoinRoomConfig config);
+
+    /// @brief 设置离线房间浏览使用的中心服务器。
+    /// @param endpoint 地址、信令端口和 TLS 配置。
+    /// @return 当前未加入房间且配置有效时返回 true。
+    [[nodiscard]] bool setServerEndpoint(CollaborationServerEndpoint endpoint);
+
+    /// @brief 主动请求刷新公网房间目录。
+    /// @return 目录连接可用且请求发送成功时返回 true。
+    [[nodiscard]] bool refreshDirectory();
 
     /// @brief 设置远端提交谱面数据的本地逻辑命令入口。
     /// @param callback UI 线程调用的非阻塞回灌函数。
@@ -154,12 +164,19 @@ public:
     [[nodiscard]] bool isHost() const;
     /// @brief 查询是否处于房间生命周期中。
     [[nodiscard]] bool isActive() const;
-    /// @brief 获取当前房间码。
-    [[nodiscard]] const std::string& roomCode() const;
-    /// @brief 获取房主地址；房主侧为空。
-    [[nodiscard]] const std::string& hostAddress() const;
-    /// @brief 获取实际信令端口。
-    [[nodiscard]] std::uint16_t port() const;
+    /// @brief 获取当前公开房间标识。
+    [[nodiscard]] const std::string& roomId() const;
+    /// @brief 获取当前公开房间名称。
+    [[nodiscard]] const std::string& roomName() const;
+    /// @brief 获取当前中心服务器配置。
+    [[nodiscard]] const CollaborationServerEndpoint& serverEndpoint() const;
+    /// @brief 获取公网目录连接状态。
+    [[nodiscard]] CollaborationDirectoryState directoryState() const;
+    /// @brief 获取最近一次在线房间列表。
+    [[nodiscard]] const std::vector<CollaborationDirectoryRoom>&
+    directoryRooms() const;
+    /// @brief 获取最近目录连接错误。
+    [[nodiscard]] const std::string& directoryError() const;
     /// @brief 获取当前客户端 PeerId。
     [[nodiscard]] PeerId localPeerId() const;
     /// @brief 获取当前已知参与者 Creator 表。
@@ -172,10 +189,10 @@ public:
     /// @brief 获取资源同步进度快照。
     [[nodiscard]] CollaborationResourceSyncProgress resourceProgress() const;
 
-    /// @brief 生成便于人工输入的六位房间码。
-    [[nodiscard]] static std::string generateRoomCode();
-
 private:
+    /// @brief 驱动目录订阅并在断线后低频重连。
+    /// @warning UI 热路径：只处理有界事件队列，重连受时间节流。
+    void updateDirectory();
     /// @brief 记录结构化协作日志。
     void appendLog(CollaborationLogEventType type, PeerId peerId,
                    std::string creator, std::string detail);
@@ -201,12 +218,18 @@ private:
     CollaborationRoomState m_state = CollaborationRoomState::Idle;
     /// @brief 当前角色是否为房主。
     bool m_isHost = false;
-    /// @brief 房间码。
-    std::string m_roomCode;
-    /// @brief 访客连接的房主地址。
-    std::string m_hostAddress;
-    /// @brief 信令端口。
-    std::uint16_t m_port = 0;
+    /// @brief 服务端分配的公开房间标识。
+    std::string m_roomId;
+    /// @brief 公网目录展示的房间名称。
+    std::string m_roomName;
+    /// @brief 当前中心服务器配置。
+    CollaborationServerEndpoint m_serverEndpoint;
+    /// @brief 公网在线房间目录订阅客户端。
+    CollaborationDirectoryClient m_directory;
+    /// @brief 目录断线后的下一次重连时间。
+    std::chrono::steady_clock::time_point m_nextDirectoryReconnect;
+    /// @brief 跨重连保留的最近目录错误。
+    std::string m_directoryError;
     /// @brief 当前 Creator。
     std::string m_creator;
     /// @brief 最近错误。

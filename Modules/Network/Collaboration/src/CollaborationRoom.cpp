@@ -3,11 +3,8 @@
 #include "config/CreatorIdentity.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
-#include <string_view>
 #include <utility>
 
 namespace MMM::Network::Collaboration
@@ -25,32 +22,13 @@ constexpr std::size_t MAX_LOCAL_OPERATIONS_PER_UPDATE = 256;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
 
-/// @brief 规范化房间码，供产品层保存和展示。
-std::string normalizeRoomCode(std::string_view value)
-{
-    while ( !value.empty() &&
-            std::isspace(static_cast<unsigned char>(value.front())) != 0 ) {
-        value.remove_prefix(1);
-    }
-    while ( !value.empty() &&
-            std::isspace(static_cast<unsigned char>(value.back())) != 0 ) {
-        value.remove_suffix(1);
-    }
-    if ( value.size() < 4 || value.size() > 12 ) return {};
-
-    std::string result;
-    result.reserve(value.size());
-    for ( const char character : value ) {
-        const auto byte = static_cast<unsigned char>(character);
-        if ( std::isalnum(byte) == 0 ) return {};
-        result.push_back(static_cast<char>(std::toupper(byte)));
-    }
-    return result;
-}
+/// @brief 目录连接失败后的重试间隔。
+constexpr auto DIRECTORY_RECONNECT_INTERVAL = std::chrono::seconds(5);
 }  // namespace
 
 CollaborationRoom::CollaborationRoom()
-    : m_startedAt(std::chrono::steady_clock::now())
+    : m_nextDirectoryReconnect(std::chrono::steady_clock::now())
+    , m_startedAt(std::chrono::steady_clock::now())
 {
 }
 
@@ -66,19 +44,18 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
 {
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
-    config.creator  = Config::normalizeCreatorIdentity(config.creator);
-    config.roomCode = config.roomCode.empty()
-                          ? generateRoomCode()
-                          : normalizeRoomCode(config.roomCode);
-    if ( config.creator.empty() || config.roomCode.empty() ) {
+    config.creator = Config::normalizeCreatorIdentity(config.creator);
+    if ( config.creator.empty() || config.roomName.empty() ||
+         makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_host_configuration");
         return false;
     }
+    m_directory.disconnect();
 
     auto             transport = std::make_unique<WebRtcTransport>();
     WebRtcHostConfig transportConfig;
-    transportConfig.port     = config.port;
-    transportConfig.roomCode = config.roomCode;
+    transportConfig.endpoint = config.endpoint;
+    transportConfig.roomName = config.roomName;
     transportConfig.creator  = config.creator;
     transportConfig.hostId   = DEFAULT_HOST_ID;
     if ( !transport->startHost(transportConfig) ) {
@@ -86,12 +63,12 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         return false;
     }
 
-    m_state    = CollaborationRoomState::Hosting;
-    m_isHost   = true;
-    m_roomCode = std::move(config.roomCode);
-    m_hostAddress.clear();
-    m_port    = transport->listeningPort();
-    m_creator = std::move(config.creator);
+    m_state  = CollaborationRoomState::Hosting;
+    m_isHost = true;
+    m_roomId.clear();
+    m_roomName       = std::move(config.roomName);
+    m_serverEndpoint = std::move(config.endpoint);
+    m_creator        = std::move(config.creator);
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -131,7 +108,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     appendLog(CollaborationLogEventType::RoomStarted,
               DEFAULT_HOST_ID,
               m_creator,
-              std::to_string(m_port));
+              "publishing");
     return true;
 }
 
@@ -139,19 +116,18 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
 {
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
-    config.creator  = Config::normalizeCreatorIdentity(config.creator);
-    config.roomCode = normalizeRoomCode(config.roomCode);
-    if ( config.creator.empty() || config.host.empty() || config.port == 0 ||
-         config.roomCode.empty() ) {
+    config.creator = Config::normalizeCreatorIdentity(config.creator);
+    if ( config.creator.empty() || config.roomId.empty() ||
+         makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_join_configuration");
         return false;
     }
+    m_directory.disconnect();
 
     auto              transport = std::make_unique<WebRtcTransport>();
     WebRtcGuestConfig transportConfig;
-    transportConfig.host     = config.host;
-    transportConfig.port     = config.port;
-    transportConfig.roomCode = config.roomCode;
+    transportConfig.endpoint = config.endpoint;
+    transportConfig.roomId   = config.roomId;
     transportConfig.creator  = config.creator;
     transportConfig.hostId   = DEFAULT_HOST_ID;
     if ( !transport->connectToHost(transportConfig) ) {
@@ -159,12 +135,12 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
         return false;
     }
 
-    m_state       = CollaborationRoomState::Joining;
-    m_isHost      = false;
-    m_roomCode    = std::move(config.roomCode);
-    m_hostAddress = std::move(config.host);
-    m_port        = config.port;
-    m_creator     = std::move(config.creator);
+    m_state          = CollaborationRoomState::Joining;
+    m_isHost         = false;
+    m_roomId         = std::move(config.roomId);
+    m_roomName       = std::move(config.roomName);
+    m_serverEndpoint = std::move(config.endpoint);
+    m_creator        = std::move(config.creator);
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -188,6 +164,24 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
               {},
               "connecting");
     return true;
+}
+
+bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
+{
+    if ( isActive() || makeCollaborationSignalingUrl(endpoint).empty() ) {
+        return false;
+    }
+    if ( endpoint == m_serverEndpoint ) return true;
+    m_serverEndpoint = std::move(endpoint);
+    m_directory.disconnect();
+    m_directoryError.clear();
+    m_nextDirectoryReconnect = std::chrono::steady_clock::now();
+    return true;
+}
+
+bool CollaborationRoom::refreshDirectory()
+{
+    return m_directory.refresh();
 }
 
 void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
@@ -247,9 +241,8 @@ void CollaborationRoom::disconnect()
     m_transport = nullptr;
     m_state     = CollaborationRoomState::Idle;
     m_isHost    = false;
-    m_roomCode.clear();
-    m_hostAddress.clear();
-    m_port = 0;
+    m_roomId.clear();
+    m_roomName.clear();
     m_creator.clear();
     m_lastError.clear();
     m_documentCodec.reset();
@@ -266,6 +259,7 @@ void CollaborationRoom::disconnect()
 
 void CollaborationRoom::update()
 {
+    updateDirectory();
     if ( !m_transport ) return;
 
     ensureGuestPeer();
@@ -305,19 +299,35 @@ bool CollaborationRoom::isActive() const
     return m_state != CollaborationRoomState::Idle;
 }
 
-const std::string& CollaborationRoom::roomCode() const
+const std::string& CollaborationRoom::roomId() const
 {
-    return m_roomCode;
+    return m_roomId;
 }
 
-const std::string& CollaborationRoom::hostAddress() const
+const std::string& CollaborationRoom::roomName() const
 {
-    return m_hostAddress;
+    return m_roomName;
 }
 
-std::uint16_t CollaborationRoom::port() const
+const CollaborationServerEndpoint& CollaborationRoom::serverEndpoint() const
 {
-    return m_port;
+    return m_serverEndpoint;
+}
+
+CollaborationDirectoryState CollaborationRoom::directoryState() const
+{
+    return m_directory.state();
+}
+
+const std::vector<CollaborationDirectoryRoom>&
+CollaborationRoom::directoryRooms() const
+{
+    return m_directory.rooms();
+}
+
+const std::string& CollaborationRoom::directoryError() const
+{
+    return m_directoryError;
 }
 
 PeerId CollaborationRoom::localPeerId() const
@@ -347,24 +357,31 @@ CollaborationResourceSyncProgress CollaborationRoom::resourceProgress() const
     return m_resourceSync.progress();
 }
 
-std::string CollaborationRoom::generateRoomCode()
+void CollaborationRoom::updateDirectory()
 {
-    static std::atomic<std::uint64_t> sequence{ 1 };
-    constexpr std::array<char, 32>    alphabet = {
-        '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C',
-        'D', 'E', 'F', 'G', 'H', 'J', 'K', 'M', 'N', 'P', 'Q',
-        'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0',
-    };
-    auto value =
-        static_cast<std::uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count()) ^
-        sequence.fetch_add(1, std::memory_order_relaxed);
-    std::string roomCode(6, '0');
-    for ( char& character : roomCode ) {
-        character = alphabet[value % alphabet.size()];
-        value     = (value / alphabet.size()) ^ (value << 7U);
+    if ( isActive() ) {
+        if ( m_directory.state() != CollaborationDirectoryState::Idle ) {
+            m_directory.disconnect();
+        }
+        return;
     }
-    return roomCode;
+    m_directory.update();
+    const auto state = m_directory.state();
+    if ( state == CollaborationDirectoryState::Connected ||
+         state == CollaborationDirectoryState::Connecting ) {
+        if ( state == CollaborationDirectoryState::Connected ) {
+            m_directoryError.clear();
+        }
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if ( now < m_nextDirectoryReconnect ) return;
+    if ( state == CollaborationDirectoryState::Error ) {
+        m_directoryError = m_directory.lastError();
+        m_directory.disconnect();
+    }
+    static_cast<void>(m_directory.connect(m_serverEndpoint));
+    m_nextDirectoryReconnect = now + DIRECTORY_RECONNECT_INTERVAL;
 }
 
 void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
@@ -395,6 +412,13 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                   event.peerId,
                   event.creator,
                   event.detail);
+        break;
+    case WebRtcTransportEventType::RoomPublished:
+        m_roomId = event.detail;
+        appendLog(CollaborationLogEventType::SignalingConnected,
+                  event.peerId,
+                  event.creator,
+                  "room_published");
         break;
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
@@ -443,7 +467,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                   event.peerId,
                   event.creator,
                   event.detail);
-        if ( !m_isHost ) {
+        if ( !m_isHost || event.detail == "room_directory_connection_closed" ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
         }

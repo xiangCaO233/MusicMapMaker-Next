@@ -1,9 +1,14 @@
 #include "network/collaboration/CollaborationRoom.h"
+#include "network/collaboration/CollaborationDirectoryClient.h"
+#include "network/collaboration_server/CollaborationSignalingServer.h"
+
+#include "log/colorful-log.h"
 
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -13,7 +18,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -26,11 +34,16 @@ using MMM::Network::Collaboration::CollaborationLogEventType;
 using MMM::Network::Collaboration::CollaborationRoom;
 using MMM::Network::Collaboration::CollaborationRoomState;
 using MMM::Network::Collaboration::CollaborationResourceBundle;
+using MMM::Network::Collaboration::CollaborationServerEndpoint;
+using MMM::Network::CollaborationServer::CollaborationSignalingServer;
+using MMM::Network::CollaborationServer::CollaborationSignalingServerConfig;
 
 /// @brief 本机 WebRTC 集成测试允许的最长等待时间。
 constexpr auto TEST_TIMEOUT = std::chrono::seconds(15);
+/// @brief 公网部署探针允许的最长等待时间。
+constexpr auto EXTERNAL_TEST_TIMEOUT = std::chrono::seconds(30);
 /// @brief 验收房间中的访客数量。
-constexpr std::size_t GUEST_COUNT = 7;
+constexpr std::size_t GUEST_COUNT = 1;
 
 /// @brief 为真实 WebRTC 资源测试创建并清理隔离目录。
 class ScopedRoomResourceDirectory
@@ -139,12 +152,13 @@ std::shared_ptr<BeatMap> makeBeatmap(double noteTimestamp, std::string author)
 
 /// @brief 驱动房主和全部访客直到条件满足或超时。
 template<typename Predicate>
-bool pumpUntil(CollaborationRoom&                               host,
+bool pumpUntil(CollaborationSignalingServer& server, CollaborationRoom& host,
                std::vector<std::unique_ptr<CollaborationRoom>>& guests,
                Predicate                                        predicate)
 {
     const auto deadline = std::chrono::steady_clock::now() + TEST_TIMEOUT;
     while ( std::chrono::steady_clock::now() < deadline ) {
+        server.update();
         host.update();
         for ( auto& guest : guests ) guest->update();
         host.update();
@@ -217,15 +231,31 @@ bool hasExpectedState(const std::shared_ptr<const BeatMap>& beatmap,
            std::abs(beatmap->m_baseMapMetadata.preference_bpm - 150.0) < 1e-6;
 }
 
-/// @brief 覆盖 1 房主 + 7 访客的真实 WebRTC、初始快照和双向增量收敛。
-bool testEightClientLocalWebRtcRoom()
+/// @brief 覆盖中心信令、真实 WebRTC、初始快照和双向增量收敛。
+bool testPublicDirectoryWebRtcRoom()
 {
+    CollaborationSignalingServerConfig serverConfig;
+    serverConfig.port        = 0;
+    serverConfig.bindAddress = "127.0.0.1";
+    CollaborationSignalingServer server;
+    if ( !server.start(std::move(serverConfig)) ) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CollaborationServerEndpoint endpoint;
+    endpoint.address       = "127.0.0.1";
+    endpoint.signalingPort = server.listeningPort();
+    endpoint.useTls        = false;
+
     CollaborationRoom           host;
     CollaborationHostRoomConfig hostConfig;
     hostConfig.creator  = "Host Creator";
-    hostConfig.port     = 0;
-    hostConfig.roomCode = "ABC234";
-    if ( !host.startHost(hostConfig) || host.port() == 0 ) return false;
+    hostConfig.roomName = "Public WebRTC Test";
+    hostConfig.endpoint = endpoint;
+    if ( !host.startHost(hostConfig) ) return false;
+    std::vector<std::unique_ptr<CollaborationRoom>> guests;
+    if ( !pumpUntil(
+             server, host, guests, [&]() { return !host.roomId().empty(); }) ) {
+        return false;
+    }
 
     std::shared_ptr<const BeatMap> hostModel;
     std::size_t                    hostApplyCount = 0;
@@ -244,9 +274,8 @@ bool testEightClientLocalWebRtcRoom()
         return false;
     }
 
-    std::vector<std::unique_ptr<CollaborationRoom>> guests;
-    std::vector<std::shared_ptr<const BeatMap>>     guestModels(GUEST_COUNT);
-    std::vector<std::size_t> guestApplyCounts(GUEST_COUNT);
+    std::vector<std::shared_ptr<const BeatMap>> guestModels(GUEST_COUNT);
+    std::vector<std::size_t>                    guestApplyCounts(GUEST_COUNT);
     guests.reserve(GUEST_COUNT);
     for ( std::size_t index = 0; index < GUEST_COUNT; ++index ) {
         auto guest = std::make_unique<CollaborationRoom>();
@@ -258,14 +287,40 @@ bool testEightClientLocalWebRtcRoom()
             });
         CollaborationJoinRoomConfig guestConfig;
         guestConfig.creator  = "Guest " + std::to_string(index + 1);
-        guestConfig.host     = "127.0.0.1";
-        guestConfig.port     = host.port();
-        guestConfig.roomCode = host.roomCode();
+        guestConfig.roomId   = host.roomId();
+        guestConfig.roomName = host.roomName();
+        guestConfig.endpoint = endpoint;
         if ( !guest->join(guestConfig) ) return false;
         guests.push_back(std::move(guest));
+        if ( !pumpUntil(server, host, guests, [&]() {
+                 return guests.back()->state() ==
+                        CollaborationRoomState::Connected;
+             }) ) {
+            XERROR(
+                "Guest {} failed during staged connection: state={}, error={}",
+                index + 1U,
+                static_cast<int>(guests.back()->state()),
+                guests.back()->lastError());
+            for ( const auto& entry : guests.back()->logs() ) {
+                XERROR("Guest {} staged log type={} detail={}",
+                       index + 1U,
+                       static_cast<int>(entry.type),
+                       entry.detail);
+            }
+            XERROR("Server clients={}, rooms={}, host participants={}",
+                   server.clientCount(),
+                   server.roomCount(),
+                   host.participants().size());
+            for ( const auto& entry : host.logs() ) {
+                XERROR("Host staged log type={} detail={}",
+                       static_cast<int>(entry.type),
+                       entry.detail);
+            }
+            return false;
+        }
     }
 
-    const bool connected = pumpUntil(host, guests, [&]() {
+    const bool connected = pumpUntil(server, host, guests, [&]() {
         if ( host.participants().size() != GUEST_COUNT + 1U ) return false;
         for ( std::size_t index = 0; index < guests.size(); ++index ) {
             if ( guests[index]->state() != CollaborationRoomState::Connected ||
@@ -277,12 +332,34 @@ bool testEightClientLocalWebRtcRoom()
         }
         return true;
     });
-    if ( !connected ) return false;
+    if ( !connected ) {
+        XERROR(
+            "Collaboration test connection timeout: host participants={}, "
+            "state={}, error={}",
+            host.participants().size(),
+            static_cast<int>(host.state()),
+            host.lastError());
+        for ( std::size_t index = 0; index < guests.size(); ++index ) {
+            XERROR("Guest {} state={}, peer={}, participants={}, error={}",
+                   index + 1U,
+                   static_cast<int>(guests[index]->state()),
+                   guests[index]->localPeerId(),
+                   guests[index]->participants().size(),
+                   guests[index]->lastError());
+            for ( const auto& entry : guests[index]->logs() ) {
+                XERROR("Guest {} log type={} detail={}",
+                       index + 1U,
+                       static_cast<int>(entry.type),
+                       entry.detail);
+            }
+        }
+        return false;
+    }
 
     auto guestEdit      = makeBeatmap(1250.0, "Host Creator");
     guestModels.front() = guestEdit;
     guests.front()->onBeatmapMutated(*guestEdit, BeatmapMutationFlags::Objects);
-    const bool guestEditConverged = pumpUntil(host, guests, [&]() {
+    const bool guestEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Creator") ) {
             return false;
         }
@@ -291,12 +368,16 @@ bool testEightClientLocalWebRtcRoom()
                 return hasExpectedState(model, 1250.0, "Host Creator");
             });
     });
-    if ( !guestEditConverged ) return false;
+    if ( !guestEditConverged ) {
+        XERROR("Guest edit failed to converge across {} participants",
+               host.participants().size());
+        return false;
+    }
 
     auto hostEdit = makeBeatmap(1250.0, "Host Revised");
     hostModel     = hostEdit;
     host.onBeatmapMutated(*hostEdit, BeatmapMutationFlags::Metadata);
-    const bool hostEditConverged = pumpUntil(host, guests, [&]() {
+    const bool hostEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Revised") ) {
             return false;
         }
@@ -311,17 +392,36 @@ bool testEightClientLocalWebRtcRoom()
                       guestApplyCounts.end(),
                       [](std::size_t count) { return count == 3U; }) ||
          countLogs(host, CollaborationLogEventType::OperationCommitted) < 3U ) {
+        XERROR(
+            "Host edit validation failed: converged={}, hostApply={}, "
+            "firstGuestApply={}, hostLogs={}",
+            hostEditConverged,
+            hostApplyCount,
+            guestApplyCounts.front(),
+            countLogs(host, CollaborationLogEventType::OperationCommitted));
         return false;
     }
 
     for ( auto& guest : guests ) guest->disconnect();
-    return pumpUntil(
-        host, guests, [&]() { return host.participants().size() == 1U; });
+    return pumpUntil(server, host, guests, [&]() {
+        return host.participants().size() == 1U;
+    });
 }
 
 /// @brief 验证资源清单和多分块通过真实 DataChannel 到达访客并完成校验。
 bool testOneGuestResourceSync()
 {
+    CollaborationSignalingServerConfig serverConfig;
+    serverConfig.port        = 0;
+    serverConfig.bindAddress = "127.0.0.1";
+    CollaborationSignalingServer server;
+    if ( !server.start(std::move(serverConfig)) ) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CollaborationServerEndpoint endpoint;
+    endpoint.address       = "127.0.0.1";
+    endpoint.signalingPort = server.listeningPort();
+    endpoint.useTls        = false;
+
     ScopedRoomResourceDirectory directory;
     if ( directory.path().empty() ) return false;
     const auto      projectRoot = directory.path() / "host";
@@ -352,10 +452,15 @@ bool testOneGuestResourceSync()
     CollaborationRoom           host;
     CollaborationHostRoomConfig hostConfig;
     hostConfig.creator  = "Resource Host";
-    hostConfig.port     = 0;
-    hostConfig.roomCode = "RES234";
+    hostConfig.roomName = "Resource Test";
+    hostConfig.endpoint = endpoint;
     host.prepareHostResources(project, beatmap);
     if ( !host.startHost(hostConfig) ) return false;
+    std::vector<std::unique_ptr<CollaborationRoom>> guests;
+    if ( !pumpUntil(
+             server, host, guests, [&]() { return !host.roomId().empty(); }) ) {
+        return false;
+    }
 
     std::optional<CollaborationResourceBundle> receivedBundle;
     auto guest = std::make_unique<CollaborationRoom>();
@@ -365,18 +470,29 @@ bool testOneGuestResourceSync()
         });
     CollaborationJoinRoomConfig joinConfig;
     joinConfig.creator           = "Resource Guest";
-    joinConfig.host              = "127.0.0.1";
-    joinConfig.port              = host.port();
-    joinConfig.roomCode          = host.roomCode();
+    joinConfig.roomId            = host.roomId();
+    joinConfig.roomName          = host.roomName();
+    joinConfig.endpoint          = endpoint;
     joinConfig.resourceCacheRoot = directory.path() / "cache";
     if ( !guest->join(joinConfig) ) return false;
-    std::vector<std::unique_ptr<CollaborationRoom>> guests;
     guests.push_back(std::move(guest));
-    if ( !pumpUntil(host, guests, [&]() {
+    if ( !pumpUntil(server, host, guests, [&]() {
              return receivedBundle.has_value() &&
                     guests.front()->state() ==
                         CollaborationRoomState::Connected;
          }) ) {
+        XERROR(
+            "Resource collaboration timeout: host participants={}, guest "
+            "state={}, error={}, resource phase={}",
+            host.participants().size(),
+            static_cast<int>(guests.front()->state()),
+            guests.front()->lastError(),
+            static_cast<int>(guests.front()->resourceProgress().phase));
+        for ( const auto& entry : guests.front()->logs() ) {
+            XERROR("Resource guest log type={} detail={}",
+                   static_cast<int>(entry.type),
+                   entry.detail);
+        }
         return false;
     }
     if ( !receivedBundle->project ||
@@ -402,11 +518,156 @@ bool testOneGuestResourceSync()
     return input.gcount() == static_cast<std::streamsize>(actual.size()) &&
            actual == expected;
 }
+
+/// @brief 驱动公网目录、房主和访客，直到条件满足或超时。
+template<typename Predicate>
+bool pumpExternalUntil(
+    CollaborationRoom& host, CollaborationRoom& guest,
+    MMM::Network::Collaboration::CollaborationDirectoryClient& directory,
+    Predicate                                                  predicate)
+{
+    const auto deadline =
+        std::chrono::steady_clock::now() + EXTERNAL_TEST_TIMEOUT;
+    while ( std::chrono::steady_clock::now() < deadline ) {
+        directory.update();
+        host.update();
+        guest.update();
+        host.update();
+        if ( predicate() ) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
+/// @brief 验证部署后的房间发布、目录发现、加入配对和 DataChannel 建立。
+bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
+{
+    using MMM::Network::Collaboration::CollaborationDirectoryClient;
+    using MMM::Network::Collaboration::CollaborationDirectoryState;
+
+    CollaborationDirectoryClient directory;
+    if ( !directory.connect(endpoint) ) return false;
+
+    CollaborationRoom host;
+    CollaborationRoom guest;
+    if ( !pumpExternalUntil(host, guest, directory, [&]() {
+             return directory.state() == CollaborationDirectoryState::Connected;
+         }) ) {
+        XERROR("External directory bootstrap failed: state={}, error={}",
+               static_cast<int>(directory.state()),
+               directory.lastError());
+        return false;
+    }
+
+    CollaborationHostRoomConfig hostConfig;
+    hostConfig.creator  = "Deployment Host";
+    hostConfig.roomName = "Public Deployment Probe";
+    hostConfig.endpoint = endpoint;
+    if ( !host.startHost(hostConfig) ) return false;
+
+    const bool roomDiscovered =
+        pumpExternalUntil(host, guest, directory, [&]() {
+            if ( host.roomId().empty() ||
+                 directory.state() != CollaborationDirectoryState::Connected ) {
+                return false;
+            }
+            return std::any_of(directory.rooms().begin(),
+                               directory.rooms().end(),
+                               [&host](const auto& room) {
+                                   return room.roomId == host.roomId();
+                               });
+        });
+    if ( !roomDiscovered ) {
+        XERROR(
+            "External room discovery failed: host state={}, host error={}, "
+            "directory state={}, directory error={}",
+            static_cast<int>(host.state()),
+            host.lastError(),
+            static_cast<int>(directory.state()),
+            directory.lastError());
+        return false;
+    }
+
+    const auto roomIterator = std::find_if(
+        directory.rooms().begin(),
+        directory.rooms().end(),
+        [&host](const auto& room) { return room.roomId == host.roomId(); });
+    if ( roomIterator == directory.rooms().end() ) return false;
+    CollaborationJoinRoomConfig guestConfig;
+    guestConfig.creator  = "Deployment Guest";
+    guestConfig.roomId   = roomIterator->roomId;
+    guestConfig.roomName = roomIterator->roomName;
+    guestConfig.endpoint = endpoint;
+    if ( !guest.join(guestConfig) ) return false;
+
+    const bool connected = pumpExternalUntil(host, guest, directory, [&]() {
+        return guest.state() == CollaborationRoomState::Connected &&
+               host.participants().size() == 2U &&
+               guest.participants().size() == 2U;
+    });
+    if ( !connected ) {
+        XERROR(
+            "External P2P connection failed: host state={}, participants={}, "
+            "error={}; guest state={}, participants={}, error={}",
+            static_cast<int>(host.state()),
+            host.participants().size(),
+            host.lastError(),
+            static_cast<int>(guest.state()),
+            guest.participants().size(),
+            guest.lastError());
+        for ( const auto& entry : host.logs() ) {
+            XERROR("External host log type={} detail={}",
+                   static_cast<int>(entry.type),
+                   entry.detail);
+        }
+        for ( const auto& entry : guest.logs() ) {
+            XERROR("External guest log type={} detail={}",
+                   static_cast<int>(entry.type),
+                   entry.detail);
+        }
+        return false;
+    }
+
+    guest.disconnect();
+    const bool guestRemoved = pumpExternalUntil(host, guest, directory, [&]() {
+        return host.participants().size() == 1U;
+    });
+    host.disconnect();
+    directory.disconnect();
+    return guestRemoved;
+}
 }  // namespace
 
-int main()
+int main(int argc, char** argv)
 {
-    if ( !testEightClientLocalWebRtcRoom() ) return 1;
-    if ( !testOneGuestResourceSync() ) return 2;
-    return 0;
+    if ( argc < 2 || !argv[1] ) return 3;
+    const std::string_view mode(argv[1]);
+    if ( mode == "p2p" && argc == 2 ) {
+        return testPublicDirectoryWebRtcRoom() ? 0 : 1;
+    }
+    if ( mode == "resource" && argc == 2 ) {
+        return testOneGuestResourceSync() ? 0 : 2;
+    }
+    if ( mode == "external" && argc == 5 ) {
+        std::uint32_t          port = 0;
+        const std::string_view portText(argv[3]);
+        const auto [end, error] = std::from_chars(
+            portText.data(), portText.data() + portText.size(), port);
+        if ( error != std::errc{} || end != portText.data() + portText.size() ||
+             port == 0 || port > 65535 ) {
+            return 3;
+        }
+        const std::string_view tlsText(argv[4]);
+        if ( tlsText != "true" && tlsText != "false" ) return 3;
+        CollaborationServerEndpoint endpoint;
+        endpoint.address       = argv[2];
+        endpoint.signalingPort = static_cast<std::uint16_t>(port);
+        endpoint.useTls        = tlsText == "true";
+        XLogger::init("CollaborationRoomTest");
+        const bool success =
+            testExternalPublicDirectoryWebRtcRoom(std::move(endpoint));
+        XLogger::shutdown();
+        return success ? 0 : 1;
+    }
+    return 3;
 }

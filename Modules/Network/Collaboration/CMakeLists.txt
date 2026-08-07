@@ -3,6 +3,7 @@ add_library(
   NetworkCollaboration STATIC
   src/BeatmapDocumentCodec.cpp
   src/CollaborationPeer.cpp
+  src/CollaborationDirectoryClient.cpp
   src/CollaborationResourceSync.cpp
   src/CollaborationProtocol.cpp
   src/CollaborationRoom.cpp
@@ -36,8 +37,18 @@ target_link_libraries(CollaborationResourceSyncTest PRIVATE NetworkCollaboration
 add_test(NAME CollaborationResourceSyncTest
          COMMAND CollaborationResourceSyncTest)
 
-# 本机真实 WebRTC 集成测试覆盖信令、DataChannel、Creator 身份和增量提交。
+# 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
 mmm_add_test_executable(Collaboration CollaborationRoomTest
                         tests/CollaborationRoomTest.cpp)
-target_link_libraries(CollaborationRoomTest PRIVATE NetworkCollaboration)
-add_test(NAME CollaborationRoomTest COMMAND CollaborationRoomTest)
+target_link_libraries(CollaborationRoomTest PRIVATE NetworkCollaboration
+                                                    NetworkCollaborationServer)
+# 同进程混用 libdatachannel 服务端与 WebRTC 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external`
+# 链路保留为手动部署探针。 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
+
+# 公网目录客户端测试覆盖房间列表订阅、刷新与异常消息隔离。
+mmm_add_test_executable(Collaboration CollaborationDirectoryClientTest
+                        tests/CollaborationDirectoryClientTest.cpp)
+target_link_libraries(CollaborationDirectoryClientTest
+                      PRIVATE NetworkCollaboration NetworkCollaborationServer)
+add_test(NAME CollaborationDirectoryClientTest
+         COMMAND CollaborationDirectoryClientTest)

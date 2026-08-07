@@ -7,11 +7,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <climits>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -20,7 +22,7 @@ namespace MMM::Network::Collaboration
 {
 namespace
 {
-/// @brief 最小信令协议版本，与协作数据协议独立演进。
+/// @brief 中心目录与点对点协商协议版本。
 constexpr std::uint64_t SIGNALING_PROTOCOL_VERSION = 1;
 /// @brief 协作 DataChannel 的稳定标签。
 constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";
@@ -32,11 +34,14 @@ constexpr int MAX_DATA_CHANNEL_MESSAGE_BYTES = 2 * 1024 * 1024;
 constexpr std::size_t MAX_QUEUED_DATA_CHANNEL_PACKETS = 4096;
 /// @brief 产品层未及时消费时保留的连接事件数。
 constexpr std::size_t MAX_QUEUED_TRANSPORT_EVENTS = 1024;
+/// @brief 中心服务允许下发的 ICE URI 数量。
+constexpr std::size_t MAX_ICE_SERVERS = 8;
+/// @brief 房主控制令牌使用的无歧义字符表。
+constexpr std::string_view TOKEN_ALPHABET =
+    "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-/// @brief 将人工输入的房间码规范化为大写 ASCII。
-/// @param value 输入房间码。
-/// @return 只包含 4～12 位字母数字的规范化房间码，否则为空。
-std::string normalizeRoomCode(std::string_view value)
+/// @brief 规范化可在目录公开展示的房间名称。
+std::string normalizeRoomName(std::string_view value)
 {
     while ( !value.empty() &&
             std::isspace(static_cast<unsigned char>(value.front())) != 0 ) {
@@ -46,20 +51,25 @@ std::string normalizeRoomCode(std::string_view value)
             std::isspace(static_cast<unsigned char>(value.back())) != 0 ) {
         value.remove_suffix(1);
     }
-    if ( value.size() < 4 || value.size() > 12 ) {
+    if ( value.empty() || value.size() > 128U ) return {};
+    if ( std::any_of(value.begin(), value.end(), [](char character) {
+             const auto byte = static_cast<unsigned char>(character);
+             return byte < 0x20U || byte == 0x7FU;
+         }) ) {
         return {};
     }
+    return std::string(value);
+}
 
-    std::string result;
-    result.reserve(value.size());
-    for ( const char character : value ) {
-        const auto byte = static_cast<unsigned char>(character);
-        if ( std::isalnum(byte) == 0 ) {
-            return {};
-        }
-        result.push_back(static_cast<char>(std::toupper(byte)));
-    }
-    return result;
+/// @brief 校验中心服务分配的房间标识。
+bool isValidRoomId(std::string_view value)
+{
+    return !value.empty() && value.size() <= 64U &&
+           std::all_of(value.begin(), value.end(), [](char character) {
+               const auto byte = static_cast<unsigned char>(character);
+               return std::isalnum(byte) != 0 || character == '-' ||
+                      character == '_';
+           });
 }
 
 /// @brief 从 JSON 对象读取字符串字段。
@@ -67,9 +77,7 @@ bool readStringField(const nlohmann::json& object, std::string_view key,
                      std::string& value)
 {
     const auto iterator = object.find(key);
-    if ( iterator == object.end() || !iterator->is_string() ) {
-        return false;
-    }
+    if ( iterator == object.end() || !iterator->is_string() ) return false;
     value = iterator->get_ref<const std::string&>();
     return true;
 }
@@ -86,26 +94,39 @@ bool readUnsignedField(const nlohmann::json& object, std::string_view key,
     return true;
 }
 
-/// @brief 为 WebSocket 客户端构造 ws URL，兼容裸 IPv6 地址。
-std::string makeWebSocketUrl(std::string host, std::uint16_t port)
+/// @brief 生成仅房主控制连接持有的随机令牌。
+std::string generateOwnerToken()
 {
-    if ( host.find(':') != std::string::npos &&
-         !(host.starts_with('[') && host.ends_with(']')) ) {
-        host = '[' + host + ']';
+    std::mt19937_64                            random{ std::random_device{}() };
+    std::uniform_int_distribution<std::size_t> distribution(
+        0, TOKEN_ALPHABET.size() - 1U);
+    std::string token(48U, '0');
+    for ( char& character : token ) {
+        character = TOKEN_ALPHABET[distribution(random)];
     }
-    return "ws://" + host + ':' + std::to_string(port) + "/mmm-collaboration";
+    return token;
 }
 }  // namespace
 
 class WebRtcTransport::Impl
 {
 public:
-    /// @brief 一个访客到房主的信令、PeerConnection 与 DataChannel 上下文。
+    /// @brief 中心 WebSocket 在当前传输中的职责。
+    enum class ConnectionRole {
+        HostControl,
+        Peer,
+    };
+
+    /// @brief 一个访客与房主之间的临时信令和长期 P2P 上下文。
     struct Connection {
         /// @brief 所属传输实现的稳定观察指针。
         Impl* owner = nullptr;
+        /// @brief 中心连接职责。
+        ConnectionRole role = ConnectionRole::Peer;
         /// @brief 信令 WebSocket 标识。
         int websocketId = -1;
+        /// @brief 防止打开回调与注册后的状态补检重复声明连接角色。
+        std::atomic_bool openHandled{ false };
         /// @brief WebRTC PeerConnection 标识。
         int peerConnectionId = -1;
         /// @brief 可靠有序 DataChannel 标识。
@@ -114,10 +135,14 @@ public:
         PeerId remotePeerId = 0;
         /// @brief 远端 Creator。
         std::string remoteCreator;
-        /// @brief 是否已经完成房间码和 Creator 校验。
+        /// @brief 服务端加入请求标识；仅房主的访客通道使用。
+        std::string requestId;
+        /// @brief 是否已经完成 P2P 身份握手。
         bool joined = false;
         /// @brief 是否已经上报 DataChannel 建立事件。
         bool connectedEventSent = false;
+        /// @brief 对端是否已经确认 DataChannel 打开。
+        bool remoteDataChannelReady = false;
         /// @brief 是否已经上报离开事件。
         bool disconnectedEventSent = false;
     };
@@ -125,137 +150,94 @@ public:
     /// @brief 停止并释放所有 libdatachannel 句柄。
     ~Impl() { stop(); }
 
-    /// @brief 启动房主端信令服务。
+    /// @brief 连接中心服务并发布房间。
     bool startHost(const WebRtcHostConfig& config)
     {
         const auto creator  = Config::normalizeCreatorIdentity(config.creator);
-        const auto roomCode = normalizeRoomCode(config.roomCode);
-        if ( creator.empty() || roomCode.empty() || config.hostId == 0 ) {
+        const auto roomName = normalizeRoomName(config.roomName);
+        if ( creator.empty() || roomName.empty() || config.hostId == 0 ||
+             makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
 
+        auto control        = std::make_unique<Connection>();
+        control->owner      = this;
+        control->role       = ConnectionRole::HostControl;
+        Connection* pointer = control.get();
         {
             std::scoped_lock lock(m_mutex);
             if ( m_running ) return false;
             m_isHost          = true;
             m_creator         = creator;
-            m_roomCode        = roomCode;
+            m_roomName        = roomName;
+            m_signalingUrl    = makeCollaborationSignalingUrl(config.endpoint);
+            m_ownerToken      = generateOwnerToken();
             m_localPeerId     = config.hostId;
             m_hostId          = config.hostId;
             m_maxParticipants = std::clamp(config.maxParticipants,
                                            MIN_COLLABORATION_PARTICIPANTS,
                                            MAX_COLLABORATION_PARTICIPANTS);
             m_stopping        = false;
+            m_running         = true;
+            m_connections.push_back(std::move(control));
         }
-
-        rtcWsServerConfiguration serverConfig{};
-        serverConfig.port                = config.port;
-        serverConfig.enableTls           = false;
-        serverConfig.bindAddress         = nullptr;
-        serverConfig.maxMessageSize      = MAX_SIGNALING_MESSAGE_BYTES;
-        serverConfig.connectionTimeoutMs = 10000;
-
-        const int serverId =
-            rtcCreateWebSocketServer(&serverConfig, &Impl::onWebSocketClient);
-        if ( serverId < 0 ) {
-            resetStartFailure();
+        if ( !openWebSocket(*pointer) ) {
+            stop();
             return false;
-        }
-        rtcSetUserPointer(serverId, this);
-
-        const int actualPort = rtcGetWebSocketServerPort(serverId);
-        if ( actualPort <= 0 || actualPort > 65535 ) {
-            rtcDeleteWebSocketServer(serverId);
-            resetStartFailure();
-            return false;
-        }
-
-        {
-            std::scoped_lock lock(m_mutex);
-            m_webSocketServerId = serverId;
-            m_listeningPort     = static_cast<std::uint16_t>(actualPort);
-            m_running           = true;
         }
         return true;
     }
 
-    /// @brief 启动访客端信令连接。
+    /// @brief 连接中心服务并请求加入公开房间。
     bool connectToHost(const WebRtcGuestConfig& config)
     {
-        const auto creator  = Config::normalizeCreatorIdentity(config.creator);
-        const auto roomCode = normalizeRoomCode(config.roomCode);
-        if ( creator.empty() || roomCode.empty() || config.host.empty() ||
-             config.port == 0 || config.hostId == 0 ) {
+        const auto creator = Config::normalizeCreatorIdentity(config.creator);
+        if ( creator.empty() || config.hostId == 0 ||
+             !isValidRoomId(config.roomId) ||
+             makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
 
         auto connection           = std::make_unique<Connection>();
         connection->owner         = this;
+        connection->role          = ConnectionRole::Peer;
         connection->remotePeerId  = config.hostId;
         Connection* connectionPtr = connection.get();
-
         {
             std::scoped_lock lock(m_mutex);
             if ( m_running ) return false;
-            m_isHost      = false;
-            m_creator     = creator;
-            m_roomCode    = roomCode;
-            m_localPeerId = 0;
-            m_hostId      = config.hostId;
-            m_stopping    = false;
+            m_isHost       = false;
+            m_creator      = creator;
+            m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
+            m_roomId       = config.roomId;
+            m_localPeerId  = 0;
+            m_hostId       = config.hostId;
+            m_stopping     = false;
+            m_running      = true;
             m_connections.push_back(std::move(connection));
         }
-
-        const std::string  url = makeWebSocketUrl(config.host, config.port);
-        rtcWsConfiguration webSocketConfig{};
-        webSocketConfig.connectionTimeoutMs = 10000;
-        webSocketConfig.pingIntervalMs      = 5000;
-        webSocketConfig.maxOutstandingPings = 3;
-        webSocketConfig.maxMessageSize      = MAX_SIGNALING_MESSAGE_BYTES;
-        const int webSocketId =
-            rtcCreateWebSocketEx(url.c_str(), &webSocketConfig);
-        if ( webSocketId < 0 ) {
+        if ( !openWebSocket(*connectionPtr) ) {
             stop();
             return false;
-        }
-
-        connectionPtr->websocketId = webSocketId;
-        rtcSetUserPointer(webSocketId, connectionPtr);
-        rtcSetOpenCallback(webSocketId, &Impl::onGuestWebSocketOpen);
-        rtcSetMessageCallback(webSocketId, &Impl::onWebSocketMessage);
-        rtcSetClosedCallback(webSocketId, &Impl::onWebSocketClosed);
-        rtcSetErrorCallback(webSocketId, &Impl::onWebSocketError);
-
-        {
-            std::scoped_lock lock(m_mutex);
-            m_running = true;
         }
         return true;
     }
 
-    /// @brief 释放服务器、通道、PeerConnection 和 WebSocket。
+    /// @brief 释放通道、PeerConnection 和中心 WebSocket。
     void stop()
     {
-        int                                      serverId = -1;
         std::vector<std::unique_ptr<Connection>> connections;
         {
             std::scoped_lock lock(m_mutex);
-            if ( !m_running && m_webSocketServerId < 0 &&
-                 m_connections.empty() ) {
-                return;
-            }
-            m_stopping      = true;
-            m_running       = false;
-            serverId        = std::exchange(m_webSocketServerId, -1);
-            m_listeningPort = 0;
-            m_localPeerId   = 0;
-            connections     = std::move(m_connections);
+            if ( !m_running && m_connections.empty() ) return;
+            m_stopping    = true;
+            m_running     = false;
+            m_localPeerId = 0;
+            connections   = std::move(m_connections);
             m_incomingPackets.clear();
+            m_events.clear();
         }
 
-        if ( serverId >= 0 ) {
-            rtcDeleteWebSocketServer(serverId);
-        }
         for ( auto& connection : connections ) {
             if ( connection->dataChannelId >= 0 ) {
                 rtcDeleteDataChannel(connection->dataChannelId);
@@ -273,6 +255,10 @@ public:
 
         std::scoped_lock lock(m_mutex);
         m_stopping = false;
+        m_roomId.clear();
+        m_roomName.clear();
+        m_ownerToken.clear();
+        m_iceServers.clear();
     }
 
     /// @brief 查询运行状态。
@@ -296,11 +282,11 @@ public:
         return m_localPeerId;
     }
 
-    /// @brief 获取监听端口。
-    std::uint16_t listeningPort() const
+    /// @brief 获取公开房间标识。
+    std::string roomId() const
     {
         std::scoped_lock lock(m_mutex);
-        return m_listeningPort;
+        return m_roomId;
     }
 
     /// @brief 发送协作协议二进制帧。
@@ -315,7 +301,8 @@ public:
         {
             std::scoped_lock lock(m_mutex);
             for ( const auto& connection : m_connections ) {
-                if ( connection->remotePeerId == recipientId &&
+                if ( connection->role == ConnectionRole::Peer &&
+                     connection->remotePeerId == recipientId &&
                      connection->dataChannelId >= 0 &&
                      connection->connectedEventSent ) {
                     dataChannelId = connection->dataChannelId;
@@ -323,9 +310,7 @@ public:
                 }
             }
         }
-        if ( dataChannelId < 0 || !rtcIsOpen(dataChannelId) ) {
-            return false;
-        }
+        if ( dataChannelId < 0 || !rtcIsOpen(dataChannelId) ) return false;
         return rtcSendMessage(dataChannelId,
                               reinterpret_cast<const char*>(payload.data()),
                               static_cast<int>(payload.size())) ==
@@ -353,15 +338,48 @@ public:
     }
 
 private:
-    /// @brief 启动失败时清理已写入的状态。
-    void resetStartFailure()
+    /// @brief 创建并配置一个中心 WebSocket。
+    bool openWebSocket(Connection& connection)
     {
-        std::scoped_lock lock(m_mutex);
-        m_isHost      = false;
-        m_localPeerId = 0;
-        m_hostId      = 0;
-        m_creator.clear();
-        m_roomCode.clear();
+        rtcWsConfiguration config{};
+        config.connectionTimeoutMs = 10000;
+        config.pingIntervalMs      = 5000;
+        config.maxOutstandingPings = 3;
+        config.maxMessageSize      = MAX_SIGNALING_MESSAGE_BYTES;
+        const int websocketId =
+            rtcCreateWebSocketEx(m_signalingUrl.c_str(), &config);
+        if ( websocketId < 0 ) return false;
+        connection.websocketId = websocketId;
+        rtcSetUserPointer(websocketId, &connection);
+        rtcSetOpenCallback(websocketId, &Impl::onWebSocketOpen);
+        rtcSetMessageCallback(websocketId, &Impl::onWebSocketMessage);
+        rtcSetClosedCallback(websocketId, &Impl::onWebSocketClosed);
+        rtcSetErrorCallback(websocketId, &Impl::onWebSocketError);
+        if ( rtcIsOpen(websocketId) ) {
+            onWebSocketOpen(websocketId, &connection);
+        }
+        return true;
+    }
+
+    /// @brief 创建房主接受单个访客所需的瞬时信令连接。
+    void openHostPeerConnection(std::string requestId)
+    {
+        auto connection       = std::make_unique<Connection>();
+        connection->owner     = this;
+        connection->role      = ConnectionRole::Peer;
+        connection->requestId = std::move(requestId);
+        Connection* pointer   = connection.get();
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( m_stopping || !m_running ) return;
+            m_connections.push_back(std::move(connection));
+        }
+        if ( !openWebSocket(*pointer) ) {
+            pushEvent(WebRtcTransportEventType::Error,
+                      0,
+                      {},
+                      "peer_signaling_connect_start_failed");
+        }
     }
 
     /// @brief 将连接事件压入线程安全队列。
@@ -383,22 +401,57 @@ private:
         const std::string payload = message.dump();
         if ( connection.websocketId < 0 ||
              payload.size() >
-                 static_cast<std::size_t>(MAX_SIGNALING_MESSAGE_BYTES) ) {
+                 static_cast<std::size_t>(MAX_SIGNALING_MESSAGE_BYTES) ||
+             !rtcIsOpen(connection.websocketId) ) {
             return false;
         }
         return rtcSendMessage(connection.websocketId, payload.c_str(), -1) ==
                RTC_ERR_SUCCESS;
     }
 
+    /// @brief 校验并保存服务端下发的 ICE URI。
+    bool updateIceServers(const nlohmann::json& message)
+    {
+        const auto iterator = message.find("iceServers");
+        if ( iterator == message.end() || !iterator->is_array() ||
+             iterator->size() > MAX_ICE_SERVERS ) {
+            return false;
+        }
+        std::vector<std::string> iceServers;
+        iceServers.reserve(iterator->size());
+        for ( const auto& value : *iterator ) {
+            if ( !value.is_string() ) return false;
+            const auto& uri = value.get_ref<const std::string&>();
+            if ( uri.empty() || uri.size() > 512U ) return false;
+            iceServers.push_back(uri);
+        }
+        std::scoped_lock lock(m_mutex);
+        m_iceServers = std::move(iceServers);
+        return true;
+    }
+
     /// @brief 创建并配置一个 WebRTC PeerConnection。
     bool createPeerConnection(Connection& connection, bool createDataChannel)
     {
+        std::vector<std::string> iceServers;
+        {
+            std::scoped_lock lock(m_mutex);
+            iceServers = m_iceServers;
+        }
+        std::vector<const char*> iceServerPointers;
+        iceServerPointers.reserve(iceServers.size());
+        for ( const auto& uri : iceServers ) {
+            iceServerPointers.push_back(uri.c_str());
+        }
+
         rtcConfiguration configuration{};
+        configuration.iceServers =
+            iceServerPointers.empty() ? nullptr : iceServerPointers.data();
+        configuration.iceServersCount =
+            static_cast<int>(iceServerPointers.size());
         configuration.maxMessageSize = MAX_DATA_CHANNEL_MESSAGE_BYTES;
         const int peerConnectionId   = rtcCreatePeerConnection(&configuration);
-        if ( peerConnectionId < 0 ) {
-            return false;
-        }
+        if ( peerConnectionId < 0 ) return false;
 
         connection.peerConnectionId = peerConnectionId;
         rtcSetUserPointer(peerConnectionId, &connection);
@@ -415,10 +468,9 @@ private:
         channelConfig.reliability.unordered  = false;
         channelConfig.reliability.unreliable = false;
         channelConfig.protocol               = "mmm-collaboration";
-        const int dataChannelId              = rtcCreateDataChannelEx(
-            peerConnectionId,
-            std::string(COLLABORATION_CHANNEL_LABEL).c_str(),
-            &channelConfig);
+        const std::string label(COLLABORATION_CHANNEL_LABEL);
+        const int         dataChannelId = rtcCreateDataChannelEx(
+            peerConnectionId, label.c_str(), &channelConfig);
         if ( dataChannelId < 0 ) {
             rtcDeletePeerConnection(peerConnectionId);
             connection.peerConnectionId = -1;
@@ -445,37 +497,33 @@ private:
         for ( PeerId candidate = m_hostId + 1;
               candidate <= static_cast<PeerId>(m_maxParticipants);
               ++candidate ) {
-            const bool occupied =
-                std::any_of(m_connections.begin(),
-                            m_connections.end(),
-                            [candidate](const auto& connection) {
-                                return connection->joined &&
-                                       connection->remotePeerId == candidate;
-                            });
+            const bool occupied = std::any_of(
+                m_connections.begin(),
+                m_connections.end(),
+                [candidate](const auto& connection) {
+                    return connection->role == ConnectionRole::Peer &&
+                           connection->joined &&
+                           connection->remotePeerId == candidate;
+                });
             if ( !occupied ) return candidate;
         }
         return 0;
     }
 
-    /// @brief 处理访客的初始加入信令。
+    /// @brief 处理访客在透明信令通道上的身份握手。
     void handleJoin(Connection& connection, const nlohmann::json& message)
     {
-        std::string   roomCode;
         std::string   creator;
         std::uint64_t version = 0;
         if ( !readUnsignedField(message, "version", version) ||
              version != SIGNALING_PROTOCOL_VERSION ||
-             !readStringField(message, "roomCode", roomCode) ||
              !readStringField(message, "creator", creator) ) {
             reject(connection, "invalid_join");
             return;
         }
-        roomCode = normalizeRoomCode(roomCode);
-        creator  = Config::normalizeCreatorIdentity(creator);
-        if ( roomCode != m_roomCode || creator.empty() ) {
-            reject(connection,
-                   roomCode != m_roomCode ? "room_code_mismatch"
-                                          : "invalid_creator");
+        creator = Config::normalizeCreatorIdentity(creator);
+        if ( creator.empty() ) {
+            reject(connection, "invalid_creator");
             return;
         }
 
@@ -510,7 +558,7 @@ private:
         }
     }
 
-    /// @brief 处理房主接受访客后的配置消息。
+    /// @brief 处理房主接受访客后的身份配置消息。
     void handleAccepted(Connection& connection, const nlohmann::json& message)
     {
         std::uint64_t peerId = 0;
@@ -561,7 +609,6 @@ private:
                       "negotiation_before_peer_connection");
             return;
         }
-
         if ( type == "description" ) {
             std::string sdp;
             std::string descriptionType;
@@ -594,7 +641,7 @@ private:
         }
     }
 
-    /// @brief 拒绝一个信令连接。
+    /// @brief 拒绝一条已经由中心配对的访客连接。
     void reject(Connection& connection, std::string reason)
     {
         nlohmann::json rejected;
@@ -608,6 +655,102 @@ private:
                   std::move(reason));
     }
 
+    /// @brief 处理中心服务自身的目录与配对消息。
+    bool handleBrokerMessage(Connection&           connection,
+                             const nlohmann::json& message,
+                             std::string_view      type)
+    {
+        if ( type == "room_created" &&
+             connection.role == ConnectionRole::HostControl ) {
+            std::string roomId;
+            if ( !readStringField(message, "roomId", roomId) ||
+                 !isValidRoomId(roomId) || !updateIceServers(message) ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          m_hostId,
+                          m_creator,
+                          "invalid_room_created");
+                return true;
+            }
+            {
+                std::scoped_lock lock(m_mutex);
+                m_roomId = roomId;
+            }
+            pushEvent(WebRtcTransportEventType::RoomPublished,
+                      m_hostId,
+                      m_creator,
+                      std::move(roomId));
+            return true;
+        }
+        if ( type == "join_requested" &&
+             connection.role == ConnectionRole::HostControl ) {
+            std::string roomId;
+            std::string requestId;
+            if ( !readStringField(message, "roomId", roomId) ||
+                 !readStringField(message, "requestId", requestId) ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          0,
+                          {},
+                          "invalid_join_request");
+                return true;
+            }
+            {
+                std::scoped_lock lock(m_mutex);
+                if ( roomId != m_roomId ) return true;
+            }
+            openHostPeerConnection(std::move(requestId));
+            return true;
+        }
+        if ( type == "join_pending" ) return true;
+        if ( type == "relay_ready" &&
+             connection.role == ConnectionRole::Peer ) {
+            if ( !updateIceServers(message) ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          connection.remotePeerId,
+                          {},
+                          "invalid_ice_configuration");
+                return true;
+            }
+            if ( !m_isHost ) {
+                nlohmann::json join;
+                join["type"]    = "join";
+                join["version"] = SIGNALING_PROTOCOL_VERSION;
+                join["creator"] = m_creator;
+                if ( !sendSignal(connection, join) ) {
+                    pushEvent(WebRtcTransportEventType::Error,
+                              m_hostId,
+                              {},
+                              "join_signal_send_failed");
+                    return true;
+                }
+            }
+            pushEvent(WebRtcTransportEventType::SignalingConnected,
+                      connection.remotePeerId,
+                      {},
+                      "p2p_signaling_ready");
+            return true;
+        }
+        if ( type == "error" ) {
+            std::string reason;
+            static_cast<void>(readStringField(message, "reason", reason));
+            pushEvent(connection.role == ConnectionRole::HostControl
+                          ? WebRtcTransportEventType::Error
+                          : WebRtcTransportEventType::Rejected,
+                      connection.remotePeerId,
+                      connection.remoteCreator,
+                      reason.empty() ? "signaling_server_error" : reason);
+            return true;
+        }
+        if ( type == "p2p_ready" && connection.role == ConnectionRole::Peer ) {
+            {
+                std::scoped_lock lock(m_mutex);
+                connection.remoteDataChannelReady = true;
+            }
+            closeSignalingIfReady(connection);
+            return true;
+        }
+        return false;
+    }
+
     /// @brief 处理一条已经解析的 WebSocket 信令消息。
     void handleSignalingMessage(Connection&           connection,
                                 const nlohmann::json& message)
@@ -615,8 +758,10 @@ private:
         if ( !message.is_object() ) return;
         std::string type;
         if ( !readStringField(message, "type", type) ) return;
+        if ( handleBrokerMessage(connection, message, type) ) return;
 
-        if ( m_isHost && type == "join" ) {
+        if ( m_isHost && connection.role == ConnectionRole::Peer &&
+             type == "join" ) {
             handleJoin(connection, message);
         } else if ( !m_isHost && type == "accepted" ) {
             handleAccepted(connection, message);
@@ -632,61 +777,94 @@ private:
         }
     }
 
-    /// @brief WebSocketServer 接收客户端连接的回调。
-    static void onWebSocketClient(int, int websocketId, void* pointer)
+    /// @brief 向中心服务上报房主当前真实 P2P 在线人数。
+    void sendParticipantCount()
     {
-        auto* owner = static_cast<Impl*>(pointer);
-        if ( !owner ) {
-            rtcDeleteWebSocket(websocketId);
-            return;
-        }
-
-        auto connection           = std::make_unique<Connection>();
-        connection->owner         = owner;
-        connection->websocketId   = websocketId;
-        Connection* connectionPtr = connection.get();
+        int         controlWebSocketId = -1;
+        std::size_t participants       = 1;
         {
-            std::scoped_lock lock(owner->m_mutex);
-            if ( owner->m_stopping || !owner->m_running ) {
-                rtcDeleteWebSocket(websocketId);
-                return;
+            std::scoped_lock lock(m_mutex);
+            if ( !m_isHost || m_stopping ) return;
+            for ( const auto& connection : m_connections ) {
+                if ( connection->role == ConnectionRole::HostControl ) {
+                    controlWebSocketId = connection->websocketId;
+                } else if ( connection->connectedEventSent &&
+                            !connection->disconnectedEventSent ) {
+                    ++participants;
+                }
             }
-            owner->m_connections.push_back(std::move(connection));
         }
-
-        rtcSetUserPointer(websocketId, connectionPtr);
-        rtcSetMessageCallback(websocketId, &Impl::onWebSocketMessage);
-        rtcSetClosedCallback(websocketId, &Impl::onWebSocketClosed);
-        rtcSetErrorCallback(websocketId, &Impl::onWebSocketError);
-        owner->pushEvent(WebRtcTransportEventType::SignalingConnected,
-                         0,
-                         {},
-                         "incoming_signaling_connection");
+        if ( controlWebSocketId < 0 || !rtcIsOpen(controlWebSocketId) ) return;
+        const nlohmann::json message = {
+            { "type", "update_room" },
+            { "version", SIGNALING_PROTOCOL_VERSION },
+            { "participants", participants },
+        };
+        const std::string payload = message.dump();
+        static_cast<void>(
+            rtcSendMessage(controlWebSocketId, payload.c_str(), -1));
     }
 
-    /// @brief 访客 WebSocket 建立后的加入请求回调。
-    static void onGuestWebSocketOpen(int, void* pointer)
+    /// @brief 判断连接已经打开 DataChannel。
+    bool isPeerConnected(const Connection& connection) const
+    {
+        std::scoped_lock lock(m_mutex);
+        return connection.connectedEventSent &&
+               !connection.disconnectedEventSent;
+    }
+
+    /// @brief 双方均确认 DataChannel 打开后释放瞬时信令连接。
+    void closeSignalingIfReady(Connection& connection)
+    {
+        int websocketId = -1;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( connection.connectedEventSent &&
+                 connection.remoteDataChannelReady ) {
+                websocketId = connection.websocketId;
+            }
+        }
+        if ( websocketId >= 0 && rtcIsOpen(websocketId) ) {
+            static_cast<void>(rtcClose(websocketId));
+        }
+    }
+
+    /// @brief 中心 WebSocket 打开后声明当前连接职责。
+    static void onWebSocketOpen(int, void* pointer)
     {
         auto* connection = static_cast<Connection*>(pointer);
         if ( !connection || !connection->owner ) return;
-        Impl& owner = *connection->owner;
-
-        nlohmann::json join;
-        join["type"]     = "join";
-        join["version"]  = SIGNALING_PROTOCOL_VERSION;
-        join["roomCode"] = owner.m_roomCode;
-        join["creator"]  = owner.m_creator;
-        if ( !owner.sendSignal(*connection, join) ) {
-            owner.pushEvent(WebRtcTransportEventType::Error,
-                            owner.m_hostId,
-                            {},
-                            "join_signal_send_failed");
+        if ( connection->openHandled.exchange(true,
+                                              std::memory_order_acq_rel) ) {
             return;
         }
-        owner.pushEvent(WebRtcTransportEventType::SignalingConnected,
-                        owner.m_hostId,
-                        {},
-                        "signaling_connected");
+        Impl& owner = *connection->owner;
+
+        nlohmann::json message;
+        message["version"] = SIGNALING_PROTOCOL_VERSION;
+        if ( connection->role == ConnectionRole::HostControl ) {
+            message["type"]       = "create_room";
+            message["roomName"]   = owner.m_roomName;
+            message["creator"]    = owner.m_creator;
+            message["ownerToken"] = owner.m_ownerToken;
+            message["capacity"]   = owner.m_maxParticipants;
+        } else if ( owner.m_isHost ) {
+            std::scoped_lock lock(owner.m_mutex);
+            message["type"]       = "accept_join";
+            message["roomId"]     = owner.m_roomId;
+            message["requestId"]  = connection->requestId;
+            message["ownerToken"] = owner.m_ownerToken;
+        } else {
+            message["type"]    = "join_room";
+            message["roomId"]  = owner.m_roomId;
+            message["creator"] = owner.m_creator;
+        }
+        if ( !owner.sendSignal(*connection, message) ) {
+            owner.pushEvent(WebRtcTransportEventType::Error,
+                            connection->remotePeerId,
+                            {},
+                            "broker_request_send_failed");
+        }
     }
 
     /// @brief 解析 WebSocket 文本信令。
@@ -708,12 +886,20 @@ private:
         connection->owner->handleSignalingMessage(*connection, parsed);
     }
 
-    /// @brief WebSocket 关闭回调。
+    /// @brief WebSocket 关闭回调；P2P 已建立时信令关闭属于正常释放。
     static void onWebSocketClosed(int, void* pointer)
     {
         auto* connection = static_cast<Connection*>(pointer);
         if ( !connection || !connection->owner ) return;
-        connection->owner->notifyDisconnected(*connection, "signaling_closed");
+        Impl& owner = *connection->owner;
+        if ( connection->role == ConnectionRole::HostControl ) {
+            owner.pushEvent(WebRtcTransportEventType::Error,
+                            owner.m_hostId,
+                            owner.m_creator,
+                            "room_directory_connection_closed");
+        } else if ( !owner.isPeerConnected(*connection) ) {
+            owner.notifyDisconnected(*connection, "signaling_closed");
+        }
     }
 
     /// @brief WebSocket 错误回调。
@@ -721,6 +907,10 @@ private:
     {
         auto* connection = static_cast<Connection*>(pointer);
         if ( !connection || !connection->owner ) return;
+        if ( connection->role == ConnectionRole::Peer &&
+             connection->owner->isPeerConnected(*connection) ) {
+            return;
+        }
         connection->owner->pushEvent(WebRtcTransportEventType::Error,
                                      connection->remotePeerId,
                                      connection->remoteCreator,
@@ -737,7 +927,8 @@ private:
         description["type"]            = "description";
         description["sdp"]             = sdp;
         description["descriptionType"] = type;
-        if ( !connection->owner->sendSignal(*connection, description) ) {
+        if ( !connection->owner->sendSignal(*connection, description) &&
+             !connection->owner->isPeerConnected(*connection) ) {
             connection->owner->pushEvent(WebRtcTransportEventType::Error,
                                          connection->remotePeerId,
                                          connection->remoteCreator,
@@ -755,7 +946,8 @@ private:
         candidateMessage["type"]      = "candidate";
         candidateMessage["candidate"] = candidate;
         candidateMessage["mid"]       = mid;
-        if ( !connection->owner->sendSignal(*connection, candidateMessage) ) {
+        if ( !connection->owner->sendSignal(*connection, candidateMessage) &&
+             !connection->owner->isPeerConnected(*connection) ) {
             connection->owner->pushEvent(WebRtcTransportEventType::Error,
                                          connection->remotePeerId,
                                          connection->remoteCreator,
@@ -802,7 +994,7 @@ private:
         connection->owner->configureDataChannel(*connection, dataChannelId);
     }
 
-    /// @brief DataChannel 打开回调。
+    /// @brief DataChannel 打开后与对端确认，再释放瞬时信令连接。
     static void onDataChannelOpen(int, void* pointer)
     {
         auto* connection = static_cast<Connection*>(pointer);
@@ -817,6 +1009,18 @@ private:
                         connection->remotePeerId,
                         connection->remoteCreator,
                         "data_channel_open");
+        if ( owner.m_isHost ) owner.sendParticipantCount();
+        nlohmann::json ready;
+        ready["type"]    = "p2p_ready";
+        ready["version"] = SIGNALING_PROTOCOL_VERSION;
+        if ( !owner.sendSignal(*connection, ready) ) {
+            owner.pushEvent(WebRtcTransportEventType::Error,
+                            connection->remotePeerId,
+                            connection->remoteCreator,
+                            "p2p_ready_send_failed");
+            return;
+        }
+        owner.closeSignalingIfReady(*connection);
     }
 
     /// @brief DataChannel 二进制消息回调。
@@ -863,20 +1067,23 @@ private:
                                      error ? error : "data_channel_error");
     }
 
-    /// @brief 保证每个连接只上报一次离开事件。
+    /// @brief 保证每个 P2P 连接只上报一次离开事件。
     void notifyDisconnected(Connection& connection, std::string detail)
     {
+        bool updateParticipants = false;
         {
             std::scoped_lock lock(m_mutex);
             if ( connection.disconnectedEventSent || m_stopping ) return;
             connection.disconnectedEventSent = true;
-            connection.connectedEventSent    = false;
-            connection.joined                = false;
+            updateParticipants = m_isHost && connection.connectedEventSent;
+            connection.connectedEventSent = false;
+            connection.joined             = false;
         }
         pushEvent(WebRtcTransportEventType::PeerDisconnected,
                   connection.remotePeerId,
                   connection.remoteCreator,
                   std::move(detail));
+        if ( updateParticipants ) sendParticipantCount();
     }
 
     /// @brief 保护跨 libdatachannel 回调线程共享的队列和连接表。
@@ -889,19 +1096,23 @@ private:
     bool m_isHost = false;
     /// @brief 当前 Creator。
     std::string m_creator;
-    /// @brief 当前房间码。
-    std::string m_roomCode;
+    /// @brief 公网目录展示名称。
+    std::string m_roomName;
+    /// @brief 中心服务分配的公开房间标识。
+    std::string m_roomId;
+    /// @brief 中心信令 URL。
+    std::string m_signalingUrl;
+    /// @brief 房主控制连接鉴权令牌。
+    std::string m_ownerToken;
+    /// @brief 中心服务下发的 ICE URI。
+    std::vector<std::string> m_iceServers;
     /// @brief 当前本地 PeerId。
     PeerId m_localPeerId = 0;
     /// @brief 房主 PeerId。
     PeerId m_hostId = 0;
     /// @brief 房间总人数上限。
     std::size_t m_maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
-    /// @brief WebSocketServer 句柄。
-    int m_webSocketServerId = -1;
-    /// @brief 房主实际监听端口。
-    std::uint16_t m_listeningPort = 0;
-    /// @brief 所有房主访客连接或访客到房主的唯一连接。
+    /// @brief 房主控制连接、房主访客连接或访客唯一连接。
     std::vector<std::unique_ptr<Connection>> m_connections;
     /// @brief DataChannel 收到的完整协作协议帧。
     std::deque<TransportPacket> m_incomingPackets;
@@ -943,9 +1154,9 @@ PeerId WebRtcTransport::localPeerId() const
     return m_impl->localPeerId();
 }
 
-std::uint16_t WebRtcTransport::listeningPort() const
+std::string WebRtcTransport::roomId() const
 {
-    return m_impl->listeningPort();
+    return m_impl->roomId();
 }
 
 bool WebRtcTransport::receiveEvent(WebRtcTransportEvent& event)
