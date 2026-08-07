@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CanvasTabTitle.h"
+#include "canvas/CollaborationViewportProjection.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
@@ -83,14 +84,6 @@ bool isCurrentCanvasWindowVisible()
     return contentSize.x > 1.0f && contentSize.y > 1.0f;
 }
 
-/// @brief 计算没有滚动分段时使用的主画布绝对 Y 速度。
-/// @return 兜底绝对 Y 速度，单位为逻辑像素/秒。
-double defaultCollaborationAbsYSpeed()
-{
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
-    return 500.0 * static_cast<double>(std::max(0.01F, visual.timelineZoom));
-}
-
 /// @brief 从渲染快照估算指定视觉时间对应的绝对 Y。
 /// @param snapshot 当前主画布快照。
 /// @param time 远端视口边界的视觉时间。
@@ -99,9 +92,6 @@ double defaultCollaborationAbsYSpeed()
 double collaborationAbsYAtTime(const Logic::RenderSnapshot& snapshot,
                                double                       time)
 {
-    if ( snapshot.scrollSegments.empty() ) {
-        return time * defaultCollaborationAbsYSpeed();
-    }
     const auto it = std::upper_bound(
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
@@ -128,6 +118,15 @@ float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
     const float judgmentLineY =
         canvasHeight * visual.judgmentLinePositionForKeyCount(
                            std::max(snapshot.trackCount, 1));
+    if ( snapshot.scrollSegments.empty() ) {
+        return projectCollaborationViewportTime(time,
+                                                snapshot.currentTime,
+                                                snapshot.visibleTimeStart,
+                                                snapshot.visibleTimeEnd,
+                                                judgmentLineY,
+                                                canvasHeight)
+            .value_or(judgmentLineY);
+    }
     const double currentAbsY =
         collaborationAbsYAtTime(snapshot, snapshot.currentTime);
     const double targetAbsY = collaborationAbsYAtTime(snapshot, time);

@@ -257,6 +257,10 @@ private:
     void handleCommittedOperation(const CommittedOperation& operation);
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
+    /// @brief 关闭本地谱面变更入口并丢弃尚未提交的操作。
+    /// @warning UI 网络事件路径调用；会短暂获取本地操作队列锁，以与逻辑线程
+    /// 正在编码的 mutation 完成终止握手。
+    void stopAcceptingLocalMutations();
     /// @brief 在节流周期到达时发布有变化的本地主画布状态。
     /// @warning UI 热路径：每帧仅做时间点和固定大小数值比较，达到配置的
     /// 5～60 Hz 周期后才编码并发送一个小消息。

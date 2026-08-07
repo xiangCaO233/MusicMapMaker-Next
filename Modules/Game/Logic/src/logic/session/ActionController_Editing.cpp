@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1926,6 +1927,10 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
 
 void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
 {
+    // 元数据编辑窗口仍会在 UI 线程同步读取 ECS；整体替换必须与该读取共用
+    // SessionRegistry 锁，避免远端提交清空 Registry 时使 EnTT View 失效。
+    std::lock_guard<std::recursive_mutex> sessionLock(
+        EditorEngine::instance().getSessionMutex());
     if ( !m_ctx.currentBeatmap || !cmd.sourceBeatmap ) {
         return;
     }

@@ -179,6 +179,16 @@ std::size_t countLogs(const CollaborationRoom&  room,
         }));
 }
 
+/// @brief 统计指定详情的协作日志条数。
+std::size_t countLogDetails(const CollaborationRoom& room,
+                            std::string_view         detail)
+{
+    return static_cast<std::size_t>(std::count_if(
+        room.logs().begin(), room.logs().end(), [detail](const auto& entry) {
+            return entry.detail == detail;
+        }));
+}
+
 /// @brief 判断谱面是否包含指定同步结果。
 bool hasExpectedState(const std::shared_ptr<const BeatMap>& beatmap,
                       double noteTimestamp, std::string_view author)
@@ -519,6 +529,16 @@ bool testHostAdmissionControl()
         return failAdmission("approve");
     }
 
+    auto sharedBeatmap = makeBeatmap(1000.0, "Admission Host");
+    host.onBeatmapMutated(*sharedBeatmap, BeatmapMutationFlags::All);
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return countLogs(*guests.back(),
+                              CollaborationLogEventType::OperationCommitted) >=
+                    1U;
+         }) ) {
+        return failAdmission("initial_document");
+    }
+
     const PeerId guestPeerId = guests.back()->localPeerId();
     if ( guestPeerId == 0 || !host.removeParticipant(guestPeerId) ) {
         return failAdmission("remove_start");
@@ -528,6 +548,18 @@ bool testHostAdmissionControl()
                     guests.back()->state() == CollaborationRoomState::Error;
          }) ) {
         return failAdmission("remove_complete");
+    }
+
+    const auto submitFailuresBefore =
+        countLogDetails(*guests.back(), "local_operation_submit_failed");
+    sharedBeatmap->m_noteData.notes.front().m_timestamp = 1250.0;
+    sharedBeatmap->sync();
+    guests.back()->onBeatmapMutated(*sharedBeatmap,
+                                    BeatmapMutationFlags::Objects);
+    guests.back()->update();
+    if ( countLogDetails(*guests.back(), "local_operation_submit_failed") !=
+         submitFailuresBefore ) {
+        return failAdmission("post_disconnect_mutation");
     }
     return true;
 }

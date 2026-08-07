@@ -993,6 +993,13 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
                                        context);
     context.sortedNoteEntities.push_back(staleEntity);
     context.sortedNoteMaxEndPrefix.push_back(1.0);
+    context.noteRegistry.emplace_or_replace<MMM::Logic::InteractionComponent>(
+        staleEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    context.selectedNoteEntities.insert(staleEntity);
+    context.hoveredEntity     = staleEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.draggedEntity     = staleEntity;
+    context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
     context.dragRenderPinnedEntities.push_back(staleEntity);
     context.brushState.isActive = true;
     context.brushState.polylineSegments.push_back({});
@@ -1026,6 +1033,9 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
          context.eraserState.isActive ||
          !context.eraserState.targetEntities.empty() ||
          !context.dragRenderPinnedEntities.empty() ||
+         !context.selectedNoteEntities.empty() ||
+         context.hoveredEntity != entt::null ||
+         context.draggedEntity != entt::null ||
          !context.sortedNoteEntities.empty() ||
          !context.sortedNoteMaxEndPrefix.empty() ||
          !context.isNoteOrderDirty ) {

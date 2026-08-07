@@ -25,6 +25,14 @@ target_link_libraries(
          3rd_entt)
 target_include_directories(Canvas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# 协作视野投影是无图形依赖的纯计算，覆盖缺少 ScrollSegment 时的锚点映射。
+mmm_add_test_executable(Canvas CollaborationViewportProjectionTest
+                        tests/CollaborationViewportProjectionTest.cpp)
+target_include_directories(CollaborationViewportProjectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CollaborationViewportProjectionTest
+         COMMAND CollaborationViewportProjectionTest)
+
 # 密度栏坐标映射为无图形依赖的纯函数，测试目标无需链接完整 Canvas。
 mmm_add_test_executable(Canvas PreviewDensityInteractionTest
                         tests/PreviewDensityInteractionTest.cpp)

@@ -60,7 +60,7 @@ CollaborationRoom::CollaborationRoom()
 
 CollaborationRoom::~CollaborationRoom()
 {
-    m_acceptLocalMutations.store(false, std::memory_order_release);
+    stopAcceptingLocalMutations();
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
@@ -308,6 +308,7 @@ void CollaborationRoom::onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
     if ( !payload.has_value() ) return;
 
     std::lock_guard lock(m_localOperationMutex);
+    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
     if ( m_localOperationQueue.size() >= MAX_QUEUED_LOCAL_OPERATIONS ) {
         return;
     }
@@ -316,7 +317,7 @@ void CollaborationRoom::onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
 
 void CollaborationRoom::disconnect()
 {
-    m_acceptLocalMutations.store(false, std::memory_order_release);
+    stopAcceptingLocalMutations();
     if ( m_state != CollaborationRoomState::Idle ) {
         appendLog(CollaborationLogEventType::Disconnected,
                   localPeerId(),
@@ -342,10 +343,6 @@ void CollaborationRoom::disconnect()
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard lock(m_localOperationMutex);
-        m_localOperationQueue.clear();
-    }
 }
 
 void CollaborationRoom::update()
@@ -639,6 +636,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         } else if ( !m_isHost ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
+            stopAcceptingLocalMutations();
         }
         appendLog(CollaborationLogEventType::ParticipantLeft,
                   event.peerId,
@@ -653,6 +651,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         if ( !m_isHost ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
+            stopAcceptingLocalMutations();
         }
         break;
     case WebRtcTransportEventType::Error:
@@ -663,6 +662,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         if ( !m_isHost || event.detail == "room_directory_connection_closed" ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
+            if ( !m_isHost ) stopAcceptingLocalMutations();
         }
         break;
     }
@@ -741,6 +741,9 @@ void CollaborationRoom::handleCommittedOperation(
 
 void CollaborationRoom::submitQueuedLocalOperations()
 {
+    if ( !m_peer || !m_acceptLocalMutations.load(std::memory_order_acquire) ) {
+        return;
+    }
     for ( std::size_t index = 0; index < MAX_LOCAL_OPERATIONS_PER_UPDATE;
           ++index ) {
         ByteBuffer payload;
@@ -759,6 +762,13 @@ void CollaborationRoom::submitQueuedLocalOperations()
                   "local_operation_submit_failed");
         return;
     }
+}
+
+void CollaborationRoom::stopAcceptingLocalMutations()
+{
+    m_acceptLocalMutations.store(false, std::memory_order_release);
+    std::lock_guard lock(m_localOperationMutex);
+    m_localOperationQueue.clear();
 }
 
 void CollaborationRoom::flushLocalViewport()
@@ -869,6 +879,7 @@ void CollaborationRoom::sendResourceManifest(PeerId peerId)
 
 void CollaborationRoom::fail(std::string message)
 {
+    stopAcceptingLocalMutations();
     m_pendingJoinRequests.clear();
     m_state     = CollaborationRoomState::Error;
     m_lastError = message;
