@@ -185,7 +185,7 @@ private:
     /// @return 有效窗口内容缩放；无效配置回退为 1。
     [[nodiscard]] static float currentFontRasterScale();
 
-    /// @brief 发布本地主画布状态、应用列表跟随目标并绘制远端视野提示。
+    /// @brief 发布本地主画布状态、应用跟随目标并绘制可点击的远端视野提示。
     /// @param sourceManager 提供应用级协作房间观察入口的 UI 管理器。
     /// @param canvasScreenPosition 主画布左上角屏幕坐标。
     /// @param canvasSize 主画布逻辑像素尺寸。

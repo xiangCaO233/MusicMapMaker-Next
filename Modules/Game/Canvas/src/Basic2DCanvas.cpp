@@ -417,11 +417,9 @@ void Basic2DCanvas::updateCollaborationViewports(
         m_lastFollowedViewportSequence = 0;
     }
     const auto& viewports = room->participantViewports();
-    if ( followedPeerId != 0 ) {
-        const auto followed = viewports.find(followedPeerId);
-        if ( followed != viewports.end() &&
-             followed->second.sequence != m_lastFollowedViewportSequence ) {
-            const auto& viewport = followed->second;
+    const auto  jumpToViewport =
+        [this, &canvasSize](
+            const Network::Collaboration::ParticipantViewport& viewport) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSeek{ viewport.playbackTime }));
             const float desiredHorizontalOffset =
@@ -442,6 +440,13 @@ void Basic2DCanvas::updateCollaborationViewports(
                         .renderScaleY   = m_currentSnapshot->renderScaleY,
                     }));
             }
+        };
+    if ( followedPeerId != 0 ) {
+        const auto followed = viewports.find(followedPeerId);
+        if ( followed != viewports.end() &&
+             followed->second.sequence != m_lastFollowedViewportSequence ) {
+            const auto& viewport = followed->second;
+            jumpToViewport(viewport);
             m_lastFollowedViewportSequence = viewport.sequence;
         }
     }
@@ -575,6 +580,34 @@ void Basic2DCanvas::updateCollaborationViewports(
         const float textY =
             remoteAhead ? baseY + 2.0F : baseY - textSize.y - 2.0F;
         drawList->AddText({ textX, textY }, color, creator->second.c_str());
+
+        const ImVec2 savedCursorPosition = ImGui::GetCursorScreenPos();
+        const ImVec2 hitMinimum{
+            std::max(canvasScreenPosition.x,
+                     std::min(arrowX - 11.0F, textX - 4.0F)),
+            std::max(canvasScreenPosition.y,
+                     std::min({ tipY, baseY, textY }) - 4.0F),
+        };
+        const ImVec2 hitMaximum{
+            std::min(canvasMaximum.x,
+                     std::max(arrowX + 11.0F, textX + textSize.x + 4.0F)),
+            std::min(canvasMaximum.y,
+                     std::max({ tipY, baseY, textY + textSize.y }) + 4.0F),
+        };
+        if ( hitMaximum.x > hitMinimum.x && hitMaximum.y > hitMinimum.y ) {
+            ImGui::PushID(static_cast<int>(peerId));
+            ImGui::SetCursorScreenPos(hitMinimum);
+            if ( ImGui::InvisibleButton("##CollaborationViewportJump",
+                                        { hitMaximum.x - hitMinimum.x,
+                                          hitMaximum.y - hitMinimum.y }) ) {
+                jumpToViewport(viewport);
+            }
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            }
+            ImGui::PopID();
+            ImGui::SetCursorScreenPos(savedCursorPosition);
+        }
     }
     drawList->PopClipRect();
 }
