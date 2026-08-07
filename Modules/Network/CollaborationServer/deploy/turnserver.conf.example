@@ -1,0 +1,16 @@
+listening-port=3478
+listening-ip=0.0.0.0
+relay-ip=REPLACE_WITH_PRIVATE_IPV4
+external-ip=REPLACE_WITH_PUBLIC_IPV4/REPLACE_WITH_PRIVATE_IPV4
+min-port=49160
+max-port=49200
+realm=REPLACE_WITH_REALM
+server-name=REPLACE_WITH_SERVER_NAME
+fingerprint
+lt-cred-mech
+user=REPLACE_WITH_USERNAME:REPLACE_WITH_RANDOM_PASSWORD
+stale-nonce=600
+no-multicast-peers
+no-tls
+log-file=stdout
+simple-log

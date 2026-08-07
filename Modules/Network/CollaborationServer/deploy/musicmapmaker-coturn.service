@@ -1,0 +1,14 @@
+[Unit]
+Description=MusicMapMaker STUN/TURN service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/podman rm --force --ignore musicmapmaker-coturn
+ExecStart=/usr/bin/podman run --rm --name musicmapmaker-coturn --user 0:0 --network=host --security-opt=no-new-privileges -v %h/.config/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro docker.io/coturn/coturn:4.15.0-r0 -c /etc/coturn/turnserver.conf
+ExecStop=/usr/bin/podman stop --ignore --time 10 musicmapmaker-coturn
+ExecStopPost=-/usr/bin/podman rm --force --ignore musicmapmaker-coturn
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
