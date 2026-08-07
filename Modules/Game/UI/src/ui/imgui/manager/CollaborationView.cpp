@@ -90,6 +90,53 @@ const char* resourcePhaseText(
     default: return TR("ui.collaboration.resource.idle").data();
     }
 }
+
+/// @brief 绘制房间信息表中的一行左侧标签。
+/// @param label 本地化标签。
+/// @warning UI 热路径：只切换表格列并提交一段禁用色文本。
+void drawRoomInfoLabel(const char* label)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("%s", label);
+    ImGui::TableSetColumnIndex(1);
+}
+
+/// @brief 绘制一名协作成员的表格行和可选跟随按钮。
+/// @param room 当前协作房间。
+/// @param peerId 成员 PeerId。
+/// @param creator 成员 Creator 展示名。
+/// @warning UI 热路径：成员表可见时每帧最多调用 8 次；只绘制内存状态，
+/// 不执行网络发送或文件系统访问。
+void drawParticipantRow(Network::Collaboration::CollaborationRoom& room,
+                        Network::Collaboration::PeerId             peerId,
+                        const std::string&                         creator)
+{
+    const bool local     = peerId == room.localPeerId();
+    const bool following = room.followedPeerId() == peerId;
+
+    ImGui::PushID(static_cast<int>(peerId));
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight());
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(creator.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(#%llu)", static_cast<unsigned long long>(peerId));
+
+    ImGui::TableSetColumnIndex(1);
+    if ( local ) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", TR("ui.collaboration.you_suffix").data());
+    } else {
+        const char* actionLabel =
+            following ? TR("ui.collaboration.stop_following").data()
+                      : TR("ui.collaboration.follow").data();
+        if ( FeedbackSmallButton(actionLabel) ) {
+            static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
+        }
+    }
+    ImGui::PopID();
+}
 }  // namespace
 
 CollaborationView::CollaborationView(
@@ -102,6 +149,8 @@ CollaborationView::CollaborationView(
         setInputBuffer(m_serverAddress, endpoint.address);
         m_signalingPort = endpoint.signalingPort;
         m_useTls        = endpoint.useTls;
+        m_viewportPublishRateHz =
+            static_cast<int>(m_room->viewportPublishRateHz());
     } else {
         setInputBuffer(m_serverAddress, "xiang233.top");
     }
@@ -178,141 +227,244 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         m_roomNameInitialized = true;
     }
 
-    ImGui::SeparatorText(TR("ui.collaboration.server").data());
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##CollaborationServerAddress",
-                             TR("ui.collaboration.server_address_hint").data(),
-                             m_serverAddress.data(),
-                             m_serverAddress.size());
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputInt(TR("ui.collaboration.signaling_port").data(),
-                    &m_signalingPort);
-    m_signalingPort = std::clamp(m_signalingPort, 1, 65535);
-    ImGui::Checkbox(TR("ui.collaboration.use_tls").data(), &m_useTls);
-    if ( FeedbackButton(TR("ui.collaboration.apply_server").data(),
-                        ImVec2(-1.0f, 0.0f)) ) {
-        static_cast<void>(applyServerEndpoint());
-    }
-    ImGui::Text("%s: %s",
-                TR("ui.collaboration.directory.status").data(),
-                directoryStateText(m_room->directoryState()));
-    if ( !m_room->directoryError().empty() ) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f),
-                           "%s",
-                           m_room->directoryError().c_str());
-    }
+    const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.server").data(),
+                                  headerFlags) ) {
+        const float labelWidth =
+            std::max(
+                { ImGui::CalcTextSize(
+                      TR("ui.collaboration.server_address").data())
+                      .x,
+                  ImGui::CalcTextSize(
+                      TR("ui.collaboration.signaling_port").data())
+                      .x,
+                  ImGui::CalcTextSize(TR("ui.collaboration.use_tls").data()).x,
+                  ImGui::CalcTextSize(
+                      TR("ui.collaboration.directory.status").data())
+                      .x }) +
+            ImGui::GetStyle().ItemSpacing.x;
+        if ( ImGui::BeginTable("CollaborationServerSettingsTable",
+                               2,
+                               ImGuiTableFlags_SizingStretchProp) ) {
+            ImGui::TableSetupColumn("##ServerSettingLabel",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    labelWidth);
+            ImGui::TableSetupColumn("##ServerSettingControl",
+                                    ImGuiTableColumnFlags_WidthStretch);
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(TR("ui.collaboration.host_room").data());
-    ImGui::TextWrapped("%s", TR("ui.collaboration.host_desc").data());
-    if ( !hasProject ) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.25f, 1.0f),
-                           "%s",
-                           TR("ui.collaboration.project_required").data());
-    }
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##CollaborationRoomName",
-                             TR("ui.collaboration.room_name_hint").data(),
-                             m_roomName.data(),
-                             m_roomName.size());
-    ImGui::BeginDisabled(
-        !creatorValid || m_roomName[0] == '\0' ||
-        !isCollaborationProjectRequirementSatisfied(true, hostReady));
-    if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
-                        ImVec2(-1.0f, 0.0f)) ) {
-        if ( applyServerEndpoint() ) {
-            Network::Collaboration::CollaborationHostRoomConfig config;
-            config.creator  = Config::AppConfig::instance()
-                                  .getEditorSettings()
-                                  .defaultCreator;
-            config.roomName = m_roomName.data();
-            config.endpoint = m_room->serverEndpoint();
-            m_room->prepareHostResources(
-                *project, *activeSession->getContext().currentBeatmap);
-            static_cast<void>(m_room->startHost(std::move(config)));
-            showLogWindow(sourceManager);
+            drawRoomInfoLabel(TR("ui.collaboration.server_address").data());
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputTextWithHint(
+                "##CollaborationServerAddress",
+                TR("ui.collaboration.server_address_hint").data(),
+                m_serverAddress.data(),
+                m_serverAddress.size());
+
+            drawRoomInfoLabel(TR("ui.collaboration.signaling_port").data());
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputInt(
+                "##CollaborationSignalingPort", &m_signalingPort, 0, 0);
+            m_signalingPort = std::clamp(m_signalingPort, 1, 65535);
+
+            drawRoomInfoLabel(TR("ui.collaboration.use_tls").data());
+            FeedbackCheckbox("##CollaborationUseTls", &m_useTls);
+
+            drawRoomInfoLabel(TR("ui.collaboration.directory.status").data());
+            ImGui::TextUnformatted(
+                directoryStateText(m_room->directoryState()));
+            ImGui::EndTable();
+        }
+        if ( FeedbackButton(TR("ui.collaboration.apply_server").data(),
+                            ImVec2(-1.0F, 0.0F)) ) {
+            static_cast<void>(applyServerEndpoint());
+        }
+        if ( !m_room->directoryError().empty() ) {
+            ImGui::TextWrapped("%s", m_room->directoryError().c_str());
         }
     }
-    ImGui::EndDisabled();
 
     ImGui::Spacing();
-    ImGui::SeparatorText(TR("ui.collaboration.online_rooms").data());
-    ImGui::TextWrapped("%s", TR("ui.collaboration.join_desc").data());
-    if ( FeedbackButton(TR("ui.collaboration.refresh_rooms").data()) ) {
-        static_cast<void>(m_room->refreshDirectory());
-    }
-    const auto& rooms = m_room->directoryRooms();
-    if ( rooms.empty() ) {
-        ImGui::TextDisabled("%s", TR("ui.collaboration.no_rooms").data());
-        return;
-    }
-
-    for ( const auto& room : rooms ) {
-        ImGui::PushID(room.roomId.c_str());
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", room.roomName.c_str());
-        ImGui::TextDisabled(TR("ui.collaboration.room_summary").data(),
-                            room.hostCreator.c_str(),
-                            static_cast<unsigned int>(room.participants),
-                            static_cast<unsigned int>(room.capacity));
-        const bool full = room.participants >= room.capacity;
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.host_room").data(),
+                                  headerFlags) ) {
+        ImGui::TextWrapped("%s", TR("ui.collaboration.host_desc").data());
+        if ( !hasProject ) {
+            ImGui::TextWrapped("%s",
+                               TR("ui.collaboration.project_required").data());
+        }
+        if ( ImGui::BeginTable("CollaborationHostSettingsTable",
+                               2,
+                               ImGuiTableFlags_SizingStretchProp) ) {
+            ImGui::TableSetupColumn(
+                "##HostSettingLabel",
+                ImGuiTableColumnFlags_WidthFixed,
+                ImGui::CalcTextSize(TR("ui.collaboration.room_name").data()).x +
+                    ImGui::GetStyle().ItemSpacing.x);
+            ImGui::TableSetupColumn("##HostSettingControl",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            drawRoomInfoLabel(TR("ui.collaboration.room_name").data());
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputTextWithHint(
+                "##CollaborationRoomName",
+                TR("ui.collaboration.room_name_hint").data(),
+                m_roomName.data(),
+                m_roomName.size());
+            ImGui::EndTable();
+        }
         ImGui::BeginDisabled(
-            !creatorValid || full ||
-            !isCollaborationProjectRequirementSatisfied(false, hasProject));
-        if ( FeedbackButton(full ? TR("ui.collaboration.room_full").data()
-                                 : TR("ui.collaboration.join_now").data(),
-                            ImVec2(-1.0f, 0.0f)) ) {
+            !creatorValid || m_roomName[0] == '\0' ||
+            !isCollaborationProjectRequirementSatisfied(true, hostReady));
+        if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
+                            ImVec2(-1.0F, 0.0F)) ) {
             if ( applyServerEndpoint() ) {
-                Network::Collaboration::CollaborationJoinRoomConfig config;
+                Network::Collaboration::CollaborationHostRoomConfig config;
                 config.creator  = Config::AppConfig::instance()
                                       .getEditorSettings()
                                       .defaultCreator;
-                config.roomId   = room.roomId;
-                config.roomName = room.roomName;
+                config.roomName = m_roomName.data();
                 config.endpoint = m_room->serverEndpoint();
-                config.resourceCacheRoot =
-                    Config::AppPaths::configRootPath() / "collaboration-cache";
-                static_cast<void>(m_room->join(std::move(config)));
+                m_room->prepareHostResources(
+                    *project, *activeSession->getContext().currentBeatmap);
+                static_cast<void>(m_room->startHost(std::move(config)));
                 showLogWindow(sourceManager);
             }
         }
         ImGui::EndDisabled();
-        ImGui::PopID();
+    }
+
+    ImGui::Spacing();
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.online_rooms").data(),
+                                  headerFlags) ) {
+        ImGui::TextWrapped("%s", TR("ui.collaboration.join_desc").data());
+        if ( FeedbackButton(TR("ui.collaboration.refresh_rooms").data()) ) {
+            static_cast<void>(m_room->refreshDirectory());
+        }
+        const auto& rooms = m_room->directoryRooms();
+        if ( rooms.empty() ) {
+            ImGui::TextDisabled("%s", TR("ui.collaboration.no_rooms").data());
+            return;
+        }
+
+        const ImGuiTableFlags tableFlags =
+            ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+        if ( ImGui::BeginTable(
+                 "CollaborationOnlineRoomsTable", 3, tableFlags) ) {
+            const float actionWidth =
+                std::max(
+                    ImGui::CalcTextSize(TR("ui.collaboration.join_now").data())
+                        .x,
+                    ImGui::CalcTextSize(TR("ui.collaboration.room_full").data())
+                        .x) +
+                ImGui::GetStyle().FramePadding.x * 2.0F;
+            ImGui::TableSetupColumn(TR("ui.collaboration.room_name").data(),
+                                    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(TR("ui.collaboration.online").data(),
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize("00/00").x +
+                                        ImGui::GetStyle().CellPadding.x * 2.0F);
+            ImGui::TableSetupColumn(TR("ui.collaboration.action").data(),
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    actionWidth);
+            ImGui::TableHeadersRow();
+
+            for ( const auto& room : rooms ) {
+                ImGui::PushID(room.roomId.c_str());
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,
+                                    ImGui::GetFrameHeight());
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(room.roomName.c_str());
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::BeginTooltip();
+                    ImGui::Text("%s: %s",
+                                TR("ui.collaboration.role.host").data(),
+                                room.hostCreator.c_str());
+                    ImGui::EndTooltip();
+                }
+                ImGui::TableSetColumnIndex(1);
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%u/%u",
+                            static_cast<unsigned int>(room.participants),
+                            static_cast<unsigned int>(room.capacity));
+                ImGui::TableSetColumnIndex(2);
+                const bool full = room.participants >= room.capacity;
+                ImGui::BeginDisabled(
+                    !creatorValid || full ||
+                    !isCollaborationProjectRequirementSatisfied(false,
+                                                                hasProject));
+                if ( FeedbackSmallButton(
+                         full ? TR("ui.collaboration.room_full").data()
+                              : TR("ui.collaboration.join_now").data()) ) {
+                    if ( applyServerEndpoint() ) {
+                        Network::Collaboration::CollaborationJoinRoomConfig
+                            config;
+                        config.creator  = Config::AppConfig::instance()
+                                              .getEditorSettings()
+                                              .defaultCreator;
+                        config.roomId   = room.roomId;
+                        config.roomName = room.roomName;
+                        config.endpoint = m_room->serverEndpoint();
+                        config.resourceCacheRoot =
+                            Config::AppPaths::configRootPath() /
+                            "collaboration-cache";
+                        static_cast<void>(m_room->join(std::move(config)));
+                        showLogWindow(sourceManager);
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
     }
 }
 
 void CollaborationView::drawActiveRoom(UIManager* sourceManager)
 {
-    ImGui::TextUnformatted(TR("ui.collaboration.status").data());
-    ImGui::SameLine();
-    ImGui::TextUnformatted(roomStateText(m_room->state()));
+    const auto&              endpoint    = m_room->serverEndpoint();
+    const auto&              style       = ImGui::GetStyle();
+    const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
 
-    ImGui::Text("%s: %s",
-                TR("ui.collaboration.role").data(),
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.room_details").data(),
+                                  headerFlags) ) {
+        if ( ImGui::BeginTable("CollaborationRoomDetailsTable",
+                               2,
+                               ImGuiTableFlags_SizingStretchProp) ) {
+            const float labelWidth = std::max(
+                ImGui::CalcTextSize(TR("ui.collaboration.server").data()).x,
+                ImGui::CalcTextSize(TR("ui.collaboration.room_name").data()).x);
+            ImGui::TableSetupColumn("##RoomDetailLabel",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    labelWidth + style.ItemSpacing.x);
+            ImGui::TableSetupColumn("##RoomDetailValue",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            drawRoomInfoLabel(TR("ui.collaboration.status").data());
+            ImGui::TextUnformatted(roomStateText(m_room->state()));
+            drawRoomInfoLabel(TR("ui.collaboration.role").data());
+            ImGui::TextUnformatted(
                 m_room->isHost() ? TR("ui.collaboration.role.host").data()
                                  : TR("ui.collaboration.role.guest").data());
-    ImGui::Text("%s: %llu",
-                TR("ui.collaboration.peer_id").data(),
-                static_cast<unsigned long long>(m_room->localPeerId()));
-    ImGui::Text("%s: %s",
-                TR("ui.collaboration.room_name").data(),
-                m_room->roomName().c_str());
-    if ( !m_room->roomId().empty() ) {
-        ImGui::Text("%s: %s",
-                    TR("ui.collaboration.room_id").data(),
-                    m_room->roomId().c_str());
-    }
-    const auto& endpoint = m_room->serverEndpoint();
-    ImGui::Text("%s: %s:%u",
-                TR("ui.collaboration.server").data(),
+            drawRoomInfoLabel(TR("ui.collaboration.room_name").data());
+            ImGui::TextWrapped("%s", m_room->roomName().c_str());
+            drawRoomInfoLabel(TR("ui.collaboration.peer_id").data());
+            ImGui::Text("#%llu",
+                        static_cast<unsigned long long>(m_room->localPeerId()));
+            if ( !m_room->roomId().empty() ) {
+                drawRoomInfoLabel(TR("ui.collaboration.room_id").data());
+                ImGui::TextWrapped("%s", m_room->roomId().c_str());
+            }
+            drawRoomInfoLabel(TR("ui.collaboration.server").data());
+            ImGui::TextWrapped(
+                "%s:%u",
                 endpoint.address.c_str(),
                 static_cast<unsigned int>(endpoint.signalingPort));
-
-    if ( !m_room->lastError().empty() ) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f),
-                           "%s: %s",
-                           TR("ui.collaboration.error").data(),
-                           m_room->lastError().c_str());
+            ImGui::EndTable();
+        }
+        if ( !m_room->lastError().empty() ) {
+            ImGui::TextWrapped("%s: %s",
+                               TR("ui.collaboration.error").data(),
+                               m_room->lastError().c_str());
+        }
     }
 
     const auto resource = m_room->resourceProgress();
@@ -322,10 +474,42 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                               resource.phase == ResourcePhase::ComparingCache ||
                               resource.phase == ResourcePhase::Downloading ||
                               resource.phase == ResourcePhase::Verifying;
-    if ( resource.phase != ResourcePhase::Idle ) {
-        ImGui::Text("%s: %s",
-                    TR("ui.collaboration.resource.status").data(),
-                    resourcePhaseText(resource.phase));
+
+    ImGui::Spacing();
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.sync_settings").data(),
+                                  headerFlags) ) {
+        const float labelWidth =
+            std::max(
+                ImGui::CalcTextSize(TR("ui.collaboration.viewport_rate").data())
+                    .x,
+                ImGui::CalcTextSize(
+                    TR("ui.collaboration.resource.status").data())
+                    .x) +
+            style.ItemSpacing.x;
+        if ( ImGui::BeginTable("CollaborationSyncSettingsTable",
+                               2,
+                               ImGuiTableFlags_SizingStretchProp) ) {
+            ImGui::TableSetupColumn("##SyncSettingLabel",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    labelWidth);
+            ImGui::TableSetupColumn("##SyncSettingControl",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            drawRoomInfoLabel(TR("ui.collaboration.viewport_rate").data());
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::SliderInt("##CollaborationViewportRate",
+                             &m_viewportPublishRateHz,
+                             5,
+                             60,
+                             "%d Hz");
+            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                m_room->setViewportPublishRateHz(
+                    static_cast<std::uint32_t>(m_viewportPublishRateHz));
+            }
+
+            drawRoomInfoLabel(TR("ui.collaboration.resource.status").data());
+            ImGui::TextWrapped("%s", resourcePhaseText(resource.phase));
+            ImGui::EndTable();
+        }
         if ( showProgress ) {
             float fraction = 0.0F;
             if ( (resource.phase == ResourcePhase::Preparing ||
@@ -357,24 +541,53 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
         }
     }
 
-    if ( FeedbackButton(TR("ui.collaboration.show_log").data()) ) {
+    ImGui::Spacing();
+    const float actionWidth = std::max(
+        1.0F, (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5F);
+    if ( FeedbackButton(TR("ui.collaboration.show_log").data(),
+                        ImVec2(actionWidth, 0.0F)) ) {
         showLogWindow(sourceManager);
     }
     ImGui::SameLine();
-    if ( FeedbackButton(TR("ui.collaboration.disconnect").data()) ) {
+    if ( FeedbackButton(TR("ui.collaboration.disconnect").data(),
+                        ImVec2(actionWidth, 0.0F)) ) {
         m_room->disconnect();
         return;
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText(TR("ui.collaboration.participants").data());
-    for ( const auto& [peerId, creator] : m_room->participants() ) {
-        ImGui::BulletText("%s  (#%llu)%s",
-                          creator.c_str(),
-                          static_cast<unsigned long long>(peerId),
-                          peerId == m_room->localPeerId()
-                              ? TR("ui.collaboration.you_suffix").data()
-                              : "");
+    if ( FeedbackCollapsingHeader(TR("ui.collaboration.participants").data(),
+                                  headerFlags) ) {
+        const auto&           participants = m_room->participants();
+        const ImGuiTableFlags tableFlags =
+            ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+        if ( ImGui::BeginTable(
+                 "CollaborationParticipantsTable", 2, tableFlags) ) {
+            const float actionWidth =
+                ImGui::CalcTextSize(
+                    TR("ui.collaboration.stop_following").data())
+                    .x +
+                style.FramePadding.x * 2.0F;
+            ImGui::TableSetupColumn(TR("ui.collaboration.user").data(),
+                                    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(TR("ui.collaboration.action").data(),
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    actionWidth);
+            ImGui::TableHeadersRow();
+
+            const auto localPeer = participants.find(m_room->localPeerId());
+            if ( localPeer != participants.end() ) {
+                drawParticipantRow(
+                    *m_room, localPeer->first, localPeer->second);
+            }
+            for ( const auto& [peerId, creator] : participants ) {
+                if ( peerId != m_room->localPeerId() ) {
+                    drawParticipantRow(*m_room, peerId, creator);
+                }
+            }
+            ImGui::EndTable();
+        }
     }
 }
 

@@ -63,5 +63,7 @@ private:
     std::array<char, 160> m_roomName{};
     /// @brief 是否已经从当前谱面初始化房间名称。
     bool m_roomNameInitialized = false;
+    /// @brief 当前客户端向 P2P 房间发布主画布状态的频率。
+    int m_viewportPublishRateHz = 10;
 };
 }  // namespace MMM::UI
