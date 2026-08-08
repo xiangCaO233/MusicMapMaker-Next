@@ -384,6 +384,59 @@ bool testBatchMoveVisibilityConstraint()
                0.35F) <= 1e-4F;
 }
 
+/// @brief 验证相机缩放后鼠标指向的逻辑画布坐标保持不变。
+bool testMouseAnchoredCameraZoom()
+{
+    constexpr float DPI_SCALE = 2.0F;
+    constexpr float POINTER_X = 100.0F;
+    constexpr float POINTER_Y = 60.0F;
+    constexpr float SCROLL_X  = 300.0F;
+    constexpr float SCROLL_Y  = 180.0F;
+    const auto result = MMM::UI::ProjectAudioToolLayout::zoomCameraAtPointer(
+        1.0F, 1.0F, DPI_SCALE, SCROLL_X, SCROLL_Y, POINTER_X, POINTER_Y);
+    const float anchorBeforeX = (SCROLL_X + POINTER_X) / DPI_SCALE;
+    const float anchorBeforeY = (SCROLL_Y + POINTER_Y) / DPI_SCALE;
+    const float anchorAfterX =
+        (result.scrollX + POINTER_X) / (DPI_SCALE * result.zoom);
+    const float anchorAfterY =
+        (result.scrollY + POINTER_Y) / (DPI_SCALE * result.zoom);
+    return near(result.zoom,
+                MMM::UI::ProjectAudioToolLayout::CAMERA_ZOOM_STEP) &&
+           near(anchorBeforeX, anchorAfterX) &&
+           near(anchorBeforeY, anchorAfterY);
+}
+
+/// @brief 验证相机倍率上下限和画布原点附近的非负滚动约束。
+bool testCameraZoomLimits()
+{
+    const auto maximum = MMM::UI::ProjectAudioToolLayout::zoomCameraAtPointer(
+        1.0F, 100.0F, 1.0F, 0.0F, 0.0F, 50.0F, 50.0F);
+    const auto minimum = MMM::UI::ProjectAudioToolLayout::zoomCameraAtPointer(
+        1.0F, -100.0F, 1.0F, 0.0F, 0.0F, 50.0F, 50.0F);
+    return near(maximum.zoom,
+                MMM::UI::ProjectAudioToolLayout::MAXIMUM_CAMERA_ZOOM) &&
+           near(minimum.zoom,
+                MMM::UI::ProjectAudioToolLayout::MINIMUM_CAMERA_ZOOM) &&
+           near(minimum.scrollX, 0.0F) && near(minimum.scrollY, 0.0F);
+}
+
+/// @brief 验证缩放滑条指定倍率时以可见画布中心保持相机锚点。
+bool testSliderCameraZoom()
+{
+    constexpr float POINTER_X = 240.0F;
+    constexpr float POINTER_Y = 160.0F;
+    constexpr float SCROLL_X  = 120.0F;
+    constexpr float SCROLL_Y  = 80.0F;
+    const auto result = MMM::UI::ProjectAudioToolLayout::zoomCameraToPointer(
+        1.0F, 2.5F, 1.0F, SCROLL_X, SCROLL_Y, POINTER_X, POINTER_Y);
+    const float anchorBeforeX = SCROLL_X + POINTER_X;
+    const float anchorBeforeY = SCROLL_Y + POINTER_Y;
+    const float anchorAfterX  = (result.scrollX + POINTER_X) / result.zoom;
+    const float anchorAfterY  = (result.scrollY + POINTER_Y) / result.zoom;
+    return near(result.zoom, 2.5F) && near(anchorBeforeX, anchorAfterX) &&
+           near(anchorBeforeY, anchorAfterY);
+}
+
 }  // namespace
 
 /// @brief 运行项目音频工具几何布局测试。
@@ -404,5 +457,8 @@ int main()
     if ( !testPreparedVisibilityConstraint() ) return 13;
     if ( !testExistingVisibilityDeficitIsBaseline() ) return 14;
     if ( !testBatchMoveVisibilityConstraint() ) return 15;
+    if ( !testMouseAnchoredCameraZoom() ) return 16;
+    if ( !testCameraZoomLimits() ) return 17;
+    if ( !testSliderCameraZoom() ) return 18;
     return 0;
 }

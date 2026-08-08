@@ -248,10 +248,12 @@ private:
     /// @brief 绘制一个方块和位于其可见区域内的滚动文本。
     /// @param item 方块缓存。
     /// @param canvasOrigin 逻辑画布原点对应的屏幕坐标。
+    /// @param canvasScale 逻辑画布坐标到屏幕像素的相机缩放。
     /// @param dpiScale 当前内容缩放。
     /// @param drawList 当前 ImGui 绘制列表。
-    void drawItem(const Item& item, ImVec2 canvasOrigin, float dpiScale,
-                  bool hovered, bool pressed, ImDrawList& drawList) const;
+    void drawItem(const Item& item, ImVec2 canvasOrigin, float canvasScale,
+                  float dpiScale, bool hovered, bool pressed,
+                  ImDrawList& drawList) const;
 
     /// @brief 计算可容纳全部方块的画布尺寸。
     [[nodiscard]] ImVec2 calculateContentSize(float visibleWidth,
@@ -380,6 +382,12 @@ private:
 
     /// @brief 方块默认尺寸上次测量时的内容缩放。
     float m_cachedDpiScale{ 0.0F };
+
+    /// @brief 项目音频工具逻辑画布的运行时相机倍率。
+    float m_canvasZoom{ 1.0F };
+
+    /// @brief 缩放滑条下一帧需要应用到画布子窗口的滚动像素。
+    std::optional<ImVec2> m_pendingCanvasScroll;
 
     /// @brief 是否在下一帧聚焦窗口。
     bool m_requestFocus{ false };

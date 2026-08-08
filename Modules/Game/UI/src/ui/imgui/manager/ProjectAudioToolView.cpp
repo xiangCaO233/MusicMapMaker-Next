@@ -145,13 +145,13 @@ bool isVisible(const ProjectAudioToolLayout::Rect& rect,
 
 /// @brief 转换逻辑画布矩形为屏幕像素矩形。
 ProjectAudioToolLayout::Rect toScreenRect(
-    const ProjectAudioToolLayout::Rect& rect, ImVec2 origin, float dpiScale)
+    const ProjectAudioToolLayout::Rect& rect, ImVec2 origin, float canvasScale)
 {
     return {
-        origin.x + rect.x * dpiScale,
-        origin.y + rect.y * dpiScale,
-        rect.width * dpiScale,
-        rect.height * dpiScale,
+        origin.x + rect.x * canvasScale,
+        origin.y + rect.y * canvasScale,
+        rect.width * canvasScale,
+        rect.height * canvasScale,
     };
 }
 
@@ -402,7 +402,9 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         m_selectedAudioLabel.clear();
         m_openVolumeEditorResourceId.clear();
         m_cachedProjectRoot.clear();
-        m_cachedDpiScale     = 0.0F;
+        m_cachedDpiScale = 0.0F;
+        m_canvasZoom     = 1.0F;
+        m_pendingCanvasScroll.reset();
         m_batchDragging      = false;
         m_marqueeSelecting   = false;
         m_searchResultsDirty = true;
@@ -1064,10 +1066,11 @@ void ProjectAudioToolView::rebuildBatchDragConstraints()
 }
 
 void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
-                                    float dpiScale, bool hovered, bool pressed,
+                                    float canvasScale, float dpiScale,
+                                    bool hovered, bool pressed,
                                     ImDrawList& drawList) const
 {
-    const auto   screenRect = toScreenRect(item.rect, canvasOrigin, dpiScale);
+    const auto screenRect = toScreenRect(item.rect, canvasOrigin, canvasScale);
     const ImVec2 minimum{ screenRect.x, screenRect.y };
     const ImVec2 maximum{ screenRect.right(), screenRect.bottom() };
     const bool   selected = item.audioResourceId == m_selectedAudioResourceId;
@@ -1103,7 +1106,8 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
             minimum, maximum, BATCH_SELECTION_FILL, rounding);
     }
 
-    const auto labelRect = toScreenRect(item.labelRect, canvasOrigin, dpiScale);
+    const auto labelRect =
+        toScreenRect(item.labelRect, canvasOrigin, canvasScale);
     const auto audioControlLayout = calculateItemAudioControlLayout(screenRect);
     const float horizontalPadding = std::max(1.0F, style.FramePadding.x);
     const float verticalPadding   = std::max(1.0F, style.FramePadding.y);
@@ -1370,21 +1374,81 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         childSize,
         true,
         ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
-    const ImVec2 visibleSizePixels = ImGui::GetContentRegionAvail();
-    const float  visibleWidth  = std::max(1.0F, visibleSizePixels.x / dpiScale);
-    const float  visibleHeight = std::max(1.0F, visibleSizePixels.y / dpiScale);
+    const ImVec2      visibleSizePixels = ImGui::GetContentRegionAvail();
     const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
-    if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
-         projectRoot != m_cachedProjectRoot ||
-         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
-        rebuildItems(visibleWidth, dpiScale);
+    if ( projectRoot != m_cachedProjectRoot ) {
+        m_canvasZoom = 1.0F;
+        m_pendingCanvasScroll.reset();
     }
 
     const ImVec2 canvasCursor = ImGui::GetCursorScreenPos();
-    const ImVec2 scroll{ ImGui::GetScrollX(), ImGui::GetScrollY() };
-    const ImVec2 canvasOrigin = canvasCursor;
+    ImVec2       scroll{ ImGui::GetScrollX(), ImGui::GetScrollY() };
+    const ImVec2 unscrolledCanvasOrigin{ canvasCursor.x + scroll.x,
+                                         canvasCursor.y + scroll.y };
+    if ( m_pendingCanvasScroll ) {
+        scroll = *m_pendingCanvasScroll;
+        m_pendingCanvasScroll.reset();
+        ImGui::SetScrollX(scroll.x);
+        ImGui::SetScrollY(scroll.y);
+    }
+    ImVec2     canvasOrigin{ unscrolledCanvasOrigin.x - scroll.x,
+                             unscrolledCanvasOrigin.y - scroll.y };
+    const bool canvasHovered =
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows |
+                               ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    const auto& io                = ImGui::GetIO();
+    const bool  cameraZoomAllowed = canvasHovered && io.KeyCtrl &&
+                                    std::abs(io.MouseWheel) > 0.01F &&
+                                    !m_draggingItem && !m_resizingItem &&
+                                    !m_batchDragging && !m_marqueeSelecting;
+    if ( cameraZoomAllowed ) {
+        const auto zoomResult = ProjectAudioToolLayout::zoomCameraAtPointer(
+            m_canvasZoom,
+            io.MouseWheel,
+            dpiScale,
+            scroll.x,
+            scroll.y,
+            io.MousePos.x - unscrolledCanvasOrigin.x,
+            io.MousePos.y - unscrolledCanvasOrigin.y);
+        m_canvasZoom = zoomResult.zoom;
+        scroll       = { zoomResult.scrollX, zoomResult.scrollY };
+        canvasOrigin = { unscrolledCanvasOrigin.x - scroll.x,
+                         unscrolledCanvasOrigin.y - scroll.y };
+        ImGui::SetScrollX(scroll.x);
+        ImGui::SetScrollY(scroll.y);
+    }
+
+    const float canvasScale = dpiScale * m_canvasZoom;
+    const float visibleWidth =
+        std::max(1.0F, visibleSizePixels.x / canvasScale);
+    const float visibleHeight =
+        std::max(1.0F, visibleSizePixels.y / canvasScale);
+    const float layoutVisibleWidth =
+        std::max(1.0F, visibleSizePixels.x / dpiScale);
+    if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
+         projectRoot != m_cachedProjectRoot ||
+         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
+        rebuildItems(layoutVisibleWidth, dpiScale);
+    }
+
     const ImVec2 contentLogical =
         calculateContentSize(visibleWidth, visibleHeight);
+    const ImVec2 maximumScroll{
+        std::max(0.0F, contentLogical.x * canvasScale - visibleSizePixels.x),
+        std::max(0.0F, contentLogical.y * canvasScale - visibleSizePixels.y),
+    };
+    const ImVec2 constrainedScroll{
+        std::clamp(scroll.x, 0.0F, maximumScroll.x),
+        std::clamp(scroll.y, 0.0F, maximumScroll.y),
+    };
+    if ( std::abs(constrainedScroll.x - scroll.x) > 1e-4F ||
+         std::abs(constrainedScroll.y - scroll.y) > 1e-4F ) {
+        scroll       = constrainedScroll;
+        canvasOrigin = { unscrolledCanvasOrigin.x - scroll.x,
+                         unscrolledCanvasOrigin.y - scroll.y };
+        ImGui::SetScrollX(scroll.x);
+        ImGui::SetScrollY(scroll.y);
+    }
 
     if ( !m_searchFocusRequestId.empty() ) {
         const auto requestedItem =
@@ -1398,13 +1462,17 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 previewEffectSelection(m_items[*activeIndex]);
                 const auto& activeRect = m_items[*activeIndex].rect;
                 const float targetScrollX =
-                    (activeRect.x + activeRect.width * 0.5F) * dpiScale -
+                    (activeRect.x + activeRect.width * 0.5F) * canvasScale -
                     visibleSizePixels.x * 0.5F;
                 const float targetScrollY =
-                    (activeRect.y + activeRect.height * 0.5F) * dpiScale -
+                    (activeRect.y + activeRect.height * 0.5F) * canvasScale -
                     visibleSizePixels.y * 0.5F;
-                ImGui::SetScrollX(std::max(0.0F, targetScrollX));
-                ImGui::SetScrollY(std::max(0.0F, targetScrollY));
+                scroll.x     = std::clamp(targetScrollX, 0.0F, maximumScroll.x);
+                scroll.y     = std::clamp(targetScrollY, 0.0F, maximumScroll.y);
+                canvasOrigin = { unscrolledCanvasOrigin.x - scroll.x,
+                                 unscrolledCanvasOrigin.y - scroll.y };
+                ImGui::SetScrollX(scroll.x);
+                ImGui::SetScrollY(scroll.y);
                 persistWorkspace();
             }
         }
@@ -1412,17 +1480,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
 
     const ProjectAudioToolLayout::Rect visibleCanvas{
-        scroll.x / dpiScale,
-        scroll.y / dpiScale,
+        scroll.x / canvasScale,
+        scroll.y / canvasScale,
         visibleWidth,
         visibleHeight,
     };
-    const bool canvasHovered =
-        ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows |
-                               ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 mouseLogical{
-        (ImGui::GetIO().MousePos.x - canvasOrigin.x) / dpiScale,
-        (ImGui::GetIO().MousePos.y - canvasOrigin.y) / dpiScale,
+        (io.MousePos.x - canvasOrigin.x) / canvasScale,
+        (io.MousePos.y - canvasOrigin.y) / canvasScale,
     };
     std::optional<std::size_t> hoveredItem;
     if ( canvasHovered ) {
@@ -1453,9 +1518,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         audioControlsItem = hoveredItem;
     }
     if ( audioControlsEnabled && !audioControlsItem && canvasHovered ) {
-        const float maximumDistanceSquared =
-            AUDIO_CONTROLS_PROXIMITY * AUDIO_CONTROLS_PROXIMITY;
-        float nearestDistanceSquared = maximumDistanceSquared;
+        const float maximumDistanceSquared = AUDIO_CONTROLS_PROXIMITY *
+                                             AUDIO_CONTROLS_PROXIMITY /
+                                             (m_canvasZoom * m_canvasZoom);
+        float       nearestDistanceSquared = maximumDistanceSquared;
         for ( std::size_t reverse = m_items.size(); reverse > 0; --reverse ) {
             const std::size_t index = reverse - 1U;
             if ( !isVisible(m_items[index].rect, visibleCanvas) ) continue;
@@ -1474,6 +1540,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
         drawItem(item,
                  canvasOrigin,
+                 canvasScale,
                  dpiScale,
                  hoveredItem == index,
                  (m_draggingItem == index || m_resizingItem == index ||
@@ -1492,7 +1559,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 makeProjectAudioPreviewPoolKey("tool/" + item.audioResourceId);
         }
         const auto itemScreenRect =
-            toScreenRect(item.rect, canvasOrigin, dpiScale);
+            toScreenRect(item.rect, canvasOrigin, canvasScale);
         const auto controls = calculateItemAudioControlLayout(itemScreenRect);
         const bool controlsPointerInside = containsItemAudioControls(
             controls.controls, ImGui::GetIO().MousePos);
@@ -1644,7 +1711,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const float deltaX = mouseLogical.x - m_itemDragStartMouse.x;
         const float deltaY = mouseLogical.y - m_itemDragStartMouse.y;
         const float dragThreshold =
-            ImGui::GetIO().MouseDragThreshold / dpiScale;
+            ImGui::GetIO().MouseDragThreshold / canvasScale;
         m_itemDragMoved = m_itemDragMoved || deltaX * deltaX + deltaY * deltaY >
                                                  dragThreshold * dragThreshold;
         if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
@@ -1858,12 +1925,12 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
     if ( snapGuideBounds ) {
         const ImVec2 visibleMinimum{
-            canvasOrigin.x + visibleCanvas.x * dpiScale,
-            canvasOrigin.y + visibleCanvas.y * dpiScale,
+            canvasOrigin.x + visibleCanvas.x * canvasScale,
+            canvasOrigin.y + visibleCanvas.y * canvasScale,
         };
         const ImVec2 visibleMaximum{
-            canvasOrigin.x + visibleCanvas.right() * dpiScale,
-            canvasOrigin.y + visibleCanvas.bottom() * dpiScale,
+            canvasOrigin.x + visibleCanvas.right() * canvasScale,
+            canvasOrigin.y + visibleCanvas.bottom() * canvasScale,
         };
         constexpr ImU32 SNAP_GUIDE_COLOR   = IM_COL32(255, 218, 96, 150);
         const float     snapGuideThickness = std::max(1.0F, 1.25F * dpiScale);
@@ -1873,7 +1940,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
              alignsWithTargetLine(
                  *snapGuideBounds, *m_snapLocks.x.targetLine, true) ) {
             const float guideX =
-                canvasOrigin.x + *m_snapLocks.x.targetLine * dpiScale;
+                canvasOrigin.x + *m_snapLocks.x.targetLine * canvasScale;
             drawSnapGuide(*drawList,
                           { guideX, visibleMinimum.y },
                           { guideX, visibleMaximum.y },
@@ -1886,7 +1953,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
              alignsWithTargetLine(
                  *snapGuideBounds, *m_snapLocks.y.targetLine, false) ) {
             const float guideY =
-                canvasOrigin.y + *m_snapLocks.y.targetLine * dpiScale;
+                canvasOrigin.y + *m_snapLocks.y.targetLine * canvasScale;
             drawSnapGuide(*drawList,
                           { visibleMinimum.x, guideY },
                           { visibleMaximum.x, guideY },
@@ -1901,7 +1968,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         const auto selectionRect =
             toScreenRect(rectFromPoints(m_marqueeStart, m_marqueeEnd),
                          canvasOrigin,
-                         dpiScale);
+                         canvasScale);
         const ImVec2 minimum{ selectionRect.x, selectionRect.y };
         const ImVec2 maximum{ selectionRect.right(), selectionRect.bottom() };
         drawList->AddRectFilled(minimum, maximum, IM_COL32(120, 170, 255, 42));
@@ -1917,10 +1984,25 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // Dummy 会让后续回退到方块坐标的 ImGui Item 落入非流式布局状态，在
     // 新版 ImGui 中可能被裁成残片；末尾 Dummy 同时满足滚动范围和边界检查。
     ImGui::SetCursorScreenPos(canvasCursor);
-    ImGui::Dummy({ contentLogical.x * dpiScale, contentLogical.y * dpiScale });
+    ImGui::Dummy(
+        { contentLogical.x * canvasScale, contentLogical.y * canvasScale });
     ImGui::EndChild();
     renderRenamePopup(dpiScale);
     ImGui::Separator();
+
+    const ImVec2 statusRowStart = ImGui::GetCursorScreenPos();
+    const float  statusRowWidth = ImGui::GetContentRegionAvail().x;
+    const float  zoomSliderWidth =
+        std::min(statusRowWidth,
+                 std::max(120.0F * dpiScale,
+                          std::min(220.0F * dpiScale, statusRowWidth * 0.42F)));
+    const float statusTextWidth = std::max(
+        0.0F,
+        statusRowWidth - zoomSliderWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::PushClipRect(statusRowStart,
+                        { statusRowStart.x + statusTextWidth,
+                          statusRowStart.y + ImGui::GetFrameHeight() },
+                        true);
     if ( m_selectedAudioResourceId.empty() ) {
         ImGui::TextUnformatted(m_translationCache.statusNone);
     } else {
@@ -1935,6 +2017,50 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         ImGui::SameLine();
         ImGui::TextDisabled(
             "| %s: %zu", m_translationCache.statusBatchSelected, batchCount);
+    }
+    ImGui::PopClipRect();
+
+    ImGui::SetCursorScreenPos(
+        { statusRowStart.x + statusRowWidth - zoomSliderWidth,
+          statusRowStart.y });
+    ImGui::SetNextItemWidth(zoomSliderWidth);
+    int zoomPercentage = std::clamp(
+        static_cast<int>(std::lround(m_canvasZoom * 100.0F)), 100, 400);
+    if ( ImGui::SliderInt("##ProjectAudioToolCanvasZoom",
+                          &zoomPercentage,
+                          100,
+                          400,
+                          "%d%%",
+                          ImGuiSliderFlags_AlwaysClamp) ) {
+        const auto zoomResult = ProjectAudioToolLayout::zoomCameraToPointer(
+            m_canvasZoom,
+            static_cast<float>(zoomPercentage) * 0.01F,
+            dpiScale,
+            scroll.x,
+            scroll.y,
+            visibleSizePixels.x * 0.5F,
+            visibleSizePixels.y * 0.5F);
+        m_canvasZoom = zoomResult.zoom;
+
+        const float nextCanvasScale = dpiScale * m_canvasZoom;
+        const float nextVisibleWidth =
+            std::max(1.0F, visibleSizePixels.x / nextCanvasScale);
+        const float nextVisibleHeight =
+            std::max(1.0F, visibleSizePixels.y / nextCanvasScale);
+        const ImVec2 nextContentLogical =
+            calculateContentSize(nextVisibleWidth, nextVisibleHeight);
+        const ImVec2 nextMaximumScroll{
+            std::max(
+                0.0F,
+                nextContentLogical.x * nextCanvasScale - visibleSizePixels.x),
+            std::max(
+                0.0F,
+                nextContentLogical.y * nextCanvasScale - visibleSizePixels.y),
+        };
+        m_pendingCanvasScroll = ImVec2{
+            std::clamp(zoomResult.scrollX, 0.0F, nextMaximumScroll.x),
+            std::clamp(zoomResult.scrollY, 0.0F, nextMaximumScroll.y),
+        };
     }
 }
 
