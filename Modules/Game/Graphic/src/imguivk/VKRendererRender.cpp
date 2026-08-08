@@ -336,13 +336,13 @@ struct GlfwCursorState {
     ImGuiMouseCursor cursor{ ImGuiMouseCursor_COUNT };
 };
 
-/// @brief GLFW 主窗口焦点状态缓存。
+/// @brief GLFW 主窗口可激活状态缓存。
 struct MainWindowFocusState {
     /// @brief 当前缓存所属 GLFW 主窗口。
     GLFWwindow* window{ nullptr };
 
-    /// @brief 上一帧主窗口是否拥有焦点。
-    bool focused{ false };
+    /// @brief 上一帧主窗口是否拥有焦点且未最小化。
+    bool active{ false };
 };
 
 /// @brief 获取 GLFW 主窗口光标状态缓存。
@@ -421,29 +421,34 @@ void applyNativeCursor(GLFWwindow* window, ImGuiMouseCursor cursor)
     applyGlfwCursorMode(window, GLFW_CURSOR_NORMAL, cursor);
 }
 
-/// @brief 消费主窗口从未聚焦到聚焦的激活边沿。
+/// @brief 消费主窗口从非激活态到可见聚焦态的激活边沿。
 /// @param window GLFW 主窗口句柄。
-/// @return 本帧主窗口刚获得焦点时返回 true。
+/// @return 本帧主窗口刚获得焦点且未最小化时返回 true。
 /// @warning 渲染热路径：每帧调用；只读取 GLFW 窗口属性和更新静态缓存。
 bool consumeMainWindowActivation(GLFWwindow* window)
 {
     auto& state = mainWindowFocusState();
 
     if ( !window ) {
-        state.window  = nullptr;
-        state.focused = false;
+        state.window = nullptr;
+        state.active = false;
         return false;
     }
 
     const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+    bool       active  = focused;
+#ifdef _WIN32
+    // Windows 10 在任务栏最小化期间可能短暂保留焦点，不能把该状态当作恢复边沿。
+    active = active && glfwGetWindowAttrib(window, GLFW_ICONIFIED) != GLFW_TRUE;
+#endif
     if ( state.window != window ) {
-        state.window  = window;
-        state.focused = focused;
-        return focused;
+        state.window = window;
+        state.active = active;
+        return active;
     }
 
-    const bool activated = focused && !state.focused;
-    state.focused        = focused;
+    const bool activated = active && !state.active;
+    state.active         = active;
     return activated;
 }
 
@@ -533,6 +538,11 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
     }
 
 #ifdef _WIN32
+    HWND mainHwnd = glfwGetWin32Window(mainWindow);
+    if ( !mainHwnd || IsIconic(mainHwnd) ) {
+        return;
+    }
+
     // 在 Windows 下提窗顺序很关键：主窗口先拿回前台焦点，随后独立
     // 独立 ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
     raiseGlfwWindowToTop(mainWindow, true);
