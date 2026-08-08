@@ -260,6 +260,7 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "toolColorEraser", config.toolColorEraser },
         { "mirror", config.mirror },
         { "mirrorPaste", config.mirrorPaste },
+        { "editSelectedVolume", config.editSelectedVolume },
         { "deleteSelected", config.deleteSelected },
         { "toggleReverseScroll", config.toggleReverseScroll },
         { "toggleScrollSnap", config.toggleScrollSnap },
@@ -285,6 +286,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
         json.value("toolColorEraser", defaults.toolColorEraser);
     config.mirror      = json.value("mirror", defaults.mirror);
     config.mirrorPaste = json.value("mirrorPaste", defaults.mirrorPaste);
+    config.editSelectedVolume =
+        json.value("editSelectedVolume", defaults.editSelectedVolume);
     config.deleteSelected =
         json.value("deleteSelected", defaults.deleteSelected);
     config.toggleReverseScroll =

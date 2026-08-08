@@ -257,6 +257,9 @@ struct ShortcutConfig {
     /// @brief 镜像粘贴剪贴板物件。
     ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
 
+    /// @brief 打开选中物件批量音量编辑器。
+    ShortcutBinding editSelectedVolume{ false, "", false, false, false, false };
+
     /// @brief 删除当前选中物件。
     ShortcutBinding deleteSelected{
         true, "Delete", false, false, false, false

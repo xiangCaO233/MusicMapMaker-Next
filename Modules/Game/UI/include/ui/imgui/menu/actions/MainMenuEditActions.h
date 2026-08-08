@@ -44,6 +44,10 @@ createBmsEditingToggleAction();
 /// @brief 创建打开音符元数据编辑器动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenNoteMetadataAction();
 
+/// @brief 创建打开选中物件批量音量编辑器动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler>
+createEditSelectedObjectVolumeAction();
+
 /// @brief 创建播放暂停切换动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createTogglePlaybackAction();
 

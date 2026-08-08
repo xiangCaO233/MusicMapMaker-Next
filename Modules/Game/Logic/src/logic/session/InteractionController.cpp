@@ -8,6 +8,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/EditorAction.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SampleAction.h"
 #include "logic/session/SamplePropertyEdit.h"
@@ -1371,6 +1372,99 @@ void InteractionController::handleCommand(
             NoteAction::Type::Update, cmd.entity, before, std::move(after)),
         m_ctx);
     m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").data();
+}
+
+/// @brief 将同一音量应用到全部受支持的选中玩家物件和自动采样。
+/// @param cmd 非负有限音量倍率。
+void InteractionController::handleCommand(
+    const CmdUpdateSelectedObjectSampleVolume& cmd)
+{
+    if ( !std::isfinite(cmd.volume) || cmd.volume < 0.0F ) {
+        m_ctx.lastActionMessage =
+            TR("ui.edit.sample_properties.invalid_volume").data();
+        return;
+    }
+
+    std::vector<BatchNoteAction::Entry> noteEntries;
+    noteEntries.reserve(m_ctx.selectedNoteEntities.size());
+    for ( const auto entity : m_ctx.selectedNoteEntities ) {
+        if ( !m_ctx.noteRegistry.valid(entity) ||
+             !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+            continue;
+        }
+
+        const auto& before =
+            m_ctx.noteRegistry.get<const NoteComponent>(entity);
+        if ( before.m_isSubNote || !SessionUtils::isNoteEditable(
+                                       before, m_ctx.lastConfig.settings) ) {
+            continue;
+        }
+
+        auto after   = before;
+        bool changed = false;
+        if ( after.m_sampleBinding &&
+             after.m_sampleBinding->m_volume != cmd.volume ) {
+            after.m_sampleBinding->m_volume = cmd.volume;
+            changed                         = true;
+        }
+        for ( auto& subNote : after.m_subNotes ) {
+            if ( !subNote.sampleBinding ||
+                 subNote.sampleBinding->m_volume == cmd.volume ) {
+                continue;
+            }
+            subNote.sampleBinding->m_volume = cmd.volume;
+            changed                         = true;
+        }
+        if ( changed ) {
+            noteEntries.push_back({
+                .entity = entity,
+                .before = before,
+                .after  = std::move(after),
+            });
+        }
+    }
+
+    std::vector<BatchSampleAction::Entry> sampleEntries;
+    sampleEntries.reserve(m_ctx.selectedSampleEntities.size());
+    for ( const auto entity : m_ctx.selectedSampleEntities ) {
+        if ( !m_ctx.sampleRegistry.valid(entity) ||
+             !m_ctx.sampleRegistry.all_of<SampleComponent>(entity) ) {
+            continue;
+        }
+
+        const auto& before =
+            m_ctx.sampleRegistry.get<const SampleComponent>(entity);
+        if ( before.m_volume == cmd.volume ) continue;
+        auto after     = before;
+        after.m_volume = cmd.volume;
+        sampleEntries.push_back({
+            .entity = entity,
+            .before = before,
+            .after  = std::move(after),
+        });
+    }
+
+    std::vector<std::unique_ptr<IEditorAction>> actions;
+    actions.reserve(2U);
+    const std::string actionName = TR("ui.edit.selected_volume").data();
+    if ( !noteEntries.empty() ) {
+        actions.push_back(std::make_unique<BatchNoteAction>(
+            std::move(noteEntries), actionName));
+    }
+    if ( !sampleEntries.empty() ) {
+        actions.push_back(std::make_unique<BatchSampleAction>(
+            std::move(sampleEntries), actionName));
+    }
+    if ( actions.empty() ) return;
+
+    std::unique_ptr<IEditorAction> action;
+    if ( actions.size() == 1U ) {
+        action = std::move(actions.front());
+    } else {
+        action = std::make_unique<CompositeEditorAction>(std::move(actions),
+                                                         actionName);
+    }
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 }
 
 /// @brief 处理视口鼠标位置、拖拽状态和边缘自动滚动速度。

@@ -51,9 +51,9 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     const char* clearLabel  = TR_CACHE("ui.settings.shortcut.clear").data();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
     const float recordW     = ImGui::CalcTextSize(recordLabel).x +
-                          ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float clearW = ImGui::CalcTextSize(clearLabel).x +
-                         ImGui::GetStyle().FramePadding.x * 2.0f;
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float clearW      = ImGui::CalcTextSize(clearLabel).x +
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
     const float displayW =
         std::max(80.0f, width - recordW - clearW - spacing * 2.0f);
 
@@ -185,6 +185,11 @@ void SettingsView::drawShortcutSettings()
                    shortcutConfig.mirrorPaste,
                    ShortcutRecordTarget::MirrorPaste,
                    "MirrorPaste");
+    addShortcutRow(shortcutSection,
+                   TR_CACHE("ui.settings.shortcut.edit_selected_volume").data(),
+                   shortcutConfig.editSelectedVolume,
+                   ShortcutRecordTarget::EditSelectedVolume,
+                   "EditSelectedVolume");
     addShortcutRow(shortcutSection,
                    TR_CACHE("ui.settings.shortcut.delete_selected").data(),
                    shortcutConfig.deleteSelected,

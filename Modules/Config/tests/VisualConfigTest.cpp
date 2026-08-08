@@ -203,6 +203,29 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证批量音量编辑快捷键可持久化且旧配置默认不占用键位。
+/// @return 自定义组合键往返无损且缺失字段保持禁用时返回 true。
+bool testSelectedVolumeShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.editSelectedVolume =
+        MMM::Config::ShortcutBinding{ true, "U", true, true, false, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding       = restored.shortcutConfig.editSelectedVolume;
+    const auto& legacyBinding = legacy.shortcutConfig.editSelectedVolume;
+    if ( !binding.enabled || binding.key != "U" || !binding.ctrl ||
+         !binding.shift || binding.alt || binding.super ||
+         legacyBinding.enabled || !legacyBinding.key.empty() ) {
+        XERROR("Selected volume shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
 /// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
 bool testRenderingDefaultsReset()
@@ -453,6 +476,7 @@ int main()
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
+                   testSelectedVolumeShortcutRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&

@@ -102,6 +102,7 @@ private:
         ToolColorEraser,
         Mirror,
         MirrorPaste,
+        EditSelectedVolume,
         DeleteSelected,
         ToggleReverseScroll,
         ToggleScrollSnap,

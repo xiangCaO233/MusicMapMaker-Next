@@ -51,6 +51,10 @@ public:
     /// @param cmd 带类型的实体、可选子物件索引与音量倍率。
     void handleCommand(const CmdUpdateObjectSampleVolume& cmd);
 
+    /// @brief 批量更新当前选中物件所含音频绑定的音量。
+    /// @param cmd 要应用到全部受支持选中物件的音量倍率。
+    void handleCommand(const CmdUpdateSelectedObjectSampleVolume& cmd);
+
     /// @brief 处理切换工具的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdChangeTool& cmd);

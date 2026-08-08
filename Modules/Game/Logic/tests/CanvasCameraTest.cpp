@@ -1605,6 +1605,95 @@ bool testObjectSampleVolumeCommandRoutesThroughSession()
            context.actionStack.getUndoStackSize() == 1;
 }
 
+/// @brief 验证批量音量命令覆盖全部选中音频物件且合并为一次撤销。
+/// @return 玩家主绑定、折线子绑定和自动采样可一起执行、撤销和重做时返回 true。
+bool testSelectedObjectSampleVolumeCommand()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    context.trackCount                                    = 4;
+
+    MMM::Logic::NoteComponent note;
+    note.m_type          = MMM::NoteType::POLYLINE;
+    note.m_sampleBinding = MMM::AudioSampleBinding{ "head.wav", 0.35F };
+    note.m_subNotes.push_back(MMM::Logic::NoteComponent::SubNote{
+        .type          = MMM::NoteType::NOTE,
+        .timestamp     = 1.0,
+        .duration      = 0.0,
+        .trackIndex    = 0,
+        .dtrack        = 0,
+        .sampleBinding = MMM::AudioSampleBinding{ "node.wav", 0.55F },
+    });
+    const auto noteEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(noteEntity, note);
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::PlayerNote, noteEntity, true);
+
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "sample.wav",
+            .m_volume          = 0.45F,
+        });
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::AudioSample, sampleEntity, true);
+
+    const auto unselectedSampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        unselectedSampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 2.0,
+            .m_track           = 4,
+            .m_audioResourceId = "other.wav",
+            .m_volume          = 0.65F,
+        });
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateSelectedObjectSampleVolume{ .volume = 0.8F } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    const auto volumesEqual = [&](float expectedNote,
+                                  float expectedSubNote,
+                                  float expectedSample) {
+        const auto& currentNote =
+            context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+        return currentNote.m_sampleBinding &&
+               near(currentNote.m_sampleBinding->m_volume, expectedNote) &&
+               currentNote.m_subNotes.front().sampleBinding &&
+               near(currentNote.m_subNotes.front().sampleBinding->m_volume,
+                    expectedSubNote) &&
+               near(context.sampleRegistry
+                        .get<MMM::Logic::SampleComponent>(sampleEntity)
+                        .m_volume,
+                    expectedSample) &&
+               near(
+                   context.sampleRegistry
+                       .get<MMM::Logic::SampleComponent>(unselectedSampleEntity)
+                       .m_volume,
+                   0.65F);
+    };
+
+    if ( !volumesEqual(0.8F, 0.8F, 0.8F) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Selected object volume command did not batch selected targets");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !volumesEqual(0.35F, 0.55F, 0.45F) ) {
+        XERROR("Selected object volume undo did not restore original values");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return volumesEqual(0.8F, 0.8F, 0.8F) &&
+           context.actionStack.getUndoStackSize() == 1U;
+}
+
 /// @brief 验证协作资源命令由会话队列消费且换谱时不会泄漏到新谱面。
 /// @return 资源项目和路径映射完成绑定，并在加载新谱面后清空时返回 true。
 bool testCollaborationResourcesRouteThroughSession()
@@ -2769,6 +2858,7 @@ int main()
                    testNoteSampleBindingRoundTrip() &&
                    testObjectSampleVolumeCommand() &&
                    testObjectSampleVolumeCommandRoutesThroughSession() &&
+                   testSelectedObjectSampleVolumeCommand() &&
                    testCollaborationResourcesRouteThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&

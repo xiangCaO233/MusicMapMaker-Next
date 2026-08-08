@@ -837,6 +837,7 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
+    target.settings.shortcutConfig       = source.settings.shortcutConfig;
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
 }
@@ -853,6 +854,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdCreateAudioSample>(cmd) ||
          std::holds_alternative<CmdUpdateAudioSampleProperties>(cmd) ||
          std::holds_alternative<CmdUpdateObjectSampleVolume>(cmd) ||
+         std::holds_alternative<CmdUpdateSelectedObjectSampleVolume>(cmd) ||
          std::holds_alternative<CmdUpdateTrackCount>(cmd) ||
          std::holds_alternative<CmdUpdateBgmTrackCount>(cmd) ||
          std::holds_alternative<CmdUndo>(cmd) ||

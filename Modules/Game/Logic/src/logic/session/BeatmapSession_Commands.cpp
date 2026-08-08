@@ -1168,6 +1168,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
                     std::is_same_v<T, CmdChangeTool> ||
                     std::is_same_v<T, CmdSetMousePosition> ||
                     std::is_same_v<T, CmdUpdateTrackCount> ||
@@ -1226,6 +1227,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateTrackCount> ||
                     std::is_same_v<T, CmdUpdateBgmTrackCount> ||
                     std::is_same_v<T, CmdPaste> ||

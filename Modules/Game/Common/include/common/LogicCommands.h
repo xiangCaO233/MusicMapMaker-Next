@@ -159,6 +159,12 @@ struct CmdUpdateObjectSampleVolume {
     float volume{ 1.0F };
 };
 
+/// @brief 批量更新当前选中物件所含音频绑定的音量。
+struct CmdUpdateSelectedObjectSampleVolume {
+    /// @brief 要写入全部受支持选中物件的非负音量倍率。
+    float volume{ 1.0F };
+};
+
 /**
  * @brief 设置鼠标在视口中的位置指令
  */
@@ -770,7 +776,8 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
     CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
-    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
+    CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
+    CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
     CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
     CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
