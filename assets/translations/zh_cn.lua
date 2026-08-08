@@ -1078,6 +1078,17 @@ return {
 	["ui.status.mouse_time"] = "鼠标",
 	["ui.status.max_combo"] = "最大连击数",
 	["ui.status.note_count"] = "物件数",
+	["ui.status.project_loading.validating"] = "正在校验项目",
+	["ui.status.project_loading.extracting_package"] = "正在解压谱面包",
+	["ui.status.project_loading.closing_current_project"] = "正在关闭当前项目",
+	["ui.status.project_loading.scanning_directory"] = "正在扫描项目文件",
+	["ui.status.project_loading.building_resources"] = "正在建立资源索引",
+	["ui.status.project_loading.loading_configuration"] = "正在读取项目配置",
+	["ui.status.project_loading.migrating_configuration"] = "正在迁移项目数据",
+	["ui.status.project_loading.saving_configuration"] = "正在保存项目配置",
+	["ui.status.project_loading.preparing_audio"] = "正在准备音频资源",
+	["ui.status.project_loading.loading_beatmaps"] = "正在加载谱面",
+	["ui.status.project_loading.finalizing"] = "正在完成项目加载",
 
 	-- 状态栏操作信息
 	["ui.status.category.action"] = "[操作]",

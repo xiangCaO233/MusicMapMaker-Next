@@ -7,6 +7,7 @@
 #include "mmm/project/Project.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/CLayWrapperCore.h"
+#include "ui/project/ProjectOpenProgressState.h"
 #include "ui/project/ProjectUiLifecycleState.h"
 #include <atomic>
 #include <concurrentqueue.h>
@@ -89,6 +90,12 @@ public:
     /// @warning UI 热路径：逻辑线程生命周期回调负责写入，UI 和渲染线程
     /// 负责读取；为阻止同帧访问已关闭项目，必须执行一次 acquire 原子读取。
     [[nodiscard]] bool isProjectTransitionInProgress() const;
+
+    /// @brief 获取 UI 线程维护的项目打开进度快照。
+    /// @return 当前项目打开进度；只在 active 为 true 时展示。
+    /// @warning UI 热路径：返回 UI 线程本地状态引用，不访问逻辑线程或加锁。
+    [[nodiscard]] const ProjectOpenProgressState&
+    getProjectOpenProgress() const;
 
     /// @brief 判断 UI 是否持有已加载项目的生命周期快照。
     /// @return 已加载项目仍有效时返回 true。
@@ -314,6 +321,13 @@ private:
     moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
         m_pendingProjectLifecycleUpdates;
 
+    /// @brief 项目加载进度跨线程更新队列。
+    moodycamel::ConcurrentQueue<ProjectOpenProgressState>
+        m_pendingProjectOpenProgressUpdates;
+
+    /// @brief UI 线程当前展示的项目加载进度。
+    ProjectOpenProgressState m_projectOpenProgress;
+
     /// @brief 逻辑线程已经发起、但 UI 线程可能尚未消费的项目切换标志。
     /// @warning 写入者为逻辑线程生命周期回调，读取者为 UI 线程；用于阻止
     /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
@@ -321,6 +335,9 @@ private:
 
     /// @brief 项目开始打开事件订阅 ID。
     Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
+
+    /// @brief 项目加载进度事件订阅 ID。
+    Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
 
     /// @brief 项目加载完成事件订阅 ID。
     Event::SubscriptionID m_projectLoadedSubId{ 0 };

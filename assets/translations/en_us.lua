@@ -1075,6 +1075,17 @@ return {
 	["ui.status.mouse_time"] = "Mouse",
 	["ui.status.max_combo"] = "Max Combo",
 	["ui.status.note_count"] = "Objects",
+	["ui.status.project_loading.validating"] = "Validating project",
+	["ui.status.project_loading.extracting_package"] = "Extracting package",
+	["ui.status.project_loading.closing_current_project"] = "Closing current project",
+	["ui.status.project_loading.scanning_directory"] = "Scanning project files",
+	["ui.status.project_loading.building_resources"] = "Building resource index",
+	["ui.status.project_loading.loading_configuration"] = "Loading project configuration",
+	["ui.status.project_loading.migrating_configuration"] = "Migrating project data",
+	["ui.status.project_loading.saving_configuration"] = "Saving project configuration",
+	["ui.status.project_loading.preparing_audio"] = "Preparing audio resources",
+	["ui.status.project_loading.loading_beatmaps"] = "Loading beatmap",
+	["ui.status.project_loading.finalizing"] = "Finalizing project",
 
 	-- Status Bar Action Info
 	["ui.status.category.action"] = "[Action]",

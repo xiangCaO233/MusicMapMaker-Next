@@ -342,6 +342,16 @@ UIManager::UIManager()
                 update.projectRoot = Config::utf8ToPath(event.m_projectPath);
                 m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
             });
+    m_projectOpenProgressSubId =
+        eventBus.subscribe<Event::ProjectOpenProgressEvent>(
+            [this](const Event::ProjectOpenProgressEvent& event) {
+                ProjectOpenProgressState update;
+                update.active   = true;
+                update.stage    = event.m_stage;
+                update.fraction = event.m_fraction;
+                update.detail   = event.m_detail;
+                m_pendingProjectOpenProgressUpdates.enqueue(std::move(update));
+            });
     m_projectLoadedSubId = eventBus.subscribe<Event::ProjectLoadedEvent>(
         [this](const Event::ProjectLoadedEvent& event) {
             ProjectUiLifecycleUpdate update;
@@ -394,6 +404,10 @@ UIManager::~UIManager()
         eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
             m_projectOpenStartedSubId);
     }
+    if ( m_projectOpenProgressSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectOpenProgressEvent>(
+            m_projectOpenProgressSubId);
+    }
     if ( m_projectLoadedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectLoadedEvent>(m_projectLoadedSubId);
     }
@@ -440,6 +454,11 @@ Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
 bool UIManager::isProjectTransitionInProgress() const
 {
     return m_projectTransitionSignal.load(std::memory_order_acquire);
+}
+
+const ProjectOpenProgressState& UIManager::getProjectOpenProgress() const
+{
+    return m_projectOpenProgress;
 }
 
 bool UIManager::hasActiveProjectUiState() const
@@ -679,13 +698,29 @@ void UIManager::applyNoProjectDefaultWorkspace()
 
 void UIManager::consumePendingProjectLifecycleUpdates()
 {
+    ProjectOpenProgressState progressUpdate;
+    while ( m_pendingProjectOpenProgressUpdates.try_dequeue(progressUpdate) ) {
+        applyProjectOpenProgress(m_projectOpenProgress,
+                                 progressUpdate.stage,
+                                 progressUpdate.fraction,
+                                 std::move(progressUpdate.detail));
+    }
+
     ProjectUiLifecycleUpdate update;
     while ( m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
         m_projectLifecycleState =
             reduceProjectUiLifecycleState(m_projectLifecycleState, update.kind);
 
         switch ( update.kind ) {
-        case ProjectUiLifecycleKind::OpenStarted: break;
+        case ProjectUiLifecycleKind::OpenStarted: {
+            auto detailPath = update.projectRoot.filename();
+            if ( detailPath.empty() ) {
+                detailPath = update.projectRoot;
+            }
+            beginProjectOpenProgress(m_projectOpenProgress,
+                                     Config::pathToUtf8(detailPath));
+            break;
+        }
         case ProjectUiLifecycleKind::Opened:
             m_activeProjectRoot                = std::move(update.projectRoot);
             m_noProjectWorkspaceDefaultApplied = false;
@@ -697,6 +732,7 @@ void UIManager::consumePendingProjectLifecycleUpdates()
                     std::move(update.audioResources);
             }
             m_projectWorkspaceRestorePending = true;
+            finishProjectOpenProgress(m_projectOpenProgress);
             m_projectTransitionSignal.store(false, std::memory_order_release);
             break;
         case ProjectUiLifecycleKind::Closed:
@@ -707,6 +743,7 @@ void UIManager::consumePendingProjectLifecycleUpdates()
                 m_pendingProjectAudioResources.clear();
             }
             if ( update.kind == ProjectUiLifecycleKind::OpenFailed ) {
+                finishProjectOpenProgress(m_projectOpenProgress);
                 m_projectTransitionSignal.store(false,
                                                 std::memory_order_release);
             }

@@ -14,6 +14,7 @@
 #include <miniz.h>
 #include <optional>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace MMM::Logic
@@ -247,6 +248,29 @@ void publishProjectOpenFailed(const std::filesystem::path& path,
     event.m_projectPath  = Config::pathToUtf8(path);
     event.m_errorMessage = message;
     event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
+}
+
+/// @brief 取得适合状态栏展示的项目加载路径名称。
+/// @param path 项目、谱面包或资源路径。
+/// @return 优先返回文件名，无法取得时返回完整路径。
+std::string projectOpenProgressPathDetail(const std::filesystem::path& path)
+{
+    const auto fileName = path.filename();
+    return Config::pathToUtf8(fileName.empty() ? path : fileName);
+}
+
+/// @brief 发布项目打开流程的分阶段进度。
+/// @param stage 当前加载阶段。
+/// @param fraction 当前总进度，范围为 0 到 1。
+/// @param detail 当前处理对象名称。
+void publishProjectOpenProgress(Event::ProjectOpenProgressStage stage,
+                                float fraction, std::string detail)
+{
+    Event::ProjectOpenProgressEvent event;
+    event.m_stage    = stage;
+    event.m_fraction = fraction;
+    event.m_detail   = std::move(detail);
     Event::EventBus::instance().publish(event);
 }
 
@@ -937,6 +961,10 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     /// @brief 失败提示中展示给用户的源路径。
     const std::filesystem::path failureDisplayPath =
         isPackageOpen ? temporaryInfo->m_sourcePackagePath : projectPath;
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::Validating,
+        0.10F,
+        projectOpenProgressPathDetail(failureDisplayPath));
 
     if ( creationOptions ) {
         std::error_code filesystemError;
@@ -1013,6 +1041,10 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     newProject->m_metadata.m_title =
         Config::pathToUtf8(actualProjectPath.filename());
 
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::ScanningDirectory,
+        0.18F,
+        projectOpenProgressPathDetail(actualProjectPath));
     /// @brief 当前项目目录扫描结果。
     auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
     if ( !directoryScan.m_success ) {
@@ -1020,8 +1052,14 @@ ProjectController::OpenProjectResult ProjectController::openProject(
                Config::pathToUtf8(actualProjectPath));
     }
 
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::BuildingResources,
+        0.34F,
+        projectOpenProgressPathDetail(actualProjectPath));
     m_projectResourceService.buildInitialResources(*newProject, directoryScan);
 
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::LoadingConfiguration, 0.46F, ".mmm");
     /// @brief 是否存在新分片或旧单文件项目配置。
     const bool projectConfigurationExists =
         ProjectStorage::hasProjectConfiguration(actualProjectPath);
@@ -1070,6 +1108,10 @@ ProjectController::OpenProjectResult ProjectController::openProject(
               persistedProject.m_errorMessage);
     }
 
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::MigratingConfiguration,
+        0.58F,
+        projectOpenProgressPathDetail(actualProjectPath));
     if ( creationOptions && !projectConfigurationExists ) {
         applyProjectCreationOptions(
             *newProject,
@@ -1103,6 +1145,8 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             Config::utf8ToPath(newProject->m_beatmaps.front().m_filePath);
     }
 
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::SavingConfiguration, 0.68F, ".mmm");
     std::string storageError;
     if ( m_projectStorage.save(*newProject, actualProjectPath, storageError) ) {
         if ( persistedProject.m_success &&
@@ -1121,10 +1165,26 @@ ProjectController::OpenProjectResult ProjectController::openProject(
               storageError);
     }
 
+    publishProjectOpenProgress(Event::ProjectOpenProgressStage::PreparingAudio,
+                               0.76F,
+                               newProject->m_metadata.m_title);
+    std::size_t       audioResourceIndex = 0;
+    const std::size_t audioResourceCount = newProject->m_audioResources.size();
     for ( const auto& resource : newProject->m_audioResources ) {
+        const float resourceProgress =
+            audioResourceCount == 0
+                ? 0.80F
+                : 0.76F + 0.04F * static_cast<float>(audioResourceIndex + 1) /
+                              static_cast<float>(audioResourceCount);
+        ++audioResourceIndex;
         if ( resource.m_type != AudioTrackType::Effect ) {
             continue;
         }
+
+        publishProjectOpenProgress(
+            Event::ProjectOpenProgressStage::PreparingAudio,
+            resourceProgress,
+            resource.m_id);
 
         /// @brief 音效资源在项目目录中的绝对路径。
         auto absolutePath =

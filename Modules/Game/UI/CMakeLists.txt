@@ -178,6 +178,14 @@ target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
 
+# 项目加载进度测试覆盖跨线程事件乱序、数值约束和完成清理。
+mmm_add_test_executable(UI ProjectOpenProgressStateTest
+                        tests/ProjectOpenProgressStateTest.cpp)
+target_include_directories(ProjectOpenProgressStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ProjectOpenProgressStateTest PRIVATE Event)
+add_test(NAME ProjectOpenProgressStateTest COMMAND ProjectOpenProgressStateTest)
+
 # 协作入口切换测试覆盖按钮点击改变选中状态时的 ImGui 颜色栈配对。
 mmm_add_test_executable(UI CollaborationSelectableButtonTest
                         tests/CollaborationSelectableButtonTest.cpp)
