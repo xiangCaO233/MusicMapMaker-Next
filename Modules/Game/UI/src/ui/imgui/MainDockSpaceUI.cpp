@@ -159,6 +159,20 @@ audioResourceMutationResultQueue()
     return queue;
 }
 
+/// @brief 获取协作访客本机项目打开拦截通知队列。
+moodycamel::ConcurrentQueue<bool>& collaborationProjectOpenBlockedQueue()
+{
+    static moodycamel::ConcurrentQueue<bool> queue;
+    return queue;
+}
+
+/// @brief 获取离线房间谱面编辑拦截通知队列。
+moodycamel::ConcurrentQueue<bool>& collaborationOfflineEditBlockedQueue()
+{
+    static moodycamel::ConcurrentQueue<bool> queue;
+    return queue;
+}
+
 /// @brief 构建音频资源变更的完整用户提示。
 /// @param result 待展示结果。
 /// @return 包含目标资源及全部阻止谱面的多行提示。
@@ -244,6 +258,14 @@ void ensureTemporaryProjectSubscriptions()
                     event.m_blockingBeatmapPaths,
                     event.m_errorMessage,
                 });
+        });
+    eventBus.subscribe<Event::CollaborationProjectOpenBlockedEvent>(
+        [](const Event::CollaborationProjectOpenBlockedEvent&) {
+            collaborationProjectOpenBlockedQueue().enqueue(true);
+        });
+    eventBus.subscribe<Event::CollaborationOfflineEditBlockedEvent>(
+        [](const Event::CollaborationOfflineEditBlockedEvent&) {
+            collaborationOfflineEditBlockedQueue().enqueue(true);
         });
 
     subscribed = true;
@@ -663,6 +685,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
+    renderCollaborationSafetyPopups(dpiScale);
     renderTemporaryProjectPopups(dpiScale, viewport);
     if ( m_exitAfterTemporaryProjectSave && viewport->PlatformHandle ) {
         m_temporaryProjectExitConfirmed = true;
@@ -828,6 +851,16 @@ void MainDockSpaceUI::consumeTemporaryProjectQueues()
                 mutationResult.success ? 3.0F : 10.0F);
         }
     }
+
+    bool collaborationSafetySignal = false;
+    while ( collaborationProjectOpenBlockedQueue().try_dequeue(
+        collaborationSafetySignal) ) {
+        m_showCollaborationProjectOpenBlockedModal = true;
+    }
+    while ( collaborationOfflineEditBlockedQueue().try_dequeue(
+        collaborationSafetySignal) ) {
+        m_showCollaborationOfflineEditBlockedModal = true;
+    }
 }
 
 /// @brief 请求选择临时项目正式保存位置。
@@ -974,6 +1007,57 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                 ImGui::CloseCurrentPopup();
             }
 
+            ImGui::EndPopup();
+        }
+    }
+}
+
+void MainDockSpaceUI::renderCollaborationSafetyPopups(float dpiScale)
+{
+    const std::string offlinePopupId =
+        TR("ui.collaboration.offline_edit.title").toString() +
+        "###CollaborationOfflineEditBlockedModal";
+    const std::string projectPopupId =
+        TR("ui.collaboration.project_open_blocked.title").toString() +
+        "###CollaborationProjectOpenBlockedModal";
+    if ( m_showCollaborationOfflineEditBlockedModal ) {
+        FeedbackOpenPopup(offlinePopupId.c_str());
+        m_showCollaborationOfflineEditBlockedModal = false;
+    } else if ( m_showCollaborationProjectOpenBlockedModal ) {
+        FeedbackOpenPopup(projectPopupId.c_str());
+        m_showCollaborationProjectOpenBlockedModal = false;
+    }
+
+    {
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin(offlinePopupId.c_str(),
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(520.0F * dpiScale, 0.0F)) ) {
+            ImGui::TextWrapped(
+                "%s", TR("ui.collaboration.offline_edit.message").data());
+            ImGui::Spacing();
+            if ( FeedbackButton(TR("ui.common.confirm").data(),
+                                ImVec2(120.0F * dpiScale, 0.0F)) ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    {
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin(projectPopupId.c_str(),
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(520.0F * dpiScale, 0.0F)) ) {
+            ImGui::TextWrapped(
+                "%s",
+                TR("ui.collaboration.project_open_blocked.message").data());
+            ImGui::Spacing();
+            if ( FeedbackButton(TR("ui.common.confirm").data(),
+                                ImVec2(120.0F * dpiScale, 0.0F)) ) {
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::EndPopup();
         }
     }

@@ -130,6 +130,14 @@ struct ProjectOpenFailedEvent : public ProjectLifecycleEvent {
     bool m_isPackage{ false };
 };
 
+/// @brief 协作访客在线期间打开本机项目的请求被拦截事件。
+struct CollaborationProjectOpenBlockedEvent : public ProjectLifecycleEvent {
+};
+
+/// @brief 已离线的协作房间谱面收到编辑命令时的拦截事件。
+struct CollaborationOfflineEditBlockedEvent : public ProjectLifecycleEvent {
+};
+
 /// @brief 临时项目只读编辑被拦截事件。
 struct TemporaryProjectEditBlockedEvent : public ProjectLifecycleEvent {
     /// @brief 用户拖拽打开的原始包文件路径。
@@ -213,6 +221,10 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenProgressEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectClosedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::CollaborationProjectOpenBlockedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::CollaborationOfflineEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);

@@ -209,8 +209,34 @@ void Win32WindowAdapter::associateTaskbarGroupWindow(HWND window,
     }
 
     HANDLE expectedGroup = reinterpret_cast<HANDLE>(mainWindow);
-    if ( GetPropW(window, TASKBAR_WINDOW_GROUP_PROP) != expectedGroup ) {
-        SetPropW(window, TASKBAR_WINDOW_GROUP_PROP, expectedGroup);
+    if ( GetPropW(window, TASKBAR_WINDOW_GROUP_PROP) == expectedGroup ) {
+        return;
+    }
+
+    if ( GetWindow(window, GW_OWNER) != mainWindow ) {
+        SetLastError(ERROR_SUCCESS);
+        const LONG_PTR previousOwner = SetWindowLongPtrW(
+            window, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(mainWindow));
+        const DWORD ownerError = GetLastError();
+        if ( previousOwner == 0 && ownerError != ERROR_SUCCESS ) {
+            XWARN("Failed to associate Win32 viewport owner: error={}",
+                  ownerError);
+            return;
+        }
+
+        SetWindowPos(window,
+                     nullptr,
+                     0,
+                     0,
+                     0,
+                     0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                         SWP_FRAMECHANGED);
+    }
+
+    if ( !SetPropW(window, TASKBAR_WINDOW_GROUP_PROP, expectedGroup) ) {
+        XWARN("Failed to mark Win32 taskbar window group: error={}",
+              GetLastError());
     }
 }
 

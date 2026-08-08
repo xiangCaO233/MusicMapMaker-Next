@@ -149,6 +149,20 @@ void requestBeatmapMetadataAutoSave()
         Logic::CmdMarkBeatmapMetadataDirty{});
 }
 
+/// @brief 渲染离线协作谱面提示，并把窗口内的编辑尝试交给统一只读门闩。
+/// @param session 当前离线协作谱面会话。
+/// @warning UI 每帧路径：只绘制固定文本；仅在鼠标点击时入队一次拦截命令。
+void renderCollaborationOfflineReadOnlyNotice(Logic::BeatmapSession& session)
+{
+    ImGui::TextWrapped("%s",
+                       TR("ui.collaboration.offline_edit.message").data());
+    if ( ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        session.pushCommand(
+            Logic::LogicCommand(Logic::CmdMarkBeatmapMetadataDirty{}));
+    }
+}
+
 /// @brief 将字符串安全复制进固定 ImGui 输入缓冲区。
 /// @warning UI 每帧/交互路径：只做固定上限内存复制。
 template<size_t N>
@@ -1088,6 +1102,8 @@ void renderMetadataEditorWindow(bool& showWindow)
         if ( !session ) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                "当前无活动的编辑器会话。");
+        } else if ( session->isCollaborationOfflineReadOnly() ) {
+            renderCollaborationOfflineReadOnlyNotice(*session);
         } else {
             auto beatmap = session->getContext().currentBeatmap;
             if ( !beatmap ) {
@@ -2111,6 +2127,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                "%s",
                                TR("ui.tools.no_active_session").data());
+        } else if ( session->isCollaborationOfflineReadOnly() ) {
+            renderCollaborationOfflineReadOnlyNotice(*session);
         } else {
             // --- 收集选中物件 ---
             struct SelectedNote {

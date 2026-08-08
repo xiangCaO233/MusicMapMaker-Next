@@ -2,6 +2,7 @@
 
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>

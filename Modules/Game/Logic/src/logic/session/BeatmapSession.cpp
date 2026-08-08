@@ -1,5 +1,7 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
+#include "event/core/EventBus.h"
+#include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -112,7 +114,40 @@ BeatmapSession::~BeatmapSession() = default;
 
 void BeatmapSession::pushCommand(LogicCommand&& cmd)
 {
+    if ( blockCollaborationOfflineEdit(cmd) ) return;
     m_commandQueue.enqueue(std::move(cmd));
+}
+
+bool BeatmapSession::blockCollaborationOfflineEdit(const LogicCommand& cmd)
+{
+    if ( !m_collaborationOfflineReadOnly.load(std::memory_order_acquire) ||
+         !isBeatmapEditingCommand(cmd) ) {
+        return false;
+    }
+    if ( !m_offlineEditBlockedNotificationSent.exchange(
+             true, std::memory_order_acq_rel) ) {
+        Event::EventBus::instance().publish(
+            Event::CollaborationOfflineEditBlockedEvent{});
+    }
+    return true;
+}
+
+void BeatmapSession::setCollaborationOfflineReadOnly(bool readOnly)
+{
+    const bool previous = m_collaborationOfflineReadOnly.exchange(
+        readOnly, std::memory_order_acq_rel);
+    if ( !readOnly ) {
+        m_offlineEditBlockedNotificationSent.store(false,
+                                                   std::memory_order_release);
+    }
+    if ( previous == readOnly ) return;
+    m_commandQueue.enqueue(
+        LogicCommand(CmdSetCollaborationOfflineReadOnly{ readOnly }));
+}
+
+bool BeatmapSession::isCollaborationOfflineReadOnly() const
+{
+    return m_collaborationOfflineReadOnly.load(std::memory_order_acquire);
 }
 
 void BeatmapSession::setMutationObserver(

@@ -2,11 +2,16 @@
 
 if(APPLE)
   # macOS 使用标准 .app 应用束，供 CPack DragNDrop 生成可直接拖入 Applications 的 DMG。
-  add_executable(MusicMapMaker-Next MACOSX_BUNDLE src/main.cpp)
+  set(MMM_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/logo.icns")
+  set_source_files_properties("${MMM_APP_ICON}"
+                              PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+  add_executable(MusicMapMaker-Next MACOSX_BUNDLE src/main.cpp
+                                                  "${MMM_APP_ICON}")
   set_target_properties(
     MusicMapMaker-Next
     PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME "MusicMapMaker-Next"
                MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+               MACOSX_BUNDLE_ICON_FILE "logo.icns"
                MACOSX_BUNDLE_GUI_IDENTIFIER "top.xiang233.musicmapmaker-next"
                MACOSX_BUNDLE_INFO_PLIST
                "${CMAKE_SOURCE_DIR}/cmake/MacOSBundleInfo.plist.in"

@@ -49,6 +49,8 @@ Environment:
   DEEPSEEK_APIKEY / DEEPSEEK_API_KEY  DeepSeek API key，优先使用 DEEPSEEK_APIKEY。
   DEEPSEEK_MODEL                     DeepSeek 模型名，默认 deepseek-v4-flash。
   DEEPSEEK_MAX_TOKENS                changelog 最大输出 token，默认 12000。
+  DEEPSEEK_THINKING                  是否启用思考模式，默认 enabled。
+  DEEPSEEK_REASONING_EFFORT          思考强度，默认 low。
   MMM_RELEASE_WINDOWS_DIR            网站公开 Windows 下载优先使用的产物目录，默认 windows-msvc-clang。
   MMM_RELEASE_LINUX_DIR              网站公开 Linux 下载优先使用的产物目录，默认 linux-gcc14。
   MMM_RELEASE_MACOS_DIR              网站公开 macOS 下载使用的产物目录，默认 macos-arm64。
@@ -242,7 +244,7 @@ model = os.environ["DEEPSEEK_EFFECTIVE_MODEL"]
 max_tokens = int(os.environ.get("DEEPSEEK_MAX_TOKENS", "12000"))
 temperature = float(os.environ.get("DEEPSEEK_TEMPERATURE", "0.2"))
 thinking_type = os.environ.get("DEEPSEEK_THINKING", "enabled")
-reasoning_effort = os.environ.get("DEEPSEEK_REASONING_EFFORT", "medium")
+reasoning_effort = os.environ.get("DEEPSEEK_REASONING_EFFORT", "low")
 timeout = int(os.environ.get("DEEPSEEK_TIMEOUT", "300"))
 
 context = context_path.read_text(encoding="utf-8")
@@ -250,6 +252,7 @@ system_prompt = (
     "你是 MusicMapMaker-Next 项目的发布维护者。"
     "请只依据用户提供的 Git 分支发布上下文生成面向用户的中文 Markdown changelog，"
     "不要臆造上下文中没有的信息。"
+    "不要逐提交展开长篇推理，只做必要的归类合并，尽快直接输出最终 Markdown。"
 )
 user_prompt = f"""请为 {release_version} 生成 changelog.md。
 
@@ -261,6 +264,8 @@ user_prompt = f"""请为 {release_version} 生成 changelog.md。
 5. 面向普通用户优先描述功能、稳定性、兼容性和可下载产物相关变化；内部实现细节只在会影响用户或发布质量时提及。
 6. 必须覆盖上下文中从上一次版本更新提交到 HEAD 的所有提交，不要遗漏明显的修复、构建和测试变化。
 7. 不要列 commit hash。
+8. 快速生成：不要复述分析过程，不要逐条解释提交；先合并同类变化，再直接写最终稿。
+9. 正文控制在约 600 至 1600 个中文字符、最多 24 个列表项；优先保留用户可感知的重要变化。
 
 以下是完整上下文：
 
@@ -302,10 +307,24 @@ except urllib.error.URLError as error:
     sys.exit(1)
 
 try:
-    content = data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    content = choice["message"]["content"]
 except (KeyError, IndexError, TypeError) as error:
     print(f"Unexpected DeepSeek response: {json.dumps(data, ensure_ascii=False)[:4000]}", file=sys.stderr)
     raise SystemExit(1) from error
+
+finish_reason = choice.get("finish_reason")
+if finish_reason != "stop":
+    usage = json.dumps(data.get("usage", {}), ensure_ascii=False)
+    print(
+        f"DeepSeek changelog generation stopped unexpectedly: "
+        f"finish_reason={finish_reason}, usage={usage}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not isinstance(content, str):
+    print("DeepSeek changelog response content is not a string", file=sys.stderr)
+    raise SystemExit(1)
 
 content = content.strip()
 if content.startswith("```"):
@@ -318,6 +337,15 @@ if content.startswith("```"):
 
 if not content.startswith("# Changelog"):
     content = f"# Changelog\n\n{content}"
+
+expected_version_heading = f"## {release_version} - "
+if len(content) < 200 or expected_version_heading not in content:
+    print(
+        f"DeepSeek changelog response is incomplete: "
+        f"length={len(content)}, expected_heading={expected_version_heading!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 output_path.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 PY

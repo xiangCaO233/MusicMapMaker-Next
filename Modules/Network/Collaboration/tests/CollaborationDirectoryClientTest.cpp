@@ -50,49 +50,93 @@ bool testPublishedRoomAppearsInDirectory()
     serverConfig.port        = 0;
     serverConfig.bindAddress = "127.0.0.1";
     CollaborationSignalingServer server;
-    if ( !server.start(std::move(serverConfig)) ) return false;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if ( !server.start(std::move(serverConfig)) ||
+         server.listeningPort() == 0 ) {
+        XERROR("Directory client test failed at server_start");
+        return false;
+    }
 
     CollaborationServerEndpoint endpoint;
     endpoint.address       = "127.0.0.1";
     endpoint.signalingPort = server.listeningPort();
     endpoint.useTls        = false;
     CollaborationDirectoryClient directory;
-    if ( !directory.connect(endpoint) ) return false;
+    const auto fail = [&server, &directory](std::string_view stage) {
+        XERROR(
+            "Directory client test failed at {}: state={}, error={}, "
+            "clients={}, rooms={}",
+            stage,
+            static_cast<int>(directory.state()),
+            directory.lastError(),
+            server.clientCount(),
+            server.roomCount());
+        return false;
+    };
+    if ( !directory.connect(endpoint) ) return fail("directory_connect");
+
+    // 先完成目录订阅，再发布房间；两个独立 WebSocket 握手不应共享一个
+    // 测试超时窗口，避免高负载 CI 把后发起的房主连接挤到截止点。
+    if ( !pumpUntil(server,
+                    directory,
+                    [&]() {
+                        return directory.state() !=
+                               CollaborationDirectoryState::Connecting;
+                    }) ||
+         directory.state() != CollaborationDirectoryState::Connected ||
+         !directory.rooms().empty() ) {
+        return fail("directory_bootstrap");
+    }
 
     WebRtcTransport  transport;
     WebRtcHostConfig hostConfig;
     hostConfig.endpoint = endpoint;
     hostConfig.roomName = "Directory Test Room";
     hostConfig.creator  = "Directory Host";
-    if ( !transport.startHost(hostConfig) ) return false;
+    if ( !transport.startHost(hostConfig) ) return fail("host_start");
 
-    bool published = false;
-    if ( !pumpUntil(server, directory, [&]() {
-             WebRtcTransportEvent event;
-             while ( transport.receiveEvent(event) ) {
-                 if ( event.type == WebRtcTransportEventType::RoomPublished ) {
-                     published = true;
-                 }
-             }
-             return published &&
-                    directory.state() ==
-                        CollaborationDirectoryState::Connected &&
-                    directory.rooms().size() == 1U;
-         }) ) {
-        return false;
+    bool        published = false;
+    std::string transportError;
+    if ( !pumpUntil(server,
+                    directory,
+                    [&]() {
+                        WebRtcTransportEvent event;
+                        while ( transport.receiveEvent(event) ) {
+                            if ( event.type ==
+                                 WebRtcTransportEventType::RoomPublished ) {
+                                published = true;
+                            } else if ( event.type ==
+                                        WebRtcTransportEventType::Error ) {
+                                transportError = std::move(event.detail);
+                            }
+                        }
+                        return !transportError.empty() ||
+                               (published &&
+                                directory.state() ==
+                                    CollaborationDirectoryState::Connected &&
+                                directory.rooms().size() == 1U);
+                    }) ||
+         !transportError.empty() ) {
+        if ( !transportError.empty() ) {
+            XERROR("Directory client test host transport failed: {}",
+                   transportError);
+        }
+        return fail("room_publish");
     }
     const auto& room = directory.rooms().front();
     if ( room.roomId != transport.roomId() ||
          room.roomName != "Directory Test Room" ||
          room.hostCreator != "Directory Host" || room.participants != 1U ||
          room.capacity != 8U || !directory.refresh() ) {
-        return false;
+        return fail("room_snapshot");
     }
-    return pumpUntil(server, directory, [&]() {
-        return directory.state() == CollaborationDirectoryState::Connected &&
-               directory.rooms().size() == 1U;
-    });
+    if ( !pumpUntil(server, directory, [&]() {
+             return directory.state() ==
+                        CollaborationDirectoryState::Connected &&
+                    directory.rooms().size() == 1U;
+         }) ) {
+        return fail("directory_refresh");
+    }
+    return true;
 }
 
 /// @brief 验证部署后的外部房间目录可由产品使用的 WebSocket 客户端访问。

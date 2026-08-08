@@ -251,6 +251,13 @@ void publishProjectOpenFailed(const std::filesystem::path& path,
     Event::EventBus::instance().publish(event);
 }
 
+/// @brief 发布协作访客在线期间的本机项目打开拦截事件。
+void publishCollaborationProjectOpenBlocked()
+{
+    Event::EventBus::instance().publish(
+        Event::CollaborationProjectOpenBlockedEvent{});
+}
+
 /// @brief 取得适合状态栏展示的项目加载路径名称。
 /// @param path 项目、谱面包或资源路径。
 /// @return 优先返回文件名，无法取得时返回完整路径。
@@ -658,6 +665,10 @@ void ProjectController::requestOpenProject(
     if ( projectPath.empty() ) {
         return;
     }
+    if ( isLocalProjectOpeningBlockedByCollaboration() ) {
+        publishCollaborationProjectOpenBlocked();
+        return;
+    }
 
     /// @brief 保护本次打开请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
@@ -687,6 +698,10 @@ void ProjectController::requestOpenTemporaryProjectPackage(
     const std::filesystem::path& packagePath)
 {
     if ( packagePath.empty() ) {
+        return;
+    }
+    if ( isLocalProjectOpeningBlockedByCollaboration() ) {
+        publishCollaborationProjectOpenBlocked();
         return;
     }
 
@@ -719,6 +734,10 @@ void ProjectController::requestCreateProject(
     const ProjectCreationOptions& options)
 {
     if ( projectPath.empty() ) {
+        return;
+    }
+    if ( isLocalProjectOpeningBlockedByCollaboration() ) {
+        publishCollaborationProjectOpenBlocked();
         return;
     }
 
@@ -763,6 +782,21 @@ void ProjectController::requestCloseProject()
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
     m_hasPendingProjectAction.store(true, std::memory_order_release);
+}
+
+void ProjectController::setLocalProjectOpeningBlockedByCollaboration(
+    bool blocked)
+{
+    const bool previous = m_localProjectOpeningBlockedByCollaboration.exchange(
+        blocked, std::memory_order_acq_rel);
+    if ( previous == blocked || !blocked ) return;
+    cancelPendingProjectSwitch();
+}
+
+bool ProjectController::isLocalProjectOpeningBlockedByCollaboration() const
+{
+    return m_localProjectOpeningBlockedByCollaboration.load(
+        std::memory_order_acquire);
 }
 
 /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
@@ -949,6 +983,10 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 {
     /// @brief 本次打开项目的返回结果。
     OpenProjectResult result;
+    if ( isLocalProjectOpeningBlockedByCollaboration() ) {
+        publishCollaborationProjectOpenBlocked();
+        return result;
+    }
     /// @brief 调用方传入路径的绝对规范形式。
     const std::filesystem::path requestedProjectPath =
         makeAbsoluteNormalizedPath(projectPath);

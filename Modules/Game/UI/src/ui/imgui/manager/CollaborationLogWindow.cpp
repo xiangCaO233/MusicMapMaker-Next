@@ -5,11 +5,13 @@
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
+#include "ui/imgui/manager/CollaborationEntryPolicy.h"
 
 #include <algorithm>
 #include <string>
@@ -22,43 +24,48 @@ CollaborationLogWindow::CollaborationLogWindow(
     : IUIView(name), m_room(std::move(room))
 {
     if ( m_room ) {
-        m_room->setApplyBeatmapCallback(
-            [this](std::shared_ptr<::MMM::BeatMap> beatmap,
-                   ::MMM::BeatmapMutationFlags     flags) {
-                auto session = m_boundSession.lock();
-                if ( !beatmap ) return;
-                if ( !session && !m_room->isHost() ) {
-                    auto&             engine = Logic::EditorEngine::instance();
-                    const std::string displayName =
-                        beatmap->m_baseMapMetadata.name.empty()
-                            ? TR("title.collaboration_manager").toString()
-                            : beatmap->m_baseMapMetadata.name;
-                    static_cast<void>(
-                        engine.createSession(beatmap, displayName, false));
-                    session = engine.getActiveSession();
-                    if ( !session ) return;
-                    session->setMutationObserver(m_room, false);
-                    m_room->onBeatmapSynchronized(*beatmap);
-                    m_boundSession = session;
-                    bindPendingResources();
-                    return;
-                }
+        m_room->setApplyBeatmapCallback([this](
+                                            std::shared_ptr<::MMM::BeatMap>
+                                                                        beatmap,
+                                            ::MMM::BeatmapMutationFlags flags) {
+            auto session = m_boundSession.lock();
+            if ( !beatmap ) return;
+            if ( !session && !m_room->isHost() ) {
+                auto&             engine = Logic::EditorEngine::instance();
+                const std::string displayName =
+                    beatmap->m_baseMapMetadata.name.empty()
+                        ? TR("title.collaboration_manager").toString()
+                        : beatmap->m_baseMapMetadata.name;
+                static_cast<void>(
+                    engine.createSession(beatmap, displayName, false));
+                session = engine.getActiveSession();
                 if ( !session ) return;
-                session->pushCommand(
-                    Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
-                        .sourceBeatmap  = std::move(beatmap),
-                        .replaceObjects = hasBeatmapMutationFlag(
-                            flags, ::MMM::BeatmapMutationFlags::Objects),
-                        .replaceTimelines = hasBeatmapMutationFlag(
-                            flags, ::MMM::BeatmapMutationFlags::Timelines),
-                        .replaceMetadata = hasBeatmapMutationFlag(
-                            flags, ::MMM::BeatmapMutationFlags::Metadata),
-                        .replaceAudioSamples = hasBeatmapMutationFlag(
-                            flags, ::MMM::BeatmapMutationFlags::AudioSamples),
-                        .notifyMutationObserver = false,
-                        .authoritativeRemote    = true,
-                    }));
-            });
+                session->setCollaborationOfflineReadOnly(
+                    m_room->state() !=
+                    Network::Collaboration::CollaborationRoomState::Connected);
+                session->setMutationObserver(m_room, false);
+                m_room->onBeatmapSynchronized(*beatmap);
+                m_boundSession        = session;
+                m_boundSessionIsGuest = true;
+                bindPendingResources();
+                return;
+            }
+            if ( !session ) return;
+            session->pushCommand(
+                Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
+                    .sourceBeatmap  = std::move(beatmap),
+                    .replaceObjects = hasBeatmapMutationFlag(
+                        flags, ::MMM::BeatmapMutationFlags::Objects),
+                    .replaceTimelines = hasBeatmapMutationFlag(
+                        flags, ::MMM::BeatmapMutationFlags::Timelines),
+                    .replaceMetadata = hasBeatmapMutationFlag(
+                        flags, ::MMM::BeatmapMutationFlags::Metadata),
+                    .replaceAudioSamples = hasBeatmapMutationFlag(
+                        flags, ::MMM::BeatmapMutationFlags::AudioSamples),
+                    .notifyMutationObserver = false,
+                    .authoritativeRemote    = true,
+                }));
+        });
         m_room->setResourceBundleCallback(
             [this](Network::Collaboration::CollaborationResourceBundle bundle) {
                 m_pendingResourceBundle = std::make_shared<
@@ -73,6 +80,13 @@ CollaborationLogWindow::~CollaborationLogWindow()
 {
     if ( auto session = m_boundSession.lock() ) {
         session->setMutationObserver(nullptr);
+        if ( m_boundSessionIsGuest ) {
+            session->setCollaborationOfflineReadOnly(true);
+        }
+    }
+    if ( m_guestProjectGateHeld ) {
+        Logic::ProjectController::instance()
+            .setLocalProjectOpeningBlockedByCollaboration(false);
     }
     if ( m_room ) {
         m_room->setApplyBeatmapCallback(nullptr);
@@ -83,8 +97,8 @@ CollaborationLogWindow::~CollaborationLogWindow()
 void CollaborationLogWindow::update(UIManager*)
 {
     if ( !m_room ) return;
-    updateSessionBinding();
     m_room->update();
+    updateSessionBinding();
 
     const bool roomActive = m_room->isActive();
     if ( roomActive && !m_wasRoomActive ) {
@@ -134,24 +148,55 @@ void CollaborationLogWindow::update(UIManager*)
 
 void CollaborationLogWindow::updateSessionBinding()
 {
-    auto bound = m_boundSession.lock();
+    auto       bound = m_boundSession.lock();
+    const auto state = m_room->state();
+    const bool guestConnectionBlocksProjects =
+        !m_room->isHost() &&
+        (state == Network::Collaboration::CollaborationRoomState::Joining ||
+         state ==
+             Network::Collaboration::CollaborationRoomState::AwaitingApproval ||
+         state == Network::Collaboration::CollaborationRoomState::Connected);
+    if ( guestConnectionBlocksProjects ) {
+        Logic::ProjectController::instance()
+            .setLocalProjectOpeningBlockedByCollaboration(true);
+        m_guestProjectGateHeld = true;
+    } else if ( m_guestProjectGateHeld ) {
+        Logic::ProjectController::instance()
+            .setLocalProjectOpeningBlockedByCollaboration(false);
+        m_guestProjectGateHeld = false;
+    }
+
     if ( !m_room->isActive() ) {
-        if ( bound ) bound->setMutationObserver(nullptr);
+        if ( bound ) {
+            bound->setMutationObserver(nullptr);
+            if ( m_boundSessionIsGuest ) {
+                bound->setCollaborationOfflineReadOnly(true);
+            }
+        }
         m_boundSession.reset();
+        m_boundSessionIsGuest = false;
         m_pendingResourceBundle.reset();
         m_hostResourceProject = nullptr;
         m_hostResourceBeatmap = nullptr;
         return;
     }
     if ( bound ) {
+        if ( m_boundSessionIsGuest ) {
+            bound->setCollaborationOfflineReadOnly(
+                state !=
+                Network::Collaboration::CollaborationRoomState::Connected);
+        }
         refreshHostResources();
         return;
     }
 
+    if ( !mayBindExistingSessionForCollaboration(m_room->isHost()) ) return;
+
     auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
     active->setMutationObserver(m_room, m_room->isHost());
-    m_boundSession = active;
+    m_boundSession        = active;
+    m_boundSessionIsGuest = false;
     refreshHostResources();
     bindPendingResources();
 }

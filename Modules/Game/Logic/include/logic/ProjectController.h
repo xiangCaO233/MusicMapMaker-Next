@@ -136,6 +136,16 @@ public:
     /// @brief 请求关闭当前项目，必要时等待 UI 完成旧画布关闭。
     void requestCloseProject();
 
+    /// @brief 设置协作访客在线期间的本机项目打开门闩。
+    /// @param blocked 为 true
+    /// 时取消挂起打开请求并拒绝新的打开、创建和谱面包请求。
+    /// @warning UI/逻辑跨线程低频调用；状态变化时会取得项目请求锁并清空队列。
+    void setLocalProjectOpeningBlockedByCollaboration(bool blocked);
+
+    /// @brief 查询本机项目是否因访客协作连接而禁止打开。
+    /// @return 项目打开入口被锁定时返回 true。
+    [[nodiscard]] bool isLocalProjectOpeningBlockedByCollaboration() const;
+
     /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
     /// @return 有挂起项目切换流程时返回 true。
     bool hasPendingProjectSwitch() const;
@@ -351,6 +361,11 @@ private:
     /// 打开、创建、关闭或完成旧画布关闭后写入。仅作为进入 m_pendingMutex
     /// 的脏位门闩，使用 acquire/release。
     std::atomic<bool> m_hasPendingProjectAction{ false };
+
+    /// @brief 访客加入协作房间后统一阻止本机项目打开的门闩。
+    /// @warning 项目请求入口跨线程读取；仅协作生命周期变化时写入，使用
+    /// acquire/release 保证请求队列清理对后续请求可见。
+    std::atomic_bool m_localProjectOpeningBlockedByCollaboration{ false };
 };
 
 }  // namespace MMM::Logic

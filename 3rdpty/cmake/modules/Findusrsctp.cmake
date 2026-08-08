@@ -33,10 +33,17 @@ endif()
 if(NOT TARGET 3rd_usrsctp)
   find_package(Threads REQUIRED)
   add_library(3rd_usrsctp INTERFACE)
-  target_link_libraries(3rd_usrsctp INTERFACE 3rd_usrsctp_library
-                                              Threads::Threads)
-  if(WIN32)
-    target_link_libraries(3rd_usrsctp INTERFACE ws2_32 iphlpapi)
+  if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # MinGW GNU ld 按序解析静态库，需重扫描 usrsctp 与 iphlpapi 以保持有效顺序。
+    target_link_libraries(
+      3rd_usrsctp INTERFACE "$<LINK_GROUP:RESCAN,3rd_usrsctp_library,iphlpapi>"
+                            Threads::Threads ws2_32)
+  else()
+    target_link_libraries(3rd_usrsctp INTERFACE 3rd_usrsctp_library
+                                                Threads::Threads)
+    if(WIN32)
+      target_link_libraries(3rd_usrsctp INTERFACE ws2_32 iphlpapi)
+    endif()
   endif()
 endif()
 

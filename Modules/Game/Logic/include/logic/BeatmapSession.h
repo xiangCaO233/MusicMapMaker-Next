@@ -40,6 +40,16 @@ public:
     /// @param cmd 指令对象
     void pushCommand(LogicCommand&& cmd);
 
+    /// @brief 设置协作访客谱面是否因房间离线而只读。
+    /// @param readOnly 离线时为 true，重新连接到权威房间时为 false。
+    /// @warning UI/逻辑跨线程低频调用；原子标志在命令入队入口读取，状态变化时
+    /// 额外排队一次取消交互命令。
+    void setCollaborationOfflineReadOnly(bool readOnly);
+
+    /// @brief 查询协作访客谱面是否处于离线只读状态。
+    /// @return 离线只读时返回 true。
+    [[nodiscard]] bool isCollaborationOfflineReadOnly() const;
+
     /// @brief 设置低频谱面领域变化观察者。
     /// @param observer 新观察者；为空时恢复纯离线会话。
     /// @param publishCurrentSnapshot 是否在下一次逻辑更新发布当前完整谱面；
@@ -121,6 +131,13 @@ private:
     /// 仅低频元数据命令允许同步自动采样领域数据。
     bool processCommands();
 
+    /// @brief 在入队与消费边界统一拦截离线房间谱面的编辑命令。
+    /// @param cmd 待检查命令。
+    /// @return 命令已被拦截时返回 true。
+    /// @warning 命令热路径：只读取原子门闩、执行 variant 类型分派，并在每个
+    /// 离线周期首次拦截时发布一次事件。
+    [[nodiscard]] bool blockCollaborationOfflineEdit(const LogicCommand& cmd);
+
     /// @brief 发布跨线程请求的完整谱面快照。
     /// @warning 逻辑热路径：每 update 仅检查一个 relaxed 原子标志；只有新观察者
     /// 绑定后的单次分支会同步完整 BeatMap 并回调。
@@ -164,6 +181,7 @@ private:
     void handleCommand(const CmdUpdateViewport& cmd);
     void handleCommand(const CmdLoadBeatmap& cmd);
     void handleCommand(const CmdSetCollaborationResources& cmd);
+    void handleCommand(const CmdSetCollaborationOfflineReadOnly& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
@@ -192,6 +210,15 @@ private:
     /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed
     /// 即可，因为观察者指针自身通过 acquire/release 原子传递。
     std::atomic_bool m_mutationSnapshotRequested{ false };
+
+    /// @brief 协作访客谱面断线后的入队级只读门闩。
+    /// @warning UI 线程写、所有命令生产线程读；只在协作连接状态变化时写入，
+    /// 入队热路径使用 acquire 读取以确保及时拦截编辑命令。
+    std::atomic_bool m_collaborationOfflineReadOnly{ false };
+
+    /// @brief 当前离线周期是否已经发布过编辑拦截提示。
+    /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
+    std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
 
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点
