@@ -589,6 +589,9 @@ struct EditorSettings {
     /// @brief 绘制物件(按住Shift)时是否屏蔽滚动加速
     bool disableScrollAccelerationWhileDrawing{ true };
 
+    /// @brief 抓取工具整体移动物件时是否锁定时间，仅允许横向换轨。
+    bool disableVerticalObjectDrag{ false };
+
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 

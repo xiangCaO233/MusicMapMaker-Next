@@ -2115,6 +2115,113 @@ bool testSampleAnchorDragUsesSingleAction()
            context.bgmTrackCount == 2;
 }
 
+/// @brief 验证禁止垂直移动同时约束玩家轨道和 BGM 轨道的整体拖拽。
+/// @return 两类物件只横向换轨、时间保持不变且仍可撤销时返回 true。
+bool testVerticalObjectDragLock()
+{
+    MMM::Logic::SessionContext noteContext;
+    configureObjectEditingCanvas(noteContext);
+    noteContext.lastConfig.settings.disableVerticalObjectDrag = true;
+
+    const auto noteEntity = noteContext.noteRegistry.create();
+    noteContext.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        noteEntity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    noteContext.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        noteEntity);
+    noteContext.hoveredEntity     = noteEntity;
+    noteContext.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    noteContext.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+
+    MMM::Logic::GrabTool noteTool;
+    noteTool.handleStartDrag(noteContext,
+                             MMM::Logic::CmdStartDrag{
+                                 noteEntity,
+                                 "Basic2DCanvas",
+                                 false,
+                                 MMM::Logic::ChartObjectKind::PlayerNote,
+                             });
+    noteTool.handleUpdateDrag(noteContext,
+                              MMM::Logic::CmdUpdateDrag{
+                                  "Basic2DCanvas",
+                                  250.0F,
+                                  50.0F,
+                                  true,
+                              });
+    noteTool.handleEndDrag(noteContext,
+                           MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& movedNote =
+        noteContext.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    if ( !near(movedNote.m_timestamp, 1.0) || movedNote.m_trackIndex != 1 ||
+         noteContext.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Vertical drag lock did not constrain the player Note");
+        return false;
+    }
+    noteContext.actionStack.undo(noteContext);
+    const auto& restoredNote =
+        noteContext.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    if ( !near(restoredNote.m_timestamp, 1.0) ||
+         restoredNote.m_trackIndex != 0 ) {
+        XERROR("Vertical drag lock Note undo did not restore the track");
+        return false;
+    }
+
+    MMM::Logic::SessionContext sampleContext;
+    configureObjectEditingCanvas(sampleContext);
+    sampleContext.lastConfig.settings.disableVerticalObjectDrag = true;
+    const auto sampleEntity = sampleContext.sampleRegistry.create();
+    sampleContext.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "effect.wav",
+        });
+    sampleContext.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sampleEntity);
+    sampleContext.hoveredEntity     = sampleEntity;
+    sampleContext.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    sampleContext.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
+
+    MMM::Logic::GrabTool sampleTool;
+    sampleTool.handleStartDrag(sampleContext,
+                               MMM::Logic::CmdStartDrag{
+                                   sampleEntity,
+                                   "Basic2DCanvas",
+                                   false,
+                                   MMM::Logic::ChartObjectKind::AudioSample,
+                               });
+    sampleTool.handleUpdateDrag(sampleContext,
+                                MMM::Logic::CmdUpdateDrag{
+                                    "Basic2DCanvas",
+                                    650.0F,
+                                    50.0F,
+                                    true,
+                                });
+    sampleTool.handleEndDrag(sampleContext,
+                             MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& movedSample =
+        sampleContext.sampleRegistry.get<MMM::Logic::SampleComponent>(
+            sampleEntity);
+    if ( !near(movedSample.m_timestamp, 1.0) || movedSample.m_track != 5 ||
+         sampleContext.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Vertical drag lock did not constrain the automatic sample");
+        return false;
+    }
+    sampleContext.actionStack.undo(sampleContext);
+    const auto& restoredSample =
+        sampleContext.sampleRegistry.get<MMM::Logic::SampleComponent>(
+            sampleEntity);
+    return near(restoredSample.m_timestamp, 1.0) && restoredSample.m_track == 4;
+}
+
 /// @brief 验证拖放命令不能绕过项目资源表创建悬空自动采样。
 /// @return 当前项目中无法解析资源时不创建实体或撤销动作。
 bool testAudioResourceDropRejectsMissingProjectResource()
@@ -2209,6 +2316,7 @@ bool testSampleOffsetHandleDrag()
 {
     MMM::Logic::SessionContext context;
     configureObjectEditingCanvas(context);
+    context.lastConfig.settings.disableVerticalObjectDrag = true;
 
     const auto entity = context.sampleRegistry.create();
     context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
@@ -2865,6 +2973,7 @@ int main()
                    testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
+                   testVerticalObjectDragLock() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&
                    testGuestCollaborationResourcesSupportEditing() &&
                    testSampleOffsetHandleDrag() &&

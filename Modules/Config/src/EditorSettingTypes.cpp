@@ -535,6 +535,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "lastFilePickerPath", settings.lastFilePickerPath },
         { "disableScrollAccelerationWhileDrawing",
           settings.disableScrollAccelerationWhileDrawing },
+        { "disableVerticalObjectDrag", settings.disableVerticalObjectDrag },
         { "removeObjectsOnPolylinePath", settings.removeObjectsOnPolylinePath },
         { "enablePolylineEditing", settings.enablePolylineEditing },
         { "enableBmsEditing", settings.enableBmsEditing },
@@ -645,6 +646,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("lastFilePickerPath", std::string("."));
     settings.disableScrollAccelerationWhileDrawing =
         json.value("disableScrollAccelerationWhileDrawing", true);
+    settings.disableVerticalObjectDrag =
+        json.value("disableVerticalObjectDrag", false);
     settings.removeObjectsOnPolylinePath =
         json.value("removeObjectsOnPolylinePath", false);
     settings.enablePolylineEditing = json.value("enablePolylineEditing", true);

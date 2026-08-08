@@ -823,6 +823,9 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
     double       deltaTime = target->time - primaryTime;
     std::int64_t deltaTrack =
         static_cast<std::int64_t>(target->absoluteTrack) - primaryTrack;
+    if ( ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+        deltaTime = 0.0;
+    }
 
     double       minimumTimestamp = std::numeric_limits<double>::infinity();
     std::int64_t minimumTrack     = std::numeric_limits<std::int64_t>::max();
@@ -1081,16 +1084,24 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
     m_isPolylineSubDrag = isPolylineSubDrag;
 
+    const bool movesWholeObjects = isMultiDrag && !isPolylineSubDrag;
+    if ( movesWholeObjects &&
+         ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+        deltaT = 0.0;
+    }
+
     if ( isPolylineSubDrag || isMultiDrag ) {
         constexpr double TARGET_TIME_EPSILON = 1e-7;
+        const double     appliedTargetTime =
+            movesWholeObjects ? refInitialTime + deltaT : targetTime;
         if ( m_hasLastAppliedDragTarget &&
-             std::abs(m_lastAppliedDragTargetTime - targetTime) <=
+             std::abs(m_lastAppliedDragTargetTime - appliedTargetTime) <=
                  TARGET_TIME_EPSILON &&
              m_lastAppliedDragTargetTrack == targetTrack ) {
             return;
         }
         m_hasLastAppliedDragTarget   = true;
-        m_lastAppliedDragTargetTime  = targetTime;
+        m_lastAppliedDragTargetTime  = appliedTargetTime;
         m_lastAppliedDragTargetTrack = targetTrack;
     }
 

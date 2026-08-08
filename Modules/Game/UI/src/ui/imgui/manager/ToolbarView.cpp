@@ -3390,6 +3390,24 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         .currentBeatmap->m_baseMapMetadata.track_count);
             }
         }
+        {
+            auto& dragSettings = appConfig.getEditorSettings();
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_disable_vertical_object_drag")
+                         .data(),
+                     &dragSettings.disableVerticalObjectDrag) ) {
+                Logic::EditorEngine::instance().setEditorConfig(
+                    appConfig.getEditorConfig());
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_disable_vertical_object_drag_hint")
+                        .data());
+            }
+        }
+        ImGui::Separator();
+
         const float colorButtonSize    = std::floor(22.0f * dpiScale);
         const float visualControlWidth = std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");

@@ -203,6 +203,26 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证禁止垂直移动设置可持久化且旧配置保持自由拖动。
+/// @return 开启状态往返不变且缺失字段默认关闭时返回 true。
+bool testVerticalObjectDragConfigRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.disableVerticalObjectDrag = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( !encoded.value("disableVerticalObjectDrag", false) ||
+         !restored.disableVerticalObjectDrag ||
+         legacy.disableVerticalObjectDrag ) {
+        XERROR("Vertical object drag config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证批量音量编辑快捷键可持久化且旧配置默认不占用键位。
 /// @return 自定义组合键往返无损且缺失字段保持禁用时返回 true。
 bool testSelectedVolumeShortcutRoundTrip()
@@ -476,6 +496,7 @@ int main()
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
+                   testVerticalObjectDragConfigRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&

@@ -731,6 +731,8 @@ return {
 	["ui.toolbar.color_eraser"] = "配色橡皮",
 	["ui.toolbar.layout"] = "调整布局（再次点击退出）",
 	["ui.toolbar.layout_settings"] = "调整布局",
+	["ui.toolbar.layout_disable_vertical_object_drag"] = "禁止垂直移动",
+	["ui.toolbar.layout_disable_vertical_object_drag_hint"] = "开启后，抓取工具整体拖动物件时锁定时间位置，仅允许横向换轨；不影响局部形状和采样偏移编辑。",
 	["ui.toolbar.layout_components"] = "可选画布组件",
 	["ui.toolbar.layout_note_resize_hint"] = "拖动物件包围框四角可分别调整横向与纵向缩放",
 	["ui.toolbar.layout_current_judgment_time"] = "当前判定线时间",

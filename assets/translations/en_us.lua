@@ -728,6 +728,8 @@ return {
 	["ui.toolbar.color_eraser"] = "Color Eraser",
 	["ui.toolbar.layout"] = "Adjust Layout (click again to exit)",
 	["ui.toolbar.layout_settings"] = "Adjust Layout",
+	["ui.toolbar.layout_disable_vertical_object_drag"] = "Disable Vertical Object Movement",
+	["ui.toolbar.layout_disable_vertical_object_drag_hint"] = "Lock object times while moving with the Grab tool, allowing horizontal lane changes only. Local shape and sample-offset editing are unaffected.",
 	["ui.toolbar.layout_components"] = "Optional Canvas Components",
 	["ui.toolbar.layout_note_resize_hint"] = "Drag note bounding-box corners to adjust horizontal and vertical scale independently",
 	["ui.toolbar.layout_current_judgment_time"] = "Current Judgment Time",

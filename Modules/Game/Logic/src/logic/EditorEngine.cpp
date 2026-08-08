@@ -832,6 +832,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;
+    target.settings.disableVerticalObjectDrag =
+        source.settings.disableVerticalObjectDrag;
     target.settings.autoUploadPgoProfiles =
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
