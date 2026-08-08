@@ -1206,6 +1206,14 @@ void ProjectResourceService::buildInitialResources(
 
     /// @brief 一次性构建的谱面音频引用哈希索引。
     const AudioReferenceLookupIndex referenceIndex(project, audioReferences);
+    /// @brief 是否已经通过谱面歌曲提示识别出主音轨。
+    bool hasMainAudio = false;
+    /// @brief 没有歌曲提示时按文件大小选出的主音轨候选索引。
+    std::optional<std::size_t> fallbackMainAudioIndex;
+    /// @brief 当前主音轨候选的文件大小。
+    std::uintmax_t fallbackMainAudioSize = 0U;
+    /// @brief 文件大小相同时用于稳定选择的项目相对路径。
+    std::string fallbackMainAudioPath;
     for ( const auto& audioPath : scanResult.m_audioFiles ) {
         /// @brief 音频文件相对于项目根目录的 UTF-8 路径。
         const auto relativeAudioPath =
@@ -1216,6 +1224,41 @@ void ProjectResourceService::buildInitialResources(
             inferIndexedAudioResourceType(referenceIndex, resource);
 
         project.m_audioResources.push_back(resource);
+        if ( resource.m_type == AudioTrackType::Main ) {
+            hasMainAudio = true;
+            continue;
+        }
+
+        const bool boundToNote = (referenceIndex.matchingKinds(resource) &
+                                  NOTE_SAMPLE_BINDING_MASK) != 0U;
+        if ( boundToNote ) continue;
+
+        std::error_code fileSizeError;
+        const auto      fileSize =
+            std::filesystem::file_size(audioPath, fileSizeError);
+        const auto candidatePath = relativeAudioPath;
+        if ( !fallbackMainAudioIndex ||
+             (!fileSizeError && fileSize > fallbackMainAudioSize) ||
+             ((!fileSizeError ? fileSize : 0U) == fallbackMainAudioSize &&
+              candidatePath < fallbackMainAudioPath) ) {
+            fallbackMainAudioIndex = project.m_audioResources.size() - 1U;
+            fallbackMainAudioSize  = fileSizeError ? 0U : fileSize;
+            fallbackMainAudioPath  = candidatePath;
+        }
+    }
+
+    if ( !hasMainAudio && fallbackMainAudioIndex ) {
+        auto& fallbackMainAudio =
+            project.m_audioResources[*fallbackMainAudioIndex];
+        fallbackMainAudio.m_type = AudioTrackType::Main;
+        XINFO(
+            "No song_file_hint matched; selected largest unbound audio '{}' "
+            "as Main ({} bytes)",
+            fallbackMainAudio.m_id,
+            fallbackMainAudioSize);
+    }
+
+    for ( const auto& resource : project.m_audioResources ) {
         XINFO("Found {} audio resource: {}",
               (resource.m_type == AudioTrackType::Main ? "Main" : "Effect"),
               resource.m_id);
