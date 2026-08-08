@@ -190,6 +190,84 @@ bool validateSampleTrackCountMigration(const MMM::Logic::SessionContext& ctx,
     return true;
 }
 
+/// @brief 在谱面主音轨提示变化时替换时间最早的 Main BGM 自动采样资源。
+/// @param ctx 当前谱面会话上下文。
+/// @param oldMetadata 更新前的谱面基础元数据。
+/// @param updatedMetadata 已规范化的目标谱面基础元数据。
+/// @return 找到并实际替换自动采样资源时返回 true。
+/// @warning 仅由低频元数据命令调用；替换成功时会同步完整自动采样列表。
+bool retargetFirstMainBgmSample(MMM::Logic::SessionContext& ctx,
+                                const MMM::BaseMapMeta&     oldMetadata,
+                                const MMM::BaseMapMeta&     updatedMetadata)
+{
+    const auto& oldAudioHint     = oldMetadata.song_file_hint.empty()
+                                       ? oldMetadata.main_audio_path
+                                       : oldMetadata.song_file_hint;
+    const auto& updatedAudioHint = updatedMetadata.song_file_hint.empty()
+                                       ? updatedMetadata.main_audio_path
+                                       : updatedMetadata.song_file_hint;
+    if ( oldAudioHint == updatedAudioHint || updatedAudioHint.empty() ||
+         ctx.trackCount <= 0 ) {
+        return false;
+    }
+
+    const auto* project =
+        ctx.collaborationProject
+            ? ctx.collaborationProject.get()
+            : MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return false;
+
+    const auto* targetResource =
+        MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+            *project,
+            updatedMetadata.map_path,
+            MMM::Config::pathToUtf8(updatedAudioHint));
+    if ( !targetResource ||
+         targetResource->m_type != MMM::AudioTrackType::Main ) {
+        return false;
+    }
+
+    const auto playerTrackCount = static_cast<std::uint32_t>(ctx.trackCount);
+    auto sampleView = ctx.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    entt::entity firstMainBgmSample = entt::null;
+    double       firstEffectiveTime = std::numeric_limits<double>::infinity();
+    for ( const auto entity : sampleView ) {
+        const auto& sample =
+            sampleView.get<const MMM::Logic::SampleComponent>(entity);
+        if ( sample.m_track < playerTrackCount ) continue;
+
+        const auto* currentResource =
+            MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+                *project, oldMetadata.map_path, sample.m_audioResourceId);
+        if ( !currentResource ||
+             currentResource->m_type != MMM::AudioTrackType::Main ) {
+            continue;
+        }
+
+        const double effectiveTime = sample.effectiveTime();
+        if ( !std::isfinite(effectiveTime) ||
+             effectiveTime >= firstEffectiveTime ) {
+            continue;
+        }
+        firstEffectiveTime = effectiveTime;
+        firstMainBgmSample = entity;
+    }
+    if ( firstMainBgmSample == entt::null ) return false;
+
+    auto& sample =
+        sampleView.get<MMM::Logic::SampleComponent>(firstMainBgmSample);
+    if ( sample.m_audioResourceId == targetResource->m_id ) return false;
+
+    const auto previousResourceId = sample.m_audioResourceId;
+    sample.m_audioResourceId      = targetResource->m_id;
+    ctx.m_needsSamplesSync        = true;
+    MMM::Logic::SessionUtils::syncBeatmap(ctx);
+    XINFO("Retargeted first Main BGM sample from '{}' to '{}'",
+          previousResourceId,
+          targetResource->m_id);
+    return true;
+}
+
 /// @brief 将已成功保存的谱面基础信息同步到项目谱面入口。
 /// @param metadata 已成功写入谱面文件的基础元数据。
 /// @return 项目入口的名称发生变化时返回 true。
@@ -1014,7 +1092,8 @@ bool BeatmapSession::processCommands()
             visual.judgmentLinePositionForKeyCount(m_ctx->trackCount);
         bool replacedEditorConfig = false;
         std::visit(
-            [this, &processed, &replacedEditorConfig](auto&& arg) {
+            [this, &processed, &replacedEditorConfig, &mutationFlags](
+                auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
                     replacedEditorConfig = true;
@@ -1143,7 +1222,12 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                                std::is_same_v<T,
                                               CmdMarkBeatmapMetadataDirty> ) {
-                    this->handleCommand(arg);
+                    if constexpr ( std::is_same_v<T,
+                                                  CmdUpdateBeatmapMetadata> ) {
+                        mutationFlags |= this->handleCommand(arg);
+                    } else {
+                        this->handleCommand(arg);
+                    }
                 }
                 // --- Playback 处理的命令 ---
                 else if constexpr (
@@ -1602,15 +1686,22 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     });
 }
 
-void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
+/// @brief 更新谱面元数据，并同步主音轨提示对应的首个 Main BGM 采样。
+/// @param cmd 新的谱面基础元数据。
+/// @return 自动采样发生同步替换时包含 AudioSamples，否则返回 None。
+::MMM::BeatmapMutationFlags BeatmapSession::handleCommand(
+    const CmdUpdateBeatmapMetadata& cmd)
 {
+    auto mutationFlags = ::MMM::BeatmapMutationFlags::None;
     if ( m_ctx->currentBeatmap ) {
         const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         auto       updatedMeta = cmd.baseMeta;
         normalizeCurrentProjectMetadataPaths(updatedMeta);
         updatedMeta.track_count     = std::max(1, updatedMeta.track_count);
         updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;
-        if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) return;
+        if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) {
+            return mutationFlags;
+        }
 
         // 所有元数据编辑入口最终都在此处转入可撤销的原子改键操作，避免 UI
         // 直接覆盖 track_count 后丢失自动采样的 BGM 相对轨道。
@@ -1622,7 +1713,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                                                     migrationError) ) {
                 m_ctx->lastActionMessage = migrationError;
                 XERROR("BeatmapSession: {}", migrationError);
-                return;
+                return mutationFlags;
             }
 
             m_interaction->handleCommand(
@@ -1633,8 +1724,12 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                         "玩家轨道数变更未能完成，元数据保持不变";
                 }
                 XERROR("BeatmapSession: {}", m_ctx->lastActionMessage);
-                return;
+                return mutationFlags;
             }
+        }
+
+        if ( retargetFirstMainBgmSample(*m_ctx, oldMetadata, updatedMeta) ) {
+            mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
         }
 
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
@@ -1682,6 +1777,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                     : EditorEngine::instance().getCurrentProject());
         }
     }
+    return mutationFlags;
 }
 
 /// @brief 标记 UI 直接修改的扩展元数据，并安排一次尾随自动保存。

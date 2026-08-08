@@ -19,16 +19,36 @@
 #include "logic/session/tool/DrawTool.h"
 #include "logic/session/tool/GrabTool.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "mmm/project/Project.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <unordered_map>
 
 namespace
 {
+
+/// @brief 记录单次会话测试收到的谱面变化类型。
+class RecordingMutationObserver final : public MMM::IBeatmapMutationObserver
+{
+public:
+    /// @brief 保存最近一次谱面变化类型。
+    /// @param beatMap 发生变化的谱面。
+    /// @param flags 本次变化包含的数据类别。
+    void onBeatmapMutated(const MMM::BeatMap&       beatMap,
+                          MMM::BeatmapMutationFlags flags) override
+    {
+        (void)beatMap;
+        m_flags = flags;
+    }
+
+    /// @brief 最近一次收到的谱面变化类型。
+    MMM::BeatmapMutationFlags m_flags{ MMM::BeatmapMutationFlags::None };
+};
 
 /// @brief 使用小容差比较逻辑像素或时间值。
 /// @param lhs 左值。
@@ -871,6 +891,120 @@ bool testMetadataTrackCountMigrationIsAtomic()
                    .m_track == 1 &&
            context.sampleRegistry.get<MMM::Logic::SampleComponent>(far)
                    .m_track == 2;
+}
+
+/// @brief 验证谱面设置更换主音轨会同步时间最早的 Main BGM 自动采样。
+/// @return 仅首个 Main BGM 采样更新且其他 Main、Effect 和玩家轨采样不变时返回
+/// true。
+bool testMetadataAudioChangeRetargetsFirstMainBgmSample()
+{
+    MMM::Logic::BeatmapSession session;
+    const auto observer = std::make_shared<RecordingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    auto& context          = session.getContextMutable();
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.name     = "AudioChange";
+    context.currentBeatmap->m_baseMapMetadata.map_path = "AudioChange.mmm";
+    context.currentBeatmap->m_baseMapMetadata.song_file_hint  = "audio/old.ogg";
+    context.currentBeatmap->m_baseMapMetadata.track_count     = 4;
+    context.currentBeatmap->m_baseMapMetadata.bgm_track_count = 2;
+    context.trackCount                                        = 4;
+    context.bgmTrackCount                                     = 2;
+    context.collaborationProject = std::make_shared<MMM::Project>();
+    context.collaborationProject->m_audioResources = {
+        MMM::AudioResource{ .m_id   = "old-main",
+                            .m_path = "audio/old.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "new-main",
+                            .m_path = "audio/new.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "effect",
+                            .m_path = "audio/effect.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    const auto playerSample = context.sampleRegistry.create();
+    const auto effectSample = context.sampleRegistry.create();
+    const auto firstMain    = context.sampleRegistry.create();
+    const auto laterMain    = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        playerSample,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 0.25,
+            .m_track           = 1,
+            .m_audioResourceId = "old-main",
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        effectSample,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 0.5,
+            .m_track           = 4,
+            .m_audioResourceId = "effect",
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        firstMain,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_offsetMs        = -100,
+            .m_track           = 4,
+            .m_audioResourceId = "old-main",
+            .m_volume          = 0.6F,
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        laterMain,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 2.0,
+            .m_track           = 5,
+            .m_audioResourceId = "old-main",
+        });
+
+    auto updatedMeta           = context.currentBeatmap->m_baseMapMetadata;
+    updatedMeta.song_file_hint = "audio/new.ogg";
+    updatedMeta.main_audio_path.clear();
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateBeatmapMetadata{
+            .baseMeta = updatedMeta,
+        } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    const auto& updatedFirst =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(firstMain);
+    if ( updatedFirst.m_audioResourceId != "new-main" ||
+         !near(updatedFirst.m_timestamp, 1.0) ||
+         updatedFirst.m_offsetMs != -100 || updatedFirst.m_track != 4 ||
+         !near(updatedFirst.m_volume, 0.6) ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(laterMain)
+                 .m_audioResourceId != "old-main" ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(effectSample)
+                 .m_audioResourceId != "effect" ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(playerSample)
+                 .m_audioResourceId != "old-main" ||
+         context.currentBeatmap->m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/new.ogg") ||
+         !MMM::hasBeatmapMutationFlag(observer->m_flags,
+                                      MMM::BeatmapMutationFlags::Metadata) ||
+         !MMM::hasBeatmapMutationFlag(
+             observer->m_flags, MMM::BeatmapMutationFlags::AudioSamples) ||
+         context.actionStack.getUndoStackSize() != 0U ) {
+        XERROR(
+            "Metadata audio change did not retarget only the first Main BGM "
+            "sample");
+        return false;
+    }
+
+    const auto updatedDomainSample =
+        std::find_if(context.currentBeatmap->m_audioSamples.begin(),
+                     context.currentBeatmap->m_audioSamples.end(),
+                     [](const MMM::AudioSampleEvent& sample) {
+                         return sample.m_audioResourceId == "new-main";
+                     });
+    return context.currentBeatmap->m_audioSamples.size() == 4U &&
+           updatedDomainSample !=
+               context.currentBeatmap->m_audioSamples.end() &&
+           updatedDomainSample->m_timestamp == 1000.0 &&
+           updatedDomainSample->m_offsetMs == -100 &&
+           updatedDomainSample->m_track == 4 &&
+           near(updatedDomainSample->m_volume, 0.6);
 }
 
 /// @brief 验证替换元数据时同步迁移自动采样，并保留当前 BGM 轨道数。
@@ -2955,6 +3089,7 @@ int main()
                    testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&
+                   testMetadataAudioChangeRetargetsFirstMainBgmSample() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&
                    testReplaceBeatmapMetadataOverflowIsRejected() &&
                    testAuthoritativeReplacementInvalidatesEntityState() &&

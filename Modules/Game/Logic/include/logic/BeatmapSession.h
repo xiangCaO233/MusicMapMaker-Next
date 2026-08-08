@@ -117,6 +117,8 @@ private:
 
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
+    /// @warning 逻辑热路径：每个 Session update 调用；普通帧只检查空队列，
+    /// 仅低频元数据命令允许同步自动采样领域数据。
     bool processCommands();
 
     /// @brief 发布跨线程请求的完整谱面快照。
@@ -165,7 +167,12 @@ private:
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
-    void handleCommand(const CmdUpdateBeatmapMetadata& cmd);
+    /// @brief 更新谱面元数据，并在主音轨提示变化时同步首个 Main BGM 采样。
+    /// @param cmd 新的谱面基础元数据。
+    /// @return 本次元数据更新额外产生的谱面变化类型。
+    /// @warning 低频 UI 命令路径；主音轨实际变化时会同步完整自动采样列表。
+    ::MMM::BeatmapMutationFlags handleCommand(
+        const CmdUpdateBeatmapMetadata& cmd);
     void handleCommand(const CmdMarkBeatmapMetadataDirty& cmd);
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态
