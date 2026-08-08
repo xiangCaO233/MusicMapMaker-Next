@@ -1,6 +1,7 @@
 #include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
 #include "canvas/TimeFormatUtils.h"
+#include "canvas/TimelineTimingTooltip.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
@@ -800,8 +801,17 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         if ( gearHovered ) {
                             const auto timeText =
                                 formatCanvasTime(el.time, m_currentSnapshot);
+                            const auto descriptor =
+                                timelineTimingTooltipDescriptor(gear.effect);
                             ImGui::SetTooltip(
-                                "%s Event: %s", gear.label, timeText.c_str());
+                                "%s Event: %s\n%.*s: %.6g%.*s",
+                                gear.label,
+                                timeText.c_str(),
+                                static_cast<int>(descriptor.label.size()),
+                                descriptor.label.data(),
+                                el.*(gear.value),
+                                static_cast<int>(descriptor.valueSuffix.size()),
+                                descriptor.valueSuffix.data());
                         }
                     }
                 }
