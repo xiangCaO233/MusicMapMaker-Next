@@ -151,6 +151,12 @@ target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
 add_test(NAME NoteBoundSampleLabelRenderTest
          COMMAND NoteBoundSampleLabelRenderTest)
 
+# 重叠键遮罩测试确保播放快照仍会生成顶层重叠提示。
+mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
+                        tests/NoteOverlapMaskRenderTest.cpp)
+target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
+add_test(NAME NoteOverlapMaskRenderTest COMMAND NoteOverlapMaskRenderTest)
+
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest
                         tests/LogoPlaceholderScissorTest.cpp)
