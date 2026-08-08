@@ -148,6 +148,8 @@ return {
 	["ui.settings.debug.short"] = "调试",
 	["ui.settings.debug.rendering"] = "渲染调试",
 	["ui.settings.debug.draw_hitboxes"] = "绘制物件交互包围盒",
+	["ui.settings.debug.hitbox_scale_x"] = "交互包围盒横向缩放",
+	["ui.settings.debug.hitbox_scale_y"] = "交互包围盒纵向缩放",
 	["ui.settings.debug.render_profile_logging"] = "输出渲染阶段耗时日志",
 	["ui.settings.debug.networking"] = "网络调试",
 	["ui.settings.debug.rtc_diagnostic_logging"] = "输出 WebRTC/ICE 底层日志（可能包含 IP 地址）",

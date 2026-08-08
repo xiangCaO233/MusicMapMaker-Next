@@ -51,6 +51,12 @@ struct VisualConfig {
     static constexpr float MIN_NON_HOLD_HIT_EFFECT_DURATION{ 0.01f };
     /// @brief 非 Hold 打击特效持续时间的最大值，单位秒。
     static constexpr float MAX_NON_HOLD_HIT_EFFECT_DURATION{ 5.0f };
+    /// @brief 物件交互拾取包围盒缩放默认值。
+    static constexpr float DEFAULT_INTERACTION_HITBOX_SCALE{ 1.0f };
+    /// @brief 物件交互拾取包围盒允许的最小缩放。
+    static constexpr float MIN_INTERACTION_HITBOX_SCALE{ 0.25f };
+    /// @brief 物件交互拾取包围盒允许的最大缩放。
+    static constexpr float MAX_INTERACTION_HITBOX_SCALE{ 4.0f };
 
     /// @brief 旧版或无有效 Key 数时使用的轨道布局模板。
     TrackLayout trackLayout;
@@ -185,6 +191,10 @@ struct VisualConfig {
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。
     bool debugDrawHitboxes{ false };
+    /// @brief 物件交互拾取包围盒相对原始几何的横向缩放。
+    float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
+    /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。
+    float interactionHitboxScaleY{ DEFAULT_INTERACTION_HITBOX_SCALE };
 };
 
 /// @brief 将完整视觉配置序列化为 JSON。

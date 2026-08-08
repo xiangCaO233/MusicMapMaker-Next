@@ -157,6 +157,12 @@ mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
 target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
 add_test(NAME NoteOverlapMaskRenderTest COMMAND NoteOverlapMaskRenderTest)
 
+# 交互拾取包围盒测试覆盖独立横纵缩放、中心保持和非法值回退。
+mmm_add_test_executable(Logic InteractionHitboxScaleTest
+                        tests/InteractionHitboxScaleTest.cpp)
+target_link_libraries(InteractionHitboxScaleTest PRIVATE Logic Log)
+add_test(NAME InteractionHitboxScaleTest COMMAND InteractionHitboxScaleTest)
+
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest
                         tests/LogoPlaceholderScissorTest.cpp)

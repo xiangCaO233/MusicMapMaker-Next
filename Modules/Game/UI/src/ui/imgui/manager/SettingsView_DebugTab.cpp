@@ -118,6 +118,36 @@ void SettingsView::drawDebugSettings()
         addSettingItem(
             *sec,
             rowIndex,
+            TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleX",
+                    &visual.interactionHitboxScaleX,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleY",
+                    &visual.interactionHitboxScaleY,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+        addSettingItem(
+            *sec,
+            rowIndex,
             TR_CACHE("ui.settings.debug.render_profile_logging").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {

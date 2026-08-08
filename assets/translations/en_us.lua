@@ -149,6 +149,8 @@ return {
 	["ui.settings.debug.short"] = "Debug",
 	["ui.settings.debug.rendering"] = "Render Debug",
 	["ui.settings.debug.draw_hitboxes"] = "Draw Object Interaction Hitboxes",
+	["ui.settings.debug.hitbox_scale_x"] = "Interaction Hitbox Horizontal Scale",
+	["ui.settings.debug.hitbox_scale_y"] = "Interaction Hitbox Vertical Scale",
 	["ui.settings.debug.render_profile_logging"] = "Log Render Stage Timings",
 	["ui.settings.debug.networking"] = "Network Debug",
 	["ui.settings.debug.rtc_diagnostic_logging"] = "Log WebRTC/ICE Internals (May Include IP Addresses)",

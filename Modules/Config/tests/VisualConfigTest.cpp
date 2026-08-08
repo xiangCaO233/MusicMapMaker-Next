@@ -136,6 +136,37 @@ bool testBoundSampleLabelConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证交互拾取包围盒横纵缩放能够持久化并限制到调试界面范围。
+/// @return 往返、缺省值和上下界限制均正确时返回 true。
+bool testInteractionHitboxScaleConfig()
+{
+    MMM::Config::VisualConfig source;
+    source.interactionHitboxScaleX = 2.5F;
+    source.interactionHitboxScaleY = 0.75F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    const auto clamped = nlohmann::json{ { "interactionHitboxScaleX", 0.0F },
+                                         { "interactionHitboxScaleY", 8.0F } }
+                             .get<MMM::Config::VisualConfig>();
+    if ( !near(restored.interactionHitboxScaleX, 2.5F) ||
+         !near(restored.interactionHitboxScaleY, 0.75F) ||
+         !near(legacy.interactionHitboxScaleX,
+               MMM::Config::VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE) ||
+         !near(legacy.interactionHitboxScaleY,
+               MMM::Config::VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE) ||
+         !near(clamped.interactionHitboxScaleX,
+               MMM::Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE) ||
+         !near(clamped.interactionHitboxScaleY,
+               MMM::Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE) ) {
+        XERROR("Interaction hitbox scales escaped supported bounds");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证非 Hold 打击特效时长能够持久化并兼容旧配置。
 /// @return 当前值往返无损、旧配置使用默认值且越界值被限制时返回 true。
 bool testNonHoldHitEffectDurationConfig()
@@ -493,6 +524,7 @@ int main()
                    testHoverSubdivisionLineExtensionRatioConfig() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
+                   testInteractionHitboxScaleConfig() &&
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&

@@ -167,6 +167,18 @@ void NoteRenderSystem::generateSnapshot(
     HitFXSystem* hitFXSystem)
 {
     const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
+    const auto normalizeInteractionHitboxScale = [](float scale) {
+        if ( !std::isfinite(scale) ) {
+            return Config::VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE;
+        }
+        return std::clamp(scale,
+                          Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                          Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
+    };
+    snapshot->interactionHitboxScaleX =
+        normalizeInteractionHitboxScale(config.visual.interactionHitboxScaleX);
+    snapshot->interactionHitboxScaleY =
+        normalizeInteractionHitboxScale(config.visual.interactionHitboxScaleY);
 
     // 核心同步：如果预览区正在拖拽，主画布渲染的时间应该是预览区当前的悬停时间
     double renderTime = currentTime;
@@ -1206,7 +1218,11 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
     if ( !snapshot ) return;
 
     batcher.setTexture(TextureID::None);
-    for ( const auto& hb : snapshot->hitboxes ) {
+    for ( const auto& rawHitbox : snapshot->hitboxes ) {
+        const auto hb =
+            scaleInteractionHitbox(rawHitbox,
+                                   snapshot->interactionHitboxScaleX,
+                                   snapshot->interactionHitboxScaleY);
         if ( hb.entity == entt::null || hb.w <= 0.0f || hb.h <= 0.0f ) continue;
 
         glm::vec4 color{ 0.2f, 0.9f, 1.0f, 0.8f };

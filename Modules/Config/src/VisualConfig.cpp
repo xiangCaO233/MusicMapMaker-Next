@@ -668,7 +668,9 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "spectrumDetailLevel", config.spectrumDetailLevel },
         { "enableHitEffects", config.enableHitEffects },
         { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
-        { "debugDrawHitboxes", config.debugDrawHitboxes }
+        { "debugDrawHitboxes", config.debugDrawHitboxes },
+        { "interactionHitboxScaleX", config.interactionHitboxScaleX },
+        { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
 }
 
@@ -759,6 +761,28 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                    VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
+    config.interactionHitboxScaleX =
+        j.value("interactionHitboxScaleX",
+                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+    config.interactionHitboxScaleY =
+        j.value("interactionHitboxScaleY",
+                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+    if ( !std::isfinite(config.interactionHitboxScaleX) ) {
+        config.interactionHitboxScaleX =
+            VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE;
+    }
+    if ( !std::isfinite(config.interactionHitboxScaleY) ) {
+        config.interactionHitboxScaleY =
+            VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE;
+    }
+    config.interactionHitboxScaleX =
+        std::clamp(config.interactionHitboxScaleX,
+                   VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                   VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
+    config.interactionHitboxScaleY =
+        std::clamp(config.interactionHitboxScaleY,
+                   VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                   VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
 }
 
 }  // namespace MMM::Config

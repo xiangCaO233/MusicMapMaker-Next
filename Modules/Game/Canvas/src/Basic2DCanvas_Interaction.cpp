@@ -2810,17 +2810,24 @@ void Basic2DCanvasInteraction::handleInteractions(
         for ( auto it = currentSnapshot->hitboxes.rbegin();
               it != currentSnapshot->hitboxes.rend();
               ++it ) {
-            if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
-                 localMousePos.y >= it->y &&
-                 localMousePos.y <= it->y + it->h ) {
-                candidates.push_back(
-                    { it->entity, it->kind, it->part, it->subIndex });
+            const auto hitbox = Logic::scaleInteractionHitbox(
+                *it,
+                currentSnapshot->interactionHitboxScaleX,
+                currentSnapshot->interactionHitboxScaleY);
+            if ( localMousePos.x >= hitbox.x &&
+                 localMousePos.x <= hitbox.x + hitbox.w &&
+                 localMousePos.y >= hitbox.y &&
+                 localMousePos.y <= hitbox.y + hitbox.h ) {
+                candidates.push_back({ hitbox.entity,
+                                       hitbox.kind,
+                                       hitbox.part,
+                                       hitbox.subIndex });
                 layerSignature +=
-                    std::to_string(
-                        static_cast<uint32_t>(entt::to_integral(it->entity))) +
-                    ":" + std::to_string(static_cast<uint32_t>(it->kind)) +
-                    ":" + std::to_string(static_cast<uint32_t>(it->part)) +
-                    ":" + std::to_string(it->subIndex) + ";";
+                    std::to_string(static_cast<uint32_t>(
+                        entt::to_integral(hitbox.entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(hitbox.kind)) +
+                    ":" + std::to_string(static_cast<uint32_t>(hitbox.part)) +
+                    ":" + std::to_string(hitbox.subIndex) + ";";
             }
         }
     }
