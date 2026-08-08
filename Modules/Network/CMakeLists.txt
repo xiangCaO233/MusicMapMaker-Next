@@ -10,6 +10,7 @@ target_include_directories(Network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(Network PUBLIC 3rd_curl 3rd_miniz 3rd_nlohmann_json
                                      Config Log Event)
+target_link_libraries(Network PRIVATE Runtime)
 
 if(WIN32)
   target_link_libraries(Network PUBLIC shell32)

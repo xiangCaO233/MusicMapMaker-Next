@@ -20,6 +20,7 @@ target_link_libraries(
          UI
          Graphic
          Logic
+         Runtime
          NetworkCollaboration
          3rd_glm
          3rd_entt)

@@ -3,9 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <mutex>
 #include <string>
-#include <thread>
 
 namespace MMM::Network
 {
@@ -127,11 +127,11 @@ private:
     /// @warning 只能在持有 m_infoMutex 时读写。
     UpdateInfo m_info;
 
-    /// @brief 后台检查更新线程。
-    std::thread m_checkThread;
+    /// @brief 发布到 Runtime 共享线程池的更新检查任务。
+    std::future<void> m_checkFuture;
 
-    /// @brief 后台下载更新线程。
-    std::thread m_downloadThread;
+    /// @brief 发布到 Runtime 共享线程池的更新下载任务。
+    std::future<void> m_downloadFuture;
 
     /// @brief 后台任务取消标志。
     /// @warning 后台线程与 UI 线程共享；只表示退出请求，使用 relaxed 即可。

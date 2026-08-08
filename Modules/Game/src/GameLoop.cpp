@@ -50,6 +50,9 @@ using FrameLimitClock = std::chrono::steady_clock;
 /// @brief 限帧粗睡眠预留量，给操作系统调度精度留出少量余量。
 constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
 
+/// @brief GLFW 请求关闭后允许全部业务线程和后端正常收尾的最长时间。
+constexpr auto APPLICATION_SHUTDOWN_TIMEOUT = std::chrono::seconds(45);
+
 /// @brief 等待到目标帧时间点，避免用 yield 反复忙等。
 /// @warning 热路径等待：主渲染循环提前到达目标帧间隔时执行；只能包含
 /// sleep 和时间查询，禁止加入锁、分配或业务逻辑。
@@ -173,7 +176,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
     // 初始化窗口
     // VKContext 表面资源后续初始化
     if ( g_vkContext ) {
-        Runtime::AppThreadPool::instance().init();
+        auto& appThreadPool = Runtime::AppThreadPool::instance();
+        appThreadPool.init();
 
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
@@ -302,6 +306,10 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
             context.getRenderer().render(window, graphicUserHooks);
         }
 
+        appThreadPool.armApplicationShutdownWatchdog(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                APPLICATION_SHUTDOWN_TIMEOUT));
+
         // 保存当前项目工作区和项目配置
         m_uiManager.captureProjectWorkspaceState();
         Logic::EditorEngine::instance().saveProject();
@@ -328,7 +336,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
         (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
         context.release();
-        Runtime::AppThreadPool::instance().shutdown();
+        appThreadPool.shutdown();
+        appThreadPool.completeApplicationShutdownWatchdog();
         return EXIT_NORMAL;
     } else {
         return EXIT_WINDOW_EXEPTION;

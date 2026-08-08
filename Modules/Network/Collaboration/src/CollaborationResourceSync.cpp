@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,8 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -20,8 +23,8 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <stop_token>
 #include <string_view>
-#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -648,17 +651,25 @@ private:
     /// @brief 启动后台循环。
     void startWorker()
     {
-        m_worker = std::jthread(
-            [this](std::stop_token stopToken) { workerLoop(stopToken); });
+        auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+        if ( !appThreadPool ) {
+            fail("runtime_thread_pool_not_initialized");
+            return;
+        }
+        m_stopSource     = std::stop_source{};
+        const auto token = m_stopSource.get_token();
+        m_workerFuture =
+            appThreadPool->enqueue([this, token]() { workerLoop(token); });
     }
 
     /// @brief 请求后台线程停止。
     void stopWorker()
     {
-        if ( !m_worker.joinable() ) return;
-        m_worker.request_stop();
+        if ( !m_workerFuture.valid() ) return;
+        m_stopSource.request_stop();
         m_taskCondition.notify_all();
-        m_worker.join();
+        m_workerFuture.wait();
+        m_workerFuture = std::future<void>{};
     }
 
     /// @brief 后台串行处理文件任务。
@@ -1146,7 +1157,8 @@ private:
     std::deque<ResourceTask>                   m_tasks;
     std::mutex                                 m_eventMutex;
     std::deque<CollaborationResourceSyncEvent> m_events;
-    std::jthread                               m_worker;
+    std::future<void>                          m_workerFuture;
+    std::stop_source                           m_stopSource;
 
     std::vector<HostFile> m_hostFiles;
     std::uint64_t         m_hostGeneration = 0;

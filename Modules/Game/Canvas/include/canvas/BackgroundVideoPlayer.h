@@ -4,9 +4,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <optional>
-#include <thread>
+#include <stop_token>
 
 namespace MMM::Canvas
 {
@@ -95,8 +96,11 @@ private:
     /// @brief 最新完成且尚未被 UI 消费的帧。
     std::optional<BackgroundVideoFrame> m_readyFrame;
 
-    /// @brief 专用视频解码线程。
-    std::jthread m_worker;
+    /// @brief 发布到 Runtime 共享线程池的视频解码任务。
+    std::future<void> m_workerFuture;
+
+    /// @brief 视频解码任务的协作式停止源。
+    std::stop_source m_stopSource;
 };
 
 }  // namespace MMM::Canvas

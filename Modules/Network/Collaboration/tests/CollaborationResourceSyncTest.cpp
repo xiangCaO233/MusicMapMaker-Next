@@ -2,6 +2,7 @@
 
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <chrono>
@@ -540,8 +541,18 @@ bool testHostProjectBoundary()
 /// @brief 运行协作资源清单、分块、缓存与完整性回归测试。
 int main()
 {
-    if ( !testRoundTripCacheAndIncrementalChanges() ) return 1;
-    if ( !testTamperRejection() ) return 2;
-    if ( !testHostProjectBoundary() ) return 3;
-    return 0;
+    auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+    appThreadPool.init();
+
+    int result = 0;
+    if ( !testRoundTripCacheAndIncrementalChanges() ) {
+        result = 1;
+    } else if ( !testTamperRejection() ) {
+        result = 2;
+    } else if ( !testHostProjectBoundary() ) {
+        result = 3;
+    }
+
+    appThreadPool.shutdown();
+    return result;
 }

@@ -16,7 +16,7 @@ target_include_directories(NetworkCollaboration
 target_link_libraries(NetworkCollaboration PUBLIC MMM)
 target_link_libraries(
   NetworkCollaboration PRIVATE 3rd_libdatachannel 3rd_nlohmann_json 3rd_miniz
-                               Config Log)
+                               Config Log Runtime)
 
 # RTC 诊断测试覆盖配置持久化以及 TURN 长期凭据脱敏。
 mmm_add_test_executable(Collaboration RtcDiagnosticLoggingTest
@@ -50,8 +50,8 @@ add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
 # 资源状态机测试覆盖清单完整性、分块重组、缓存复用和单文件增量更新。
 mmm_add_test_executable(Collaboration CollaborationResourceSyncTest
                         tests/CollaborationResourceSyncTest.cpp)
-target_link_libraries(CollaborationResourceSyncTest PRIVATE NetworkCollaboration
-                                                            3rd_nlohmann_json)
+target_link_libraries(CollaborationResourceSyncTest
+                      PRIVATE NetworkCollaboration 3rd_nlohmann_json Runtime)
 add_test(NAME CollaborationResourceSyncTest
          COMMAND CollaborationResourceSyncTest)
 

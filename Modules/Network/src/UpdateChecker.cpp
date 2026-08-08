@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include "mmmversion.h"
 #include "network/AssetSyncService.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -14,6 +15,7 @@
 #include <curl/curl.h>
 #include <filesystem>
 #include <fmt/format.h>
+#include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -252,11 +254,13 @@ void UpdateChecker::cancelAndJoinWorkers()
 {
     m_cancelRequested.store(true, std::memory_order_relaxed);
 
-    if ( m_checkThread.joinable() ) {
-        m_checkThread.join();
+    if ( m_checkFuture.valid() ) {
+        m_checkFuture.wait();
+        m_checkFuture = std::future<void>{};
     }
-    if ( m_downloadThread.joinable() ) {
-        m_downloadThread.join();
+    if ( m_downloadFuture.valid() ) {
+        m_downloadFuture.wait();
+        m_downloadFuture = std::future<void>{};
     }
 }
 
@@ -531,13 +535,21 @@ void UpdateChecker::checkAsync()
     cancelAndJoinWorkers();
     m_cancelRequested.store(false, std::memory_order_relaxed);
 
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        std::lock_guard<std::mutex> lock(m_infoMutex);
+        m_info.status       = UpdateStatus::kError;
+        m_info.errorMessage = "Runtime thread pool is not initialized";
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lock(m_infoMutex);
         m_info.status         = UpdateStatus::kChecking;
         m_info.currentVersion = MMM_VERSION_STRING;
     }
 
-    m_checkThread = std::thread([this]() {
+    m_checkFuture = appThreadPool->enqueue([this]() {
         int maxRetries = 3;
         int retries    = 0;
 
@@ -699,6 +711,14 @@ void UpdateChecker::downloadAsync()
     cancelAndJoinWorkers();
     m_cancelRequested.store(false, std::memory_order_relaxed);
 
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        std::lock_guard<std::mutex> lock(m_infoMutex);
+        m_info.status       = UpdateStatus::kError;
+        m_info.errorMessage = "Runtime thread pool is not initialized";
+        return;
+    }
+
     UpdateInfo initialInfo;
     {
         std::lock_guard<std::mutex> lock(m_infoMutex);
@@ -729,7 +749,7 @@ void UpdateChecker::downloadAsync()
         m_info.status = UpdateStatus::kDownloading;
     }
 
-    m_downloadThread = std::thread([this, initialInfo]() {
+    m_downloadFuture = appThreadPool->enqueue([this, initialInfo]() {
         auto fail = [this](const std::string& message) {
             if ( isCancelRequested() ) {
                 return;

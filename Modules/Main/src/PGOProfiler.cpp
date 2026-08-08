@@ -4,6 +4,7 @@
 #include "main/PGOProfiler.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
+#include "runtime/AppThreadPool.h"
 
 #ifdef MMM_PGO_INSTRUMENT
 #    include "pgo_upload_url.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -414,8 +416,15 @@ bool beginShutdownPGOProfilerAsync(bool uploadAllowed)
         s_shutdownProgress.finished = false;
     }
 
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        setShutdownStage(PGOProfilerShutdownStage::Failed,
+                         "PGO: runtime thread pool is not initialized",
+                         true);
+        return false;
+    }
     s_shutdownFuture =
-        std::async(std::launch::async, []() { uploadPreparedProfile(); });
+        appThreadPool->enqueue([]() { uploadPreparedProfile(); });
     return true;
 #else
     (void)uploadAllowed;
