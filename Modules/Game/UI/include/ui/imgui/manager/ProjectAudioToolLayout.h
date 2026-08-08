@@ -34,7 +34,7 @@ struct Rect {
 };
 
 /// @brief 项目音频工具画布允许的最小相机倍率。
-inline constexpr float MINIMUM_CAMERA_ZOOM = 1.0F;
+inline constexpr float MINIMUM_CAMERA_ZOOM = 0.5F;
 
 /// @brief 项目音频工具画布允许的最大相机倍率。
 inline constexpr float MAXIMUM_CAMERA_ZOOM = 4.0F;

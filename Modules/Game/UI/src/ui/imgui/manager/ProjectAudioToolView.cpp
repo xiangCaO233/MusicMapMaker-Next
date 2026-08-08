@@ -2025,10 +2025,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
           statusRowStart.y });
     ImGui::SetNextItemWidth(zoomSliderWidth);
     int zoomPercentage = std::clamp(
-        static_cast<int>(std::lround(m_canvasZoom * 100.0F)), 100, 400);
+        static_cast<int>(std::lround(m_canvasZoom * 100.0F)), 50, 400);
     if ( ImGui::SliderInt("##ProjectAudioToolCanvasZoom",
                           &zoomPercentage,
-                          100,
+                          50,
                           400,
                           "%d%%",
                           ImGuiSliderFlags_AlwaysClamp) ) {
