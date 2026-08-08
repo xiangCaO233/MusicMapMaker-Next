@@ -141,6 +141,30 @@ bool testHorizontalOffscreenClamping()
            right && near(right->leftX, 995.0F) && near(right->rightX, 998.0F);
 }
 
+/// @brief 验证同侧多人离屏箭头按稳定槽位展开且窄轨道会退回整幅画布。
+/// @return 单人居中、多人展开和非法槽位均符合预期时返回 true。
+bool testOffscreenIndicatorLayout()
+{
+    const auto single = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        300.0F, 700.0F, 1000.0F, 0, 1);
+    const auto first = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        300.0F, 700.0F, 1000.0F, 0, 3);
+    const auto middle = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        300.0F, 700.0F, 1000.0F, 1, 3);
+    const auto last = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        300.0F, 700.0F, 1000.0F, 2, 3);
+    const auto narrowFirst = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        490.0F, 510.0F, 1000.0F, 0, 3);
+    const auto narrowLast = MMM::Canvas::layoutCollaborationViewportIndicatorX(
+        490.0F, 510.0F, 1000.0F, 2, 3);
+
+    return near(single, 500.0F) && near(first, 310.0F) &&
+           near(middle, 500.0F) && near(last, 690.0F) &&
+           near(narrowFirst, 10.0F) && near(narrowLast, 990.0F) &&
+           !MMM::Canvas::layoutCollaborationViewportIndicatorX(
+               300.0F, 700.0F, 1000.0F, 3, 3);
+}
+
 /// @brief 验证反向时间边界和非法输入不会产生错误坐标。
 /// @return 反向锚点正确且 NaN 被拒绝时返回 true。
 bool testReverseAndInvalidRanges()
@@ -166,6 +190,7 @@ int main()
                    testTrackViewportBoundaryRoundTrip() &&
                    testHorizontalUsesLocalTrackProjection() &&
                    testHorizontalOffscreenClamping() &&
+                   testOffscreenIndicatorLayout() &&
                    testReverseAndInvalidRanges()
                ? 0
                : 1;

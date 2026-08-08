@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 
 namespace MMM::Canvas
@@ -14,6 +15,51 @@ struct CollaborationViewportHorizontalRange {
     /// @brief 裁剪后的右边界。
     float rightX{ 0.0F };
 };
+
+/// @brief 计算同侧多人离屏视口箭头的横向槽位。
+/// @param contentLeft 本地轨道区左边界。
+/// @param contentRight 本地轨道区右边界。
+/// @param canvasWidth 本地画布宽度。
+/// @param slotIndex 当前箭头按稳定 PeerId 排列后的槽位索引。
+/// @param slotCount 当前画布同一侧的箭头总数。
+/// @return 输入有效时返回不会越过画布安全边距的箭头中心 X 坐标。
+/// @warning UI 热路径：每个离屏参与者调用一次；只执行常量数值计算，禁止加入
+/// 分配或阻塞操作。
+inline std::optional<float> layoutCollaborationViewportIndicatorX(
+    float contentLeft, float contentRight, float canvasWidth,
+    std::size_t slotIndex, std::size_t slotCount)
+{
+    if ( !std::isfinite(contentLeft) || !std::isfinite(contentRight) ||
+         !std::isfinite(canvasWidth) || canvasWidth <= 20.0F ||
+         contentRight <= contentLeft || slotCount == 0 ||
+         slotIndex >= slotCount ) {
+        return std::nullopt;
+    }
+
+    constexpr float CANVAS_EDGE_PADDING = 10.0F;
+    constexpr float INDICATOR_SPACING   = 24.0F;
+    const float     canvasLeft          = CANVAS_EDGE_PADDING;
+    const float     canvasRight         = canvasWidth - CANVAS_EDGE_PADDING;
+    const float     contentCenter       = (contentLeft + contentRight) * 0.5F;
+    if ( slotCount == 1 ) {
+        return std::clamp(contentCenter, canvasLeft, canvasRight);
+    }
+
+    float slotLeft =
+        std::clamp(contentLeft + CANVAS_EDGE_PADDING, canvasLeft, canvasRight);
+    float slotRight =
+        std::clamp(contentRight - CANVAS_EDGE_PADDING, canvasLeft, canvasRight);
+    const float requiredSpan =
+        INDICATOR_SPACING * static_cast<float>(slotCount - 1);
+    if ( slotRight <= slotLeft || slotRight - slotLeft < requiredSpan ) {
+        slotLeft  = canvasLeft;
+        slotRight = canvasRight;
+    }
+
+    const float progress =
+        static_cast<float>(slotIndex) / static_cast<float>(slotCount - 1);
+    return slotLeft + (slotRight - slotLeft) * progress;
+}
 
 /// @brief 将协作视野框锚定到本地轨道区并裁剪到画布内。
 /// @param localContentLeft 本地相机下协作轨道区左边界。

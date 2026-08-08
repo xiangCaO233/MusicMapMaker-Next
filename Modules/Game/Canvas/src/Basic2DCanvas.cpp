@@ -499,6 +499,46 @@ void Basic2DCanvas::updateCollaborationViewports(
         m_currentSnapshot->canvasHorizontalOffsetX,
         true,
         m_currentSnapshot->bmsEditingEnabled);
+    if ( !localLaneProjection.valid ) return;
+    const auto horizontalRange = projectCollaborationViewportHorizontalRange(
+        localLaneProjection.player.leftX,
+        localLaneProjection.bgmRightX,
+        canvasSize.x);
+    if ( !horizontalRange ) return;
+
+    /// @brief 判断远端视口是否需要绘制上方或下方离屏提示。
+    /// @return 上方提示返回 true，下方提示返回 false，不需要提示则返回空值。
+    const auto classifyOffscreenIndicator =
+        [&viewports, &creators, localId, localMinimum, localMaximum, this](
+            Network::Collaboration::PeerId peerId) -> std::optional<bool> {
+        if ( peerId == localId || !creators.contains(peerId) ) {
+            return std::nullopt;
+        }
+        const auto viewportIt = viewports.find(peerId);
+        if ( viewportIt == viewports.end() ) return std::nullopt;
+        const auto&  viewport = viewportIt->second;
+        const double remoteMinimum =
+            std::min(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+        const double remoteMaximum =
+            std::max(viewport.visibleTimeStart, viewport.visibleTimeEnd);
+        if ( !std::isfinite(remoteMinimum) || !std::isfinite(remoteMaximum) ||
+             !std::isfinite(viewport.visualTime) ||
+             (remoteMaximum >= localMinimum &&
+              remoteMinimum <= localMaximum) ) {
+            return std::nullopt;
+        }
+        return viewport.visualTime > m_currentSnapshot->currentTime;
+    };
+
+    std::array<std::size_t, 2> indicatorCounts{};
+    for ( const auto& [peerId, viewport] : viewports ) {
+        (void)viewport;
+        const auto direction = classifyOffscreenIndicator(peerId);
+        if ( direction ) {
+            ++indicatorCounts[*direction ? 1U : 0U];
+        }
+    }
+
     ImDrawList*  drawList = ImGui::GetWindowDrawList();
     const ImVec2 canvasMaximum{
         canvasScreenPosition.x + canvasSize.x,
@@ -519,13 +559,6 @@ void Basic2DCanvas::updateCollaborationViewports(
             continue;
         }
 
-        if ( !localLaneProjection.valid ) continue;
-        const auto horizontalRange =
-            projectCollaborationViewportHorizontalRange(
-                localLaneProjection.player.leftX,
-                localLaneProjection.bgmRightX,
-                canvasSize.x);
-        if ( !horizontalRange ) continue;
         const float leftX     = horizontalRange->leftX;
         const float rightX    = horizontalRange->rightX;
         const float centerX   = (leftX + rightX) * 0.5F;
@@ -587,10 +620,28 @@ void Basic2DCanvas::updateCollaborationViewports(
 
         const bool remoteAhead =
             viewport.visualTime > m_currentSnapshot->currentTime;
-        const float tipY   = remoteAhead ? canvasScreenPosition.y + 7.0F
-                                         : canvasMaximum.y - 7.0F;
-        const float baseY  = remoteAhead ? tipY + 13.0F : tipY - 13.0F;
-        const float arrowX = canvasScreenPosition.x + centerX;
+        const std::size_t directionIndex = remoteAhead ? 1U : 0U;
+        std::size_t       indicatorSlot  = 0;
+        for ( const auto& [candidatePeerId, candidateViewport] : viewports ) {
+            (void)candidateViewport;
+            if ( candidatePeerId >= peerId ) continue;
+            const auto candidateDirection =
+                classifyOffscreenIndicator(candidatePeerId);
+            if ( candidateDirection && *candidateDirection == remoteAhead ) {
+                ++indicatorSlot;
+            }
+        }
+        const float tipY        = remoteAhead ? canvasScreenPosition.y + 7.0F
+                                              : canvasMaximum.y - 7.0F;
+        const float baseY       = remoteAhead ? tipY + 13.0F : tipY - 13.0F;
+        const float arrowLocalX = layoutCollaborationViewportIndicatorX(
+                                      leftX,
+                                      rightX,
+                                      canvasSize.x,
+                                      indicatorSlot,
+                                      indicatorCounts[directionIndex])
+                                      .value_or(centerX);
+        const float arrowX      = canvasScreenPosition.x + arrowLocalX;
         drawList->AddTriangleFilled({ arrowX, tipY },
                                     { arrowX - 8.0F, baseY },
                                     { arrowX + 8.0F, baseY },
