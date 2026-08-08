@@ -1,11 +1,16 @@
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
+#include "event/core/EventBus.h"
+#include "event/project/ProjectEvents.h"
 #include "logic/BeatmapSession.h"
+#include "logic/ProjectController.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 
 #include "log/colorful-log.h"
 
+#include <atomic>
 #include <memory>
 
 namespace
@@ -223,6 +228,106 @@ private:
     }
     return true;
 }
+
+/// @brief 验证房间掉线后编辑命令被统一拦截且提示在一个离线周期只发布一次。
+/// @return 只读状态保持谱面不变，解除只读后编辑恢复时返回 true。
+[[nodiscard]] bool testOfflineCollaborationSessionIsReadOnly()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+    });
+    session.update(0.0, config, false);
+
+    std::atomic_int blockedEvents{ 0 };
+    auto&           eventBus = MMM::Event::EventBus::instance();
+    const auto      subscription =
+        eventBus.subscribe<MMM::Event::CollaborationOfflineEditBlockedEvent>(
+            [&blockedEvents](
+                const MMM::Event::CollaborationOfflineEditBlockedEvent&) {
+                blockedEvents.fetch_add(1, std::memory_order_relaxed);
+            });
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 6 },
+    });
+    session.setCollaborationOfflineReadOnly(true);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 1.0,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 2.0,
+        },
+    });
+    session.update(0.0, config, false);
+    const bool stayedReadOnly =
+        session.getContext().trackCount == 4 &&
+        blockedEvents.load(std::memory_order_relaxed) == 1;
+
+    session.setCollaborationOfflineReadOnly(false);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.update(0.0, config, false);
+    const bool resumedEditing = session.getContext().trackCount == 7;
+
+    eventBus.unsubscribe<MMM::Event::CollaborationOfflineEditBlockedEvent>(
+        subscription);
+    if ( !stayedReadOnly || !resumedEditing ) {
+        XERROR(
+            "Offline collaboration session edit gate failed: readOnly={}, "
+            "resumed={}, events={}",
+            stayedReadOnly,
+            resumedEditing,
+            blockedEvents.load(std::memory_order_relaxed));
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证访客连接门闩会清空旧打开请求并拦截所有后续本机项目请求。
+/// @return 门闩解除前没有项目动作进入逻辑线程时返回 true。
+[[nodiscard]] bool testGuestConnectionBlocksLocalProjectOpening()
+{
+    auto& controller = MMM::Logic::ProjectController::instance();
+    controller.setLocalProjectOpeningBlockedByCollaboration(false);
+    controller.cancelPendingProjectSwitch();
+    controller.requestOpenProject("/tmp/mmm-collaboration-pending-project");
+    if ( !controller.hasPendingProjectAction() ) {
+        XERROR("Local project request was not queued before collaboration");
+        return false;
+    }
+
+    std::atomic_int blockedEvents{ 0 };
+    auto&           eventBus = MMM::Event::EventBus::instance();
+    const auto      subscription =
+        eventBus.subscribe<MMM::Event::CollaborationProjectOpenBlockedEvent>(
+            [&blockedEvents](
+                const MMM::Event::CollaborationProjectOpenBlockedEvent&) {
+                blockedEvents.fetch_add(1, std::memory_order_relaxed);
+            });
+
+    controller.setLocalProjectOpeningBlockedByCollaboration(true);
+    controller.requestOpenProject("/tmp/mmm-collaboration-blocked-project");
+    const bool blocked =
+        controller.isLocalProjectOpeningBlockedByCollaboration() &&
+        !controller.hasPendingProjectAction() &&
+        blockedEvents.load(std::memory_order_relaxed) == 1;
+
+    controller.setLocalProjectOpeningBlockedByCollaboration(false);
+    controller.cancelPendingProjectSwitch();
+    eventBus.unsubscribe<MMM::Event::CollaborationProjectOpenBlockedEvent>(
+        subscription);
+    if ( !blocked ) {
+        XERROR("Guest collaboration did not isolate local project requests");
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 运行协作谱面观察者绑定回归测试。
@@ -231,7 +336,9 @@ int main()
 {
     return testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
-                   testRemoteSynchronizationWaitsForBrushEnd()
+                   testRemoteSynchronizationWaitsForBrushEnd() &&
+                   testOfflineCollaborationSessionIsReadOnly() &&
+                   testGuestConnectionBlocksLocalProjectOpening()
                ? 0
                : 1;
 }

@@ -24,6 +24,9 @@ public:
         const std::string&                                         subViewName,
         std::shared_ptr<Network::Collaboration::CollaborationRoom> room);
 
+    /// @brief 在待加入配置类型完整的实现单元中销毁视图状态。
+    ~CollaborationView() override;
+
     /// @copydoc ISubView::onUpdate
     /// @warning UI 热路径：子视图可见时每帧执行；只绘制内存状态，禁止加入
     /// 文件系统访问、网络等待或完整谱面遍历。
@@ -50,6 +53,15 @@ private:
     bool applyServerEndpoint();
     /// @brief 请求显示独立协作日志窗口。
     void showLogWindow(UIManager* sourceManager) const;
+    /// @brief 开始访客加入流程，必要时先请求关闭全部本机项目与谱面画布。
+    void beginGuestJoin(std::string creator, std::string roomId,
+                        std::string roomName, UIManager* sourceManager);
+    /// @brief 推进等待本机关闭完成的访客加入流程。
+    /// @warning UI 热路径低频分支：等待期间每帧只读取项目和 Session 快照；
+    /// 完成后才启动一次网络连接。
+    void advancePendingGuestJoin(UIManager* sourceManager);
+
+    struct PendingGuestJoin;
 
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
@@ -65,5 +77,9 @@ private:
     bool m_roomNameInitialized = false;
     /// @brief 当前客户端向 P2P 房间发布主画布状态的频率。
     int m_viewportPublishRateHz = 10;
+    /// @brief 等待全部本机编辑状态安全关闭后的访客加入配置。
+    std::unique_ptr<PendingGuestJoin> m_pendingGuestJoin;
+    /// @brief 上一次访客入房是否因本机关闭未完成或被取消而中止。
+    bool m_guestJoinPreparationCancelled = false;
 };
 }  // namespace MMM::UI

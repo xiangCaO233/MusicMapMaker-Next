@@ -1188,6 +1188,7 @@ bool BeatmapSession::processCommands()
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
     };
     while ( m_commandQueue.try_dequeue(cmd) ) {
+        if ( blockCollaborationOfflineEdit(cmd) ) continue;
         const bool authoritativeSynchronization = std::visit(
             [](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
@@ -1338,17 +1339,17 @@ bool BeatmapSession::processCommands()
                 }
 
                 // --- Session 自己处理的命令 ---
-                if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ||
-                               std::is_same_v<T, CmdUpdateViewport> ||
-                               std::is_same_v<T, CmdLoadBeatmap> ||
-                               std::is_same_v<T,
-                                              CmdSetCollaborationResources> ||
-                               std::is_same_v<T, CmdSaveBeatmap> ||
-                               std::is_same_v<T, CmdSaveBeatmapAs> ||
-                               std::is_same_v<T, CmdPackBeatmap> ||
-                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
-                               std::is_same_v<T,
-                                              CmdMarkBeatmapMetadataDirty> ) {
+                if constexpr (
+                    std::is_same_v<T, CmdUpdateEditorConfig> ||
+                    std::is_same_v<T, CmdUpdateViewport> ||
+                    std::is_same_v<T, CmdLoadBeatmap> ||
+                    std::is_same_v<T, CmdSetCollaborationResources> ||
+                    std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
+                    std::is_same_v<T, CmdSaveBeatmap> ||
+                    std::is_same_v<T, CmdSaveBeatmapAs> ||
+                    std::is_same_v<T, CmdPackBeatmap> ||
+                    std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                    std::is_same_v<T, CmdMarkBeatmapMetadataDirty> ) {
                     if constexpr ( std::is_same_v<T,
                                                   CmdUpdateBeatmapMetadata> ) {
                         mutationFlags |= this->handleCommand(arg);
@@ -1514,6 +1515,58 @@ bool BeatmapSession::processCommands()
 }
 
 // --- Session 自己处理的 ---
+
+void BeatmapSession::handleCommand(
+    const CmdSetCollaborationOfflineReadOnly& cmd)
+{
+    if ( !cmd.readOnly ) return;
+
+    for ( const auto entity : m_ctx->dragRenderPinnedEntities ) {
+        if ( m_ctx->noteRegistry.valid(entity) &&
+             m_ctx->noteRegistry.all_of<InteractionComponent>(entity) ) {
+            m_ctx->noteRegistry.get<InteractionComponent>(entity).isDragging =
+                false;
+        }
+    }
+    for ( const auto entity : m_ctx->dragSampleRenderPinnedEntities ) {
+        if ( m_ctx->sampleRegistry.valid(entity) &&
+             m_ctx->sampleRegistry.all_of<InteractionComponent>(entity) ) {
+            m_ctx->sampleRegistry.get<InteractionComponent>(entity).isDragging =
+                false;
+        }
+    }
+
+    m_ctx->isDragging        = false;
+    m_ctx->draggedEntity     = entt::null;
+    m_ctx->draggedObjectKind = ChartObjectKind::PlayerNote;
+    m_ctx->draggedPart       = HoverPart::None;
+    m_ctx->draggedSubIndex   = -1;
+    m_ctx->dragInitialNote.reset();
+    m_ctx->dragInitialSample.reset();
+    m_ctx->dragCameraId.clear();
+    m_ctx->dragRenderPinnedEntities.clear();
+    m_ctx->dragSampleRenderPinnedEntities.clear();
+
+    m_ctx->isSelecting             = false;
+    m_ctx->hasMarqueeSelection     = false;
+    m_ctx->marqueeIsAdditive       = false;
+    m_ctx->isMarqueeSelectionDirty = false;
+    m_ctx->marqueeBoxes.clear();
+
+    m_ctx->brushState.isActive           = false;
+    m_ctx->brushState.createsAudioSample = false;
+    m_ctx->brushState.activeAudioResourceId.clear();
+    m_ctx->brushState.activeSampleBinding.reset();
+    m_ctx->brushState.polylineSegments.clear();
+    m_ctx->brushState.holdStartTime = -1.0;
+    m_ctx->brushState.duration      = 0.0;
+    m_ctx->brushState.dtrack        = 0;
+
+    m_ctx->eraserState.isActive         = false;
+    m_ctx->eraserState.isShiftDown      = false;
+    m_ctx->eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+    m_ctx->eraserState.targetEntities.clear();
+}
 
 void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 {

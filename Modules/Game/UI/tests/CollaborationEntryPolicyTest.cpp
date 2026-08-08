@@ -22,11 +22,30 @@ namespace
     }
     return true;
 }
+
+/// @brief 验证访客必须先清空本机状态且不能复用既有活动会话。
+/// @return 数据隔离策略符合预期时返回 true。
+[[nodiscard]] bool testGuestSessionIsolation()
+{
+    using MMM::UI::mayBindExistingSessionForCollaboration;
+    using MMM::UI::needsLocalStateCloseBeforeGuestJoin;
+
+    if ( needsLocalStateCloseBeforeGuestJoin(false, false) ||
+         !needsLocalStateCloseBeforeGuestJoin(true, false) ||
+         !needsLocalStateCloseBeforeGuestJoin(false, true) ||
+         !needsLocalStateCloseBeforeGuestJoin(true, true) ||
+         mayBindExistingSessionForCollaboration(false) ||
+         !mayBindExistingSessionForCollaboration(true) ) {
+        XERROR("Collaboration guest session isolation policy was incorrect");
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 运行协作入口项目要求回归测试。
 /// @return 全部断言通过时返回 0。
 int main()
 {
-    return testProjectRequirement() ? 0 : 1;
+    return testProjectRequirement() && testGuestSessionIsolation() ? 0 : 1;
 }

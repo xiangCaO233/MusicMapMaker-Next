@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -671,6 +672,12 @@ struct CmdSetCollaborationResources {
     std::unordered_map<std::string, std::string> pathRemap;
 };
 
+/// @brief 切换协作访客会话的离线只读状态。
+struct CmdSetCollaborationOfflineReadOnly {
+    /// @brief 为 true 时取消未完成交互并只允许查看类命令。
+    bool readOnly{ false };
+};
+
 /**
  * @brief 从模板创建谱面时可复制的数据类别。
  */
@@ -792,12 +799,55 @@ using LogicCommand = std::variant<
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
-    CmdSetCollaborationResources, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
+
+/// @brief 判断命令是否会修改谱面、项目资源或把当前谱面写入文件。
+/// @param command 待检查的逻辑命令。
+/// @return 离线协作谱面必须拦截该命令时返回 true。
+/// @warning 命令入队热路径：只执行一次 variant 类型分派，不访问谱面或文件系统。
+[[nodiscard]] inline bool isBeatmapEditingCommand(const LogicCommand& command)
+{
+    return std::visit(
+        [](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
+                return !value.authoritativeRemote;
+            }
+            const bool readOnlyCommand =
+                std::is_same_v<T, CmdUpdateEditorConfig> ||
+                std::is_same_v<T, CmdUpdateViewport> ||
+                std::is_same_v<T, CmdSetPlayState> ||
+                std::is_same_v<T, CmdSetHoveredEntity> ||
+                std::is_same_v<T, CmdSelectEntity> ||
+                std::is_same_v<T, CmdSetMousePosition> ||
+                std::is_same_v<T, CmdStartMarquee> ||
+                std::is_same_v<T, CmdUpdateMarquee> ||
+                std::is_same_v<T, CmdEndMarquee> ||
+                std::is_same_v<T, CmdRemoveMarqueeAt> ||
+                std::is_same_v<T, CmdSeek> ||
+                std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                std::is_same_v<T, CmdSetKeySoundTrackMute> ||
+                std::is_same_v<T, CmdSetKeySoundTrackGain> ||
+                std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
+                std::is_same_v<T, CmdChangeTool> ||
+                std::is_same_v<T, CmdSetBrushNoteColor> ||
+                std::is_same_v<T, CmdSetBrushNotePalette> ||
+                std::is_same_v<T, CmdSetBrushAudioResource> ||
+                std::is_same_v<T, CmdCopy> || std::is_same_v<T, CmdSelectAll> ||
+                std::is_same_v<T, CmdScroll> ||
+                std::is_same_v<T, CmdPanCanvas> ||
+                std::is_same_v<T, CmdSetCollaborationResources> ||
+                std::is_same_v<T, CmdSetCollaborationOfflineReadOnly>;
+            return !readOnlyCommand;
+        },
+        command);
+}
 
 }  // namespace MMM::Logic

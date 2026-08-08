@@ -120,7 +120,12 @@ public:
     /// @warning UI 热路径低频分支：只在弹窗打开时绘制少量文本和按钮。
     void renderTemporaryProjectPopups(float dpiScale, ImGuiViewport* viewport);
 
-    /// @brief 处理临时项目提示和保存结果队列。
+    /// @brief 渲染协作项目隔离与离线只读提示弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径低频分支：只在收到拦截事件时打开并绘制固定内容。
+    void renderCollaborationSafetyPopups(float dpiScale);
+
+    /// @brief 处理临时项目、协作安全提示和保存结果队列。
     /// @warning UI 热路径：每帧只消费少量跨线程 UI 事件载荷。
     void consumeTemporaryProjectQueues();
 
@@ -184,6 +189,10 @@ public:
     bool m_exitAfterTemporaryProjectSave{ false };
     /// @brief 临时项目退出弹窗是否已经确认允许本次窗口关闭。
     bool m_temporaryProjectExitConfirmed{ false };
+    /// @brief 是否在下一帧显示协作访客禁止打开本机项目提示。
+    bool m_showCollaborationProjectOpenBlockedModal{ false };
+    /// @brief 是否在下一帧显示离线房间谱面只读提示。
+    bool m_showCollaborationOfflineEditBlockedModal{ false };
 };
 
 }  // namespace MMM::UI

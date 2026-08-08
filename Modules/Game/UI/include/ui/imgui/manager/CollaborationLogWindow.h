@@ -76,6 +76,10 @@ private:
     const ::MMM::Project* m_hostResourceProject{ nullptr };
     /// @brief 最近一次生成房主资源清单时使用的谱面观察指针，仅用于身份比较。
     const ::MMM::BeatMap* m_hostResourceBeatmap{ nullptr };
+    /// @brief 当前固定会话是否由访客收到的房主快照创建。
+    bool m_boundSessionIsGuest{ false };
+    /// @brief 当前控制器是否已接管访客在线期间的本机项目打开门闩。
+    bool m_guestProjectGateHeld{ false };
     /// @brief 独立日志窗口当前是否可见。
     bool m_windowVisible = false;
     /// @brief 上一帧房间是否处于活动状态。
