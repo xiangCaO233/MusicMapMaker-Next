@@ -131,6 +131,8 @@ jobs:
       - name: ci->Checkout Repository
         uses: actions/checkout@v6
         with:
+          # 自托管 macOS Runner 保留被 Git 忽略的 build_ci_macos_arm64 增量缓存。
+          clean: false
           lfs: true
           submodules: recursive
 
