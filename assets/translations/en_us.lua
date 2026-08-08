@@ -137,6 +137,8 @@ return {
 	["ui.pgo.upload.runtime_fmt"] = "Runtime: {} seconds",
 
 	["canvas.editor"] = "Editor",
+	["canvas.collaboration.online"] = "(Online)",
+	["canvas.collaboration.offline"] = "(Offline)",
 	["canvas.preview"] = "Preview",
 	["canvas.timeline"] = "Timeline",
 

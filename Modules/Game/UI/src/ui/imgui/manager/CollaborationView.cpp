@@ -331,8 +331,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                       .defaultCreator;
                 config.roomName = m_roomName.data();
                 config.endpoint = m_room->serverEndpoint();
-                m_room->prepareHostResources(
-                    *project, *activeSession->getContext().currentBeatmap);
                 static_cast<void>(m_room->startHost(std::move(config)));
                 showLogWindow(sourceManager);
             }

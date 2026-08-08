@@ -752,8 +752,75 @@ bool testOneGuestResourceSync()
     std::vector<std::uint8_t> actual(expected.size());
     input.read(reinterpret_cast<char*>(actual.data()),
                static_cast<std::streamsize>(actual.size()));
-    return input.gcount() == static_cast<std::streamsize>(actual.size()) &&
-           actual == expected;
+    if ( input.gcount() != static_cast<std::streamsize>(actual.size()) ||
+         actual != expected ) {
+        return false;
+    }
+
+    const auto replacementRoot = directory.path() / "replacement-host";
+    const auto replacementPath = replacementRoot / "audio/replacement.bin";
+    std::filesystem::create_directories(replacementPath.parent_path(), error);
+    if ( error ) return false;
+    std::vector<std::uint8_t> replacementExpected(90017U);
+    for ( std::size_t index = 0; index < replacementExpected.size(); ++index ) {
+        replacementExpected[index] =
+            static_cast<std::uint8_t>((index * 41U + 17U) % 253U);
+    }
+    std::ofstream replacementOutput(replacementPath,
+                                    std::ios::binary | std::ios::trunc);
+    replacementOutput.write(
+        reinterpret_cast<const char*>(replacementExpected.data()),
+        static_cast<std::streamsize>(replacementExpected.size()));
+    replacementOutput.close();
+    if ( !replacementOutput ) return false;
+
+    MMM::Project replacementProject;
+    replacementProject.m_projectRoot = replacementRoot;
+    replacementProject.m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "replacement-main-id",
+        .m_path = "audio/replacement.bin",
+        .m_type = MMM::AudioTrackType::Main,
+    });
+    BeatMap replacementBeatmap;
+    replacementBeatmap.m_audioSamples.emplace_back().m_audioResourceId =
+        "replacement-main-id";
+    receivedBundle.reset();
+    host.prepareHostResources(replacementProject, replacementBeatmap);
+    if ( !pumpUntil(
+             server,
+             host,
+             guests,
+             [&]() {
+                 return receivedBundle && receivedBundle->project &&
+                        receivedBundle->project->m_audioResources.size() ==
+                            1U &&
+                        receivedBundle->project->m_audioResources.front()
+                                .m_id == "replacement-main-id";
+             }) ||
+         countLogs(host, CollaborationLogEventType::ResourceManifest) != 2U ||
+         countLogs(*guests.front(),
+                   CollaborationLogEventType::ResourceCompleted) != 2U ) {
+        return false;
+    }
+
+    const auto& replacementResource =
+        receivedBundle->project->m_audioResources.front();
+    std::ifstream replacementInput(
+        receivedBundle->project->m_projectRoot / replacementResource.m_path,
+        std::ios::binary | std::ios::ate);
+    if ( !replacementInput ||
+         replacementInput.tellg() !=
+             static_cast<std::streamoff>(replacementExpected.size()) ) {
+        return false;
+    }
+    replacementInput.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> replacementActual(replacementExpected.size());
+    replacementInput.read(
+        reinterpret_cast<char*>(replacementActual.data()),
+        static_cast<std::streamsize>(replacementActual.size()));
+    return replacementInput.gcount() ==
+               static_cast<std::streamsize>(replacementActual.size()) &&
+           replacementActual == replacementExpected;
 }
 
 /// @brief 驱动公网目录、房主和访客，直到条件满足或超时。

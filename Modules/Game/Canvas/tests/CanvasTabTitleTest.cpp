@@ -41,6 +41,18 @@ bool testPlaceholderIgnoresDirtyState()
            "canvas.editor";
 }
 
+/// @brief 验证协作状态位于谱面名称前，脏标志仍固定在整个标签最前方。
+/// @return 在线与离线标签均按预期组合时返回 true。
+bool testCollaborationStatusPrecedesBeatmapName()
+{
+    return MMM::Canvas::makeCanvasTabTitle(
+               "canvas.editor", true, "Online Map", false, "(在线)") ==
+               "(在线) Online Map" &&
+           MMM::Canvas::makeCanvasTabTitle(
+               "canvas.editor", true, "Offline Map", true, "(离线)") ==
+               "* (离线) Offline Map";
+}
+
 }  // namespace
 
 /// @brief 覆盖主画布标签的标题和脏标志布局规则。
@@ -50,7 +62,8 @@ int main()
     return testDirtyLongTitleKeepsLeadingMarker() &&
                    testCleanTitleHasNoMarker() &&
                    testDirtyUnnamedBeatmapKeepsMarker() &&
-                   testPlaceholderIgnoresDirtyState()
+                   testPlaceholderIgnoresDirtyState() &&
+                   testCollaborationStatusPrecedesBeatmapName()
                ? 0
                : 1;
 }

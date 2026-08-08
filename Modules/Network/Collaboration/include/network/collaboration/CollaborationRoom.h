@@ -157,7 +157,8 @@ public:
     /// @param callback UI 线程消费的资源包回调。
     void setResourceBundleCallback(ResourceBundleCallback callback);
 
-    /// @brief 在开房前异步准备当前谱面引用的项目资源。
+    /// @brief
+    /// 异步准备当前谱面引用的项目资源；房主换谱时可再次调用并下发新清单。
     /// @param project 当前房主项目。
     /// @param beatmap 当前房间谱面。
     void prepareHostResources(const ::MMM::Project& project,

@@ -136,6 +136,8 @@ return {
 	["ui.pgo.upload.runtime_fmt"] = "本次运行时长：{} 秒",
 
 	["canvas.editor"] = "编辑器",
+	["canvas.collaboration.online"] = "(在线)",
+	["canvas.collaboration.offline"] = "(离线)",
 	["canvas.preview"] = "预览",
 	["canvas.timeline"] = "时间线",
 

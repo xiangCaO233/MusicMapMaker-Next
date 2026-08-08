@@ -13,6 +13,12 @@ struct CollaborationLogEntry;
 struct CollaborationResourceBundle;
 }  // namespace MMM::Network::Collaboration
 
+namespace MMM
+{
+class BeatMap;
+class Project;
+}  // namespace MMM
+
 namespace MMM::Logic
 {
 class BeatmapSession;
@@ -52,6 +58,10 @@ private:
 
     /// @brief 根据房间生命周期绑定或解除本次协作使用的固定谱面会话。
     void updateSessionBinding();
+    /// @brief 房主切换项目或谱面后重新生成并下发资源清单。
+    /// @warning UI 热路径：普通帧只比较两个观察指针；仅身份变化的低频分支
+    /// 会遍历当前谱面资源引用并启动后台清单生成。
+    void refreshHostResources();
     /// @brief 将已经完成的资源包排队绑定到固定协作会话。
     void bindPendingResources();
 
@@ -62,6 +72,10 @@ private:
     /// @brief 早于首个谱面快照完成的访客资源包。
     std::shared_ptr<Network::Collaboration::CollaborationResourceBundle>
         m_pendingResourceBundle;
+    /// @brief 最近一次生成房主资源清单时使用的项目观察指针，仅用于身份比较。
+    const ::MMM::Project* m_hostResourceProject{ nullptr };
+    /// @brief 最近一次生成房主资源清单时使用的谱面观察指针，仅用于身份比较。
+    const ::MMM::BeatMap* m_hostResourceBeatmap{ nullptr };
     /// @brief 独立日志窗口当前是否可见。
     bool m_windowVisible = false;
     /// @brief 上一帧房间是否处于活动状态。

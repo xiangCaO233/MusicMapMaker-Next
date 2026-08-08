@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "network/collaboration/CollaborationRoom.h"
@@ -138,15 +139,44 @@ void CollaborationLogWindow::updateSessionBinding()
         if ( bound ) bound->setMutationObserver(nullptr);
         m_boundSession.reset();
         m_pendingResourceBundle.reset();
+        m_hostResourceProject = nullptr;
+        m_hostResourceBeatmap = nullptr;
         return;
     }
-    if ( bound ) return;
+    if ( bound ) {
+        refreshHostResources();
+        return;
+    }
 
     auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
     active->setMutationObserver(m_room, m_room->isHost());
     m_boundSession = active;
+    refreshHostResources();
     bindPendingResources();
+}
+
+void CollaborationLogWindow::refreshHostResources()
+{
+    if ( !m_room->isHost() ||
+         m_room->state() !=
+             Network::Collaboration::CollaborationRoomState::Hosting ) {
+        return;
+    }
+
+    auto session = m_boundSession.lock();
+    if ( !session || !session->getContext().currentBeatmap ) return;
+    auto& engine  = Logic::EditorEngine::instance();
+    auto* project = engine.getCurrentProject();
+    auto* beatmap = session->getContext().currentBeatmap.get();
+    if ( !project || (project == m_hostResourceProject &&
+                      beatmap == m_hostResourceBeatmap) ) {
+        return;
+    }
+
+    m_hostResourceProject = project;
+    m_hostResourceBeatmap = beatmap;
+    m_room->prepareHostResources(*project, *beatmap);
 }
 
 void CollaborationLogWindow::bindPendingResources()

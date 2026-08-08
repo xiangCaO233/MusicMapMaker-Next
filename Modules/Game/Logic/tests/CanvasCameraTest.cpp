@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -1852,6 +1853,37 @@ bool testCollaborationResourcesRouteThroughSession()
     if ( context.collaborationProject != project ||
          context.collaborationPathRemap != pathRemap ) {
         XERROR("Collaboration resources command was not routed to session");
+        return false;
+    }
+
+    context.isAudioTimelineDescriptorDirty           = false;
+    context.isAudioTimelineActivationPending         = false;
+    context.isAudioTimelineFingerprintPublishPending = false;
+    auto replacementProject           = std::make_shared<MMM::Project>();
+    replacementProject->m_projectRoot = "replacement-collaboration-cache";
+    replacementProject->m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "replacement-main",
+        .m_path = "audio/new.ogg",
+        .m_type = MMM::AudioTrackType::Main,
+    });
+    context.currentBeatmap->m_audioSamples.emplace_back().m_audioResourceId =
+        "replacement-main";
+    const std::unordered_map<std::string, std::string> replacementRemap{
+        { "audio/new.ogg", "files/new-audio-hash.ogg" },
+    };
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetCollaborationResources{
+            .project   = replacementProject,
+            .pathRemap = replacementRemap,
+        },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    if ( context.collaborationProject != replacementProject ||
+         context.collaborationPathRemap != replacementRemap ||
+         !MMM::Logic::audioTimelineDescriptorReferencesResource(
+             context.audioTimelineDescriptor, "replacement-main") ||
+         !context.isAudioTimelineActivationPending ) {
+        XERROR("Replacement collaboration resources did not rebind audio");
         return false;
     }
 

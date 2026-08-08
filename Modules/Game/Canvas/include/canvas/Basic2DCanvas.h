@@ -356,6 +356,13 @@ private:
     /// @brief 已经应用到逻辑相机的远端视口状态序号。
     std::uint64_t m_lastFollowedViewportSequence{ 0 };
 
+    /// @brief 当前主画布是否曾在房间生命周期开始时绑定到协作会话。
+    bool m_isCollaborationCanvas{ false };
+
+    /// @brief 上一帧是否观察到非 Idle
+    /// 的房间生命周期，用于只标记启动时的活动画布。
+    bool m_wasCollaborationRoomLifecycleActive{ false };
+
 private:
     /// @brief 当快照背景路径或类型变化时加载或清理背景资源。
     /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
