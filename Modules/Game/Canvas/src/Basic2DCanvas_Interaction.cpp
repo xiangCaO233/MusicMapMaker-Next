@@ -1268,12 +1268,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
     rebuildNoteLayoutInstances(currentSnapshot);
 
-    auto& appConfig = Config::AppConfig::instance();
-    auto  layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
-    const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
-    const float worldPointerX = pointerX - cameraOffsetX;
-    float       judgmentLinePosition =
-        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
+    auto&      appConfig = Config::AppConfig::instance();
+    const auto keyCount  = currentSnapshot.hasBeatmap
+                               ? std::max(currentSnapshot.trackCount, 1)
+                               : 0;
+    auto       layout    = sanitizeTrackLayout(
+        appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
+    const float cameraOffsetX        = currentSnapshot.canvasHorizontalOffsetX;
+    const float worldPointerX        = pointerX - cameraOffsetX;
+    float       judgmentLinePosition = sanitizeJudgmentLinePosition(
+        appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
     const float dpiScale                 = appConfig.getWindowContentScale();
     const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
     const float moveHandleRadius         = std::max(12.0f, 15.0f * dpiScale);
@@ -1330,9 +1334,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
               it != currentSnapshot.canvasComponentInstances.rend();
               ++it ) {
-            const auto& placement =
-                appConfig.getVisualConfig().canvasComponents.placement(
-                    it->type);
+            const auto& placement = appConfig.getVisualConfig()
+                                        .canvasComponentsForKeyCount(keyCount)
+                                        .placement(it->type);
             if ( !placement.visible ) continue;
 
             const auto bounds = canvasComponentContentBounds(*it);
@@ -1404,12 +1408,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
             const auto placement =
-                appConfig.getVisualConfig().canvasComponents.resolvedPlacement(
-                    *hoveredComponent,
-                    hoveredComponentInstance->instanceIndex,
-                    currentSnapshot.trackCount,
-                    layout.left,
-                    layout.right);
+                appConfig.getVisualConfig()
+                    .canvasComponentsForKeyCount(keyCount)
+                    .resolvedPlacement(*hoveredComponent,
+                                       hoveredComponentInstance->instanceIndex,
+                                       currentSnapshot.trackCount,
+                                       layout.left,
+                                       layout.right);
             m_canvasComponentDragStart = placement;
             m_canvasComponentDragStartBounds =
                 canvasComponentContentBounds(*hoveredComponentInstance);
@@ -1419,7 +1424,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 hoveredComponentInstance->instanceIndex;
             m_synchronizedKpsTransformStarts.clear();
             const auto& canvasComponents =
-                appConfig.getVisualConfig().canvasComponents;
+                appConfig.getVisualConfig().canvasComponentsForKeyCount(
+                    keyCount);
             const bool draggedKpsTrack =
                 hoveredComponentInstance->instanceIndex >= 0;
             const bool captureAllKpsMove =
@@ -1502,8 +1508,10 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( m_canvasComponentDragTarget.has_value() &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         constexpr float componentPositionEpsilon = 1e-6f;
-        auto& canvasComponents = appConfig.getVisualConfig().canvasComponents;
-        auto& component        = canvasComponents.editablePlacement(
+        auto&           canvasComponents =
+            appConfig.getVisualConfig().editableCanvasComponentsForKeyCount(
+                keyCount);
+        auto& component = canvasComponents.editablePlacement(
             *m_canvasComponentDragTarget,
             m_canvasComponentDragInstanceIndex,
             currentSnapshot.trackCount,
@@ -1834,11 +1842,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             const float     candidatePosition =
                 sanitizeJudgmentLinePosition(normalizedY);
             const float currentPosition =
-                appConfig.getVisualConfig().judgeline_pos;
+                appConfig.getVisualConfig().judgmentLinePositionForKeyCount(
+                    keyCount);
             if ( !std::isfinite(currentPosition) ||
                  std::abs(currentPosition - candidatePosition) >
                      positionEpsilon ) {
-                appConfig.getVisualConfig().judgeline_pos = candidatePosition;
+                appConfig.getVisualConfig()
+                    .editableJudgmentLinePositionForKeyCount(keyCount) =
+                    candidatePosition;
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
@@ -1869,7 +1880,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 m_canvasComponentSnapTargetsX.clear();
                 m_canvasComponentSnapTargetsY.clear();
                 const auto& canvasComponents =
-                    appConfig.getVisualConfig().canvasComponents;
+                    appConfig.getVisualConfig().canvasComponentsForKeyCount(
+                        keyCount);
                 const std::size_t targetObjectCount =
                     currentSnapshot.canvasComponentInstances.size();
                 m_canvasComponentSnapTargetsX.reserve(targetObjectCount * 3U +
@@ -1922,14 +1934,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
 
             constexpr float layoutEpsilon = 1e-6f;
-            const auto&     current = appConfig.getVisualConfig().trackLayout;
-            const bool      changed =
+            const auto&     current =
+                appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount);
+            const bool changed =
                 std::abs(current.left - candidate.left) > layoutEpsilon ||
                 std::abs(current.top - candidate.top) > layoutEpsilon ||
                 std::abs(current.right - candidate.right) > layoutEpsilon ||
                 std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
             if ( changed ) {
-                appConfig.getVisualConfig().trackLayout = candidate;
+                appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
+                    keyCount) = candidate;
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
@@ -1946,9 +1960,10 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         finishLayoutEditing();
     }
 
-    layout = sanitizeTrackLayout(appConfig.getVisualConfig().trackLayout);
-    judgmentLinePosition =
-        sanitizeJudgmentLinePosition(appConfig.getVisualConfig().judgeline_pos);
+    layout = sanitizeTrackLayout(
+        appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
+    judgmentLinePosition = sanitizeJudgmentLinePosition(
+        appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
     const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2 canvasMax{ canvasScreenX + targetWidth,
                             canvasScreenY + targetHeight };
@@ -2072,8 +2087,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                       IM_COL32(20, 30, 40, 255),
                       arrowThickness);
 
-    const auto& canvasComponents = appConfig.getVisualConfig().canvasComponents;
-    const bool  groupAllKpsPositions =
+    const auto& canvasComponents =
+        appConfig.getVisualConfig().canvasComponentsForKeyCount(keyCount);
+    const bool groupAllKpsPositions =
         canvasComponents.kps.visible &&
         canvasComponents.syncAllKpsComponentPositions;
     const bool groupKpsTrackPositions =
@@ -2191,9 +2207,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
-        const auto& placement =
-            appConfig.getVisualConfig().canvasComponents.placement(
-                instance.type);
+        const auto& placement = appConfig.getVisualConfig()
+                                    .canvasComponentsForKeyCount(keyCount)
+                                    .placement(instance.type);
         if ( !placement.visible ) continue;
 
         const auto bounds = canvasComponentContentBounds(instance);
@@ -2277,7 +2293,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                             ImGui::IsMouseDragging(ImGuiMouseButton_Left);
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
-    const auto& layout = visual.trackLayout;
+    const auto& layout =
+        visual.trackLayoutForKeyCount(currentSnapshot->trackCount);
     if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
          targetWidth > 0.0F && targetHeight > 0.0F ) {
         const auto projection = Logic::calculateCanvasLaneProjection(
@@ -2793,17 +2810,24 @@ void Basic2DCanvasInteraction::handleInteractions(
         for ( auto it = currentSnapshot->hitboxes.rbegin();
               it != currentSnapshot->hitboxes.rend();
               ++it ) {
-            if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
-                 localMousePos.y >= it->y &&
-                 localMousePos.y <= it->y + it->h ) {
-                candidates.push_back(
-                    { it->entity, it->kind, it->part, it->subIndex });
+            const auto hitbox = Logic::scaleInteractionHitbox(
+                *it,
+                currentSnapshot->interactionHitboxScaleX,
+                currentSnapshot->interactionHitboxScaleY);
+            if ( localMousePos.x >= hitbox.x &&
+                 localMousePos.x <= hitbox.x + hitbox.w &&
+                 localMousePos.y >= hitbox.y &&
+                 localMousePos.y <= hitbox.y + hitbox.h ) {
+                candidates.push_back({ hitbox.entity,
+                                       hitbox.kind,
+                                       hitbox.part,
+                                       hitbox.subIndex });
                 layerSignature +=
-                    std::to_string(
-                        static_cast<uint32_t>(entt::to_integral(it->entity))) +
-                    ":" + std::to_string(static_cast<uint32_t>(it->kind)) +
-                    ":" + std::to_string(static_cast<uint32_t>(it->part)) +
-                    ":" + std::to_string(it->subIndex) + ";";
+                    std::to_string(static_cast<uint32_t>(
+                        entt::to_integral(hitbox.entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(hitbox.kind)) +
+                    ":" + std::to_string(static_cast<uint32_t>(hitbox.part)) +
+                    ":" + std::to_string(hitbox.subIndex) + ";";
             }
         }
     }

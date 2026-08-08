@@ -1,8 +1,11 @@
 #include "logic/ProjectDirectoryWatcher.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
 
 #include <chrono>
+#include <ice/thread/ThreadPool.hpp>
+#include <thread>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -94,6 +97,12 @@ void ProjectDirectoryWatcher::start(const std::filesystem::path& path)
 {
     stop();
 
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        XERROR("Directory Watcher: Runtime thread pool is not initialized.");
+        return;
+    }
+
     {
         /// @brief 保护监听状态切换和平台退出事件创建的互斥锁。
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -109,8 +118,10 @@ void ProjectDirectoryWatcher::start(const std::filesystem::path& path)
 #endif
     }
 
-    m_thread =
-        std::thread(&ProjectDirectoryWatcher::watcherThreadLoop, this, path);
+    m_stopSource     = std::stop_source{};
+    const auto token = m_stopSource.get_token();
+    m_workerFuture   = appThreadPool->enqueue(
+        [this, path, token]() { watcherThreadLoop(path, token); });
     XINFO("Directory Watcher: Started monitoring directory: {}",
           Config::pathToUtf8(path));
 }
@@ -120,14 +131,14 @@ void ProjectDirectoryWatcher::stop()
 {
     /// @brief 停止前监听器是否处于运行状态。
     bool wasRunning = false;
-    /// @brief 停止前监听线程是否仍可 join。
-    bool hadThread = false;
+    /// @brief 停止前监听任务是否仍有效。
+    bool hadWorker = false;
 
     {
         /// @brief 保护监听状态切换和平台退出事件触发的互斥锁。
         std::lock_guard<std::mutex> lock(m_mutex);
         wasRunning = m_running.exchange(false, std::memory_order_acq_rel);
-        hadThread  = m_thread.joinable();
+        hadWorker  = m_workerFuture.valid();
 #ifdef _WIN32
         if ( wasRunning && m_exitEvent &&
              m_exitEvent != INVALID_HANDLE_VALUE ) {
@@ -137,8 +148,10 @@ void ProjectDirectoryWatcher::stop()
 #endif
     }
 
-    if ( m_thread.joinable() ) {
-        m_thread.join();
+    m_stopSource.request_stop();
+    if ( m_workerFuture.valid() ) {
+        m_workerFuture.wait();
+        m_workerFuture = std::future<void>{};
     }
 
     // 在线程完全退出并 Join 之后，再安全地在主线程清理句柄，防止重叠 I/O
@@ -158,7 +171,7 @@ void ProjectDirectoryWatcher::stop()
 #endif
     }
 
-    if ( wasRunning || hadThread ) {
+    if ( wasRunning || hadWorker ) {
         XINFO("Directory Watcher: Stopped monitoring.");
     }
 }
@@ -187,7 +200,9 @@ bool ProjectDirectoryWatcher::isRelevantProjectPathChange(
 
 /// @brief 文件夹监听线程的主循环。
 /// @param watchPath 需要递归监听的项目目录路径。
-void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
+/// @param stopToken 共享线程池任务的停止令牌。
+void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath,
+                                                std::stop_token       stopToken)
 {
 #ifdef _WIN32
     /// @brief Win32 API 需要使用的宽字符目录路径。
@@ -234,7 +249,8 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
     /// @brief 停止监听和目录变更两个事件的等待数组。
     HANDLE waitHandles[2] = { static_cast<HANDLE>(m_exitEvent), changeEvent };
 
-    while ( m_running.load(std::memory_order_acquire) ) {
+    while ( m_running.load(std::memory_order_acquire) &&
+            !stopToken.stop_requested() ) {
         ResetEvent(changeEvent);
 
         /// @brief 本次目录变更读取返回的字节数。
@@ -310,7 +326,8 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath)
     DirectoryPollingSnapshot previousSnapshot;
     (void)collectDirectoryPollingSnapshot(watchPath, previousSnapshot);
 
-    while ( m_running.load(std::memory_order_acquire) ) {
+    while ( m_running.load(std::memory_order_acquire) &&
+            !stopToken.stop_requested() ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         DirectoryPollingSnapshot currentSnapshot;

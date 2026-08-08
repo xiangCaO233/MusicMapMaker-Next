@@ -33,6 +33,105 @@ struct Rect {
     [[nodiscard]] float bottom() const { return y + height; }
 };
 
+/// @brief 项目音频工具画布允许的最小相机倍率。
+inline constexpr float MINIMUM_CAMERA_ZOOM = 0.5F;
+
+/// @brief 项目音频工具画布允许的最大相机倍率。
+inline constexpr float MAXIMUM_CAMERA_ZOOM = 4.0F;
+
+/// @brief 单格滚轮对应的相机倍率。
+inline constexpr float CAMERA_ZOOM_STEP = 1.2F;
+
+/// @brief 围绕鼠标缩放项目音频画布后的相机状态。
+struct CameraZoomResult {
+    /// @brief 应用范围限制后的画布倍率。
+    float zoom{ 1.0F };
+
+    /// @brief 保持鼠标锚点所需的水平滚动像素。
+    float scrollX{ 0.0F };
+
+    /// @brief 保持鼠标锚点所需的垂直滚动像素。
+    float scrollY{ 0.0F };
+};
+
+/// @brief 将画布相机缩放到指定倍率并保持鼠标锚点。
+/// @param currentZoom 当前画布倍率。
+/// @param targetZoom 目标画布倍率。
+/// @param dpiScale 当前窗口内容缩放。
+/// @param scrollX 当前水平滚动像素。
+/// @param scrollY 当前垂直滚动像素。
+/// @param pointerX 鼠标相对可见画布左边界的像素坐标。
+/// @param pointerY 鼠标相对可见画布上边界的像素坐标。
+/// @return 新倍率与保持鼠标下逻辑坐标所需的滚动位置。
+/// @warning UI 热路径：仅在 Ctrl+滚轮或缩放滑条变化时执行常量数学运算，
+/// 不得引入分配。
+[[nodiscard]] inline CameraZoomResult zoomCameraToPointer(
+    float currentZoom, float targetZoom, float dpiScale, float scrollX,
+    float scrollY, float pointerX, float pointerY)
+{
+    const float safeZoom =
+        std::isfinite(currentZoom)
+            ? std::clamp(currentZoom, MINIMUM_CAMERA_ZOOM, MAXIMUM_CAMERA_ZOOM)
+            : 1.0F;
+    const float safeDpiScale =
+        std::isfinite(dpiScale) ? std::max(0.01F, dpiScale) : 1.0F;
+    const float safeScrollX =
+        std::isfinite(scrollX) ? std::max(0.0F, scrollX) : 0.0F;
+    const float safeScrollY =
+        std::isfinite(scrollY) ? std::max(0.0F, scrollY) : 0.0F;
+    const float nextZoom =
+        std::isfinite(targetZoom)
+            ? std::clamp(targetZoom, MINIMUM_CAMERA_ZOOM, MAXIMUM_CAMERA_ZOOM)
+            : safeZoom;
+    if ( std::abs(nextZoom - safeZoom) <= 1e-6F ) {
+        return { safeZoom, safeScrollX, safeScrollY };
+    }
+
+    const float safePointerX = std::isfinite(pointerX) ? pointerX : 0.0F;
+    const float safePointerY = std::isfinite(pointerY) ? pointerY : 0.0F;
+    const float oldScale     = safeDpiScale * safeZoom;
+    const float nextScale    = safeDpiScale * nextZoom;
+    const float anchorX      = (safeScrollX + safePointerX) / oldScale;
+    const float anchorY      = (safeScrollY + safePointerY) / oldScale;
+    return {
+        nextZoom,
+        std::max(0.0F, anchorX * nextScale - safePointerX),
+        std::max(0.0F, anchorY * nextScale - safePointerY),
+    };
+}
+
+/// @brief 按滚轮增量围绕鼠标位置缩放画布相机。
+/// @param currentZoom 当前画布倍率。
+/// @param wheelDelta 本帧垂直滚轮增量，正值放大、负值缩小。
+/// @param dpiScale 当前窗口内容缩放。
+/// @param scrollX 当前水平滚动像素。
+/// @param scrollY 当前垂直滚动像素。
+/// @param pointerX 鼠标相对可见画布左边界的像素坐标。
+/// @param pointerY 鼠标相对可见画布上边界的像素坐标。
+/// @return 新倍率与保持鼠标下逻辑坐标所需的滚动位置。
+/// @warning UI 热路径：仅在 Ctrl+滚轮触发时执行常量数学运算，不得引入分配。
+[[nodiscard]] inline CameraZoomResult zoomCameraAtPointer(
+    float currentZoom, float wheelDelta, float dpiScale, float scrollX,
+    float scrollY, float pointerX, float pointerY)
+{
+    const float safeZoom =
+        std::isfinite(currentZoom)
+            ? std::clamp(currentZoom, MINIMUM_CAMERA_ZOOM, MAXIMUM_CAMERA_ZOOM)
+            : 1.0F;
+    if ( !std::isfinite(wheelDelta) || std::abs(wheelDelta) <= 1e-6F ) {
+        return zoomCameraToPointer(
+            safeZoom, safeZoom, dpiScale, scrollX, scrollY, pointerX, pointerY);
+    }
+    return zoomCameraToPointer(
+        safeZoom,
+        safeZoom * std::pow(CAMERA_ZOOM_STEP, wheelDelta),
+        dpiScale,
+        scrollX,
+        scrollY,
+        pointerX,
+        pointerY);
+}
+
 /// @brief 一个下层方块及其已有上层遮挡，用于校验新增方块后的可见面积。
 struct VisibilityConstraint {
     /// @brief 必须保留可见面积的下层方块。

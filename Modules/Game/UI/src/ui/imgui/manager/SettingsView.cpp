@@ -85,8 +85,9 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 30> labels{
+        const std::array<const char*, 31> labels{
             TR_CACHE("ui.settings.software.language").data(),
+            TR_CACHE("ui.settings.software.default_creator").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
             TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
             TR_CACHE("ui.settings.software.skin").data(),
@@ -224,9 +225,12 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Debug: {
-        const std::array<const char*, 2> labels{
+        const std::array<const char*, 5> labels{
             TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
-            TR_CACHE("ui.settings.debug.render_profile_logging").data()
+            TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
+            TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
+            TR_CACHE("ui.settings.debug.render_profile_logging").data(),
+            TR_CACHE("ui.settings.debug.rtc_diagnostic_logging").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
@@ -537,6 +541,16 @@ ImVec2 SettingsView::getMinWindowSize(float dpiScale) const
     return getLayoutMetrics(dpiScale).minWindowSize;
 }
 
+/// @brief 从持久化设置刷新默认 Creator 输入缓冲区。
+void SettingsView::refreshDefaultCreatorInputBuffer()
+{
+    m_defaultCreatorInputBuffer.fill('\0');
+    const auto creator = Config::normalizeCreatorIdentity(
+        Config::AppConfig::instance().getEditorSettings().defaultCreator);
+    std::copy(
+        creator.begin(), creator.end(), m_defaultCreatorInputBuffer.begin());
+}
+
 /// @brief 打开设置窗口并切换到指定设置页。
 /// @param tab 需要激活的设置页。
 void SettingsView::open(Event::SettingsTab tab)
@@ -546,6 +560,7 @@ void SettingsView::open(Event::SettingsTab tab)
     m_focusRequestFramesRemaining   = FOCUS_REQUEST_FRAME_COUNT;
     m_dockToCenterNextFrame         = true;
     m_availableSkinDirectoriesDirty = true;
+    refreshDefaultCreatorInputBuffer();
     if ( tab != Event::SettingsTab::Shortcut ) {
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -571,7 +586,7 @@ void SettingsView::update(UIManager* sourceManager)
     m_sourceManager = sourceManager;
 
     std::string windowName =
-        std::string(TR("title.settings_manager").data()) + "###SettingsWindow";
+        TR("title.settings_manager").toString() + "###SettingsWindow";
 
     ImGuiID dockId = 0;
     if ( m_dockToCenterNextFrame ) {

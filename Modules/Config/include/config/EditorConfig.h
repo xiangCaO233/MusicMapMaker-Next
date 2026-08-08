@@ -39,7 +39,8 @@ struct EditorConfig {
     }
 
     /// @brief 将背景与画布渲染选项恢复为应用默认配置。
-    /// @details 恢复填充模式、背景不透明度、暗化程度和分拍线透明度，
+    /// @details
+    /// 恢复填充模式、背景不透明度、暗化程度、分拍线透明度和检视分拍线延伸比例，
     /// 保留背景电平图配置。
     void resetBackgroundRenderingToDefaults()
     {
@@ -50,6 +51,8 @@ struct EditorConfig {
         visual.background.darken_ratio =
             defaults.visual.background.darken_ratio;
         visual.beatLineAlpha = defaults.visual.beatLineAlpha;
+        visual.hoverSubdivisionLineExtensionRatio =
+            defaults.visual.hoverSubdivisionLineExtensionRatio;
     }
 };
 

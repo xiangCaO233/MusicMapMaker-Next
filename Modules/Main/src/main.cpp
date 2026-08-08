@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/CreatorIdentity.h"
 #include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -14,16 +15,23 @@
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
+#include "network/collaboration/RtcDiagnosticLogging.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/utils/UIWidgetUtils.h"
+
+#include <fmt/core.h>
+#include <imgui.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
-#include <fmt/core.h>
-#include <imgui.h>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <string>
 #include <thread>
 #include <utility>
@@ -101,9 +109,8 @@ public:
     /// @warning 退出低频渲染路径：关闭软件时短暂执行，只读取进度快照并绘制 UI。
     void onUpdateUI() override
     {
-        const std::string popupId =
-            std::string(TR("ui.pgo.upload.title").data()) +
-            "###PgoShutdownUploadProgressModal";
+        const std::string popupId = TR("ui.pgo.upload.title").toString() +
+                                    "###PgoShutdownUploadProgressModal";
         ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
         const float dpiScale =
@@ -292,7 +299,14 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
     };
 
     AssetSyncTaskState taskState;
-    std::jthread       syncThread(
+    auto*              appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        Network::AssetSyncResult result;
+        result.status       = Network::AssetSyncStatus::kError;
+        result.errorMessage = "Runtime thread pool is not initialized";
+        return result;
+    }
+    auto syncFuture = appThreadPool->enqueue(
         [options = std::move(options), &taskState]() mutable {
             taskState.m_result = Network::AssetSyncService::sync(options);
             taskState.m_finished.store(true, std::memory_order_release);
@@ -309,7 +323,7 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     } while ( !taskState.m_finished.load(std::memory_order_acquire) );
 
-    syncThread.join();
+    syncFuture.wait();
     return std::move(taskState.m_result);
 }
 
@@ -530,16 +544,33 @@ int main(int argc, char* argv[])
     using namespace MMM;
     using namespace Config;
 
+    auto& appThreadPool = Runtime::AppThreadPool::instance();
+    appThreadPool.init();
+
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();
+    Network::Collaboration::setRtcDiagnosticLoggingEnabled(
+        AppConfig::instance().getEditorSettings().rtcDiagnosticLogging);
+    if ( const char* creatorOverride = std::getenv("MMM_CREATOR");
+         creatorOverride && creatorOverride[0] != '\0' ) {
+        const auto creator = normalizeCreatorIdentity(creatorOverride);
+        if ( !creator.empty() ) {
+            AppConfig::instance().getEditorSettings().defaultCreator = creator;
+            XINFO("Using isolated collaboration Creator: {}", creator);
+        }
+    }
 
     UI::SetInteractionFeedbackEnabled(false);
     const auto startupResult = Main::prepareStartupAssets();
     UI::SetInteractionFeedbackEnabled(true);
     if ( startupResult == Main::StartupPreparationResult::Cancelled ) {
+        appThreadPool.shutdown();
         return 0;
     }
-    if ( startupResult == Main::StartupPreparationResult::Failed ) return 1;
+    if ( startupResult == Main::StartupPreparationResult::Failed ) {
+        appThreadPool.shutdown();
+        return 1;
+    }
 
     if ( resetUnavailableFontPreferences(
              AppConfig::instance().getEditorSettings(),
@@ -563,6 +594,7 @@ int main(int argc, char* argv[])
         // 这里会打印 VKContext::get() 返回的初始化失败原因。
         XERROR("Start Failed, graphic enc initialize failed with:\n {}",
                gameLoop.g_vkContext.error());
+        appThreadPool.shutdown();
         return 1;
     }
 

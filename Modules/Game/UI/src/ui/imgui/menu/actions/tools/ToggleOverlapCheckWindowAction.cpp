@@ -410,7 +410,7 @@ private:
         if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
         std::string windowTitle =
-            std::string(TR("ui.tools.overlap_check_title").data()) +
+            TR("ui.tools.overlap_check_title").toString() +
             "###OverlapCheckWindow";
         const bool wasOpenBeforeBegin = m_showWindow;
         bool       opened = ImGui::Begin(windowTitle.c_str(), &m_showWindow);

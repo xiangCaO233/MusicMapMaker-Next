@@ -180,7 +180,7 @@ void MainMenuRecentProjectsItem::update(MainMenuContext& context)
 /// @warning UI 热路径低频分支：仅在最近项目子菜单展开时格式化显示文本。
 void MainMenuRecentProjectsItem::render(MainMenuContext& context)
 {
-    if ( !::MMM::UI::FeedbackBeginMenu(TR("ui.file.open_recent")) ) {
+    if ( !::MMM::UI::FeedbackBeginMenu(TR("ui.file.open_recent").data()) ) {
         return;
     }
 
@@ -188,7 +188,7 @@ void MainMenuRecentProjectsItem::render(MainMenuContext& context)
         Config::AppConfig::instance().getEditorConfig().recentProjects;
     if ( recent.empty() ) {
         ::MMM::UI::FeedbackMenuItem(
-            TR("ui.file.no_recent"), nullptr, false, false);
+            TR("ui.file.no_recent").data(), nullptr, false, false);
     } else {
         for ( size_t i = 0; i < recent.size(); ++i ) {
             const auto&           path = recent[i];

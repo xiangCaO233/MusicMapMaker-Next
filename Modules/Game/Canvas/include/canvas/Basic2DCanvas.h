@@ -185,6 +185,16 @@ private:
     /// @return 有效窗口内容缩放；无效配置回退为 1。
     [[nodiscard]] static float currentFontRasterScale();
 
+    /// @brief 发布本地主画布状态、应用跟随目标并绘制可点击的远端视野提示。
+    /// @param sourceManager 提供应用级协作房间观察入口的 UI 管理器。
+    /// @param canvasScreenPosition 主画布左上角屏幕坐标。
+    /// @param canvasSize 主画布逻辑像素尺寸。
+    /// @warning UI 热路径：活动主画布每帧调用；只遍历最多 8 个房间成员并绘制
+    /// ImGui 覆盖层，网络编码由房间层按配置频率节流。
+    void updateCollaborationViewports(UI::UIManager* sourceManager,
+                                      const ImVec2&  canvasScreenPosition,
+                                      const ImVec2&  canvasSize);
+
     /// @brief 画布名称
     std::string m_canvasName;
 
@@ -339,6 +349,19 @@ private:
 
     /// @brief 当前画布窗口最近一次更新时所在的 ImGui Dock 节点。
     ImGuiID m_lastDockId{ 0 };
+
+    /// @brief 上一帧从房间读取的列表跟随目标。
+    std::uint64_t m_lastFollowedPeerId{ 0 };
+
+    /// @brief 已经应用到逻辑相机的远端视口状态序号。
+    std::uint64_t m_lastFollowedViewportSequence{ 0 };
+
+    /// @brief 当前主画布是否曾在房间生命周期开始时绑定到协作会话。
+    bool m_isCollaborationCanvas{ false };
+
+    /// @brief 上一帧是否观察到非 Idle
+    /// 的房间生命周期，用于只标记启动时的活动画布。
+    bool m_wasCollaborationRoomLifecycleActive{ false };
 
 private:
     /// @brief 当快照背景路径或类型变化时加载或清理背景资源。

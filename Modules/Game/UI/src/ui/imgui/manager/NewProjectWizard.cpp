@@ -394,7 +394,7 @@ void NewProjectWizard::renderLocationStep()
 
     const std::string parentText =
         m_parentDirectory.empty()
-            ? std::string(TR("ui.wizard.new_project.parent.none").data())
+            ? TR("ui.wizard.new_project.parent.none").toString()
             : Config::pathToUtf8(m_parentDirectory);
     ImGui::TextUnformatted(TR("ui.wizard.new_project.parent").data());
     ImGui::Indent();
@@ -624,7 +624,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
     const std::string windowTitle =
-        std::string(TR("ui.wizard.new_project.title").data()) +
+        TR("ui.wizard.new_project.title").toString() +
         "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
         ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
@@ -689,13 +689,18 @@ void NewProjectWizard::close()
 
 void NewProjectWizard::reset()
 {
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+
     m_currentStep      = Step::ProjectInfo;
     m_folderNameEdited = false;
     copyToBuffer(m_titleBuf,
                  sizeof(m_titleBuf),
                  TR("ui.wizard.new_project.default_title").data());
     copyToBuffer(m_artistBuf, sizeof(m_artistBuf), "Unknown");
-    copyToBuffer(m_mapperBuf, sizeof(m_mapperBuf), "Unknown");
+    copyToBuffer(
+        m_mapperBuf,
+        sizeof(m_mapperBuf),
+        settings.defaultCreator.empty() ? "Unknown" : settings.defaultCreator);
     refreshFolderNameFromTitle();
     m_locationErrorText.clear();
     m_suppressFooterActionFrames = 0;
@@ -704,7 +709,6 @@ void NewProjectWizard::reset()
     m_colorPaletteSchemeName.clear();
     m_initialSideBarTab = SideBarTab::FileExplorer;
 
-    const auto& settings = Config::AppConfig::instance().getEditorSettings();
     if ( !settings.lastFilePickerPath.empty() ) {
         m_parentDirectory = Config::utf8ToPath(settings.lastFilePickerPath);
     } else {

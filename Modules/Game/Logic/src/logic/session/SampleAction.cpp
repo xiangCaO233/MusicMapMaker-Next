@@ -298,8 +298,8 @@ void BgmTrackCountAction::redo(SessionContext& ctx)
 std::string BgmTrackCountAction::getName() const
 {
     return m_afterBgmTrackCount > m_beforeBgmTrackCount
-               ? TR("ui.action.bgm_track.add").pStr
-               : TR("ui.action.bgm_track.remove").pStr;
+               ? TR("ui.action.bgm_track.add").data()
+               : TR("ui.action.bgm_track.remove").data();
 }
 
 }  // namespace MMM::Logic

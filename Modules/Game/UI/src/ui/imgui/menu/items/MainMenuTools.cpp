@@ -76,7 +76,7 @@ MainMenuId MainMenuTools::id() const
 const char* MainMenuTools::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.tools");
+    return TR("ui.tools").data();
 }
 
 /// @brief 遍历更新工具菜单项。

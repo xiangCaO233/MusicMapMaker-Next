@@ -1453,7 +1453,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::SetNextWindowSize(ImVec2(820, 450), ImGuiCond_FirstUseEver);
 
     std::string windowTitle =
-        std::string(TR("ui.timeline.timing_points_table.title").data()) +
+        TR("ui.timeline.timing_points_table.title").toString() +
         "###TimingPointsTableWindow";
     const bool wasOpenBeforeBegin = m_isTableWindowOpen;
     const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen);

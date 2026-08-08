@@ -15,6 +15,7 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "network/collaboration/CollaborationRoom.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/CanvasTabManager.h"
@@ -23,6 +24,8 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/BeatMapManagerView.h"
+#include "ui/imgui/manager/CollaborationLogWindow.h"
+#include "ui/imgui/manager/CollaborationView.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/NewProjectWizard.h"
@@ -46,6 +49,9 @@ using FrameLimitClock = std::chrono::steady_clock;
 
 /// @brief 限帧粗睡眠预留量，给操作系统调度精度留出少量余量。
 constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
+
+/// @brief GLFW 请求关闭后允许全部业务线程和后端正常收尾的最长时间。
+constexpr auto APPLICATION_SHUTDOWN_TIMEOUT = std::chrono::seconds(45);
 
 /// @brief 等待到目标帧时间点，避免用 yield 反复忙等。
 /// @warning 热路径等待：主渲染循环提前到达目标帧间隔时执行；只能包含
@@ -95,17 +101,29 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     auto sidebar_manager =
         m_uiManager.getView<UI::FloatingManagerUI>("SideBarManager");
     sidebar_manager->registerSubView(
-        TR("title.search_manager"),
-        std::make_unique<UI::SearchView>(TR("title.search_manager")));
+        TR("title.search_manager").toString(),
+        std::make_unique<UI::SearchView>(
+            TR("title.search_manager").toString()));
+    sidebar_manager->registerSubView(TR("title.file_manager").toString(),
+                                     std::make_unique<UI::FileManagerView>(
+                                         TR("title.file_manager").toString()));
+    sidebar_manager->registerSubView(TR("title.audio_manager").toString(),
+                                     std::make_unique<UI::AudioManagerView>(
+                                         TR("title.audio_manager").toString()));
     sidebar_manager->registerSubView(
-        TR("title.file_manager"),
-        std::make_unique<UI::FileManagerView>(TR("title.file_manager")));
+        TR("title.beatmap_manager").toString(),
+        std::make_unique<UI::BeatMapManagerView>(
+            TR("title.beatmap_manager").toString()));
+    auto collaborationRoom =
+        std::make_shared<Network::Collaboration::CollaborationRoom>();
+    m_uiManager.setCollaborationRoom(collaborationRoom.get());
     sidebar_manager->registerSubView(
-        TR("title.audio_manager"),
-        std::make_unique<UI::AudioManagerView>(TR("title.audio_manager")));
-    sidebar_manager->registerSubView(
-        TR("title.beatmap_manager"),
-        std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
+        TR("title.collaboration_manager").toString(),
+        std::make_unique<UI::CollaborationView>(
+            TR("title.collaboration_manager").toString(), collaborationRoom));
+    m_uiManager.registerView("CollaborationLogWindow",
+                             std::make_unique<UI::CollaborationLogWindow>(
+                                 "CollaborationLogWindow", collaborationRoom));
 
     // 注册新建向导
     m_uiManager.registerView("NewProjectWizard",
@@ -119,7 +137,7 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
                              std::make_unique<UI::CanvasTabManager>());
 
     // 默认创建一个初始 Logo 占位画布
-    engine.createSession(nullptr, TR("canvas.welcome").pStr, true);
+    engine.createSession(nullptr, TR("canvas.welcome").data(), true);
 
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(
@@ -158,7 +176,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
     // 初始化窗口
     // VKContext 表面资源后续初始化
     if ( g_vkContext ) {
-        Runtime::AppThreadPool::instance().init();
+        auto& appThreadPool = Runtime::AppThreadPool::instance();
+        appThreadPool.init();
 
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
@@ -287,6 +306,10 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
             context.getRenderer().render(window, graphicUserHooks);
         }
 
+        appThreadPool.armApplicationShutdownWatchdog(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                APPLICATION_SHUTDOWN_TIMEOUT));
+
         // 保存当前项目工作区和项目配置
         m_uiManager.captureProjectWorkspaceState();
         Logic::EditorEngine::instance().saveProject();
@@ -313,7 +336,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
         (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
         context.release();
-        Runtime::AppThreadPool::instance().shutdown();
+        appThreadPool.shutdown();
+        appThreadPool.completeApplicationShutdownWatchdog();
         return EXIT_NORMAL;
     } else {
         return EXIT_WINDOW_EXEPTION;

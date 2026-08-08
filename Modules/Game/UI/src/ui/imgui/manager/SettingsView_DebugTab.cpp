@@ -2,10 +2,13 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
-#include "imgui.h"
-#include "imgui_internal.h"
+#include "network/collaboration/RtcDiagnosticLogging.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
 #include <cstdint>
 #include <string>
 
@@ -115,6 +118,36 @@ void SettingsView::drawDebugSettings()
         addSettingItem(
             *sec,
             rowIndex,
+            TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleX",
+                    &visual.interactionHitboxScaleX,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleY",
+                    &visual.interactionHitboxScaleY,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+        addSettingItem(
+            *sec,
+            rowIndex,
             TR_CACHE("ui.settings.debug.render_profile_logging").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
@@ -122,6 +155,26 @@ void SettingsView::drawDebugSettings()
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##RenderProfileLogging", &settings.renderProfileLogging);
+            });
+    }
+
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.debug.networking").data(),
+                               true) ) {
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.rtc_diagnostic_logging").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                const bool rtcLoggingChanged = ::MMM::UI::FeedbackCheckbox(
+                    "##RtcDiagnosticLogging", &settings.rtcDiagnosticLogging);
+                changed |= rtcLoggingChanged;
+                if ( rtcLoggingChanged ) {
+                    Network::Collaboration::setRtcDiagnosticLoggingEnabled(
+                        settings.rtcDiagnosticLogging);
+                }
             });
     }
 

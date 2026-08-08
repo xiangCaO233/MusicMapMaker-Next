@@ -601,8 +601,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
                                  ImGuiCond_FirstUseEver);
     }
     std::string windowTitle =
-        std::string(TR("ui.tools.bpm_measure.title").data()) +
-        "###BpmMeasurementTool";
+        TR("ui.tools.bpm_measure.title").toString() + "###BpmMeasurementTool";
     LayoutContext layoutContext(
         m_layoutCtx,
         windowTitle,

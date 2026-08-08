@@ -481,12 +481,31 @@ void SettingsView::drawBeatmapSettings()
             [&](Clay_BoundingBox r, bool) {
                 const auto bgmTrackCount =
                     std::max(0, session->getContext().bgmTrackCount);
-                const float buttonSize = ImGui::GetFrameHeight();
+                const float buttonSize       = ImGui::GetFrameHeight();
+                const auto& style            = ImGui::GetStyle();
+                const float buttonGlyphWidth = std::max(
+                    ImGui::CalcTextSize("-").x, ImGui::CalcTextSize("+").x);
+                const float maxHorizontalPadding = std::max(
+                    0.0f, (buttonSize - buttonGlyphWidth) * 0.5f - 1.0f);
+                const ImVec2 compactButtonPadding{
+                    std::min(style.FramePadding.x, maxHorizontalPadding),
+                    style.FramePadding.y,
+                };
+                // 紧凑方形按钮只收窄横向内边距，避免大 FramePadding
+                // 主题裁掉加减号。
+                const auto drawTrackCountButton = [&](const char* label) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                        compactButtonPadding);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                        ImVec2(0.5f, 0.5f));
+                    const bool clicked = ::MMM::UI::FeedbackButton(
+                        label, ImVec2(buttonSize, buttonSize));
+                    ImGui::PopStyleVar(2);
+                    return clicked;
+                };
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImGui::BeginDisabled(bgmTrackCount <= 0);
-                if ( ::MMM::UI::FeedbackButton(
-                         "-##RemovePersistentBgmTrack",
-                         ImVec2(buttonSize, buttonSize)) ) {
+                if ( drawTrackCountButton("-##RemovePersistentBgmTrack") ) {
                     engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
                         bgmTrackCount - 1,
                     });
@@ -507,9 +526,7 @@ void SettingsView::drawBeatmapSettings()
                 const bool canAdd =
                     bgmTrackCount < std::numeric_limits<std::int32_t>::max();
                 ImGui::BeginDisabled(!canAdd);
-                if ( ::MMM::UI::FeedbackButton(
-                         "+##AddPersistentBgmTrack",
-                         ImVec2(buttonSize, buttonSize)) ) {
+                if ( drawTrackCountButton("+##AddPersistentBgmTrack") ) {
                     engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
                         bgmTrackCount + 1,
                     });

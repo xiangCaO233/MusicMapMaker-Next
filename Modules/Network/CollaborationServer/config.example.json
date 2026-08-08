@@ -1,0 +1,19 @@
+{
+  "port": 24864,
+  "bindAddress": "127.0.0.1",
+  "enableTls": false,
+  "certificatePemFile": "",
+  "keyPemFile": "",
+  "maxRooms": 256,
+  "maxClients": 2048,
+  "ice": {
+    "address": "xiang233.top",
+    "enableStun": true,
+    "stunPort": 3478,
+    "enableTurn": true,
+    "turnPort": 3478,
+    "enableTurnTcp": false,
+    "turnUsername": "replace-with-turn-user",
+    "turnPassword": "replace-with-random-password"
+  }
+}

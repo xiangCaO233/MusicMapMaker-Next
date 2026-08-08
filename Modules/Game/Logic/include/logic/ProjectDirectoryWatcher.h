@@ -2,8 +2,9 @@
 
 #include <atomic>
 #include <filesystem>
+#include <future>
 #include <mutex>
-#include <thread>
+#include <stop_token>
 
 namespace MMM::Logic
 {
@@ -52,10 +53,15 @@ public:
 private:
     /// @brief 文件夹监听线程的主循环。
     /// @param watchPath 需要递归监听的项目目录路径。
-    void watcherThreadLoop(std::filesystem::path watchPath);
+    /// @param stopToken 共享线程池任务的停止令牌。
+    void watcherThreadLoop(std::filesystem::path watchPath,
+                           std::stop_token       stopToken);
 
-    /// @brief 文件夹监听线程。
-    std::thread m_thread;
+    /// @brief 发布到 Runtime 共享线程池的监听任务。
+    std::future<void> m_workerFuture;
+
+    /// @brief 监听任务的协作式停止源。
+    std::stop_source m_stopSource;
 
     /// @brief 监听线程运行标志。
     /// @warning 文件监听线程原子：启动/停止线程时写入，监听循环轮询读取；

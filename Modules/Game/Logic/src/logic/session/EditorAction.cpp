@@ -18,6 +18,7 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     action->execute(ctx);
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();
+    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -32,6 +33,7 @@ void EditorActionStack::undo(SessionContext& ctx)
         "{} {}", TR("ui.status.category.undo").data(), action->getName());
     action->undo(ctx);
     m_redoStack.push_back(std::move(action));
+    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -46,6 +48,7 @@ void EditorActionStack::redo(SessionContext& ctx)
         "{} {}", TR("ui.status.category.redo").data(), action->getName());
     action->redo(ctx);
     m_undoStack.push_back(std::move(action));
+    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -57,6 +60,7 @@ void EditorActionStack::clear()
     m_redoStack.clear();
     m_saveIndex             = 0;
     m_hasNonUndoableChanges = false;
+    m_pendingMutationFlags  = ::MMM::BeatmapMutationFlags::None;
 }
 
 bool EditorActionStack::isDirty() const
@@ -73,6 +77,26 @@ void EditorActionStack::markSaved()
 void EditorActionStack::markDirty()
 {
     m_hasNonUndoableChanges = true;
+}
+
+::MMM::BeatmapMutationFlags EditorActionStack::takePendingMutationFlags()
+{
+    const auto flags       = m_pendingMutationFlags;
+    m_pendingMutationFlags = ::MMM::BeatmapMutationFlags::None;
+    return flags;
+}
+
+void EditorActionStack::rememberPendingMutationFlags(const SessionContext& ctx)
+{
+    if ( ctx.m_needsNotesSync ) {
+        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
+    }
+    if ( ctx.m_needsTimingsSync ) {
+        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::Timelines;
+    }
+    if ( ctx.m_needsSamplesSync ) {
+        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
 }
 
 void CompositeEditorAction::execute(SessionContext& ctx)

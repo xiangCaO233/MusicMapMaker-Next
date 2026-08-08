@@ -75,6 +75,33 @@ bool testBeatLineAutoRatioClamping()
     return true;
 }
 
+/// @brief 验证悬浮检视分拍线单侧延伸比例能够持久化并限制到允许范围。
+/// @return 当前值往返、旧配置默认值和上下界限制均正确时返回 true。
+bool testHoverSubdivisionLineExtensionRatioConfig()
+{
+    MMM::Config::VisualConfig source;
+    source.hoverSubdivisionLineExtensionRatio = 0.75F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    const auto belowMinimum =
+        nlohmann::json{ { "hoverSubdivisionLineExtensionRatio", -0.4F } }
+            .get<MMM::Config::VisualConfig>();
+    const auto aboveMaximum =
+        nlohmann::json{ { "hoverSubdivisionLineExtensionRatio", 1.8F } }
+            .get<MMM::Config::VisualConfig>();
+    if ( !near(restored.hoverSubdivisionLineExtensionRatio, 0.75F) ||
+         !near(legacy.hoverSubdivisionLineExtensionRatio, 0.5F) ||
+         !near(belowMinimum.hoverSubdivisionLineExtensionRatio, 0.0F) ||
+         !near(aboveMaximum.hoverSubdivisionLineExtensionRatio, 1.0F) ) {
+        XERROR("Hover subdivision line extension ratio was not normalized");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证预览区默认隐藏分拍线并继续显示 Timing 线。
 /// @return 默认构造和缺省 JSON 均使用相同的安全显示状态时返回 true。
 bool testPreviewAreaLineDefaults()
@@ -90,20 +117,51 @@ bool testPreviewAreaLineDefaults()
     return true;
 }
 
-/// @brief 验证玩家物件绑定音效标签开关能够持久化且旧配置默认关闭。
-/// @return 当前格式往返开启且缺省 JSON 保持关闭时返回 true。
+/// @brief 验证玩家物件绑定音效标签能够显式关闭且缺省配置默认开启。
+/// @return 当前格式往返关闭且缺省 JSON 保持开启时返回 true。
 bool testBoundSampleLabelConfigRoundTrip()
 {
     MMM::Config::VisualConfig source;
-    source.showBoundSampleLabels = true;
+    source.showBoundSampleLabels = false;
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::VisualConfig>();
     const auto           legacy =
         nlohmann::json::object().get<MMM::Config::VisualConfig>();
-    if ( !encoded.value("showBoundSampleLabels", false) ||
-         !restored.showBoundSampleLabels || legacy.showBoundSampleLabels ) {
+    if ( encoded.value("showBoundSampleLabels", true) ||
+         restored.showBoundSampleLabels || !legacy.showBoundSampleLabels ) {
         XERROR("Bound sample label config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证交互拾取包围盒横纵缩放能够持久化并限制到调试界面范围。
+/// @return 往返、缺省值和上下界限制均正确时返回 true。
+bool testInteractionHitboxScaleConfig()
+{
+    MMM::Config::VisualConfig source;
+    source.interactionHitboxScaleX = 2.5F;
+    source.interactionHitboxScaleY = 0.75F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    const auto clamped = nlohmann::json{ { "interactionHitboxScaleX", 0.0F },
+                                         { "interactionHitboxScaleY", 8.0F } }
+                             .get<MMM::Config::VisualConfig>();
+    if ( !near(restored.interactionHitboxScaleX, 2.5F) ||
+         !near(restored.interactionHitboxScaleY, 0.75F) ||
+         !near(legacy.interactionHitboxScaleX,
+               MMM::Config::VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE) ||
+         !near(legacy.interactionHitboxScaleY,
+               MMM::Config::VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE) ||
+         !near(clamped.interactionHitboxScaleX,
+               MMM::Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE) ||
+         !near(clamped.interactionHitboxScaleY,
+               MMM::Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE) ) {
+        XERROR("Interaction hitbox scales escaped supported bounds");
         return false;
     }
     return true;
@@ -176,6 +234,86 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证禁止垂直移动设置可持久化且旧配置保持自由拖动。
+/// @return 开启状态往返不变且缺失字段默认关闭时返回 true。
+bool testVerticalObjectDragConfigRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.disableVerticalObjectDrag = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( !encoded.value("disableVerticalObjectDrag", false) ||
+         !restored.disableVerticalObjectDrag ||
+         legacy.disableVerticalObjectDrag ) {
+        XERROR("Vertical object drag config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证协作视野绘制三态可持久化且旧配置保持原有填充效果。
+/// @return 三种稳定文本、缺失字段和非法值均按兼容规则恢复时返回 true。
+bool testCollaborationViewportRenderModeRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.collaborationViewportRenderMode =
+        MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           outline =
+        nlohmann::json{ { "collaborationViewportRenderMode", "Outline" } }
+            .get<MMM::Config::EditorSettings>();
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto invalid =
+        nlohmann::json{ { "collaborationViewportRenderMode", "Unknown" } }
+            .get<MMM::Config::EditorSettings>();
+
+    if ( encoded.value("collaborationViewportRenderMode", std::string()) !=
+             "TrackEdge" ||
+         restored.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::TrackEdge ||
+         outline.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Outline ||
+         legacy.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Filled ||
+         invalid.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Filled ) {
+        XERROR(
+            "Collaboration viewport render mode did not preserve "
+            "compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证批量音量编辑快捷键可持久化且旧配置默认不占用键位。
+/// @return 自定义组合键往返无损且缺失字段保持禁用时返回 true。
+bool testSelectedVolumeShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.editSelectedVolume =
+        MMM::Config::ShortcutBinding{ true, "U", true, true, false, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding       = restored.shortcutConfig.editSelectedVolume;
+    const auto& legacyBinding = legacy.shortcutConfig.editSelectedVolume;
+    if ( !binding.enabled || binding.key != "U" || !binding.ctrl ||
+         !binding.shift || binding.alt || binding.super ||
+         legacyBinding.enabled || !legacyBinding.key.empty() ) {
+        XERROR("Selected volume shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
 /// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
 bool testRenderingDefaultsReset()
@@ -184,16 +322,17 @@ bool testRenderingDefaultsReset()
     config.visual.noteScaleX               = 2.4F;
     config.visual.noteScaleY               = 0.7F;
     config.visual.nonHoldHitEffectDuration = 0.76F;
-    config.visual.showBoundSampleLabels    = true;
+    config.visual.showBoundSampleLabels    = false;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
     config.settings.defaultColorPaletteSchemeName = "Custom";
     config.visual.background.fillMode =
         MMM::Config::BackgroundFillMode::Stretch;
-    config.visual.background.opaque_ratio       = 0.2F;
-    config.visual.background.darken_ratio       = 0.1F;
-    config.visual.beatLineAlpha                 = 0.2F;
-    config.visual.background.spectrum.bandCount = 64;
-    config.visual.background.spectrum.opacity   = 0.8F;
+    config.visual.background.opaque_ratio            = 0.2F;
+    config.visual.background.darken_ratio            = 0.1F;
+    config.visual.beatLineAlpha                      = 0.2F;
+    config.visual.hoverSubdivisionLineExtensionRatio = 0.9F;
+    config.visual.background.spectrum.bandCount      = 64;
+    config.visual.background.spectrum.opacity        = 0.8F;
 
     config.resetNoteRenderingToDefaults();
     const MMM::Config::EditorConfig defaults;
@@ -220,6 +359,8 @@ bool testRenderingDefaultsReset()
          !near(config.visual.background.darken_ratio,
                defaults.visual.background.darken_ratio) ||
          !near(config.visual.beatLineAlpha, defaults.visual.beatLineAlpha) ||
+         !near(config.visual.hoverSubdivisionLineExtensionRatio,
+               defaults.visual.hoverSubdivisionLineExtensionRatio) ||
          config.visual.background.spectrum.bandCount != 64 ||
          !near(config.visual.background.spectrum.opacity, 0.8F) ) {
         XERROR("Background rendering reset escaped its configuration boundary");
@@ -327,6 +468,87 @@ bool testBackgroundSpectrumClamping()
     return true;
 }
 
+/// @brief 验证不同 Key 数的轨道、判定线与组件布局独立保存。
+/// @return 独立编辑、旧配置继承和 JSON 往返均正确时返回 true。
+bool testKeyCountLayoutIsolationAndMigration()
+{
+    MMM::Config::VisualConfig source;
+    source.trackLayout.left                    = 0.11F;
+    source.judgeline_pos                       = 0.81F;
+    source.canvasComponents.beatNumber.anchorX = 0.13F;
+
+    auto& fourTrackLayout = source.editableTrackLayoutForKeyCount(4);
+    fourTrackLayout.left  = 0.21F;
+    fourTrackLayout.right = 0.61F;
+    source.editableJudgmentLinePositionForKeyCount(4) = 0.74F;
+    auto& fourComponents = source.editableCanvasComponentsForKeyCount(4);
+    fourComponents.beatNumber.visible = true;
+    fourComponents.beatNumber.anchorX = 0.24F;
+
+    auto& sevenTrackLayout = source.editableTrackLayoutForKeyCount(7);
+    sevenTrackLayout.left  = 0.31F;
+    sevenTrackLayout.right = 0.91F;
+    source.editableJudgmentLinePositionForKeyCount(7) = 0.88F;
+    auto& sevenComponents = source.editableCanvasComponentsForKeyCount(7);
+    sevenComponents.beatNumber.visible = false;
+    sevenComponents.beatNumber.anchorX = 0.67F;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::VisualConfig>();
+    const auto&          restoredFourTrack = restored.trackLayoutForKeyCount(4);
+    const auto& restoredSevenTrack         = restored.trackLayoutForKeyCount(7);
+    const auto& restoredLegacyTrack        = restored.trackLayoutForKeyCount(5);
+    const auto& restoredFourComponents =
+        restored.canvasComponentsForKeyCount(4);
+    const auto& restoredSevenComponents =
+        restored.canvasComponentsForKeyCount(7);
+    const auto& restoredLegacyComponents =
+        restored.canvasComponentsForKeyCount(5);
+
+    auto materialized = restored;
+    materialized.applyKeyCountLayout(7);
+    const auto legacy =
+        nlohmann::json{
+            { "trackLayout",
+              { { "left", 0.17F },
+                { "top", 0.05F },
+                { "right", 0.77F },
+                { "bottom", 0.95F } } },
+            { "judgeline_pos", 0.79F },
+            { "canvasComponents",
+              { { "beatNumber", { { "anchorX", 0.29F } } } } },
+        }
+            .get<MMM::Config::VisualConfig>();
+
+    if ( source.keyCountLayouts.size() != 2U ||
+         restored.keyCountLayouts.size() != 2U ||
+         !near(restoredFourTrack.left, 0.21F) ||
+         !near(restoredFourTrack.right, 0.61F) ||
+         !near(restoredSevenTrack.left, 0.31F) ||
+         !near(restoredSevenTrack.right, 0.91F) ||
+         !near(restoredLegacyTrack.left, 0.11F) ||
+         !near(restored.judgmentLinePositionForKeyCount(4), 0.74F) ||
+         !near(restored.judgmentLinePositionForKeyCount(7), 0.88F) ||
+         !near(restored.judgmentLinePositionForKeyCount(5), 0.81F) ||
+         !restoredFourComponents.beatNumber.visible ||
+         !near(restoredFourComponents.beatNumber.anchorX, 0.24F) ||
+         restoredSevenComponents.beatNumber.visible ||
+         !near(restoredSevenComponents.beatNumber.anchorX, 0.67F) ||
+         !near(restoredLegacyComponents.beatNumber.anchorX, 0.13F) ||
+         !near(materialized.trackLayout.left, 0.31F) ||
+         !near(materialized.judgeline_pos, 0.88F) ||
+         !near(materialized.canvasComponents.beatNumber.anchorX, 0.67F) ||
+         !legacy.keyCountLayouts.empty() ||
+         !near(legacy.trackLayoutForKeyCount(4).left, 0.17F) ||
+         !near(legacy.judgmentLinePositionForKeyCount(7), 0.79F) ||
+         !near(legacy.canvasComponentsForKeyCount(9).beatNumber.anchorX,
+               0.29F) ) {
+        XERROR("Key-count layouts were shared or legacy migration failed");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行视觉配置兼容性与默认值测试。
@@ -336,15 +558,21 @@ int main()
     return testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
+                   testHoverSubdivisionLineExtensionRatioConfig() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
+                   testInteractionHitboxScaleConfig() &&
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
+                   testVerticalObjectDragConfigRoundTrip() &&
+                   testCollaborationViewportRenderModeRoundTrip() &&
+                   testSelectedVolumeShortcutRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&
-                   testBackgroundSpectrumClamping()
+                   testBackgroundSpectrumClamping() &&
+                   testKeyCountLayoutIsolationAndMigration()
                ? 0
                : 1;
 }

@@ -48,7 +48,15 @@ target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp
                                           src/StartupProgressDialog.cpp)
 target_include_directories(MusicMapMaker-Next PRIVATE include)
 
-target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game Network)
+target_link_libraries(
+  MusicMapMaker-Next
+  PRIVATE Log
+          Config
+          Audio
+          Game
+          Network
+          NetworkCollaboration
+          Runtime)
 
 # shared 预编译依赖复制到主程序输出目录，便于直接运行和 ldd/dumpbin 诊断完整动态链路。
 if(COMMAND prebuilt_copy_runtime_files)

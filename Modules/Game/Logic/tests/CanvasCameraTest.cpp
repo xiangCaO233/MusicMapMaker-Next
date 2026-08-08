@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -19,14 +20,36 @@
 #include "logic/session/tool/DrawTool.h"
 #include "logic/session/tool/GrabTool.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/BeatmapMutationObserver.h"
+#include "mmm/project/Project.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 
 namespace
 {
+
+/// @brief 记录单次会话测试收到的谱面变化类型。
+class RecordingMutationObserver final : public MMM::IBeatmapMutationObserver
+{
+public:
+    /// @brief 保存最近一次谱面变化类型。
+    /// @param beatMap 发生变化的谱面。
+    /// @param flags 本次变化包含的数据类别。
+    void onBeatmapMutated(const MMM::BeatMap&       beatMap,
+                          MMM::BeatmapMutationFlags flags) override
+    {
+        (void)beatMap;
+        m_flags = flags;
+    }
+
+    /// @brief 最近一次收到的谱面变化类型。
+    MMM::BeatmapMutationFlags m_flags{ MMM::BeatmapMutationFlags::None };
+};
 
 /// @brief 使用小容差比较逻辑像素或时间值。
 /// @param lhs 左值。
@@ -644,6 +667,105 @@ bool testTrackCountActionMigratesAllSamples()
     return true;
 }
 
+/// @brief 验证 Session 按当前 Key 数选择独立轨道与组件布局。
+/// @return 切换 Key 数后直接字段均物化为对应独立布局时返回 true。
+bool testSessionSelectsKeyCountLayout()
+{
+    MMM::Config::EditorConfig config;
+    auto& fourTrack = config.visual.editableTrackLayoutForKeyCount(4);
+    fourTrack.left  = 0.14F;
+    fourTrack.right = 0.54F;
+    config.visual.editableJudgmentLinePositionForKeyCount(4) = 0.74F;
+    config.visual.editableCanvasComponentsForKeyCount(4).beatNumber.anchorX =
+        0.24F;
+
+    auto& sevenTrack = config.visual.editableTrackLayoutForKeyCount(7);
+    sevenTrack.left  = 0.27F;
+    sevenTrack.right = 0.87F;
+    config.visual.editableJudgmentLinePositionForKeyCount(7) = 0.87F;
+    config.visual.editableCanvasComponentsForKeyCount(7).beatNumber.anchorX =
+        0.67F;
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.trackCount                 = 4;
+    session.update(0.0, config, false);
+    if ( !near(context.lastConfig.visual.trackLayout.left, 0.14) ||
+         !near(context.lastConfig.visual.trackLayout.right, 0.54) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.74) ||
+         !near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+               0.24) ) {
+        XERROR("Four-key Session did not select its independent layout");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.update(0.0, config, false);
+    if ( context.trackCount != 7 ||
+         !near(context.lastConfig.visual.trackLayout.left, 0.27) ||
+         !near(context.lastConfig.visual.trackLayout.right, 0.87) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.87) ||
+         !near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+               0.67) ) {
+        XERROR("Seven-key Session reused another Key-count layout");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateEditorConfig{ .config = config },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 5 },
+    });
+    session.update(0.0, config, false);
+    return context.trackCount == 5 &&
+           near(context.lastConfig.visual.trackLayout.left,
+                config.visual.trackLayout.left) &&
+           near(context.lastConfig.visual.judgeline_pos,
+                config.visual.judgeline_pos) &&
+           near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
+                config.visual.canvasComponents.beatNumber.anchorX);
+}
+
+/// @brief 验证交互命令执行前已经物化当前 Key 数的轨道与判定线布局。
+/// @return 画笔在专属布局中的鼠标位置生成同轨同时间预览时返回 true。
+bool testQueuedBrushUsesKeyCountLayout()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    context.currentTool = MMM::Logic::EditTool::Draw;
+
+    auto config                     = context.lastConfig;
+    config.visual.trackLayout.left  = 0.1F;
+    config.visual.trackLayout.right = 0.5F;
+    config.visual.judgeline_pos     = 0.5F;
+    auto& fourTrackLayout = config.visual.editableTrackLayoutForKeyCount(4);
+    fourTrackLayout.left  = 0.4F;
+    fourTrackLayout.right = 0.8F;
+    config.visual.editableJudgmentLinePositionForKeyCount(4) = 0.75F;
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas",
+            .mouseX   = 450.0F,
+            .mouseY   = 450.0F,
+        },
+    });
+    session.update(0.0, config, true);
+
+    if ( !context.brushState.isActive || context.brushState.track != 0 ||
+         !near(context.brushState.time, 1.0) ||
+         !near(context.lastConfig.visual.trackLayout.left, 0.4) ||
+         !near(context.lastConfig.visual.judgeline_pos, 0.75) ) {
+        XERROR("Queued brush command used the legacy global canvas layout");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证玩家轨道数变化不会把超出 uint32 的自动采样轨道静默截断。
 /// @return 溢出时轨道数、采样和撤销栈均保持原状时返回 true。
 bool testTrackCountOverflowIsRejectedAtomically()
@@ -772,6 +894,120 @@ bool testMetadataTrackCountMigrationIsAtomic()
                    .m_track == 2;
 }
 
+/// @brief 验证谱面设置更换主音轨会同步时间最早的 Main BGM 自动采样。
+/// @return 仅首个 Main BGM 采样更新且其他 Main、Effect 和玩家轨采样不变时返回
+/// true。
+bool testMetadataAudioChangeRetargetsFirstMainBgmSample()
+{
+    MMM::Logic::BeatmapSession session;
+    const auto observer = std::make_shared<RecordingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    auto& context          = session.getContextMutable();
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.name     = "AudioChange";
+    context.currentBeatmap->m_baseMapMetadata.map_path = "AudioChange.mmm";
+    context.currentBeatmap->m_baseMapMetadata.song_file_hint  = "audio/old.ogg";
+    context.currentBeatmap->m_baseMapMetadata.track_count     = 4;
+    context.currentBeatmap->m_baseMapMetadata.bgm_track_count = 2;
+    context.trackCount                                        = 4;
+    context.bgmTrackCount                                     = 2;
+    context.collaborationProject = std::make_shared<MMM::Project>();
+    context.collaborationProject->m_audioResources = {
+        MMM::AudioResource{ .m_id   = "old-main",
+                            .m_path = "audio/old.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "new-main",
+                            .m_path = "audio/new.ogg",
+                            .m_type = MMM::AudioTrackType::Main },
+        MMM::AudioResource{ .m_id   = "effect",
+                            .m_path = "audio/effect.wav",
+                            .m_type = MMM::AudioTrackType::Effect },
+    };
+
+    const auto playerSample = context.sampleRegistry.create();
+    const auto effectSample = context.sampleRegistry.create();
+    const auto firstMain    = context.sampleRegistry.create();
+    const auto laterMain    = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        playerSample,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 0.25,
+            .m_track           = 1,
+            .m_audioResourceId = "old-main",
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        effectSample,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 0.5,
+            .m_track           = 4,
+            .m_audioResourceId = "effect",
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        firstMain,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_offsetMs        = -100,
+            .m_track           = 4,
+            .m_audioResourceId = "old-main",
+            .m_volume          = 0.6F,
+        });
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        laterMain,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 2.0,
+            .m_track           = 5,
+            .m_audioResourceId = "old-main",
+        });
+
+    auto updatedMeta           = context.currentBeatmap->m_baseMapMetadata;
+    updatedMeta.song_file_hint = "audio/new.ogg";
+    updatedMeta.main_audio_path.clear();
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateBeatmapMetadata{
+            .baseMeta = updatedMeta,
+        } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    const auto& updatedFirst =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(firstMain);
+    if ( updatedFirst.m_audioResourceId != "new-main" ||
+         !near(updatedFirst.m_timestamp, 1.0) ||
+         updatedFirst.m_offsetMs != -100 || updatedFirst.m_track != 4 ||
+         !near(updatedFirst.m_volume, 0.6) ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(laterMain)
+                 .m_audioResourceId != "old-main" ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(effectSample)
+                 .m_audioResourceId != "effect" ||
+         context.sampleRegistry.get<MMM::Logic::SampleComponent>(playerSample)
+                 .m_audioResourceId != "old-main" ||
+         context.currentBeatmap->m_baseMapMetadata.song_file_hint !=
+             std::filesystem::path("audio/new.ogg") ||
+         !MMM::hasBeatmapMutationFlag(observer->m_flags,
+                                      MMM::BeatmapMutationFlags::Metadata) ||
+         !MMM::hasBeatmapMutationFlag(
+             observer->m_flags, MMM::BeatmapMutationFlags::AudioSamples) ||
+         context.actionStack.getUndoStackSize() != 0U ) {
+        XERROR(
+            "Metadata audio change did not retarget only the first Main BGM "
+            "sample");
+        return false;
+    }
+
+    const auto updatedDomainSample =
+        std::find_if(context.currentBeatmap->m_audioSamples.begin(),
+                     context.currentBeatmap->m_audioSamples.end(),
+                     [](const MMM::AudioSampleEvent& sample) {
+                         return sample.m_audioResourceId == "new-main";
+                     });
+    return context.currentBeatmap->m_audioSamples.size() == 4U &&
+           updatedDomainSample !=
+               context.currentBeatmap->m_audioSamples.end() &&
+           updatedDomainSample->m_timestamp == 1000.0 &&
+           updatedDomainSample->m_offsetMs == -100 &&
+           updatedDomainSample->m_track == 4 &&
+           near(updatedDomainSample->m_volume, 0.6);
+}
+
 /// @brief 验证替换元数据时同步迁移自动采样，并保留当前 BGM 轨道数。
 /// @return 执行、Undo 和 Redo 均恢复轨道与元数据时返回 true。
 bool testReplaceBeatmapMetadataMigratesSamples()
@@ -873,6 +1109,145 @@ bool testReplaceBeatmapMetadataOverflowIsRejected()
                    .m_track == std::numeric_limits<std::uint32_t>::max() &&
            context.actionStack.getUndoStackSize() == 0 &&
            !context.lastActionMessage.empty();
+}
+
+/// @brief 验证权威远端替换废弃旧实体历史与全部玩家物件交互状态。
+/// @return 替换后只保留权威对象且旧撤销和实体缓存不可再访问时返回 true。
+bool testAuthoritativeReplacementInvalidatesEntityState()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap                = std::make_shared<MMM::BeatMap>();
+    const auto                staleEntity = context.noteRegistry.create();
+    MMM::Logic::NoteComponent staleNote;
+    staleNote.m_timestamp = 1.0;
+    context.actionStack.pushAndExecute(std::make_unique<MMM::Logic::NoteAction>(
+                                           MMM::Logic::NoteAction::Type::Create,
+                                           staleEntity,
+                                           std::nullopt,
+                                           staleNote),
+                                       context);
+    context.sortedNoteEntities.push_back(staleEntity);
+    context.sortedNoteMaxEndPrefix.push_back(1.0);
+    context.noteRegistry.emplace_or_replace<MMM::Logic::InteractionComponent>(
+        staleEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    context.selectedNoteEntities.insert(staleEntity);
+    context.hoveredEntity     = staleEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.draggedEntity     = staleEntity;
+    context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.dragRenderPinnedEntities.push_back(staleEntity);
+    context.brushState.isActive = true;
+    context.brushState.polylineSegments.push_back({});
+    context.eraserState.isActive = true;
+    context.eraserState.targetObjectKind =
+        MMM::Logic::ChartObjectKind::PlayerNote;
+    context.eraserState.targetEntities.insert(staleEntity);
+
+    auto  source     = std::make_shared<MMM::BeatMap>();
+    auto& note       = source->m_noteData.notes.emplace_back();
+    note.m_timestamp = 2500.0;
+    note.m_track     = 3;
+    source->sync();
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdReplaceBeatmapData{
+        .sourceBeatmap       = source,
+        .replaceObjects      = true,
+        .authoritativeRemote = true,
+    });
+
+    const auto view =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    if ( view.size() != 1U ||
+         !near(view.get<const MMM::Logic::NoteComponent>(*view.begin())
+                   .m_timestamp,
+               2.5) ||
+         context.actionStack.getUndoStackSize() != 0U ||
+         !context.actionStack.isDirty() || context.brushState.isActive ||
+         !context.brushState.polylineSegments.empty() ||
+         context.eraserState.isActive ||
+         !context.eraserState.targetEntities.empty() ||
+         !context.dragRenderPinnedEntities.empty() ||
+         !context.selectedNoteEntities.empty() ||
+         context.hoveredEntity != entt::null ||
+         context.draggedEntity != entt::null ||
+         !context.sortedNoteEntities.empty() ||
+         !context.sortedNoteMaxEndPrefix.empty() ||
+         !context.isNoteOrderDirty ) {
+        XERROR("Authoritative replacement retained stale entity state");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    const auto afterUndo =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    return afterUndo.size() == 1U &&
+           near(afterUndo
+                    .get<const MMM::Logic::NoteComponent>(*afterUndo.begin())
+                    .m_timestamp,
+                2.5);
+}
+
+/// @brief 验证 Polyline 子物件经过多轮领域对象与 ECS 往返仍保持身份和顺序。
+/// @return 子物件不会成为独立根对象且全部字段稳定时返回 true。
+bool testPolylineSubNoteIdentitySurvivesRepeatedEcsSync()
+{
+    auto  beatmap        = std::make_shared<MMM::BeatMap>();
+    auto& hold           = beatmap->m_noteData.holds.emplace_back();
+    hold.m_timestamp     = 1000.0;
+    hold.m_duration      = 375.0;
+    hold.m_track         = 1;
+    hold.m_isSubNote     = true;
+    hold.m_sampleBinding = MMM::AudioSampleBinding{ "hold.wav", 0.4F };
+    hold.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["child"] =
+        "hold";
+    auto& flick       = beatmap->m_noteData.flicks.emplace_back();
+    flick.m_timestamp = 1375.0;
+    flick.m_track     = 1;
+    flick.m_dtrack    = 2;
+    flick.m_isSubNote = true;
+    flick.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["child"] =
+        "flick";
+    auto& polyline = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_subNotes.emplace_back(hold);
+    polyline.m_subNotes.emplace_back(flick);
+    polyline.m_subHolds.emplace_back(hold);
+    polyline.m_subFlicks.emplace_back(flick);
+    beatmap->sync();
+
+    MMM::Logic::SessionContext context;
+    for ( std::size_t round = 0; round < 32U; ++round ) {
+        MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+        context.m_needsNotesSync = true;
+        MMM::Logic::SessionUtils::syncBeatmap(context);
+        if ( beatmap->m_noteData.notes.size() != 0U ||
+             beatmap->m_noteData.holds.size() != 1U ||
+             beatmap->m_noteData.flicks.size() != 1U ||
+             beatmap->m_noteData.polylines.size() != 1U ) {
+            XERROR("Polyline ECS round trip amplified child objects");
+            return false;
+        }
+        const auto& restoredHold     = beatmap->m_noteData.holds.front();
+        const auto& restoredFlick    = beatmap->m_noteData.flicks.front();
+        const auto& restoredPolyline = beatmap->m_noteData.polylines.front();
+        if ( !restoredHold.m_isSubNote || !restoredFlick.m_isSubNote ||
+             restoredPolyline.m_subNotes.size() != 2U ||
+             &restoredPolyline.m_subNotes[0].get() != &restoredHold ||
+             &restoredPolyline.m_subNotes[1].get() != &restoredFlick ||
+             restoredPolyline.m_subHolds.size() != 1U ||
+             restoredPolyline.m_subFlicks.size() != 1U ||
+             !near(restoredHold.m_duration, 375.0) ||
+             restoredFlick.m_dtrack != 2 || !restoredHold.m_sampleBinding ||
+             restoredHold.m_sampleBinding->m_audioResourceId != "hold.wav" ||
+             !near(restoredHold.m_sampleBinding->m_volume, 0.4) ||
+             restoredHold.m_metadata.note_properties
+                     .at(MMM::NoteMetadataType::MMM)
+                     .at("child") != "hold" ) {
+            XERROR("Polyline ECS round trip lost child semantics");
+            return false;
+        }
+    }
+    return true;
 }
 
 /// @brief 验证在运行时追加空轨放置采样会持久扩展 BGM 轨道数。
@@ -1365,6 +1740,163 @@ bool testObjectSampleVolumeCommandRoutesThroughSession()
            context.actionStack.getUndoStackSize() == 1;
 }
 
+/// @brief 验证批量音量命令覆盖全部选中音频物件且合并为一次撤销。
+/// @return 玩家主绑定、折线子绑定和自动采样可一起执行、撤销和重做时返回 true。
+bool testSelectedObjectSampleVolumeCommand()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    context.trackCount                                    = 4;
+
+    MMM::Logic::NoteComponent note;
+    note.m_type          = MMM::NoteType::POLYLINE;
+    note.m_sampleBinding = MMM::AudioSampleBinding{ "head.wav", 0.35F };
+    note.m_subNotes.push_back(MMM::Logic::NoteComponent::SubNote{
+        .type          = MMM::NoteType::NOTE,
+        .timestamp     = 1.0,
+        .duration      = 0.0,
+        .trackIndex    = 0,
+        .dtrack        = 0,
+        .sampleBinding = MMM::AudioSampleBinding{ "node.wav", 0.55F },
+    });
+    const auto noteEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(noteEntity, note);
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::PlayerNote, noteEntity, true);
+
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "sample.wav",
+            .m_volume          = 0.45F,
+        });
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::AudioSample, sampleEntity, true);
+
+    const auto unselectedSampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        unselectedSampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 2.0,
+            .m_track           = 4,
+            .m_audioResourceId = "other.wav",
+            .m_volume          = 0.65F,
+        });
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateSelectedObjectSampleVolume{ .volume = 0.8F } });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
+    const auto volumesEqual = [&](float expectedNote,
+                                  float expectedSubNote,
+                                  float expectedSample) {
+        const auto& currentNote =
+            context.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+        return currentNote.m_sampleBinding &&
+               near(currentNote.m_sampleBinding->m_volume, expectedNote) &&
+               currentNote.m_subNotes.front().sampleBinding &&
+               near(currentNote.m_subNotes.front().sampleBinding->m_volume,
+                    expectedSubNote) &&
+               near(context.sampleRegistry
+                        .get<MMM::Logic::SampleComponent>(sampleEntity)
+                        .m_volume,
+                    expectedSample) &&
+               near(
+                   context.sampleRegistry
+                       .get<MMM::Logic::SampleComponent>(unselectedSampleEntity)
+                       .m_volume,
+                   0.65F);
+    };
+
+    if ( !volumesEqual(0.8F, 0.8F, 0.8F) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Selected object volume command did not batch selected targets");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !volumesEqual(0.35F, 0.55F, 0.45F) ) {
+        XERROR("Selected object volume undo did not restore original values");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return volumesEqual(0.8F, 0.8F, 0.8F) &&
+           context.actionStack.getUndoStackSize() == 1U;
+}
+
+/// @brief 验证协作资源命令由会话队列消费且换谱时不会泄漏到新谱面。
+/// @return 资源项目和路径映射完成绑定，并在加载新谱面后清空时返回 true。
+bool testCollaborationResourcesRouteThroughSession()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+
+    auto project           = std::make_shared<MMM::Project>();
+    project->m_projectRoot = "collaboration-cache";
+    const std::unordered_map<std::string, std::string> pathRemap{
+        { "images/cover.png", "files/cover-hash.png" },
+    };
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetCollaborationResources{
+            .project   = project,
+            .pathRemap = pathRemap,
+        },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    if ( context.collaborationProject != project ||
+         context.collaborationPathRemap != pathRemap ) {
+        XERROR("Collaboration resources command was not routed to session");
+        return false;
+    }
+
+    context.isAudioTimelineDescriptorDirty           = false;
+    context.isAudioTimelineActivationPending         = false;
+    context.isAudioTimelineFingerprintPublishPending = false;
+    auto replacementProject           = std::make_shared<MMM::Project>();
+    replacementProject->m_projectRoot = "replacement-collaboration-cache";
+    replacementProject->m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "replacement-main",
+        .m_path = "audio/new.ogg",
+        .m_type = MMM::AudioTrackType::Main,
+    });
+    context.currentBeatmap->m_audioSamples.emplace_back().m_audioResourceId =
+        "replacement-main";
+    const std::unordered_map<std::string, std::string> replacementRemap{
+        { "audio/new.ogg", "files/new-audio-hash.ogg" },
+    };
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetCollaborationResources{
+            .project   = replacementProject,
+            .pathRemap = replacementRemap,
+        },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    if ( context.collaborationProject != replacementProject ||
+         context.collaborationPathRemap != replacementRemap ||
+         !MMM::Logic::audioTimelineDescriptorReferencesResource(
+             context.audioTimelineDescriptor, "replacement-main") ||
+         !context.isAudioTimelineActivationPending ) {
+        XERROR("Replacement collaboration resources did not rebind audio");
+        return false;
+    }
+
+    auto replacement = std::make_shared<MMM::BeatMap>();
+    replacement->m_baseMapMetadata.track_count = 4;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(replacement) },
+    });
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    return !context.collaborationProject &&
+           context.collaborationPathRemap.empty();
+}
+
 /// @brief 验证不同 ECS 注册表中重叠的实体 ID 不会被 DrawTool 混淆。
 /// @return 悬停自动采样时只删除 Sample 并可通过一次 Undo 恢复时返回 true。
 bool testSampleEraseTargetsTypedRegistry()
@@ -1491,6 +2023,145 @@ bool testSampleHoverInspectDetails()
     return true;
 }
 
+/// @brief 验证悬浮检视与常用分拍编辑手势只生成单轨单拍临时预览。
+/// @return 悬浮、拖动与绘制状态均使用正确轨道、拍区间和分拍来源时返回 true。
+bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
+{
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 6;
+    beatmap->m_baseMapMetadata.preference_bpm = 120.0;
+
+    MMM::Timing timing;
+    timing.m_timestamp             = 0.0;
+    timing.m_bpm                   = 120.0;
+    timing.m_beat_length           = 500.0;
+    timing.m_timingEffect          = MMM::TimingEffect::BPM;
+    timing.m_timingEffectParameter = 120.0;
+    beatmap->m_timings.push_back(timing);
+
+    MMM::Note note;
+    note.m_timestamp = 1166.6666666667;
+    note.m_track     = 5;
+    beatmap->m_noteData.notes.push_back(note);
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+    configureObjectEditingCanvas(context);
+    context.currentBeatmap->m_baseMapMetadata.track_count = 6;
+    context.trackCount                                    = 6;
+    context.lastConfig.settings.beatDivisor               = 4;
+
+    const auto view = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( view.size() != 1 ) {
+        XERROR("Hover subdivision preview setup did not load one Note");
+        return false;
+    }
+    const auto entity = *view.begin();
+    auto&      interaction =
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    interaction.isHovered = true;
+    interaction.hoveredPart =
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head);
+    context.hoveredEntity     = entity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+    context.mouseCameraId   = "Basic2DCanvas";
+    context.isMouseInCanvas = true;
+    context.lastMousePos    = { 350.0F, 200.0F };
+
+    auto config = context.lastConfig;
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Hover subdivision preview did not publish a canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot ) return false;
+    const auto& preview = snapshot->hoverSubdivisionPreview;
+    if ( !preview.show || preview.track != 5 || preview.numerator != 1 ||
+         preview.denominator != 3 || !near(preview.beatStartTime, 1.0) ||
+         !near(preview.beatEndTime, 1.5) || !near(preview.beatDuration, 0.5) ) {
+        XERROR("Hover subdivision preview escaped the inspected track or beat");
+        return false;
+    }
+
+    context.isDragging        = true;
+    context.draggedEntity     = entity;
+    context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.draggedPart       = MMM::Logic::HoverPart::Head;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR("Dragging did not restore the configured beat grid preview");
+        return false;
+    }
+
+    std::uint32_t commonBeatDivisorMask = 0U;
+    MMM::Config::setCommonBeatDivisorEnabled(commonBeatDivisorMask, 3, true);
+    MMM::Config::setCommonBeatDivisorEnabled(commonBeatDivisorMask, 5, true);
+    config.settings.objectPlacementSnap = true;
+    config.settings.objectPlacementSnapMode =
+        MMM::Config::ObjectPlacementSnapMode::CommonBeatDivisors;
+    config.settings.commonBeatDivisorMask = commonBeatDivisorMask;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
+         snapshot->hoverSubdivisionPreview.track != 5 ||
+         snapshot->hoverSubdivisionPreview.commonBeatDivisorMask !=
+             commonBeatDivisorMask ||
+         !near(snapshot->hoverSubdivisionPreview.focusTime,
+               note.m_timestamp / 1000.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatStartTime, 1.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatEndTime, 1.5) ) {
+        XERROR("Common-divisor drag preview did not follow the dragged Note");
+        return false;
+    }
+    context.isDragging    = false;
+    context.draggedEntity = entt::null;
+
+    config.settings.beatDivisor = 6;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR("Compatible current beat grid still enabled hover preview");
+        return false;
+    }
+
+    interaction.isHovered                 = false;
+    context.hoveredEntity                 = entt::null;
+    context.brushState.isActive           = true;
+    context.brushState.createsAudioSample = false;
+    context.brushState.type               = MMM::NoteType::HOLD;
+    context.brushState.time               = 1.0;
+    context.brushState.duration           = 0.1;
+    context.brushState.track              = 4;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
+         snapshot->hoverSubdivisionPreview.track != 4 ||
+         snapshot->hoverSubdivisionPreview.commonBeatDivisorMask !=
+             commonBeatDivisorMask ||
+         !near(snapshot->hoverSubdivisionPreview.focusTime, 1.1) ||
+         !near(snapshot->hoverSubdivisionPreview.beatStartTime, 1.0) ||
+         !near(snapshot->hoverSubdivisionPreview.beatEndTime, 1.5) ) {
+        XERROR("Common-divisor draw preview did not follow the brush tip");
+        return false;
+    }
+
+    context.brushState.createsAudioSample = true;
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
+        XERROR(
+            "BGM sample brush unexpectedly enabled player subdivision preview");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证绑定采样的玩家物件会向主画布公开独立试听字段。
 /// @return 悬浮信息保留实体类型、资源 ID 和物件音量时返回 true。
 bool testBoundNoteHoverInspectAudioPreview()
@@ -1610,6 +2281,113 @@ bool testSampleAnchorDragUsesSingleAction()
            context.bgmTrackCount == 2;
 }
 
+/// @brief 验证禁止垂直移动同时约束玩家轨道和 BGM 轨道的整体拖拽。
+/// @return 两类物件只横向换轨、时间保持不变且仍可撤销时返回 true。
+bool testVerticalObjectDragLock()
+{
+    MMM::Logic::SessionContext noteContext;
+    configureObjectEditingCanvas(noteContext);
+    noteContext.lastConfig.settings.disableVerticalObjectDrag = true;
+
+    const auto noteEntity = noteContext.noteRegistry.create();
+    noteContext.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        noteEntity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    noteContext.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        noteEntity);
+    noteContext.hoveredEntity     = noteEntity;
+    noteContext.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    noteContext.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+
+    MMM::Logic::GrabTool noteTool;
+    noteTool.handleStartDrag(noteContext,
+                             MMM::Logic::CmdStartDrag{
+                                 noteEntity,
+                                 "Basic2DCanvas",
+                                 false,
+                                 MMM::Logic::ChartObjectKind::PlayerNote,
+                             });
+    noteTool.handleUpdateDrag(noteContext,
+                              MMM::Logic::CmdUpdateDrag{
+                                  "Basic2DCanvas",
+                                  250.0F,
+                                  50.0F,
+                                  true,
+                              });
+    noteTool.handleEndDrag(noteContext,
+                           MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& movedNote =
+        noteContext.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    if ( !near(movedNote.m_timestamp, 1.0) || movedNote.m_trackIndex != 1 ||
+         noteContext.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Vertical drag lock did not constrain the player Note");
+        return false;
+    }
+    noteContext.actionStack.undo(noteContext);
+    const auto& restoredNote =
+        noteContext.noteRegistry.get<MMM::Logic::NoteComponent>(noteEntity);
+    if ( !near(restoredNote.m_timestamp, 1.0) ||
+         restoredNote.m_trackIndex != 0 ) {
+        XERROR("Vertical drag lock Note undo did not restore the track");
+        return false;
+    }
+
+    MMM::Logic::SessionContext sampleContext;
+    configureObjectEditingCanvas(sampleContext);
+    sampleContext.lastConfig.settings.disableVerticalObjectDrag = true;
+    const auto sampleEntity = sampleContext.sampleRegistry.create();
+    sampleContext.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "effect.wav",
+        });
+    sampleContext.sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sampleEntity);
+    sampleContext.hoveredEntity     = sampleEntity;
+    sampleContext.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    sampleContext.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
+
+    MMM::Logic::GrabTool sampleTool;
+    sampleTool.handleStartDrag(sampleContext,
+                               MMM::Logic::CmdStartDrag{
+                                   sampleEntity,
+                                   "Basic2DCanvas",
+                                   false,
+                                   MMM::Logic::ChartObjectKind::AudioSample,
+                               });
+    sampleTool.handleUpdateDrag(sampleContext,
+                                MMM::Logic::CmdUpdateDrag{
+                                    "Basic2DCanvas",
+                                    650.0F,
+                                    50.0F,
+                                    true,
+                                });
+    sampleTool.handleEndDrag(sampleContext,
+                             MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& movedSample =
+        sampleContext.sampleRegistry.get<MMM::Logic::SampleComponent>(
+            sampleEntity);
+    if ( !near(movedSample.m_timestamp, 1.0) || movedSample.m_track != 5 ||
+         sampleContext.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Vertical drag lock did not constrain the automatic sample");
+        return false;
+    }
+    sampleContext.actionStack.undo(sampleContext);
+    const auto& restoredSample =
+        sampleContext.sampleRegistry.get<MMM::Logic::SampleComponent>(
+            sampleEntity);
+    return near(restoredSample.m_timestamp, 1.0) && restoredSample.m_track == 4;
+}
+
 /// @brief 验证拖放命令不能绕过项目资源表创建悬空自动采样。
 /// @return 当前项目中无法解析资源时不创建实体或撤销动作。
 bool testAudioResourceDropRejectsMissingProjectResource()
@@ -1631,12 +2409,80 @@ bool testAudioResourceDropRejectsMissingProjectResource()
            !context.lastActionMessage.empty();
 }
 
+/// @brief 验证未打开本地项目的访客可使用已校验协作资源继续编辑。
+/// @return 资源拖放成功且跨区域转换保留资源绑定时返回 true。
+bool testGuestCollaborationResourcesSupportEditing()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.collaborationProject = std::make_shared<MMM::Project>();
+    context.collaborationProject->m_projectRoot = "collaboration-cache";
+    context.collaborationProject->m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "guest-effect-id",
+        .m_path = "files/effect-hash.wav",
+        .m_type = MMM::AudioTrackType::Effect,
+    });
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdCreateAudioSample{
+        .audioResourceId = "guest-effect-id",
+        .cameraId        = "Basic2DCanvas",
+        .mouseX          = 650.0F,
+        .mouseY          = 50.0F,
+        .isCtrlDown      = true,
+    });
+
+    auto samples = context.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( samples.size() != 1 ||
+         samples.get<MMM::Logic::SampleComponent>(*samples.begin())
+                 .m_audioResourceId != "guest-effect-id" ) {
+        XERROR("Guest collaboration resource could not create a sample");
+        return false;
+    }
+
+    const auto sampleEntity = *samples.begin();
+    context.sampleRegistry.get<MMM::Logic::InteractionComponent>(sampleEntity)
+        .isSelected           = true;
+    context.hoveredEntity     = sampleEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             sampleEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::AudioSample,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              150.0F,
+                              300.0F,
+                              true,
+                          });
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( !context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty() ||
+         notes.size() != 1 ) {
+        XERROR("Guest sample did not convert through collaboration resources");
+        return false;
+    }
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    return note.m_sampleBinding &&
+           note.m_sampleBinding->m_audioResourceId == "guest-effect-id";
+}
+
 /// @brief 验证实际触发 handle 可产生有符号 offset 并完整撤销。
 /// @return 负 offset、Undo 与 Redo 均正确时返回 true。
 bool testSampleOffsetHandleDrag()
 {
     MMM::Logic::SessionContext context;
     configureObjectEditingCanvas(context);
+    context.lastConfig.settings.disableVerticalObjectDrag = true;
 
     const auto entity = context.sampleRegistry.create();
     context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
@@ -2271,10 +3117,15 @@ int main()
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
+                   testSessionSelectsKeyCountLayout() &&
+                   testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&
+                   testMetadataAudioChangeRetargetsFirstMainBgmSample() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&
                    testReplaceBeatmapMetadataOverflowIsRejected() &&
+                   testAuthoritativeReplacementInvalidatesEntityState() &&
+                   testPolylineSubNoteIdentitySurvivesRepeatedEcsSync() &&
                    testAppendLaneExpandsPersistentCount() &&
                    testExplicitBgmTrackCountAction() &&
                    testSamplePropertyEditValidationAndAction() &&
@@ -2282,11 +3133,16 @@ int main()
                    testNoteSampleBindingRoundTrip() &&
                    testObjectSampleVolumeCommand() &&
                    testObjectSampleVolumeCommandRoutesThroughSession() &&
+                   testSelectedObjectSampleVolumeCommand() &&
+                   testCollaborationResourcesRouteThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSampleHoverInspectDetails() &&
+                   testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
+                   testVerticalObjectDragLock() &&
                    testAudioResourceDropRejectsMissingProjectResource() &&
+                   testGuestCollaborationResourcesSupportEditing() &&
                    testSampleOffsetHandleDrag() &&
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&

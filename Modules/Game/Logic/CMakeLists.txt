@@ -25,6 +25,7 @@ add_library(
   src/logic/ProjectDirectoryWatcher.cpp
   src/logic/ProjectStorage.cpp
   src/logic/ProjectResourceService.cpp
+  src/logic/MalodyPackageCompatibility.cpp
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
@@ -151,6 +152,18 @@ target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
 add_test(NAME NoteBoundSampleLabelRenderTest
          COMMAND NoteBoundSampleLabelRenderTest)
 
+# 重叠键遮罩测试确保播放快照仍会生成顶层重叠提示。
+mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
+                        tests/NoteOverlapMaskRenderTest.cpp)
+target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
+add_test(NAME NoteOverlapMaskRenderTest COMMAND NoteOverlapMaskRenderTest)
+
+# 交互拾取包围盒测试覆盖独立横纵缩放、中心保持和非法值回退。
+mmm_add_test_executable(Logic InteractionHitboxScaleTest
+                        tests/InteractionHitboxScaleTest.cpp)
+target_link_libraries(InteractionHitboxScaleTest PRIVATE Logic Log)
+add_test(NAME InteractionHitboxScaleTest COMMAND InteractionHitboxScaleTest)
+
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest
                         tests/LogoPlaceholderScissorTest.cpp)
@@ -179,3 +192,10 @@ mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest
 target_link_libraries(BeatmapLoadDiagnosticPublisherTest PRIVATE Logic Log)
 add_test(NAME BeatmapLoadDiagnosticPublisherTest
          COMMAND BeatmapLoadDiagnosticPublisherTest)
+
+# 协作观察者绑定测试确保访客不会把收到的房主快照回传为本地编辑。
+mmm_add_test_executable(Logic BeatmapMutationObserverBindingTest
+                        tests/BeatmapMutationObserverBindingTest.cpp)
+target_link_libraries(BeatmapMutationObserverBindingTest PRIVATE Logic Log)
+add_test(NAME BeatmapMutationObserverBindingTest
+         COMMAND BeatmapMutationObserverBindingTest)

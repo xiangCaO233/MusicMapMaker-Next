@@ -57,11 +57,11 @@ float SideBarUI::GetSidebarWidth(float dpiScale)
     ImFont* menuFont      = skinCfg.getFont("menu");
     if ( menuFont && ImGui::GetCurrentContext() ) {
         ImGui::PushFont(menuFont, menuFont->LegacySize);
-        const std::array tabs = { SideBarTab::Search,
-                                  SideBarTab::FileExplorer,
-                                  SideBarTab::AudioExplorer,
-                                  SideBarTab::BeatMapExplorer,
-                                  SideBarTab::Settings };
+        const std::array tabs = {
+            SideBarTab::Search,        SideBarTab::FileExplorer,
+            SideBarTab::AudioExplorer, SideBarTab::BeatMapExplorer,
+            SideBarTab::Collaboration, SideBarTab::Settings
+        };
         for ( auto tab : tabs ) {
             std::string label = TabToShortLabel(tab);
             if ( !label.empty() ) {
@@ -120,6 +120,7 @@ std::string SideBarUI::workspaceNameFromTab(SideBarTab tab)
     case SideBarTab::FileExplorer: return "FileExplorer";
     case SideBarTab::AudioExplorer: return "AudioExplorer";
     case SideBarTab::BeatMapExplorer: return "BeatMapExplorer";
+    case SideBarTab::Collaboration: return "Collaboration";
     case SideBarTab::Settings:
     case SideBarTab::None:
     default: return "None";
@@ -132,6 +133,7 @@ SideBarTab SideBarUI::workspaceNameToTab(const std::string& name)
     if ( name == "FileExplorer" ) return SideBarTab::FileExplorer;
     if ( name == "AudioExplorer" ) return SideBarTab::AudioExplorer;
     if ( name == "BeatMapExplorer" ) return SideBarTab::BeatMapExplorer;
+    if ( name == "Collaboration" ) return SideBarTab::Collaboration;
     return SideBarTab::None;
 }
 
@@ -374,6 +376,14 @@ void SideBarUI::update(UIManager* sourceManager)
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_FILE,
                                               SideBarTab::BeatMapExplorer,
+                                              rect);
+                        })
+            .addElement("CollaborationButton",
+                        Sizing::Grow(),
+                        Sizing::Fixed(btnHeight),
+                        [&](Clay_BoundingBox rect, bool isHovered) {
+                            DrawSidebarButton(ICON_MMM_USERS,
+                                              SideBarTab::Collaboration,
                                               rect);
                         })
             .addSpring()

@@ -18,6 +18,7 @@ enum class SideBarTab {
     FileExplorer,     // 选中文件浏览器
     AudioExplorer,    // 选中音频浏览器
     BeatMapExplorer,  // 选中谱面浏览器
+    Collaboration,    // 选中协作房间
     Settings          // 选中设置
 };
 
@@ -25,10 +26,13 @@ enum class SideBarTab {
 static std::string TabToSubViewId(SideBarTab tab)
 {
     switch ( tab ) {
-    case SideBarTab::Search: return TR("title.search_manager");
-    case SideBarTab::FileExplorer: return TR("title.file_manager");
-    case SideBarTab::AudioExplorer: return TR("title.audio_manager");
-    case SideBarTab::BeatMapExplorer: return TR("title.beatmap_manager");
+    case SideBarTab::Search: return TR("title.search_manager").toString();
+    case SideBarTab::FileExplorer: return TR("title.file_manager").toString();
+    case SideBarTab::AudioExplorer: return TR("title.audio_manager").toString();
+    case SideBarTab::BeatMapExplorer:
+        return TR("title.beatmap_manager").toString();
+    case SideBarTab::Collaboration:
+        return TR("title.collaboration_manager").toString();
     default: return "";
     }
 }
@@ -36,11 +40,16 @@ static std::string TabToSubViewId(SideBarTab tab)
 static std::string TabToTooltip(SideBarTab tab)
 {
     switch ( tab ) {
-    case SideBarTab::Search: return TR("ui.sidebar.search");
-    case SideBarTab::FileExplorer: return TR("ui.sidebar.file_explorer");
-    case SideBarTab::AudioExplorer: return TR("ui.sidebar.audio_explorer");
-    case SideBarTab::BeatMapExplorer: return TR("ui.sidebar.beatmap_explorer");
-    case SideBarTab::Settings: return TR("ui.sidebar.settings");
+    case SideBarTab::Search: return TR("ui.sidebar.search").toString();
+    case SideBarTab::FileExplorer:
+        return TR("ui.sidebar.file_explorer").toString();
+    case SideBarTab::AudioExplorer:
+        return TR("ui.sidebar.audio_explorer").toString();
+    case SideBarTab::BeatMapExplorer:
+        return TR("ui.sidebar.beatmap_explorer").toString();
+    case SideBarTab::Collaboration:
+        return TR("ui.sidebar.collaboration").toString();
+    case SideBarTab::Settings: return TR("ui.sidebar.settings").toString();
     default: return "";
     }
 }
@@ -64,6 +73,9 @@ static std::string TabToShortLabel(SideBarTab tab)
     case SideBarTab::BeatMapExplorer:
         label = TR("ui.sidebar.beatmap.short").data();
         break;
+    case SideBarTab::Collaboration:
+        label = TR("ui.sidebar.collaboration.short").data();
+        break;
     case SideBarTab::Settings:
         label = TR("ui.sidebar.settings.short").data();
         break;
@@ -75,6 +87,7 @@ static std::string TabToShortLabel(SideBarTab tab)
         case SideBarTab::FileExplorer: return "文件";
         case SideBarTab::AudioExplorer: return "音频";
         case SideBarTab::BeatMapExplorer: return "谱面";
+        case SideBarTab::Collaboration: return "协作";
         case SideBarTab::Settings: return "设置";
         default: return "";
         }
@@ -85,14 +98,16 @@ static std::string TabToShortLabel(SideBarTab tab)
 
 static SideBarTab SubViewIdToTab(const std::string& subViewId)
 {
-    if ( subViewId == TR("title.search_manager").view )
+    if ( subViewId == TR("title.search_manager").view() )
         return SideBarTab::Search;
-    if ( subViewId == TR("title.file_manager").view )
+    if ( subViewId == TR("title.file_manager").view() )
         return SideBarTab::FileExplorer;
-    if ( subViewId == TR("title.audio_manager").view )
+    if ( subViewId == TR("title.audio_manager").view() )
         return SideBarTab::AudioExplorer;
-    if ( subViewId == TR("title.beatmap_manager").view )
+    if ( subViewId == TR("title.beatmap_manager").view() )
         return SideBarTab::BeatMapExplorer;
+    if ( subViewId == TR("title.collaboration_manager").view() )
+        return SideBarTab::Collaboration;
     return SideBarTab::None;
 }
 

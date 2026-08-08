@@ -71,6 +71,12 @@ MainMenuEdit::MainMenuEdit()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenNoteMetadataAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_VOLUME_HIGH,
+        "ui.edit.selected_volume",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createEditSelectedObjectVolumeAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.bms_editing",
@@ -109,7 +115,7 @@ MainMenuId MainMenuEdit::id() const
 const char* MainMenuEdit::label(const MainMenuContext& context) const
 {
     (void)context;
-    return TR("ui.edit");
+    return TR("ui.edit").data();
 }
 
 /// @brief 遍历更新编辑菜单项。

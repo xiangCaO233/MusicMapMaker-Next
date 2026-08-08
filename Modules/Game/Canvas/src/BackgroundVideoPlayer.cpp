@@ -1,22 +1,33 @@
 #include "canvas/BackgroundVideoPlayer.h"
+#include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
 
 #include <cmath>
+#include <ice/thread/ThreadPool.hpp>
 #include <utility>
 
 namespace MMM::Canvas
 {
 
 BackgroundVideoPlayer::BackgroundVideoPlayer()
-    : m_worker([this](std::stop_token stopToken) { workerLoop(stopToken); })
 {
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        XERROR("Background video: Runtime thread pool is not initialized.");
+        return;
+    }
+    const auto token = m_stopSource.get_token();
+    m_workerFuture =
+        appThreadPool->enqueue([this, token]() { workerLoop(token); });
 }
 
 BackgroundVideoPlayer::~BackgroundVideoPlayer()
 {
-    m_worker.request_stop();
+    m_stopSource.request_stop();
     m_condition.notify_all();
-    if ( m_worker.joinable() ) {
-        m_worker.join();
+    if ( m_workerFuture.valid() ) {
+        m_workerFuture.wait();
+        m_workerFuture = std::future<void>{};
     }
 }
 

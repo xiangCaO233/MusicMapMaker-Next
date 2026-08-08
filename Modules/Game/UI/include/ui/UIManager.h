@@ -7,6 +7,7 @@
 #include "mmm/project/Project.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/CLayWrapperCore.h"
+#include "ui/project/ProjectOpenProgressState.h"
 #include "ui/project/ProjectUiLifecycleState.h"
 #include <atomic>
 #include <concurrentqueue.h>
@@ -26,6 +27,11 @@ namespace MMM::Event
 {
 enum class SettingsTab;
 }  // namespace MMM::Event
+
+namespace MMM::Network::Collaboration
+{
+class CollaborationRoom;
+}
 
 namespace MMM::UI
 {
@@ -64,6 +70,16 @@ public:
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
     [[nodiscard]] Graphic::NativeWindow* getNativeWindow() const;
 
+    /// @brief 绑定应用级协作房间观察指针供主画布同步视口状态。
+    /// @param room 由 GameLoop 创建并由协作视图共同持有的房间对象。
+    void setCollaborationRoom(Network::Collaboration::CollaborationRoom* room);
+
+    /// @brief 获取应用级协作房间观察指针。
+    /// @return 已绑定房间；协作功能未初始化时返回 nullptr。
+    /// @warning UI 热路径：主画布每帧读取；只返回观察指针，不复制共享所有权。
+    [[nodiscard]] Network::Collaboration::CollaborationRoom*
+    getCollaborationRoom() const;
+
     /// @brief 获取无原生装饰窗口的平台行为适配器。
     /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
@@ -74,6 +90,12 @@ public:
     /// @warning UI 热路径：逻辑线程生命周期回调负责写入，UI 和渲染线程
     /// 负责读取；为阻止同帧访问已关闭项目，必须执行一次 acquire 原子读取。
     [[nodiscard]] bool isProjectTransitionInProgress() const;
+
+    /// @brief 获取 UI 线程维护的项目打开进度快照。
+    /// @return 当前项目打开进度；只在 active 为 true 时展示。
+    /// @warning UI 热路径：返回 UI 线程本地状态引用，不访问逻辑线程或加锁。
+    [[nodiscard]] const ProjectOpenProgressState&
+    getProjectOpenProgress() const;
 
     /// @brief 判断 UI 是否持有已加载项目的生命周期快照。
     /// @return 已加载项目仍有效时返回 true。
@@ -273,6 +295,10 @@ private:
     /// @brief 主原生窗口观察指针，不持有所有权。
     Graphic::NativeWindow* m_nativeWindow{ nullptr };
 
+    /// @brief 应用级协作房间观察指针，生命周期由注册视图持有的 shared_ptr
+    /// 保证。
+    Network::Collaboration::CollaborationRoom* m_collaborationRoom{ nullptr };
+
     /// @brief 上一次已应用项目工作区的项目路径。
     std::string m_workspaceProjectPath;
 
@@ -295,6 +321,13 @@ private:
     moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
         m_pendingProjectLifecycleUpdates;
 
+    /// @brief 项目加载进度跨线程更新队列。
+    moodycamel::ConcurrentQueue<ProjectOpenProgressState>
+        m_pendingProjectOpenProgressUpdates;
+
+    /// @brief UI 线程当前展示的项目加载进度。
+    ProjectOpenProgressState m_projectOpenProgress;
+
     /// @brief 逻辑线程已经发起、但 UI 线程可能尚未消费的项目切换标志。
     /// @warning 写入者为逻辑线程生命周期回调，读取者为 UI 线程；用于阻止
     /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
@@ -302,6 +335,9 @@ private:
 
     /// @brief 项目开始打开事件订阅 ID。
     Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
+
+    /// @brief 项目加载进度事件订阅 ID。
+    Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
 
     /// @brief 项目加载完成事件订阅 ID。
     Event::SubscriptionID m_projectLoadedSubId{ 0 };

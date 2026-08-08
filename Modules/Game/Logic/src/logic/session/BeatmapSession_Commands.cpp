@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 
+#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -10,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
+#include "logic/MalodyPackageCompatibility.h"
 #include "logic/ProjectResourceService.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -21,6 +23,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -185,6 +188,84 @@ bool validateSampleTrackCountMigration(const MMM::Logic::SessionContext& ctx,
             return false;
         }
     }
+    return true;
+}
+
+/// @brief 在谱面主音轨提示变化时替换时间最早的 Main BGM 自动采样资源。
+/// @param ctx 当前谱面会话上下文。
+/// @param oldMetadata 更新前的谱面基础元数据。
+/// @param updatedMetadata 已规范化的目标谱面基础元数据。
+/// @return 找到并实际替换自动采样资源时返回 true。
+/// @warning 仅由低频元数据命令调用；替换成功时会同步完整自动采样列表。
+bool retargetFirstMainBgmSample(MMM::Logic::SessionContext& ctx,
+                                const MMM::BaseMapMeta&     oldMetadata,
+                                const MMM::BaseMapMeta&     updatedMetadata)
+{
+    const auto& oldAudioHint     = oldMetadata.song_file_hint.empty()
+                                       ? oldMetadata.main_audio_path
+                                       : oldMetadata.song_file_hint;
+    const auto& updatedAudioHint = updatedMetadata.song_file_hint.empty()
+                                       ? updatedMetadata.main_audio_path
+                                       : updatedMetadata.song_file_hint;
+    if ( oldAudioHint == updatedAudioHint || updatedAudioHint.empty() ||
+         ctx.trackCount <= 0 ) {
+        return false;
+    }
+
+    const auto* project =
+        ctx.collaborationProject
+            ? ctx.collaborationProject.get()
+            : MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return false;
+
+    const auto* targetResource =
+        MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+            *project,
+            updatedMetadata.map_path,
+            MMM::Config::pathToUtf8(updatedAudioHint));
+    if ( !targetResource ||
+         targetResource->m_type != MMM::AudioTrackType::Main ) {
+        return false;
+    }
+
+    const auto playerTrackCount = static_cast<std::uint32_t>(ctx.trackCount);
+    auto sampleView = ctx.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    entt::entity firstMainBgmSample = entt::null;
+    double       firstEffectiveTime = std::numeric_limits<double>::infinity();
+    for ( const auto entity : sampleView ) {
+        const auto& sample =
+            sampleView.get<const MMM::Logic::SampleComponent>(entity);
+        if ( sample.m_track < playerTrackCount ) continue;
+
+        const auto* currentResource =
+            MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+                *project, oldMetadata.map_path, sample.m_audioResourceId);
+        if ( !currentResource ||
+             currentResource->m_type != MMM::AudioTrackType::Main ) {
+            continue;
+        }
+
+        const double effectiveTime = sample.effectiveTime();
+        if ( !std::isfinite(effectiveTime) ||
+             effectiveTime >= firstEffectiveTime ) {
+            continue;
+        }
+        firstEffectiveTime = effectiveTime;
+        firstMainBgmSample = entity;
+    }
+    if ( firstMainBgmSample == entt::null ) return false;
+
+    auto& sample =
+        sampleView.get<MMM::Logic::SampleComponent>(firstMainBgmSample);
+    if ( sample.m_audioResourceId == targetResource->m_id ) return false;
+
+    const auto previousResourceId = sample.m_audioResourceId;
+    sample.m_audioResourceId      = targetResource->m_id;
+    ctx.m_needsSamplesSync        = true;
+    MMM::Logic::SessionUtils::syncBeatmap(ctx);
+    XINFO("Retargeted first Main BGM sample from '{}' to '{}'",
+          previousResourceId,
+          targetResource->m_id);
     return true;
 }
 
@@ -476,23 +557,82 @@ bool patchMalodyStoreModeExtFile(const std::filesystem::path& path)
         outputBytes.size());
 }
 
-/// @brief 保存谱面，并仅在 MC 导出期间临时应用用户选择的模式与 mode_ext。
+/// @brief 收集谱面中解析为项目 Main 音轨的自动采样引用。
+/// @param project 谱面所属项目。
+/// @param beatMap 待导出的谱面。
+/// @param sourcePath 来源谱面路径，用于解析旧相对路径引用。
+/// @return 需要在 MC 写出时清理 vol 的资源引用集合。
+std::unordered_set<std::string> collectMalodyMainAudioSampleReferences(
+    const MMM::Project& project, const MMM::BeatMap& beatMap,
+    const std::filesystem::path& sourcePath)
+{
+    std::vector<std::string_view> references;
+    references.reserve(beatMap.m_audioSamples.size());
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        references.emplace_back(sample.m_audioResourceId);
+    }
+
+    const auto resolvedResources =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, sourcePath, references);
+    std::unordered_set<std::string> mainReferences;
+    mainReferences.reserve(references.size());
+    for ( std::size_t index = 0; index < references.size(); ++index ) {
+        const auto* resource = resolvedResources[index];
+        if ( resource && resource->m_type == MMM::AudioTrackType::Main ) {
+            mainReferences.emplace(references[index]);
+        }
+    }
+    return mainReferences;
+}
+
+/// @brief 清理已写出的 MC 中 Main 自动音频对象的 vol 字段。
+/// @param path MC 文件路径。
+/// @param mainAudioReferences 解析为项目 Main 音轨的资源引用集合。
+/// @return 文件可解析并成功写回时返回 true。
+bool patchMalodyMainAudioVolumeFile(
+    const std::filesystem::path&           path,
+    const std::unordered_set<std::string>& mainAudioReferences)
+{
+    std::vector<std::uint8_t> inputBytes;
+    if ( !readPackageSourceFile(path, inputBytes) ) return false;
+
+    const std::string text(inputBytes.begin(), inputBytes.end());
+    auto fileData = nlohmann::json::parse(text, nullptr, false, true);
+    if ( fileData.is_discarded() || !fileData.is_object() ) return false;
+
+    MMM::Logic::stripMalodyMainAudioVolumeFields(fileData, mainAudioReferences);
+    const std::string outputText = fileData.dump(4);
+    return writePackageOutputFile(
+        path,
+        outputText.empty() ? nullptr : outputText.data(),
+        outputText.size());
+}
+
+/// @brief 保存谱面，并仅在 MC 导出期间临时应用兼容选项。
 /// @param beatMap 待保存谱面。
 /// @param outputPath 输出路径。
 /// @param malodyExportMode MC 导出时临时覆盖的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否写入上架 mode_ext。
+/// @param mainAudioReferencesWithoutVolume 需要省略 vol 的 Main
+/// 音轨引用；为空时不处理。
 /// @return 是否保存成功。
 bool saveBeatmapWithMalodyExportOptions(
     MMM::BeatMap& beatMap, const std::filesystem::path& outputPath,
-    std::optional<MMM::MalodyMode> malodyExportMode,
-    bool                           addStoreModeExtForMalodyExport)
+    std::optional<MMM::MalodyMode>         malodyExportMode,
+    bool                                   addStoreModeExtForMalodyExport,
+    const std::unordered_set<std::string>* mainAudioReferencesWithoutVolume)
 {
     refreshCurrentProjectSongFileHint(beatMap);
     const bool shouldAddStoreModeExt =
         addStoreModeExtForMalodyExport &&
         (!malodyExportMode || *malodyExportMode == MMM::MalodyMode::Slide);
+    const bool shouldStripMainAudioVolume =
+        mainAudioReferencesWithoutVolume &&
+        !mainAudioReferencesWithoutVolume->empty();
     if ( !isMalodyChartPath(outputPath) ||
-         (!malodyExportMode && !shouldAddStoreModeExt) ) {
+         (!malodyExportMode && !shouldAddStoreModeExt &&
+          !shouldStripMainAudioVolume) ) {
         return beatMap.saveToFile(outputPath);
     }
 
@@ -505,18 +645,25 @@ bool saveBeatmapWithMalodyExportOptions(
         previousProps = previousPropsIt->second;
     }
 
-    auto& props =
-        beatMap.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
-    if ( malodyExportMode ) {
-        props["mode"] = std::to_string(MMM::malodyModeValue(*malodyExportMode));
-    }
-    if ( shouldAddStoreModeExt ) {
-        applyMalodyStoreModeExtMetadata(beatMap);
+    if ( malodyExportMode || shouldAddStoreModeExt ) {
+        auto& props =
+            beatMap.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
+        if ( malodyExportMode ) {
+            props["mode"] =
+                std::to_string(MMM::malodyModeValue(*malodyExportMode));
+        }
+        if ( shouldAddStoreModeExt ) {
+            applyMalodyStoreModeExtMetadata(beatMap);
+        }
     }
 
     bool ok = beatMap.saveToFile(outputPath);
     if ( ok && shouldAddStoreModeExt ) {
         ok = patchMalodyStoreModeExtFile(outputPath);
+    }
+    if ( ok && shouldStripMainAudioVolume ) {
+        ok = patchMalodyMainAudioVolumeFile(outputPath,
+                                            *mainAudioReferencesWithoutVolume);
     }
 
     if ( previousProps ) {
@@ -593,44 +740,63 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
 
 /// @brief 将谱面源文件转换成指定路径的目标格式文件。
 /// @param sourcePath 来源谱面路径。
+/// @param project 谱面所属项目。
 /// @param outputPath 转换后输出路径。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param malodyExportMode MC 转换产物临时使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @return 是否转换成功。
-bool convertPackageBeatmapFile(const std::filesystem::path&   sourcePath,
+bool convertPackageBeatmapFile(const MMM::Project&            project,
+                               const std::filesystem::path&   sourcePath,
                                const std::filesystem::path&   outputPath,
                                const MMM::BaseMapMeta*        metadataOverride,
                                std::optional<MMM::MalodyMode> malodyExportMode,
-                               bool addStoreModeExtForMalodyExport)
+                               bool addStoreModeExtForMalodyExport,
+                               bool stripMainAudioVolumeFromMalodyExport)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
+    const auto mainAudioReferences =
+        stripMainAudioVolumeFromMalodyExport
+            ? collectMalodyMainAudioSampleReferences(
+                  project, beatMap, sourcePath)
+            : std::unordered_set<std::string>{};
     if ( metadataOverride ) {
         beatMap.m_baseMapMetadata = *metadataOverride;
     }
     beatMap.m_baseMapMetadata.map_path = outputPath;
     return saveBeatmapWithMalodyExportOptions(
-        beatMap, outputPath, malodyExportMode, addStoreModeExtForMalodyExport);
+        beatMap,
+        outputPath,
+        malodyExportMode,
+        addStoreModeExtForMalodyExport,
+        stripMainAudioVolumeFromMalodyExport ? &mainAudioReferences : nullptr);
 }
 
 /// @brief 读取转换后的目标谱面字节。
 /// @param sourcePath 来源谱面路径。
+/// @param project 谱面所属项目。
 /// @param projectOutputPath 保存到项目中时使用的目标路径。
 /// @param outputExtension 目标谱面扩展名。
 /// @param saveToProject 是否将转换产物留在项目目录中。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param malodyExportMode MC 转换产物临时使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
-    const std::filesystem::path& sourcePath,
+    const MMM::Project& project, const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
     const MMM::BaseMapMeta*        metadataOverride,
     std::optional<MMM::MalodyMode> malodyExportMode,
-    bool addStoreModeExtForMalodyExport, std::vector<std::uint8_t>& outBytes)
+    bool                           addStoreModeExtForMalodyExport,
+    bool                           stripMainAudioVolumeFromMalodyExport,
+    std::vector<std::uint8_t>&     outBytes)
 {
     const auto conversionPath =
         saveToProject
@@ -647,11 +813,13 @@ bool readConvertedPackageBeatmapBytes(
         }
     }
 
-    if ( !convertPackageBeatmapFile(sourcePath,
+    if ( !convertPackageBeatmapFile(project,
+                                    sourcePath,
                                     conversionPath,
                                     metadataOverride,
                                     malodyExportMode,
-                                    addStoreModeExtForMalodyExport) ) {
+                                    addStoreModeExtForMalodyExport,
+                                    stripMainAudioVolumeFromMalodyExport) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -764,7 +932,7 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 }
 
 /// @brief 写入 zip 兼容的谱面包。
-/// @param projectRoot 当前项目根目录。
+/// @param project 当前项目及其资源分类。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
 /// @param packageTypes 输出包格式对应的文件类型规则。
@@ -774,19 +942,22 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 /// @param malodyExportMode MCZ 包内 MC 谱面统一使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为写出的 MC 谱面写入上架
 /// mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(
-    const std::filesystem::path&          projectRoot,
-    const std::filesystem::path&          outputPath,
+    const MMM::Project& project, const std::filesystem::path& outputPath,
     const std::vector<std::string>&       selectedRelativePaths,
     const MMM::PackageSupportedFileTypes& packageTypes,
     const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
          metadataOverrides,
     bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage,
     std::optional<MMM::MalodyMode> malodyExportMode,
-    bool                           addStoreModeExtForMalodyExport)
+    bool                           addStoreModeExtForMalodyExport,
+    bool                           stripMainAudioVolumeFromMalodyExport)
 {
     if ( selectedRelativePaths.empty() ) return false;
+    const auto& projectRoot = project.m_projectRoot;
 
     mz_zip_archive zipArchive{};
     if ( !mz_zip_writer_init_heap(&zipArchive, 0, 0) ) {
@@ -803,6 +974,9 @@ bool writeBeatmapPackage(
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
     const bool addStoreModeExtToMc =
         addStoreModeExtForMalodyExport &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    const bool stripMainAudioVolumeFromMc =
+        stripMainAudioVolumeFromMalodyExport &&
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
     const auto packageMalodyExportMode =
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz")
@@ -851,8 +1025,9 @@ bool writeBeatmapPackage(
             if ( shouldConvertSource ) {
                 targetArchivePath.replace_extension(packageBeatmapExtension);
             }
-            const bool shouldReencode =
-                shouldConvertSource || packageMalodyExportMode.has_value();
+            const bool shouldReencode = shouldConvertSource ||
+                                        packageMalodyExportMode.has_value() ||
+                                        stripMainAudioVolumeFromMc;
 
             const auto metadataIt = metadataOverrideMap.find(relativePathKey);
             const MMM::BaseMapMeta* metadataOverride =
@@ -864,6 +1039,7 @@ bool writeBeatmapPackage(
                     const auto projectOutputPath =
                         (projectRoot / targetArchivePath).lexically_normal();
                     if ( !readConvertedPackageBeatmapBytes(
+                             project,
                              sourcePath,
                              projectOutputPath,
                              packageBeatmapExtension,
@@ -872,6 +1048,7 @@ bool writeBeatmapPackage(
                              metadataOverride,
                              packageMalodyExportMode,
                              addStoreModeExtToMc,
+                             stripMainAudioVolumeFromMc,
                              fileBytes) ) {
                         XERROR("PackBeatmap: failed to convert source file: {}",
                                relativeUtf8);
@@ -920,12 +1097,14 @@ bool writeBeatmapPackage(
                         const auto projectOutputPath =
                             (projectRoot / imdArchivePath).lexically_normal();
                         if ( !readConvertedPackageBeatmapBytes(
+                                 project,
                                  sourcePath,
                                  projectOutputPath,
                                  ".imd",
                                  false,
                                  nullptr,
                                  std::nullopt,
+                                 false,
                                  false,
                                  fileBytes) ) {
                             XERROR(
@@ -994,12 +1173,58 @@ namespace MMM::Logic
 
 bool BeatmapSession::processCommands()
 {
-    LogicCommand cmd;
-    bool         processed = false;
+    LogicCommand                cmd;
+    bool                        processed = false;
+    ::MMM::BeatmapMutationFlags mutationFlags =
+        ::MMM::BeatmapMutationFlags::None;
+    const auto publishPendingMutation = [this, &mutationFlags]() {
+        if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                                  std::memory_order_acquire);
+        if ( observer && m_ctx->currentBeatmap ) {
+            SessionUtils::syncBeatmap(*m_ctx);
+            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
+        }
+        mutationFlags = ::MMM::BeatmapMutationFlags::None;
+    };
     while ( m_commandQueue.try_dequeue(cmd) ) {
-        std::visit(
-            [this, &processed](auto&& arg) {
+        const bool authoritativeSynchronization = std::visit(
+            [](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
+                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
+                    return arg.authoritativeRemote;
+                }
+                return false;
+            },
+            cmd);
+        const bool localGestureActive =
+            m_ctx->isDragging || m_ctx->isSelecting ||
+            m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
+        if ( authoritativeSynchronization && localGestureActive ) {
+            m_commandQueue.enqueue(std::move(cmd));
+            break;
+        }
+        if ( authoritativeSynchronization ) publishPendingMutation();
+
+        // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
+        // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
+        // 布局。画布组件仍在 update 末尾一次性物化，避免连续输入复制内部向量。
+        auto&       visual                   = m_ctx->lastConfig.visual;
+        const auto  baseTrackLayout          = visual.trackLayout;
+        const float baseJudgmentLinePosition = visual.judgeline_pos;
+        const auto  effectiveTrackLayout =
+            visual.trackLayoutForKeyCount(m_ctx->trackCount);
+        visual.trackLayout = effectiveTrackLayout;
+        visual.judgeline_pos =
+            visual.judgmentLinePositionForKeyCount(m_ctx->trackCount);
+        bool replacedEditorConfig = false;
+        std::visit(
+            [this, &processed, &replacedEditorConfig, &mutationFlags](
+                auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
+                    replacedEditorConfig = true;
+                }
                 if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
@@ -1022,25 +1247,25 @@ bool BeatmapSession::processCommands()
 
                 // --- 自动更新操作状态描述 ---
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
-                    std::string toolName = TR("ui.status.ready").pStr;
+                    std::string toolName = TR("ui.status.ready").data();
                     switch ( arg.tool ) {
                     case EditTool::Move:
-                        toolName = TR("ui.status.tool.select_move").pStr;
+                        toolName = TR("ui.status.tool.select_move").data();
                         break;
                     case EditTool::Marquee:
-                        toolName = TR("ui.status.tool.marquee").pStr;
+                        toolName = TR("ui.status.tool.marquee").data();
                         break;
                     case EditTool::Draw:
-                        toolName = TR("ui.status.tool.draw_brush").pStr;
+                        toolName = TR("ui.status.tool.draw_brush").data();
                         break;
                     case EditTool::ColorBrush:
-                        toolName = TR("ui.status.tool.color_brush").pStr;
+                        toolName = TR("ui.status.tool.color_brush").data();
                         break;
                     case EditTool::ColorEraser:
-                        toolName = TR("ui.status.tool.color_eraser").pStr;
+                        toolName = TR("ui.status.tool.color_eraser").data();
                         break;
                     case EditTool::Layout:
-                        toolName = TR("ui.status.tool.layout").pStr;
+                        toolName = TR("ui.status.tool.layout").data();
                         break;
                     }
                     m_ctx->lastActionMessage = fmt::format(
@@ -1116,13 +1341,20 @@ bool BeatmapSession::processCommands()
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ||
                                std::is_same_v<T, CmdUpdateViewport> ||
                                std::is_same_v<T, CmdLoadBeatmap> ||
+                               std::is_same_v<T,
+                                              CmdSetCollaborationResources> ||
                                std::is_same_v<T, CmdSaveBeatmap> ||
                                std::is_same_v<T, CmdSaveBeatmapAs> ||
                                std::is_same_v<T, CmdPackBeatmap> ||
                                std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                                std::is_same_v<T,
                                               CmdMarkBeatmapMetadataDirty> ) {
-                    this->handleCommand(arg);
+                    if constexpr ( std::is_same_v<T,
+                                                  CmdUpdateBeatmapMetadata> ) {
+                        mutationFlags |= this->handleCommand(arg);
+                    } else {
+                        this->handleCommand(arg);
+                    }
                 }
                 // --- Playback 处理的命令 ---
                 else if constexpr (
@@ -1147,6 +1379,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
                     std::is_same_v<T, CmdChangeTool> ||
                     std::is_same_v<T, CmdSetMousePosition> ||
                     std::is_same_v<T, CmdUpdateTrackCount> ||
@@ -1190,11 +1423,125 @@ bool BeatmapSession::processCommands()
                 }
             },
             cmd);
+        if ( !replacedEditorConfig ) {
+            visual.trackLayout   = baseTrackLayout;
+            visual.judgeline_pos = baseJudgmentLinePosition;
+        }
+
+        std::visit(
+            [this, &mutationFlags](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                constexpr bool isMutationCommand =
+                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
+                    std::is_same_v<T, CmdEndDrag> ||
+                    std::is_same_v<T, CmdCreateAudioSample> ||
+                    std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
+                    std::is_same_v<T, CmdUpdateTrackCount> ||
+                    std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdPaste> ||
+                    std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdMirrorSelected> ||
+                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
+                    std::is_same_v<T, CmdApplyNoteColorToSelection> ||
+                    std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
+                    std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
+                    std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvents> ||
+                    std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                    std::is_same_v<T, CmdReplaceBeatmapData> ||
+                    std::is_same_v<T, CmdEndBrush> ||
+                    std::is_same_v<T, CmdEndErase> ||
+                    std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                    std::is_same_v<T, CmdMarkBeatmapMetadataDirty>;
+                if constexpr ( !isMutationCommand ) {
+                    return;
+                }
+                const auto actionMutationFlags =
+                    m_ctx->actionStack.takePendingMutationFlags();
+                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
+                    if ( !arg.notifyMutationObserver ||
+                         arg.authoritativeRemote ) {
+                        return;
+                    }
+                }
+
+                mutationFlags |= actionMutationFlags;
+                if ( m_ctx->m_needsNotesSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
+                }
+                if ( m_ctx->m_needsTimingsSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Timelines;
+                }
+                if ( m_ctx->m_needsSamplesSync ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+                }
+                if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ||
+                               std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T,
+                                              CmdMarkBeatmapMetadataDirty> ) {
+                    mutationFlags |= ::MMM::BeatmapMutationFlags::Metadata;
+                } else if constexpr ( std::is_same_v<T,
+                                                     CmdReplaceBeatmapData> ) {
+                    if ( arg.replaceMetadata ) {
+                        mutationFlags |= ::MMM::BeatmapMutationFlags::Metadata;
+                    }
+                    if ( arg.replaceAudioSamples ) {
+                        mutationFlags |=
+                            ::MMM::BeatmapMutationFlags::AudioSamples;
+                    }
+                }
+            },
+            cmd);
+        if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
+            SessionUtils::syncBeatmap(*m_ctx);
+            auto observer = std::atomic_load_explicit(
+                &m_mutationObserver, std::memory_order_acquire);
+            if ( observer ) {
+                observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+            }
+        }
     }
+
+    publishPendingMutation();
     return processed;
 }
 
 // --- Session 自己处理的 ---
+
+void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
+{
+    if ( !cmd.project || !m_ctx->currentBeatmap ) return;
+    m_ctx->collaborationProject                     = cmd.project;
+    m_ctx->collaborationPathRemap                   = cmd.pathRemap;
+    m_ctx->isAudioTimelineDescriptorDirty           = true;
+    m_ctx->isAudioTimelineActivationPending         = true;
+    m_ctx->isAudioTimelineFingerprintPublishPending = true;
+
+    for ( const auto& resource : cmd.project->m_audioResources ) {
+        if ( resource.m_type != ::MMM::AudioTrackType::Effect ) continue;
+        const auto absolutePath =
+            cmd.project->m_projectRoot / Config::utf8ToPath(resource.m_path);
+        Audio::AudioManager::instance().registerSoundEffect(
+            resource.m_id, Config::pathToUtf8(absolutePath), resource.m_config);
+    }
+
+    auto       backgroundMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+    const auto source = Config::pathToUtf8(backgroundMetadata.main_cover_path);
+    if ( const auto iterator = m_ctx->collaborationPathRemap.find(source);
+         iterator != m_ctx->collaborationPathRemap.end() ) {
+        backgroundMetadata.main_cover_path =
+            Config::utf8ToPath(iterator->second);
+    }
+    SessionUtils::updateBackgroundSize(
+        *m_ctx, backgroundMetadata, m_ctx->collaborationProject.get());
+}
 
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
@@ -1291,6 +1638,8 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     }
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
+    m_ctx->collaborationProject.reset();
+    m_ctx->collaborationPathRemap.clear();
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     if ( m_ctx->currentBeatmap ) {
         publishBeatmapLoadDiagnostics(*m_ctx->currentBeatmap);
@@ -1387,7 +1736,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             *m_ctx->currentBeatmap,
             savePath,
             cmd.malodyExportMode,
-            cmd.addStoreModeExtForMalodyExport);
+            cmd.addStoreModeExtForMalodyExport,
+            nullptr);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
@@ -1446,7 +1796,7 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     }
 
     const bool success =
-        writeBeatmapPackage(project->m_projectRoot,
+        writeBeatmapPackage(*project,
                             outputPath,
                             cmd.selectedProjectRelativePaths,
                             *packageTypes,
@@ -1454,7 +1804,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.saveConvertedBeatmapsToProject,
                             cmd.includeLegacyImdBeatmapsInPackage,
                             cmd.malodyExportMode,
-                            cmd.addStoreModeExtForMalodyExport);
+                            cmd.addStoreModeExtForMalodyExport,
+                            cmd.stripMainAudioVolumeFromMalodyExport);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {
@@ -1468,15 +1819,22 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     });
 }
 
-void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
+/// @brief 更新谱面元数据，并同步主音轨提示对应的首个 Main BGM 采样。
+/// @param cmd 新的谱面基础元数据。
+/// @return 自动采样发生同步替换时包含 AudioSamples，否则返回 None。
+::MMM::BeatmapMutationFlags BeatmapSession::handleCommand(
+    const CmdUpdateBeatmapMetadata& cmd)
 {
+    auto mutationFlags = ::MMM::BeatmapMutationFlags::None;
     if ( m_ctx->currentBeatmap ) {
         const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         auto       updatedMeta = cmd.baseMeta;
         normalizeCurrentProjectMetadataPaths(updatedMeta);
         updatedMeta.track_count     = std::max(1, updatedMeta.track_count);
         updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;
-        if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) return;
+        if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) {
+            return mutationFlags;
+        }
 
         // 所有元数据编辑入口最终都在此处转入可撤销的原子改键操作，避免 UI
         // 直接覆盖 track_count 后丢失自动采样的 BGM 相对轨道。
@@ -1488,7 +1846,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                                                     migrationError) ) {
                 m_ctx->lastActionMessage = migrationError;
                 XERROR("BeatmapSession: {}", migrationError);
-                return;
+                return mutationFlags;
             }
 
             m_interaction->handleCommand(
@@ -1499,8 +1857,12 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                         "玩家轨道数变更未能完成，元数据保持不变";
                 }
                 XERROR("BeatmapSession: {}", m_ctx->lastActionMessage);
-                return;
+                return mutationFlags;
             }
+        }
+
+        if ( retargetFirstMainBgmSample(*m_ctx, oldMetadata, updatedMeta) ) {
+            mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
         }
 
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
@@ -1531,12 +1893,24 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 路径或资源类型改变时，按图片/视频分支重新探测尺寸。
         if ( oldMetadata.main_cover_path != updatedMeta.main_cover_path ||
              oldMetadata.cover_type != updatedMeta.cover_type ) {
+            auto       backgroundMetadata = updatedMeta;
+            const auto source =
+                Config::pathToUtf8(backgroundMetadata.main_cover_path);
+            if ( const auto iterator =
+                     m_ctx->collaborationPathRemap.find(source);
+                 iterator != m_ctx->collaborationPathRemap.end() ) {
+                backgroundMetadata.main_cover_path =
+                    Config::utf8ToPath(iterator->second);
+            }
             SessionUtils::updateBackgroundSize(
                 *m_ctx,
-                updatedMeta,
-                EditorEngine::instance().getCurrentProject());
+                backgroundMetadata,
+                m_ctx->collaborationProject
+                    ? m_ctx->collaborationProject.get()
+                    : EditorEngine::instance().getCurrentProject());
         }
     }
+    return mutationFlags;
 }
 
 /// @brief 标记 UI 直接修改的扩展元数据，并安排一次尾随自动保存。

@@ -236,11 +236,10 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
 
     emitProgress(options, 0.0f, "正在打开音频...");
 
-    std::unique_ptr<ice::ThreadPool> fallbackThreadPool;
     ice::ThreadPool* threadPool = Runtime::AppThreadPool::instance().get();
     if ( !threadPool ) {
-        fallbackThreadPool = std::make_unique<ice::ThreadPool>(1);
-        threadPool         = fallbackThreadPool.get();
+        result.errorMessage = "Runtime thread pool is not initialized";
+        return result;
     }
 
     auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();

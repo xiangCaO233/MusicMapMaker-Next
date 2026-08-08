@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -22,7 +23,8 @@
 namespace MMM
 {
 class BeatMap;
-}
+class Project;
+}  // namespace MMM
 
 namespace MMM::Logic
 {
@@ -154,6 +156,12 @@ struct CmdUpdateObjectSampleVolume {
     std::int32_t subIndex{ -1 };
 
     /// @brief 要写入物件的非负音量倍率。
+    float volume{ 1.0F };
+};
+
+/// @brief 批量更新当前选中物件所含音频绑定的音量。
+struct CmdUpdateSelectedObjectSampleVolume {
+    /// @brief 要写入全部受支持选中物件的非负音量倍率。
     float volume{ 1.0F };
 };
 
@@ -508,6 +516,9 @@ struct CmdPackBeatmap {
     /// @brief MCZ 打包时是否为写出的 MC 谱面写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
+    /// @brief MCZ 打包时是否删除 Main 音轨自动采样的 vol 字段。
+    bool stripMainAudioVolumeFromMalodyExport{ false };
+
     /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
     std::optional<MMM::MalodyMode> malodyExportMode;
 
@@ -639,6 +650,25 @@ struct CmdReplaceBeatmapData {
 
     /// @brief 是否替换谱面元数据。
     bool replaceMetadata{ false };
+
+    /// @brief 是否替换自动采样对象。
+    bool replaceAudioSamples{ false };
+
+    /// @brief 是否把本次替换继续发布给外部谱面变化观察者。
+    bool notifyMutationObserver{ true };
+
+    /// @brief 是否为房主排序后下发的远端权威状态。
+    /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
+    bool authoritativeRemote{ false };
+};
+
+/// @brief 将已经完整校验的协作资源绑定到当前访客会话。
+struct CmdSetCollaborationResources {
+    /// @brief 以协作缓存为根的只读临时项目。
+    std::shared_ptr<MMM::Project> project;
+
+    /// @brief 房主谱面路径到本机内容缓存路径的映射。
+    std::unordered_map<std::string, std::string> pathRemap;
 };
 
 /**
@@ -749,7 +779,8 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
     CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
-    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
+    CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
+    CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
     CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
     CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
@@ -761,10 +792,11 @@ using LogicCommand = std::variant<
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetCollaborationResources, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 

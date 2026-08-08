@@ -1,6 +1,7 @@
 #include "audio/AudioSpeedExportService.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <cctype>
@@ -598,6 +599,8 @@ bool runResourceAudioCoverage(const std::filesystem::path& resourceRoot,
 int main(int argc, char* argv[])
 {
     XLogger::init("AudioSpeedExportServiceTest");
+    auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+    appThreadPool.init();
 
     const auto root =
         std::filesystem::temp_directory_path() / "mmm_audio_speed_export_test";
@@ -887,11 +890,13 @@ int main(int argc, char* argv[])
     std::filesystem::remove_all(root, cleanupError);
 
     if ( !ok ) {
+        appThreadPool.shutdown();
         XLogger::shutdown();
         return EXIT_FAILURE;
     }
 
     XINFO("AudioSpeedExportServiceTest passed.");
+    appThreadPool.shutdown();
     XLogger::shutdown();
     return EXIT_SUCCESS;
 }

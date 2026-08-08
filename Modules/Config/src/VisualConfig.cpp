@@ -497,6 +497,140 @@ void from_json(const nlohmann::json& j, TrackLayout& layout)
     layout.bottom = j.value("bottom", 0.95f);
 }
 
+void to_json(nlohmann::json& j, const KeyCountLayoutConfig& config)
+{
+    j = nlohmann::json{
+        { "keyCount", config.keyCount },
+        { "trackLayout", config.trackLayout },
+        { "judgeline_pos", config.judgmentLinePosition },
+        { "canvasComponents", config.canvasComponents },
+    };
+}
+
+void from_json(const nlohmann::json& j, KeyCountLayoutConfig& config)
+{
+    config.keyCount             = j.value("keyCount", 0);
+    config.trackLayout          = j.value("trackLayout", TrackLayout());
+    config.judgmentLinePosition = j.value("judgeline_pos", 0.85f);
+    config.canvasComponents =
+        j.value("canvasComponents", CanvasComponentLayoutConfig());
+}
+
+const KeyCountLayoutConfig* VisualConfig::findKeyCountLayout(
+    std::int32_t keyCount) const
+{
+    if ( keyCount <= 0 ) return nullptr;
+    const auto stored =
+        std::lower_bound(keyCountLayouts.begin(),
+                         keyCountLayouts.end(),
+                         keyCount,
+                         [](const auto& entry, std::int32_t count) {
+                             return entry.keyCount < count;
+                         });
+    if ( stored == keyCountLayouts.end() || stored->keyCount != keyCount ) {
+        return nullptr;
+    }
+    return &*stored;
+}
+
+const TrackLayout& VisualConfig::trackLayoutForKeyCount(
+    std::int32_t keyCount) const
+{
+    const auto* stored = findKeyCountLayout(keyCount);
+    return stored ? stored->trackLayout : trackLayout;
+}
+
+float VisualConfig::judgmentLinePositionForKeyCount(std::int32_t keyCount) const
+{
+    const auto* stored = findKeyCountLayout(keyCount);
+    return stored ? stored->judgmentLinePosition : judgeline_pos;
+}
+
+const CanvasComponentLayoutConfig& VisualConfig::canvasComponentsForKeyCount(
+    std::int32_t keyCount) const
+{
+    const auto* stored = findKeyCountLayout(keyCount);
+    return stored ? stored->canvasComponents : canvasComponents;
+}
+
+namespace
+{
+/// @brief 取得或建立指定 Key 数布局，新增项继承旧版布局模板。
+/// @param layouts 按 Key 数升序保存的布局集合。
+/// @param keyCount 玩家轨道数量。
+/// @param trackLayout 轨道布局模板。
+/// @param judgmentLinePosition 判定线位置模板。
+/// @param canvasComponents 画布组件布局模板。
+/// @return 对应 Key 数的可写布局。
+KeyCountLayoutConfig& editableKeyCountLayout(
+    std::vector<KeyCountLayoutConfig>& layouts, std::int32_t keyCount,
+    const TrackLayout& trackLayout, float judgmentLinePosition,
+    const CanvasComponentLayoutConfig& canvasComponents)
+{
+    const auto stored =
+        std::lower_bound(layouts.begin(),
+                         layouts.end(),
+                         keyCount,
+                         [](const auto& entry, std::int32_t count) {
+                             return entry.keyCount < count;
+                         });
+    if ( stored != layouts.end() && stored->keyCount == keyCount ) {
+        return *stored;
+    }
+    return *layouts.insert(stored,
+                           KeyCountLayoutConfig{
+                               .keyCount             = keyCount,
+                               .trackLayout          = trackLayout,
+                               .judgmentLinePosition = judgmentLinePosition,
+                               .canvasComponents     = canvasComponents,
+                           });
+}
+}  // namespace
+
+TrackLayout& VisualConfig::editableTrackLayoutForKeyCount(std::int32_t keyCount)
+{
+    if ( keyCount <= 0 ) return trackLayout;
+    return editableKeyCountLayout(keyCountLayouts,
+                                  keyCount,
+                                  trackLayout,
+                                  judgeline_pos,
+                                  canvasComponents)
+        .trackLayout;
+}
+
+float& VisualConfig::editableJudgmentLinePositionForKeyCount(
+    std::int32_t keyCount)
+{
+    if ( keyCount <= 0 ) return judgeline_pos;
+    return editableKeyCountLayout(keyCountLayouts,
+                                  keyCount,
+                                  trackLayout,
+                                  judgeline_pos,
+                                  canvasComponents)
+        .judgmentLinePosition;
+}
+
+CanvasComponentLayoutConfig& VisualConfig::editableCanvasComponentsForKeyCount(
+    std::int32_t keyCount)
+{
+    if ( keyCount <= 0 ) return canvasComponents;
+    return editableKeyCountLayout(keyCountLayouts,
+                                  keyCount,
+                                  trackLayout,
+                                  judgeline_pos,
+                                  canvasComponents)
+        .canvasComponents;
+}
+
+void VisualConfig::applyKeyCountLayout(std::int32_t keyCount)
+{
+    const auto* stored = findKeyCountLayout(keyCount);
+    if ( !stored ) return;
+    trackLayout      = stored->trackLayout;
+    judgeline_pos    = stored->judgmentLinePosition;
+    canvasComponents = stored->canvasComponents;
+}
+
 void to_json(nlohmann::json& j, const VisualConfig& config)
 {
     auto background = config.background;
@@ -505,6 +639,7 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
     j = nlohmann::json{
         { "trackLayout", config.trackLayout },
         { "canvasComponents", config.canvasComponents },
+        { "keyCountLayouts", config.keyCountLayouts },
         { "background", background },
         { "previewConfig", config.previewConfig },
         { "trackBoxLineWidth", config.trackBoxLineWidth },
@@ -521,6 +656,8 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "enableLinearScrollMapping", config.enableLinearScrollMapping },
         { "snapThreshold", config.snapThreshold },
         { "beatLineAlpha", config.beatLineAlpha },
+        { "hoverSubdivisionLineExtensionRatio",
+          config.hoverSubdivisionLineExtensionRatio },
         { "beatLineDisplayMode", config.beatLineDisplayMode },
         { "beatLineCursorVisibleRatio", config.beatLineCursorVisibleRatio },
         { "beatLineCursorFadeRatio", config.beatLineCursorFadeRatio },
@@ -531,7 +668,9 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "spectrumDetailLevel", config.spectrumDetailLevel },
         { "enableHitEffects", config.enableHitEffects },
         { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
-        { "debugDrawHitboxes", config.debugDrawHitboxes }
+        { "debugDrawHitboxes", config.debugDrawHitboxes },
+        { "interactionHitboxScaleX", config.interactionHitboxScaleX },
+        { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
 }
 
@@ -544,6 +683,22 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.trackLayout = j.value("trackLayout", TrackLayout());
     config.canvasComponents =
         j.value("canvasComponents", CanvasComponentLayoutConfig());
+    config.keyCountLayouts =
+        j.value("keyCountLayouts", std::vector<KeyCountLayoutConfig>{});
+    std::erase_if(config.keyCountLayouts,
+                  [](const auto& layout) { return layout.keyCount <= 0; });
+    std::stable_sort(config.keyCountLayouts.begin(),
+                     config.keyCountLayouts.end(),
+                     [](const auto& lhs, const auto& rhs) {
+                         return lhs.keyCount < rhs.keyCount;
+                     });
+    config.keyCountLayouts.erase(
+        std::unique(config.keyCountLayouts.begin(),
+                    config.keyCountLayouts.end(),
+                    [](const auto& lhs, const auto& rhs) {
+                        return lhs.keyCount == rhs.keyCount;
+                    }),
+        config.keyCountLayouts.end());
     config.background = j.value("background", BackgroundConfig());
     if ( !hasBackgroundSpectrumComponent ) {
         config.canvasComponents.backgroundSpectrum.visible =
@@ -571,8 +726,10 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.scrollAnimationDuration = j.value("scrollAnimationDuration", 0.12f);
     config.enableLinearScrollMapping =
         j.value("enableLinearScrollMapping", false);
-    config.snapThreshold = j.value("snapThreshold", 16.0f);
-    config.beatLineAlpha = j.value("beatLineAlpha", 0.75f);
+    config.snapThreshold                      = j.value("snapThreshold", 16.0f);
+    config.beatLineAlpha                      = j.value("beatLineAlpha", 0.75f);
+    config.hoverSubdivisionLineExtensionRatio = std::clamp(
+        j.value("hoverSubdivisionLineExtensionRatio", 0.5f), 0.0f, 1.0f);
     if ( j.contains("beatLineDisplayMode") ) {
         config.beatLineDisplayMode =
             j.value("beatLineDisplayMode", BeatLineDisplayMode::Always);
@@ -604,6 +761,28 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                    VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
+    config.interactionHitboxScaleX =
+        j.value("interactionHitboxScaleX",
+                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+    config.interactionHitboxScaleY =
+        j.value("interactionHitboxScaleY",
+                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+    if ( !std::isfinite(config.interactionHitboxScaleX) ) {
+        config.interactionHitboxScaleX =
+            VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE;
+    }
+    if ( !std::isfinite(config.interactionHitboxScaleY) ) {
+        config.interactionHitboxScaleY =
+            VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE;
+    }
+    config.interactionHitboxScaleX =
+        std::clamp(config.interactionHitboxScaleX,
+                   VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                   VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
+    config.interactionHitboxScaleY =
+        std::clamp(config.interactionHitboxScaleY,
+                   VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                   VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
 }
 
 }  // namespace MMM::Config

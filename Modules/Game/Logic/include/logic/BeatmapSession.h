@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "mmm/beatmap/BeatmapMutationObserver.h"
+#include <atomic>
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <memory>
@@ -37,6 +39,16 @@ public:
     /// @brief 推送指令到无锁队列（跨线程安全，由 UI 线程或事件系统调用）
     /// @param cmd 指令对象
     void pushCommand(LogicCommand&& cmd);
+
+    /// @brief 设置低频谱面领域变化观察者。
+    /// @param observer 新观察者；为空时恢复纯离线会话。
+    /// @param publishCurrentSnapshot 是否在下一次逻辑更新发布当前完整谱面；
+    /// 访客从房主快照创建会话时应传 false，避免把刚收到的快照回传为本地编辑。
+    /// @warning 跨 UI/逻辑线程低频调用；原子 shared_ptr
+    /// 用于保证协作房间断开时回调对象仍存活，不得在普通 update 中复制。
+    void setMutationObserver(
+        std::shared_ptr<::MMM::IBeatmapMutationObserver> observer,
+        bool publishCurrentSnapshot = true);
 
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
     /// @warning 逻辑热路径：每个逻辑 update
@@ -105,7 +117,14 @@ private:
 
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
+    /// @warning 逻辑热路径：每个 Session update 调用；普通帧只检查空队列，
+    /// 仅低频元数据命令允许同步自动采样领域数据。
     bool processCommands();
+
+    /// @brief 发布跨线程请求的完整谱面快照。
+    /// @warning 逻辑热路径：每 update 仅检查一个 relaxed 原子标志；只有新观察者
+    /// 绑定后的单次分支会同步完整 BeatMap 并回调。
+    void publishRequestedMutationSnapshot();
 
     /// @brief 判断本轮是否需要生成并发布渲染快照。
     /// @param currentSysTime 当前单调系统时间（秒）。
@@ -144,10 +163,16 @@ private:
     void handleCommand(const CmdUpdateEditorConfig& cmd);
     void handleCommand(const CmdUpdateViewport& cmd);
     void handleCommand(const CmdLoadBeatmap& cmd);
+    void handleCommand(const CmdSetCollaborationResources& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
-    void handleCommand(const CmdUpdateBeatmapMetadata& cmd);
+    /// @brief 更新谱面元数据，并在主音轨提示变化时同步首个 Main BGM 采样。
+    /// @param cmd 新的谱面基础元数据。
+    /// @return 本次元数据更新额外产生的谱面变化类型。
+    /// @warning 低频 UI 命令路径；主音轨实际变化时会同步完整自动采样列表。
+    ::MMM::BeatmapMutationFlags handleCommand(
+        const CmdUpdateBeatmapMetadata& cmd);
     void handleCommand(const CmdMarkBeatmapMetadataDirty& cmd);
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态
@@ -157,6 +182,16 @@ private:
 
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
+
+    /// @brief 当前低频谱面变化观察者。
+    /// @warning 跨线程 shared_ptr 原子：只在谱面发生实际变化或首次绑定时加载，
+    /// 用于避免观察者在逻辑回调期间被 UI 线程销毁。
+    std::shared_ptr<::MMM::IBeatmapMutationObserver> m_mutationObserver;
+
+    /// @brief 新观察者绑定后请求逻辑线程发布一次完整谱面快照。
+    /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed
+    /// 即可，因为观察者指针自身通过 acquire/release 原子传递。
+    std::atomic_bool m_mutationSnapshotRequested{ false };
 
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点

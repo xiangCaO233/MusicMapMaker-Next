@@ -244,10 +244,6 @@ void SampleRenderSystem::renderSamples(
     }
     const auto sampleColor =
         bgmColor("bgm_tracks.sample", { 0.36F, 0.72F, 0.92F, 0.96F });
-    const auto selectedColor =
-        bgmColor("bgm_tracks.sample_selected", { 1.0F, 0.78F, 0.24F, 1.0F });
-    const auto hoveredColor =
-        bgmColor("bgm_tracks.sample_hovered", { 0.58F, 0.9F, 1.0F, 1.0F });
     const auto offsetColor =
         bgmColor("bgm_tracks.offset", { 0.96F, 0.56F, 0.28F, 0.92F });
     const auto textColor = audioObjectLabelColor();
@@ -265,8 +261,42 @@ void SampleRenderSystem::renderSamples(
                                           config.visual.noteScaleY > 0.0F
                                       ? config.visual.noteScaleY
                                       : 1.0F;
+    /// @brief 使用与基础层一致的几何绘制采样本体，供基础层和发光层复用。
+    /// @param targetBatcher 目标批处理器。
+    /// @param bodyX 采样本体左边界。
+    /// @param anchorY 采样本体纵向中心。
+    /// @param bodyWidth 采样本体宽度。
+    /// @param bodyHeight 采样本体高度。
+    /// @param color 采样本体颜色。
+    /// @warning 主画布热路径：每个可见或发光采样调用，禁止引入资源查询与分配。
+    const auto renderSampleBody = [&](Batcher&  targetBatcher,
+                                      float     bodyX,
+                                      float     anchorY,
+                                      float     bodyWidth,
+                                      float     bodyHeight,
+                                      glm::vec4 color) {
+        if ( hasNoteTexture ) {
+            targetBatcher.setTexture(TextureID::Note);
+            targetBatcher.pushFilledQuad(bodyX,
+                                         anchorY + bodyHeight * 0.5F,
+                                         bodyWidth,
+                                         bodyHeight,
+                                         { noteTextureAspect, 1.0F },
+                                         config.visual.noteFillMode,
+                                         color);
+        } else {
+            targetBatcher.setTexture(TextureID::None);
+            targetBatcher.pushRoundedQuad(bodyX,
+                                          anchorY + bodyHeight * 0.5F,
+                                          bodyWidth,
+                                          bodyHeight,
+                                          4.0F,
+                                          color);
+        }
+    };
 
     batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+    bool hasSampleGlow = false;
 
     for ( const auto entity : snapshot->sampleQueryScratch ) {
         if ( !registry.valid(entity) ||
@@ -328,12 +358,7 @@ void SampleRenderSystem::renderSamples(
             (interaction &&
              (interaction->isSelected || interaction->isHovered));
 
-        glm::vec4 bodyColor = sampleColor;
-        if ( interaction && interaction->isSelected ) {
-            bodyColor = selectedColor;
-        } else if ( interaction && interaction->isHovered ) {
-            bodyColor = hoveredColor;
-        }
+        glm::vec4  bodyColor = sampleColor;
         const bool isErasing =
             snapshot->erasingObjectKind == ChartObjectKind::AudioSample &&
             snapshot->erasingEntities.contains(entity);
@@ -344,6 +369,9 @@ void SampleRenderSystem::renderSamples(
             sampleOffsetColor = { 1.0F, 0.2F, 0.2F, 0.7F };
             sampleTextColor   = { 1.0F, 0.35F, 0.35F, 0.75F };
         }
+        hasSampleGlow = hasSampleGlow ||
+                        (interaction &&
+                         (interaction->isSelected || interaction->isHovered));
 
         if ( sample.m_offsetMs != 0 ) {
             batcher.setTexture(TextureID::None);
@@ -390,24 +418,8 @@ void SampleRenderSystem::renderSamples(
                                     sampleOffsetColor);
         }
 
-        if ( hasNoteTexture ) {
-            batcher.setTexture(TextureID::Note);
-            batcher.pushFilledQuad(bodyX,
-                                   anchorY + bodyHeight * 0.5F,
-                                   bodyWidth,
-                                   bodyHeight,
-                                   { noteTextureAspect, 1.0F },
-                                   config.visual.noteFillMode,
-                                   bodyColor);
-        } else {
-            batcher.setTexture(TextureID::None);
-            batcher.pushRoundedQuad(bodyX,
-                                    anchorY + bodyHeight * 0.5F,
-                                    bodyWidth,
-                                    bodyHeight,
-                                    4.0F,
-                                    bodyColor);
-        }
+        renderSampleBody(
+            batcher, bodyX, anchorY, bodyWidth, bodyHeight, bodyColor);
 
         renderAudioObjectLabel(batcher,
                                sample.m_audioResourceId,
@@ -443,6 +455,64 @@ void SampleRenderSystem::renderSamples(
                 });
             }
         }
+    }
+
+    if ( hasSampleGlow ) {
+        batcher.flush();
+        Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+        glowBatcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+        for ( const auto entity : snapshot->sampleQueryScratch ) {
+            if ( !registry.valid(entity) ||
+                 !registry.all_of<SampleComponent>(entity) ) {
+                continue;
+            }
+            const auto* interaction =
+                registry.try_get<const InteractionComponent>(entity);
+            if ( !interaction ||
+                 (!interaction->isSelected && !interaction->isHovered) ) {
+                continue;
+            }
+            const auto& sample  = registry.get<const SampleComponent>(entity);
+            const auto  address = CanvasLaneAddress::fromAbsoluteTrack(
+                sample.m_track, projection.playerLaneCount);
+            if ( address.kind == CanvasLaneKind::Player &&
+                 !interaction->isDragging ) {
+                continue;
+            }
+            if ( address.kind == CanvasLaneKind::Bgm &&
+                 (!visibleLaneRange ||
+                  address.index < visibleLaneRange->first ||
+                  address.index >= visibleLaneRange->second) ) {
+                continue;
+            }
+            const auto bounds = projection.bounds(address);
+            if ( !bounds || bounds->rightX <= 0.0F ||
+                 bounds->leftX >= viewportWidth ) {
+                continue;
+            }
+
+            const float anchorY =
+                judgmentLineY -
+                static_cast<float>(cache->getDisplayDelta(
+                    sample.m_timestamp, currentAbsY, sample.m_timestamp)) *
+                    renderScaleY;
+            const float laneWidth = projection.player.singleTrackWidth;
+            const float bodyWidth = laneWidth * config.visual.noteScaleX;
+            const float bodyHeight =
+                (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
+            if ( anchorY + bodyHeight * 0.5F < topY ||
+                 anchorY - bodyHeight * 0.5F > bottomY ) {
+                continue;
+            }
+            const float bodyX = bounds->leftX + (laneWidth - bodyWidth) * 0.5F;
+            renderSampleBody(glowBatcher,
+                             bodyX,
+                             anchorY,
+                             bodyWidth,
+                             bodyHeight,
+                             sampleColor);
+        }
+        glowBatcher.flush();
     }
 
     const auto& brush = snapshot->brush;

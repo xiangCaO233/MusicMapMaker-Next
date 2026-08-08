@@ -148,6 +148,21 @@ std::shared_ptr<BeatmapSession> SessionRegistry::activeSession() const
     return m_entries[index].session;
 }
 
+/// @brief 获取当前活跃的非 Logo 谱面会话。
+/// @warning UI 低频绑定路径：复制一个 shared_ptr 以保证锁外调用期间生命周期。
+std::shared_ptr<BeatmapSession> SessionRegistry::activeNonLogoSession() const
+{
+    /// @brief 保护本次非 Logo 活跃 Session 读取的临界区。
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+    /// @brief 当前活跃 Session 索引快照。
+    const int32_t index = activeIndex();
+    if ( !isValidIndexUnsafe(index) || m_entries[index].isLogoPlaceholder ) {
+        return nullptr;
+    }
+    return m_entries[index].session;
+}
+
 /// @brief 获取当前活跃画布的 cameraId。
 std::string SessionRegistry::activeCameraId() const
 {

@@ -303,6 +303,28 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.default_creator").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::InputTextWithHint(
+                         "##DefaultCreator",
+                         TR_CACHE("ui.settings.software.default_creator.hint")
+                             .data(),
+                         m_defaultCreatorInputBuffer.data(),
+                         m_defaultCreatorInputBuffer.size()) ) {
+                    settings.defaultCreator = Config::normalizeCreatorIdentity(
+                        m_defaultCreatorInputBuffer.data());
+                    changed = true;
+                }
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    refreshDefaultCreatorInputBuffer();
+                }
+            });
+
         // 2. 帧数限制
         addSettingItem(
             *sec,

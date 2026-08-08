@@ -3,6 +3,7 @@
 #include "event/EventDef.h"
 #include "event/core/BaseEvent.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -72,6 +73,21 @@ struct ProjectSwitchCompletedEvent : public ProjectSwitchEvent {
 struct ProjectSwitchCancelledEvent : public ProjectSwitchEvent {
 };
 
+/// @brief 项目打开流程中可展示给 UI 的加载阶段。
+enum class ProjectOpenProgressStage : std::uint8_t {
+    Validating,              ///< 校验目标路径和项目类型。
+    ExtractingPackage,       ///< 解压临时谱面包。
+    ClosingCurrentProject,   ///< 保存并关闭当前项目。
+    ScanningDirectory,       ///< 扫描项目目录中的谱面和音频。
+    BuildingResources,       ///< 根据扫描结果构建项目资源表。
+    LoadingConfiguration,    ///< 读取并合并项目配置。
+    MigratingConfiguration,  ///< 迁移旧版项目字段和谱面引用。
+    SavingConfiguration,     ///< 写入当前分片项目配置。
+    PreparingAudio,          ///< 登记项目音效资源。
+    LoadingBeatmaps,         ///< 解析并恢复项目谱面会话。
+    Finalizing,              ///< 应用工作区并发布项目状态。
+};
+
 /// @brief 项目开始切换事件，通知 UI 保留切换中的工作区状态。
 struct ProjectOpenStartedEvent : public ProjectLifecycleEvent {
     /// @brief 正在打开的项目目录、谱面文件或谱面包路径。
@@ -79,6 +95,18 @@ struct ProjectOpenStartedEvent : public ProjectLifecycleEvent {
 
     /// @brief 当前是否正在打开临时谱面包。
     bool m_isPackage{ false };
+};
+
+/// @brief 项目打开阶段进度事件，由逻辑线程投递给 UI 状态栏。
+struct ProjectOpenProgressEvent : public ProjectLifecycleEvent {
+    /// @brief 当前加载阶段。
+    ProjectOpenProgressStage m_stage{ ProjectOpenProgressStage::Validating };
+
+    /// @brief 当前总进度，范围为 0 到 1。
+    float m_fraction{ 0.0F };
+
+    /// @brief 当前处理的项目、谱面或资源名称；没有具体对象时为空。
+    std::string m_detail;
 };
 
 /// @brief 项目关闭完成事件。
@@ -179,6 +207,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCompletedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCancelledEvent,
                        MMM::Event::ProjectSwitchEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenStartedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenProgressEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectClosedEvent,
                        MMM::Event::ProjectLifecycleEvent);

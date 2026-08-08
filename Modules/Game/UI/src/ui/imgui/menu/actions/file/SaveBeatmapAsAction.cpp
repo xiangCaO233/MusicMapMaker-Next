@@ -228,7 +228,7 @@ private:
         const bool wasOpen =
             ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker");
         ImGuiFileDialog::Instance()->OpenDialog("SaveAsFilePicker",
-                                                TR("ui.file.save_as"),
+                                                TR("ui.file.save_as").data(),
                                                 filterStr.c_str(),
                                                 fdConfig);
         if ( !wasOpen &&

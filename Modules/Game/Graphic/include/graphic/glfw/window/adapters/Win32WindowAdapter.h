@@ -58,6 +58,12 @@ public:
     /// @brief 刷新 Win32 无边框窗口的 DWM 外观状态。
     void refreshFrameShape() override;
 
+    /// @brief 将独立平台窗口登记到主窗口的任务栏窗口组。
+    /// @param window 待登记的独立平台窗口。
+    /// @param mainWindow 任务栏窗口组对应的主窗口。
+    /// @warning 渲染热路径会重复调用；仅在归属变化时写入 HWND 属性。
+    static void associateTaskbarGroupWindow(HWND window, HWND mainWindow);
+
     /// @brief Win32 不从 GLFW 鼠标按键回调发起窗口 frame 行为。
     /// @param button GLFW 鼠标按键值。
     /// @param action GLFW 鼠标动作值。

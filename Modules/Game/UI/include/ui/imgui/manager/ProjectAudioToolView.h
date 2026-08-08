@@ -106,6 +106,57 @@ private:
         int score{ 0 };
     };
 
+    /// @brief 按翻译版本批量保存项目音频工具的静态界面文本。
+    struct TranslationCache {
+        /// @brief 缓存是否已经完成至少一次构建。
+        bool valid{ false };
+
+        /// @brief 缓存对应的翻译版本。
+        std::uint32_t version{ 0 };
+
+        /// @brief 带稳定 ImGui ID 的工具窗口标题。
+        std::string windowTitle;
+
+        /// @brief 带稳定 ImGui ID 的重命名弹窗标题。
+        std::string renamePopupTitle;
+
+        /// @brief 重命名输入提示文本。
+        const char* renameLabel{ "" };
+
+        /// @brief 确认重命名按钮文本。
+        const char* renameAction{ "" };
+
+        /// @brief 通用取消按钮文本。
+        const char* cancelAction{ "" };
+
+        /// @brief 无活动项目时的提示文本。
+        const char* noProject{ "" };
+
+        /// @brief 工具使用说明文本。
+        const char* hint{ "" };
+
+        /// @brief 选中音效后自动试听的选项文本。
+        const char* previewEffectOnSelection{ "" };
+
+        /// @brief 搜索输入提示文本。
+        const char* searchHint{ "" };
+
+        /// @brief 搜索无结果提示文本。
+        const char* noSearchResults{ "" };
+
+        /// @brief 搜索结果数量标题文本。
+        const char* searchResults{ "" };
+
+        /// @brief 没有选中资源时的状态文本。
+        const char* statusNone{ "" };
+
+        /// @brief 单个资源选中状态文本。
+        const char* statusSelected{ "" };
+
+        /// @brief 批量资源选中状态文本。
+        const char* statusBatchSelected{ "" };
+    };
+
     /// @brief 从当前项目资源和工作区布局低频重建方块缓存。
     /// @param visibleWidth 当前可见画布的逻辑宽度。
     /// @param dpiScale 当前内容缩放。
@@ -179,6 +230,11 @@ private:
     /// @param dpiScale 当前内容缩放。
     void renderRenamePopup(float dpiScale);
 
+    /// @brief 在翻译版本变化时批量刷新静态文本和 ImGui 标题。
+    /// @warning UI
+    /// 热路径每帧检查一次版本；仅版本变化时执行字符串构建和翻译查询。
+    void refreshTranslationCache();
+
     /// @brief 根据鼠标位置检测方块边缘或四角的缩放热区。
     [[nodiscard]] ResizeHandle hitTestResizeHandle(const Item& item,
                                                    ImVec2 mousePosition) const;
@@ -192,10 +248,12 @@ private:
     /// @brief 绘制一个方块和位于其可见区域内的滚动文本。
     /// @param item 方块缓存。
     /// @param canvasOrigin 逻辑画布原点对应的屏幕坐标。
+    /// @param canvasScale 逻辑画布坐标到屏幕像素的相机缩放。
     /// @param dpiScale 当前内容缩放。
     /// @param drawList 当前 ImGui 绘制列表。
-    void drawItem(const Item& item, ImVec2 canvasOrigin, float dpiScale,
-                  bool hovered, bool pressed, ImDrawList& drawList) const;
+    void drawItem(const Item& item, ImVec2 canvasOrigin, float canvasScale,
+                  float dpiScale, bool hovered, bool pressed,
+                  ImDrawList& drawList) const;
 
     /// @brief 计算可容纳全部方块的画布尺寸。
     [[nodiscard]] ImVec2 calculateContentSize(float visibleWidth,
@@ -203,6 +261,9 @@ private:
 
     /// @brief 按叠层从低到高排序的方块缓存。
     std::vector<Item> m_items;
+
+    /// @brief 当前项目音频工具使用的版本化翻译文本缓存。
+    TranslationCache m_translationCache;
 
     /// @brief 排除当前移动对象后，各方块可用于增量裁切的标签区域基线。
     std::vector<ProjectAudioToolLayout::Rect> m_interactionBaseLabelRects;
@@ -321,6 +382,12 @@ private:
 
     /// @brief 方块默认尺寸上次测量时的内容缩放。
     float m_cachedDpiScale{ 0.0F };
+
+    /// @brief 项目音频工具逻辑画布的运行时相机倍率。
+    float m_canvasZoom{ 1.0F };
+
+    /// @brief 缩放滑条下一帧需要应用到画布子窗口的滚动像素。
+    std::optional<ImVec2> m_pendingCanvasScroll;
 
     /// @brief 是否在下一帧聚焦窗口。
     bool m_requestFocus{ false };

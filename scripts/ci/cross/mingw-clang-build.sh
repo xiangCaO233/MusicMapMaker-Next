@@ -466,7 +466,8 @@ if (( prebuiltTargets )); then
         spdlog \
         OpenAL \
         SDL3-static \
-        luajit_build
+        luajit_build \
+        datachannel-static
 else
     cmake --build "${buildDir}" --parallel "${buildJobs}"
 fi

@@ -1,4 +1,6 @@
 #include "logic/ProjectCommandService.h"
+#include "config/AppConfig.h"
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/ProjectResourceService.h"
@@ -538,6 +540,10 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
 
     /// @brief 新谱面的基础元数据副本，后续会规范化路径后写入文件。
     auto meta = cmd.baseMeta;
+    if ( meta.author.empty() ) {
+        meta.author = Config::normalizeCreatorIdentity(
+            Config::AppConfig::instance().getEditorSettings().defaultCreator);
+    }
     XINFO("Creating new beatmap: {} (Title: {})", meta.name, meta.title);
 
     /// @brief 经过非法文件名字符替换后的谱面文件名主体。

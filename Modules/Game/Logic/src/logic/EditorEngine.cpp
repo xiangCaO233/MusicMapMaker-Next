@@ -34,6 +34,7 @@
 #include <system_error>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #if defined(__GLIBC__)
@@ -161,14 +162,37 @@ void publishProjectOpenStarted(const std::filesystem::path& path,
     Event::EventBus::instance().publish(event);
 }
 
+/// @brief 取得适合状态栏展示的项目加载路径名称。
+/// @param path 项目、谱面包或谱面路径。
+/// @return 优先返回文件名，无法取得时返回完整路径。
+std::string projectOpenProgressPathDetail(const std::filesystem::path& path)
+{
+    const auto fileName = path.filename();
+    return Config::pathToUtf8(fileName.empty() ? path : fileName);
+}
+
+/// @brief 发布项目打开流程的分阶段进度。
+/// @param stage 当前加载阶段。
+/// @param fraction 当前总进度，范围为 0 到 1。
+/// @param detail 当前处理对象名称。
+void publishProjectOpenProgress(Event::ProjectOpenProgressStage stage,
+                                float fraction, std::string detail)
+{
+    Event::ProjectOpenProgressEvent event;
+    event.m_stage    = stage;
+    event.m_fraction = fraction;
+    event.m_detail   = std::move(detail);
+    Event::EventBus::instance().publish(event);
+}
+
 /// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
 /// hitEvents；播放不连续的低频重置分支允许扫描事件序列补建持续 Hold，只有
 /// 音符变更后的脏分支允许重建事件序列。
 void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
-                              const Config::EditorConfig& config,
-                              bool                        resetHitIndex)
+                              bool resetHitIndex)
 {
+    const auto& config = ctx.lastConfig;
     SessionUtils::ensureHitEvents(ctx);
 
     if ( resetHitIndex ) {
@@ -821,6 +845,7 @@ void applyToolbarWorkspaceState(
 void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
+    target.settings.defaultCreator     = source.settings.defaultCreator;
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
     target.settings.timelineProfessionalMode =
         source.settings.timelineProfessionalMode;
@@ -831,10 +856,14 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;
+    target.settings.disableVerticalObjectDrag =
+        source.settings.disableVerticalObjectDrag;
     target.settings.autoUploadPgoProfiles =
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
+    target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
+    target.settings.shortcutConfig       = source.settings.shortcutConfig;
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
 }
@@ -851,6 +880,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdCreateAudioSample>(cmd) ||
          std::holds_alternative<CmdUpdateAudioSampleProperties>(cmd) ||
          std::holds_alternative<CmdUpdateObjectSampleVolume>(cmd) ||
+         std::holds_alternative<CmdUpdateSelectedObjectSampleVolume>(cmd) ||
          std::holds_alternative<CmdUpdateTrackCount>(cmd) ||
          std::holds_alternative<CmdUpdateBgmTrackCount>(cmd) ||
          std::holds_alternative<CmdUndo>(cmd) ||
@@ -1175,13 +1205,22 @@ void EditorEngine::restoreProjectWorkspace(
     int32_t fallbackActiveIndex = -1;
     int32_t restoredActiveIndex = -1;
 
+    std::size_t beatmapIndex = 0;
     for ( const auto& state : beatmaps ) {
+        const std::size_t currentBeatmapIndex = beatmapIndex++;
         if ( state.m_filePath.empty() ) {
             continue;
         }
 
         auto mapPath =
             resolveProjectPath(*project, Config::utf8ToPath(state.m_filePath));
+        const float beatmapProgress =
+            0.88F + 0.08F * static_cast<float>(currentBeatmapIndex + 1) /
+                        static_cast<float>(beatmaps.size());
+        publishProjectOpenProgress(
+            Event::ProjectOpenProgressStage::LoadingBeatmaps,
+            beatmapProgress,
+            projectOpenProgressPathDetail(mapPath));
         std::error_code existsError;
         if ( !std::filesystem::exists(mapPath, existsError) ) {
             XWARN("Workspace restore skipped missing beatmap: {}",
@@ -1301,6 +1340,13 @@ void EditorEngine::openProject(
     }
 
     publishProjectOpenStarted(projectPath, false);
+    publishProjectOpenProgress(Event::ProjectOpenProgressStage::Validating,
+                               0.02F,
+                               projectOpenProgressPathDetail(projectPath));
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::ClosingCurrentProject,
+        0.08F,
+        projectOpenProgressPathDetail(projectPath));
     if ( !closeProject() ) {
         publishProjectOpenFailed(
             projectPath, "当前项目的元数据保存失败，已取消项目切换", false);
@@ -1321,6 +1367,11 @@ void EditorEngine::openProject(
 void EditorEngine::openTemporaryProjectPackage(
     const std::filesystem::path& packagePath)
 {
+    publishProjectOpenStarted(packagePath, true);
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::ExtractingPackage,
+        0.03F,
+        projectOpenProgressPathDetail(packagePath));
     auto prepared =
         ProjectController::instance().prepareTemporaryProjectPackage(
             packagePath);
@@ -1330,7 +1381,10 @@ void EditorEngine::openTemporaryProjectPackage(
         return;
     }
 
-    publishProjectOpenStarted(packagePath, true);
+    publishProjectOpenProgress(
+        Event::ProjectOpenProgressStage::ClosingCurrentProject,
+        0.08F,
+        projectOpenProgressPathDetail(packagePath));
     if ( !closeProject() ) {
         std::error_code filesystemError;
         std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1394,11 +1448,21 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         }
     }
 
+    std::size_t effectIndex = 0;
     for ( const auto& registration : openResult.m_effectRegistrations ) {
+        const float effectProgress =
+            0.82F +
+            0.04F * static_cast<float>(effectIndex + 1) /
+                static_cast<float>(openResult.m_effectRegistrations.size());
+        publishProjectOpenProgress(
+            Event::ProjectOpenProgressStage::PreparingAudio,
+            effectProgress,
+            registration.m_resource.m_id);
         Audio::AudioManager::instance().registerSoundEffect(
             registration.m_resource.m_id,
             Config::pathToUtf8(registration.m_absolutePath),
             registration.m_resource.m_config);
+        ++effectIndex;
     }
 
     XINFO("Project '{}' loaded successfully with {} beatmaps.",
@@ -1407,6 +1471,10 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 
     // 如果指定了谱面路径，则通过 createSession 加载它
     if ( !openResult.m_targetBeatmapPath.empty() ) {
+        publishProjectOpenProgress(
+            Event::ProjectOpenProgressStage::LoadingBeatmaps,
+            0.92F,
+            projectOpenProgressPathDetail(openResult.m_targetBeatmapPath));
         XINFO("Auto loading beatmap: {}",
               Config::pathToUtf8(openResult.m_targetBeatmapPath));
         auto loadedMap = BeatMap::loadFromFile(openResult.m_targetBeatmapPath);
@@ -1420,6 +1488,10 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
     }
+
+    publishProjectOpenProgress(Event::ProjectOpenProgressStage::Finalizing,
+                               0.98F,
+                               openResult.m_projectTitle);
 
     /// 音频预加载和谱面会话或工作区恢复完成后，UI 才能安全读取
     /// 已就绪的项目状态。
@@ -2373,10 +2445,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
                 ctx.hitFXSystem.clearActiveEffects();
             }
             if ( ctx.isAudioTimelineSyncFollower && entry.isCanvasVisible ) {
-                updateFollowerHitEffects(ctx,
-                                         previousAnimateTime,
-                                         editorConfig,
-                                         shouldClearHitEffects);
+                updateFollowerHitEffects(
+                    ctx, previousAnimateTime, shouldClearHitEffects);
             }
         }
         return;

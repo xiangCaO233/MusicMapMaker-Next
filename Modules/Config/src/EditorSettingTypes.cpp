@@ -1,3 +1,4 @@
+#include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
 
 #include <nlohmann/json.hpp>
@@ -259,6 +260,7 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "toolColorEraser", config.toolColorEraser },
         { "mirror", config.mirror },
         { "mirrorPaste", config.mirrorPaste },
+        { "editSelectedVolume", config.editSelectedVolume },
         { "deleteSelected", config.deleteSelected },
         { "toggleReverseScroll", config.toggleReverseScroll },
         { "toggleScrollSnap", config.toggleScrollSnap },
@@ -284,6 +286,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
         json.value("toolColorEraser", defaults.toolColorEraser);
     config.mirror      = json.value("mirror", defaults.mirror);
     config.mirrorPaste = json.value("mirrorPaste", defaults.mirrorPaste);
+    config.editSelectedVolume =
+        json.value("editSelectedVolume", defaults.editSelectedVolume);
     config.deleteSelected =
         json.value("deleteSelected", defaults.deleteSelected);
     config.toggleReverseScroll =
@@ -480,6 +484,30 @@ void from_json(const nlohmann::json&          json,
     preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);
 }
 
+void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode)
+{
+    switch ( mode ) {
+    case CollaborationViewportRenderMode::Outline: json = "Outline"; break;
+    case CollaborationViewportRenderMode::TrackEdge: json = "TrackEdge"; break;
+    case CollaborationViewportRenderMode::Filled:
+    default: json = "Filled"; break;
+    }
+}
+
+void from_json(const nlohmann::json&            json,
+               CollaborationViewportRenderMode& mode)
+{
+    mode = CollaborationViewportRenderMode::Filled;
+    if ( !json.is_string() ) return;
+
+    const std::string value = json.get<std::string>();
+    if ( value == "Outline" ) {
+        mode = CollaborationViewportRenderMode::Outline;
+    } else if ( value == "TrackEdge" ) {
+        mode = CollaborationViewportRenderMode::TrackEdge;
+    }
+}
+
 void to_json(nlohmann::json& json, const EditorSettings& settings)
 {
     json = nlohmann::json{
@@ -499,12 +527,16 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "commonBeatDivisorMask", settings.commonBeatDivisorMask },
         { "recentProjectsLimit", settings.recentProjectsLimit },
         { "language", settings.language },
+        { "defaultCreator", normalizeCreatorIdentity(settings.defaultCreator) },
         { "frameLimit", settings.frameLimit },
         { "audioPlaybackBackend", settings.audioPlaybackBackend },
         { "sdlAudioOutputDeviceName", settings.sdlAudioOutputDeviceName },
         { "openALAudioOutputDeviceName", settings.openALAudioOutputDeviceName },
         { "openALSpatialConfig", settings.openALSpatialConfig },
         { "renderProfileLogging", settings.renderProfileLogging },
+        { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
+        { "collaborationViewportRenderMode",
+          settings.collaborationViewportRenderMode },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
           settings.pgoProfileUploadConsentAsked },
@@ -529,6 +561,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "lastFilePickerPath", settings.lastFilePickerPath },
         { "disableScrollAccelerationWhileDrawing",
           settings.disableScrollAccelerationWhileDrawing },
+        { "disableVerticalObjectDrag", settings.disableVerticalObjectDrag },
         { "removeObjectsOnPolylinePath", settings.removeObjectsOnPolylinePath },
         { "enablePolylineEditing", settings.enablePolylineEditing },
         { "enableBmsEditing", settings.enableBmsEditing },
@@ -592,7 +625,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         COMMON_BEAT_DIVISOR_MASK_ALL;
     settings.recentProjectsLimit = json.value("recentProjectsLimit", 10);
     settings.language            = json.value("language", std::string("zh_cn"));
-    settings.frameLimit          = json.value(
+    settings.defaultCreator =
+        normalizeCreatorIdentity(json.value("defaultCreator", std::string()));
+    settings.frameLimit = json.value(
         "frameLimit",
         json.contains("vsync")
             ? (json.value("vsync", false) ? FrameLimitPreference::VSync
@@ -606,7 +641,11 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("openALAudioOutputDeviceName", std::string());
     settings.openALSpatialConfig =
         json.value("openALSpatialConfig", OpenALSpatialConfig());
-    settings.renderProfileLogging  = json.value("renderProfileLogging", false);
+    settings.renderProfileLogging = json.value("renderProfileLogging", false);
+    settings.rtcDiagnosticLogging = json.value("rtcDiagnosticLogging", false);
+    settings.collaborationViewportRenderMode =
+        json.value("collaborationViewportRenderMode",
+                   CollaborationViewportRenderMode::Filled);
     settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
     settings.pgoProfileUploadConsentAsked = json.value(
         "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));
@@ -636,6 +675,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("lastFilePickerPath", std::string("."));
     settings.disableScrollAccelerationWhileDrawing =
         json.value("disableScrollAccelerationWhileDrawing", true);
+    settings.disableVerticalObjectDrag =
+        json.value("disableVerticalObjectDrag", false);
     settings.removeObjectsOnPolylinePath =
         json.value("removeObjectsOnPolylinePath", false);
     settings.enablePolylineEditing = json.value("enablePolylineEditing", true);

@@ -3,6 +3,7 @@
 #include "common/AsciiFontData.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
+#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -249,10 +250,14 @@ bool testNarrowLaneLabelMarquee()
 /// @param withAsciiFont 是否注入标签字体。
 /// @param noteScaleX 物件横向缩放。
 /// @param noteScaleY 物件纵向缩放。
+/// @param erasing 是否启用待删除预览。
+/// @param hovered 是否启用悬浮状态。
+/// @param selected 是否启用选中状态。
 void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
                         std::string_view resourceId, double snapshotSysTime,
                         bool withAsciiFont, float noteScaleX = 1.2F,
-                        float noteScaleY = 1.2F, bool erasing = false)
+                        float noteScaleY = 1.2F, bool erasing = false,
+                        bool hovered = false, bool selected = false)
 {
     entt::registry timelineRegistry;
     const auto     bpmEntity = timelineRegistry.create();
@@ -278,6 +283,12 @@ void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
             .m_timestamp       = 0.0,
             .m_track           = 4,
             .m_audioResourceId = std::string(resourceId),
+        });
+    sampleRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sampleEntity,
+        MMM::Logic::InteractionComponent{
+            .isHovered  = hovered,
+            .isSelected = selected,
         });
     const std::vector<entt::entity> sortedEntities{ sampleEntity };
     const std::vector<double>       maxEndPrefix{ 0.0 };
@@ -471,6 +482,66 @@ bool testSampleErasePreview()
     return true;
 }
 
+/// @brief 验证自动采样悬浮和选中状态沿用本体颜色并写入发光层。
+/// @return 两种交互状态均只增加同色发光命令时返回 true。
+bool testSampleInteractionGlow()
+{
+    MMM::Logic::RenderSnapshot hoveredSnapshot;
+    MMM::Logic::RenderSnapshot selectedSnapshot;
+    renderSingleSample(hoveredSnapshot,
+                       "hovered.wav",
+                       0.0,
+                       false,
+                       1.2F,
+                       1.2F,
+                       false,
+                       true,
+                       false);
+    renderSingleSample(selectedSnapshot,
+                       "selected.wav",
+                       0.0,
+                       false,
+                       1.2F,
+                       1.2F,
+                       false,
+                       false,
+                       true);
+
+    for ( const auto* snapshot : { &hoveredSnapshot, &selectedSnapshot } ) {
+        if ( snapshot->glowCmds.size() != 1U ||
+             snapshot->glowCmds.front().indexCount != 6U ) {
+            XERROR("Interactive sample did not generate one body glow command");
+            return false;
+        }
+
+        std::size_t noteVertexCount = 0U;
+        for ( const auto& vertex : snapshot->vertices ) {
+            const bool usesNoteUv =
+                vertex.uv.u >= NOTE_UV.x - 1e-4F &&
+                vertex.uv.u <= NOTE_UV.x + NOTE_UV.z + 1e-4F &&
+                vertex.uv.v >= NOTE_UV.y - 1e-4F &&
+                vertex.uv.v <= NOTE_UV.y + NOTE_UV.w + 1e-4F;
+            if ( !usesNoteUv ) continue;
+            ++noteVertexCount;
+            if ( !near(vertex.color.r, 0.36F) || !near(vertex.color.g, 0.72F) ||
+                 !near(vertex.color.b, 0.92F) ||
+                 !near(vertex.color.a, 0.96F) ) {
+                XERROR(
+                    "Interactive sample replaced its base color instead of "
+                    "reusing it for glow");
+                return false;
+            }
+        }
+        if ( noteVertexCount != 8U ) {
+            XERROR(
+                "Interactive sample base and glow geometry did not both use "
+                "the Note texture");
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 判断两份快照的标签几何是否完全一致。
 /// @param lhs 第一份快照。
 /// @param rhs 第二份快照。
@@ -650,7 +721,7 @@ int main()
     return testLaneLayoutVisuals() && testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
-                   testSampleLabelMarquee() &&
+                   testSampleInteractionGlow() && testSampleLabelMarquee() &&
                    testSampleLabelScaleAndFixedLaneWidth() &&
                    testSampleLabelCjkGlyphs() &&
                    testMissingCjkGlyphRequestsAtlasRefresh()

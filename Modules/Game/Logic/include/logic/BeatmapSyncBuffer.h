@@ -129,6 +129,12 @@ struct HoverBeatPoint {
     int denominator{ 1 };
     /// @brief 部位精确时间戳，单位秒
     double time{ 0.0 };
+    /// @brief 部位所在拍的起点时间，单位秒。
+    double beatStartTime{ 0.0 };
+    /// @brief 部位所在拍的终点时间，单位秒。
+    double beatEndTime{ 0.0 };
+    /// @brief 当前 BPM 下完整一拍的名义时长，单位秒。
+    double beatDuration{ 0.0 };
     /// @brief 部位所在轨道
     int32_t track{ 0 };
 };
@@ -178,6 +184,28 @@ struct HoverInspectInfo {
     int overlapCount{ 1 };
 };
 
+/// @brief 悬浮检视或编辑手势触发的单轨单拍临时分拍预览。
+struct HoverSubdivisionPreview {
+    /// @brief 是否需要替换目标轨道当前拍内的分拍线。
+    bool show{ false };
+    /// @brief 临时预览所属的玩家轨道。
+    int32_t track{ 0 };
+    /// @brief 悬浮部件在目标拍内的最简分拍分子。
+    int numerator{ 0 };
+    /// @brief 临时预览使用的分拍分母。
+    int denominator{ 1 };
+    /// @brief 常用分拍线并集位掩码；为零时仅绘制 denominator 对应分拍线。
+    std::uint32_t commonBeatDivisorMask{ 0U };
+    /// @brief 触发临时预览的物件部件时间，单位秒。
+    double focusTime{ 0.0 };
+    /// @brief 目标拍起点时间，单位秒。
+    double beatStartTime{ 0.0 };
+    /// @brief 目标拍终点时间，单位秒。
+    double beatEndTime{ 0.0 };
+    /// @brief 生成临时分拍线所用的完整拍时长，单位秒。
+    double beatDuration{ 0.0 };
+};
+
 /**
  * @brief 碰撞拾取包围盒
  */
@@ -194,6 +222,38 @@ struct Hitbox {
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
 };
+
+/// @brief 以包围盒中心为基准缩放交互拾取区域。
+/// @param hitbox 原始渲染几何对应的包围盒。
+/// @param scaleX 横向缩放；非正数或非有限值回退为 1。
+/// @param scaleY 纵向缩放；非正数或非有限值回退为 1。
+/// @return 保留实体与部件信息的缩放后包围盒。
+/// @warning UI 与调试渲染热路径：每个候选框调用，只做常量级算术且不分配。
+[[nodiscard]] inline Hitbox scaleInteractionHitbox(const Hitbox& hitbox,
+                                                   float         scaleX,
+                                                   float scaleY) noexcept
+{
+    const float safeScaleX =
+        std::isfinite(scaleX) && scaleX > 0.0F ? scaleX : 1.0F;
+    const float safeScaleY =
+        std::isfinite(scaleY) && scaleY > 0.0F ? scaleY : 1.0F;
+    if ( safeScaleX == 1.0F && safeScaleY == 1.0F ) {
+        return hitbox;
+    }
+    const float centerX = hitbox.x + hitbox.w * 0.5F;
+    const float centerY = hitbox.y + hitbox.h * 0.5F;
+
+    Hitbox scaled = hitbox;
+    scaled.w      = hitbox.w * safeScaleX;
+    scaled.h      = hitbox.h * safeScaleY;
+    scaled.x      = centerX - scaled.w * 0.5F;
+    scaled.y      = centerY - scaled.h * 0.5F;
+    if ( !std::isfinite(scaled.x) || !std::isfinite(scaled.y) ||
+         !std::isfinite(scaled.w) || !std::isfinite(scaled.h) ) {
+        return hitbox;
+    }
+    return scaled;
+}
 
 /**
  * @brief 时间线上的交互元素 (BPM/Scroll 调整点)
@@ -287,7 +347,11 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               glowCmds;
     std::vector<UI::BrushDrawCmd>               overlayCmds;
     std::vector<Hitbox>                         hitboxes;
-    std::vector<TimelineInteractiveElement>     timelineElements;
+    /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
+    float interactionHitboxScaleX{ 1.0F };
+    /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
+    float                                   interactionHitboxScaleY{ 1.0F };
+    std::vector<TimelineInteractiveElement> timelineElements;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     std::vector<System::ScrollSegment>
@@ -457,6 +521,8 @@ struct RenderSnapshot {
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
     HoverInspectInfo hoverInspect;
+    /// @brief 当前悬浮 Note 的单轨单拍临时分拍预览。
+    HoverSubdivisionPreview hoverSubdivisionPreview;
 
     bool   isPreviewHovered{ false };
     float  previewHoverY{ 0.0f };
@@ -606,6 +672,8 @@ struct RenderSnapshot {
         glowCmds.clear();
         overlayCmds.clear();
         hitboxes.clear();
+        interactionHitboxScaleX = 1.0F;
+        interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();
         timelineElements.clear();
         canvasComponentInstances.clear();
@@ -654,6 +722,7 @@ struct RenderSnapshot {
         hoveredNoteTime          = 0.0;
         hoveredNoteTrack         = 0;
         hoverInspect             = HoverInspectInfo{};
+        hoverSubdivisionPreview  = HoverSubdivisionPreview{};
         isPreviewHovered         = false;
         previewHoverY            = 0.0f;
         previewHoverTime         = 0.0;

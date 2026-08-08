@@ -20,6 +20,7 @@ add_library(
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/CopyAction.cpp
   src/ui/imgui/menu/actions/edit/CutAction.cpp
+  src/ui/imgui/menu/actions/edit/EditSelectedObjectVolumeAction.cpp
   src/ui/imgui/menu/actions/edit/MirrorAction.cpp
   src/ui/imgui/menu/actions/edit/MirrorPasteAction.cpp
   src/ui/imgui/menu/actions/edit/MetadataEditorWindowRenderers.cpp
@@ -42,6 +43,7 @@ add_library(
   src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp
   src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp
   src/ui/imgui/menu/actions/help/CheckUpdateAction.cpp
+  src/ui/imgui/menu/actions/help/OpenHelpPathAction.cpp
   src/ui/imgui/menu/actions/help/ShowAboutAction.cpp
   src/ui/imgui/menu/actions/tools/AlignSelectedToCommonBeatsAction.cpp
   src/ui/imgui/menu/actions/tools/BpmAutoDetector.cpp
@@ -81,6 +83,8 @@ add_library(
   src/ui/imgui/manager/AudioManagerView.cpp
   src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
+  src/ui/imgui/manager/CollaborationLogWindow.cpp
+  src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
@@ -133,6 +137,7 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
+target_link_libraries(UI PRIVATE NetworkCollaboration)
 
 # Windows 系统文件管理器调用 ShellExecuteW，需要显式链接 Shell32。
 if(WIN32)
@@ -172,6 +177,31 @@ mmm_add_test_executable(UI ProjectUiLifecycleStateTest
 target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
+
+# 项目加载进度测试覆盖跨线程事件乱序、数值约束和完成清理。
+mmm_add_test_executable(UI ProjectOpenProgressStateTest
+                        tests/ProjectOpenProgressStateTest.cpp)
+target_include_directories(ProjectOpenProgressStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ProjectOpenProgressStateTest PRIVATE Event)
+add_test(NAME ProjectOpenProgressStateTest COMMAND ProjectOpenProgressStateTest)
+
+# 协作入口切换测试覆盖按钮点击改变选中状态时的 ImGui 颜色栈配对。
+mmm_add_test_executable(UI CollaborationSelectableButtonTest
+                        tests/CollaborationSelectableButtonTest.cpp)
+target_include_directories(CollaborationSelectableButtonTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
+add_test(NAME CollaborationSelectableButtonTest
+         COMMAND CollaborationSelectableButtonTest)
+
+# 协作入口策略测试确保只有房主开启房间要求预先打开项目。
+mmm_add_test_executable(UI CollaborationEntryPolicyTest
+                        tests/CollaborationEntryPolicyTest.cpp)
+target_include_directories(CollaborationEntryPolicyTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
+add_test(NAME CollaborationEntryPolicyTest COMMAND CollaborationEntryPolicyTest)
 
 # 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
 mmm_add_test_executable(UI ProjectAudioToolLayoutTest

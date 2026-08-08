@@ -263,21 +263,19 @@ void NoteRenderSystem::renderNotes(
                                              renderScaleY);
     }
 
-    // 6. 顶层重叠遮罩
-    if ( !snapshot->isPlaying ) {
-        NoteRenderSystem::renderOverlapMasks(registry,
-                                             snapshot,
-                                             ctx,
-                                             config,
-                                             noteEntities,
-                                             judgmentLineY,
-                                             leftX,
-                                             rightX,
-                                             topY,
-                                             bottomY,
-                                             singleTrackW,
-                                             renderScaleY);
-    }
+    // 6. 顶层重叠遮罩；播放时同样生成，并随动态内容使用统一的 UI 补间偏移。
+    NoteRenderSystem::renderOverlapMasks(registry,
+                                         snapshot,
+                                         ctx,
+                                         config,
+                                         noteEntities,
+                                         judgmentLineY,
+                                         leftX,
+                                         rightX,
+                                         topY,
+                                         bottomY,
+                                         singleTrackW,
+                                         renderScaleY);
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(

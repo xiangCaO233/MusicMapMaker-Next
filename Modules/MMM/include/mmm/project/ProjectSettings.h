@@ -450,6 +450,7 @@ struct ProjectSettings {
             editorOverrideJson = editorOverride;
             editorOverrideJson.erase("autoUploadPgoProfiles");
             editorOverrideJson.erase("pgoProfileUploadConsentAsked");
+            editorOverrideJson.erase("rtcDiagnosticLogging");
         }
         j = nlohmann::json{
             { "m_visualOverride", settings.m_visualOverride },
@@ -475,6 +476,7 @@ struct ProjectSettings {
             settings.m_editorOverride = it->get<Config::EditorSettings>();
             settings.m_editorOverride->autoUploadPgoProfiles        = false;
             settings.m_editorOverride->pgoProfileUploadConsentAsked = false;
+            settings.m_editorOverride->rtcDiagnosticLogging         = false;
         } else {
             settings.m_editorOverride = std::nullopt;
         }

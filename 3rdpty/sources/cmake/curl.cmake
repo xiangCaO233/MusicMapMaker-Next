@@ -1,5 +1,9 @@
 set(CURL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/curl")
 
+# 禁止其他依赖的同名选项泄漏到 curl，TLS 后端仅由下方 CURL_USE_* 选项决定。
+set(USE_MBEDTLS OFF)
+set(USE_GNUTLS OFF)
+
 set(BUILD_CURL_EXE
     OFF
     CACHE BOOL "" FORCE)

@@ -292,6 +292,14 @@ public:
         return m_sessionRegistry.activeSession();
     }
 
+    /// @brief 获取当前激活且已经载入谱面的会话。
+    /// @return 当前激活项不是 Logo 占位画布时返回会话，否则返回 nullptr。
+    /// @warning UI 低频绑定路径：仅用于项目或协作会话切换时绑定观察者。
+    std::shared_ptr<BeatmapSession> getActiveNonLogoSession()
+    {
+        return m_sessionRegistry.activeNonLogoSession();
+    }
+
     /**
      * @brief 获取当前激活画布的 cameraId
      */

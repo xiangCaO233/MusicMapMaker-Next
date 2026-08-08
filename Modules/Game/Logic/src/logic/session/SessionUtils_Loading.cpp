@@ -549,6 +549,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     n.m_type      = ::MMM::NoteType::NOTE;
                     n.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     n.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
+                    n.m_isSubNote     = true;
                     n.m_metadata      = syncedSubNote.metadata;
                     n.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.notes.push_back(std::move(n));
@@ -561,6 +562,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     h.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     h.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
                     h.m_duration      = syncedSubNote.duration * 1000.0;
+                    h.m_isSubNote     = true;
                     h.m_metadata      = syncedSubNote.metadata;
                     h.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.holds.push_back(std::move(h));
@@ -574,6 +576,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     f.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     f.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
                     f.m_dtrack        = syncedSubNote.dtrack;
+                    f.m_isSubNote     = true;
                     f.m_metadata      = syncedSubNote.metadata;
                     f.m_sampleBinding = syncedSubNote.sampleBinding;
                     newNoteData.flicks.push_back(std::move(f));

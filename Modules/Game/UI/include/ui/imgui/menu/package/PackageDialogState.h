@@ -109,6 +109,9 @@ struct PackageDialogState {
 
     /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
     bool includeLegacyImdBeatmaps{ false };
+
+    /// @brief MCZ 打包时是否删除 Main 音轨自动采样的 vol 字段。
+    bool stripMainAudioVolumeFromMalodyExport{ false };
 };
 
 }  // namespace MMM::UI

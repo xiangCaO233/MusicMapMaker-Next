@@ -257,6 +257,9 @@ struct ShortcutConfig {
     /// @brief 镜像粘贴剪贴板物件。
     ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
 
+    /// @brief 打开选中物件批量音量编辑器。
+    ShortcutBinding editSelectedVolume{ false, "", false, false, false, false };
+
     /// @brief 删除当前选中物件。
     ShortcutBinding deleteSelected{
         true, "Delete", false, false, false, false
@@ -440,6 +443,19 @@ void to_json(nlohmann::json&                      json,
 void from_json(const nlohmann::json&          json,
                BpmMeasurementToolPreferences& preferences);
 
+/// @brief 多人协作中远端视野范围的本地绘制模式。
+enum class CollaborationViewportRenderMode : std::uint8_t {
+    Filled,    ///< 绘制半透明填充和完整外框。
+    Outline,   ///< 仅绘制完整外框。
+    TrackEdge  ///< 仅在轨道边缘绘制类似左方括号的范围标记。
+};
+
+/// @brief 将协作视野绘制模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode);
+/// @brief 从稳定文本读取协作视野绘制模式。
+void from_json(const nlohmann::json&            json,
+               CollaborationViewportRenderMode& mode);
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -496,6 +512,9 @@ struct EditorSettings {
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
+    /// @brief 新建谱面的默认作者，同时作为联机写谱的客户端展示身份。
+    std::string defaultCreator;
+
     /// @brief 帧数限制模式偏好
     FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 
@@ -513,6 +532,14 @@ struct EditorSettings {
 
     /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
     bool renderProfileLogging{ false };
+
+    /// @brief 是否将 libdatachannel 的 WebRTC/ICE Debug 日志写入应用日志。
+    bool rtcDiagnosticLogging{ false };
+
+    /// @brief 多人协作中远端视野范围的本地绘制模式。
+    CollaborationViewportRenderMode collaborationViewportRenderMode{
+        CollaborationViewportRenderMode::Filled
+    };
 
     /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
     bool autoUploadPgoProfiles{ false };
@@ -579,6 +606,9 @@ struct EditorSettings {
 
     /// @brief 绘制物件(按住Shift)时是否屏蔽滚动加速
     bool disableScrollAccelerationWhileDrawing{ true };
+
+    /// @brief 抓取工具整体移动物件时是否锁定时间，仅允许横向换轨。
+    bool disableVerticalObjectDrag{ false };
 
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };

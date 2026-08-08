@@ -8,6 +8,7 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
   src/FontPreferenceValidator.cpp
   src/ColorPaletteFile.cpp
@@ -23,6 +24,24 @@ mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
 add_test(NAME FontPreferenceValidatorTest COMMAND FontPreferenceValidatorTest)
+
+# Creator 身份测试覆盖持久化、规范化和联机前置校验共同边界。
+mmm_add_test_executable(Config CreatorIdentityTest
+                        tests/CreatorIdentityTest.cpp)
+target_link_libraries(CreatorIdentityTest PRIVATE Config)
+add_test(NAME CreatorIdentityTest COMMAND CreatorIdentityTest)
+
+# 本机多客户端测试必须把每个进程的配置和 ImGui 状态隔离到独立目录。
+mmm_add_test_executable(Config AppPathsProfileOverrideTest
+                        tests/AppPathsProfileOverrideTest.cpp)
+target_link_libraries(AppPathsProfileOverrideTest PRIVATE Config)
+add_test(
+  NAME AppPathsProfileOverrideTest
+  COMMAND
+    "${CMAKE_COMMAND}" -E env
+    "MMM_CONFIG_ROOT=${CMAKE_BINARY_DIR}/test_output/collaboration_profile"
+    "$<TARGET_FILE:AppPathsProfileOverrideTest>"
+    "${CMAKE_BINARY_DIR}/test_output/collaboration_profile")
 
 # 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
 mmm_add_test_executable(Config FrameLimitUtilsTest

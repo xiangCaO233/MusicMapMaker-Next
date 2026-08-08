@@ -115,6 +115,32 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
     m_commandQueue.enqueue(std::move(cmd));
 }
 
+void BeatmapSession::setMutationObserver(
+    std::shared_ptr<::MMM::IBeatmapMutationObserver> observer,
+    bool                                             publishCurrentSnapshot)
+{
+    const bool requestSnapshot = observer != nullptr && publishCurrentSnapshot;
+    std::atomic_store_explicit(
+        &m_mutationObserver, std::move(observer), std::memory_order_release);
+    m_mutationSnapshotRequested.store(requestSnapshot,
+                                      std::memory_order_relaxed);
+}
+
+void BeatmapSession::publishRequestedMutationSnapshot()
+{
+    if ( !m_mutationSnapshotRequested.exchange(false,
+                                               std::memory_order_relaxed) ) {
+        return;
+    }
+    auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                              std::memory_order_acquire);
+    if ( !observer || !m_ctx->currentBeatmap ) return;
+
+    SessionUtils::syncBeatmap(*m_ctx);
+    observer->onBeatmapMutated(*m_ctx->currentBeatmap,
+                               ::MMM::BeatmapMutationFlags::All);
+}
+
 /// @brief 判断会话是否存在等待逻辑线程消费的指令。
 bool BeatmapSession::hasPendingCommands() const
 {
@@ -330,10 +356,16 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         m_ctx->isPlaying = false;
     }
     bool processed = processCommands();
+    publishRequestedMutationSnapshot();
+    m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
+    const auto& effectiveConfig = m_ctx->lastConfig;
 
     if ( m_ctx->isAudioTimelineDescriptorDirty ) {
-        SessionUtils::rebuildAudioTimelineDescriptor(
-            *m_ctx, EditorEngine::instance().getCurrentProject());
+        const auto* project =
+            m_ctx->collaborationProject
+                ? m_ctx->collaborationProject.get()
+                : EditorEngine::instance().getCurrentProject();
+        SessionUtils::rebuildAudioTimelineDescriptor(*m_ctx, project);
     }
     if ( m_ctx->isAudioTimelineFingerprintPublishPending ) {
         EditorEngine::instance().refreshAudioTimelineFingerprints();
@@ -373,7 +405,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                   isVisualAnimationActive || isEdgeScrollActive ||
                   hasPendingCommands();
 
-    if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
+    if ( effectiveConfig.settings.frameLimit !=
+             Config::FrameLimitPreference::VSync &&
          !isBusy && !processed ) {
         if ( currentSysTime - m_ctx->lastSnapshotTime <
              IDLE_UPDATE_MIN_INTERVAL_SECONDS ) {
@@ -399,7 +432,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     }
 
     double previousAnimateTime = m_ctx->animateTime;
-    updateAnimatedTimelineZoom(dt, config);
+    updateAnimatedTimelineZoom(dt, effectiveConfig);
 
     // --- Playback 更新 ---
     bool isPlaybackClockActive =
@@ -420,9 +453,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 audio.getLoadedAudioTimelineFingerprint(),
                 audioClockSnapshot,
                 playbackClockNow,
-                config.settings.syncConfig);
+                effectiveConfig.settings.syncConfig);
 
-        updateAnimateTime(dt, config, isPlaybackClockActive);
+        updateAnimateTime(dt, effectiveConfig, isPlaybackClockActive);
 
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
 
@@ -439,7 +472,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             m_ctx->hitFXSystem.clearActiveEffects();
             SessionUtils::syncHitIndex(*m_ctx);
             m_ctx->hitFXSystem.restoreActiveHoldEffects(
-                m_ctx->animateTime, m_ctx->hitEvents, config);
+                m_ctx->animateTime, m_ctx->hitEvents, effectiveConfig);
 
             if ( m_ctx->isPlaying ) {
                 // 核心修复：Jump/Start 后立即预测播放窗口内的所有音效
@@ -453,7 +486,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                     // 只要物件在当前播放点之后，都触发
                     if ( ev.timestamp >= m_ctx->animateTime ) {
                         m_ctx->hitFXSystem.triggerAudio(
-                            ev, m_ctx->trackCount, config);
+                            ev, m_ctx->trackCount, effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -470,7 +503,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                     if ( ev.timestamp >
                          (previousAnimateTime + predictWindow) ) {
                         m_ctx->hitFXSystem.triggerAudio(
-                            ev, m_ctx->trackCount, config);
+                            ev, m_ctx->trackCount, effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -486,10 +519,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 m_ctx->nextHitIndex++;
             }
         }
-        m_ctx->hitFXSystem.update(
-            m_ctx->animateTime, triggeredEvents, m_ctx->trackCount, config);
+        m_ctx->hitFXSystem.update(m_ctx->animateTime,
+                                  triggeredEvents,
+                                  m_ctx->trackCount,
+                                  effectiveConfig);
     } else {
-        updateAnimateTime(dt, config, false);
+        updateAnimateTime(dt, effectiveConfig, false);
 
         if ( std::abs(m_ctx->animateTime - previousAnimateTime) > 0.0001 ) {
             SessionUtils::syncHitIndex(*m_ctx);
@@ -513,8 +548,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                                      isVisualAnimationStillActive ||
                                      playbackJumped || hasRenderDirtyState;
     if ( shouldUpdateRenderSnapshot(
-             currentSysTime, forceRenderSnapshot, config) ) {
-        updateECSAndRender(config, isActiveSession);
+             currentSysTime, forceRenderSnapshot, effectiveConfig) ) {
+        updateECSAndRender(effectiveConfig, isActiveSession);
         m_lastRenderSnapshotTime = currentSysTime;
     }
 }

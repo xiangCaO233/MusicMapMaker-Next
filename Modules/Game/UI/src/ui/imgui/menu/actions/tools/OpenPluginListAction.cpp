@@ -62,8 +62,7 @@ public:
             ImVec2(620.0f * context.dpiScale, 440.0f * context.dpiScale),
             ImGuiCond_FirstUseEver);
         const std::string windowTitle =
-            std::string(TR("ui.tools.plugin_list.title").data()) +
-            "###PluginListWindow";
+            TR("ui.tools.plugin_list.title").toString() + "###PluginListWindow";
         const bool wasOpenBeforeBegin = m_showWindow;
         const bool opened = ImGui::Begin(windowTitle.c_str(), &m_showWindow);
         FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_showWindow);

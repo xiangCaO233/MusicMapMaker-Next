@@ -93,11 +93,11 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
         const auto& recent =
             Config::AppConfig::instance().getEditorConfig().recentProjects;
         const float openButtonWidth =
-            ImGui::CalcTextSize(TR("ui.file_manager.open_directory")).x +
+            ImGui::CalcTextSize(TR("ui.file_manager.open_directory").data()).x +
             style.FramePadding.x * 2.0f + 2.0f;
-        minWidth =
-            std::max(ImGui::CalcTextSize(TR("ui.file_manager.initial_hint")).x,
-                     openButtonWidth);
+        minWidth = std::max(
+            ImGui::CalcTextSize(TR("ui.file_manager.initial_hint").data()).x,
+            openButtonWidth);
         if ( !recent.empty() ) {
             minWidth = std::max(
                 minWidth,

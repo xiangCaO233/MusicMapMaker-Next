@@ -584,7 +584,7 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::BeginDisabled(isLayoutEditing);
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
-                       TR("ui.toolbar.move"),
+                       TR("ui.toolbar.move").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.move").data(),
@@ -593,7 +593,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_SQUARE_SELECT,
                        Logic::EditTool::Marquee,
-                       TR("ui.toolbar.marquee"),
+                       TR("ui.toolbar.marquee").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.marquee").data(),
@@ -602,7 +602,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_PEN,
                        Logic::EditTool::Draw,
-                       TR("ui.toolbar.draw"),
+                       TR("ui.toolbar.draw").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.draw").data(),
@@ -611,7 +611,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_PAINT_BRUSH,
                        Logic::EditTool::ColorBrush,
-                       TR("ui.toolbar.color_brush"),
+                       TR("ui.toolbar.color_brush").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_brush").data(),
@@ -620,7 +620,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
         drawToolButton(ICON_MMM_ERASER,
                        Logic::EditTool::ColorEraser,
-                       TR("ui.toolbar.color_eraser"),
+                       TR("ui.toolbar.color_eraser").data(),
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_eraser").data(),
@@ -1139,7 +1139,7 @@ void ToolbarView::update(UIManager* sourceManager)
             auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             int  currentDivisor = editorCfg.settings.beatDivisor;
 
-            ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor"));
+            ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor").data());
             ImGui::Separator();
 
             ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
@@ -2097,7 +2097,7 @@ void ToolbarView::openPaletteExportFilePicker()
         ImGuiFileDialog::Instance()->IsOpened("NotePaletteExportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "NotePaletteExportPicker",
-        TR("ui.toolbar.note_palette.export_dialog_title"),
+        TR("ui.toolbar.note_palette.export_dialog_title").data(),
         ".mmpalette",
         dialogConfig);
     if ( !wasOpen &&
@@ -2148,7 +2148,7 @@ void ToolbarView::openPaletteImportFilePicker()
         ImGuiFileDialog::Instance()->IsOpened("ColorPaletteImportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "ColorPaletteImportPicker",
-        TR("ui.toolbar.note_palette.import_dialog_title"),
+        TR("ui.toolbar.note_palette.import_dialog_title").data(),
         ".mmpalette",
         dialogConfig);
     if ( !wasOpen &&
@@ -3376,7 +3376,38 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
         ImGui::Separator();
 
-        auto&       appConfig          = Config::AppConfig::instance();
+        auto&        appConfig = Config::AppConfig::instance();
+        std::int32_t keyCount  = 0;
+        {
+            auto& engine = Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            const auto session = engine.getActiveSession();
+            if ( session && session->getContext().currentBeatmap ) {
+                keyCount = std::max(
+                    1,
+                    session->getContext()
+                        .currentBeatmap->m_baseMapMetadata.track_count);
+            }
+        }
+        {
+            auto& dragSettings = appConfig.getEditorSettings();
+            if ( ::MMM::UI::FeedbackCheckbox(
+                     TR("ui.toolbar.layout_disable_vertical_object_drag")
+                         .data(),
+                     &dragSettings.disableVerticalObjectDrag) ) {
+                Logic::EditorEngine::instance().setEditorConfig(
+                    appConfig.getEditorConfig());
+                appConfig.save();
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.toolbar.layout_disable_vertical_object_drag_hint")
+                        .data());
+            }
+        }
+        ImGui::Separator();
+
         const float colorButtonSize    = std::floor(22.0f * dpiScale);
         const float visualControlWidth = std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
@@ -3612,6 +3643,22 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            visual = appConfig.getVisualConfig();
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.hover_subdivision_line_extension")
+                    .data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutHoverSubdivisionLineExtension",
+                     &visual.hoverSubdivisionLineExtensionRatio,
+                     0.0f,
+                     1.0f,
+                     "%.4f") ) {
+                applyVisualConfig(visual);
+                m_layoutVisualConfigDirty = true;
+            }
+            saveVisualAfterEdit();
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.layout_components").data());
@@ -3622,12 +3669,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                                               bool showColor = true) {
             ImGui::PushID(static_cast<int>(type));
             bool visible = appConfig.getVisualConfig()
-                               .canvasComponents.placement(type)
+                               .canvasComponentsForKeyCount(keyCount)
+                               .placement(type)
                                .visible;
             if ( ::MMM::UI::FeedbackCheckbox(label.data(), &visible) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents.placement(type).visible =
-                    visible;
+                updatedConfig.visual
+                    .editableCanvasComponentsForKeyCount(keyCount)
+                    .placement(type)
+                    .visible = visible;
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
                     updatedConfig.visual.background.spectrum.enabled = visible;
                 }
@@ -3648,7 +3698,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 }
                 const auto componentColor =
                     fromStoredColor(appConfig.getVisualConfig()
-                                        .canvasComponents.placement(type)
+                                        .canvasComponentsForKeyCount(keyCount)
+                                        .placement(type)
                                         .color);
                 if ( ::MMM::UI::FeedbackColorButton(
                          "##Color",
@@ -3673,8 +3724,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
             if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents.resetPlacementToDefault(
-                    type);
+                updatedConfig.visual
+                    .editableCanvasComponentsForKeyCount(keyCount)
+                    .resetPlacementToDefault(type);
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
                     const Config::BackgroundSpectrumConfig defaults;
                     updatedConfig.visual.background.spectrum.widthRatio =
@@ -3696,7 +3748,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 anyColorPickerOpen = true;
                 auto editableColor =
                     fromStoredColor(appConfig.getVisualConfig()
-                                        .canvasComponents.placement(type)
+                                        .canvasComponentsForKeyCount(keyCount)
+                                        .placement(type)
                                         .color);
                 if ( ImGui::ColorPicker4(
                          "##Value",
@@ -3705,7 +3758,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                              ImGuiColorEditFlags_AlphaPreviewHalf |
                              ImGuiColorEditFlags_DisplayRGB) ) {
                     auto updatedConfig = appConfig.getEditorConfig();
-                    updatedConfig.visual.canvasComponents.placement(type)
+                    updatedConfig.visual
+                        .editableCanvasComponentsForKeyCount(keyCount)
+                        .placement(type)
                         .color = toStoredColor(editableColor);
                     Logic::EditorEngine::instance().setEditorConfig(
                         updatedConfig);
@@ -3721,14 +3776,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             ImGui::PopID();
         };
 
-        drawComponentControl(Config::CanvasComponentType::JudgmentLineTime,
-                             TR("ui.toolbar.layout_current_judgment_time"));
+        drawComponentControl(
+            Config::CanvasComponentType::JudgmentLineTime,
+            TR("ui.toolbar.layout_current_judgment_time").view());
         drawComponentControl(Config::CanvasComponentType::BeatNumber,
-                             TR("ui.toolbar.layout_beat_number"));
+                             TR("ui.toolbar.layout_beat_number").view());
         drawComponentControl(Config::CanvasComponentType::BeatLineTime,
-                             TR("ui.toolbar.layout_beat_line_time"));
+                             TR("ui.toolbar.layout_beat_line_time").view());
         drawComponentControl(Config::CanvasComponentType::BackgroundSpectrum,
-                             TR("ui.toolbar.layout_background_spectrum"),
+                             TR("ui.toolbar.layout_background_spectrum").view(),
                              false);
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_background_spectrum_settings")
@@ -3739,8 +3795,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     auto updatedConfig = appConfig.getEditorConfig();
                     updatedConfig.visual.background.spectrum = spectrum;
                     updatedConfig.visual.background.spectrum.enabled =
-                        updatedConfig.visual.canvasComponents.backgroundSpectrum
-                            .visible;
+                        updatedConfig.visual
+                            .canvasComponentsForKeyCount(keyCount)
+                            .backgroundSpectrum.visible;
                     Logic::EditorEngine::instance().setEditorConfig(
                         updatedConfig);
                 };
@@ -3863,11 +3920,13 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
 
             drawSpectrumColorControl(
-                TR("ui.settings.visual.background_spectrum.left_bar_color"),
+                TR("ui.settings.visual.background_spectrum.left_bar_color")
+                    .view(),
                 "BackgroundLevelLeft",
                 &Config::BackgroundSpectrumConfig::leftBarColor);
             drawSpectrumColorControl(
-                TR("ui.settings.visual.background_spectrum.right_bar_color"),
+                TR("ui.settings.visual.background_spectrum.right_bar_color")
+                    .view(),
                 "BackgroundLevelRight",
                 &Config::BackgroundSpectrumConfig::rightBarColor);
 
@@ -3898,18 +3957,20 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
             }
         }
         drawComponentControl(Config::CanvasComponentType::Kps,
-                             TR("ui.toolbar.layout_kps"));
+                             TR("ui.toolbar.layout_kps").view());
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_kps_sync_settings").data(),
                  ImGuiTreeNodeFlags_DefaultOpen) ) {
-            bool syncKpsTrackSizes =
-                appConfig.getVisualConfig().canvasComponents.syncKpsTrackSizes;
+            bool syncKpsTrackSizes = appConfig.getVisualConfig()
+                                         .canvasComponentsForKeyCount(keyCount)
+                                         .syncKpsTrackSizes;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
                      &syncKpsTrackSizes) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents.syncKpsTrackSizes =
-                    syncKpsTrackSizes;
+                updatedConfig.visual
+                    .editableCanvasComponentsForKeyCount(keyCount)
+                    .syncKpsTrackSizes = syncKpsTrackSizes;
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
@@ -3920,12 +3981,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
 
             bool syncKpsTrackRelativePositions =
                 appConfig.getVisualConfig()
-                    .canvasComponents.syncKpsTrackRelativePositions;
+                    .canvasComponentsForKeyCount(keyCount)
+                    .syncKpsTrackRelativePositions;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_track_positions").data(),
                      &syncKpsTrackRelativePositions) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents
+                updatedConfig.visual
+                    .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncKpsTrackRelativePositions(
                         syncKpsTrackRelativePositions);
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
@@ -3939,12 +4002,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
 
             bool syncAllKpsComponentPositions =
                 appConfig.getVisualConfig()
-                    .canvasComponents.syncAllKpsComponentPositions;
+                    .canvasComponentsForKeyCount(keyCount)
+                    .syncAllKpsComponentPositions;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_all_positions").data(),
                      &syncAllKpsComponentPositions) ) {
                 auto updatedConfig = appConfig.getEditorConfig();
-                updatedConfig.visual.canvasComponents
+                updatedConfig.visual
+                    .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncAllKpsComponentPositions(
                         syncAllKpsComponentPositions);
                 Logic::EditorEngine::instance().setEditorConfig(updatedConfig);

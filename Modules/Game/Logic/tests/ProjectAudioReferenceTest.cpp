@@ -1,6 +1,7 @@
 #include "logic/ProjectCommandService.h"
 #include "logic/ProjectResourceService.h"
 
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -15,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace
 {
@@ -60,17 +62,51 @@ private:
     std::filesystem::path m_path;
 };
 
+/// @brief 在单个测试作用域内覆盖并恢复默认 Creator。
+class ScopedDefaultCreator
+{
+public:
+    /// @brief 写入测试 Creator 并保留原始设置。
+    /// @param creator 测试期间使用的默认 Creator。
+    explicit ScopedDefaultCreator(std::string creator)
+        : m_original(MMM::Config::AppConfig::instance()
+                         .getEditorSettings()
+                         .defaultCreator)
+    {
+        MMM::Config::AppConfig::instance().getEditorSettings().defaultCreator =
+            std::move(creator);
+    }
+
+    /// @brief 恢复测试前的默认 Creator。
+    ~ScopedDefaultCreator()
+    {
+        MMM::Config::AppConfig::instance().getEditorSettings().defaultCreator =
+            std::move(m_original);
+    }
+
+    ScopedDefaultCreator(const ScopedDefaultCreator&)            = delete;
+    ScopedDefaultCreator& operator=(const ScopedDefaultCreator&) = delete;
+
+private:
+    /// @brief 测试前的默认 Creator。
+    std::string m_original;
+};
+
 /// @brief 创建目录扫描所需的最小音频占位文件。
 /// @param path 待创建文件路径。
+/// @param byteCount 需要写入的占位字节数。
 /// @return 文件成功创建时返回 true。
-bool createAudioPlaceholder(const std::filesystem::path& path)
+bool createAudioPlaceholder(const std::filesystem::path& path,
+                            std::size_t                  byteCount = 1U)
 {
     std::error_code filesystemError;
     std::filesystem::create_directories(path.parent_path(), filesystemError);
     if ( filesystemError ) return false;
 
     std::ofstream stream(path, std::ios::binary);
-    stream.put('\0');
+    for ( std::size_t index = 0; index < byteCount; ++index ) {
+        stream.put('\0');
+    }
     return stream.good();
 }
 
@@ -156,7 +192,7 @@ bool testLegacyBeatmapEntryIsReadOnly()
     return true;
 }
 
-/// @brief 验证目录扫描使用完整谱面引用推断类型且允许零主音轨。
+/// @brief 验证目录扫描优先使用谱面引用并为无引用项目推断主音轨。
 /// @return 扫描分类行为正确时返回 true。
 bool testReferenceAwareDirectoryScan()
 {
@@ -223,9 +259,38 @@ bool testReferenceAwareDirectoryScan()
     noMainScan.m_audioFiles = { unusedAudio };
     MMM::Logic::ProjectResourceService{}.buildInitialResources(noMainProject,
                                                                noMainScan);
-    return noMainProject.m_audioResources.size() == 1 &&
-           noMainProject.m_audioResources.front().m_type ==
-               MMM::AudioTrackType::Effect;
+    if ( noMainProject.m_audioResources.size() != 1U ||
+         noMainProject.m_audioResources.front().m_type !=
+             MMM::AudioTrackType::Main ) {
+        XERROR("Single unreferenced audio was not selected as Main");
+        return false;
+    }
+
+    const auto smallerAudio = directory.path() / "fallback" / "smaller.ogg";
+    const auto largerAudio  = directory.path() / "fallback" / "larger.ogg";
+    if ( !createAudioPlaceholder(smallerAudio, 8U) ||
+         !createAudioPlaceholder(largerAudio, 64U) ) {
+        XERROR("Failed to create fallback Main audio candidates");
+        return false;
+    }
+
+    MMM::Project fallbackProject;
+    fallbackProject.m_projectRoot = directory.path();
+    MMM::Logic::ProjectDirectoryScanner::ScanResult fallbackScan;
+    fallbackScan.m_success    = true;
+    fallbackScan.m_audioFiles = { smallerAudio, largerAudio };
+    MMM::Logic::ProjectResourceService{}.buildInitialResources(fallbackProject,
+                                                               fallbackScan);
+
+    const auto* smaller = findResource(fallbackProject, "smaller.ogg");
+    const auto* larger  = findResource(fallbackProject, "larger.ogg");
+    if ( !smaller || !larger ||
+         smaller->m_type != MMM::AudioTrackType::Effect ||
+         larger->m_type != MMM::AudioTrackType::Main ) {
+        XERROR("Largest unreferenced audio was not selected as Main");
+        return false;
+    }
+    return true;
 }
 
 /// @brief 验证单项和批量资源解析均保留跨匹配方式的首项语义。
@@ -1117,6 +1182,7 @@ bool testInvalidTemplateObjectTracksAreRejectedAtomically()
 /// @return 新建谱面行为正确时返回 true。
 bool testCreateBeatmapMaterializesMainSample()
 {
+    ScopedDefaultCreator       creator("Creator Test");
     ScopedTestProjectDirectory directory;
     if ( directory.path().empty() ) return false;
 
@@ -1151,6 +1217,7 @@ bool testCreateBeatmapMaterializesMainSample()
          result.m_beatmap->m_baseMapMetadata.bgm_track_count < 1 ||
          result.m_beatmap->m_baseMapMetadata.song_file_hint !=
              std::filesystem::path("audio/song.ogg") ||
+         result.m_beatmap->m_baseMapMetadata.author != "Creator Test" ||
          !result.m_beatmap->m_baseMapMetadata.main_audio_path.empty() ) {
         XERROR("Materialized Main sample fields were incorrect");
         return false;

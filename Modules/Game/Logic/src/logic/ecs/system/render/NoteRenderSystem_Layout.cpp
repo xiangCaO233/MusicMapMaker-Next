@@ -6,6 +6,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -208,7 +209,7 @@ void NoteRenderSystem::drawBeatLines(
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
     float trackAreaW, float renderScaleY, bool revealNearCursor,
-    float opacityScale)
+    float opacityScale, bool allowHoverSubdivisionPreview)
 {
     if ( !cache ) return;
     if ( revealNearCursor && !batcher.snapshot->isHoveringCanvas ) return;
@@ -280,6 +281,166 @@ void NoteRenderSystem::drawBeatLines(
         }
         return { glm::vec4(c.r, c.g, c.b, c.a * globalAlpha), width };
     };
+
+    const auto& subdivisionPreview = batcher.snapshot->hoverSubdivisionPreview;
+    const auto  commonBeatDivisorMask =
+        subdivisionPreview.commonBeatDivisorMask &
+        Config::COMMON_BEAT_DIVISOR_MASK_ALL;
+    const bool usesCommonBeatDivisors = commonBeatDivisorMask != 0U;
+    const bool hasSubdivisionPreview =
+        allowHoverSubdivisionPreview && subdivisionPreview.show &&
+        batcher.snapshot->trackCount > 0 && subdivisionPreview.track >= 0 &&
+        subdivisionPreview.track < batcher.snapshot->trackCount &&
+        (usesCommonBeatDivisors || subdivisionPreview.denominator > 1) &&
+        subdivisionPreview.denominator <= 128 &&
+        subdivisionPreview.beatEndTime > subdivisionPreview.beatStartTime &&
+        subdivisionPreview.beatDuration > 0.0;
+    const float subdivisionTrackWidth =
+        hasSubdivisionPreview
+            ? trackAreaW / static_cast<float>(batcher.snapshot->trackCount)
+            : 0.0F;
+    const float subdivisionLeft =
+        leftX +
+        static_cast<float>(subdivisionPreview.track) * subdivisionTrackWidth;
+    const float subdivisionRight = subdivisionLeft + subdivisionTrackWidth;
+    const float subdivisionLineExtensionRatio = std::clamp(
+        config.visual.hoverSubdivisionLineExtensionRatio, 0.0F, 1.0F);
+    const float subdivisionLineLeft =
+        std::max(leftX,
+                 subdivisionLeft -
+                     subdivisionTrackWidth * subdivisionLineExtensionRatio);
+    const float subdivisionLineRight =
+        std::min(leftX + trackAreaW,
+                 subdivisionRight +
+                     subdivisionTrackWidth * subdivisionLineExtensionRatio);
+    const auto timeToCanvasY = [&](double time) {
+        return judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                   time, currentAbsY, time)) *
+                                   renderScaleY;
+    };
+    const auto revealAlphaAt = [&](float y) {
+        if ( !revealNearCursor ) return 1.0F;
+        return calculateCursorRevealAlpha(
+            std::abs(y - cursorY),
+            viewportHeight,
+            config.visual.beatLineCursorVisibleRatio,
+            config.visual.beatLineCursorFadeRatio);
+    };
+    // 分段绘制允许只挖掉目标轨道该拍内的旧分拍线，同时保留其它轨道。
+    const auto drawBeatLineSegment = [&](float     x,
+                                         float     segmentWidth,
+                                         float     y,
+                                         float     lineWidth,
+                                         glm::vec4 color,
+                                         bool      glow) {
+        if ( segmentWidth <= 0.001F ) return;
+        if ( glow ) {
+            glm::vec4 glowColor = color;
+            glowColor.a *= 0.6F;
+            batcher.pushQuad(x,
+                             y + (lineWidth + 4.0F) * 0.5F,
+                             segmentWidth,
+                             lineWidth + 4.0F,
+                             glowColor);
+            glowColor.a *= 0.5F;
+            batcher.pushQuad(x,
+                             y + (lineWidth + 10.0F) * 0.5F,
+                             segmentWidth,
+                             lineWidth + 10.0F,
+                             glowColor);
+            glowColor.a *= 0.5F;
+            batcher.pushQuad(x,
+                             y + (lineWidth + 20.0F) * 0.5F,
+                             segmentWidth,
+                             lineWidth + 20.0F,
+                             glowColor);
+        }
+        batcher.pushQuad(
+            x, y + lineWidth * 0.5F, segmentWidth, lineWidth, color);
+    };
+
+    if ( hasSubdivisionPreview ) {
+        const float beatStartY =
+            timeToCanvasY(subdivisionPreview.beatStartTime);
+        const float beatEndY = timeToCanvasY(subdivisionPreview.beatEndTime);
+        const float highlightTop =
+            std::max(visibleTop, std::min(beatStartY, beatEndY));
+        const float highlightBottom =
+            std::min(visibleBottom, std::max(beatStartY, beatEndY));
+        if ( highlightBottom > highlightTop ) {
+            auto [highlightColor, outlineWidth] =
+                getBeatLineConfig(subdivisionPreview.denominator);
+            const double inspectedTime =
+                std::clamp(subdivisionPreview.focusTime,
+                           subdivisionPreview.beatStartTime,
+                           subdivisionPreview.beatEndTime);
+            const float highlightReveal =
+                revealAlphaAt(timeToCanvasY(inspectedTime));
+            glm::vec4 outlineColor = highlightColor;
+            highlightColor.a *= 0.38F * highlightReveal;
+            outlineColor.a *= 0.95F * highlightReveal;
+            batcher.pushQuad(subdivisionLeft,
+                             highlightBottom,
+                             subdivisionTrackWidth,
+                             highlightBottom - highlightTop,
+                             highlightColor);
+            batcher.pushStrokeRect(subdivisionLeft,
+                                   highlightTop,
+                                   subdivisionRight,
+                                   highlightBottom,
+                                   std::max(2.0F, outlineWidth),
+                                   outlineColor);
+        }
+
+        const auto drawSubdivisionLine = [&](int step, int divisor) {
+            const int    common      = std::gcd(step, divisor);
+            const int    numerator   = step / common;
+            const int    denominator = divisor / common;
+            const double lineTime    = subdivisionPreview.beatStartTime +
+                                       subdivisionPreview.beatDuration *
+                                           static_cast<double>(numerator) /
+                                           static_cast<double>(denominator);
+            if ( lineTime >= subdivisionPreview.beatEndTime - 1e-6 ) return;
+            const float y = timeToCanvasY(lineTime);
+            if ( y < visibleTop || y > visibleBottom ) return;
+
+            auto [color, width] = getBeatLineConfig(denominator);
+            color.a *= revealAlphaAt(y);
+            drawBeatLineSegment(subdivisionLineLeft,
+                                subdivisionLineRight - subdivisionLineLeft,
+                                y,
+                                width,
+                                color,
+                                false);
+        };
+
+        if ( usesCommonBeatDivisors ) {
+            std::array<std::array<bool, Config::COMMON_BEAT_DIVISOR_MAX + 1>,
+                       Config::COMMON_BEAT_DIVISOR_MAX + 1>
+                renderedFractions{};
+            for ( int divisor = Config::COMMON_BEAT_DIVISOR_MIN;
+                  divisor <= Config::COMMON_BEAT_DIVISOR_MAX;
+                  ++divisor ) {
+                if ( !Config::isCommonBeatDivisorEnabled(commonBeatDivisorMask,
+                                                         divisor) ) {
+                    continue;
+                }
+                for ( int step = 1; step < divisor; ++step ) {
+                    const int common      = std::gcd(step, divisor);
+                    const int numerator   = step / common;
+                    const int denominator = divisor / common;
+                    if ( renderedFractions[denominator][numerator] ) continue;
+                    renderedFractions[denominator][numerator] = true;
+                    drawSubdivisionLine(step, divisor);
+                }
+            }
+        } else {
+            for ( int step = 1; step < subdivisionPreview.denominator;
+                  ++step ) {
+                drawSubdivisionLine(step, subdivisionPreview.denominator);
+            }
+        }
+    }
 
     for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
         const auto* currentBPM = bpmEvents[i];
@@ -354,30 +515,31 @@ void NoteRenderSystem::drawBeatLines(
                 if ( y >= visibleTop && y <= visibleBottom && occupyRow(y) ) {
                     auto [color, width] = getBeatLineConfig(denominator);
                     color.a *= cursorRevealAlpha;
-                    if ( batcher.snapshot->isSnapped &&
-                         std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
-                        glm::vec4 glowCol = color;
-                        glowCol.a *= 0.6f;
-                        batcher.pushQuad(leftX,
-                                         y + (width + 4.0f) * 0.5f,
-                                         trackAreaW,
-                                         width + 4.0f,
-                                         glowCol);
-                        glowCol.a *= 0.5f;
-                        batcher.pushQuad(leftX,
-                                         y + (width + 10.0f) * 0.5f,
-                                         trackAreaW,
-                                         width + 10.0f,
-                                         glowCol);
-                        glowCol.a *= 0.5f;
-                        batcher.pushQuad(leftX,
-                                         y + (width + 20.0f) * 0.5f,
-                                         trackAreaW,
-                                         width + 20.0f,
-                                         glowCol);
+                    const bool glow =
+                        batcher.snapshot->isSnapped &&
+                        std::abs(t - batcher.snapshot->snappedTime) < 1e-6;
+                    const bool replaceTargetTrack =
+                        hasSubdivisionPreview &&
+                        t > subdivisionPreview.beatStartTime + 1e-6 &&
+                        t < subdivisionPreview.beatEndTime - 1e-6;
+                    if ( replaceTargetTrack ) {
+                        drawBeatLineSegment(leftX,
+                                            subdivisionLeft - leftX,
+                                            y,
+                                            width,
+                                            color,
+                                            glow);
+                        drawBeatLineSegment(
+                            subdivisionRight,
+                            leftX + trackAreaW - subdivisionRight,
+                            y,
+                            width,
+                            color,
+                            glow);
+                    } else {
+                        drawBeatLineSegment(
+                            leftX, trackAreaW, y, width, color, glow);
                     }
-                    batcher.pushQuad(
-                        leftX, y + width * 0.5f, trackAreaW, width, color);
                     if ( occupiedRowCount >= rowCount ) return;
                 }
                 stepOffset++;
