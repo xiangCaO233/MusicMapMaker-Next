@@ -64,9 +64,9 @@ struct ParticipantViewport {
     double playbackTime = 0.0;
     /// @brief 主画布判定线对应的视觉时间，单位为秒。
     double visualTime = 0.0;
-    /// @brief 发布端主画布可见时间范围的第一个边界，单位为秒。
+    /// @brief 发布端主画布轨道区下边界对应的视觉时间，单位为秒。
     double visibleTimeStart = 0.0;
-    /// @brief 发布端主画布可见时间范围的第二个边界，单位为秒。
+    /// @brief 发布端主画布轨道区上边界对应的视觉时间，单位为秒。
     double visibleTimeEnd = 0.0;
     /// @brief 主画布横向像素偏移除以发布端视口宽度后的比例。
     double horizontalOffsetRatio = 0.0;

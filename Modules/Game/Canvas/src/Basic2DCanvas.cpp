@@ -400,11 +400,43 @@ void Basic2DCanvas::updateCollaborationViewports(
         return;
     }
 
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout =
+        visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
+
     Network::Collaboration::ParticipantViewport localViewport;
     localViewport.playbackTime     = m_currentSnapshot->playbackTime;
     localViewport.visualTime       = m_currentSnapshot->currentTime;
     localViewport.visibleTimeStart = m_currentSnapshot->visibleTimeStart;
     localViewport.visibleTimeEnd   = m_currentSnapshot->visibleTimeEnd;
+    if ( std::isfinite(layout.top) && std::isfinite(layout.bottom) &&
+         layout.top < layout.bottom ) {
+        const float judgmentLineY =
+            canvasSize.y * visual.judgmentLinePositionForKeyCount(
+                               std::max(m_currentSnapshot->trackCount, 1));
+        const float trackTopY =
+            canvasSize.y * std::clamp(layout.top, 0.0F, 1.0F);
+        const float trackBottomY =
+            canvasSize.y * std::clamp(layout.bottom, 0.0F, 1.0F);
+        const auto trackBottomTime = unprojectCollaborationViewportTime(
+            trackBottomY,
+            m_currentSnapshot->currentTime,
+            m_currentSnapshot->visibleTimeStart,
+            m_currentSnapshot->visibleTimeEnd,
+            judgmentLineY,
+            canvasSize.y);
+        const auto trackTopTime = unprojectCollaborationViewportTime(
+            trackTopY,
+            m_currentSnapshot->currentTime,
+            m_currentSnapshot->visibleTimeStart,
+            m_currentSnapshot->visibleTimeEnd,
+            judgmentLineY,
+            canvasSize.y);
+        if ( trackBottomTime && trackTopTime ) {
+            localViewport.visibleTimeStart = *trackBottomTime;
+            localViewport.visibleTimeEnd   = *trackTopTime;
+        }
+    }
     localViewport.horizontalOffsetRatio =
         static_cast<double>(m_currentSnapshot->canvasHorizontalOffsetX) /
         static_cast<double>(canvasSize.x);
@@ -458,9 +490,6 @@ void Basic2DCanvas::updateCollaborationViewports(
                                          m_currentSnapshot->visibleTimeEnd);
     if ( !std::isfinite(localMinimum) || !std::isfinite(localMaximum) ) return;
 
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
-    const auto& layout =
-        visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
         canvasSize.x,
         m_currentSnapshot->trackCount,

@@ -15,6 +15,15 @@ bool near(const std::optional<float>& value, float expected)
     return value && std::abs(*value - expected) < 1e-4F;
 }
 
+/// @brief 比较反投影结果与期望视觉时间。
+/// @param value 待检查反投影结果。
+/// @param expected 期望视觉时间。
+/// @return 结果存在且误差小于容差时返回 true。
+bool near(const std::optional<double>& value, double expected)
+{
+    return value && std::abs(*value - expected) < 1e-9;
+}
+
 /// @brief 比较两个直接坐标值。
 /// @param value 待检查坐标。
 /// @param expected 期望坐标。
@@ -68,6 +77,49 @@ bool testPiecewiseProjection()
                 250.0F);
 }
 
+/// @brief 验证发布端使用轨道框边界而不是整幅画布边界。
+/// @return 上下布局边距被排除且边界时间可投影回原坐标时返回 true。
+bool testTrackViewportBoundaryRoundTrip()
+{
+    constexpr double VISIBLE_START  = 9.0;
+    constexpr double VISUAL_TIME    = 10.0;
+    constexpr double VISIBLE_END    = 15.0;
+    constexpr float  JUDGMENT_Y     = 500.0F;
+    constexpr float  HEIGHT         = 600.0F;
+    constexpr float  TRACK_TOP_Y    = 60.0F;
+    constexpr float  TRACK_BOTTOM_Y = 540.0F;
+
+    const auto bottomTime =
+        MMM::Canvas::unprojectCollaborationViewportTime(TRACK_BOTTOM_Y,
+                                                        VISUAL_TIME,
+                                                        VISIBLE_START,
+                                                        VISIBLE_END,
+                                                        JUDGMENT_Y,
+                                                        HEIGHT);
+    const auto topTime =
+        MMM::Canvas::unprojectCollaborationViewportTime(TRACK_TOP_Y,
+                                                        VISUAL_TIME,
+                                                        VISIBLE_START,
+                                                        VISIBLE_END,
+                                                        JUDGMENT_Y,
+                                                        HEIGHT);
+    return near(bottomTime, 9.6) && near(topTime, 14.4) &&
+           near(MMM::Canvas::projectCollaborationViewportTime(*bottomTime,
+                                                              VISUAL_TIME,
+                                                              VISIBLE_START,
+                                                              VISIBLE_END,
+                                                              JUDGMENT_Y,
+                                                              HEIGHT),
+                TRACK_BOTTOM_Y) &&
+           near(MMM::Canvas::projectCollaborationViewportTime(*topTime,
+                                                              VISUAL_TIME,
+                                                              VISIBLE_START,
+                                                              VISIBLE_END,
+                                                              JUDGMENT_Y,
+                                                              HEIGHT),
+                TRACK_TOP_Y);
+}
+
 /// @brief 验证协作框横向范围只使用本地轨道投影。
 /// @return 本地轨道边界保持不变时返回 true。
 bool testHorizontalUsesLocalTrackProjection()
@@ -111,6 +163,7 @@ bool testReverseAndInvalidRanges()
 int main()
 {
     return testLocalViewportAnchors() && testPiecewiseProjection() &&
+                   testTrackViewportBoundaryRoundTrip() &&
                    testHorizontalUsesLocalTrackProjection() &&
                    testHorizontalOffscreenClamping() &&
                    testReverseAndInvalidRanges()

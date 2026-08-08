@@ -132,4 +132,57 @@ inline std::optional<float> projectCollaborationViewportTime(
                      time, visualTime, visibleTimeEnd, judgmentLineY, 0.0F);
 }
 
+/// @brief 将本地画布 Y 坐标反投影为协作视野边界时间。
+/// @param canvasY 待反投影的本地画布 Y 坐标。
+/// @param visualTime 本地判定线对应的视觉时间。
+/// @param visibleTimeStart 本地整幅画布底边对应的时间。
+/// @param visibleTimeEnd 本地整幅画布顶边对应的时间。
+/// @param judgmentLineY 本地判定线 Y 坐标。
+/// @param canvasHeight 本地画布高度。
+/// @return 输入有效且锚点可映射时返回视觉时间。
+/// @warning UI 热路径：发布本地协作视野时调用两次；只执行常量数值计算，
+/// 禁止加入分配或阻塞操作。
+inline std::optional<double> unprojectCollaborationViewportTime(
+    float canvasY, double visualTime, double visibleTimeStart,
+    double visibleTimeEnd, float judgmentLineY, float canvasHeight)
+{
+    if ( !std::isfinite(canvasY) || !std::isfinite(visualTime) ||
+         !std::isfinite(visibleTimeStart) || !std::isfinite(visibleTimeEnd) ||
+         !std::isfinite(judgmentLineY) || !std::isfinite(canvasHeight) ||
+         canvasHeight <= 0.0F || judgmentLineY < 0.0F ||
+         judgmentLineY > canvasHeight ) {
+        return std::nullopt;
+    }
+
+    constexpr double POSITION_EPSILON = 1e-6;
+    const auto interpolate = [](float  value,
+                                float  firstY,
+                                float  secondY,
+                                double firstTime,
+                                double secondTime) -> std::optional<double> {
+        const double denominator =
+            static_cast<double>(secondY) - static_cast<double>(firstY);
+        if ( std::abs(denominator) <= POSITION_EPSILON ) {
+            return std::nullopt;
+        }
+        const double ratio =
+            (static_cast<double>(value) - static_cast<double>(firstY)) /
+            denominator;
+        const double time = firstTime + ratio * (secondTime - firstTime);
+        if ( !std::isfinite(time) ) return std::nullopt;
+        return time;
+    };
+
+    if ( std::abs(static_cast<double>(canvasY - judgmentLineY)) <=
+         POSITION_EPSILON ) {
+        return visualTime;
+    }
+    if ( canvasY > judgmentLineY ) {
+        return interpolate(
+            canvasY, canvasHeight, judgmentLineY, visibleTimeStart, visualTime);
+    }
+    return interpolate(
+        canvasY, judgmentLineY, 0.0F, visualTime, visibleTimeEnd);
+}
+
 }  // namespace MMM::Canvas
