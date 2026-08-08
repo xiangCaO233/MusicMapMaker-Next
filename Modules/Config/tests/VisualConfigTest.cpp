@@ -117,19 +117,19 @@ bool testPreviewAreaLineDefaults()
     return true;
 }
 
-/// @brief 验证玩家物件绑定音效标签开关能够持久化且旧配置默认关闭。
-/// @return 当前格式往返开启且缺省 JSON 保持关闭时返回 true。
+/// @brief 验证玩家物件绑定音效标签能够显式关闭且缺省配置默认开启。
+/// @return 当前格式往返关闭且缺省 JSON 保持开启时返回 true。
 bool testBoundSampleLabelConfigRoundTrip()
 {
     MMM::Config::VisualConfig source;
-    source.showBoundSampleLabels = true;
+    source.showBoundSampleLabels = false;
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::VisualConfig>();
     const auto           legacy =
         nlohmann::json::object().get<MMM::Config::VisualConfig>();
-    if ( !encoded.value("showBoundSampleLabels", false) ||
-         !restored.showBoundSampleLabels || legacy.showBoundSampleLabels ) {
+    if ( encoded.value("showBoundSampleLabels", true) ||
+         restored.showBoundSampleLabels || !legacy.showBoundSampleLabels ) {
         XERROR("Bound sample label config did not preserve compatibility");
         return false;
     }
@@ -254,7 +254,7 @@ bool testRenderingDefaultsReset()
     config.visual.noteScaleX               = 2.4F;
     config.visual.noteScaleY               = 0.7F;
     config.visual.nonHoldHitEffectDuration = 0.76F;
-    config.visual.showBoundSampleLabels    = true;
+    config.visual.showBoundSampleLabels    = false;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
     config.settings.defaultColorPaletteSchemeName = "Custom";
     config.visual.background.fillMode =
