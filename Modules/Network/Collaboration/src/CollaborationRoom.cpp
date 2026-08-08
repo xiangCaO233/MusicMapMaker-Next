@@ -111,7 +111,11 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_acceptLocalMutations.store(true, std::memory_order_release);
     {
         std::lock_guard lock(m_localOperationMutex);
+        m_localMutationCodec.reset();
         m_localOperationQueue.clear();
+        m_inFlightLocalOperations.clear();
+        m_localOperationSubmitBlocked = false;
+        m_localStateNeedsRebase       = false;
     }
 
     m_transport = transport.get();
@@ -191,7 +195,11 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_resourceManifestRecipients.clear();
     {
         std::lock_guard lock(m_localOperationMutex);
+        m_localMutationCodec.reset();
         m_localOperationQueue.clear();
+        m_inFlightLocalOperations.clear();
+        m_localOperationSubmitBlocked = false;
+        m_localStateNeedsRebase       = false;
     }
     m_transport        = transport.get();
     m_pendingTransport = std::move(transport);
@@ -295,24 +303,37 @@ void CollaborationRoom::onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
 {
     if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
 
-    const bool host     = m_hostRoleForObserver.load(std::memory_order_relaxed);
-    bool       snapshot = false;
-    if ( host ) {
-        snapshot =
-            !m_initialSnapshotQueued.exchange(true, std::memory_order_relaxed);
-    } else if ( !m_hasDocument.load(std::memory_order_acquire) ) {
+    const bool host = m_hostRoleForObserver.load(std::memory_order_relaxed);
+    if ( !host && !m_hasDocument.load(std::memory_order_acquire) ) {
         return;
     }
-
-    auto payload = m_documentCodec.encode(beatmap, flags, snapshot);
-    if ( !payload.has_value() ) return;
 
     std::lock_guard lock(m_localOperationMutex);
     if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
     if ( m_localOperationQueue.size() >= MAX_QUEUED_LOCAL_OPERATIONS ) {
         return;
     }
+    const bool snapshot =
+        host && !m_initialSnapshotQueued.load(std::memory_order_relaxed);
+    auto payload = m_localMutationCodec.encode(beatmap, flags, snapshot);
+    if ( !payload.has_value() ) return;
+
     m_localOperationQueue.push_back(std::move(payload.value()));
+    if ( snapshot ) {
+        m_initialSnapshotQueued.store(true, std::memory_order_relaxed);
+    }
+}
+
+void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
+{
+    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
+    std::lock_guard lock(m_localOperationMutex);
+    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
+    m_localMutationCodec.synchronizeEncodingBaseline(beatmap);
+    if ( !m_localOperationQueue.empty() ||
+         !m_inFlightLocalOperations.empty() ) {
+        m_localStateNeedsRebase = true;
+    }
 }
 
 void CollaborationRoom::disconnect()
@@ -716,16 +737,20 @@ void CollaborationRoom::handleCommittedOperation(
                   "invalid_beatmap_operation");
         return;
     }
-    auto beatmap = m_documentCodec.materialize();
-    if ( !beatmap ) {
-        appendLog(CollaborationLogEventType::Error,
-                  operation.clientId,
-                  creator,
-                  "invalid_beatmap_document");
-        return;
-    }
-
     m_hasDocument.store(true, std::memory_order_release);
+    const bool originatedLocally = operation.clientId == localPeerId();
+    bool       reapplyLocalState = false;
+    if ( originatedLocally ) {
+        std::lock_guard lock(m_localOperationMutex);
+        const auto      matching = std::find(m_inFlightLocalOperations.begin(),
+                                             m_inFlightLocalOperations.end(),
+                                             operation.payload);
+        if ( matching != m_inFlightLocalOperations.end() ) {
+            m_inFlightLocalOperations.erase(matching);
+        }
+        reapplyLocalState       = m_localStateNeedsRebase;
+        m_localStateNeedsRebase = false;
+    }
     if ( m_isHost && m_peer ) {
         auto snapshot = m_documentCodec.encodeCurrentSnapshot();
         if ( snapshot.has_value() ) {
@@ -733,9 +758,19 @@ void CollaborationRoom::handleCommittedOperation(
                 m_peer->setStateSnapshot(std::move(snapshot.value())));
         }
     }
-    const bool originatedLocally = operation.clientId == localPeerId();
-    if ( m_applyBeatmapCallback && !originatedLocally ) {
-        m_applyBeatmapCallback(std::move(beatmap), patch->flags);
+    if ( m_applyBeatmapCallback && (!originatedLocally || reapplyLocalState) ) {
+        auto beatmap = materializeRebasedLocalBeatmap();
+        if ( !beatmap ) {
+            appendLog(CollaborationLogEventType::Error,
+                      operation.clientId,
+                      creator,
+                      "invalid_beatmap_document");
+            return;
+        }
+        m_applyBeatmapCallback(std::move(beatmap),
+                               reapplyLocalState
+                                   ? ::MMM::BeatmapMutationFlags::All
+                                   : patch->flags);
     }
 }
 
@@ -750,18 +785,57 @@ void CollaborationRoom::submitQueuedLocalOperations()
         {
             std::lock_guard lock(m_localOperationMutex);
             if ( m_localOperationQueue.empty() ) return;
-            payload = std::move(m_localOperationQueue.front());
-            m_localOperationQueue.pop_front();
+            payload = m_localOperationQueue.front();
         }
         const auto result = m_peer->submitOperation(payload);
-        if ( result == SubmitOperationResult::Accepted ) continue;
+        if ( result == SubmitOperationResult::Accepted ) {
+            std::lock_guard lock(m_localOperationMutex);
+            if ( !m_localOperationQueue.empty() &&
+                 m_localOperationQueue.front() == payload ) {
+                m_inFlightLocalOperations.push_back(
+                    std::move(m_localOperationQueue.front()));
+                m_localOperationQueue.pop_front();
+            }
+            m_localOperationSubmitBlocked = false;
+            continue;
+        }
 
-        appendLog(CollaborationLogEventType::Error,
-                  localPeerId(),
-                  m_creator,
-                  "local_operation_submit_failed");
+        if ( !m_localOperationSubmitBlocked ) {
+            appendLog(CollaborationLogEventType::Error,
+                      localPeerId(),
+                      m_creator,
+                      "local_operation_submit_failed");
+            m_localOperationSubmitBlocked = true;
+        }
         return;
     }
+}
+
+std::shared_ptr<::MMM::BeatMap>
+CollaborationRoom::materializeRebasedLocalBeatmap()
+{
+    auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+    if ( !snapshot.has_value() ) return nullptr;
+
+    std::vector<ByteBuffer> pending;
+    {
+        std::lock_guard lock(m_localOperationMutex);
+        pending.reserve(m_inFlightLocalOperations.size() +
+                        m_localOperationQueue.size());
+        pending.insert(pending.end(),
+                       m_inFlightLocalOperations.begin(),
+                       m_inFlightLocalOperations.end());
+        pending.insert(pending.end(),
+                       m_localOperationQueue.begin(),
+                       m_localOperationQueue.end());
+    }
+
+    BeatmapDocumentCodec localView;
+    if ( !localView.apply(*snapshot).has_value() ) return nullptr;
+    for ( const auto& payload : pending ) {
+        if ( !localView.apply(payload).has_value() ) return nullptr;
+    }
+    return localView.materialize();
 }
 
 void CollaborationRoom::stopAcceptingLocalMutations()
@@ -769,6 +843,9 @@ void CollaborationRoom::stopAcceptingLocalMutations()
     m_acceptLocalMutations.store(false, std::memory_order_release);
     std::lock_guard lock(m_localOperationMutex);
     m_localOperationQueue.clear();
+    m_inFlightLocalOperations.clear();
+    m_localOperationSubmitBlocked = false;
+    m_localStateNeedsRebase       = false;
 }
 
 void CollaborationRoom::flushLocalViewport()

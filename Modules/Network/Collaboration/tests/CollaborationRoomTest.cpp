@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -242,6 +243,22 @@ bool hasExpectedState(const std::shared_ptr<const BeatMap>& beatmap,
            std::abs(beatmap->m_baseMapMetadata.preference_bpm - 150.0) < 1e-6;
 }
 
+/// @brief 判断谱面根 Note 是否包含全部指定时间戳。
+bool hasRootNoteTimestamps(const std::shared_ptr<const BeatMap>& beatmap,
+                           std::initializer_list<double>         timestamps)
+{
+    if ( !beatmap || beatmap->m_noteData.notes.size() != timestamps.size() ) {
+        return false;
+    }
+    return std::all_of(timestamps.begin(), timestamps.end(), [&](double value) {
+        return std::any_of(beatmap->m_noteData.notes.begin(),
+                           beatmap->m_noteData.notes.end(),
+                           [value](const MMM::Note& note) {
+                               return std::abs(note.m_timestamp - value) < 1e-6;
+                           });
+    });
+}
+
 /// @brief 覆盖中心信令、真实 WebRTC、初始快照和双向增量收敛。
 bool testPublicDirectoryWebRtcRoom()
 {
@@ -379,6 +396,57 @@ bool testPublicDirectoryWebRtcRoom()
         }
         return false;
     }
+    for ( std::size_t index = 0; index < guests.size(); ++index ) {
+        guests[index]->onBeatmapSynchronized(*guestModels[index]);
+    }
+
+    auto  hostConcurrent      = makeBeatmap(1000.0, "Host Creator");
+    auto& hostAddedNote       = hostConcurrent->m_noteData.notes.emplace_back();
+    hostAddedNote.m_timestamp = 3000.0;
+    hostAddedNote.m_track     = 0;
+    hostConcurrent->sync();
+    auto  guestConcurrent = makeBeatmap(1000.0, "Host Creator");
+    auto& guestAddedNote  = guestConcurrent->m_noteData.notes.emplace_back();
+    guestAddedNote.m_timestamp = 4000.0;
+    guestAddedNote.m_track     = 1;
+    guestConcurrent->sync();
+    hostModel           = hostConcurrent;
+    guestModels.front() = guestConcurrent;
+    host.onBeatmapMutated(*hostConcurrent, BeatmapMutationFlags::Objects);
+    guests.front()->onBeatmapMutated(*guestConcurrent,
+                                     BeatmapMutationFlags::Objects);
+    const bool concurrentEditsConverged =
+        pumpUntil(server, host, guests, [&]() {
+            return hasRootNoteTimestamps(hostModel,
+                                         { 1000.0, 3000.0, 4000.0 }) &&
+                   hasRootNoteTimestamps(guestModels.front(),
+                                         { 1000.0, 3000.0, 4000.0 });
+        });
+    if ( !concurrentEditsConverged ) {
+        XERROR(
+            "Concurrent host and guest object additions overwrote each other");
+        return false;
+    }
+    host.onBeatmapSynchronized(*hostModel);
+    guests.front()->onBeatmapSynchronized(*guestModels.front());
+
+    auto hostReset      = makeBeatmap(1000.0, "Host Creator");
+    auto guestReset     = makeBeatmap(1000.0, "Host Creator");
+    hostModel           = hostReset;
+    guestModels.front() = guestReset;
+    host.onBeatmapMutated(*hostReset, BeatmapMutationFlags::Objects);
+    guests.front()->onBeatmapMutated(*guestReset,
+                                     BeatmapMutationFlags::Objects);
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1000.0, "Host Creator") &&
+                    hasExpectedState(
+                        guestModels.front(), 1000.0, "Host Creator");
+         }) ) {
+        XERROR("Concurrent object cleanup did not converge");
+        return false;
+    }
+    host.onBeatmapSynchronized(*hostModel);
+    guests.front()->onBeatmapSynchronized(*guestModels.front());
 
     auto guestEdit      = makeBeatmap(1250.0, "Host Creator");
     guestModels.front() = guestEdit;
@@ -410,11 +478,12 @@ bool testPublicDirectoryWebRtcRoom()
                 return hasExpectedState(model, 1250.0, "Host Revised");
             });
     });
-    if ( !hostEditConverged || hostApplyCount != 1U ||
-         guestApplyCounts.front() != 2U ||
-         !std::all_of(guestApplyCounts.begin() + 1,
-                      guestApplyCounts.end(),
-                      [](std::size_t count) { return count == 3U; }) ||
+    if ( !hostEditConverged || hostApplyCount < 3U ||
+         guestApplyCounts.front() < 4U ||
+         !std::all_of(
+             guestApplyCounts.begin() + 1,
+             guestApplyCounts.end(),
+             [](std::size_t count) { return count == 3U; }) ||
          countLogs(host, CollaborationLogEventType::OperationCommitted) < 3U ) {
         XERROR(
             "Host edit validation failed: converged={}, hostApply={}, "

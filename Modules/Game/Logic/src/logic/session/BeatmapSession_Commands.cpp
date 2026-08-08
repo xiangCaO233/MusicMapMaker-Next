@@ -1078,7 +1078,35 @@ bool BeatmapSession::processCommands()
     bool                        processed = false;
     ::MMM::BeatmapMutationFlags mutationFlags =
         ::MMM::BeatmapMutationFlags::None;
+    const auto publishPendingMutation = [this, &mutationFlags]() {
+        if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                                  std::memory_order_acquire);
+        if ( observer && m_ctx->currentBeatmap ) {
+            SessionUtils::syncBeatmap(*m_ctx);
+            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
+        }
+        mutationFlags = ::MMM::BeatmapMutationFlags::None;
+    };
     while ( m_commandQueue.try_dequeue(cmd) ) {
+        const bool authoritativeSynchronization = std::visit(
+            [](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
+                    return arg.authoritativeRemote;
+                }
+                return false;
+            },
+            cmd);
+        const bool localGestureActive =
+            m_ctx->isDragging || m_ctx->isSelecting ||
+            m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
+        if ( authoritativeSynchronization && localGestureActive ) {
+            m_commandQueue.enqueue(std::move(cmd));
+            break;
+        }
+        if ( authoritativeSynchronization ) publishPendingMutation();
+
         // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
         // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
         // 布局。画布组件仍在 update 末尾一次性物化，避免连续输入复制内部向量。
@@ -1306,7 +1334,6 @@ bool BeatmapSession::processCommands()
                 using T = std::decay_t<decltype(arg)>;
                 constexpr bool isMutationCommand =
                     std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
-                    std::is_same_v<T, CmdUpdateDrag> ||
                     std::is_same_v<T, CmdEndDrag> ||
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
@@ -1329,9 +1356,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                     std::is_same_v<T, CmdReplaceBeatmapData> ||
-                    std::is_same_v<T, CmdUpdateBrush> ||
                     std::is_same_v<T, CmdEndBrush> ||
-                    std::is_same_v<T, CmdUpdateErase> ||
                     std::is_same_v<T, CmdEndErase> ||
                     std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                     std::is_same_v<T, CmdMarkBeatmapMetadataDirty>;
@@ -1339,7 +1364,10 @@ bool BeatmapSession::processCommands()
                     return;
                 }
                 if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
-                    if ( !arg.notifyMutationObserver ) return;
+                    if ( !arg.notifyMutationObserver ||
+                         arg.authoritativeRemote ) {
+                        return;
+                    }
                 }
 
                 if ( m_ctx->m_needsNotesSync ) {
@@ -1369,16 +1397,17 @@ bool BeatmapSession::processCommands()
                 }
             },
             cmd);
-    }
-
-    if ( mutationFlags != ::MMM::BeatmapMutationFlags::None ) {
-        auto observer = std::atomic_load_explicit(&m_mutationObserver,
-                                                  std::memory_order_acquire);
-        if ( observer && m_ctx->currentBeatmap ) {
+        if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
             SessionUtils::syncBeatmap(*m_ctx);
-            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
+            auto observer = std::atomic_load_explicit(
+                &m_mutationObserver, std::memory_order_acquire);
+            if ( observer ) {
+                observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+            }
         }
     }
+
+    publishPendingMutation();
     return processed;
 }
 

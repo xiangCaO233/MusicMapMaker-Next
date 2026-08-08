@@ -51,7 +51,12 @@ public:
     /// @return 成功时返回 CBOR 二进制负载。
     [[nodiscard]] std::expected<ByteBuffer, BeatmapDocumentError> encode(
         const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags,
-        bool snapshot) const;
+        bool snapshot);
+
+    /// @brief 将本地增量编码基线同步为逻辑线程当前实际谱面。
+    /// @param beatmap 已完成远端权威合并后的本地谱面。
+    /// @warning 只能由持有该编码器外部同步锁的低频谱面同步路径调用。
+    void synchronizeEncodingBaseline(const ::MMM::BeatMap& beatmap);
 
     /// @brief 将房主已排序的快照或分类增量应用到本地规范文档。
     /// @param payload CBOR 二进制负载。

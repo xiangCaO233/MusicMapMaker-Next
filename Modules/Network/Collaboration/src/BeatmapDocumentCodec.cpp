@@ -4,14 +4,17 @@
 #include "mmm/Metadata.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <miniz.h>
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
-#include <miniz.h>
-#include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -21,7 +24,7 @@ namespace
 {
 using Json = nlohmann::json;
 
-constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 1;
+constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 2;
 /// @brief 协作谱面负载固定魔数，对应 ASCII `MMBD`。
 constexpr std::array<std::uint8_t, 4> DOCUMENT_PAYLOAD_MAGIC{
     'M', 'M', 'B', 'D'
@@ -541,29 +544,85 @@ bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
     return true;
 }
 
-Json makePatch(const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags,
-               bool snapshot)
+/// @brief 编码不含协议头的完整谱面分类文档。
+Json makeDocument(const ::MMM::BeatMap& beatmap)
 {
-    if ( snapshot ) flags = ::MMM::BeatmapMutationFlags::All;
+    return Json{
+        { "objects", encodeObjects(beatmap) },
+        { "timelines", encodeTimelines(beatmap) },
+        { "audio_samples", encodeAudioSamples(beatmap) },
+        { "metadata", encodeMetadata(beatmap) },
+    };
+}
+
+/// @brief 计算两个数组间保留重复项数量的增删集合。
+Json makeArrayDelta(const Json& before, const Json& after)
+{
+    std::unordered_map<std::string, std::int64_t> countDifference;
+    countDifference.reserve(before.size() + after.size());
+    for ( const auto& value : before ) --countDifference[value.dump()];
+    for ( const auto& value : after ) ++countDifference[value.dump()];
+
+    Json added = Json::array();
+    for ( const auto& value : after ) {
+        auto& remaining = countDifference[value.dump()];
+        if ( remaining <= 0 ) continue;
+        added.push_back(value);
+        --remaining;
+    }
+
+    Json removed = Json::array();
+    for ( const auto& value : before ) {
+        auto& remaining = countDifference[value.dump()];
+        if ( remaining >= 0 ) continue;
+        removed.push_back(value);
+        ++remaining;
+    }
+    return Json{
+        { "added", std::move(added) },
+        { "removed", std::move(removed) },
+    };
+}
+
+/// @brief 判断数组增量是否没有任何净变化。
+bool arrayDeltaEmpty(const Json& delta)
+{
+    return delta.at("added").empty() && delta.at("removed").empty();
+}
+
+/// @brief 基于逻辑线程上一次实际状态构造可合并的分类增量。
+std::optional<Json> makeIncrementalPatch(const Json&                 baseline,
+                                         const Json&                 current,
+                                         ::MMM::BeatmapMutationFlags flags)
+{
     Json patch{
         { "version", DOCUMENT_FORMAT_VERSION },
-        { "snapshot", snapshot },
+        { "snapshot", false },
     };
-    if ( hasBeatmapMutationFlag(flags, ::MMM::BeatmapMutationFlags::Objects) ) {
-        patch["objects"] = encodeObjects(beatmap);
+    bool       changed          = false;
+    const auto appendArrayDelta = [&](std::string_view            category,
+                                      std::string_view            deltaKey,
+                                      ::MMM::BeatmapMutationFlags flag) {
+        if ( !hasBeatmapMutationFlag(flags, flag) ) return;
+        auto delta =
+            makeArrayDelta(baseline.at(category), current.at(category));
+        if ( arrayDeltaEmpty(delta) ) return;
+        patch[std::string(deltaKey)] = std::move(delta);
+        changed                      = true;
+    };
+    appendArrayDelta(
+        "objects", "objects_delta", ::MMM::BeatmapMutationFlags::Objects);
+    appendArrayDelta(
+        "timelines", "timelines_delta", ::MMM::BeatmapMutationFlags::Timelines);
+    appendArrayDelta("audio_samples",
+                     "audio_samples_delta",
+                     ::MMM::BeatmapMutationFlags::AudioSamples);
+    if ( hasBeatmapMutationFlag(flags, ::MMM::BeatmapMutationFlags::Metadata) &&
+         baseline.at("metadata") != current.at("metadata") ) {
+        patch["metadata"] = current.at("metadata");
+        changed           = true;
     }
-    if ( hasBeatmapMutationFlag(flags,
-                                ::MMM::BeatmapMutationFlags::Timelines) ) {
-        patch["timelines"] = encodeTimelines(beatmap);
-    }
-    if ( hasBeatmapMutationFlag(flags,
-                                ::MMM::BeatmapMutationFlags::AudioSamples) ) {
-        patch["audio_samples"] = encodeAudioSamples(beatmap);
-    }
-    if ( hasBeatmapMutationFlag(flags,
-                                ::MMM::BeatmapMutationFlags::Metadata) ) {
-        patch["metadata"] = encodeMetadata(beatmap);
-    }
+    if ( !changed ) return std::nullopt;
     return patch;
 }
 }  // namespace
@@ -573,6 +632,8 @@ class BeatmapDocumentCodec::Impl
 public:
     Json document = Json::object();
     bool hasDocument{ false };
+    Json encodingBaseline = Json::object();
+    bool hasEncodingBaseline{ false };
 };
 
 BeatmapDocumentCodec::BeatmapDocumentCodec() : m_impl(std::make_unique<Impl>())
@@ -583,12 +644,52 @@ BeatmapDocumentCodec::~BeatmapDocumentCodec() = default;
 
 std::expected<ByteBuffer, BeatmapDocumentError> BeatmapDocumentCodec::encode(
     const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags,
-    bool snapshot) const
+    bool snapshot)
 {
     if ( !snapshot && flags == ::MMM::BeatmapMutationFlags::None ) {
         return std::unexpected(BeatmapDocumentError::EmptyPayload);
     }
-    return encodeDocumentPayload(makePatch(beatmap, flags, snapshot));
+    const Json current = makeDocument(beatmap);
+    if ( snapshot ) {
+        Json payload        = current;
+        payload["version"]  = DOCUMENT_FORMAT_VERSION;
+        payload["snapshot"] = true;
+        auto encoded        = encodeDocumentPayload(payload);
+        if ( encoded.has_value() ) {
+            m_impl->encodingBaseline    = current;
+            m_impl->hasEncodingBaseline = true;
+        }
+        return encoded;
+    }
+    if ( !m_impl->hasEncodingBaseline ) {
+        return std::unexpected(BeatmapDocumentError::MissingSnapshot);
+    }
+    auto patch = makeIncrementalPatch(m_impl->encodingBaseline, current, flags);
+    if ( !patch.has_value() ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    auto encoded = encodeDocumentPayload(*patch);
+    if ( !encoded.has_value() ) return encoded;
+
+    const auto updateBaseline = [&](std::string_view            category,
+                                    ::MMM::BeatmapMutationFlags flag) {
+        if ( hasBeatmapMutationFlag(flags, flag) ) {
+            m_impl->encodingBaseline[std::string(category)] =
+                current.at(category);
+        }
+    };
+    updateBaseline("objects", ::MMM::BeatmapMutationFlags::Objects);
+    updateBaseline("timelines", ::MMM::BeatmapMutationFlags::Timelines);
+    updateBaseline("audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples);
+    updateBaseline("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+    return encoded;
+}
+
+void BeatmapDocumentCodec::synchronizeEncodingBaseline(
+    const ::MMM::BeatMap& beatmap)
+{
+    m_impl->encodingBaseline    = makeDocument(beatmap);
+    m_impl->hasEncodingBaseline = true;
 }
 
 std::expected<BeatmapPatchResult, BeatmapDocumentError>
@@ -623,19 +724,60 @@ BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
         next[std::string(key)] = *iterator;
         result.flags |= flag;
     };
-    copyCategory("objects", ::MMM::BeatmapMutationFlags::Objects);
-    copyCategory("timelines", ::MMM::BeatmapMutationFlags::Timelines);
-    copyCategory("audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples);
-    copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+    bool       valid           = true;
+    const auto applyArrayDelta = [&](std::string_view            deltaKey,
+                                     std::string_view            category,
+                                     ::MMM::BeatmapMutationFlags flag) {
+        const auto deltaIt = patch.find(deltaKey);
+        if ( deltaIt == patch.end() ) return;
+        const auto addedIt   = deltaIt->find("added");
+        const auto removedIt = deltaIt->find("removed");
+        auto       targetIt  = next.find(category);
+        if ( !deltaIt->is_object() || addedIt == deltaIt->end() ||
+             !addedIt->is_array() || removedIt == deltaIt->end() ||
+             !removedIt->is_array() || targetIt == next.end() ||
+             !targetIt->is_array() ) {
+            valid = false;
+            return;
+        }
+        for ( const auto& removed : *removedIt ) {
+            const auto existing =
+                std::find(targetIt->begin(), targetIt->end(), removed);
+            if ( existing != targetIt->end() ) targetIt->erase(existing);
+        }
+        for ( const auto& added : *addedIt ) targetIt->push_back(added);
+        result.flags |= flag;
+    };
 
-    if ( snapshot && result.flags != ::MMM::BeatmapMutationFlags::All ) {
+    if ( snapshot ) {
+        copyCategory("objects", ::MMM::BeatmapMutationFlags::Objects);
+        copyCategory("timelines", ::MMM::BeatmapMutationFlags::Timelines);
+        copyCategory("audio_samples",
+                     ::MMM::BeatmapMutationFlags::AudioSamples);
+        copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+    } else {
+        applyArrayDelta(
+            "objects_delta", "objects", ::MMM::BeatmapMutationFlags::Objects);
+        applyArrayDelta("timelines_delta",
+                        "timelines",
+                        ::MMM::BeatmapMutationFlags::Timelines);
+        applyArrayDelta("audio_samples_delta",
+                        "audio_samples",
+                        ::MMM::BeatmapMutationFlags::AudioSamples);
+        copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+    }
+
+    if ( !valid ||
+         (snapshot && result.flags != ::MMM::BeatmapMutationFlags::All) ) {
         return std::unexpected(BeatmapDocumentError::InvalidDocument);
     }
     if ( result.flags == ::MMM::BeatmapMutationFlags::None ) {
         return std::unexpected(BeatmapDocumentError::EmptyPayload);
     }
-    m_impl->document    = std::move(next);
-    m_impl->hasDocument = true;
+    m_impl->document            = std::move(next);
+    m_impl->hasDocument         = true;
+    m_impl->encodingBaseline    = m_impl->document;
+    m_impl->hasEncodingBaseline = true;
     return result;
 }
 
@@ -683,7 +825,9 @@ bool BeatmapDocumentCodec::hasDocument() const
 
 void BeatmapDocumentCodec::reset()
 {
-    m_impl->document    = Json::object();
-    m_impl->hasDocument = false;
+    m_impl->document            = Json::object();
+    m_impl->hasDocument         = false;
+    m_impl->encodingBaseline    = Json::object();
+    m_impl->hasEncodingBaseline = false;
 }
 }  // namespace MMM::Network::Collaboration

@@ -169,6 +169,10 @@ public:
     void onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
                           ::MMM::BeatmapMutationFlags flags) override;
 
+    /// @brief 接收逻辑线程已经合并远端提交后的本地编码基线。
+    /// @warning 逻辑线程低频远端提交路径调用；仅执行内存编码并获取短期互斥锁。
+    void onBeatmapSynchronized(const ::MMM::BeatMap& beatmap) override;
+
     /// @brief 主动离开并回到离线状态。
     void disconnect();
 
@@ -257,6 +261,9 @@ private:
     void handleCommittedOperation(const CommittedOperation& operation);
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
+    /// @brief 在权威文档上重放尚未提交的本地增量，构造本机可见谱面。
+    [[nodiscard]] std::shared_ptr<::MMM::BeatMap>
+    materializeRebasedLocalBeatmap();
     /// @brief 关闭本地谱面变更入口并丢弃尚未提交的操作。
     /// @warning UI 网络事件路径调用；会短暂获取本地操作队列锁，以与逻辑线程
     /// 正在编码的 mutation 完成终止握手。
@@ -303,6 +310,8 @@ private:
     std::unique_ptr<CollaborationPeer> m_peer;
     /// @brief 当前客户端的规范化谱面文档。
     BeatmapDocumentCodec m_documentCodec;
+    /// @brief 逻辑线程专用的本地编辑增量编码器。
+    BeatmapDocumentCodec m_localMutationCodec;
     /// @brief 远端提交数据的本地逻辑命令入口。
     ApplyBeatmapCallback m_applyBeatmapCallback;
     /// @brief 访客完成资源校验后的会话绑定入口。
@@ -315,10 +324,16 @@ private:
     std::unordered_set<PeerId> m_resourceManifestRecipients;
     /// @brief 逻辑线程等待 UI 网络循环提交的本地操作。
     std::deque<ByteBuffer> m_localOperationQueue;
+    /// @brief 已交给可靠传输且等待房主提交回执的本地操作。
+    std::deque<ByteBuffer> m_inFlightLocalOperations;
     /// @brief 保护本地操作队列。
     std::mutex m_localOperationMutex;
     /// @brief 当前房间是否接受逻辑线程发布的谱面变化。
     std::atomic_bool m_acceptLocalMutations{ false };
+    /// @brief 本地队首因传输背压暂时无法提交时抑制重复错误日志。
+    bool m_localOperationSubmitBlocked = false;
+    /// @brief 远端回灌曾覆盖含待确认编辑的本地状态，需要由本人提交回执重放。
+    bool m_localStateNeedsRebase = false;
     /// @brief 当前房间角色是否为房主。
     std::atomic_bool m_hostRoleForObserver{ false };
     /// @brief 房主是否已经排队初始完整快照。

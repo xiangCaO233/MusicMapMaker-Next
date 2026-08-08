@@ -53,5 +53,13 @@ public:
     /// @warning 逻辑线程低频编辑分支调用；实现不得阻塞等待网络或访问文件系统。
     virtual void onBeatmapMutated(const BeatMap&       beatmap,
                                   BeatmapMutationFlags flags) = 0;
+
+    /// @brief 同步远端权威合并后逻辑线程当前实际持有的谱面基线。
+    /// @param beatmap 已按逻辑命令顺序完成合并的当前谱面。
+    /// @warning 逻辑线程低频远端提交路径调用；实现不得访问网络或文件系统。
+    virtual void onBeatmapSynchronized(const BeatMap& beatmap)
+    {
+        static_cast<void>(beatmap);
+    }
 };
 }  // namespace MMM

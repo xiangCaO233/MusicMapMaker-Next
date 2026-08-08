@@ -366,11 +366,8 @@ bool testRepeatedBidirectionalObjectRoundTrips()
         }
         auto authoritative = hostDocument.materialize();
         if ( !authoritative ) return false;
-        auto committed = hostDocument.encode(
-            *authoritative, BeatmapMutationFlags::Objects, false);
-        if ( !committed.has_value() ||
-             !guestDocument.apply(committed.value()).has_value() ||
-             !broadcaster.apply(committed.value()).has_value() ) {
+        if ( !guestDocument.apply(request.value()).has_value() ||
+             !broadcaster.apply(request.value()).has_value() ) {
             return false;
         }
         auto guest      = guestDocument.materialize();
@@ -385,6 +382,71 @@ bool testRepeatedBidirectionalObjectRoundTrips()
         }
     }
     return true;
+}
+
+/// @brief 校验多个客户端基于同一基线追加物件时按房主顺序合并而不互相覆盖。
+bool testConcurrentObjectDeltasMerge()
+{
+    BeatmapDocumentCodec hostEncoder;
+    BeatmapDocumentCodec firstGuestEncoder;
+    BeatmapDocumentCodec secondGuestEncoder;
+    BeatmapDocumentCodec authority;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    auto                 snapshot =
+        hostEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() ||
+         !authority.apply(snapshot.value()).has_value() ) {
+        return false;
+    }
+    firstGuestEncoder.synchronizeEncodingBaseline(*initial);
+    secondGuestEncoder.synchronizeEncodingBaseline(*initial);
+
+    auto  hostEdit       = makeCompleteBeatmap("Creator");
+    auto& hostNote       = hostEdit->m_noteData.notes.emplace_back();
+    hostNote.m_timestamp = 3000.0;
+    hostNote.m_track     = 0;
+    hostEdit->sync();
+
+    auto  firstGuestEdit = makeCompleteBeatmap("Creator");
+    auto& firstGuestNote = firstGuestEdit->m_noteData.notes.emplace_back();
+    firstGuestNote.m_timestamp = 4000.0;
+    firstGuestNote.m_track     = 1;
+    firstGuestEdit->sync();
+
+    auto  secondGuestEdit = makeCompleteBeatmap("Creator");
+    auto& secondGuestNote = secondGuestEdit->m_noteData.notes.emplace_back();
+    secondGuestNote.m_timestamp = 5000.0;
+    secondGuestNote.m_track     = 2;
+    secondGuestEdit->sync();
+
+    auto hostDelta =
+        hostEncoder.encode(*hostEdit, BeatmapMutationFlags::Objects, false);
+    auto firstGuestDelta = firstGuestEncoder.encode(
+        *firstGuestEdit, BeatmapMutationFlags::Objects, false);
+    auto secondGuestDelta = secondGuestEncoder.encode(
+        *secondGuestEdit, BeatmapMutationFlags::Objects, false);
+    if ( !hostDelta.has_value() || !firstGuestDelta.has_value() ||
+         !secondGuestDelta.has_value() ||
+         !authority.apply(firstGuestDelta.value()).has_value() ||
+         !authority.apply(hostDelta.value()).has_value() ||
+         !authority.apply(secondGuestDelta.value()).has_value() ) {
+        return false;
+    }
+
+    const auto merged = authority.materialize();
+    if ( !merged || merged->m_noteData.notes.size() != 4U ) return false;
+    constexpr std::array EXPECTED_TIMESTAMPS{ 1000.0, 3000.0, 4000.0, 5000.0 };
+    return std::all_of(
+        EXPECTED_TIMESTAMPS.begin(),
+        EXPECTED_TIMESTAMPS.end(),
+        [&merged](double timestamp) {
+            return std::any_of(
+                merged->m_noteData.notes.begin(),
+                merged->m_noteData.notes.end(),
+                [timestamp](const MMM::Note& note) {
+                    return std::abs(note.m_timestamp - timestamp) < 1e-9;
+                });
+        });
 }
 
 /// @brief 校验元数据增量小于完整快照且不会覆盖其它谱面类别。
@@ -417,6 +479,9 @@ bool testInvalidPayloads()
 {
     BeatmapDocumentCodec codec;
     auto                 beatmap = makeCompleteBeatmap("Creator");
+    codec.synchronizeEncodingBaseline(*beatmap);
+    beatmap->m_noteData.notes.front().m_timestamp += 1.0;
+    beatmap->sync();
     auto delta = codec.encode(*beatmap, BeatmapMutationFlags::Objects, false);
     if ( !delta.has_value() ) return false;
     auto missingSnapshot = codec.apply(delta.value());
@@ -463,8 +528,8 @@ int main()
                    testPolylineReferencesPreventDuplicateRootObjects() &&
                    testStrictCategoryIsolation() &&
                    testRepeatedBidirectionalObjectRoundTrips() &&
-                   testCategoryDelta() && testInvalidPayloads() &&
-                   testLargeSnapshotCompression()
+                   testConcurrentObjectDeltasMerge() && testCategoryDelta() &&
+                   testInvalidPayloads() && testLargeSnapshotCompression()
                ? 0
                : 1;
 }

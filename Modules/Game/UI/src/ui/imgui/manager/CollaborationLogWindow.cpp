@@ -37,6 +37,7 @@ CollaborationLogWindow::CollaborationLogWindow(
                     session = engine.getActiveSession();
                     if ( !session ) return;
                     session->setMutationObserver(m_room, false);
+                    m_room->onBeatmapSynchronized(*beatmap);
                     m_boundSession = session;
                     bindPendingResources();
                     return;
