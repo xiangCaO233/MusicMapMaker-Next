@@ -15,6 +15,8 @@ return {
 	["ui.file.save"] = "Save",
 	["ui.file.save_as"] = "Save As...",
 	["ui.file.pack"] = "Pack",
+	["ui.file.pack.strip_main_audio_volume"] = "Omit Main Track vol Fields",
+	["ui.file.pack.strip_main_audio_volume_tooltip"] = "For compatibility with some older Malody targets, Main automatic audio objects in exported .mc files omit vol. Effect and note-bound sounds are unchanged.",
 	["ui.file.exit"] = "Exit",
 	["ui.exit.confirm_title"] = "Confirm Exit",
 	["ui.exit.confirm_msg_fmt"] = "Beatmap '{}' has unsaved changes.\nDo you want to save before exiting?",

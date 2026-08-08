@@ -15,6 +15,8 @@ return {
 	["ui.file.save"] = "保存",
 	["ui.file.save_as"] = "另存为...",
 	["ui.file.pack"] = "打包",
+	["ui.file.pack.strip_main_audio_volume"] = "清理主音轨 vol 字段",
+	["ui.file.pack.strip_main_audio_volume_tooltip"] = "兼容部分旧版 Malody 目标游戏：写出的 .mc 中，Main 类型自动音频物件不会包含 vol；Effect 和玩家物件绑定音效不受影响。",
 	["ui.file.exit"] = "退出",
 	["ui.exit.confirm_title"] = "确认退出",
 	["ui.exit.confirm_msg_fmt"] = "谱面 '{}' 尚有未保存的修改。\n您想在退出前保存吗？",

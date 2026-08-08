@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
+#include "logic/MalodyPackageCompatibility.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/MalodyMode.h"
@@ -14,6 +15,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
+#include <unordered_set>
 
 namespace
 {
@@ -183,6 +185,39 @@ bool checkSlideOverrideUsesSlideFieldsAndRestoresMetadata()
     return valid;
 }
 
+/// @brief 验证 Main 自动采样清理不会影响 Effect 或玩家物件音量。
+/// @return 两种自动采样格式都只清理 Main vol 时返回 true。
+bool checkMainAudioVolumeCompatibilityPatch()
+{
+    auto document = nlohmann::json{
+        { "note",
+          nlohmann::json::array(
+              { { { "type", "SOUND" },
+                  { "sound", "main-track" },
+                  { "vol", 75 } },
+                { { "type", 1 }, { "sound", "main-track" }, { "vol", 80 } },
+                { { "type", "SOUND" },
+                  { "sound", "effect-track" },
+                  { "vol", 45 } },
+                { { "column", 1 },
+                  { "sound", "main-track" },
+                  { "vol", 60 } } }) }
+    };
+    const std::unordered_set<std::string> mainReferences{ "main-track" };
+
+    const auto removed =
+        MMM::Logic::stripMalodyMainAudioVolumeFields(document, mainReferences);
+    const auto& notes = document["note"];
+    const bool  valid = removed == 2 && !notes[0].contains("vol") &&
+                        !notes[1].contains("vol") &&
+                        notes[2].value("vol", -1) == 45 &&
+                        notes[3].value("vol", -1) == 60;
+    if ( !valid ) {
+        XERROR("Main audio volume compatibility patch changed wrong nodes");
+    }
+    return valid;
+}
+
 }  // namespace
 
 /// @brief 覆盖 MC 导出模式临时覆盖、自动转换与会话元数据恢复。
@@ -190,7 +225,8 @@ bool checkSlideOverrideUsesSlideFieldsAndRestoresMetadata()
 int main()
 {
     return checkKeyOverrideConvertsFlickAndRestoresMetadata() &&
-                   checkSlideOverrideUsesSlideFieldsAndRestoresMetadata()
+                   checkSlideOverrideUsesSlideFieldsAndRestoresMetadata() &&
+                   checkMainAudioVolumeCompatibilityPatch()
                ? 0
                : 1;
 }

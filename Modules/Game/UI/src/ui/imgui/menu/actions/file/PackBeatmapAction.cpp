@@ -862,6 +862,9 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
             Config::AppConfig::instance()
                 .getEditorSettings()
                 .autoAddStoreModeExtForMalodyExport,
+        .stripMainAudioVolumeFromMalodyExport =
+            m_package.selectedFileType == PackageFileType::Mcz &&
+            m_package.stripMainAudioVolumeFromMalodyExport,
         .malodyExportMode =
             m_package.selectedFileType == PackageFileType::Mcz
                 ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
@@ -946,6 +949,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
         }
         if ( !shouldShowLegacyImdPackageOption(selectedType) ) {
             m_package.includeLegacyImdBeatmaps = false;
+        }
+        if ( selectedType != PackageFileType::Mcz ) {
+            m_package.stripMainAudioVolumeFromMalodyExport = false;
         }
         rebuildPackageCandidateFiles();
         m_package.showFileSelectionWindow = true;
@@ -1053,6 +1059,21 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 sameLineIfItemFits(getCheckboxDisplayWidth(legacyImdLabel));
                 ::MMM::UI::FeedbackCheckbox(
                     legacyImdLabel, &m_package.includeLegacyImdBeatmaps);
+            }
+            if ( m_package.selectedFileType == PackageFileType::Mcz ) {
+                const auto stripMainVolumeLabel =
+                    TR_CACHE("ui.file.pack.strip_main_audio_volume");
+                sameLineIfItemFits(
+                    getCheckboxDisplayWidth(stripMainVolumeLabel.data()));
+                ::MMM::UI::FeedbackCheckbox(
+                    stripMainVolumeLabel.data(),
+                    &m_package.stripMainAudioVolumeFromMalodyExport);
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.file.pack.strip_main_audio_volume_tooltip")
+                            .data());
+                }
             }
             const bool hasAnyStoreModeExtCandidates =
                 hasPackageStoreModeExtCandidates();
@@ -1850,6 +1871,9 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.showFormatPicker               = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;
+    }
+    if ( m_package.selectedFileType != PackageFileType::Mcz ) {
+        m_package.stripMainAudioVolumeFromMalodyExport = false;
     }
 }
 

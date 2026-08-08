@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
+#include "logic/MalodyPackageCompatibility.h"
 #include "logic/ProjectResourceService.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -556,23 +557,82 @@ bool patchMalodyStoreModeExtFile(const std::filesystem::path& path)
         outputBytes.size());
 }
 
-/// @brief 保存谱面，并仅在 MC 导出期间临时应用用户选择的模式与 mode_ext。
+/// @brief 收集谱面中解析为项目 Main 音轨的自动采样引用。
+/// @param project 谱面所属项目。
+/// @param beatMap 待导出的谱面。
+/// @param sourcePath 来源谱面路径，用于解析旧相对路径引用。
+/// @return 需要在 MC 写出时清理 vol 的资源引用集合。
+std::unordered_set<std::string> collectMalodyMainAudioSampleReferences(
+    const MMM::Project& project, const MMM::BeatMap& beatMap,
+    const std::filesystem::path& sourcePath)
+{
+    std::vector<std::string_view> references;
+    references.reserve(beatMap.m_audioSamples.size());
+    for ( const auto& sample : beatMap.m_audioSamples ) {
+        references.emplace_back(sample.m_audioResourceId);
+    }
+
+    const auto resolvedResources =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, sourcePath, references);
+    std::unordered_set<std::string> mainReferences;
+    mainReferences.reserve(references.size());
+    for ( std::size_t index = 0; index < references.size(); ++index ) {
+        const auto* resource = resolvedResources[index];
+        if ( resource && resource->m_type == MMM::AudioTrackType::Main ) {
+            mainReferences.emplace(references[index]);
+        }
+    }
+    return mainReferences;
+}
+
+/// @brief 清理已写出的 MC 中 Main 自动音频对象的 vol 字段。
+/// @param path MC 文件路径。
+/// @param mainAudioReferences 解析为项目 Main 音轨的资源引用集合。
+/// @return 文件可解析并成功写回时返回 true。
+bool patchMalodyMainAudioVolumeFile(
+    const std::filesystem::path&           path,
+    const std::unordered_set<std::string>& mainAudioReferences)
+{
+    std::vector<std::uint8_t> inputBytes;
+    if ( !readPackageSourceFile(path, inputBytes) ) return false;
+
+    const std::string text(inputBytes.begin(), inputBytes.end());
+    auto fileData = nlohmann::json::parse(text, nullptr, false, true);
+    if ( fileData.is_discarded() || !fileData.is_object() ) return false;
+
+    MMM::Logic::stripMalodyMainAudioVolumeFields(fileData, mainAudioReferences);
+    const std::string outputText = fileData.dump(4);
+    return writePackageOutputFile(
+        path,
+        outputText.empty() ? nullptr : outputText.data(),
+        outputText.size());
+}
+
+/// @brief 保存谱面，并仅在 MC 导出期间临时应用兼容选项。
 /// @param beatMap 待保存谱面。
 /// @param outputPath 输出路径。
 /// @param malodyExportMode MC 导出时临时覆盖的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否写入上架 mode_ext。
+/// @param mainAudioReferencesWithoutVolume 需要省略 vol 的 Main
+/// 音轨引用；为空时不处理。
 /// @return 是否保存成功。
 bool saveBeatmapWithMalodyExportOptions(
     MMM::BeatMap& beatMap, const std::filesystem::path& outputPath,
-    std::optional<MMM::MalodyMode> malodyExportMode,
-    bool                           addStoreModeExtForMalodyExport)
+    std::optional<MMM::MalodyMode>         malodyExportMode,
+    bool                                   addStoreModeExtForMalodyExport,
+    const std::unordered_set<std::string>* mainAudioReferencesWithoutVolume)
 {
     refreshCurrentProjectSongFileHint(beatMap);
     const bool shouldAddStoreModeExt =
         addStoreModeExtForMalodyExport &&
         (!malodyExportMode || *malodyExportMode == MMM::MalodyMode::Slide);
+    const bool shouldStripMainAudioVolume =
+        mainAudioReferencesWithoutVolume &&
+        !mainAudioReferencesWithoutVolume->empty();
     if ( !isMalodyChartPath(outputPath) ||
-         (!malodyExportMode && !shouldAddStoreModeExt) ) {
+         (!malodyExportMode && !shouldAddStoreModeExt &&
+          !shouldStripMainAudioVolume) ) {
         return beatMap.saveToFile(outputPath);
     }
 
@@ -585,18 +645,25 @@ bool saveBeatmapWithMalodyExportOptions(
         previousProps = previousPropsIt->second;
     }
 
-    auto& props =
-        beatMap.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
-    if ( malodyExportMode ) {
-        props["mode"] = std::to_string(MMM::malodyModeValue(*malodyExportMode));
-    }
-    if ( shouldAddStoreModeExt ) {
-        applyMalodyStoreModeExtMetadata(beatMap);
+    if ( malodyExportMode || shouldAddStoreModeExt ) {
+        auto& props =
+            beatMap.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
+        if ( malodyExportMode ) {
+            props["mode"] =
+                std::to_string(MMM::malodyModeValue(*malodyExportMode));
+        }
+        if ( shouldAddStoreModeExt ) {
+            applyMalodyStoreModeExtMetadata(beatMap);
+        }
     }
 
     bool ok = beatMap.saveToFile(outputPath);
     if ( ok && shouldAddStoreModeExt ) {
         ok = patchMalodyStoreModeExtFile(outputPath);
+    }
+    if ( ok && shouldStripMainAudioVolume ) {
+        ok = patchMalodyMainAudioVolumeFile(outputPath,
+                                            *mainAudioReferencesWithoutVolume);
     }
 
     if ( previousProps ) {
@@ -673,44 +740,63 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
 
 /// @brief 将谱面源文件转换成指定路径的目标格式文件。
 /// @param sourcePath 来源谱面路径。
+/// @param project 谱面所属项目。
 /// @param outputPath 转换后输出路径。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param malodyExportMode MC 转换产物临时使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @return 是否转换成功。
-bool convertPackageBeatmapFile(const std::filesystem::path&   sourcePath,
+bool convertPackageBeatmapFile(const MMM::Project&            project,
+                               const std::filesystem::path&   sourcePath,
                                const std::filesystem::path&   outputPath,
                                const MMM::BaseMapMeta*        metadataOverride,
                                std::optional<MMM::MalodyMode> malodyExportMode,
-                               bool addStoreModeExtForMalodyExport)
+                               bool addStoreModeExtForMalodyExport,
+                               bool stripMainAudioVolumeFromMalodyExport)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
+    const auto mainAudioReferences =
+        stripMainAudioVolumeFromMalodyExport
+            ? collectMalodyMainAudioSampleReferences(
+                  project, beatMap, sourcePath)
+            : std::unordered_set<std::string>{};
     if ( metadataOverride ) {
         beatMap.m_baseMapMetadata = *metadataOverride;
     }
     beatMap.m_baseMapMetadata.map_path = outputPath;
     return saveBeatmapWithMalodyExportOptions(
-        beatMap, outputPath, malodyExportMode, addStoreModeExtForMalodyExport);
+        beatMap,
+        outputPath,
+        malodyExportMode,
+        addStoreModeExtForMalodyExport,
+        stripMainAudioVolumeFromMalodyExport ? &mainAudioReferences : nullptr);
 }
 
 /// @brief 读取转换后的目标谱面字节。
 /// @param sourcePath 来源谱面路径。
+/// @param project 谱面所属项目。
 /// @param projectOutputPath 保存到项目中时使用的目标路径。
 /// @param outputExtension 目标谱面扩展名。
 /// @param saveToProject 是否将转换产物留在项目目录中。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param malodyExportMode MC 转换产物临时使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
-    const std::filesystem::path& sourcePath,
+    const MMM::Project& project, const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
     const MMM::BaseMapMeta*        metadataOverride,
     std::optional<MMM::MalodyMode> malodyExportMode,
-    bool addStoreModeExtForMalodyExport, std::vector<std::uint8_t>& outBytes)
+    bool                           addStoreModeExtForMalodyExport,
+    bool                           stripMainAudioVolumeFromMalodyExport,
+    std::vector<std::uint8_t>&     outBytes)
 {
     const auto conversionPath =
         saveToProject
@@ -727,11 +813,13 @@ bool readConvertedPackageBeatmapBytes(
         }
     }
 
-    if ( !convertPackageBeatmapFile(sourcePath,
+    if ( !convertPackageBeatmapFile(project,
+                                    sourcePath,
                                     conversionPath,
                                     metadataOverride,
                                     malodyExportMode,
-                                    addStoreModeExtForMalodyExport) ) {
+                                    addStoreModeExtForMalodyExport,
+                                    stripMainAudioVolumeFromMalodyExport) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -844,7 +932,7 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 }
 
 /// @brief 写入 zip 兼容的谱面包。
-/// @param projectRoot 当前项目根目录。
+/// @param project 当前项目及其资源分类。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
 /// @param packageTypes 输出包格式对应的文件类型规则。
@@ -854,19 +942,22 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 /// @param malodyExportMode MCZ 包内 MC 谱面统一使用的 Malody 模式。
 /// @param addStoreModeExtForMalodyExport 是否为写出的 MC 谱面写入上架
 /// mode_ext。
+/// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
+/// 字段。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(
-    const std::filesystem::path&          projectRoot,
-    const std::filesystem::path&          outputPath,
+    const MMM::Project& project, const std::filesystem::path& outputPath,
     const std::vector<std::string>&       selectedRelativePaths,
     const MMM::PackageSupportedFileTypes& packageTypes,
     const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
          metadataOverrides,
     bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage,
     std::optional<MMM::MalodyMode> malodyExportMode,
-    bool                           addStoreModeExtForMalodyExport)
+    bool                           addStoreModeExtForMalodyExport,
+    bool                           stripMainAudioVolumeFromMalodyExport)
 {
     if ( selectedRelativePaths.empty() ) return false;
+    const auto& projectRoot = project.m_projectRoot;
 
     mz_zip_archive zipArchive{};
     if ( !mz_zip_writer_init_heap(&zipArchive, 0, 0) ) {
@@ -883,6 +974,9 @@ bool writeBeatmapPackage(
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
     const bool addStoreModeExtToMc =
         addStoreModeExtForMalodyExport &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    const bool stripMainAudioVolumeFromMc =
+        stripMainAudioVolumeFromMalodyExport &&
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
     const auto packageMalodyExportMode =
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz")
@@ -931,8 +1025,9 @@ bool writeBeatmapPackage(
             if ( shouldConvertSource ) {
                 targetArchivePath.replace_extension(packageBeatmapExtension);
             }
-            const bool shouldReencode =
-                shouldConvertSource || packageMalodyExportMode.has_value();
+            const bool shouldReencode = shouldConvertSource ||
+                                        packageMalodyExportMode.has_value() ||
+                                        stripMainAudioVolumeFromMc;
 
             const auto metadataIt = metadataOverrideMap.find(relativePathKey);
             const MMM::BaseMapMeta* metadataOverride =
@@ -944,6 +1039,7 @@ bool writeBeatmapPackage(
                     const auto projectOutputPath =
                         (projectRoot / targetArchivePath).lexically_normal();
                     if ( !readConvertedPackageBeatmapBytes(
+                             project,
                              sourcePath,
                              projectOutputPath,
                              packageBeatmapExtension,
@@ -952,6 +1048,7 @@ bool writeBeatmapPackage(
                              metadataOverride,
                              packageMalodyExportMode,
                              addStoreModeExtToMc,
+                             stripMainAudioVolumeFromMc,
                              fileBytes) ) {
                         XERROR("PackBeatmap: failed to convert source file: {}",
                                relativeUtf8);
@@ -1000,12 +1097,14 @@ bool writeBeatmapPackage(
                         const auto projectOutputPath =
                             (projectRoot / imdArchivePath).lexically_normal();
                         if ( !readConvertedPackageBeatmapBytes(
+                                 project,
                                  sourcePath,
                                  projectOutputPath,
                                  ".imd",
                                  false,
                                  nullptr,
                                  std::nullopt,
+                                 false,
                                  false,
                                  fileBytes) ) {
                             XERROR(
@@ -1637,7 +1736,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             *m_ctx->currentBeatmap,
             savePath,
             cmd.malodyExportMode,
-            cmd.addStoreModeExtForMalodyExport);
+            cmd.addStoreModeExtForMalodyExport,
+            nullptr);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
@@ -1696,7 +1796,7 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     }
 
     const bool success =
-        writeBeatmapPackage(project->m_projectRoot,
+        writeBeatmapPackage(*project,
                             outputPath,
                             cmd.selectedProjectRelativePaths,
                             *packageTypes,
@@ -1704,7 +1804,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.saveConvertedBeatmapsToProject,
                             cmd.includeLegacyImdBeatmapsInPackage,
                             cmd.malodyExportMode,
-                            cmd.addStoreModeExtForMalodyExport);
+                            cmd.addStoreModeExtForMalodyExport,
+                            cmd.stripMainAudioVolumeFromMalodyExport);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

@@ -25,6 +25,7 @@ add_library(
   src/logic/ProjectDirectoryWatcher.cpp
   src/logic/ProjectStorage.cpp
   src/logic/ProjectResourceService.cpp
+  src/logic/MalodyPackageCompatibility.cpp
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
   src/logic/EditorEngine.cpp
