@@ -461,6 +461,15 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
+    const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
+        canvasSize.x,
+        m_currentSnapshot->trackCount,
+        m_currentSnapshot->bgmTrackCount,
+        layout.left,
+        layout.right,
+        m_currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        m_currentSnapshot->bmsEditingEnabled);
     ImDrawList*  drawList = ImGui::GetWindowDrawList();
     const ImVec2 canvasMaximum{
         canvasScreenPosition.x + canvasSize.x,
@@ -481,28 +490,15 @@ void Basic2DCanvas::updateCollaborationViewports(
             continue;
         }
 
-        const auto projection = Logic::calculateCanvasLaneProjection(
-            canvasSize.x,
-            m_currentSnapshot->trackCount,
-            m_currentSnapshot->bgmTrackCount,
-            layout.left,
-            layout.right,
-            static_cast<float>(viewport.horizontalOffsetRatio *
-                               static_cast<double>(canvasSize.x)),
-            true,
-            m_currentSnapshot->bmsEditingEnabled);
-        float leftX  = projection.valid ? projection.player.leftX
-                                        : canvasSize.x * layout.left;
-        float rightX = projection.valid ? projection.bgmRightX
-                                        : canvasSize.x * layout.right;
-        leftX        = std::clamp(leftX, 2.0F, canvasSize.x - 2.0F);
-        rightX       = std::clamp(rightX, 2.0F, canvasSize.x - 2.0F);
-        if ( rightX - leftX < 12.0F ) {
-            leftX = std::clamp(
-                canvasSize.x * layout.left, 2.0F, canvasSize.x - 2.0F);
-            rightX = std::clamp(
-                canvasSize.x * layout.right, 2.0F, canvasSize.x - 2.0F);
-        }
+        if ( !localLaneProjection.valid ) continue;
+        const auto horizontalRange =
+            projectCollaborationViewportHorizontalRange(
+                localLaneProjection.player.leftX,
+                localLaneProjection.bgmRightX,
+                canvasSize.x);
+        if ( !horizontalRange ) continue;
+        const float leftX     = horizontalRange->leftX;
+        const float rightX    = horizontalRange->rightX;
         const float centerX   = (leftX + rightX) * 0.5F;
         const ImU32 color     = collaborationPeerColor(peerId, 255);
         const bool  following = followedPeerId == peerId;

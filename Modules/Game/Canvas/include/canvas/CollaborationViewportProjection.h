@@ -7,6 +7,66 @@
 namespace MMM::Canvas
 {
 
+/// @brief 远端视口在本地画布中的横向可见范围。
+struct CollaborationViewportHorizontalRange {
+    /// @brief 裁剪后的左边界。
+    float leftX{ 0.0F };
+    /// @brief 裁剪后的右边界。
+    float rightX{ 0.0F };
+};
+
+/// @brief 将协作视野框锚定到本地轨道区并裁剪到画布内。
+/// @param localContentLeft 本地相机下协作轨道区左边界。
+/// @param localContentRight 本地相机下协作轨道区右边界。
+/// @param canvasWidth 本地画布宽度。
+/// @return 输入有效时返回经过画布边缘裁剪的范围。
+/// @warning UI 热路径：每个远端参与者调用一次；只执行常量数值计算，禁止加入
+/// 分配或阻塞操作。
+inline std::optional<CollaborationViewportHorizontalRange>
+projectCollaborationViewportHorizontalRange(float localContentLeft,
+                                            float localContentRight,
+                                            float canvasWidth)
+{
+    if ( !std::isfinite(localContentLeft) ||
+         !std::isfinite(localContentRight) || !std::isfinite(canvasWidth) ||
+         canvasWidth <= 4.0F || localContentRight <= localContentLeft ) {
+        return std::nullopt;
+    }
+
+    const double rawLeft  = static_cast<double>(localContentLeft);
+    const double rawRight = static_cast<double>(localContentRight);
+    if ( !std::isfinite(rawLeft) || !std::isfinite(rawRight) ) {
+        return std::nullopt;
+    }
+
+    constexpr float EDGE_PADDING          = 2.0F;
+    constexpr float MINIMUM_VISIBLE_WIDTH = 3.0F;
+    const float     maximumX              = canvasWidth - EDGE_PADDING;
+    if ( rawRight <= static_cast<double>(EDGE_PADDING) ) {
+        return CollaborationViewportHorizontalRange{
+            EDGE_PADDING, EDGE_PADDING + MINIMUM_VISIBLE_WIDTH
+        };
+    }
+    if ( rawLeft >= static_cast<double>(maximumX) ) {
+        return CollaborationViewportHorizontalRange{
+            maximumX - MINIMUM_VISIBLE_WIDTH, maximumX
+        };
+    }
+
+    float leftX =
+        std::clamp(static_cast<float>(rawLeft), EDGE_PADDING, maximumX);
+    float rightX =
+        std::clamp(static_cast<float>(rawRight), EDGE_PADDING, maximumX);
+    if ( rightX - leftX < MINIMUM_VISIBLE_WIDTH ) {
+        if ( leftX <= EDGE_PADDING ) {
+            rightX = std::min(maximumX, leftX + MINIMUM_VISIBLE_WIDTH);
+        } else {
+            leftX = std::max(EDGE_PADDING, rightX - MINIMUM_VISIBLE_WIDTH);
+        }
+    }
+    return CollaborationViewportHorizontalRange{ leftX, rightX };
+}
+
 /// @brief 使用本地可见边界和判定线锚点投影协作视野时间。
 /// @param time 待投影的远端视觉时间。
 /// @param visualTime 本地判定线对应的视觉时间。
