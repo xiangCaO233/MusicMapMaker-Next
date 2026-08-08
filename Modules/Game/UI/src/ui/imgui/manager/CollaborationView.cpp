@@ -552,12 +552,15 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.sync_settings").data(),
                                   headerFlags) ) {
         const float labelWidth =
-            std::max(
-                ImGui::CalcTextSize(TR("ui.collaboration.viewport_rate").data())
-                    .x,
-                ImGui::CalcTextSize(
-                    TR("ui.collaboration.resource.status").data())
-                    .x) +
+            std::max({ ImGui::CalcTextSize(
+                           TR("ui.collaboration.viewport_rate").data())
+                           .x,
+                       ImGui::CalcTextSize(
+                           TR("ui.collaboration.viewport_render_mode").data())
+                           .x,
+                       ImGui::CalcTextSize(
+                           TR("ui.collaboration.resource.status").data())
+                           .x }) +
             style.ItemSpacing.x;
         if ( ImGui::BeginTable("CollaborationSyncSettingsTable",
                                2,
@@ -577,6 +580,27 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
             if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                 m_room->setViewportPublishRateHz(
                     static_cast<std::uint32_t>(m_viewportPublishRateHz));
+            }
+
+            drawRoomInfoLabel(
+                TR("ui.collaboration.viewport_render_mode").data());
+            auto& settings = Config::AppConfig::instance().getEditorSettings();
+            int   renderMode =
+                static_cast<int>(settings.collaborationViewportRenderMode);
+            const char* renderModes[]{
+                TR("ui.collaboration.viewport_render_mode.filled").data(),
+                TR("ui.collaboration.viewport_render_mode.outline").data(),
+                TR("ui.collaboration.viewport_render_mode.track_edge").data(),
+            };
+            ImGui::SetNextItemWidth(-1.0F);
+            if ( FeedbackCombo("##CollaborationViewportRenderMode",
+                               &renderMode,
+                               renderModes,
+                               IM_ARRAYSIZE(renderModes)) ) {
+                settings.collaborationViewportRenderMode =
+                    static_cast<Config::CollaborationViewportRenderMode>(
+                        renderMode);
+                Config::AppConfig::instance().save();
             }
 
             drawRoomInfoLabel(TR("ui.collaboration.resource.status").data());

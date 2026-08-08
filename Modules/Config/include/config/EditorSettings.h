@@ -443,6 +443,19 @@ void to_json(nlohmann::json&                      json,
 void from_json(const nlohmann::json&          json,
                BpmMeasurementToolPreferences& preferences);
 
+/// @brief 多人协作中远端视野范围的本地绘制模式。
+enum class CollaborationViewportRenderMode : std::uint8_t {
+    Filled,    ///< 绘制半透明填充和完整外框。
+    Outline,   ///< 仅绘制完整外框。
+    TrackEdge  ///< 仅在轨道边缘绘制类似左方括号的范围标记。
+};
+
+/// @brief 将协作视野绘制模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode);
+/// @brief 从稳定文本读取协作视野绘制模式。
+void from_json(const nlohmann::json&            json,
+               CollaborationViewportRenderMode& mode);
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -522,6 +535,11 @@ struct EditorSettings {
 
     /// @brief 是否将 libdatachannel 的 WebRTC/ICE Debug 日志写入应用日志。
     bool rtcDiagnosticLogging{ false };
+
+    /// @brief 多人协作中远端视野范围的本地绘制模式。
+    CollaborationViewportRenderMode collaborationViewportRenderMode{
+        CollaborationViewportRenderMode::Filled
+    };
 
     /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
     bool autoUploadPgoProfiles{ false };

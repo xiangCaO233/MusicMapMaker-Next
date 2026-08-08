@@ -254,6 +254,43 @@ bool testVerticalObjectDragConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证协作视野绘制三态可持久化且旧配置保持原有填充效果。
+/// @return 三种稳定文本、缺失字段和非法值均按兼容规则恢复时返回 true。
+bool testCollaborationViewportRenderModeRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.collaborationViewportRenderMode =
+        MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           outline =
+        nlohmann::json{ { "collaborationViewportRenderMode", "Outline" } }
+            .get<MMM::Config::EditorSettings>();
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto invalid =
+        nlohmann::json{ { "collaborationViewportRenderMode", "Unknown" } }
+            .get<MMM::Config::EditorSettings>();
+
+    if ( encoded.value("collaborationViewportRenderMode", std::string()) !=
+             "TrackEdge" ||
+         restored.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::TrackEdge ||
+         outline.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Outline ||
+         legacy.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Filled ||
+         invalid.collaborationViewportRenderMode !=
+             MMM::Config::CollaborationViewportRenderMode::Filled ) {
+        XERROR(
+            "Collaboration viewport render mode did not preserve "
+            "compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证批量音量编辑快捷键可持久化且旧配置默认不占用键位。
 /// @return 自定义组合键往返无损且缺失字段保持禁用时返回 true。
 bool testSelectedVolumeShortcutRoundTrip()
@@ -529,6 +566,7 @@ int main()
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
                    testVerticalObjectDragConfigRoundTrip() &&
+                   testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&

@@ -484,6 +484,30 @@ void from_json(const nlohmann::json&          json,
     preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);
 }
 
+void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode)
+{
+    switch ( mode ) {
+    case CollaborationViewportRenderMode::Outline: json = "Outline"; break;
+    case CollaborationViewportRenderMode::TrackEdge: json = "TrackEdge"; break;
+    case CollaborationViewportRenderMode::Filled:
+    default: json = "Filled"; break;
+    }
+}
+
+void from_json(const nlohmann::json&            json,
+               CollaborationViewportRenderMode& mode)
+{
+    mode = CollaborationViewportRenderMode::Filled;
+    if ( !json.is_string() ) return;
+
+    const std::string value = json.get<std::string>();
+    if ( value == "Outline" ) {
+        mode = CollaborationViewportRenderMode::Outline;
+    } else if ( value == "TrackEdge" ) {
+        mode = CollaborationViewportRenderMode::TrackEdge;
+    }
+}
+
 void to_json(nlohmann::json& json, const EditorSettings& settings)
 {
     json = nlohmann::json{
@@ -511,6 +535,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "openALSpatialConfig", settings.openALSpatialConfig },
         { "renderProfileLogging", settings.renderProfileLogging },
         { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
+        { "collaborationViewportRenderMode",
+          settings.collaborationViewportRenderMode },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
           settings.pgoProfileUploadConsentAsked },
@@ -615,8 +641,11 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("openALAudioOutputDeviceName", std::string());
     settings.openALSpatialConfig =
         json.value("openALSpatialConfig", OpenALSpatialConfig());
-    settings.renderProfileLogging  = json.value("renderProfileLogging", false);
-    settings.rtcDiagnosticLogging  = json.value("rtcDiagnosticLogging", false);
+    settings.renderProfileLogging = json.value("renderProfileLogging", false);
+    settings.rtcDiagnosticLogging = json.value("rtcDiagnosticLogging", false);
+    settings.collaborationViewportRenderMode =
+        json.value("collaborationViewportRenderMode",
+                   CollaborationViewportRenderMode::Filled);
     settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
     settings.pgoProfileUploadConsentAsked = json.value(
         "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));

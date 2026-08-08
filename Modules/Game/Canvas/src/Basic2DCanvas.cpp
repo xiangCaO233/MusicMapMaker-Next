@@ -401,6 +401,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     }
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
 
@@ -583,15 +586,38 @@ void Basic2DCanvas::updateCollaborationViewports(
                 canvasScreenPosition.x + rightX,
                 canvasScreenPosition.y + std::min(bottomY, canvasSize.y - 1.0F),
             };
-            drawList->AddRectFilled(rectangleMinimum,
-                                    rectangleMaximum,
-                                    collaborationPeerColor(peerId, 24));
-            drawList->AddRect(rectangleMinimum,
-                              rectangleMaximum,
-                              color,
-                              0.0F,
-                              0,
-                              following ? 3.0F : 2.0F);
+            const float outlineThickness = following ? 3.0F : 2.0F;
+            if ( viewportRenderMode ==
+                 Config::CollaborationViewportRenderMode::Filled ) {
+                drawList->AddRectFilled(rectangleMinimum,
+                                        rectangleMaximum,
+                                        collaborationPeerColor(peerId, 24));
+            }
+            if ( viewportRenderMode ==
+                 Config::CollaborationViewportRenderMode::TrackEdge ) {
+                constexpr float BRACKET_CAP_WIDTH = 12.0F;
+                const float     bracketRight      = std::min(
+                    rectangleMinimum.x + BRACKET_CAP_WIDTH, rectangleMaximum.x);
+                drawList->AddLine(rectangleMinimum,
+                                  { rectangleMinimum.x, rectangleMaximum.y },
+                                  color,
+                                  outlineThickness);
+                drawList->AddLine(rectangleMinimum,
+                                  { bracketRight, rectangleMinimum.y },
+                                  color,
+                                  outlineThickness);
+                drawList->AddLine({ rectangleMinimum.x, rectangleMaximum.y },
+                                  { bracketRight, rectangleMaximum.y },
+                                  color,
+                                  outlineThickness);
+            } else {
+                drawList->AddRect(rectangleMinimum,
+                                  rectangleMaximum,
+                                  color,
+                                  0.0F,
+                                  0,
+                                  outlineThickness);
+            }
 
             const ImVec2 textSize =
                 ImGui::CalcTextSize(creator->second.c_str());
