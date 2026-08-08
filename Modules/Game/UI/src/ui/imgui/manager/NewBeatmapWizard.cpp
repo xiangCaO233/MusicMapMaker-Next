@@ -836,6 +836,13 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         m_selectedAudioPath.empty()
             ? TR("ui.wizard.new_beatmap.select_audio").data()
             : Config::pathToUtf8(m_selectedAudioPath);
+    /// @brief 当前项目是否至少存在一个可绑定到谱面的主音轨。
+    const bool hasSelectableMainAudio =
+        std::any_of(project->m_audioResources.begin(),
+                    project->m_audioResources.end(),
+                    [](const auto& resource) {
+                        return resource.m_type == MMM::AudioTrackType::Main;
+                    });
 
     const char* measureBpmLabel =
         TR("ui.wizard.new_beatmap.measure_bpm_manual").data();
@@ -914,6 +921,14 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::EndDisabled();
+    }
+    if ( hasSelectableMainAudio ) {
+        ImGui::TextDisabled(
+            "%s", TR("ui.wizard.new_beatmap.main_audio_only_hint").data());
+    } else {
+        ImGui::TextColored(Utils::UIThemeUtils::getWarningColor(),
+                           "%s",
+                           TR("ui.wizard.new_beatmap.no_main_audio").data());
     }
 
     // 封面选择 (只可指向图片文件)
