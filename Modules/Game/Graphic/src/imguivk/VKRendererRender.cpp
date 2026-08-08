@@ -25,6 +25,7 @@
 #include <latch>
 
 #ifdef _WIN32
+#    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
 #    define GLFW_EXPOSE_NATIVE_WIN32
 #    include <GLFW/glfw3native.h>
 #    include <dwmapi.h>
@@ -925,6 +926,9 @@ void VKRenderer::render(NativeWindow&                window,
                     static_cast<GLFWwindow*>(vp->PlatformHandle);
                 HWND hwnd = glfwGetWin32Window(glfwWin);
                 if ( hwnd ) {
+                    HWND mainHwnd = glfwGetWin32Window(mainWindowHandle);
+                    Win32WindowAdapter::associateTaskbarGroupWindow(hwnd,
+                                                                    mainHwnd);
                     const MARGINS shadow_margin = { 1, 1, 1, 1 };
                     DwmExtendFrameIntoClientArea(hwnd, &shadow_margin);
 

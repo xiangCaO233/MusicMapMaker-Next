@@ -19,6 +19,9 @@ namespace
 constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
     L"MMMRestoreMaximizedAfterMinimize";
 
+/// @brief HWND 属性名，用于标记独立 ImGui 视口所属的任务栏窗口组。
+constexpr const wchar_t* TASKBAR_WINDOW_GROUP_PROP = L"MMMTaskbarWindowGroup";
+
 /// @brief Win32 完成最小化到恢复态切换后用于应用最大化恢复的私有消息。
 constexpr UINT APPLY_MAXIMIZED_RESTORE_MESSAGE = WM_APP + 0x0312;
 
@@ -68,6 +71,42 @@ void setRestoreMaximizedProperty(HWND hWnd, bool value)
         SetPropW(hWnd, RESTORE_MAXIMIZED_PROP, reinterpret_cast<HANDLE>(1));
     } else {
         RemovePropW(hWnd, RESTORE_MAXIMIZED_PROP);
+    }
+}
+
+/// @brief 无激活地最小化属于指定任务栏窗口组的独立平台窗口。
+/// @param window 当前枚举到的线程顶层窗口。
+/// @param groupParam 任务栏窗口组主窗口句柄。
+/// @return 固定返回 TRUE 以继续枚举。
+BOOL CALLBACK minimizeTaskbarGroupMember(HWND window, LPARAM groupParam)
+{
+    HWND mainWindow = reinterpret_cast<HWND>(groupParam);
+    if ( window == mainWindow || !IsWindowVisible(window) ||
+         IsIconic(window) ) {
+        return TRUE;
+    }
+
+    HANDLE associatedGroup = GetPropW(window, TASKBAR_WINDOW_GROUP_PROP);
+    if ( associatedGroup == reinterpret_cast<HANDLE>(mainWindow) ) {
+        ShowWindow(window, SW_SHOWMINNOACTIVE);
+    }
+    return TRUE;
+}
+
+/// @brief 最小化与主窗口关联的全部独立平台窗口。
+/// @param mainWindow 任务栏窗口组主窗口句柄。
+/// @warning 低频 Win32 消息路径：仅在主窗口收到最小化命令时枚举 UI 线程窗口。
+void minimizeTaskbarWindowGroup(HWND mainWindow)
+{
+    if ( !mainWindow ) {
+        return;
+    }
+
+    const DWORD windowThread = GetWindowThreadProcessId(mainWindow, nullptr);
+    if ( windowThread != 0 ) {
+        EnumThreadWindows(windowThread,
+                          minimizeTaskbarGroupMember,
+                          reinterpret_cast<LPARAM>(mainWindow));
     }
 }
 
@@ -160,6 +199,19 @@ void Win32WindowAdapter::refreshFrameShape()
     DWORD count = DWMWCP_ROUND;
     DwmSetWindowAttribute(
         m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &count, sizeof(count));
+}
+
+void Win32WindowAdapter::associateTaskbarGroupWindow(HWND window,
+                                                     HWND mainWindow)
+{
+    if ( !window || !mainWindow || window == mainWindow ) {
+        return;
+    }
+
+    HANDLE expectedGroup = reinterpret_cast<HANDLE>(mainWindow);
+    if ( GetPropW(window, TASKBAR_WINDOW_GROUP_PROP) != expectedGroup ) {
+        SetPropW(window, TASKBAR_WINDOW_GROUP_PROP, expectedGroup);
+    }
 }
 
 bool Win32WindowAdapter::handleClientMouseButton(int button, int action,
@@ -306,6 +358,7 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
             }
             if ( (wParam & 0xFFF0) == SC_MINIMIZE ) {
                 adapter->rememberRestoreStateBeforeMinimize(hWnd);
+                minimizeTaskbarWindowGroup(hWnd);
             } else if ( (wParam & 0xFFF0) == SC_RESTORE ) {
                 adapter->restoreMaximizedAfterMinimize(hWnd);
             }
@@ -327,6 +380,7 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
                 }
             } else if ( wParam == SIZE_MINIMIZED ) {
                 adapter->rememberRestoreStateBeforeMinimize(hWnd);
+                minimizeTaskbarWindowGroup(hWnd);
             } else if ( wParam == SIZE_RESTORED ) {
                 adapter->restoreMaximizedAfterMinimize(hWnd);
                 if ( !adapter->m_restoreMaximizedAfterMinimize &&
