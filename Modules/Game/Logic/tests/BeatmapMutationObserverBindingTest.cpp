@@ -91,6 +91,59 @@ private:
     return true;
 }
 
+/// @brief 验证 Timeline 窗口使用的单个和批量 Timing 命令都会发布协作变化。
+/// @return 两次编辑分别以 Timelines 类型通知观察者时返回 true。
+[[nodiscard]] bool testTimelineCommandsPublishMutations()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+    });
+    session.update(0.0, config, false);
+
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 1.25,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 1.5,
+        },
+    });
+    session.update(0.0, config, false);
+    if ( observer->notificationCount() != 1 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Timelines ) {
+        XERROR("Single Timeline command did not publish a mutation");
+        return false;
+    }
+
+    MMM::Logic::CmdCreateTimelineEvents batch;
+    batch.events.push_back(MMM::Logic::CmdCreateTimelineEvents::Entry{
+        .time  = 2.5,
+        .type  = MMM::TimingEffect::HS,
+        .value = 0.75,
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{ std::move(batch) });
+    session.update(0.0, config, false);
+    if ( observer->notificationCount() != 2 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Timelines ) {
+        XERROR("Batch Timeline command did not publish a mutation");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdRedo{} });
+    session.update(0.0, config, false);
+    if ( observer->notificationCount() != 4 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Timelines ) {
+        XERROR("Timeline undo/redo did not publish mutations");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证远端权威替换会等待本地画笔手势松开后再执行。
 /// @return 拖绘过程中没有同步且结束后按顺序发布本地操作并同步时返回 true。
 [[nodiscard]] bool testRemoteSynchronizationWaitsForBrushEnd()
@@ -177,6 +230,7 @@ private:
 int main()
 {
     return testOptionalInitialSnapshot() &&
+                   testTimelineCommandsPublishMutations() &&
                    testRemoteSynchronizationWaitsForBrushEnd()
                ? 0
                : 1;

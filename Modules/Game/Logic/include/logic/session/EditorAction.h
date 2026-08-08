@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/BeatmapMutationObserver.h"
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -62,6 +64,10 @@ public:
     /// @brief 标记一次未进入撤销栈的编辑为未保存。
     void markDirty();
 
+    /// @brief 取出尚未由 BeatmapSession 发布的操作变化类别。
+    /// @return 自上次取出后执行、撤销或重做所修改的谱面数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags takePendingMutationFlags();
+
     /// @brief 获取撤销栈深度
     size_t getUndoStackSize() const { return m_undoStack.size(); }
 
@@ -69,12 +75,21 @@ public:
     size_t getRedoStackSize() const { return m_redoStack.size(); }
 
 private:
+    /// @brief 在同步脏标记被清除前记录本次操作实际修改的数据类别。
+    /// @param ctx 已执行操作的会话上下文。
+    void rememberPendingMutationFlags(const SessionContext& ctx);
+
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
     size_t m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
 
     /// @brief 是否存在未进入撤销栈且尚未保存的编辑。
     bool m_hasNonUndoableChanges{ false };
+
+    /// @brief 等待 BeatmapSession 合并并发布的操作变化类别。
+    ::MMM::BeatmapMutationFlags m_pendingMutationFlags{
+        ::MMM::BeatmapMutationFlags::None
+    };
 };
 
 /// @brief 将多个领域操作合并为一次原子撤销记录。

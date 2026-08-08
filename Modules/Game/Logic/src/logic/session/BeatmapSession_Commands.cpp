@@ -1363,6 +1363,8 @@ bool BeatmapSession::processCommands()
                 if constexpr ( !isMutationCommand ) {
                     return;
                 }
+                const auto actionMutationFlags =
+                    m_ctx->actionStack.takePendingMutationFlags();
                 if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
                     if ( !arg.notifyMutationObserver ||
                          arg.authoritativeRemote ) {
@@ -1370,6 +1372,7 @@ bool BeatmapSession::processCommands()
                     }
                 }
 
+                mutationFlags |= actionMutationFlags;
                 if ( m_ctx->m_needsNotesSync ) {
                     mutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
                 }
