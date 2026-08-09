@@ -1,0 +1,101 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签，留空时读取 APPVER / Release tag; empty uses APPVER"
+        required: false
+        type: string
+      title:
+        description: "发布标题，留空时自动生成 / Release title; empty uses the tag"
+        required: false
+        type: string
+      release_type:
+        description: "发布类型 / Release type"
+        required: true
+        type: choice
+        default: stable
+        options:
+          - stable
+          - prerelease
+          - draft
+
+permissions:
+  contents: write
+
+concurrency:
+  group: musicmapmaker-next-github-release
+  cancel-in-progress: false
+
+jobs:
+  publish-github-release:
+    runs-on: [self-hosted, Linux, X64, debian]
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MMM_RELEASE_TAG: ${{ inputs.tag }}
+      MMM_RELEASE_TITLE: ${{ inputs.title }}
+      MMM_RELEASE_TYPE: ${{ inputs.release_type }}
+
+    steps:
+      - name: release->Package and publish GitHub Release
+        id: publish
+        run: |
+          set -euo pipefail
+
+          exec 9>"/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
+          flock 9
+
+          if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] ||
+             [[ ! "${GITHUB_RUN_ATTEMPT}" =~ ^[0-9]+$ ]]; then
+            printf 'error: invalid GitHub run identity\n' >&2
+            exit 1
+          fi
+
+          stage_dir="/home/xiang/MusicMapMaker-Next/.git/mmm-github-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "${stage_dir}" in
+            /home/xiang/MusicMapMaker-Next/.git/mmm-github-release/*) ;;
+            *)
+              printf 'error: unsafe staging directory: %s\n' "${stage_dir}" >&2
+              exit 1
+              ;;
+          esac
+
+          rm -rf -- "${stage_dir}"
+          mkdir -p -- "${stage_dir}"
+          trap 'rm -rf -- "${stage_dir}"' EXIT
+
+          publish_args=(
+            --source-release /home/xiang/MusicMapMaker-Next/release
+            --output-dir "${stage_dir}"
+            --target-sha "${GITHUB_SHA}"
+            --repository "${GITHUB_REPOSITORY}"
+            --type "${MMM_RELEASE_TYPE}"
+          )
+          if [[ -n "${MMM_RELEASE_TAG}" ]]; then
+            publish_args+=(--tag "${MMM_RELEASE_TAG}")
+          fi
+          if [[ -n "${MMM_RELEASE_TITLE}" ]]; then
+            publish_args+=(--title "${MMM_RELEASE_TITLE}")
+          fi
+
+          bash scripts/ci/publish-github-release.sh "${publish_args[@]}"
+
+      - name: release->Summary
+        env:
+          RELEASE_URL: ${{ steps.publish.outputs.release_url }}
+          RELEASE_TAG: ${{ steps.publish.outputs.release_tag }}
+        run: |
+          {
+            printf '## GitHub Release\n\n'
+            printf -- '- Tag: `%s`\n' "${RELEASE_TAG}"
+            printf -- '- URL: %s\n' "${RELEASE_URL}"
+            printf -- '- Target: `%s`\n' "${GITHUB_SHA}"
+          } >> "${GITHUB_STEP_SUMMARY}"
