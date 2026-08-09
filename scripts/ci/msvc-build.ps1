@@ -31,11 +31,8 @@ function Get-CiBuildJobs {
 
 $ciBuildJobs = Get-CiBuildJobs
 
-Invoke-Native git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
-Invoke-Native git checkout --force -B ci origin/ci
-Invoke-Native git reset --hard origin/ci
-Invoke-Native git submodule update --init --recursive
-Invoke-Native git lfs pull
+$mainLfsIncludes = '3rdpty/prebuilts/headers/**,3rdpty/prebuilts/binaries/windows/*/libs/x86_64/msvc/2026/RelWithDebInfo/**,assets/**,tests/data/**,Modules/Main/src/logo.svg'
+Invoke-Native git lfs pull "--include=$mainLfsIncludes" '--exclude='
 
 Remove-Item -Recurse -Force -LiteralPath build_msvc -ErrorAction SilentlyContinue
 Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF -S . -B build_msvc
