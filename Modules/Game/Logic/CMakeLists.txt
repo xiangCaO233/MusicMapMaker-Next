@@ -11,6 +11,7 @@ add_library(
   src/logic/session/BeatmapSession_Rendering.cpp
   src/logic/session/SessionUtils.cpp
   src/logic/session/ActionController.cpp
+  src/logic/session/NoteIdentity.cpp
   src/logic/session/EditorAction.cpp
   src/logic/session/SampleAction.cpp
   src/logic/session/tool/GrabTool.cpp

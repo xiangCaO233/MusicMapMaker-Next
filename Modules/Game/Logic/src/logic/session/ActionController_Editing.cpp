@@ -24,6 +24,7 @@
 #include <fmt/format.h>
 #include <limits>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -294,18 +295,14 @@ NoteColorOverrides makeNoteColorOverrides(
     return overrides;
 }
 
-/// @brief 确保整体替换创建出的音符实体拥有基础辅助组件。
+/// @brief 重置整体替换涉及音符实体的基础辅助组件。
 /// @param registry 目标 ECS 注册表。
 /// @param entity 目标音符实体。
 void ensureReplacementNoteAuxiliaryComponents(entt::registry& registry,
                                               entt::entity    entity)
 {
-    if ( !registry.all_of<TransformComponent>(entity) ) {
-        registry.emplace<TransformComponent>(entity);
-    }
-    if ( !registry.all_of<InteractionComponent>(entity) ) {
-        registry.emplace<InteractionComponent>(entity);
-    }
+    registry.emplace_or_replace<TransformComponent>(entity);
+    registry.emplace_or_replace<InteractionComponent>(entity);
 }
 
 /// @brief 标记整体替换后需要重建音符排序和统计缓存。
@@ -359,6 +356,46 @@ bool isSameNoteColorOverrides(const NoteColorOverrides& lhs,
            isSameOptionalColor(lhs.end, rhs.end) &&
            isSameOptionalColor(lhs.flickArrow, rhs.flickArrow) &&
            isSameOptionalColor(lhs.node, rhs.node);
+}
+
+/// @brief 判断两个可选命中采样绑定是否完全相同。
+bool isSameSampleBinding(const std::optional<::MMM::AudioSampleBinding>& lhs,
+                         const std::optional<::MMM::AudioSampleBinding>& rhs)
+{
+    if ( lhs.has_value() != rhs.has_value() ) return false;
+    return !lhs.has_value() ||
+           (lhs->m_audioResourceId == rhs->m_audioResourceId &&
+            lhs->m_volume == rhs->m_volume);
+}
+
+/// @brief 判断两个折线子物件组件是否完全相同。
+bool isSameSubNoteComponent(const NoteComponent::SubNote& lhs,
+                            const NoteComponent::SubNote& rhs)
+{
+    return lhs.type == rhs.type && lhs.timestamp == rhs.timestamp &&
+           lhs.duration == rhs.duration && lhs.trackIndex == rhs.trackIndex &&
+           lhs.dtrack == rhs.dtrack &&
+           lhs.metadata.note_properties == rhs.metadata.note_properties &&
+           isSameSampleBinding(lhs.sampleBinding, rhs.sampleBinding) &&
+           isSameNoteColorOverrides(lhs.customColors, rhs.customColors);
+}
+
+/// @brief 判断两个根音符组件是否可在权威同步后保留同一实体身份。
+bool isSameRootNoteComponent(const NoteComponent& lhs, const NoteComponent& rhs)
+{
+    return !lhs.m_isSubNote && !rhs.m_isSubNote && lhs.m_type == rhs.m_type &&
+           lhs.m_timestamp == rhs.m_timestamp &&
+           lhs.m_duration == rhs.m_duration &&
+           lhs.m_trackIndex == rhs.m_trackIndex &&
+           lhs.m_dtrack == rhs.m_dtrack &&
+           lhs.m_metadata.note_properties == rhs.m_metadata.note_properties &&
+           isSameSampleBinding(lhs.m_sampleBinding, rhs.m_sampleBinding) &&
+           isSameNoteColorOverrides(lhs.m_customColors, rhs.m_customColors) &&
+           lhs.m_subNotes.size() == rhs.m_subNotes.size() &&
+           std::equal(lhs.m_subNotes.begin(),
+                      lhs.m_subNotes.end(),
+                      rhs.m_subNotes.begin(),
+                      isSameSubNoteComponent);
 }
 
 /// @brief 为待删除折线父实体批量追加其子物件删除条目。
@@ -536,11 +573,12 @@ std::vector<NoteComponent> collectEditableNoteComponents(SessionContext& ctx)
 NoteComponent makeNoteComponentFromBeatmapNote(const ::MMM::Note& note)
 {
     NoteComponent component;
-    component.m_type          = note.m_type;
-    component.m_timestamp     = note.m_timestamp / 1000.0;
-    component.m_trackIndex    = static_cast<int>(note.m_track);
-    component.m_metadata      = note.m_metadata;
-    component.m_sampleBinding = note.getSampleBinding();
+    component.m_type            = note.m_type;
+    component.m_timestamp       = note.m_timestamp / 1000.0;
+    component.m_trackIndex      = static_cast<int>(note.m_track);
+    component.m_metadata        = note.m_metadata;
+    component.m_sampleBinding   = note.getSampleBinding();
+    component.m_collaborationId = note.m_collaborationId;
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         component.m_duration =
@@ -560,13 +598,14 @@ NoteComponent::SubNote makeSubNoteComponentFromBeatmapNote(
     const ::MMM::Note& note)
 {
     NoteComponent::SubNote subNote;
-    subNote.type          = note.m_type;
-    subNote.timestamp     = note.m_timestamp / 1000.0;
-    subNote.duration      = 0.0;
-    subNote.trackIndex    = static_cast<int>(note.m_track);
-    subNote.dtrack        = 0;
-    subNote.metadata      = note.m_metadata;
-    subNote.sampleBinding = note.getSampleBinding();
+    subNote.type            = note.m_type;
+    subNote.timestamp       = note.m_timestamp / 1000.0;
+    subNote.duration        = 0.0;
+    subNote.trackIndex      = static_cast<int>(note.m_track);
+    subNote.dtrack          = 0;
+    subNote.metadata        = note.m_metadata;
+    subNote.sampleBinding   = note.getSampleBinding();
+    subNote.collaborationId = note.m_collaborationId;
 
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
         subNote.duration =
@@ -670,40 +709,121 @@ std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
     return normalizeReplacementTimelines(std::move(timelines));
 }
 
-/// @brief 整体重建当前会话的物件 ECS。
+/// @brief 按协作逻辑标识合并权威物件，并保留仍存在物件的 ECS 实体。
 /// @param ctx 当前会话上下文。
 /// @param notes 替换后的非子物件组件列表。
+/// @warning 低频权威同步路径：会完整扫描一次音符 Registry 并重置交互缓存，
+/// 禁止从每帧更新路径调用。
 void replaceNoteComponents(SessionContext&                   ctx,
                            const std::vector<NoteComponent>& notes)
 {
     clearChartObjectSelectionIndex(ctx, ChartObjectKind::PlayerNote);
-    ctx.noteRegistry.clear();
+
+    struct ExistingNote {
+        /// @brief 同步前的实体。
+        entt::entity entity{ entt::null };
+        /// @brief 同步前的组件快照。
+        NoteComponent component;
+    };
+
+    std::vector<ExistingNote> existing;
+    const auto view = ctx.noteRegistry.view<const NoteComponent>();
+    existing.reserve(view.size());
+    std::unordered_map<std::string, std::size_t> identityIndex;
+    identityIndex.reserve(view.size());
+    for ( const auto entity : view ) {
+        existing.push_back({ entity, view.get<const NoteComponent>(entity) });
+        const auto& identity = existing.back().component.m_collaborationId;
+        if ( !identity.empty() ) {
+            identityIndex.try_emplace(identity, existing.size() - 1U);
+        }
+    }
+
+    std::unordered_set<entt::entity> retained;
+    retained.reserve(existing.size());
+    const auto findByIdentity = [&](std::string_view identity,
+                                    bool expectedSubNote) -> entt::entity {
+        if ( identity.empty() ) return entt::null;
+        const auto found = identityIndex.find(std::string(identity));
+        if ( found == identityIndex.end() ) return entt::null;
+        const auto& candidate = existing[found->second];
+        if ( candidate.component.m_isSubNote != expectedSubNote ||
+             retained.contains(candidate.entity) ) {
+            return entt::null;
+        }
+        return candidate.entity;
+    };
+    const auto findLegacyRoot = [&](const NoteComponent& desired) {
+        const auto found = std::find_if(
+            existing.begin(), existing.end(), [&](const ExistingNote& entry) {
+                return !entry.component.m_isSubNote &&
+                       !retained.contains(entry.entity) &&
+                       isSameRootNoteComponent(entry.component, desired);
+            });
+        return found == existing.end() ? entt::null : found->entity;
+    };
+
     for ( const auto& note : notes ) {
-        auto entity = ctx.noteRegistry.create();
-        ctx.noteRegistry.emplace<NoteComponent>(entity, note);
+        NoteComponent applied = note;
+        auto          entity = findByIdentity(applied.m_collaborationId, false);
+        if ( entity == entt::null && applied.m_collaborationId.empty() ) {
+            entity = findLegacyRoot(applied);
+        }
+        if ( entity == entt::null ) {
+            entity = ctx.noteRegistry.create();
+        } else if ( applied.m_collaborationId.empty() ) {
+            const auto& previous = ctx.noteRegistry.get<NoteComponent>(entity);
+            applied.m_collaborationId = previous.m_collaborationId;
+            if ( applied.m_subNotes.size() == previous.m_subNotes.size() ) {
+                for ( std::size_t index = 0; index < applied.m_subNotes.size();
+                      ++index ) {
+                    if ( applied.m_subNotes[index].collaborationId.empty() ) {
+                        applied.m_subNotes[index].collaborationId =
+                            previous.m_subNotes[index].collaborationId;
+                    }
+                }
+            }
+        }
+        retained.insert(entity);
+        ctx.noteRegistry.emplace_or_replace<NoteComponent>(entity, applied);
         ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry, entity);
 
-        if ( note.m_type != ::MMM::NoteType::POLYLINE ) continue;
+        if ( applied.m_type != ::MMM::NoteType::POLYLINE ) continue;
 
-        for ( std::size_t index = 0; index < note.m_subNotes.size(); ++index ) {
-            const auto&   sub = note.m_subNotes[index];
+        for ( std::size_t index = 0; index < applied.m_subNotes.size();
+              ++index ) {
+            const auto&   sub = applied.m_subNotes[index];
             NoteComponent subComponent;
-            subComponent.m_type           = sub.type;
-            subComponent.m_timestamp      = sub.timestamp;
-            subComponent.m_duration       = sub.duration;
-            subComponent.m_trackIndex     = sub.trackIndex;
-            subComponent.m_dtrack         = sub.dtrack;
-            subComponent.m_isSubNote      = true;
-            subComponent.m_parentPolyline = entity;
-            subComponent.m_subIndex       = static_cast<int>(index);
-            subComponent.m_metadata       = sub.metadata;
-            subComponent.m_sampleBinding  = sub.sampleBinding;
-            subComponent.m_customColors   = sub.customColors;
+            subComponent.m_type            = sub.type;
+            subComponent.m_timestamp       = sub.timestamp;
+            subComponent.m_duration        = sub.duration;
+            subComponent.m_trackIndex      = sub.trackIndex;
+            subComponent.m_dtrack          = sub.dtrack;
+            subComponent.m_isSubNote       = true;
+            subComponent.m_parentPolyline  = entity;
+            subComponent.m_subIndex        = static_cast<int>(index);
+            subComponent.m_metadata        = sub.metadata;
+            subComponent.m_sampleBinding   = sub.sampleBinding;
+            subComponent.m_customColors    = sub.customColors;
+            subComponent.m_collaborationId = sub.collaborationId;
 
-            auto subEntity = ctx.noteRegistry.create();
-            ctx.noteRegistry.emplace<NoteComponent>(subEntity, subComponent);
+            auto subEntity =
+                findByIdentity(subComponent.m_collaborationId, true);
+            if ( subEntity == entt::null ) {
+                subEntity = ctx.noteRegistry.create();
+            }
+            retained.insert(subEntity);
+            ctx.noteRegistry.emplace_or_replace<NoteComponent>(subEntity,
+                                                               subComponent);
             ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry,
                                                      subEntity);
+        }
+    }
+
+    for ( const auto& entry : existing ) {
+        if ( !retained.contains(entry.entity) &&
+             ctx.noteRegistry.valid(entry.entity) ) {
+            ctx.noteRegistry.destroy(entry.entity);
         }
     }
 
@@ -2030,7 +2150,12 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         beforePreferenceBpm,
         afterPreferenceBpm);
     if ( cmd.authoritativeRemote ) {
-        m_ctx.actionStack.clear();
+        const bool preservesNoteHistory =
+            cmd.replaceObjects && !cmd.replaceTimelines &&
+            !cmd.replaceMetadata && !cmd.replaceAudioSamples;
+        if ( !preservesNoteHistory ) {
+            m_ctx.actionStack.clear();
+        }
         action->execute(m_ctx);
         m_ctx.actionStack.markDirty();
     } else {

@@ -46,6 +46,9 @@ public:
     /// @brief 所有物件元数据。
     NoteMetadata m_metadata;
 
+    /// @brief 协作会话内稳定的逻辑物件标识；普通谱面格式不会持久化该字段。
+    std::string m_collaborationId;
+
     /// @brief 设置物件命中采样。
     /// @param binding 待设置的采样绑定；资源标识为空时清除绑定。
     void setSampleBinding(AudioSampleBinding binding)

@@ -80,8 +80,13 @@ struct NoteComponent {
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
         /// @brief 子物件自定义颜色缓存；为空时继承皮肤默认色。
         NoteColorOverrides customColors;
+        /// @brief 协作会话内稳定的子物件逻辑标识。
+        std::string collaborationId;
     };
     std::vector<SubNote> m_subNotes;
+
+    /// @brief 协作会话内稳定的逻辑物件标识。
+    std::string m_collaborationId;
 };
 
 }  // namespace MMM::Logic

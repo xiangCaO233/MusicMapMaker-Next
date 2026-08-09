@@ -34,31 +34,36 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     beatmap->m_metadata.map_properties[MMM::MapMetadataType::MALODY]["mode"] =
         "key";
 
-    auto& note           = beatmap->m_noteData.notes.emplace_back();
-    note.m_timestamp     = 1000.0;
-    note.m_track         = 1;
-    note.m_sampleBinding = MMM::AudioSampleBinding{ "tap.wav", 0.8F };
+    auto& note             = beatmap->m_noteData.notes.emplace_back();
+    note.m_timestamp       = 1000.0;
+    note.m_track           = 1;
+    note.m_collaborationId = "note-root";
+    note.m_sampleBinding   = MMM::AudioSampleBinding{ "tap.wav", 0.8F };
     note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["color"] =
         "#112233";
 
-    auto& flick       = beatmap->m_noteData.flicks.emplace_back();
-    flick.m_timestamp = 1500.0;
-    flick.m_track     = 2;
-    flick.m_dtrack    = -1;
+    auto& flick             = beatmap->m_noteData.flicks.emplace_back();
+    flick.m_timestamp       = 1500.0;
+    flick.m_track           = 2;
+    flick.m_dtrack          = -1;
+    flick.m_collaborationId = "flick-root";
 
-    auto& subHold        = beatmap->m_noteData.holds.emplace_back();
-    subHold.m_timestamp  = 2000.0;
-    subHold.m_duration   = 500.0;
-    subHold.m_track      = 3;
-    subHold.m_isSubNote  = true;
-    auto& subFlick       = beatmap->m_noteData.flicks.emplace_back();
-    subFlick.m_timestamp = 2500.0;
-    subFlick.m_track     = 3;
-    subFlick.m_dtrack    = 2;
-    subFlick.m_isSubNote = true;
-    auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
-    polyline.m_timestamp = subHold.m_timestamp;
-    polyline.m_track     = subHold.m_track;
+    auto& subHold              = beatmap->m_noteData.holds.emplace_back();
+    subHold.m_timestamp        = 2000.0;
+    subHold.m_duration         = 500.0;
+    subHold.m_track            = 3;
+    subHold.m_isSubNote        = true;
+    subHold.m_collaborationId  = "polyline-sub-hold";
+    auto& subFlick             = beatmap->m_noteData.flicks.emplace_back();
+    subFlick.m_timestamp       = 2500.0;
+    subFlick.m_track           = 3;
+    subFlick.m_dtrack          = 2;
+    subFlick.m_isSubNote       = true;
+    subFlick.m_collaborationId = "polyline-sub-flick";
+    auto& polyline             = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_timestamp       = subHold.m_timestamp;
+    polyline.m_track           = subHold.m_track;
+    polyline.m_collaborationId = "polyline-root";
     polyline.m_subNotes.emplace_back(subHold);
     polyline.m_subNotes.emplace_back(subFlick);
     polyline.m_subHolds.emplace_back(subHold);
@@ -159,6 +164,7 @@ bool sameObjects(const BeatMap& lhs, const BeatMap& rhs)
              std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
              left.m_track != right.m_track ||
              left.m_isSubNote != right.m_isSubNote ||
+             left.m_collaborationId != right.m_collaborationId ||
              left.m_metadata.note_properties !=
                  right.m_metadata.note_properties ||
              !sameBinding(left.m_sampleBinding, right.m_sampleBinding) ) {
@@ -402,22 +408,25 @@ bool testConcurrentObjectDeltasMerge()
     firstGuestEncoder.synchronizeEncodingBaseline(*initial);
     secondGuestEncoder.synchronizeEncodingBaseline(*initial);
 
-    auto  hostEdit       = makeCompleteBeatmap("Creator");
-    auto& hostNote       = hostEdit->m_noteData.notes.emplace_back();
-    hostNote.m_timestamp = 3000.0;
-    hostNote.m_track     = 0;
+    auto  hostEdit             = makeCompleteBeatmap("Creator");
+    auto& hostNote             = hostEdit->m_noteData.notes.emplace_back();
+    hostNote.m_timestamp       = 3000.0;
+    hostNote.m_track           = 0;
+    hostNote.m_collaborationId = "host-added-note";
     hostEdit->sync();
 
     auto  firstGuestEdit = makeCompleteBeatmap("Creator");
     auto& firstGuestNote = firstGuestEdit->m_noteData.notes.emplace_back();
-    firstGuestNote.m_timestamp = 4000.0;
-    firstGuestNote.m_track     = 1;
+    firstGuestNote.m_timestamp       = 4000.0;
+    firstGuestNote.m_track           = 1;
+    firstGuestNote.m_collaborationId = "first-guest-added-note";
     firstGuestEdit->sync();
 
     auto  secondGuestEdit = makeCompleteBeatmap("Creator");
     auto& secondGuestNote = secondGuestEdit->m_noteData.notes.emplace_back();
-    secondGuestNote.m_timestamp = 5000.0;
-    secondGuestNote.m_track     = 2;
+    secondGuestNote.m_timestamp       = 5000.0;
+    secondGuestNote.m_track           = 2;
+    secondGuestNote.m_collaborationId = "second-guest-added-note";
     secondGuestEdit->sync();
 
     auto hostDelta =

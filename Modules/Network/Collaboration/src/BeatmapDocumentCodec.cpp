@@ -24,7 +24,7 @@ namespace
 {
 using Json = nlohmann::json;
 
-constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 2;
+constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 3;
 /// @brief 协作谱面负载固定魔数，对应 ASCII `MMBD`。
 constexpr std::array<std::uint8_t, 4> DOCUMENT_PAYLOAD_MAGIC{
     'M', 'M', 'B', 'D'
@@ -243,6 +243,7 @@ Json encodeNote(const ::MMM::Note& note)
         { "type", static_cast<std::uint32_t>(note.m_type) },
         { "timestamp", note.m_timestamp },
         { "track", note.m_track },
+        { "collaboration_id", note.m_collaborationId },
         { "binding", encodeSampleBinding(note.m_sampleBinding) },
         { "metadata", encodeNoteMetadata(note.m_metadata) },
     };
@@ -383,6 +384,7 @@ bool decodeCommonNote(const Json& source, ::MMM::Note& note)
          rawType > static_cast<std::uint32_t>(::MMM::NoteType::POLYLINE) ||
          !readValue(source, "timestamp", note.m_timestamp) ||
          !readValue(source, "track", note.m_track) ||
+         !readValue(source, "collaboration_id", note.m_collaborationId) ||
          metadataIt == source.end() || bindingIt == source.end() ||
          !decodePropertyMap(*metadataIt, note.m_metadata.note_properties) ||
          !decodeSampleBinding(*bindingIt, note.m_sampleBinding) ) {

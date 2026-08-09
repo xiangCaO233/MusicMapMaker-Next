@@ -1111,9 +1111,9 @@ bool testReplaceBeatmapMetadataOverflowIsRejected()
            !context.lastActionMessage.empty();
 }
 
-/// @brief 验证权威远端替换废弃旧实体历史与全部玩家物件交互状态。
-/// @return 替换后只保留权威对象且旧撤销和实体缓存不可再访问时返回 true。
-bool testAuthoritativeReplacementInvalidatesEntityState()
+/// @brief 验证远端编辑本人创建的音符后，本人的撤回仍按逻辑身份删除该音符。
+/// @return 权威替换保留动作栈与实体身份，且撤回不删除他人物件时返回 true。
+bool testAuthoritativeReplacementPreservesOwnedCreateUndo()
 {
     MMM::Logic::SessionContext context;
     context.currentBeatmap                = std::make_shared<MMM::BeatMap>();
@@ -1126,6 +1126,9 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
                                            std::nullopt,
                                            staleNote),
                                        context);
+    const auto collaborationId =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(staleEntity)
+            .m_collaborationId;
     context.sortedNoteEntities.push_back(staleEntity);
     context.sortedNoteMaxEndPrefix.push_back(1.0);
     context.noteRegistry.emplace_or_replace<MMM::Logic::InteractionComponent>(
@@ -1143,10 +1146,15 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
         MMM::Logic::ChartObjectKind::PlayerNote;
     context.eraserState.targetEntities.insert(staleEntity);
 
-    auto  source     = std::make_shared<MMM::BeatMap>();
-    auto& note       = source->m_noteData.notes.emplace_back();
-    note.m_timestamp = 2500.0;
-    note.m_track     = 3;
+    auto  source                      = std::make_shared<MMM::BeatMap>();
+    auto& editedOwnedNote             = source->m_noteData.notes.emplace_back();
+    editedOwnedNote.m_timestamp       = 1000.0;
+    editedOwnedNote.m_track           = 3;
+    editedOwnedNote.m_collaborationId = collaborationId;
+    auto& remoteNote                  = source->m_noteData.notes.emplace_back();
+    remoteNote.m_timestamp            = 2500.0;
+    remoteNote.m_track                = 2;
+    remoteNote.m_collaborationId      = "remote-note-b";
     source->sync();
 
     MMM::Logic::ActionController controller(context);
@@ -1158,11 +1166,10 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
 
     const auto view =
         context.noteRegistry.view<const MMM::Logic::NoteComponent>();
-    if ( view.size() != 1U ||
-         !near(view.get<const MMM::Logic::NoteComponent>(*view.begin())
-                   .m_timestamp,
-               2.5) ||
-         context.actionStack.getUndoStackSize() != 0U ||
+    if ( view.size() != 2U || !context.noteRegistry.valid(staleEntity) ||
+         context.noteRegistry.get<const MMM::Logic::NoteComponent>(staleEntity)
+                 .m_trackIndex != 3 ||
+         context.actionStack.getUndoStackSize() != 1U ||
          !context.actionStack.isDirty() || context.brushState.isActive ||
          !context.brushState.polylineSegments.empty() ||
          context.eraserState.isActive ||
@@ -1174,7 +1181,7 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
          !context.sortedNoteEntities.empty() ||
          !context.sortedNoteMaxEndPrefix.empty() ||
          !context.isNoteOrderDirty ) {
-        XERROR("Authoritative replacement retained stale entity state");
+        XERROR("Authoritative replacement did not preserve owned create undo");
         return false;
     }
 
@@ -1186,6 +1193,56 @@ bool testAuthoritativeReplacementInvalidatesEntityState()
                     .get<const MMM::Logic::NoteComponent>(*afterUndo.begin())
                     .m_timestamp,
                 2.5);
+}
+
+/// @brief 验证远端覆盖本人修改结果后，撤回只还原仍未冲突的字段。
+/// @return 远端时间和轨道得到保留，本地时长修改被撤回时返回 true。
+bool testAuthoritativeReplacementMergesOwnedUpdateUndo()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap           = std::make_shared<MMM::BeatMap>();
+    const auto                entity = context.noteRegistry.create();
+    MMM::Logic::NoteComponent before;
+    before.m_type            = MMM::NoteType::HOLD;
+    before.m_timestamp       = 1.0;
+    before.m_duration        = 0.5;
+    before.m_trackIndex      = 0;
+    before.m_collaborationId = "owned-update-note";
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(entity, before);
+
+    auto after        = before;
+    after.m_timestamp = 2.0;
+    after.m_duration  = 1.5;
+    context.actionStack.pushAndExecute(
+        std::make_unique<MMM::Logic::NoteAction>(
+            MMM::Logic::NoteAction::Type::Update, entity, before, after),
+        context);
+
+    auto  source                     = std::make_shared<MMM::BeatMap>();
+    auto& remotelyEdited             = source->m_noteData.holds.emplace_back();
+    remotelyEdited.m_timestamp       = 3000.0;
+    remotelyEdited.m_duration        = 1500.0;
+    remotelyEdited.m_track           = 3;
+    remotelyEdited.m_collaborationId = before.m_collaborationId;
+    source->sync();
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdReplaceBeatmapData{
+        .sourceBeatmap       = source,
+        .replaceObjects      = true,
+        .authoritativeRemote = true,
+    });
+    if ( !context.noteRegistry.valid(entity) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Authoritative replacement did not retain owned update");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    const auto& merged =
+        context.noteRegistry.get<const MMM::Logic::NoteComponent>(entity);
+    return near(merged.m_timestamp, 3.0) && near(merged.m_duration, 0.5) &&
+           merged.m_trackIndex == 3;
 }
 
 /// @brief 验证 Polyline 子物件经过多轮领域对象与 ECS 往返仍保持身份和顺序。
@@ -3124,7 +3181,8 @@ int main()
                    testMetadataAudioChangeRetargetsFirstMainBgmSample() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&
                    testReplaceBeatmapMetadataOverflowIsRejected() &&
-                   testAuthoritativeReplacementInvalidatesEntityState() &&
+                   testAuthoritativeReplacementPreservesOwnedCreateUndo() &&
+                   testAuthoritativeReplacementMergesOwnedUpdateUndo() &&
                    testPolylineSubNoteIdentitySurvivesRepeatedEcsSync() &&
                    testAppendLaneExpandsPersistentCount() &&
                    testExplicitBgmTrackCountAction() &&

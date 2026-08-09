@@ -25,6 +25,12 @@ public:
                std::optional<NoteComponent> after)
         : m_type(type), m_entity(entity), m_before(before), m_after(after)
     {
+        if ( m_type == Type::Create && m_after ) {
+            m_after->m_collaborationId.clear();
+            for ( auto& subNote : m_after->m_subNotes ) {
+                subNote.collaborationId.clear();
+            }
+        }
     }
 
     void        execute(SessionContext& ctx) override;
@@ -61,6 +67,13 @@ public:
                     std::string        name = "Batch Note Action")
         : m_entries(std::move(entries)), m_name(std::move(name))
     {
+        for ( auto& entry : m_entries ) {
+            if ( entry.before || !entry.after ) continue;
+            entry.after->m_collaborationId.clear();
+            for ( auto& subNote : entry.after->m_subNotes ) {
+                subNote.collaborationId.clear();
+            }
+        }
     }
 
     void        execute(SessionContext& ctx) override;
