@@ -565,6 +565,65 @@ void pumpPeers(CollaborationPeer&                               host,
     return true;
 }
 
+/// @brief 验证复用 PeerId 的新连接不会继承旧连接的请求序号和待提交操作。
+/// @return 旧连接状态被清理且新连接首个操作正常提交时返回 true。
+[[nodiscard]] bool testReusedPeerIdStartsFreshRequestSequence()
+{
+    constexpr PeerId        GUEST_ID = 2;
+    LoopbackTransportHub    hub;
+    std::vector<ByteBuffer> hostModel;
+
+    CollaborationPeerConfig hostConfig;
+    hostConfig.clientId                    = HOST_ID;
+    hostConfig.hostId                      = HOST_ID;
+    hostConfig.creator                     = "Host";
+    hostConfig.isHost                      = true;
+    hostConfig.limits.maxRequestsPerUpdate = 1;
+    CollaborationPeer host(hostConfig,
+                           hub.createEndpoint(HOST_ID),
+                           [&hostModel](const CommittedOperation& operation) {
+                               hostModel.push_back(operation.payload);
+                           });
+
+    CollaborationPeerConfig guestConfig;
+    guestConfig.clientId = GUEST_ID;
+    guestConfig.hostId   = HOST_ID;
+    guestConfig.creator  = "Guest";
+    guestConfig.isHost   = false;
+    auto guest           = std::make_unique<CollaborationPeer>(
+        guestConfig, hub.createEndpoint(GUEST_ID), nullptr);
+    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+
+    const auto firstOperation  = makeOperation(GUEST_ID, 1);
+    const auto queuedOperation = makeOperation(GUEST_ID, 2);
+    if ( guest->submitOperation(firstOperation) !=
+             SubmitOperationResult::Accepted ||
+         guest->submitOperation(queuedOperation) !=
+             SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    host.update();
+    if ( host.appliedRevision() != 1 || hostModel.size() != 1U ||
+         hostModel.front() != firstOperation ) {
+        return false;
+    }
+
+    host.removeParticipant(GUEST_ID);
+    guest.reset();
+    guest = std::make_unique<CollaborationPeer>(
+        guestConfig, hub.createEndpoint(GUEST_ID), nullptr);
+    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+
+    const auto reconnectedOperation = makeOperation(GUEST_ID, 3);
+    if ( guest->submitOperation(reconnectedOperation) !=
+         SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    host.update();
+    return host.appliedRevision() == 2 && hostModel.size() == 2U &&
+           hostModel.back() == reconnectedOperation;
+}
+
 /// @brief 验证迟加入客户端可用房主完整快照直接越过已裁剪的增量日志。
 [[nodiscard]] bool testLateJoinStateSnapshot()
 {
@@ -683,5 +742,6 @@ int main()
     if ( !testEightPeerIncrementalConvergence() ) return 3;
     if ( !testLateJoinStateSnapshot() ) return 4;
     if ( !testTrimmedJournalSnapshotFallback() ) return 5;
+    if ( !testReusedPeerIdStartsFreshRequestSequence() ) return 6;
     return 0;
 }

@@ -136,6 +136,10 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
         return;
     }
     m_participants.erase(peerId);
+    std::erase_if(m_pendingRequests, [peerId](const EditRequest& request) {
+        return request.clientId == peerId;
+    });
+    m_lastAcceptedSequence.erase(peerId);
     m_lastAcknowledgedRevision.erase(peerId);
     m_participantViewports.erase(peerId);
     if ( m_participantCreators.erase(peerId) == 0 ) {
