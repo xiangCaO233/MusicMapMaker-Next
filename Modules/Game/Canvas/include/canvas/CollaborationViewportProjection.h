@@ -20,7 +20,7 @@ struct CollaborationViewportHorizontalRange {
 /// @param contentLeft 本地轨道区左边界。
 /// @param contentRight 本地轨道区右边界。
 /// @param canvasWidth 本地画布宽度。
-/// @param slotIndex 当前箭头按稳定 PeerId 排列后的槽位索引。
+/// @param slotIndex 当前箭头按临时 PeerId 排列后的槽位索引。
 /// @param slotCount 当前画布同一侧的箭头总数。
 /// @return 输入有效时返回不会越过画布安全边距的箭头中心 X 坐标。
 /// @warning UI 热路径：每个离屏参与者调用一次；只执行常量数值计算，禁止加入

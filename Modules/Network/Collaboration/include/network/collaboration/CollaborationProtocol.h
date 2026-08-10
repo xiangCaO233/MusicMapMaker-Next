@@ -10,7 +10,7 @@
 namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
-inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 3;
+inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 4;
 
 /// @brief 线协议允许的消息类型。
 enum class CollaborationMessageKind : std::uint8_t {
@@ -95,6 +95,7 @@ enum class ProtocolError : std::uint8_t {
     TruncatedMessage,
     InvalidMessageLength,
     OperationTooLarge,
+    InvalidStableIdentity,
     InvalidCreatorIdentity,
     InvalidViewportState,
 };

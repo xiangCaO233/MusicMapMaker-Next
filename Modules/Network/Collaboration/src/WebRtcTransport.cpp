@@ -23,8 +23,10 @@ namespace MMM::Network::Collaboration
 {
 namespace
 {
-/// @brief 中心目录与点对点协商协议版本。
-constexpr std::uint64_t SIGNALING_PROTOCOL_VERSION = 1;
+/// @brief 中心目录和配对服务使用的协议版本。
+constexpr std::uint64_t BROKER_PROTOCOL_VERSION = 1;
+/// @brief 中心完成配对后两端直接交换身份使用的协议版本。
+constexpr std::uint64_t P2P_SIGNALING_PROTOCOL_VERSION = 2;
 /// @brief 协作 DataChannel 的稳定标签。
 constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";
 /// @brief 单条信令消息大小上限。
@@ -136,8 +138,14 @@ public:
         PeerId remotePeerId = 0;
         /// @brief 远端 Creator。
         std::string remoteCreator;
+        /// @brief 远端不随路由槽位复用变化的稳定协作者标识。
+        ParticipantId remoteParticipantId;
+        /// @brief 远端本次加入流程的操作会话标识。
+        OperationSessionId remoteSessionId;
         /// @brief 服务端加入请求标识；仅房主的访客通道使用。
         std::string requestId;
+        /// @brief 房主批准加入时由中心服务确认的访客 Creator。
+        std::string approvedCreator;
         /// @brief 是否已经完成 P2P 身份握手。
         bool joined = false;
         /// @brief 是否已经上报 DataChannel 建立事件。
@@ -159,7 +167,12 @@ public:
     {
         const auto creator  = Config::normalizeCreatorIdentity(config.creator);
         const auto roomName = normalizeRoomName(config.roomName);
+        const auto participantId =
+            Config::normalizeCollaborationStableId(config.participantId);
+        const auto sessionId =
+            Config::normalizeCollaborationStableId(config.sessionId);
         if ( creator.empty() || roomName.empty() || config.hostId == 0 ||
+             participantId.empty() || sessionId.empty() ||
              makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
@@ -173,6 +186,8 @@ public:
             if ( m_running ) return false;
             m_isHost          = true;
             m_creator         = creator;
+            m_participantId   = participantId;
+            m_sessionId       = sessionId;
             m_roomName        = roomName;
             m_signalingUrl    = makeCollaborationSignalingUrl(config.endpoint);
             m_ownerToken      = generateOwnerToken();
@@ -196,8 +211,12 @@ public:
     bool connectToHost(const WebRtcGuestConfig& config)
     {
         const auto creator = Config::normalizeCreatorIdentity(config.creator);
-        if ( creator.empty() || config.hostId == 0 ||
-             !isValidRoomId(config.roomId) ||
+        const auto participantId =
+            Config::normalizeCollaborationStableId(config.participantId);
+        const auto sessionId =
+            Config::normalizeCollaborationStableId(config.sessionId);
+        if ( creator.empty() || config.hostId == 0 || participantId.empty() ||
+             sessionId.empty() || !isValidRoomId(config.roomId) ||
              makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
@@ -210,14 +229,16 @@ public:
         {
             std::scoped_lock lock(m_mutex);
             if ( m_running ) return false;
-            m_isHost       = false;
-            m_creator      = creator;
-            m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
-            m_roomId       = config.roomId;
-            m_localPeerId  = 0;
-            m_hostId       = config.hostId;
-            m_stopping     = false;
-            m_running      = true;
+            m_isHost        = false;
+            m_creator       = creator;
+            m_participantId = participantId;
+            m_sessionId     = sessionId;
+            m_signalingUrl  = makeCollaborationSignalingUrl(config.endpoint);
+            m_roomId        = config.roomId;
+            m_localPeerId   = 0;
+            m_hostId        = config.hostId;
+            m_stopping      = false;
+            m_running       = true;
             m_connections.push_back(std::move(connection));
         }
         if ( !openWebSocket(*connectionPtr) ) {
@@ -231,6 +252,7 @@ public:
     bool approveJoinRequest(std::string_view requestId)
     {
         std::string request;
+        std::string creator;
         {
             std::scoped_lock lock(m_mutex);
             if ( !m_isHost || m_stopping || requestId.empty() ) return false;
@@ -238,8 +260,9 @@ public:
                 m_pendingJoinRequests.find(std::string(requestId));
             if ( iterator == m_pendingJoinRequests.end() ) return false;
             request = iterator->first;
+            creator = iterator->second;
         }
-        if ( !openHostPeerConnection(request) ) return false;
+        if ( !openHostPeerConnection(request, creator) ) return false;
         std::scoped_lock lock(m_mutex);
         m_pendingJoinRequests.erase(request);
         return true;
@@ -271,7 +294,7 @@ public:
         if ( !control ) return false;
         const nlohmann::json rejected = {
             { "type", "reject_join" },
-            { "version", SIGNALING_PROTOCOL_VERSION },
+            { "version", BROKER_PROTOCOL_VERSION },
             { "roomId", roomId },
             { "requestId", request },
             { "ownerToken", ownerToken },
@@ -329,7 +352,9 @@ public:
             m_stopping    = true;
             m_running     = false;
             m_localPeerId = 0;
-            connections   = std::move(m_connections);
+            m_participantId.clear();
+            m_sessionId.clear();
+            connections = std::move(m_connections);
             m_incomingPackets.clear();
             m_events.clear();
             m_pendingJoinRequests.clear();
@@ -462,13 +487,15 @@ private:
     }
 
     /// @brief 创建房主接受单个访客所需的瞬时信令连接。
-    bool openHostPeerConnection(std::string requestId)
+    bool openHostPeerConnection(std::string requestId,
+                                std::string approvedCreator)
     {
-        auto connection       = std::make_unique<Connection>();
-        connection->owner     = this;
-        connection->role      = ConnectionRole::Peer;
-        connection->requestId = std::move(requestId);
-        Connection* pointer   = connection.get();
+        auto connection             = std::make_unique<Connection>();
+        connection->owner           = this;
+        connection->role            = ConnectionRole::Peer;
+        connection->requestId       = std::move(requestId);
+        connection->approvedCreator = std::move(approvedCreator);
+        Connection* pointer         = connection.get();
         {
             std::scoped_lock lock(m_mutex);
             if ( m_stopping || !m_running ) return false;
@@ -487,7 +514,8 @@ private:
     /// @brief 将连接事件压入线程安全队列。
     void pushEvent(WebRtcTransportEventType type, PeerId peerId,
                    std::string creator, std::string detail,
-                   std::string requestId = {})
+                   std::string requestId = {}, ParticipantId participantId = {},
+                   OperationSessionId sessionId = {})
     {
         std::scoped_lock lock(m_mutex);
         if ( m_stopping ) return;
@@ -496,6 +524,8 @@ private:
         }
         m_events.push_back({ type,
                              peerId,
+                             std::move(participantId),
+                             std::move(sessionId),
                              std::move(creator),
                              std::move(detail),
                              std::move(requestId) });
@@ -620,16 +650,23 @@ private:
     void handleJoin(Connection& connection, const nlohmann::json& message)
     {
         std::string   creator;
+        std::string   participantId;
+        std::string   sessionId;
         std::uint64_t version = 0;
         if ( !readUnsignedField(message, "version", version) ||
-             version != SIGNALING_PROTOCOL_VERSION ||
-             !readStringField(message, "creator", creator) ) {
+             version != P2P_SIGNALING_PROTOCOL_VERSION ||
+             !readStringField(message, "creator", creator) ||
+             !readStringField(message, "participantId", participantId) ||
+             !readStringField(message, "sessionId", sessionId) ) {
             reject(connection, "invalid_join");
             return;
         }
-        creator = Config::normalizeCreatorIdentity(creator);
-        if ( creator.empty() ) {
-            reject(connection, "invalid_creator");
+        creator       = Config::normalizeCreatorIdentity(creator);
+        participantId = Config::normalizeCollaborationStableId(participantId);
+        sessionId     = Config::normalizeCollaborationStableId(sessionId);
+        if ( creator.empty() || participantId.empty() || sessionId.empty() ||
+             creator != connection.approvedCreator ) {
+            reject(connection, "invalid_identity");
             return;
         }
 
@@ -639,9 +676,11 @@ private:
             if ( connection.joined ) return;
             assignedPeerId = allocatePeerId();
             if ( assignedPeerId != 0 ) {
-                connection.joined        = true;
-                connection.remotePeerId  = assignedPeerId;
-                connection.remoteCreator = creator;
+                connection.joined              = true;
+                connection.remotePeerId        = assignedPeerId;
+                connection.remoteCreator       = creator;
+                connection.remoteParticipantId = participantId;
+                connection.remoteSessionId     = sessionId;
             }
         }
         if ( assignedPeerId == 0 ) {
@@ -650,11 +689,13 @@ private:
         }
 
         nlohmann::json accepted;
-        accepted["type"]        = "accepted";
-        accepted["version"]     = SIGNALING_PROTOCOL_VERSION;
-        accepted["peerId"]      = assignedPeerId;
-        accepted["hostId"]      = m_hostId;
-        accepted["hostCreator"] = m_creator;
+        accepted["type"]              = "accepted";
+        accepted["version"]           = P2P_SIGNALING_PROTOCOL_VERSION;
+        accepted["peerId"]            = assignedPeerId;
+        accepted["hostId"]            = m_hostId;
+        accepted["hostCreator"]       = m_creator;
+        accepted["hostParticipantId"] = m_participantId;
+        accepted["hostSessionId"]     = m_sessionId;
         if ( !createPeerConnection(connection, false) ||
              !sendSignal(connection, accepted) ) {
             pushEvent(WebRtcTransportEventType::Error,
@@ -667,12 +708,20 @@ private:
     /// @brief 处理房主接受访客后的身份配置消息。
     void handleAccepted(Connection& connection, const nlohmann::json& message)
     {
-        std::uint64_t peerId = 0;
-        std::uint64_t hostId = 0;
+        std::uint64_t peerId  = 0;
+        std::uint64_t hostId  = 0;
+        std::uint64_t version = 0;
         std::string   hostCreator;
-        if ( !readUnsignedField(message, "peerId", peerId) || peerId == 0 ||
+        std::string   hostParticipantId;
+        std::string   hostSessionId;
+        if ( !readUnsignedField(message, "version", version) ||
+             version != P2P_SIGNALING_PROTOCOL_VERSION ||
+             !readUnsignedField(message, "peerId", peerId) || peerId == 0 ||
              !readUnsignedField(message, "hostId", hostId) || hostId == 0 ||
-             !readStringField(message, "hostCreator", hostCreator) ) {
+             !readStringField(message, "hostCreator", hostCreator) ||
+             !readStringField(
+                 message, "hostParticipantId", hostParticipantId) ||
+             !readStringField(message, "hostSessionId", hostSessionId) ) {
             pushEvent(WebRtcTransportEventType::Error,
                       0,
                       {},
@@ -680,7 +729,11 @@ private:
             return;
         }
         hostCreator = Config::normalizeCreatorIdentity(hostCreator);
-        if ( hostCreator.empty() || hostId != m_hostId ) {
+        hostParticipantId =
+            Config::normalizeCollaborationStableId(hostParticipantId);
+        hostSessionId = Config::normalizeCollaborationStableId(hostSessionId);
+        if ( hostCreator.empty() || hostParticipantId.empty() ||
+             hostSessionId.empty() || hostId != m_hostId ) {
             pushEvent(WebRtcTransportEventType::Error,
                       0,
                       {},
@@ -691,10 +744,12 @@ private:
         {
             std::scoped_lock lock(m_mutex);
             if ( m_localPeerId != 0 ) return;
-            m_localPeerId            = static_cast<PeerId>(peerId);
-            connection.remotePeerId  = static_cast<PeerId>(hostId);
-            connection.remoteCreator = hostCreator;
-            connection.joined        = true;
+            m_localPeerId                  = static_cast<PeerId>(peerId);
+            connection.remotePeerId        = static_cast<PeerId>(hostId);
+            connection.remoteCreator       = hostCreator;
+            connection.remoteParticipantId = std::move(hostParticipantId);
+            connection.remoteSessionId     = std::move(hostSessionId);
+            connection.joined              = true;
         }
         if ( !createPeerConnection(connection, true) ) {
             pushEvent(WebRtcTransportEventType::Error,
@@ -752,7 +807,7 @@ private:
     {
         nlohmann::json rejected;
         rejected["type"]    = "rejected";
-        rejected["version"] = SIGNALING_PROTOCOL_VERSION;
+        rejected["version"] = P2P_SIGNALING_PROTOCOL_VERSION;
         rejected["reason"]  = reason;
         static_cast<void>(sendSignal(connection, rejected));
         pushEvent(WebRtcTransportEventType::Rejected,
@@ -876,9 +931,11 @@ private:
             }
             if ( !m_isHost ) {
                 nlohmann::json join;
-                join["type"]    = "join";
-                join["version"] = SIGNALING_PROTOCOL_VERSION;
-                join["creator"] = m_creator;
+                join["type"]          = "join";
+                join["version"]       = P2P_SIGNALING_PROTOCOL_VERSION;
+                join["creator"]       = m_creator;
+                join["participantId"] = m_participantId;
+                join["sessionId"]     = m_sessionId;
                 if ( !sendSignal(connection, join) ) {
                     pushEvent(WebRtcTransportEventType::Error,
                               m_hostId,
@@ -910,6 +967,15 @@ private:
             return true;
         }
         if ( type == "p2p_ready" && connection.role == ConnectionRole::Peer ) {
+            std::uint64_t version = 0;
+            if ( !readUnsignedField(message, "version", version) ||
+                 version != P2P_SIGNALING_PROTOCOL_VERSION ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          connection.remotePeerId,
+                          connection.remoteCreator,
+                          "unsupported_p2p_protocol");
+                return true;
+            }
             {
                 std::scoped_lock lock(m_mutex);
                 connection.remoteDataChannelReady = true;
@@ -970,7 +1036,7 @@ private:
         if ( controlWebSocketId < 0 || !rtcIsOpen(controlWebSocketId) ) return;
         const nlohmann::json message = {
             { "type", "update_room" },
-            { "version", SIGNALING_PROTOCOL_VERSION },
+            { "version", BROKER_PROTOCOL_VERSION },
             { "participants", participants },
         };
         const std::string payload = message.dump();
@@ -1021,7 +1087,7 @@ private:
         Impl& owner = *connection->owner;
 
         nlohmann::json message;
-        message["version"] = SIGNALING_PROTOCOL_VERSION;
+        message["version"] = BROKER_PROTOCOL_VERSION;
         if ( connection->role == ConnectionRole::HostControl ) {
             message["type"]       = "create_room";
             message["roomName"]   = owner.m_roomName;
@@ -1190,11 +1256,14 @@ private:
         owner.pushEvent(WebRtcTransportEventType::PeerConnected,
                         connection->remotePeerId,
                         connection->remoteCreator,
-                        "data_channel_open");
+                        "data_channel_open",
+                        {},
+                        connection->remoteParticipantId,
+                        connection->remoteSessionId);
         if ( owner.m_isHost ) owner.sendParticipantCount();
         nlohmann::json ready;
         ready["type"]    = "p2p_ready";
-        ready["version"] = SIGNALING_PROTOCOL_VERSION;
+        ready["version"] = P2P_SIGNALING_PROTOCOL_VERSION;
         if ( !owner.sendSignal(*connection, ready) ) {
             owner.pushEvent(WebRtcTransportEventType::Error,
                             connection->remotePeerId,
@@ -1264,7 +1333,10 @@ private:
         pushEvent(WebRtcTransportEventType::PeerDisconnected,
                   connection.remotePeerId,
                   connection.remoteCreator,
-                  std::move(detail));
+                  std::move(detail),
+                  {},
+                  connection.remoteParticipantId,
+                  connection.remoteSessionId);
         if ( updateParticipants ) sendParticipantCount();
     }
 
@@ -1278,6 +1350,10 @@ private:
     bool m_isHost = false;
     /// @brief 当前 Creator。
     std::string m_creator;
+    /// @brief 当前应用配置持久化的稳定协作者标识。
+    ParticipantId m_participantId;
+    /// @brief 当前加入流程生成的操作会话标识。
+    OperationSessionId m_sessionId;
     /// @brief 公网目录展示名称。
     std::string m_roomName;
     /// @brief 中心服务分配的公开房间标识。

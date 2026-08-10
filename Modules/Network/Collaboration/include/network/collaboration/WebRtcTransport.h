@@ -30,6 +30,10 @@ struct WebRtcTransportEvent {
     WebRtcTransportEventType type = WebRtcTransportEventType::Error;
     /// @brief 事件关联的远端 PeerId；尚未分配时为 0。
     PeerId peerId = 0;
+    /// @brief 事件关联的远端稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 事件关联的远端操作会话标识。
+    OperationSessionId sessionId;
     /// @brief 事件关联的远端 Creator。
     std::string creator;
     /// @brief 面向诊断日志的简短详情。
@@ -46,7 +50,11 @@ struct WebRtcHostConfig {
     std::string roomName;
     /// @brief 房主 Creator 展示身份。
     std::string creator;
-    /// @brief 房主稳定 PeerId。
+    /// @brief 房主持久化的稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 房主本次房间生命周期的操作会话标识。
+    OperationSessionId sessionId;
+    /// @brief 房主固定路由槽位。
     PeerId hostId = 1;
     /// @brief 房间允许的总客户端数。
     std::size_t maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
@@ -60,7 +68,11 @@ struct WebRtcGuestConfig {
     std::string roomId;
     /// @brief 当前访客 Creator 展示身份。
     std::string creator;
-    /// @brief 房主稳定 PeerId。
+    /// @brief 当前访客持久化的稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 当前访客本次加入流程的操作会话标识。
+    OperationSessionId sessionId;
+    /// @brief 房主固定路由槽位。
     PeerId hostId = 1;
 };
 

@@ -71,7 +71,10 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
     config.creator = Config::normalizeCreatorIdentity(config.creator);
-    if ( config.creator.empty() || config.roomName.empty() ||
+    config.participantId =
+        Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.creator.empty() || config.participantId.empty() ||
+         config.roomName.empty() ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_host_configuration");
         return false;
@@ -80,10 +83,12 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
 
     auto             transport = std::make_unique<WebRtcTransport>();
     WebRtcHostConfig transportConfig;
-    transportConfig.endpoint = config.endpoint;
-    transportConfig.roomName = config.roomName;
-    transportConfig.creator  = config.creator;
-    transportConfig.hostId   = DEFAULT_HOST_ID;
+    transportConfig.endpoint      = config.endpoint;
+    transportConfig.roomName      = config.roomName;
+    transportConfig.creator       = config.creator;
+    transportConfig.participantId = config.participantId;
+    transportConfig.sessionId     = Config::makeCollaborationStableId();
+    transportConfig.hostId        = DEFAULT_HOST_ID;
     if ( !transport->startHost(transportConfig) ) {
         fail("host_signaling_start_failed");
         return false;
@@ -92,9 +97,11 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_state  = CollaborationRoomState::Hosting;
     m_isHost = true;
     m_roomId.clear();
-    m_roomName       = std::move(config.roomName);
-    m_serverEndpoint = std::move(config.endpoint);
-    m_creator        = std::move(config.creator);
+    m_roomName           = std::move(config.roomName);
+    m_serverEndpoint     = std::move(config.endpoint);
+    m_creator            = std::move(config.creator);
+    m_participantId      = std::move(config.participantId);
+    m_operationSessionId = std::move(transportConfig.sessionId);
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -102,7 +109,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
-    m_followedPeerId      = 0;
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -120,11 +127,13 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
 
     m_transport = transport.get();
     CollaborationPeerConfig peerConfig;
-    peerConfig.clientId = DEFAULT_HOST_ID;
-    peerConfig.hostId   = DEFAULT_HOST_ID;
-    peerConfig.creator  = m_creator;
-    peerConfig.isHost   = true;
-    m_peer              = std::make_unique<CollaborationPeer>(
+    peerConfig.peerId        = DEFAULT_HOST_ID;
+    peerConfig.hostPeerId    = DEFAULT_HOST_ID;
+    peerConfig.participantId = m_participantId;
+    peerConfig.sessionId     = m_operationSessionId;
+    peerConfig.creator       = m_creator;
+    peerConfig.isHost        = true;
+    m_peer                   = std::make_unique<CollaborationPeer>(
         std::move(peerConfig),
         std::move(transport),
         [this](const CommittedOperation& operation) {
@@ -152,7 +161,10 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
     config.creator = Config::normalizeCreatorIdentity(config.creator);
-    if ( config.creator.empty() || config.roomId.empty() ||
+    config.participantId =
+        Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.creator.empty() || config.participantId.empty() ||
+         config.roomId.empty() ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_join_configuration");
         return false;
@@ -161,21 +173,25 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
 
     auto              transport = std::make_unique<WebRtcTransport>();
     WebRtcGuestConfig transportConfig;
-    transportConfig.endpoint = config.endpoint;
-    transportConfig.roomId   = config.roomId;
-    transportConfig.creator  = config.creator;
-    transportConfig.hostId   = DEFAULT_HOST_ID;
+    transportConfig.endpoint      = config.endpoint;
+    transportConfig.roomId        = config.roomId;
+    transportConfig.creator       = config.creator;
+    transportConfig.participantId = config.participantId;
+    transportConfig.sessionId     = Config::makeCollaborationStableId();
+    transportConfig.hostId        = DEFAULT_HOST_ID;
     if ( !transport->connectToHost(transportConfig) ) {
         fail("signaling_connect_start_failed");
         return false;
     }
 
-    m_state          = CollaborationRoomState::Joining;
-    m_isHost         = false;
-    m_roomId         = std::move(config.roomId);
-    m_roomName       = std::move(config.roomName);
-    m_serverEndpoint = std::move(config.endpoint);
-    m_creator        = std::move(config.creator);
+    m_state              = CollaborationRoomState::Joining;
+    m_isHost             = false;
+    m_roomId             = std::move(config.roomId);
+    m_roomName           = std::move(config.roomName);
+    m_serverEndpoint     = std::move(config.endpoint);
+    m_creator            = std::move(config.creator);
+    m_participantId      = std::move(config.participantId);
+    m_operationSessionId = std::move(transportConfig.sessionId);
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -183,7 +199,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
-    m_followedPeerId      = 0;
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_documentCodec.reset();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -353,6 +369,8 @@ void CollaborationRoom::disconnect()
     m_roomId.clear();
     m_roomName.clear();
     m_creator.clear();
+    m_participantId.clear();
+    m_operationSessionId.clear();
     m_lastError.clear();
     m_documentCodec.reset();
     m_resourceSync.reset();
@@ -360,7 +378,7 @@ void CollaborationRoom::disconnect()
     m_resourceManifestRecipients.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_followedPeerId = 0;
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
@@ -383,10 +401,6 @@ void CollaborationRoom::update()
         submitQueuedLocalOperations();
         m_peer->update();
         flushLocalViewport();
-        if ( m_followedPeerId != 0 &&
-             !m_peer->participantCreators().contains(m_followedPeerId) ) {
-            m_followedPeerId = 0;
-        }
     }
     processResourceEvents();
 }
@@ -407,7 +421,7 @@ void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport)
          !std::isfinite(viewport.horizontalOffsetRatio) ) {
         return;
     }
-    viewport.clientId      = 0;
+    viewport.peerId        = 0;
     viewport.sequence      = 0;
     m_pendingLocalViewport = viewport;
 }
@@ -422,14 +436,15 @@ void CollaborationRoom::setViewportPublishRateHz(std::uint32_t rateHz)
 bool CollaborationRoom::setFollowedPeer(PeerId peerId)
 {
     if ( peerId == 0 ) {
-        m_followedPeerId = 0;
+        m_followedParticipantId.clear();
         return true;
     }
     if ( !m_peer || peerId == m_peer->localPeerId() ||
-         !m_peer->participantCreators().contains(peerId) ) {
+         !m_peer->participantIdentities().contains(peerId) ) {
         return false;
     }
-    m_followedPeerId = peerId;
+    m_followedParticipantId =
+        m_peer->participantIdentities().at(peerId).participantId;
     return true;
 }
 
@@ -485,10 +500,10 @@ PeerId CollaborationRoom::localPeerId() const
     return m_transport ? m_transport->localPeerId() : 0;
 }
 
-const std::unordered_map<PeerId, std::string>&
+const std::unordered_map<PeerId, ParticipantIdentity>&
 CollaborationRoom::participants() const
 {
-    return m_peer ? m_peer->participantCreators() : m_emptyParticipants;
+    return m_peer ? m_peer->participantIdentities() : m_emptyParticipants;
 }
 
 const std::vector<CollaborationPendingJoinRequest>&
@@ -505,7 +520,13 @@ CollaborationRoom::participantViewports() const
 
 PeerId CollaborationRoom::followedPeerId() const
 {
-    return m_followedPeerId;
+    if ( !m_peer || m_followedParticipantId.empty() ) return 0;
+    const auto& identities  = m_peer->participantIdentities();
+    const auto  participant = std::find_if(
+        identities.begin(), identities.end(), [this](const auto& entry) {
+            return entry.second.participantId == m_followedParticipantId;
+        });
+    return participant == identities.end() ? 0 : participant->first;
 }
 
 std::uint32_t CollaborationRoom::viewportPublishRateHz() const
@@ -556,8 +577,17 @@ void CollaborationRoom::updateDirectory()
 }
 
 void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
-                                  std::string creator, std::string detail)
+                                  std::string creator, std::string detail,
+                                  ParticipantId participantId)
 {
+    if ( participantId.empty() ) {
+        const auto participant = participants().find(peerId);
+        if ( participant != participants().end() ) {
+            participantId = participant->second.participantId;
+        } else if ( peerId != 0 && peerId == localPeerId() ) {
+            participantId = m_participantId;
+        }
+    }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_startedAt);
     m_logs.push_back({ m_nextLogSequence++,
@@ -565,6 +595,7 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
                            std::max<std::int64_t>(0, elapsed.count())),
                        type,
                        peerId,
+                       std::move(participantId),
                        std::move(creator),
                        std::move(detail) });
     if ( m_logs.size() > MAX_COLLABORATION_LOG_ENTRIES ) {
@@ -633,12 +664,18 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
-            if ( !m_peer ||
-                 !m_peer->addParticipant(event.peerId, event.creator) ) {
+            if ( !m_peer || !m_peer->addParticipant(event.peerId,
+                                                    event.participantId,
+                                                    event.sessionId,
+                                                    event.creator) ) {
                 appendLog(CollaborationLogEventType::Error,
                           event.peerId,
                           event.creator,
                           "participant_registration_failed");
+                if ( m_transport ) {
+                    static_cast<void>(m_transport->disconnectPeer(
+                        event.peerId, "participant_registration_failed"));
+                }
                 break;
             }
             sendResourceManifest(event.peerId);
@@ -648,7 +685,8 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         appendLog(CollaborationLogEventType::ParticipantJoined,
                   event.peerId,
                   event.creator,
-                  event.detail);
+                  event.detail,
+                  event.participantId);
         break;
     case WebRtcTransportEventType::PeerDisconnected:
         if ( m_isHost && m_peer ) {
@@ -662,7 +700,8 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         appendLog(CollaborationLogEventType::ParticipantLeft,
                   event.peerId,
                   event.creator,
-                  event.detail);
+                  event.detail,
+                  event.participantId);
         break;
     case WebRtcTransportEventType::Rejected:
         appendLog(CollaborationLogEventType::Error,
@@ -692,16 +731,18 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
 void CollaborationRoom::ensureGuestPeer()
 {
     if ( m_isHost || m_peer || !m_pendingTransport ) return;
-    const PeerId clientId = m_pendingTransport->localPeerId();
-    if ( clientId == 0 ) return;
+    const PeerId peerId = m_pendingTransport->localPeerId();
+    if ( peerId == 0 ) return;
 
     CollaborationPeerConfig peerConfig;
-    peerConfig.clientId = clientId;
-    peerConfig.hostId   = DEFAULT_HOST_ID;
-    peerConfig.creator  = m_creator;
-    peerConfig.isHost   = false;
-    m_transport         = m_pendingTransport.get();
-    m_peer              = std::make_unique<CollaborationPeer>(
+    peerConfig.peerId        = peerId;
+    peerConfig.hostPeerId    = DEFAULT_HOST_ID;
+    peerConfig.participantId = m_participantId;
+    peerConfig.sessionId     = m_operationSessionId;
+    peerConfig.creator       = m_creator;
+    peerConfig.isHost        = false;
+    m_transport              = m_pendingTransport.get();
+    m_peer                   = std::make_unique<CollaborationPeer>(
         std::move(peerConfig),
         std::move(m_pendingTransport),
         [this](const CommittedOperation& operation) {
@@ -720,25 +761,35 @@ void CollaborationRoom::ensureGuestPeer()
 void CollaborationRoom::handleCommittedOperation(
     const CommittedOperation& operation)
 {
-    const auto        participant = participants().find(operation.clientId);
-    const std::string creator     = participant == participants().end()
-                                        ? std::string{}
-                                        : participant->second;
+    const auto participant = std::find_if(
+        participants().begin(),
+        participants().end(),
+        [&operation](const auto& entry) {
+            return entry.second.participantId == operation.participantId;
+        });
+    const PeerId peerId =
+        participant == participants().end() ? 0 : participant->first;
+    const std::string creator = participant == participants().end()
+                                    ? std::string{}
+                                    : participant->second.creator;
     appendLog(CollaborationLogEventType::OperationCommitted,
-              operation.clientId,
+              peerId,
               creator,
-              std::to_string(operation.revision));
+              std::to_string(operation.revision),
+              operation.participantId);
 
     auto patch = m_documentCodec.apply(operation.payload);
     if ( !patch.has_value() ) {
         appendLog(CollaborationLogEventType::Error,
-                  operation.clientId,
+                  peerId,
                   creator,
-                  "invalid_beatmap_operation");
+                  "invalid_beatmap_operation",
+                  operation.participantId);
         return;
     }
     m_hasDocument.store(true, std::memory_order_release);
-    const bool originatedLocally = operation.clientId == localPeerId();
+    const bool originatedLocally = operation.participantId == m_participantId &&
+                                   operation.sessionId == m_operationSessionId;
     bool       reapplyLocalState = false;
     if ( originatedLocally ) {
         std::lock_guard lock(m_localOperationMutex);
@@ -766,9 +817,10 @@ void CollaborationRoom::handleCommittedOperation(
         auto beatmap = materializeRebasedLocalBeatmap();
         if ( !beatmap ) {
             appendLog(CollaborationLogEventType::Error,
-                      operation.clientId,
+                      peerId,
                       creator,
-                      "invalid_beatmap_document");
+                      "invalid_beatmap_document",
+                      operation.participantId);
             return;
         }
         m_applyBeatmapCallback(std::move(beatmap),

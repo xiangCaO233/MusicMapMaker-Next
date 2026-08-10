@@ -260,7 +260,7 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
     }
 
     const auto& viewports     = room->participantViewports();
-    const auto& creators      = room->participants();
+    const auto& participants  = room->participants();
     const auto  localId       = room->localPeerId();
     const float markerMaximum = std::max(1.0F, innerWidth * 0.35F);
     const float markerSize =
@@ -270,7 +270,8 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
     const ImU32 markerOutlineColor = ImGui::GetColorU32(ImGuiCol_Border);
     drawList->PushClipRect(layout.railMin, layout.railMax, true);
     for ( const auto& [peerId, viewport] : viewports ) {
-        if ( peerId == localId || !creators.contains(peerId) ) {
+        const auto participant = participants.find(peerId);
+        if ( peerId == localId || participant == participants.end() ) {
             continue;
         }
         const auto markerY = previewDensityYAtTime(viewport.visualTime,
@@ -281,9 +282,10 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
             continue;
         }
 
-        const float y     = static_cast<float>(*markerY);
-        const ImU32 color = collaborationPeerColor(peerId, 255);
-        const float tipX  = layout.innerMax.x - markerSize;
+        const float y = static_cast<float>(*markerY);
+        const ImU32 color =
+            collaborationPeerColor(participant->second.participantId, 255);
+        const float tipX = layout.innerMax.x - markerSize;
         drawList->AddLine({ layout.innerMin.x, y },
                           { tipX, y },
                           markerOutlineColor,

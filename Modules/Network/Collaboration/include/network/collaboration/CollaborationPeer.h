@@ -77,9 +77,17 @@ public:
     /// @return `isHost` 配置值。
     [[nodiscard]] bool isHost() const;
 
-    /// @brief 返回当前 Peer 的稳定客户端标识。
-    /// @return 当前客户端 PeerId。
+    /// @brief 返回当前连接的临时路由槽位。
+    /// @return 当前连接 PeerId。
     [[nodiscard]] PeerId localPeerId() const;
+
+    /// @brief 返回当前协作者的持久化稳定标识。
+    /// @return 不随 PeerId 复用或重连变化的 ParticipantId。
+    [[nodiscard]] const ParticipantId& localParticipantId() const;
+
+    /// @brief 返回当前加入房间流程的操作会话标识。
+    /// @return 精确区分重连前后请求序列的 OperationSessionId。
+    [[nodiscard]] const OperationSessionId& localSessionId() const;
 
     /// @brief 返回已经连续应用到本地模型的版本。
     /// @return 当前连续版本。
@@ -89,10 +97,10 @@ public:
     /// @return 当前累计统计。
     [[nodiscard]] const CollaborationPeerStats& stats() const;
 
-    /// @brief 返回全部已知客户端的 Creator 展示身份。
-    /// @return 以内部 PeerId 索引的只读身份表。
-    [[nodiscard]] const std::unordered_map<PeerId, std::string>&
-    participantCreators() const;
+    /// @brief 返回全部已知连接的稳定协作者身份。
+    /// @return 以临时 PeerId 索引的只读身份表。
+    [[nodiscard]] const std::unordered_map<PeerId, ParticipantIdentity>&
+    participantIdentities() const;
 
     /// @brief 返回全部已经发布主画布位置的客户端状态。
     /// @return 以 PeerId 索引的最新只读视口状态表。
@@ -100,10 +108,15 @@ public:
     participantViewports() const;
 
     /// @brief 房主登记一个可提交和接收增量操作的访客。
-    /// @param peerId 访客标识。
+    /// @param peerId 访客本次连接的路由槽位。
+    /// @param participantId 访客不随重连变化的稳定标识。
+    /// @param sessionId 访客本次加入流程的操作会话标识。
     /// @param creator 访客在连接阶段提交的 Creator 展示身份。
-    /// @return 当前 Peer 是房主且标识合法时返回 true。
-    [[nodiscard]] bool addParticipant(PeerId peerId, std::string creator);
+    /// @return 当前 Peer 是房主且全部身份互不冲突时返回 true。
+    [[nodiscard]] bool addParticipant(PeerId             peerId,
+                                      ParticipantId      participantId,
+                                      OperationSessionId sessionId,
+                                      std::string        creator);
 
     /// @brief 更新房主供新加入客户端直接追平的完整状态快照。
     /// @param payload 可独立恢复的完整谱面负载。
@@ -177,7 +190,7 @@ private:
 
     /// @brief 访客接收房主广播的身份离开通知。
     /// @param senderId 传输层确认的发送方。
-    /// @param participantLeft 已离开的内部客户端标识。
+    /// @param participantLeft 已离开的临时路由槽位。
     void handleParticipantLeft(PeerId                 senderId,
                                const ParticipantLeft& participantLeft);
 
@@ -239,14 +252,15 @@ private:
     std::unordered_set<PeerId> m_participants;
     /// @brief 房主尚未排序提交的本地和远端请求。
     std::deque<EditRequest> m_pendingRequests;
-    /// @brief 房主为每个客户端接受的最高请求序号。
-    std::unordered_map<PeerId, std::uint64_t> m_lastAcceptedSequence;
+    /// @brief 房主为每个加入会话接受的最高请求序号。
+    std::unordered_map<OperationSessionId, std::uint64_t>
+        m_lastAcceptedSequence;
     /// @brief 房主保留的有界已提交操作日志。
     std::deque<CommittedOperation> m_journal;
     /// @brief 房主记录的各访客最高连续确认版本。
     std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
-    /// @brief 当前客户端已知的 PeerId 到 Creator 展示身份映射。
-    std::unordered_map<PeerId, std::string> m_participantCreators;
+    /// @brief 当前客户端已知的 PeerId 到稳定协作者身份映射。
+    std::unordered_map<PeerId, ParticipantIdentity> m_participantIdentities;
     /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
     std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
     /// @brief 房主最近一次可独立恢复的完整谱面快照。

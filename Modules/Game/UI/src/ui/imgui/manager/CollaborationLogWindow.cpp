@@ -243,10 +243,13 @@ std::string CollaborationLogWindow::formatEntry(
 {
     const double seconds =
         static_cast<double>(entry.elapsedMilliseconds) / 1000.0;
+    const std::string stableLabel = entry.participantId.empty()
+                                        ? fmt::format("#{}", entry.peerId)
+                                        : entry.participantId.substr(0, 8);
     const std::string actor =
         entry.creator.empty()
-            ? fmt::format("#{}", entry.peerId)
-            : fmt::format("{} (#{})", entry.creator, entry.peerId);
+            ? stableLabel
+            : fmt::format("{} ({})", entry.creator, stableLabel);
     const char* formatKey = "ui.collaboration.log.error_fmt";
     switch ( entry.type ) {
     case Network::Collaboration::CollaborationLogEventType::RoomStarted:

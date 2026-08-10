@@ -28,8 +28,37 @@ using MMM::Network::Collaboration::encodeCollaborationMessage;
 
 /// @brief 测试中的客户端总数。
 constexpr std::size_t PEER_COUNT = 8;
-/// @brief 房主使用的稳定客户端标识。
+/// @brief 房主使用的固定路由槽位。
 constexpr PeerId HOST_ID = 1;
+
+/// @brief 为测试 Peer 构造固定长度且可读的稳定标识。
+/// @param peerId 测试连接槽位。
+/// @param discriminator 区分参与者标识和操作会话标识的十六进制字符。
+/// @return 满足线上协议格式的 32 字符小写十六进制标识。
+[[nodiscard]] std::string makeTestStableId(PeerId peerId, char discriminator)
+{
+    constexpr std::string_view DIGITS = "0123456789abcdef";
+    std::string                identity(32U, '0');
+    identity.front() = discriminator;
+    for ( std::size_t index = identity.size(); index > 1U; --index ) {
+        identity[index - 1U] = DIGITS[peerId & 0xFU];
+        peerId >>= 4U;
+    }
+    return identity;
+}
+
+/// @brief 填充 Peer 测试所需的三层身份。
+/// @param config 待填充配置。
+/// @param peerId 本次连接路由槽位。
+/// @param hostPeerId 房主路由槽位。
+void setTestPeerIdentity(CollaborationPeerConfig& config, PeerId peerId,
+                         PeerId hostPeerId = HOST_ID)
+{
+    config.peerId        = peerId;
+    config.hostPeerId    = hostPeerId;
+    config.participantId = makeTestStableId(peerId, 'a');
+    config.sessionId     = makeTestStableId(peerId, 'b');
+}
 
 /// @brief 为指定客户端和局部序号生成唯一规范化操作负载。
 /// @param peerId 发起客户端标识。
@@ -91,11 +120,27 @@ void pumpPeers(CollaborationPeer&                               host,
     const CollaborationPeer&                               host,
     const std::vector<std::unique_ptr<CollaborationPeer>>& guests)
 {
-    if ( host.participantCreators().size() != PEER_COUNT ) {
+    if ( host.participantIdentities().size() != PEER_COUNT ) {
         return false;
     }
     return std::all_of(guests.begin(), guests.end(), [&](const auto& guest) {
-        return guest->participantCreators() == host.participantCreators();
+        const auto& guestIdentities = guest->participantIdentities();
+        if ( guestIdentities.size() != host.participantIdentities().size() ) {
+            return false;
+        }
+        return std::all_of(
+            host.participantIdentities().begin(),
+            host.participantIdentities().end(),
+            [&guestIdentities](const auto& entry) {
+                const auto guestIdentity = guestIdentities.find(entry.first);
+                return guestIdentity != guestIdentities.end() &&
+                       guestIdentity->second.peerId == entry.second.peerId &&
+                       guestIdentity->second.participantId ==
+                           entry.second.participantId &&
+                       guestIdentity->second.sessionId ==
+                           entry.second.sessionId &&
+                       guestIdentity->second.creator == entry.second.creator;
+            });
     });
 }
 
@@ -134,10 +179,9 @@ void pumpPeers(CollaborationPeer&                               host,
     std::array<std::vector<ByteBuffer>, PEER_COUNT> models;
 
     CollaborationPeerConfig hostConfig;
-    hostConfig.clientId = HOST_ID;
-    hostConfig.hostId   = HOST_ID;
-    hostConfig.creator  = "Host Creator";
-    hostConfig.isHost   = true;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host Creator";
+    hostConfig.isHost  = true;
     CollaborationPeer host(hostConfig,
                            hub.createEndpoint(HOST_ID),
                            [&models](const CommittedOperation& operation) {
@@ -146,16 +190,18 @@ void pumpPeers(CollaborationPeer&                               host,
     if ( !host.isValid() ) {
         return false;
     }
-    if ( host.addParticipant(99, " \t") ) {
+    if ( host.addParticipant(99,
+                             makeTestStableId(99, 'a'),
+                             makeTestStableId(99, 'b'),
+                             " \t") ) {
         return false;
     }
 
     {
         CollaborationPeerConfig invalidConfig;
-        invalidConfig.clientId = 99;
-        invalidConfig.hostId   = 99;
-        invalidConfig.creator  = "";
-        invalidConfig.isHost   = true;
+        setTestPeerIdentity(invalidConfig, 99, 99);
+        invalidConfig.creator = "";
+        invalidConfig.isHost  = true;
         CollaborationPeer invalidPeer(
             invalidConfig, hub.createEndpoint(99), nullptr);
         if ( invalidPeer.isValid() ) {
@@ -168,23 +214,27 @@ void pumpPeers(CollaborationPeer&                               host,
     for ( std::size_t index = 1; index < PEER_COUNT; ++index ) {
         const PeerId            peerId = static_cast<PeerId>(index + 1);
         CollaborationPeerConfig guestConfig;
-        guestConfig.clientId = peerId;
-        guestConfig.hostId   = HOST_ID;
-        guestConfig.creator  = "Guest " + std::to_string(peerId);
-        guestConfig.isHost   = false;
-        auto guest           = std::make_unique<CollaborationPeer>(
+        setTestPeerIdentity(guestConfig, peerId);
+        guestConfig.creator = "Guest " + std::to_string(peerId);
+        guestConfig.isHost  = false;
+        auto guest          = std::make_unique<CollaborationPeer>(
             guestConfig,
             hub.createEndpoint(peerId),
             [&models, index](const CommittedOperation& operation) {
                 models[index].push_back(operation.payload);
             });
         if ( !guest->isValid() ||
-             !host.addParticipant(peerId, guestConfig.creator) ) {
+             !host.addParticipant(peerId,
+                                  guestConfig.participantId,
+                                  guestConfig.sessionId,
+                                  guestConfig.creator) ) {
             return false;
         }
         guests.push_back(std::move(guest));
     }
     if ( host.addParticipant(static_cast<PeerId>(PEER_COUNT + 1),
+                             makeTestStableId(PEER_COUNT + 1, 'a'),
+                             makeTestStableId(PEER_COUNT + 1, 'b'),
                              "Overflow Guest") ) {
         return false;
     }
@@ -267,21 +317,21 @@ void pumpPeers(CollaborationPeer&                               host,
     }
 
     host.removeParticipant(HOST_ID);
-    if ( !host.participantCreators().contains(HOST_ID) ) {
+    if ( !host.participantIdentities().contains(HOST_ID) ) {
         return false;
     }
 
     constexpr PeerId DEPARTING_PEER_ID = PEER_COUNT;
     host.removeParticipant(DEPARTING_PEER_ID);
     pumpPeers(host, guests, 4);
-    if ( host.participantCreators().contains(DEPARTING_PEER_ID) ) {
+    if ( host.participantIdentities().contains(DEPARTING_PEER_ID) ) {
         return false;
     }
     if ( host.participantViewports().contains(DEPARTING_PEER_ID) ) {
         return false;
     }
     for ( std::size_t index = 0; index + 1 < guests.size(); ++index ) {
-        if ( guests[index]->participantCreators().contains(
+        if ( guests[index]->participantIdentities().contains(
                  DEPARTING_PEER_ID) ) {
             return false;
         }
@@ -298,7 +348,8 @@ void pumpPeers(CollaborationPeer&                               host,
 [[nodiscard]] bool testProtocolBounds()
 {
     MMM::Network::Collaboration::EditRequest request;
-    request.clientId       = 7;
+    request.participantId  = makeTestStableId(7, 'a');
+    request.sessionId      = makeTestStableId(7, 'b');
     request.clientSequence = 11;
     request.payload        = { 1, 2, 3, 4 };
 
@@ -313,7 +364,8 @@ void pumpPeers(CollaborationPeer&                               host,
     const auto* decodedRequest =
         std::get_if<MMM::Network::Collaboration::EditRequest>(&decoded.value());
     if ( decodedRequest == nullptr ||
-         decodedRequest->clientId != request.clientId ||
+         decodedRequest->participantId != request.participantId ||
+         decodedRequest->sessionId != request.sessionId ||
          decodedRequest->clientSequence != request.clientSequence ||
          decodedRequest->payload != request.payload ) {
         return false;
@@ -325,7 +377,10 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
-    ParticipantIdentity identity{ 7, "  Creator Test  " };
+    ParticipantIdentity identity{ 7,
+                                  makeTestStableId(7, 'a'),
+                                  makeTestStableId(7, 'b'),
+                                  "  Creator Test  " };
     auto identityEncoded = encodeCollaborationMessage(identity, 4);
     if ( !identityEncoded.has_value() ) {
         return false;
@@ -336,12 +391,16 @@ void pumpPeers(CollaborationPeer&                               host,
         identityDecoded.has_value()
             ? std::get_if<ParticipantIdentity>(&identityDecoded.value())
             : nullptr;
-    if ( decodedIdentity == nullptr || decodedIdentity->clientId != 7 ||
+    if ( decodedIdentity == nullptr || decodedIdentity->peerId != 7 ||
+         decodedIdentity->participantId != identity.participantId ||
+         decodedIdentity->sessionId != identity.sessionId ||
          decodedIdentity->creator != "Creator Test" ) {
         return false;
     }
 
-    ParticipantIdentity invalidIdentity{ 7, " \n" };
+    ParticipantIdentity invalidIdentity{
+        7, makeTestStableId(7, 'a'), makeTestStableId(7, 'b'), " \n"
+    };
     auto invalidIdentityResult = encodeCollaborationMessage(invalidIdentity, 4);
     if ( invalidIdentityResult.has_value() ||
          invalidIdentityResult.error() !=
@@ -365,7 +424,7 @@ void pumpPeers(CollaborationPeer&                               host,
     }
 
     ParticipantViewport viewport{
-        .clientId              = 7,
+        .peerId                = 7,
         .sequence              = 19,
         .playbackTime          = 18.25,
         .visualTime            = 18.35,
@@ -383,7 +442,7 @@ void pumpPeers(CollaborationPeer&                               host,
     const auto* decodedViewport =
         viewportDecoded ? std::get_if<ParticipantViewport>(&*viewportDecoded)
                         : nullptr;
-    if ( !decodedViewport || decodedViewport->clientId != viewport.clientId ||
+    if ( !decodedViewport || decodedViewport->peerId != viewport.peerId ||
          decodedViewport->sequence != viewport.sequence ||
          decodedViewport->playbackTime != viewport.playbackTime ||
          decodedViewport->visibleTimeStart != viewport.visibleTimeStart ||
@@ -504,10 +563,9 @@ void pumpPeers(CollaborationPeer&                               host,
         guestResources;
 
     CollaborationPeerConfig hostConfig;
-    hostConfig.clientId = HOST_ID;
-    hostConfig.hostId   = HOST_ID;
-    hostConfig.creator  = "Host";
-    hostConfig.isHost   = true;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host";
+    hostConfig.isHost  = true;
     CollaborationPeer host(
         hostConfig,
         hub.createEndpoint(HOST_ID),
@@ -519,10 +577,9 @@ void pumpPeers(CollaborationPeer&                               host,
         });
 
     CollaborationPeerConfig guestConfig;
-    guestConfig.clientId = GUEST_ID;
-    guestConfig.hostId   = HOST_ID;
-    guestConfig.creator  = "Guest";
-    guestConfig.isHost   = false;
+    setTestPeerIdentity(guestConfig, GUEST_ID);
+    guestConfig.creator = "Guest";
+    guestConfig.isHost  = false;
     CollaborationPeer guest(
         guestConfig,
         hub.createEndpoint(GUEST_ID),
@@ -532,7 +589,12 @@ void pumpPeers(CollaborationPeer&                               host,
             const MMM::Network::Collaboration::CollaborationMessage& message) {
             guestResources.push_back(message);
         });
-    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
     guest.update();
 
     const MMM::Network::Collaboration::ResourceRequest request{
@@ -565,34 +627,38 @@ void pumpPeers(CollaborationPeer&                               host,
     return true;
 }
 
-/// @brief 验证复用 PeerId 的新连接不会继承旧连接的请求序号和待提交操作。
-/// @return 旧连接状态被清理且新连接首个操作正常提交时返回 true。
+/// @brief 验证稳定协作者重连时复用 PeerId 仍按新操作会话独立去重。
+/// @return 旧请求被清理且提交来源保留稳定身份和新会话时返回 true。
 [[nodiscard]] bool testReusedPeerIdStartsFreshRequestSequence()
 {
-    constexpr PeerId        GUEST_ID = 2;
-    LoopbackTransportHub    hub;
-    std::vector<ByteBuffer> hostModel;
+    constexpr PeerId                GUEST_ID = 2;
+    LoopbackTransportHub            hub;
+    std::vector<CommittedOperation> hostOperations;
 
     CollaborationPeerConfig hostConfig;
-    hostConfig.clientId                    = HOST_ID;
-    hostConfig.hostId                      = HOST_ID;
+    setTestPeerIdentity(hostConfig, HOST_ID);
     hostConfig.creator                     = "Host";
     hostConfig.isHost                      = true;
     hostConfig.limits.maxRequestsPerUpdate = 1;
-    CollaborationPeer host(hostConfig,
-                           hub.createEndpoint(HOST_ID),
-                           [&hostModel](const CommittedOperation& operation) {
-                               hostModel.push_back(operation.payload);
-                           });
+    CollaborationPeer host(
+        hostConfig,
+        hub.createEndpoint(HOST_ID),
+        [&hostOperations](const CommittedOperation& operation) {
+            hostOperations.push_back(operation);
+        });
 
     CollaborationPeerConfig guestConfig;
-    guestConfig.clientId = GUEST_ID;
-    guestConfig.hostId   = HOST_ID;
-    guestConfig.creator  = "Guest";
-    guestConfig.isHost   = false;
-    auto guest           = std::make_unique<CollaborationPeer>(
+    setTestPeerIdentity(guestConfig, GUEST_ID);
+    guestConfig.creator = "Guest";
+    guestConfig.isHost  = false;
+    auto guest          = std::make_unique<CollaborationPeer>(
         guestConfig, hub.createEndpoint(GUEST_ID), nullptr);
-    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
 
     const auto firstOperation  = makeOperation(GUEST_ID, 1);
     const auto queuedOperation = makeOperation(GUEST_ID, 2);
@@ -603,16 +669,22 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
     host.update();
-    if ( host.appliedRevision() != 1 || hostModel.size() != 1U ||
-         hostModel.front() != firstOperation ) {
+    if ( host.appliedRevision() != 1 || hostOperations.size() != 1U ||
+         hostOperations.front().payload != firstOperation ) {
         return false;
     }
 
     host.removeParticipant(GUEST_ID);
     guest.reset();
-    guest = std::make_unique<CollaborationPeer>(
+    guestConfig.sessionId = makeTestStableId(GUEST_ID, 'c');
+    guest                 = std::make_unique<CollaborationPeer>(
         guestConfig, hub.createEndpoint(GUEST_ID), nullptr);
-    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
 
     const auto reconnectedOperation = makeOperation(GUEST_ID, 3);
     if ( guest->submitOperation(reconnectedOperation) !=
@@ -620,8 +692,56 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
     host.update();
-    return host.appliedRevision() == 2 && hostModel.size() == 2U &&
-           hostModel.back() == reconnectedOperation;
+    const auto identity = host.participantIdentities().find(GUEST_ID);
+    return host.appliedRevision() == 2 && hostOperations.size() == 2U &&
+           hostOperations.back().payload == reconnectedOperation &&
+           hostOperations.back().participantId == guestConfig.participantId &&
+           hostOperations.back().sessionId == guestConfig.sessionId &&
+           identity != host.participantIdentities().end() &&
+           identity->second.participantId == guestConfig.participantId &&
+           identity->second.sessionId == guestConfig.sessionId;
+}
+
+/// @brief 验证房主拒绝同一稳定协作者或同一操作会话占用多个 PeerId。
+/// @return 身份冲突均被拒绝且原身份保持不变时返回 true。
+[[nodiscard]] bool testStableIdentityConflictsAreRejected()
+{
+    constexpr PeerId     FIRST_GUEST_ID  = 2;
+    constexpr PeerId     SECOND_GUEST_ID = 3;
+    LoopbackTransportHub hub;
+
+    CollaborationPeerConfig hostConfig;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host";
+    hostConfig.isHost  = true;
+    CollaborationPeer host(hostConfig, hub.createEndpoint(HOST_ID), nullptr);
+
+    const auto participantId = makeTestStableId(FIRST_GUEST_ID, 'a');
+    const auto sessionId     = makeTestStableId(FIRST_GUEST_ID, 'b');
+    if ( !host.addParticipant(
+             FIRST_GUEST_ID, participantId, sessionId, "First Guest") ||
+         !host.addParticipant(
+             FIRST_GUEST_ID, participantId, sessionId, "First Guest") ||
+         host.addParticipant(SECOND_GUEST_ID,
+                             participantId,
+                             makeTestStableId(SECOND_GUEST_ID, 'b'),
+                             "Duplicate Participant") ||
+         host.addParticipant(SECOND_GUEST_ID,
+                             makeTestStableId(SECOND_GUEST_ID, 'a'),
+                             sessionId,
+                             "Duplicate Session") ||
+         host.addParticipant(FIRST_GUEST_ID,
+                             makeTestStableId(SECOND_GUEST_ID, 'a'),
+                             makeTestStableId(SECOND_GUEST_ID, 'b'),
+                             "Changed Identity") ) {
+        return false;
+    }
+
+    const auto identity = host.participantIdentities().find(FIRST_GUEST_ID);
+    return host.participantIdentities().size() == 2U &&
+           identity != host.participantIdentities().end() &&
+           identity->second.participantId == participantId &&
+           identity->second.sessionId == sessionId;
 }
 
 /// @brief 验证迟加入客户端可用房主完整快照直接越过已裁剪的增量日志。
@@ -633,8 +753,7 @@ void pumpPeers(CollaborationPeer&                               host,
     std::vector<ByteBuffer> guestModel;
 
     CollaborationPeerConfig hostConfig;
-    hostConfig.clientId                    = HOST_ID;
-    hostConfig.hostId                      = HOST_ID;
+    setTestPeerIdentity(hostConfig, HOST_ID);
     hostConfig.creator                     = "Host";
     hostConfig.isHost                      = true;
     hostConfig.limits.maxJournalOperations = 2;
@@ -664,16 +783,20 @@ void pumpPeers(CollaborationPeer&                               host,
     }
 
     CollaborationPeerConfig guestConfig;
-    guestConfig.clientId = GUEST_ID;
-    guestConfig.hostId   = HOST_ID;
-    guestConfig.creator  = "Late Guest";
-    guestConfig.isHost   = false;
+    setTestPeerIdentity(guestConfig, GUEST_ID);
+    guestConfig.creator = "Late Guest";
+    guestConfig.isHost  = false;
     CollaborationPeer guest(guestConfig,
                             hub.createEndpoint(GUEST_ID),
                             [&guestModel](const CommittedOperation& operation) {
                                 guestModel.push_back(operation.payload);
                             });
-    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
     for ( std::size_t round = 0; round < 4; ++round ) {
         guest.update();
         host.update();
@@ -691,24 +814,27 @@ void pumpPeers(CollaborationPeer&                               host,
     std::vector<ByteBuffer> guestModel;
 
     CollaborationPeerConfig hostConfig;
-    hostConfig.clientId                    = HOST_ID;
-    hostConfig.hostId                      = HOST_ID;
+    setTestPeerIdentity(hostConfig, HOST_ID);
     hostConfig.creator                     = "Host";
     hostConfig.isHost                      = true;
     hostConfig.limits.maxJournalOperations = 2;
     CollaborationPeer host(hostConfig, hub.createEndpoint(HOST_ID), nullptr);
 
     CollaborationPeerConfig guestConfig;
-    guestConfig.clientId = GUEST_ID;
-    guestConfig.hostId   = HOST_ID;
-    guestConfig.creator  = "Slow Guest";
-    guestConfig.isHost   = false;
+    setTestPeerIdentity(guestConfig, GUEST_ID);
+    guestConfig.creator = "Slow Guest";
+    guestConfig.isHost  = false;
     CollaborationPeer guest(guestConfig,
                             hub.createEndpoint(GUEST_ID),
                             [&guestModel](const CommittedOperation& operation) {
                                 guestModel.push_back(operation.payload);
                             });
-    if ( !host.addParticipant(GUEST_ID, guestConfig.creator) ) return false;
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
     guest.update();
 
     hub.dropNextPacket(HOST_ID, GUEST_ID);
@@ -743,5 +869,6 @@ int main()
     if ( !testLateJoinStateSnapshot() ) return 4;
     if ( !testTrimmedJournalSnapshotFallback() ) return 5;
     if ( !testReusedPeerIdStartsFreshRequestSequence() ) return 6;
+    if ( !testStableIdentityConflictsAreRejected() ) return 7;
     return 0;
 }

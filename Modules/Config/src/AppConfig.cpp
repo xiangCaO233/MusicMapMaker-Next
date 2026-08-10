@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -19,6 +20,7 @@ AppConfig& AppConfig::instance()
 }
 
 AppConfig::AppConfig()
+    : m_collaborationParticipantId(makeCollaborationStableId())
 {
     // 初始化默认值
     reset();
@@ -74,13 +76,28 @@ bool AppConfig::load(const std::filesystem::path& path)
         return false;
     }
 
+    std::string serializedCollaborationParticipantId;
+    if ( const auto identity = j.find("collaborationParticipantId");
+         identity != j.end() && identity->is_string() ) {
+        serializedCollaborationParticipantId = identity->get<std::string>();
+    }
+    const auto collaborationParticipantId =
+        normalizeCollaborationStableId(serializedCollaborationParticipantId);
+    const bool generatedCollaborationParticipantId =
+        collaborationParticipantId.empty();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_editorConfig = j.get<EditorConfig>();
+        if ( !generatedCollaborationParticipantId ) {
+            m_collaborationParticipantId = collaborationParticipantId;
+        } else if ( m_collaborationParticipantId.empty() ) {
+            m_collaborationParticipantId = makeCollaborationStableId();
+        }
     }
 
     XINFO("Config loaded successfully from: {}", pathToUtf8(finalPath));
-    if ( useDefaultPath && finalPath != getDefaultConfigPath() ) {
+    if ( useDefaultPath && (finalPath != getDefaultConfigPath() ||
+                            generatedCollaborationParticipantId) ) {
         save();
     }
     return true;
@@ -106,7 +123,8 @@ bool AppConfig::save(const std::filesystem::path& path) const
     nlohmann::json j;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        j = m_editorConfig;
+        j                               = m_editorConfig;
+        j["collaborationParticipantId"] = m_collaborationParticipantId;
     }
 
     std::filesystem::path tempPath = finalPath;

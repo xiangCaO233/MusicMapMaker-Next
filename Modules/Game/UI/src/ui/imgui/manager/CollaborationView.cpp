@@ -128,20 +128,21 @@ void drawRoomInfoLabel(const char* label)
 /// @param creator 成员 Creator 展示名。
 /// @warning UI 热路径：成员表可见时每帧最多调用 8 次；只绘制内存状态，
 /// 不执行网络发送或文件系统访问。
-void drawParticipantRow(Network::Collaboration::CollaborationRoom& room,
-                        Network::Collaboration::PeerId             peerId,
-                        const std::string&                         creator)
+void drawParticipantRow(
+    Network::Collaboration::CollaborationRoom&         room,
+    Network::Collaboration::PeerId                     peerId,
+    const Network::Collaboration::ParticipantIdentity& identity)
 {
     const bool local     = peerId == room.localPeerId();
     const bool following = room.followedPeerId() == peerId;
 
-    ImGui::PushID(static_cast<int>(peerId));
+    ImGui::PushID(identity.participantId.c_str());
     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight());
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(creator.c_str());
+    ImGui::TextUnformatted(identity.creator.c_str());
     ImGui::SameLine();
-    ImGui::TextDisabled("(#%llu)", static_cast<unsigned long long>(peerId));
+    ImGui::TextDisabled("(%.*s)", 8, identity.participantId.c_str());
 
     ImGui::TableSetColumnIndex(1);
     if ( local ) {
@@ -356,11 +357,13 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                             ImVec2(-1.0F, 0.0F)) ) {
             if ( applyServerEndpoint() ) {
                 Network::Collaboration::CollaborationHostRoomConfig config;
-                config.creator  = Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .defaultCreator;
-                config.roomName = m_roomName.data();
-                config.endpoint = m_room->serverEndpoint();
+                config.creator       = Config::AppConfig::instance()
+                                           .getEditorSettings()
+                                           .defaultCreator;
+                config.participantId = Config::AppConfig::instance()
+                                           .getCollaborationParticipantId();
+                config.roomName      = m_roomName.data();
+                config.endpoint      = m_room->serverEndpoint();
                 static_cast<void>(m_room->startHost(std::move(config)));
             }
         }
@@ -465,8 +468,10 @@ void CollaborationView::beginGuestJoin(std::string creator, std::string roomId,
 {
     if ( !m_room || m_pendingGuestJoin || m_room->isActive() ) return;
 
-    auto pending             = std::make_unique<PendingGuestJoin>();
-    pending->config.creator  = std::move(creator);
+    auto pending            = std::make_unique<PendingGuestJoin>();
+    pending->config.creator = std::move(creator);
+    pending->config.participantId =
+        Config::AppConfig::instance().getCollaborationParticipantId();
     pending->config.roomId   = std::move(roomId);
     pending->config.roomName = std::move(roomName);
     pending->config.endpoint = m_room->serverEndpoint();
@@ -772,9 +777,9 @@ void CollaborationView::drawActiveRoom()
                 drawParticipantRow(
                     *m_room, localPeer->first, localPeer->second);
             }
-            for ( const auto& [peerId, creator] : participants ) {
+            for ( const auto& [peerId, identity] : participants ) {
                 if ( peerId != m_room->localPeerId() ) {
-                    drawParticipantRow(*m_room, peerId, creator);
+                    drawParticipantRow(*m_room, peerId, identity);
                 }
             }
             ImGui::EndTable();

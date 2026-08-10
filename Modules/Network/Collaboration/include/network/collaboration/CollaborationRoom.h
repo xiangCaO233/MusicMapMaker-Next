@@ -56,6 +56,8 @@ struct CollaborationLogEntry {
     CollaborationLogEventType type = CollaborationLogEventType::Error;
     /// @brief 事件关联 PeerId。
     PeerId peerId = 0;
+    /// @brief 事件关联且不随 PeerId 复用变化的稳定协作者标识。
+    ParticipantId participantId;
     /// @brief 事件关联 Creator。
     std::string creator;
     /// @brief 事件附加详情。
@@ -66,6 +68,8 @@ struct CollaborationLogEntry {
 struct CollaborationHostRoomConfig {
     /// @brief 房主 Creator。
     std::string creator;
+    /// @brief 房主应用配置持久化的稳定协作者标识。
+    ParticipantId participantId;
     /// @brief 公网目录展示的房间名称。
     std::string roomName;
     /// @brief 中心服务器地址、信令端口与 TLS 配置。
@@ -76,6 +80,8 @@ struct CollaborationHostRoomConfig {
 struct CollaborationJoinRoomConfig {
     /// @brief 访客 Creator。
     std::string creator;
+    /// @brief 访客应用配置持久化的稳定协作者标识。
+    ParticipantId participantId;
     /// @brief 从公网目录选择的房间标识。
     std::string roomId;
     /// @brief 目录中显示的房间名称。
@@ -224,8 +230,8 @@ public:
     [[nodiscard]] const std::string& directoryError() const;
     /// @brief 获取当前客户端 PeerId。
     [[nodiscard]] PeerId localPeerId() const;
-    /// @brief 获取当前已知参与者 Creator 表。
-    [[nodiscard]] const std::unordered_map<PeerId, std::string>&
+    /// @brief 获取当前已知参与者的稳定身份表。
+    [[nodiscard]] const std::unordered_map<PeerId, ParticipantIdentity>&
     participants() const;
     /// @brief 获取等待房主批准或拒绝的访客请求。
     [[nodiscard]] const std::vector<CollaborationPendingJoinRequest>&
@@ -253,7 +259,8 @@ private:
     void updateDirectory();
     /// @brief 记录结构化协作日志。
     void appendLog(CollaborationLogEventType type, PeerId peerId,
-                   std::string creator, std::string detail);
+                   std::string creator, std::string detail,
+                   ParticipantId participantId = {});
     /// @brief 处理传输层生命周期事件。
     void handleTransportEvent(const WebRtcTransportEvent& event);
     /// @brief 在访客取得 PeerId 后创建协作状态机。
@@ -302,6 +309,10 @@ private:
     std::string m_directoryError;
     /// @brief 当前 Creator。
     std::string m_creator;
+    /// @brief 当前应用配置持久化的稳定协作者标识。
+    ParticipantId m_participantId;
+    /// @brief 当前加入房间流程生成且不会复用的操作会话标识。
+    OperationSessionId m_operationSessionId;
     /// @brief 最近错误。
     std::string m_lastError;
     /// @brief 访客取得 PeerId 前暂存的传输所有权。
@@ -356,12 +367,12 @@ private:
     std::chrono::steady_clock::time_point m_nextViewportPublish;
     /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。
     std::uint32_t m_viewportPublishRateHz = 10;
-    /// @brief 用户列表选择的持续跟随目标，0 表示未跟随。
-    PeerId m_followedPeerId = 0;
+    /// @brief 用户列表选择的持续跟随稳定身份；为空表示未跟随。
+    ParticipantId m_followedParticipantId;
     /// @brief 尚未获准建立 P2P 连接的访客请求。
     std::vector<CollaborationPendingJoinRequest> m_pendingJoinRequests;
     /// @brief 无 Peer 时返回的空参与者表。
-    std::unordered_map<PeerId, std::string> m_emptyParticipants;
+    std::unordered_map<PeerId, ParticipantIdentity> m_emptyParticipants;
     /// @brief 无 Peer 时返回的空视口状态表。
     std::unordered_map<PeerId, ParticipantViewport> m_emptyViewports;
 };

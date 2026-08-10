@@ -47,6 +47,21 @@ constexpr auto EXTERNAL_TEST_TIMEOUT = std::chrono::seconds(30);
 /// @brief 验收房间中的访客数量。
 constexpr std::size_t GUEST_COUNT = 1;
 
+/// @brief 为真实 WebRTC 测试参与者生成确定的稳定身份。
+/// @param ordinal 当前测试房间内的身份序号。
+/// @return 满足协议格式的 32 字符小写十六进制标识。
+[[nodiscard]] std::string makeRoomTestParticipantId(std::size_t ordinal)
+{
+    constexpr std::string_view DIGITS = "0123456789abcdef";
+    std::string                identity(32U, '0');
+    identity.front() = 'd';
+    for ( std::size_t index = identity.size(); index > 1U; --index ) {
+        identity[index - 1U] = DIGITS[ordinal & 0xFU];
+        ordinal >>= 4U;
+    }
+    return identity;
+}
+
 /// @brief 为真实 WebRTC 资源测试创建并清理隔离目录。
 class ScopedRoomResourceDirectory
 {
@@ -275,9 +290,10 @@ bool testPublicDirectoryWebRtcRoom()
 
     CollaborationRoom           host;
     CollaborationHostRoomConfig hostConfig;
-    hostConfig.creator  = "Host Creator";
-    hostConfig.roomName = "Public WebRTC Test";
-    hostConfig.endpoint = endpoint;
+    hostConfig.creator       = "Host Creator";
+    hostConfig.participantId = makeRoomTestParticipantId(1);
+    hostConfig.roomName      = "Public WebRTC Test";
+    hostConfig.endpoint      = endpoint;
     if ( !host.startHost(hostConfig) ) return false;
     std::vector<std::unique_ptr<CollaborationRoom>> guests;
     if ( !pumpUntil(
@@ -314,10 +330,11 @@ bool testPublicDirectoryWebRtcRoom()
                 ++guestApplyCounts[index];
             });
         CollaborationJoinRoomConfig guestConfig;
-        guestConfig.creator  = "Guest " + std::to_string(index + 1);
-        guestConfig.roomId   = host.roomId();
-        guestConfig.roomName = host.roomName();
-        guestConfig.endpoint = endpoint;
+        guestConfig.creator       = "Guest " + std::to_string(index + 1);
+        guestConfig.participantId = makeRoomTestParticipantId(index + 2);
+        guestConfig.roomId        = host.roomId();
+        guestConfig.roomName      = host.roomName();
+        guestConfig.endpoint      = endpoint;
         if ( !guest->join(guestConfig) ) return false;
         guests.push_back(std::move(guest));
         if ( !pumpUntil(
@@ -524,9 +541,10 @@ bool testHostAdmissionControl()
 
     CollaborationRoom           host;
     CollaborationHostRoomConfig hostConfig;
-    hostConfig.creator  = "Admission Host";
-    hostConfig.roomName = "Admission Test";
-    hostConfig.endpoint = endpoint;
+    hostConfig.creator       = "Admission Host";
+    hostConfig.participantId = makeRoomTestParticipantId(1);
+    hostConfig.roomName      = "Admission Test";
+    hostConfig.endpoint      = endpoint;
     if ( !host.startHost(hostConfig) ) return false;
     std::vector<std::unique_ptr<CollaborationRoom>> guests;
     const auto failAdmission = [&host, &guests](std::string_view phase) {
@@ -548,13 +566,15 @@ bool testHostAdmissionControl()
         return failAdmission("publish");
     }
 
-    auto makeGuest = [&](std::string creator) {
+    std::size_t nextGuestIdentity = 2;
+    auto        makeGuest         = [&](std::string creator) {
         auto guest = std::make_unique<CollaborationRoom>();
         CollaborationJoinRoomConfig config;
-        config.creator  = std::move(creator);
-        config.roomId   = host.roomId();
-        config.roomName = host.roomName();
-        config.endpoint = endpoint;
+        config.creator       = std::move(creator);
+        config.participantId = makeRoomTestParticipantId(nextGuestIdentity++);
+        config.roomId        = host.roomId();
+        config.roomName      = host.roomName();
+        config.endpoint      = endpoint;
         if ( !guest->join(std::move(config)) ) {
             return std::unique_ptr<CollaborationRoom>{};
         }
@@ -682,9 +702,10 @@ bool testOneGuestResourceSync()
 
     CollaborationRoom           host;
     CollaborationHostRoomConfig hostConfig;
-    hostConfig.creator  = "Resource Host";
-    hostConfig.roomName = "Resource Test";
-    hostConfig.endpoint = endpoint;
+    hostConfig.creator       = "Resource Host";
+    hostConfig.participantId = makeRoomTestParticipantId(1);
+    hostConfig.roomName      = "Resource Test";
+    hostConfig.endpoint      = endpoint;
     host.prepareHostResources(project, beatmap);
     if ( !host.startHost(hostConfig) ) return false;
     std::vector<std::unique_ptr<CollaborationRoom>> guests;
@@ -701,6 +722,7 @@ bool testOneGuestResourceSync()
         });
     CollaborationJoinRoomConfig joinConfig;
     joinConfig.creator           = "Resource Guest";
+    joinConfig.participantId     = makeRoomTestParticipantId(2);
     joinConfig.roomId            = host.roomId();
     joinConfig.roomName          = host.roomName();
     joinConfig.endpoint          = endpoint;
@@ -870,9 +892,10 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
     }
 
     CollaborationHostRoomConfig hostConfig;
-    hostConfig.creator  = "Deployment Host";
-    hostConfig.roomName = "Public Deployment Probe";
-    hostConfig.endpoint = endpoint;
+    hostConfig.creator       = "Deployment Host";
+    hostConfig.participantId = makeRoomTestParticipantId(1);
+    hostConfig.roomName      = "Public Deployment Probe";
+    hostConfig.endpoint      = endpoint;
     if ( !host.startHost(hostConfig) ) return false;
 
     const bool roomDiscovered =
@@ -904,10 +927,11 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
         [&host](const auto& room) { return room.roomId == host.roomId(); });
     if ( roomIterator == directory.rooms().end() ) return false;
     CollaborationJoinRoomConfig guestConfig;
-    guestConfig.creator  = "Deployment Guest";
-    guestConfig.roomId   = roomIterator->roomId;
-    guestConfig.roomName = roomIterator->roomName;
-    guestConfig.endpoint = endpoint;
+    guestConfig.creator       = "Deployment Guest";
+    guestConfig.participantId = makeRoomTestParticipantId(2);
+    guestConfig.roomId        = roomIterator->roomId;
+    guestConfig.roomName      = roomIterator->roomName;
+    guestConfig.endpoint      = endpoint;
     if ( !guest.join(guestConfig) ) return false;
 
     if ( !pumpExternalUntil(

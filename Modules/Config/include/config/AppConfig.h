@@ -1,8 +1,10 @@
 #pragma once
 
 #include "EditorConfig.h"
+
 #include <filesystem>
 #include <mutex>
+#include <string>
 
 namespace MMM::Config
 {
@@ -29,6 +31,13 @@ public:
     const EditorSettings& getEditorSettings() const
     {
         return m_editorConfig.settings;
+    }
+
+    /// @brief 获取当前应用配置持久化的协作者稳定标识。
+    /// @return 不随房间 PeerId 或重连变化的 128 位十六进制标识。
+    [[nodiscard]] const std::string& getCollaborationParticipantId() const
+    {
+        return m_collaborationParticipantId;
     }
 
     /// @brief 从文件加载配置
@@ -88,7 +97,9 @@ private:
     /// @return 用户目录/.config/mmm/user_config.json。
     std::filesystem::path getDefaultConfigPath() const;
 
-    EditorConfig       m_editorConfig;
+    EditorConfig m_editorConfig;
+    /// @brief 当前应用配置持久化的协作者稳定标识。
+    std::string        m_collaborationParticipantId;
     mutable std::mutex m_mutex;
     int                m_deviceRefreshRate{ 60 };  // 默认60Hz
     float              m_nativeContentScale{ 1.0f };
