@@ -448,8 +448,9 @@ bool testPublicDirectoryWebRtcRoom()
     host.onBeatmapSynchronized(*hostModel);
     guests.front()->onBeatmapSynchronized(*guestModels.front());
 
-    auto guestEdit      = makeBeatmap(1250.0, "Host Creator");
-    guestModels.front() = guestEdit;
+    const auto guestApplyCountBeforeLocalEdit = guestApplyCounts.front();
+    auto       guestEdit = makeBeatmap(1250.0, "Host Creator");
+    guestModels.front()  = guestEdit;
     guests.front()->onBeatmapMutated(*guestEdit, BeatmapMutationFlags::Objects);
     const bool guestEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Creator") ) {
@@ -460,9 +461,14 @@ bool testPublicDirectoryWebRtcRoom()
                 return hasExpectedState(model, 1250.0, "Host Creator");
             });
     });
-    if ( !guestEditConverged ) {
-        XERROR("Guest edit failed to converge across {} participants",
-               host.participants().size());
+    if ( !guestEditConverged ||
+         guestApplyCounts.front() <= guestApplyCountBeforeLocalEdit ) {
+        XERROR(
+            "Guest edit failed to converge or refresh its local view: "
+            "participants={}, applyBefore={}, applyAfter={}",
+            host.participants().size(),
+            guestApplyCountBeforeLocalEdit,
+            guestApplyCounts.front());
         return false;
     }
 

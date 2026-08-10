@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 
 #include <atomic>
+#include <cmath>
 #include <memory>
 
 namespace
@@ -65,6 +66,47 @@ private:
     beatmap->m_baseMapMetadata.name        = "Collaboration Snapshot";
     beatmap->m_baseMapMetadata.track_count = 4;
     return beatmap;
+}
+
+/// @brief 判断会话中是否存在指定时间与轨道的非折线根 Note。
+/// @param session 待检查会话。
+/// @param timestamp 时间戳，单位秒。
+/// @param track 玩家轨道索引。
+/// @return 找到匹配物件时返回 true。
+[[nodiscard]] bool hasRootNote(const MMM::Logic::BeatmapSession& session,
+                               double timestamp, int track)
+{
+    const auto& context = session.getContext();
+    const auto  notes =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : notes ) {
+        const auto& note = notes.get<const MMM::Logic::NoteComponent>(entity);
+        if ( !note.m_isSubNote && note.m_type == MMM::NoteType::NOTE &&
+             std::abs(note.m_timestamp - timestamp) < 1e-9 &&
+             note.m_trackIndex == track ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// @brief 判断会话中是否存在已经提交的折线根物件。
+/// @param session 待检查会话。
+/// @return 找到至少包含两个子段的折线时返回 true。
+[[nodiscard]] bool hasCommittedPolyline(
+    const MMM::Logic::BeatmapSession& session)
+{
+    const auto& context = session.getContext();
+    const auto  notes =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : notes ) {
+        const auto& note = notes.get<const MMM::Logic::NoteComponent>(entity);
+        if ( !note.m_isSubNote && note.m_type == MMM::NoteType::POLYLINE &&
+             note.m_subNotes.size() >= 2U ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// @brief 验证访客绑定观察者时不会把房主快照回传为本地编辑。
@@ -149,14 +191,19 @@ private:
     return true;
 }
 
-/// @brief 验证远端权威替换会等待本地画笔手势松开后再执行。
-/// @return 拖绘过程中没有同步且结束后按顺序发布本地操作并同步时返回 true。
-[[nodiscard]] bool testRemoteSynchronizationWaitsForBrushEnd()
+/// @brief 验证远端纯物件替换不会覆盖正在绘制的本地折线草稿。
+/// @return 远端物件即时出现且松键后本地折线与远端物件同时存在时返回 true。
+[[nodiscard]] bool testRemoteSynchronizationPreservesActiveBrush()
 {
     MMM::Logic::BeatmapSession session;
     MMM::Config::EditorConfig  config;
+    auto                       initial = makeBeatmap();
+    auto& initialNote       = initial->m_noteData.notes.emplace_back();
+    initialNote.m_timestamp = 500.0;
+    initialNote.m_track     = 2;
+    initial->sync();
     session.pushCommand(MMM::Logic::LogicCommand{
-        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(initial) },
     });
     session.pushCommand(MMM::Logic::LogicCommand{
         MMM::Logic::CmdUpdateViewport{
@@ -206,8 +253,18 @@ private:
         },
     });
     session.update(0.2, config, false);
-    if ( observer->synchronizationCount() != 0 ) {
-        XERROR("Remote synchronization interrupted an active brush gesture");
+    if ( observer->synchronizationCount() != 1 ||
+         !session.getContext().brushState.isActive ||
+         session.getContext().brushState.polylineSegments.empty() ||
+         !hasRootNote(session, 1.0, 3) || hasRootNote(session, 0.5, 2) ) {
+        XERROR(
+            "Remote synchronization did not preserve the active Polyline "
+            "draft: syncs={}, active={}, segments={}, added={}, deleted={}",
+            observer->synchronizationCount(),
+            session.getContext().brushState.isActive,
+            session.getContext().brushState.polylineSegments.size(),
+            hasRootNote(session, 1.0, 3),
+            !hasRootNote(session, 0.5, 2));
         return false;
     }
 
@@ -215,15 +272,19 @@ private:
         MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" },
     });
     session.update(0.3, config, false);
-    session.update(0.4, config, false);
     if ( observer->notificationCount() != 1 ||
          observer->lastFlags() != MMM::BeatmapMutationFlags::Objects ||
-         observer->synchronizationCount() != 1 ) {
+         observer->synchronizationCount() != 1 ||
+         !hasRootNote(session, 1.0, 3) || hasRootNote(session, 0.5, 2) ||
+         !hasCommittedPolyline(session) ) {
         XERROR(
-            "Brush operation was not published before deferred remote sync: "
-            "mutations={}, syncs={}",
+            "Active Polyline did not commit on top of the remote baseline: "
+            "mutations={}, syncs={}, added={}, deleted={}, polyline={}",
             observer->notificationCount(),
-            observer->synchronizationCount());
+            observer->synchronizationCount(),
+            hasRootNote(session, 1.0, 3),
+            !hasRootNote(session, 0.5, 2),
+            hasCommittedPolyline(session));
         return false;
     }
     return true;
@@ -336,7 +397,7 @@ int main()
 {
     return testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
-                   testRemoteSynchronizationWaitsForBrushEnd() &&
+                   testRemoteSynchronizationPreservesActiveBrush() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testGuestConnectionBlocksLocalProjectOpening()
                ? 0

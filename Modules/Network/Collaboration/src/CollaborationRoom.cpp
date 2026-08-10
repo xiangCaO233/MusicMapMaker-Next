@@ -758,7 +758,11 @@ void CollaborationRoom::handleCommittedOperation(
                 m_peer->setStateSnapshot(std::move(snapshot.value())));
         }
     }
-    if ( m_applyBeatmapCallback && (!originatedLocally || reapplyLocalState) ) {
+    const bool refreshLocalObjectCommit =
+        originatedLocally &&
+        patch->flags == ::MMM::BeatmapMutationFlags::Objects;
+    if ( m_applyBeatmapCallback && (!originatedLocally || reapplyLocalState ||
+                                    refreshLocalObjectCommit) ) {
         auto beatmap = materializeRebasedLocalBeatmap();
         if ( !beatmap ) {
             appendLog(CollaborationLogEventType::Error,

@@ -258,7 +258,8 @@ private:
     void handleTransportEvent(const WebRtcTransportEvent& event);
     /// @brief 在访客取得 PeerId 后创建协作状态机。
     void ensureGuestPeer();
-    /// @brief 应用一条房主已排序的规范化谱面操作。
+    /// @brief 应用一条房主已排序的规范化谱面操作并按需回灌本地视图。
+    /// @warning UI 低频提交路径：可能物化一次完整谱面；不得放入每帧轮询分支。
     void handleCommittedOperation(const CommittedOperation& operation);
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();

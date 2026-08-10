@@ -1189,23 +1189,42 @@ bool BeatmapSession::processCommands()
     };
     while ( m_commandQueue.try_dequeue(cmd) ) {
         if ( blockCollaborationOfflineEdit(cmd) ) continue;
-        const bool authoritativeSynchronization = std::visit(
-            [](const auto& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
-                    return arg.authoritativeRemote;
-                }
-                return false;
-            },
-            cmd);
+        const auto* authoritativeReplacement =
+            std::get_if<CmdReplaceBeatmapData>(&cmd);
+        const bool authoritativeSynchronization =
+            authoritativeReplacement &&
+            authoritativeReplacement->authoritativeRemote;
         const bool localGestureActive =
             m_ctx->isDragging || m_ctx->isSelecting ||
             m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
-        if ( authoritativeSynchronization && localGestureActive ) {
+        const bool preservesActiveBrush =
+            authoritativeSynchronization &&
+            authoritativeReplacement->replaceObjects &&
+            !authoritativeReplacement->replaceTimelines &&
+            !authoritativeReplacement->replaceMetadata &&
+            !authoritativeReplacement->replaceAudioSamples &&
+            m_ctx->brushState.isActive && !m_ctx->isSelecting &&
+            !m_ctx->brushState.replacesExistingObject &&
+            !m_ctx->eraserState.isActive &&
+            m_ctx->draggedEntity == entt::null && !m_ctx->dragInitialNote &&
+            !m_ctx->dragInitialSample;
+        if ( authoritativeSynchronization && localGestureActive &&
+             !preservesActiveBrush ) {
             m_commandQueue.enqueue(std::move(cmd));
             break;
         }
         if ( authoritativeSynchronization ) publishPendingMutation();
+
+        std::optional<SessionContext::BrushState> preservedBrushState;
+        bool        preservedBrushDragging = false;
+        std::string preservedBrushDragCameraId;
+        if ( preservesActiveBrush ) {
+            // 纯物件权威替换会重置交互缓存；先保存画笔草稿，使远端物件成为
+            // 当前基线后仍可继续原手势并在松键时提交。
+            preservedBrushState.emplace(m_ctx->brushState);
+            preservedBrushDragging     = m_ctx->isDragging;
+            preservedBrushDragCameraId = m_ctx->dragCameraId;
+        }
 
         // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
         // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
@@ -1424,6 +1443,11 @@ bool BeatmapSession::processCommands()
                 }
             },
             cmd);
+        if ( preservedBrushState ) {
+            m_ctx->brushState   = std::move(*preservedBrushState);
+            m_ctx->isDragging   = preservedBrushDragging;
+            m_ctx->dragCameraId = std::move(preservedBrushDragCameraId);
+        }
         if ( !replacedEditorConfig ) {
             visual.trackLayout   = baseTrackLayout;
             visual.judgeline_pos = baseJudgmentLinePosition;

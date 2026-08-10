@@ -84,11 +84,12 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.polylineSegments.clear();
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
-    ctx.brushState.holdStartTime      = -1.0;
-    ctx.brushState.duration           = 0.0;
-    ctx.brushState.dtrack             = 0;
-    ctx.brushState.createsAudioSample = false;
-    ctx.brushState.isActive           = false;
+    ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.holdStartTime          = -1.0;
+    ctx.brushState.duration               = 0.0;
+    ctx.brushState.dtrack                 = 0;
+    ctx.brushState.createsAudioSample     = false;
+    ctx.brushState.isActive               = false;
 }
 
 /// @brief 将当前绘制手势切换到鼠标所在的统一画布轨道区域。
@@ -117,6 +118,7 @@ void retargetBrushToLane(SessionContext& ctx, CanvasLaneAddress lane,
     ctx.brushState.polylineSegments.clear();
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
+    ctx.brushState.replacesExistingObject = false;
 
     if ( createsAudioSample ) {
         ctx.brushState.activeAudioResourceId =
@@ -263,6 +265,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         createsAudioSample ? ctx.brushState.selectedAudioResourceId
                            : std::string{};
     ctx.brushState.activeSampleBinding.reset();
+    ctx.brushState.replacesExistingObject = false;
     if ( !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() ) {
         ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
@@ -412,9 +415,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                                        ctx);
 
                         // 设置拖拽状态
-                        ctx.isDragging   = true;
-                        ctx.dragCameraId = cmd.cameraId;
-                        isResuming       = true;
+                        ctx.brushState.replacesExistingObject = true;
+                        ctx.isDragging                        = true;
+                        ctx.dragCameraId                      = cmd.cameraId;
+                        isResuming                            = true;
                         XINFO("Resuming Polyline edit for entity {}",
                               static_cast<uint32_t>(targetEntity));
                     }
@@ -466,9 +470,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                     std::move(deleteEntries), "Convert Note to Polyline");
                 ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
 
-                ctx.isDragging   = true;
-                ctx.dragCameraId = cmd.cameraId;
-                isResuming       = true;
+                ctx.brushState.replacesExistingObject = true;
+                ctx.isDragging                        = true;
+                ctx.dragCameraId                      = cmd.cameraId;
+                isResuming                            = true;
                 XINFO(
                     "Converting ordinary note (type {}) to Polyline and "
                     "resuming edit for entity {}",

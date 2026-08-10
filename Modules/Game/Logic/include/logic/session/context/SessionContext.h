@@ -246,6 +246,9 @@ struct SessionContext {
         /// @brief 当前玩家物件创建或恢复手势锁定的采样绑定。
         std::optional<::MMM::AudioSampleBinding> activeSampleBinding;
 
+        /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
+        bool replacesExistingObject{ false };
+
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brushState;
