@@ -24,48 +24,50 @@ CollaborationLogWindow::CollaborationLogWindow(
     : IUIView(name), m_room(std::move(room))
 {
     if ( m_room ) {
-        m_room->setApplyBeatmapCallback([this](
-                                            std::shared_ptr<::MMM::BeatMap>
-                                                                        beatmap,
-                                            ::MMM::BeatmapMutationFlags flags) {
-            auto session = m_boundSession.lock();
-            if ( !beatmap ) return;
-            if ( !session && !m_room->isHost() ) {
-                auto&             engine = Logic::EditorEngine::instance();
-                const std::string displayName =
-                    beatmap->m_baseMapMetadata.name.empty()
-                        ? TR("title.collaboration_manager").toString()
-                        : beatmap->m_baseMapMetadata.name;
-                static_cast<void>(
-                    engine.createSession(beatmap, displayName, false));
-                session = engine.getActiveSession();
+        m_room->setApplyBeatmapCallback(
+            [this](std::shared_ptr<::MMM::BeatMap> beatmap,
+                   ::MMM::BeatmapMutationFlags     flags) {
+                auto session = m_boundSession.lock();
+                if ( !beatmap ) return;
+                if ( !session && !m_room->isHost() ) {
+                    auto&             engine = Logic::EditorEngine::instance();
+                    const std::string displayName =
+                        beatmap->m_baseMapMetadata.name.empty()
+                            ? TR("title.collaboration_manager").toString()
+                            : beatmap->m_baseMapMetadata.name;
+                    static_cast<void>(
+                        engine.createSession(beatmap, displayName, false));
+                    session = engine.getActiveSession();
+                    if ( !session ) return;
+                    session->setCollaborationOfflineReadOnly(
+                        shouldCollaborationSessionBeReadOnly(
+                            true,
+                            m_room->state() ==
+                                Network::Collaboration::CollaborationRoomState::
+                                    Connected));
+                    session->setMutationObserver(m_room, false);
+                    m_room->onBeatmapSynchronized(*beatmap);
+                    m_boundSession        = session;
+                    m_boundSessionIsGuest = true;
+                    bindPendingResources();
+                    return;
+                }
                 if ( !session ) return;
-                session->setCollaborationOfflineReadOnly(
-                    m_room->state() !=
-                    Network::Collaboration::CollaborationRoomState::Connected);
-                session->setMutationObserver(m_room, false);
-                m_room->onBeatmapSynchronized(*beatmap);
-                m_boundSession        = session;
-                m_boundSessionIsGuest = true;
-                bindPendingResources();
-                return;
-            }
-            if ( !session ) return;
-            session->pushCommand(
-                Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
-                    .sourceBeatmap  = std::move(beatmap),
-                    .replaceObjects = hasBeatmapMutationFlag(
-                        flags, ::MMM::BeatmapMutationFlags::Objects),
-                    .replaceTimelines = hasBeatmapMutationFlag(
-                        flags, ::MMM::BeatmapMutationFlags::Timelines),
-                    .replaceMetadata = hasBeatmapMutationFlag(
-                        flags, ::MMM::BeatmapMutationFlags::Metadata),
-                    .replaceAudioSamples = hasBeatmapMutationFlag(
-                        flags, ::MMM::BeatmapMutationFlags::AudioSamples),
-                    .notifyMutationObserver = false,
-                    .authoritativeRemote    = true,
-                }));
-        });
+                session->pushCommand(
+                    Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
+                        .sourceBeatmap  = std::move(beatmap),
+                        .replaceObjects = hasBeatmapMutationFlag(
+                            flags, ::MMM::BeatmapMutationFlags::Objects),
+                        .replaceTimelines = hasBeatmapMutationFlag(
+                            flags, ::MMM::BeatmapMutationFlags::Timelines),
+                        .replaceMetadata = hasBeatmapMutationFlag(
+                            flags, ::MMM::BeatmapMutationFlags::Metadata),
+                        .replaceAudioSamples = hasBeatmapMutationFlag(
+                            flags, ::MMM::BeatmapMutationFlags::AudioSamples),
+                        .notifyMutationObserver = false,
+                        .authoritativeRemote    = true,
+                    }));
+            });
         m_room->setResourceBundleCallback(
             [this](Network::Collaboration::CollaborationResourceBundle bundle) {
                 m_pendingResourceBundle = std::make_shared<
@@ -171,11 +173,11 @@ void CollaborationLogWindow::updateSessionBinding()
         return;
     }
     if ( bound ) {
-        if ( m_boundSessionIsGuest ) {
-            bound->setCollaborationOfflineReadOnly(
-                state !=
-                Network::Collaboration::CollaborationRoomState::Connected);
-        }
+        bound->setCollaborationOfflineReadOnly(
+            shouldCollaborationSessionBeReadOnly(
+                m_boundSessionIsGuest,
+                state ==
+                    Network::Collaboration::CollaborationRoomState::Connected));
         refreshHostResources();
         return;
     }
@@ -184,6 +186,7 @@ void CollaborationLogWindow::updateSessionBinding()
 
     auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
+    active->setCollaborationOfflineReadOnly(false);
     active->setMutationObserver(m_room, m_room->isHost());
     m_boundSession        = active;
     m_boundSessionIsGuest = false;

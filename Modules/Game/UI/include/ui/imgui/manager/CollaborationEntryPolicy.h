@@ -29,4 +29,14 @@ namespace MMM::UI
 {
     return isHost;
 }
+
+/// @brief 判断协作谱面会话是否应进入离线只读状态。
+/// @param isGuest 当前会话是否绑定为访客会话。
+/// @param isConnected 当前协作房间是否已经连接。
+/// @return 访客尚未连接时返回 true；房主始终保留本机编辑权限。
+[[nodiscard]] constexpr bool shouldCollaborationSessionBeReadOnly(
+    bool isGuest, bool isConnected)
+{
+    return isGuest && !isConnected;
+}
 }  // namespace MMM::UI
