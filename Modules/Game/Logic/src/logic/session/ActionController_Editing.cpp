@@ -295,14 +295,19 @@ NoteColorOverrides makeNoteColorOverrides(
     return overrides;
 }
 
-/// @brief 重置整体替换涉及音符实体的基础辅助组件。
+/// @brief 更新整体替换涉及音符实体的基础辅助组件。
 /// @param registry 目标 ECS 注册表。
 /// @param entity 目标音符实体。
+/// @param preserveInteraction 是否保留实体已有的本地交互状态。
 void ensureReplacementNoteAuxiliaryComponents(entt::registry& registry,
-                                              entt::entity    entity)
+                                              entt::entity    entity,
+                                              bool preserveInteraction)
 {
     registry.emplace_or_replace<TransformComponent>(entity);
-    registry.emplace_or_replace<InteractionComponent>(entity);
+    if ( !preserveInteraction ||
+         !registry.all_of<InteractionComponent>(entity) ) {
+        registry.emplace_or_replace<InteractionComponent>(entity);
+    }
 }
 
 /// @brief 标记整体替换后需要重建音符排序和统计缓存。
@@ -712,12 +717,16 @@ std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
 /// @brief 按协作逻辑标识合并权威物件，并保留仍存在物件的 ECS 实体。
 /// @param ctx 当前会话上下文。
 /// @param notes 替换后的非子物件组件列表。
-/// @warning 低频权威同步路径：会完整扫描一次音符 Registry 并重置交互缓存，
+/// @param preserveInteraction 是否保留仍存在实体的本地交互状态。
+/// @warning 低频权威同步路径：会完整扫描一次音符 Registry 并整理交互缓存，
 /// 禁止从每帧更新路径调用。
 void replaceNoteComponents(SessionContext&                   ctx,
-                           const std::vector<NoteComponent>& notes)
+                           const std::vector<NoteComponent>& notes,
+                           bool preserveInteraction)
 {
-    clearChartObjectSelectionIndex(ctx, ChartObjectKind::PlayerNote);
+    if ( !preserveInteraction ) {
+        clearChartObjectSelectionIndex(ctx, ChartObjectKind::PlayerNote);
+    }
 
     struct ExistingNote {
         /// @brief 同步前的实体。
@@ -769,6 +778,7 @@ void replaceNoteComponents(SessionContext&                   ctx,
         if ( entity == entt::null && applied.m_collaborationId.empty() ) {
             entity = findLegacyRoot(applied);
         }
+        const bool retainedExistingEntity = entity != entt::null;
         if ( entity == entt::null ) {
             entity = ctx.noteRegistry.create();
         } else if ( applied.m_collaborationId.empty() ) {
@@ -786,7 +796,10 @@ void replaceNoteComponents(SessionContext&                   ctx,
         }
         retained.insert(entity);
         ctx.noteRegistry.emplace_or_replace<NoteComponent>(entity, applied);
-        ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry, entity);
+        ensureReplacementNoteAuxiliaryComponents(
+            ctx.noteRegistry,
+            entity,
+            preserveInteraction && retainedExistingEntity);
 
         if ( applied.m_type != ::MMM::NoteType::POLYLINE ) continue;
 
@@ -809,14 +822,17 @@ void replaceNoteComponents(SessionContext&                   ctx,
 
             auto subEntity =
                 findByIdentity(subComponent.m_collaborationId, true);
+            const bool retainedExistingSubEntity = subEntity != entt::null;
             if ( subEntity == entt::null ) {
                 subEntity = ctx.noteRegistry.create();
             }
             retained.insert(subEntity);
             ctx.noteRegistry.emplace_or_replace<NoteComponent>(subEntity,
                                                                subComponent);
-            ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry,
-                                                     subEntity);
+            ensureReplacementNoteAuxiliaryComponents(
+                ctx.noteRegistry,
+                subEntity,
+                preserveInteraction && retainedExistingSubEntity);
         }
     }
 
@@ -827,8 +843,36 @@ void replaceNoteComponents(SessionContext&                   ctx,
         }
     }
 
-    ctx.hoveredEntity     = entt::null;
-    ctx.hoveredObjectKind = ChartObjectKind::PlayerNote;
+    if ( preserveInteraction ) {
+        std::erase_if(ctx.selectedNoteEntities, [&](entt::entity entity) {
+            return !retained.contains(entity) ||
+                   !ctx.noteRegistry.valid(entity) ||
+                   !ctx.noteRegistry.all_of<InteractionComponent>(entity) ||
+                   !ctx.noteRegistry.get<const InteractionComponent>(entity)
+                        .isSelected;
+        });
+        if ( ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
+             (ctx.hoveredEntity == entt::null ||
+              !retained.contains(ctx.hoveredEntity) ||
+              !ctx.noteRegistry.valid(ctx.hoveredEntity)) ) {
+            ctx.hoveredEntity     = entt::null;
+            ctx.hoveredObjectKind = ChartObjectKind::PlayerNote;
+            ctx.hoveredPart       = static_cast<std::int32_t>(HoverPart::None);
+            ctx.hoveredSubIndex   = -1;
+        }
+        if ( !ctx.marqueeBoxes.empty() ) {
+            ctx.isMarqueeSelectionDirty = true;
+        }
+    } else {
+        ctx.hoveredEntity       = entt::null;
+        ctx.hoveredObjectKind   = ChartObjectKind::PlayerNote;
+        ctx.hoveredPart         = static_cast<std::int32_t>(HoverPart::None);
+        ctx.hoveredSubIndex     = -1;
+        ctx.isSelecting         = false;
+        ctx.hasMarqueeSelection = false;
+        ctx.isMarqueeSelectionDirty = false;
+        ctx.marqueeBoxes.clear();
+    }
     ctx.draggedEntity     = entt::null;
     ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
     ctx.draggedPart       = HoverPart::None;
@@ -836,10 +880,7 @@ void replaceNoteComponents(SessionContext&                   ctx,
     ctx.dragInitialNote.reset();
     ctx.dragInitialSample.reset();
     ctx.dragRenderPinnedEntities.clear();
-    ctx.isDragging          = false;
-    ctx.isSelecting         = false;
-    ctx.hasMarqueeSelection = false;
-    ctx.marqueeBoxes.clear();
+    ctx.isDragging = false;
     if ( ctx.brushState.isActive && !ctx.brushState.createsAudioSample ) {
         ctx.brushState.isActive = false;
         ctx.brushState.polylineSegments.clear();
@@ -1007,6 +1048,7 @@ public:
     /// @param replaceObjects 是否替换玩家物件。
     /// @param replaceTimelines 是否替换 Timing。
     /// @param replaceMetadata 是否替换谱面元数据。
+    /// @param preserveInteraction 是否保留仍存在物件的本地交互状态。
     /// @param beforeNotes 替换前的玩家物件快照。
     /// @param afterNotes 替换后的玩家物件快照。
     /// @param beforeTimelines 替换前的 Timeline 快照。
@@ -1018,7 +1060,8 @@ public:
     /// @param afterPreferenceBpm 替换后的首选 BPM。
     ReplaceBeatmapDataAction(
         bool replaceObjects, bool replaceTimelines, bool replaceMetadata,
-        bool replaceAudioSamples, std::vector<NoteComponent> beforeNotes,
+        bool replaceAudioSamples, bool preserveInteraction,
+        std::vector<NoteComponent>                       beforeNotes,
         std::vector<NoteComponent>                       afterNotes,
         std::vector<TimelineComponent>                   beforeTimelines,
         std::vector<TimelineComponent>                   afterTimelines,
@@ -1032,6 +1075,7 @@ public:
         , m_replaceTimelines(replaceTimelines)
         , m_replaceMetadata(replaceMetadata)
         , m_replaceAudioSamples(replaceAudioSamples)
+        , m_preserveInteraction(preserveInteraction)
         , m_beforeNotes(std::move(beforeNotes))
         , m_afterNotes(std::move(afterNotes))
         , m_beforeTimelines(std::move(beforeTimelines))
@@ -1068,7 +1112,9 @@ private:
     void apply(SessionContext& ctx, bool forward)
     {
         if ( m_replaceObjects ) {
-            replaceNoteComponents(ctx, forward ? m_afterNotes : m_beforeNotes);
+            replaceNoteComponents(ctx,
+                                  forward ? m_afterNotes : m_beforeNotes,
+                                  m_preserveInteraction);
         }
         if ( m_replaceTimelines ) {
             replaceTimelineComponents(
@@ -1109,6 +1155,9 @@ private:
 
     /// @brief 是否替换自动采样对象。
     bool m_replaceAudioSamples{ false };
+
+    /// @brief 是否保留稳定身份仍存在物件的本地交互状态。
+    bool m_preserveInteraction{ false };
 
     /// @brief 替换前物件组件。
     std::vector<NoteComponent> m_beforeNotes;
@@ -2138,6 +2187,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         cmd.replaceTimelines,
         cmd.replaceMetadata,
         cmd.replaceAudioSamples,
+        cmd.authoritativeRemote,
         std::move(beforeNotes),
         std::move(afterNotes),
         std::move(beforeTimelines),

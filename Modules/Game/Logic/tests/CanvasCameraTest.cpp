@@ -1132,10 +1132,26 @@ bool testAuthoritativeReplacementPreservesOwnedCreateUndo()
     context.sortedNoteEntities.push_back(staleEntity);
     context.sortedNoteMaxEndPrefix.push_back(1.0);
     context.noteRegistry.emplace_or_replace<MMM::Logic::InteractionComponent>(
-        staleEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+        staleEntity,
+        MMM::Logic::InteractionComponent{
+            .isHovered  = true,
+            .isSelected = true,
+            .hoveredPart =
+                static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        });
     context.selectedNoteEntities.insert(staleEntity);
     context.hoveredEntity     = staleEntity;
     context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::Head);
+    context.hasMarqueeSelection = true;
+    context.marqueeBoxes.push_back(MMM::Logic::MarqueeBox{
+        .startTime  = 0.5,
+        .endTime    = 1.5,
+        .startTrack = 0.0F,
+        .endTrack   = 3.0F,
+        .cameraId   = "Basic2DCanvas",
+    });
     context.draggedEntity     = staleEntity;
     context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
     context.dragRenderPinnedEntities.push_back(staleEntity);
@@ -1175,8 +1191,16 @@ bool testAuthoritativeReplacementPreservesOwnedCreateUndo()
          context.eraserState.isActive ||
          !context.eraserState.targetEntities.empty() ||
          !context.dragRenderPinnedEntities.empty() ||
-         !context.selectedNoteEntities.empty() ||
-         context.hoveredEntity != entt::null ||
+         !context.selectedNoteEntities.contains(staleEntity) ||
+         !context.noteRegistry
+              .get<const MMM::Logic::InteractionComponent>(staleEntity)
+              .isSelected ||
+         !context.noteRegistry
+              .get<const MMM::Logic::InteractionComponent>(staleEntity)
+              .isHovered ||
+         context.hoveredEntity != staleEntity || !context.hasMarqueeSelection ||
+         context.marqueeBoxes.size() != 1U ||
+         !context.isMarqueeSelectionDirty ||
          context.draggedEntity != entt::null ||
          !context.sortedNoteEntities.empty() ||
          !context.sortedNoteMaxEndPrefix.empty() ||

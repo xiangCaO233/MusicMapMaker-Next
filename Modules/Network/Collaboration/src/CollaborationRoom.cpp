@@ -823,10 +823,10 @@ void CollaborationRoom::handleCommittedOperation(
                       operation.participantId);
             return;
         }
-        m_applyBeatmapCallback(std::move(beatmap),
-                               reapplyLocalState
-                                   ? ::MMM::BeatmapMutationFlags::All
-                                   : patch->flags);
+        // 本地提交在并发远端操作后需要重物化，但重物化范围仍由该提交的真实
+        // MutationFlags 决定。扩大为 All 会把纯物件 Undo/Redo 误判成全谱替换，
+        // 进而清空访客仍然有效的本地撤销栈。
+        m_applyBeatmapCallback(std::move(beatmap), patch->flags);
     }
 }
 

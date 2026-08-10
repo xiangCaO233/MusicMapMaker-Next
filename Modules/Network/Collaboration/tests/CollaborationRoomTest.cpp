@@ -320,14 +320,17 @@ bool testPublicDirectoryWebRtcRoom()
 
     std::vector<std::shared_ptr<const BeatMap>> guestModels(GUEST_COUNT);
     std::vector<std::size_t>                    guestApplyCounts(GUEST_COUNT);
+    std::vector<std::vector<BeatmapMutationFlags>> guestApplyFlags(GUEST_COUNT);
     guests.reserve(GUEST_COUNT);
     for ( std::size_t index = 0; index < GUEST_COUNT; ++index ) {
         auto guest = std::make_unique<CollaborationRoom>();
         guest->setApplyBeatmapCallback(
-            [&guestModels, &guestApplyCounts, index](
-                std::shared_ptr<const BeatMap> beatmap, BeatmapMutationFlags) {
+            [&guestModels, &guestApplyCounts, &guestApplyFlags, index](
+                std::shared_ptr<const BeatMap> beatmap,
+                BeatmapMutationFlags           flags) {
                 guestModels[index] = std::move(beatmap);
                 ++guestApplyCounts[index];
+                guestApplyFlags[index].push_back(flags);
             });
         CollaborationJoinRoomConfig guestConfig;
         guestConfig.creator       = "Guest " + std::to_string(index + 1);
@@ -415,6 +418,7 @@ bool testPublicDirectoryWebRtcRoom()
     }
     for ( std::size_t index = 0; index < guests.size(); ++index ) {
         guests[index]->onBeatmapSynchronized(*guestModels[index]);
+        guestApplyFlags[index].clear();
     }
 
     auto  hostConcurrent      = makeBeatmap(1000.0, "Host Creator");
@@ -442,6 +446,15 @@ bool testPublicDirectoryWebRtcRoom()
     if ( !concurrentEditsConverged ) {
         XERROR(
             "Concurrent host and guest object additions overwrote each other");
+        return false;
+    }
+    if ( guestApplyFlags.front().empty() ||
+         std::any_of(guestApplyFlags.front().begin(),
+                     guestApplyFlags.front().end(),
+                     [](BeatmapMutationFlags flags) {
+                         return flags != BeatmapMutationFlags::Objects;
+                     }) ) {
+        XERROR("Concurrent object rebase widened its replacement flags");
         return false;
     }
     host.onBeatmapSynchronized(*hostModel);
