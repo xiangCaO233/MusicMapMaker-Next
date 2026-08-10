@@ -201,7 +201,8 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     advancePendingGuestJoin(sourceManager);
 
     if ( m_room->isActive() ) {
-        drawActiveRoom(sourceManager);
+        drawActiveRoom();
+        drawLogSection(sourceManager);
         return;
     }
 
@@ -210,6 +211,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     ImGui::Separator();
     ImGui::Spacing();
     drawOfflineFlow(sourceManager, creatorValid);
+    drawLogSection(sourceManager);
 }
 
 ImVec2 CollaborationView::getMinContentSize(float dpiScale) const
@@ -360,7 +362,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 config.roomName = m_roomName.data();
                 config.endpoint = m_room->serverEndpoint();
                 static_cast<void>(m_room->startHost(std::move(config)));
-                showLogWindow(sourceManager);
             }
         }
         ImGui::EndDisabled();
@@ -498,7 +499,6 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
         auto config = std::move(m_pendingGuestJoin->config);
         m_pendingGuestJoin.reset();
         if ( m_room->join(std::move(config)) ) {
-            showLogWindow(sourceManager);
             return;
         }
         m_room->disconnect();
@@ -523,7 +523,7 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
     projectController.setLocalProjectOpeningBlockedByCollaboration(false);
 }
 
-void CollaborationView::drawActiveRoom(UIManager* sourceManager)
+void CollaborationView::drawActiveRoom()
 {
     const auto&              endpoint    = m_room->serverEndpoint();
     const auto&              style       = ImGui::GetStyle();
@@ -734,15 +734,8 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     }
 
     ImGui::Spacing();
-    const float actionWidth = std::max(
-        1.0F, (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5F);
-    if ( FeedbackButton(TR("ui.collaboration.show_log").data(),
-                        ImVec2(actionWidth, 0.0F)) ) {
-        showLogWindow(sourceManager);
-    }
-    ImGui::SameLine();
     if ( FeedbackButton(TR("ui.collaboration.disconnect").data(),
-                        ImVec2(actionWidth, 0.0F)) ) {
+                        ImVec2(-1.0F, 0.0F)) ) {
         m_room->disconnect();
         return;
     }
@@ -802,12 +795,19 @@ bool CollaborationView::applyServerEndpoint()
     return m_room->setServerEndpoint(std::move(endpoint));
 }
 
-void CollaborationView::showLogWindow(UIManager* sourceManager) const
+void CollaborationView::drawLogSection(UIManager* sourceManager) const
 {
-    if ( !sourceManager ) return;
+    if ( !sourceManager || !m_room || m_room->logs().empty() ) return;
+
+    ImGui::Spacing();
+    if ( !FeedbackCollapsingHeader(TR("title.collaboration_log").data(),
+                                   ImGuiTreeNodeFlags_DefaultOpen) ) {
+        return;
+    }
+
     if ( auto* logWindow = sourceManager->getView<CollaborationLogWindow>(
              "CollaborationLogWindow") ) {
-        logWindow->show();
+        logWindow->renderInline();
     }
 }
 }  // namespace MMM::UI

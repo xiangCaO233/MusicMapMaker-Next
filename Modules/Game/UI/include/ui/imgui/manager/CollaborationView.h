@@ -47,12 +47,13 @@ private:
     void drawOfflineFlow(UIManager* sourceManager, bool creatorValid);
     /// @brief 绘制当前房间状态、连接信息和成员列表。
     /// @warning UI 热路径：最多遍历 8 个内存成员记录。
-    void drawActiveRoom(UIManager* sourceManager);
+    void drawActiveRoom();
+    /// @brief 在协作侧栏内绘制可收起的实时日志。
+    /// @warning UI 热路径：仅在区域展开时委托常驻控制器遍历日志。
+    void drawLogSection(UIManager* sourceManager) const;
     /// @brief 将地址、信令端口和 TLS 控件应用到目录客户端。
     /// @return 服务器配置有效并成功应用时返回 true。
     bool applyServerEndpoint();
-    /// @brief 请求显示独立协作日志窗口。
-    void showLogWindow(UIManager* sourceManager) const;
     /// @brief 开始访客加入流程，必要时先请求关闭全部本机项目与谱面画布。
     void beginGuestJoin(std::string creator, std::string roomId,
                         std::string roomName, UIManager* sourceManager);

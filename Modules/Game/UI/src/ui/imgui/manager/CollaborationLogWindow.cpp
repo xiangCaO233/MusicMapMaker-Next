@@ -99,51 +99,41 @@ void CollaborationLogWindow::update(UIManager*)
     if ( !m_room ) return;
     m_room->update();
     updateSessionBinding();
+}
 
-    const bool roomActive = m_room->isActive();
-    if ( roomActive && !m_wasRoomActive ) {
-        m_windowVisible = true;
-    }
-    m_wasRoomActive = roomActive;
-    if ( !m_windowVisible ) return;
+void CollaborationLogWindow::renderInline()
+{
+    if ( !m_room ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(620.0f, 320.0f), ImGuiCond_FirstUseEver);
-    const std::string title =
-        TR("title.collaboration_log").toString() + "###CollaborationLogWindow";
-    const bool wasVisible = m_windowVisible;
-    const bool drawWindow =
-        ImGui::Begin(title.c_str(), &m_windowVisible, ImGuiWindowFlags_None);
-    FeedbackCurrentWindowCloseButton(wasVisible, &m_windowVisible);
-    if ( drawWindow ) {
-        ImGui::Text("%s: %zu",
-                    TR("ui.collaboration.log.entries").data(),
-                    m_room->logs().size());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", TR("ui.collaboration.log.realtime").data());
-        ImGui::Separator();
+    ImGui::Text("%s: %zu",
+                TR("ui.collaboration.log.entries").data(),
+                m_room->logs().size());
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", TR("ui.collaboration.log.realtime").data());
+    ImGui::Separator();
 
-        if ( ImGui::BeginChild("##CollaborationLogEntries",
-                               ImVec2(0.0f, 0.0f),
-                               ImGuiChildFlags_None,
-                               ImGuiWindowFlags_HorizontalScrollbar) ) {
-            for ( const auto& entry : m_room->logs() ) {
-                const std::string line = formatEntry(entry);
-                if ( entry.type == Network::Collaboration::
-                                       CollaborationLogEventType::Error ) {
-                    ImGui::TextColored(
-                        ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "%s", line.c_str());
-                } else {
-                    ImGui::TextUnformatted(line.c_str());
-                }
-            }
-            if ( m_room->logs().size() > m_lastLogCount ) {
-                ImGui::SetScrollHereY(1.0f);
+    const float logHeight = ImGui::GetTextLineHeightWithSpacing() * 10.0F +
+                            ImGui::GetStyle().FramePadding.y * 2.0F;
+    if ( ImGui::BeginChild("##CollaborationLogEntries",
+                           ImVec2(0.0f, logHeight),
+                           ImGuiChildFlags_Borders,
+                           ImGuiWindowFlags_HorizontalScrollbar) ) {
+        for ( const auto& entry : m_room->logs() ) {
+            const std::string line = formatEntry(entry);
+            if ( entry.type ==
+                 Network::Collaboration::CollaborationLogEventType::Error ) {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "%s", line.c_str());
+            } else {
+                ImGui::TextUnformatted(line.c_str());
             }
         }
-        ImGui::EndChild();
-        m_lastLogCount = m_room->logs().size();
+        if ( m_room->logs().size() > m_lastLogCount ) {
+            ImGui::SetScrollHereY(1.0f);
+        }
     }
-    ImGui::End();
+    ImGui::EndChild();
+    m_lastLogCount = m_room->logs().size();
 }
 
 void CollaborationLogWindow::updateSessionBinding()
@@ -245,12 +235,7 @@ bool CollaborationLogWindow::isOpen() const
 
 void CollaborationLogWindow::setOpen(bool open)
 {
-    m_windowVisible = open;
-}
-
-void CollaborationLogWindow::show()
-{
-    m_windowVisible = true;
+    (void)open;
 }
 
 std::string CollaborationLogWindow::formatEntry(
