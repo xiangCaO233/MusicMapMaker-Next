@@ -150,11 +150,12 @@ target_include_directories(BpmPlaybackRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
 
-# 空格播放路由测试覆盖主画布与时间线的活动拖拽交互。
+# 空格播放路由测试覆盖活动拖拽交互和控件导航激活隔离。
 mmm_add_test_executable(UI PlaybackShortcutRoutingTest
                         tests/PlaybackShortcutRoutingTest.cpp)
 target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(PlaybackShortcutRoutingTest PRIVATE 3rd_imgui)
 add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。

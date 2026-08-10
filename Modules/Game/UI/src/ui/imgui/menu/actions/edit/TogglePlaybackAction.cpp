@@ -82,9 +82,7 @@ public:
         if ( bpmDisposition != BpmSpaceShortcutDisposition::NotOwned ) {
             // BPM 窗口层级拥有空格键时禁止导航控件再次激活，也禁止事件
             // 穿透至背后的谱面编辑器。
-            if ( imguiContext ) {
-                imguiContext->NavActivateId = 0;
-            }
+            consumePlaybackShortcutNavigationActivation(imguiContext);
             if ( bpmDisposition == BpmSpaceShortcutDisposition::ToggleTool ) {
                 bpmTool->togglePlaybackFromShortcut();
             }
@@ -114,6 +112,9 @@ public:
             return false;
         }
 
+        // 全局播放快捷键已消费空格后，禁止同一按键再激活当前获得导航焦点的
+        // 协作跟随按钮或远端位置跳转热区。
+        consumePlaybackShortcutNavigationActivation(imguiContext);
         execute(context, MainMenuItemActivation{});
         return true;
     }
