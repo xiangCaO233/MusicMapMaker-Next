@@ -111,3 +111,14 @@ add_test(
   NAME TranslationResourceMigrationTest
   COMMAND TranslationResourceMigrationTest
           "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
+
+# 默认中英文翻译键必须一一对应，避免界面直接回显未翻译的键名。
+mmm_add_test_executable(Config DefaultTranslationParityTest
+                        tests/DefaultTranslationParityTest.cpp)
+target_link_libraries(DefaultTranslationParityTest PRIVATE Config Log)
+add_test(
+  NAME DefaultTranslationParityTest
+  COMMAND
+    DefaultTranslationParityTest
+    "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
+    "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")

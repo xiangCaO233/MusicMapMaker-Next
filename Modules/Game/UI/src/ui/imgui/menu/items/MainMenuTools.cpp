@@ -27,14 +27,14 @@ MainMenuTools::MainMenuTools()
         createToggleOverlapCheckWindowAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_COG,
-        "谱面额外元数据编辑",
-        MainMenuItemTextKind::Literal,
+        "ui.tools.metadata_editor",
+        MainMenuItemTextKind::TranslationKey,
         nullptr,
         createToggleMetadataEditorWindowAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_BARS,
-        "数据来源替换工具",
-        MainMenuItemTextKind::Literal,
+        "ui.tools.data_source_replace",
+        MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenDataSourceReplaceWindowAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
@@ -45,8 +45,8 @@ MainMenuTools::MainMenuTools()
         createAlignSelectedToCommonBeatsAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_MUSIC,
-        "谱面倍速制作",
-        MainMenuItemTextKind::Literal,
+        "ui.tools.speed_export",
+        MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenBeatmapSpeedExportAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
