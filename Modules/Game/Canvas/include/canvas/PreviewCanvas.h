@@ -130,11 +130,13 @@ private:
     /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
     /// @param dpiScale 当前窗口 DPI 缩放。
     /// @param seekPreviewTime 当前拖动预览时间；无交互时使用快照播放时间。
-    /// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
-    /// 遍历、排序、文件访问或共享指针复制。
+    /// @param sourceManager UI 管理器观察指针，用于读取应用级协作房间。
+    /// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本和 8 个协作者
+    /// 标记；禁止 ECS 遍历、排序、文件访问或共享指针复制。
     void drawDensityOverview(const ImVec2& canvasPos, const ImVec2& canvasSize,
                              float reservedWidth, float dpiScale,
-                             std::optional<double> seekPreviewTime) const;
+                             std::optional<double> seekPreviewTime,
+                             UI::UIManager*        sourceManager) const;
 
     /// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
     /// @param canvasPos 预览画布内容左上角屏幕坐标。

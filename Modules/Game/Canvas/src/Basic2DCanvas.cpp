@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CanvasTabTitle.h"
+#include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -138,26 +139,6 @@ float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
            static_cast<float>((targetAbsY - currentAbsY) * scale);
 }
 
-/// @brief 根据 PeerId 选择稳定且醒目的覆盖层颜色。
-/// @param peerId 远端参与者标识。
-/// @param alpha 输出透明度。
-/// @return ImGui 使用的 RGBA 颜色。
-ImU32 collaborationPeerColor(Network::Collaboration::PeerId peerId,
-                             std::uint8_t                   alpha)
-{
-    constexpr std::array<ImVec4, 7> COLORS{
-        ImVec4{ 0.20F, 0.72F, 1.00F, 1.00F },
-        ImVec4{ 1.00F, 0.38F, 0.42F, 1.00F },
-        ImVec4{ 0.42F, 0.90F, 0.45F, 1.00F },
-        ImVec4{ 1.00F, 0.72F, 0.22F, 1.00F },
-        ImVec4{ 0.75F, 0.46F, 1.00F, 1.00F },
-        ImVec4{ 0.16F, 0.88F, 0.78F, 1.00F },
-        ImVec4{ 1.00F, 0.46F, 0.82F, 1.00F },
-    };
-    ImVec4 color = COLORS[peerId % COLORS.size()];
-    color.w      = static_cast<float>(alpha) / 255.0F;
-    return ImGui::ColorConvertFloat4ToU32(color);
-}
 }  // namespace
 
 Basic2DCanvas::Basic2DCanvas(
