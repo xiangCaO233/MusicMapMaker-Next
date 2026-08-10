@@ -4,9 +4,16 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace MMM::Graphic
 {
@@ -44,6 +51,53 @@ std::string fontPathUtf8(const std::filesystem::path& path)
 {
     const auto value = path.u8string();
     return { reinterpret_cast<const char*>(value.data()), value.size() };
+}
+
+/// @brief 保持字体文件字节在 FreeType Face 生命周期内有效。
+struct LoadedFreeTypeFace {
+    /// @brief 通过原生文件系统路径读取的完整字体文件。
+    std::vector<FT_Byte> bytes;
+    /// @brief 引用 bytes 的 FreeType Face；成员逆序析构确保先释放 Face。
+    UniqueFreeTypeFace face;
+};
+
+/// @brief 通过 std::filesystem 原生路径读取字体并创建内存 Face。
+/// @param library 已初始化的 FreeType 库。
+/// @param fontPath 字体文件路径。
+/// @return 文件完整可读且 FreeType 可以解析时返回持有对象。
+std::optional<LoadedFreeTypeFace> loadFreeTypeFace(
+    FT_Library library, const std::filesystem::path& fontPath)
+{
+    std::error_code fileSizeError;
+    const auto fileSize = std::filesystem::file_size(fontPath, fileSizeError);
+    if ( fileSizeError || fileSize == 0U ||
+         fileSize >
+             static_cast<std::uintmax_t>(std::numeric_limits<FT_Long>::max()) ||
+         fileSize > static_cast<std::uintmax_t>(
+                        std::numeric_limits<std::streamsize>::max()) ) {
+        return std::nullopt;
+    }
+
+    std::vector<FT_Byte> bytes(static_cast<std::size_t>(fileSize));
+    std::ifstream        input(fontPath, std::ios::binary);
+    if ( !input ) return std::nullopt;
+    input.read(reinterpret_cast<char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    if ( !input ||
+         input.gcount() != static_cast<std::streamsize>(bytes.size()) ) {
+        return std::nullopt;
+    }
+
+    FT_Face rawFace = nullptr;
+    if ( FT_New_Memory_Face(library,
+                            bytes.data(),
+                            static_cast<FT_Long>(bytes.size()),
+                            0,
+                            &rawFace) != 0 ||
+         !rawFace ) {
+        return std::nullopt;
+    }
+    return LoadedFreeTypeFace{ std::move(bytes), UniqueFreeTypeFace(rawFace) };
 }
 
 /// @brief 从 FreeType 灰度或单色位图取得覆盖率。
@@ -128,14 +182,13 @@ std::optional<RasterizedAsciiFont> AsciiFontRasterizer::rasterize(
     }
     UniqueFreeTypeLibrary library(rawLibrary);
 
-    const std::string pathUtf8 = fontPathUtf8(fontPath);
-    FT_Face           rawFace  = nullptr;
-    if ( FT_New_Face(library.get(), pathUtf8.c_str(), 0, &rawFace) != 0 ||
-         !rawFace ) {
+    const std::string pathUtf8   = fontPathUtf8(fontPath);
+    auto              loadedFace = loadFreeTypeFace(library.get(), fontPath);
+    if ( !loadedFace ) {
         XERROR("Failed to load ASCII font: {}", pathUtf8);
         return std::nullopt;
     }
-    UniqueFreeTypeFace face(rawFace);
+    auto& face = loadedFace->face;
 
     if ( FT_Set_Pixel_Sizes(face.get(), 0U, pixelHeight) != 0 ) {
         XERROR("Failed to set ASCII font raster size: {}", pathUtf8);
@@ -189,14 +242,13 @@ std::optional<RasterizedUnicodeFont> AsciiFontRasterizer::rasterizeUnicode(
     }
     UniqueFreeTypeLibrary library(rawLibrary);
 
-    const std::string pathUtf8 = fontPathUtf8(fontPath);
-    FT_Face           rawFace  = nullptr;
-    if ( FT_New_Face(library.get(), pathUtf8.c_str(), 0, &rawFace) != 0 ||
-         !rawFace ) {
+    const std::string pathUtf8   = fontPathUtf8(fontPath);
+    auto              loadedFace = loadFreeTypeFace(library.get(), fontPath);
+    if ( !loadedFace ) {
         XERROR("Failed to load Unicode font: {}", pathUtf8);
         return std::nullopt;
     }
-    UniqueFreeTypeFace face(rawFace);
+    auto& face = loadedFace->face;
 
     if ( FT_Set_Pixel_Sizes(face.get(), 0U, pixelHeight) != 0 ) {
         XERROR("Failed to set Unicode font raster size: {}", pathUtf8);
