@@ -71,18 +71,6 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         return false;
     }
 
-    const int representableBgmTrackCount =
-        beatMap.m_audioSamples.empty() ? 0 : 1;
-    if ( beatMap.m_baseMapMetadata.bgm_track_count !=
-         representableBgmTrackCount ) {
-        XERROR(
-            "RM/IMD 导出失败：格式只能由单音频隐式表达 {} 条 BGM "
-            "轨，当前谱面显式保存了 {} 条",
-            representableBgmTrackCount,
-            beatMap.m_baseMapMetadata.bgm_track_count);
-        return false;
-    }
-
     const AudioSampleEvent* legacyAudioSample = nullptr;
     if ( beatMap.m_audioSamples.size() > 1 ) {
         XERROR(
@@ -95,18 +83,26 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         legacyAudioSample            = &beatMap.m_audioSamples.front();
         const uint32_t firstBgmTrack = static_cast<uint32_t>(
             std::max(0, beatMap.m_baseMapMetadata.track_count));
+        const uint64_t declaredBgmTrackEnd =
+            static_cast<uint64_t>(firstBgmTrack) +
+            static_cast<uint64_t>(
+                std::max(0, beatMap.m_baseMapMetadata.bgm_track_count));
         if ( legacyAudioSample->m_audioResourceId.empty() ||
              !std::isfinite(legacyAudioSample->m_timestamp) ||
              std::abs(legacyAudioSample->m_timestamp) > 1e-6 ||
              legacyAudioSample->m_offsetMs != 0 ||
-             legacyAudioSample->m_track != firstBgmTrack ||
+             legacyAudioSample->m_track < firstBgmTrack ||
+             static_cast<uint64_t>(legacyAudioSample->m_track) >=
+                 declaredBgmTrackEnd ||
              !std::isfinite(legacyAudioSample->m_volume) ||
              std::abs(legacyAudioSample->m_volume - 1.0F) > 1e-6F ) {
             XERROR(
                 "RM/IMD 导出失败：自动采样必须是 timestamp=0、offset=0、"
-                "track={}、volume=1 且音频引用非空；当前为 "
+                "track 位于已声明 BGM 轨范围 [{}, {})、volume=1 "
+                "且音频引用非空；当前为 "
                 "timestamp={}、offset={}、track={}、volume={}、ref='{}'",
                 firstBgmTrack,
+                declaredBgmTrackEnd,
                 legacyAudioSample->m_timestamp,
                 legacyAudioSample->m_offsetMs,
                 legacyAudioSample->m_track,

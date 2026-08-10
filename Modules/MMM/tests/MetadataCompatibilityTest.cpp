@@ -686,10 +686,10 @@ bool testRMSingleAudioMigration(const std::filesystem::path& outputDirectory)
     return ok;
 }
 
-/// @brief 验证单音频格式拒绝无法无损表达的自动采样时间线。
+/// @brief 验证单音频格式的 BGM 轨折叠与不兼容时间线拒绝。
 /// @param outputDirectory 测试输出目录。
 /// @return 验证是否通过。
-bool testSingleAudioExporterRejection(
+bool testSingleAudioExporterCompatibility(
     const std::filesystem::path& outputDirectory)
 {
     MMM::BeatMap timedSource;
@@ -776,6 +776,33 @@ bool testSingleAudioExporterRejection(
             "osu! should round-trip a playable sample file");
     }
 
+    const auto collapsedAudioPath = outputDirectory / "Collapsed.flac";
+    ok &= check(writeTextFile(collapsedAudioPath, "fLaC"),
+                "collapsed RM/IMD fixture audio should be created");
+    MMM::BeatMap collapsedBgmSource;
+    collapsedBgmSource.m_baseMapMetadata.track_count     = 6;
+    collapsedBgmSource.m_baseMapMetadata.bgm_track_count = 5;
+    MMM::AudioSampleEvent collapsedSample;
+    collapsedSample.m_track           = 10;
+    collapsedSample.m_audioResourceId = "Collapsed.flac";
+    collapsedBgmSource.m_audioSamples.push_back(collapsedSample);
+
+    const auto collapsedBgmIMDPath = outputDirectory / "Collapsed_6k_Test.imd";
+    removeError.clear();
+    std::filesystem::remove(collapsedBgmIMDPath, removeError);
+    ok &= check(collapsedBgmSource.saveToFile(collapsedBgmIMDPath),
+                "RM/IMD should collapse one audio from a later BGM track");
+    if ( std::filesystem::exists(collapsedBgmIMDPath) ) {
+        const MMM::BeatMap reloaded =
+            MMM::BeatMap::loadFromFile(collapsedBgmIMDPath);
+        ok &= check(reloaded.m_audioSamples.size() == 1U &&
+                        reloaded.m_audioSamples.front().m_track == 6U &&
+                        reloaded.m_audioSamples.front().m_audioResourceId ==
+                            "Collapsed.flac" &&
+                        reloaded.m_baseMapMetadata.bgm_track_count == 1,
+                    "RM/IMD should reload the collapsed audio on BGM track 1");
+    }
+
     MMM::BeatMap emptyBgmSource;
     emptyBgmSource.m_baseMapMetadata.track_count     = 4;
     emptyBgmSource.m_baseMapMetadata.bgm_track_count = 2;
@@ -788,11 +815,11 @@ bool testSingleAudioExporterRejection(
     std::filesystem::remove(emptyBgmIMDPath, removeError);
     ok &= check(!emptyBgmSource.saveToFile(emptyBgmOSUPath),
                 "osu! should reject unrepresentable empty BGM tracks");
-    ok &= check(!emptyBgmSource.saveToFile(emptyBgmIMDPath),
-                "RM/IMD should reject unrepresentable empty BGM tracks");
+    ok &= check(emptyBgmSource.saveToFile(emptyBgmIMDPath),
+                "RM/IMD should ignore empty BGM track declarations");
     ok &= check(!std::filesystem::exists(emptyBgmOSUPath) &&
-                    !std::filesystem::exists(emptyBgmIMDPath),
-                "rejected empty-BGM exports should not leave partial files");
+                    std::filesystem::exists(emptyBgmIMDPath),
+                "empty-BGM exports should follow each format capability");
     return ok;
 }
 
@@ -890,7 +917,7 @@ int main(int argc, char* argv[])
     ok &= testVersion2InvalidSampleTrackRelocation(outputDirectory);
     ok &= testOSUSingleAudioMigration(outputDirectory);
     ok &= testRMSingleAudioMigration(outputDirectory);
-    ok &= testSingleAudioExporterRejection(outputDirectory);
+    ok &= testSingleAudioExporterCompatibility(outputDirectory);
     ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
 
