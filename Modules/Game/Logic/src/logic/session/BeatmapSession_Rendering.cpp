@@ -1327,8 +1327,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                 : HoverInspectKind::AudioSampleAnchor;
                         inspect.head =
                             makeBeatPoint(sample->m_timestamp, sample->m_track);
-                        if ( sample->m_offsetMs != 0 ||
-                             hoveredPart == HoverPart::SampleOffset ) {
+                        if ( sample->m_offsetMs != 0 ) {
                             inspect.end = makeBeatPoint(sample->effectiveTime(),
                                                         sample->m_track);
                         }

@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 
 #include "audio/AudioManager.h"
+#include "canvas/HoverLayerSelection.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
@@ -2797,15 +2798,8 @@ void Basic2DCanvasInteraction::handleInteractions(
     uint8_t hoveredPart     = 0;
     int     hoveredSubIndex = -1;
 
-    struct HoverCandidate {
-        entt::entity           entity{ entt::null };
-        Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
-        Logic::HoverPart       part{ Logic::HoverPart::None };
-        int                    subIndex{ -1 };
-    };
-
-    std::vector<HoverCandidate> candidates;
-    std::string                 layerSignature;
+    std::vector<HoverLayerCandidate> candidates;
+    std::string                      layerSignature;
     if ( isHovered ) {
         for ( auto it = currentSnapshot->hitboxes.rbegin();
               it != currentSnapshot->hitboxes.rend();
@@ -2818,10 +2812,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                  localMousePos.x <= hitbox.x + hitbox.w &&
                  localMousePos.y >= hitbox.y &&
                  localMousePos.y <= hitbox.y + hitbox.h ) {
-                candidates.push_back({ hitbox.entity,
-                                       hitbox.kind,
-                                       hitbox.part,
-                                       hitbox.subIndex });
+                const bool appended = appendHoverLayerCandidate(
+                    candidates,
+                    { hitbox.entity,
+                      hitbox.kind,
+                      static_cast<std::uint8_t>(hitbox.part),
+                      hitbox.subIndex });
+                if ( !appended ) continue;
                 layerSignature +=
                     std::to_string(static_cast<uint32_t>(
                         entt::to_integral(hitbox.entity))) +
@@ -2861,7 +2858,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         const auto& candidate = candidates[m_hoverLayerIndex];
         hoveredEntity         = candidate.entity;
         hoveredObjectKind     = candidate.kind;
-        hoveredPart           = static_cast<uint8_t>(candidate.part);
+        hoveredPart           = candidate.part;
         hoveredSubIndex       = candidate.subIndex;
     }
 

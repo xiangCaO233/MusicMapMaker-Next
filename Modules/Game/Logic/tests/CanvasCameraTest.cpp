@@ -2101,6 +2101,17 @@ bool testSampleHoverInspectDetails()
         XERROR("Sample hover inspect omitted audio or effective-time details");
         return false;
     }
+
+    context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity).m_offsetMs =
+        0;
+    session.update(0.0, config, true);
+    const auto* zeroOffsetSnapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !zeroOffsetSnapshot || !zeroOffsetSnapshot->hoverInspect.head.show ||
+         zeroOffsetSnapshot->hoverInspect.end.show ||
+         !near(zeroOffsetSnapshot->hoverInspect.head.time, 1.25) ) {
+        XERROR("Zero-offset sample hover inspect duplicated the trigger point");
+        return false;
+    }
     return true;
 }
 
