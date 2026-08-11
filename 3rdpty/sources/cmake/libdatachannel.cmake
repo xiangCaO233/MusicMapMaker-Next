@@ -15,6 +15,14 @@ set(RTC_UPDATE_VERSION_HEADER OFF)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libdatachannel SYSTEM)
 
+# mbedTLS 通过 C 回调调用 libdatachannel 的 C++ 传输层。Windows 默认的 /EHsc 隐含
+# /EHc，会错误假定该边界绝不抛出异常并省略必要的栈展开状态；断线竞争下异常将无法到达 TlsTransport::doRecv 的保护边界。仅为
+# libdatachannel 取消该假定，保留标准 C++ 异常模型。
+if(MSVC)
+  target_compile_options(datachannel PRIVATE /EHs /EHc-)
+  target_compile_options(datachannel-static PRIVATE /EHs /EHc-)
+endif()
+
 # usrsctp 的 Windows C 实现仍使用 Win32 min/max 宏；MinGW 严格 C99 编译时需覆盖项目全局 NOMINMAX。
 if(MINGW AND TARGET usrsctp)
   target_compile_options(usrsctp PRIVATE -UNOMINMAX)

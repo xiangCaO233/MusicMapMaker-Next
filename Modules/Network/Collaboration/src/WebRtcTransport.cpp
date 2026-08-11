@@ -159,6 +159,16 @@ public:
         bool signalingTerminalEventSent = false;
     };
 
+    /// @brief 从连接状态中原子退役、随后在锁外删除的一组 RTC 句柄。
+    struct RetiredHandles {
+        /// @brief DataChannel 句柄。
+        int dataChannelId = -1;
+        /// @brief PeerConnection 句柄。
+        int peerConnectionId = -1;
+        /// @brief WebSocket 句柄。
+        int websocketId = -1;
+    };
+
     /// @brief 停止并释放所有 libdatachannel 句柄。
     ~Impl() { stop(); }
 
@@ -181,26 +191,31 @@ public:
         control->owner      = this;
         control->role       = ConnectionRole::HostControl;
         Connection* pointer = control.get();
+        bool        opened  = false;
         {
-            std::scoped_lock lock(m_mutex);
-            if ( m_running ) return false;
-            m_isHost          = true;
-            m_creator         = creator;
-            m_participantId   = participantId;
-            m_sessionId       = sessionId;
-            m_roomName        = roomName;
-            m_signalingUrl    = makeCollaborationSignalingUrl(config.endpoint);
-            m_ownerToken      = generateOwnerToken();
-            m_localPeerId     = config.hostId;
-            m_hostId          = config.hostId;
-            m_maxParticipants = std::clamp(config.maxParticipants,
-                                           MIN_COLLABORATION_PARTICIPANTS,
-                                           MAX_COLLABORATION_PARTICIPANTS);
-            m_stopping        = false;
-            m_running         = true;
-            m_connections.push_back(std::move(control));
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            {
+                std::scoped_lock lock(m_mutex);
+                if ( m_running || m_stopping ) return false;
+                m_isHost        = true;
+                m_creator       = creator;
+                m_participantId = participantId;
+                m_sessionId     = sessionId;
+                m_roomName      = roomName;
+                m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
+                m_ownerToken   = generateOwnerToken();
+                m_localPeerId  = config.hostId;
+                m_hostId       = config.hostId;
+                m_maxParticipants = std::clamp(config.maxParticipants,
+                                               MIN_COLLABORATION_PARTICIPANTS,
+                                               MAX_COLLABORATION_PARTICIPANTS);
+                m_stopping        = false;
+                m_running         = true;
+                m_connections.push_back(std::move(control));
+            }
+            opened = openWebSocket(*pointer);
         }
-        if ( !openWebSocket(*pointer) ) {
+        if ( !opened ) {
             stop();
             return false;
         }
@@ -226,22 +241,27 @@ public:
         connection->role          = ConnectionRole::Peer;
         connection->remotePeerId  = config.hostId;
         Connection* connectionPtr = connection.get();
+        bool        opened        = false;
         {
-            std::scoped_lock lock(m_mutex);
-            if ( m_running ) return false;
-            m_isHost        = false;
-            m_creator       = creator;
-            m_participantId = participantId;
-            m_sessionId     = sessionId;
-            m_signalingUrl  = makeCollaborationSignalingUrl(config.endpoint);
-            m_roomId        = config.roomId;
-            m_localPeerId   = 0;
-            m_hostId        = config.hostId;
-            m_stopping      = false;
-            m_running       = true;
-            m_connections.push_back(std::move(connection));
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            {
+                std::scoped_lock lock(m_mutex);
+                if ( m_running || m_stopping ) return false;
+                m_isHost        = false;
+                m_creator       = creator;
+                m_participantId = participantId;
+                m_sessionId     = sessionId;
+                m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
+                m_roomId       = config.roomId;
+                m_localPeerId  = 0;
+                m_hostId       = config.hostId;
+                m_stopping     = false;
+                m_running      = true;
+                m_connections.push_back(std::move(connection));
+            }
+            opened = openWebSocket(*connectionPtr);
         }
-        if ( !openWebSocket(*connectionPtr) ) {
+        if ( !opened ) {
             stop();
             return false;
         }
@@ -271,10 +291,11 @@ public:
     /// @brief 拒绝一个由中心服务暂存的访客加入请求。
     bool rejectJoinRequest(std::string_view requestId)
     {
-        Connection* control = nullptr;
-        std::string request;
-        std::string roomId;
-        std::string ownerToken;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        Connection*      control = nullptr;
+        std::string      request;
+        std::string      roomId;
+        std::string      ownerToken;
         {
             std::scoped_lock lock(m_mutex);
             if ( !m_isHost || m_stopping || requestId.empty() ) return false;
@@ -308,9 +329,10 @@ public:
     /// @brief 主动关闭一个已经建立的访客 P2P 连接。
     bool disconnectPeer(PeerId peerId, std::string detail)
     {
-        Connection* connection       = nullptr;
-        int         dataChannelId    = -1;
-        int         peerConnectionId = -1;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        Connection*      connection       = nullptr;
+        int              dataChannelId    = -1;
+        int              peerConnectionId = -1;
         {
             std::scoped_lock lock(m_mutex);
             if ( !m_isHost || m_stopping || peerId == 0 ||
@@ -346,37 +368,58 @@ public:
     void stop()
     {
         std::vector<std::unique_ptr<Connection>> connections;
+        std::vector<RetiredHandles>              retiredHandles;
         {
-            std::scoped_lock lock(m_mutex);
-            if ( !m_running && m_connections.empty() ) return;
-            m_stopping    = true;
-            m_running     = false;
-            m_localPeerId = 0;
-            m_participantId.clear();
-            m_sessionId.clear();
-            connections = std::move(m_connections);
-            m_incomingPackets.clear();
-            m_events.clear();
-            m_pendingJoinRequests.clear();
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            {
+                std::scoped_lock lock(m_mutex);
+                if ( !m_running && m_connections.empty() ) return;
+                m_stopping  = true;
+                m_running   = false;
+                connections = std::move(m_connections);
+                m_incomingPackets.clear();
+                m_events.clear();
+                m_pendingJoinRequests.clear();
+            }
+
+            retiredHandles.reserve(connections.size());
+            for ( auto& connection : connections ) {
+                RetiredHandles handles{ connection->dataChannelId,
+                                        connection->peerConnectionId,
+                                        connection->websocketId };
+                connection->dataChannelId    = -1;
+                connection->peerConnectionId = -1;
+                connection->websocketId      = -1;
+                if ( handles.dataChannelId >= 0 ) {
+                    detachChannelCallbacks(handles.dataChannelId);
+                }
+                if ( handles.peerConnectionId >= 0 ) {
+                    detachPeerConnectionCallbacks(handles.peerConnectionId);
+                }
+                if ( handles.websocketId >= 0 ) {
+                    detachChannelCallbacks(handles.websocketId);
+                }
+                retiredHandles.push_back(handles);
+            }
         }
 
-        for ( auto& connection : connections ) {
-            if ( connection->dataChannelId >= 0 ) {
-                rtcDeleteDataChannel(connection->dataChannelId);
-                connection->dataChannelId = -1;
+        for ( const auto& handles : retiredHandles ) {
+            if ( handles.dataChannelId >= 0 ) {
+                rtcDeleteDataChannel(handles.dataChannelId);
             }
-            if ( connection->peerConnectionId >= 0 ) {
-                rtcDeletePeerConnection(connection->peerConnectionId);
-                connection->peerConnectionId = -1;
+            if ( handles.peerConnectionId >= 0 ) {
+                rtcDeletePeerConnection(handles.peerConnectionId);
             }
-            if ( connection->websocketId >= 0 ) {
-                rtcDeleteWebSocket(connection->websocketId);
-                connection->websocketId = -1;
+            if ( handles.websocketId >= 0 ) {
+                rtcDeleteWebSocket(handles.websocketId);
             }
         }
 
         std::scoped_lock lock(m_mutex);
-        m_stopping = false;
+        m_stopping    = false;
+        m_localPeerId = 0;
+        m_participantId.clear();
+        m_sessionId.clear();
         m_roomId.clear();
         m_roomName.clear();
         m_ownerToken.clear();
@@ -419,7 +462,8 @@ public:
             return false;
         }
 
-        int dataChannelId = -1;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        int              dataChannelId = -1;
         {
             std::scoped_lock lock(m_mutex);
             for ( const auto& connection : m_connections ) {
@@ -460,9 +504,30 @@ public:
     }
 
 private:
+    /// @brief 在句柄删除前切断 DataChannel 或 WebSocket 的全部回调。
+    static void detachChannelCallbacks(int channelId)
+    {
+        rtcSetOpenCallback(channelId, nullptr);
+        rtcSetMessageCallback(channelId, nullptr);
+        rtcSetClosedCallback(channelId, nullptr);
+        rtcSetErrorCallback(channelId, nullptr);
+        rtcSetUserPointer(channelId, nullptr);
+    }
+
+    /// @brief 在句柄删除前切断 PeerConnection 的全部回调。
+    static void detachPeerConnectionCallbacks(int peerConnectionId)
+    {
+        rtcSetLocalDescriptionCallback(peerConnectionId, nullptr);
+        rtcSetLocalCandidateCallback(peerConnectionId, nullptr);
+        rtcSetStateChangeCallback(peerConnectionId, nullptr);
+        rtcSetDataChannelCallback(peerConnectionId, nullptr);
+        rtcSetUserPointer(peerConnectionId, nullptr);
+    }
+
     /// @brief 创建并配置一个中心 WebSocket。
     /// @warning libdatachannel C API 尚未暴露 CA 注入，当前 mbedTLS
     /// 预编译库无法建立系统信任链，因此 WSS 暂时只提供传输加密。
+    /// @warning 调用方必须持有 m_rtcApiMutex，保证句柄注册期间连接不会退役。
     bool openWebSocket(Connection& connection)
     {
         rtcWsConfiguration config{};
@@ -496,12 +561,17 @@ private:
         connection->requestId       = std::move(requestId);
         connection->approvedCreator = std::move(approvedCreator);
         Connection* pointer         = connection.get();
+        bool        opened          = false;
         {
-            std::scoped_lock lock(m_mutex);
-            if ( m_stopping || !m_running ) return false;
-            m_connections.push_back(std::move(connection));
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            {
+                std::scoped_lock lock(m_mutex);
+                if ( m_stopping || !m_running ) return false;
+                m_connections.push_back(std::move(connection));
+            }
+            opened = openWebSocket(*pointer);
         }
-        if ( !openWebSocket(*pointer) ) {
+        if ( !opened ) {
             pushEvent(WebRtcTransportEventType::Error,
                       0,
                       {},
@@ -535,13 +605,19 @@ private:
     bool sendSignal(Connection& connection, const nlohmann::json& message)
     {
         const std::string payload = message.dump();
-        if ( connection.websocketId < 0 ||
-             payload.size() >
-                 static_cast<std::size_t>(MAX_SIGNALING_MESSAGE_BYTES) ||
-             !rtcIsOpen(connection.websocketId) ) {
+        if ( payload.size() >
+             static_cast<std::size_t>(MAX_SIGNALING_MESSAGE_BYTES) ) {
             return false;
         }
-        return rtcSendMessage(connection.websocketId, payload.c_str(), -1) ==
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        int              websocketId = -1;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( m_stopping ) return false;
+            websocketId = connection.websocketId;
+        }
+        if ( websocketId < 0 || !rtcIsOpen(websocketId) ) return false;
+        return rtcSendMessage(websocketId, payload.c_str(), -1) ==
                RTC_ERR_SUCCESS;
     }
 
@@ -569,9 +645,11 @@ private:
     /// @brief 创建并配置一个 WebRTC PeerConnection。
     bool createPeerConnection(Connection& connection, bool createDataChannel)
     {
+        std::unique_lock         rtcLock(m_rtcApiMutex);
         std::vector<std::string> iceServers;
         {
             std::scoped_lock lock(m_mutex);
+            if ( m_stopping || !m_running ) return false;
             iceServers = m_iceServers;
         }
         std::vector<const char*> iceServerPointers;
@@ -608,8 +686,10 @@ private:
         const int         dataChannelId = rtcCreateDataChannelEx(
             peerConnectionId, label.c_str(), &channelConfig);
         if ( dataChannelId < 0 ) {
-            rtcDeletePeerConnection(peerConnectionId);
+            detachPeerConnectionCallbacks(peerConnectionId);
             connection.peerConnectionId = -1;
+            rtcLock.unlock();
+            rtcDeletePeerConnection(peerConnectionId);
             return false;
         }
         configureDataChannel(connection, dataChannelId);
@@ -619,6 +699,11 @@ private:
     /// @brief 配置 DataChannel 的可靠消息回调。
     void configureDataChannel(Connection& connection, int dataChannelId)
     {
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( m_stopping || !m_running ) return;
+        }
         connection.dataChannelId = dataChannelId;
         rtcSetUserPointer(dataChannelId, &connection);
         rtcSetOpenCallback(dataChannelId, &Impl::onDataChannelOpen);
@@ -763,7 +848,15 @@ private:
     void handleNegotiation(Connection&           connection,
                            const nlohmann::json& message, std::string_view type)
     {
-        if ( connection.peerConnectionId < 0 ) {
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        int              peerConnectionId = -1;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( !m_stopping ) {
+                peerConnectionId = connection.peerConnectionId;
+            }
+        }
+        if ( peerConnectionId < 0 ) {
             pushEvent(WebRtcTransportEventType::Error,
                       connection.remotePeerId,
                       connection.remoteCreator,
@@ -776,9 +869,8 @@ private:
             if ( !readStringField(message, "sdp", sdp) ||
                  !readStringField(
                      message, "descriptionType", descriptionType) ||
-                 rtcSetRemoteDescription(connection.peerConnectionId,
-                                         sdp.c_str(),
-                                         descriptionType.c_str()) !=
+                 rtcSetRemoteDescription(
+                     peerConnectionId, sdp.c_str(), descriptionType.c_str()) !=
                      RTC_ERR_SUCCESS ) {
                 pushEvent(WebRtcTransportEventType::Error,
                           connection.remotePeerId,
@@ -792,7 +884,7 @@ private:
         std::string mid;
         if ( !readStringField(message, "candidate", candidate) ||
              !readStringField(message, "mid", mid) ||
-             rtcAddRemoteCandidate(connection.peerConnectionId,
+             rtcAddRemoteCandidate(peerConnectionId,
                                    candidate.c_str(),
                                    mid.c_str()) != RTC_ERR_SUCCESS ) {
             pushEvent(WebRtcTransportEventType::Error,
@@ -1019,8 +1111,9 @@ private:
     /// @brief 向中心服务上报房主当前真实 P2P 在线人数。
     void sendParticipantCount()
     {
-        int         controlWebSocketId = -1;
-        std::size_t participants       = 1;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        int              controlWebSocketId = -1;
+        std::size_t      participants       = 1;
         {
             std::scoped_lock lock(m_mutex);
             if ( !m_isHost || m_stopping ) return;
@@ -1062,10 +1155,11 @@ private:
     /// @brief 双方均确认 DataChannel 打开后释放瞬时信令连接。
     void closeSignalingIfReady(Connection& connection)
     {
-        int websocketId = -1;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        int              websocketId = -1;
         {
             std::scoped_lock lock(m_mutex);
-            if ( connection.connectedEventSent &&
+            if ( !m_stopping && connection.connectedEventSent &&
                  connection.remoteDataChannelReady ) {
                 websocketId = connection.websocketId;
             }
@@ -1227,19 +1321,25 @@ private:
             rtcDeleteDataChannel(dataChannelId);
             return;
         }
+        Impl&            owner = *connection->owner;
+        std::scoped_lock rtcLock(owner.m_rtcApiMutex);
+        {
+            std::scoped_lock lock(owner.m_mutex);
+            if ( owner.m_stopping || !owner.m_running ) return;
+        }
         std::array<char, 64> label{};
         const int            labelLength = rtcGetDataChannelLabel(
             dataChannelId, label.data(), static_cast<int>(label.size()));
         if ( labelLength <= 0 ||
              std::string_view(label.data()) != COLLABORATION_CHANNEL_LABEL ) {
             rtcDeleteDataChannel(dataChannelId);
-            connection->owner->pushEvent(WebRtcTransportEventType::Error,
-                                         connection->remotePeerId,
-                                         connection->remoteCreator,
-                                         "unexpected_data_channel");
+            owner.pushEvent(WebRtcTransportEventType::Error,
+                            connection->remotePeerId,
+                            connection->remoteCreator,
+                            "unexpected_data_channel");
             return;
         }
-        connection->owner->configureDataChannel(*connection, dataChannelId);
+        owner.configureDataChannel(*connection, dataChannelId);
     }
 
     /// @brief DataChannel 打开后与对端确认，再释放瞬时信令连接。
@@ -1340,6 +1440,8 @@ private:
         if ( updateParticipants ) sendParticipantCount();
     }
 
+    /// @brief 串行化 RTC 句柄创建、发送、关闭与退役。
+    mutable std::recursive_mutex m_rtcApiMutex;
     /// @brief 保护跨 libdatachannel 回调线程共享的队列和连接表。
     mutable std::mutex m_mutex;
     /// @brief 传输是否已启动。

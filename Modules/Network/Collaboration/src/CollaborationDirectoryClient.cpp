@@ -74,6 +74,7 @@ public:
     /// 预编译库无法建立系统信任链，因此 WSS 暂时只提供传输加密。
     bool connect(CollaborationServerEndpoint endpoint)
     {
+        std::scoped_lock  rtcLock(m_rtcApiMutex);
         const std::string signalingUrl =
             makeCollaborationSignalingUrl(endpoint);
         if ( signalingUrl.empty() || m_websocketId >= 0 ) {
@@ -114,9 +115,16 @@ public:
     /// @brief 关闭目录连接并清空状态。
     void disconnect()
     {
-        m_acceptCallbacks.store(false, std::memory_order_release);
-        const int websocketId = std::exchange(m_websocketId, -1);
-        if ( websocketId >= 0 ) rtcDeleteWebSocket(websocketId);
+        int websocketId = -1;
+        {
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            m_acceptCallbacks.store(false, std::memory_order_release);
+            websocketId = std::exchange(m_websocketId, -1);
+            if ( websocketId >= 0 ) {
+                detachWebSocketCallbacks(websocketId);
+                rtcDeleteWebSocket(websocketId);
+            }
+        }
         {
             std::scoped_lock lock(m_eventMutex);
             m_events.clear();
@@ -177,10 +185,24 @@ public:
     const CollaborationServerEndpoint& endpoint() const { return m_endpoint; }
 
 private:
+    /// @brief 在删除 WebSocket 前切断全部回调和用户指针。
+    static void detachWebSocketCallbacks(int websocketId)
+    {
+        rtcSetOpenCallback(websocketId, nullptr);
+        rtcSetMessageCallback(websocketId, nullptr);
+        rtcSetClosedCallback(websocketId, nullptr);
+        rtcSetErrorCallback(websocketId, nullptr);
+        rtcSetUserPointer(websocketId, nullptr);
+    }
+
     /// @brief 发送房间列表订阅请求。
     bool sendListRequest() const
     {
-        if ( m_websocketId < 0 || !rtcIsOpen(m_websocketId) ) return false;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        if ( !m_acceptCallbacks.load(std::memory_order_acquire) ||
+             m_websocketId < 0 || !rtcIsOpen(m_websocketId) ) {
+            return false;
+        }
         const nlohmann::json request = {
             { "type", "list_rooms" },
             { "version", DIRECTORY_PROTOCOL_VERSION },
@@ -293,6 +315,8 @@ private:
 
     /// @brief 当前 WebSocket 句柄。
     int m_websocketId = -1;
+    /// @brief 串行化目录句柄的发送、退役与删除前解绑。
+    mutable std::recursive_mutex m_rtcApiMutex;
     /// @brief 是否仍接受第三方线程回调。
     std::atomic_bool m_acceptCallbacks{ false };
     /// @brief 防止打开回调与注册后的状态补检重复发送目录请求。
