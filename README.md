@@ -68,7 +68,7 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 | `develop` | 日常开发与集成分支 | 包含即将合入稳定线的变化；适合本地验证，稳定性可能低于 `main` |
 | `ci` | 连续构建与发布编排分支 | push 会触发 Windows 三套、Linux 两套和 macOS ARM64 构建，并暂存到 `release/<产物目录>`；网站发布仍由 `workflow_dispatch` 的 `website-release` 任务显式执行 |
 
-原生 MSVC 脚本已不再 `fetch`、`checkout ci` 或 `reset --hard`；无论当前位于 `main`、`develop`、功能分支还是某个 detached commit，都会原样构建当前工作树。
+原生 MSVC、MinGW UCRT64 和 MinGW CLANG64 脚本均不再 `fetch`、`checkout ci` 或 `reset --hard`；无论当前位于 `main`、`develop`、功能分支还是某个 detached commit，都会原样构建当前工作树。
 
 ### 按需构建
 
@@ -264,7 +264,7 @@ Build scripts always build the currently checked-out commit. A branch determines
 | `develop` | Day-to-day development and integration | Contains changes intended for the stable line; appropriate for local validation, but potentially less stable than `main` |
 | `ci` | Continuous build and release orchestration | A push triggers three Windows builds, two Linux builds, and macOS ARM64, staging them under `release/<artifact-directory>`; website publication remains an explicit `workflow_dispatch` `website-release` job |
 
-The native MSVC script no longer performs `fetch`, `checkout ci`, or `reset --hard`. Whether the checkout is on `main`, `develop`, a feature branch, or a detached commit, it builds that exact working tree.
+The native MSVC, MinGW UCRT64, and MinGW CLANG64 scripts no longer perform `fetch`, `checkout ci`, or `reset --hard`. Whether the checkout is on `main`, `develop`, a feature branch, or a detached commit, they build that exact working tree.
 
 ### On-demand builds
 
