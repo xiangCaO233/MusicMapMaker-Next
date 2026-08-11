@@ -23,7 +23,6 @@ Options:
 Environment overrides:
   MSVC_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
   WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
-  VCPKG_ROOT             Default: ${WINDOWS_CROSS_ROOT}/vcpkg
   VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
   CMAKE_GENERATOR        Default: Ninja
 EOF
@@ -187,7 +186,6 @@ if [[ ! -f "${toolchainFile}" ]]; then
 fi
 
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
-export VCPKG_ROOT="${VCPKG_ROOT:-${WINDOWS_CROSS_ROOT}/vcpkg}"
 export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 export MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231}"
 export WINSDK_BASE="${WINSDK_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10}"
@@ -208,11 +206,6 @@ requireCommand llvm-lib-22
 requireCommand llvm-lib
 requireCommand llvm-rc-22
 requireCommand llvm-mt-22
-
-if [[ ! -d "${VCPKG_ROOT}" ]]; then
-    printf "error: VCPKG_ROOT does not exist: %s\n" "${VCPKG_ROOT}" >&2
-    exit 1
-fi
 
 if [[ ! -d "${VULKAN_SDK}" ]]; then
     printf "error: VULKAN_SDK does not exist: %s\n" "${VULKAN_SDK}" >&2

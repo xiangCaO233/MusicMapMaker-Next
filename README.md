@@ -56,7 +56,7 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 - [MSYS2](https://www.msys2.org/)（MinGW-w64 UCRT/CLANG64 环境）
 - [Xcode](https://developer.apple.com/xcode/)（AppleClang）
 - [CMake 下载](https://cmake.org/download/)、[Ninja](https://ninja-build.org/)、[Git LFS](https://git-lfs.com/)
-- [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home)、[vcpkg](https://github.com/microsoft/vcpkg)
+- [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home)
 
 ### 分支与产物
 
@@ -76,7 +76,7 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 
 #### Windows 原生 MSVC
 
-先安装 Microsoft C++ Build Tools（勾选“使用 C++ 的桌面开发”）、CMake 3.31+、Ninja、Git LFS、Vulkan SDK 和 vcpkg，并设置 `VULKAN_SDK`、`VCPKG_ROOT`。然后在 “Developer PowerShell for VS” 中执行：
+先安装 Microsoft C++ Build Tools（勾选“使用 C++ 的桌面开发”）、CMake 3.31+、Ninja、Git LFS 和 Vulkan SDK，并设置 `VULKAN_SDK`。然后在 “Developer PowerShell for VS” 中执行：
 
 ```powershell
 git lfs install
@@ -252,7 +252,7 @@ Official compiler and build-tool downloads:
 - [MSYS2](https://www.msys2.org/) for MinGW-w64 UCRT/CLANG64 environments
 - [Xcode](https://developer.apple.com/xcode/) for AppleClang
 - [CMake download](https://cmake.org/download/), [Ninja](https://ninja-build.org/), and [Git LFS](https://git-lfs.com/)
-- [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) and [vcpkg](https://github.com/microsoft/vcpkg)
+- [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home)
 
 ### Branches and artifacts
 
@@ -272,7 +272,7 @@ Prebuilt dependencies are managed by Git LFS. Clone with `GIT_LFS_SKIP_SMUDGE=1`
 
 #### Windows native MSVC
 
-Install Microsoft C++ Build Tools with “Desktop development with C++”, CMake 3.31+, Ninja, Git LFS, the Vulkan SDK, and vcpkg. Set `VULKAN_SDK` and `VCPKG_ROOT`, then run in “Developer PowerShell for VS”:
+Install Microsoft C++ Build Tools with “Desktop development with C++”, CMake 3.31+, Ninja, Git LFS, and the Vulkan SDK. Set `VULKAN_SDK`, then run in “Developer PowerShell for VS”:
 
 ```powershell
 git lfs install
