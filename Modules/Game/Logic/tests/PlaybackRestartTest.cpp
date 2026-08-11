@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/PlaybackController.h"
@@ -338,6 +339,42 @@ bool testEditorConfigSynchronizesGlobalKeySoundControls()
     return true;
 }
 
+/// @brief 验证工具栏配置回写不会覆盖由 AppConfig 直接维护的协作视野模式。
+/// @return 调整分拍数后引擎与全局配置仍保留协作视野模式时返回 true。
+bool testBeatDivisorUpdatePreservesCollaborationViewportRenderMode()
+{
+    auto&      engine               = MMM::Logic::EditorEngine::instance();
+    auto&      appConfig            = MMM::Config::AppConfig::instance();
+    const auto originalEngineConfig = engine.getEditorConfig();
+    const auto originalGlobalMode =
+        appConfig.getEditorSettings().collaborationViewportRenderMode;
+
+    appConfig.getEditorSettings().collaborationViewportRenderMode =
+        MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+    auto toolbarConfig = originalEngineConfig;
+    toolbarConfig.settings.beatDivisor =
+        toolbarConfig.settings.beatDivisor == 64
+            ? 63
+            : toolbarConfig.settings.beatDivisor + 1;
+    engine.setEditorConfig(toolbarConfig);
+
+    const auto updatedEngineConfig = engine.getEditorConfig();
+    const bool preserved =
+        updatedEngineConfig.settings.collaborationViewportRenderMode ==
+            MMM::Config::CollaborationViewportRenderMode::TrackEdge &&
+        appConfig.getEditorSettings().collaborationViewportRenderMode ==
+            MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+
+    appConfig.getEditorSettings().collaborationViewportRenderMode =
+        originalGlobalMode;
+    engine.setEditorConfig(originalEngineConfig);
+    if ( !preserved ) {
+        XERROR("Beat divisor update reset collaboration viewport render mode");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证手动跳转取消自然结束后的自动回到开头。
 bool testSeekCancelsPendingRestart()
 {
@@ -370,6 +407,7 @@ int main()
                    testBackgroundSessionCannotControlTransport() &&
                    testBackgroundSessionCannotControlKeySoundGain() &&
                    testEditorConfigSynchronizesGlobalKeySoundControls() &&
+                   testBeatDivisorUpdatePreservesCollaborationViewportRenderMode() &&
                    testSeekCancelsPendingRestart()
                ? 0
                : 1;

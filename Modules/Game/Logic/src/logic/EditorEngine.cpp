@@ -863,7 +863,9 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
-    target.settings.shortcutConfig       = source.settings.shortcutConfig;
+    target.settings.collaborationViewportRenderMode =
+        source.settings.collaborationViewportRenderMode;
+    target.settings.shortcutConfig = source.settings.shortcutConfig;
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
 }
