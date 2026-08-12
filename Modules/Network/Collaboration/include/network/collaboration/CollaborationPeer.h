@@ -123,6 +123,13 @@ public:
     /// @return 仅房主且已经提交至少一个版本时返回 true。
     [[nodiscard]] bool setStateSnapshot(ByteBuffer payload);
 
+    /// @brief 更新房主指定修订对应的完整状态快照。
+    /// @param revision 快照实际物化完成的权威修订号。
+    /// @param payload 可独立恢复的完整谱面负载。
+    /// @return 修订不超过当前协议状态且负载合法时返回 true。
+    [[nodiscard]] bool setStateSnapshot(std::uint64_t revision,
+                                        ByteBuffer    payload);
+
     /// @brief 房主移除一个访客及其确认状态。
     /// @param peerId 访客标识。
     void removeParticipant(PeerId peerId);

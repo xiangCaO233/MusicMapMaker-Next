@@ -777,8 +777,13 @@ void pumpPeers(CollaborationPeer&                               host,
         }
         host.update();
     }
+    const ByteBuffer partialSnapshot{ 0xFA, 0xCE, 0x04 };
     const ByteBuffer fullSnapshot{ 0xFA, 0xCE, 0x05 };
-    if ( host.appliedRevision() != 5 || !host.setStateSnapshot(fullSnapshot) ) {
+    if ( host.appliedRevision() != 5 ||
+         host.setStateSnapshot(6, fullSnapshot) ||
+         !host.setStateSnapshot(4, partialSnapshot) ||
+         host.setStateSnapshot(3, partialSnapshot) ||
+         !host.setStateSnapshot(5, fullSnapshot) ) {
         return false;
     }
 

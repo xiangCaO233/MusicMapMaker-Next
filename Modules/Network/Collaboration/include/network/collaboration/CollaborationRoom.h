@@ -254,6 +254,9 @@ public:
     [[nodiscard]] CollaborationResourceSyncProgress resourceProgress() const;
 
 private:
+    /// @brief 隔离无锁队列与后台任务生命周期的私有实现。
+    class RemoteOperationPipeline;
+
     /// @brief 驱动目录订阅并在断线后低频重连。
     /// @warning UI 热路径：只处理有界事件队列，重连受时间节流。
     void updateDirectory();
@@ -265,9 +268,29 @@ private:
     void handleTransportEvent(const WebRtcTransportEvent& event);
     /// @brief 在访客取得 PeerId 后创建协作状态机。
     void ensureGuestPeer();
-    /// @brief 应用一条房主已排序的规范化谱面操作并按需回灌本地视图。
-    /// @warning UI 低频提交路径：可能物化一次完整谱面；不得放入每帧轮询分支。
+    /// @brief 将一条房主已排序的规范化谱面操作排入后台文档流水线。
+    /// @warning UI 热路径：只整理常量级元数据并写入无锁队列，不得解压、物化
+    /// 完整谱面或等待后台任务。
     void handleCommittedOperation(const CommittedOperation& operation);
+    /// @brief 确保无锁远端操作队列已有一个后台消费者。
+    /// @warning UI 热路径：每次远端提交调用；只在消费者空闲时向共享线程池提交
+    /// 一个串行任务，不得等待任务结束。
+    void scheduleRemoteOperationWorker();
+    /// @brief 串行消费权威提交并生成可交给逻辑线程的谱面结果。
+    /// @warning 后台任务路径：允许执行内存解压、JSON 合并和谱面物化，禁止访问
+    /// UI、ECS 或直接调用本地谱面回调。
+    void processRemoteOperations();
+    /// @brief 在 UI 帧内有界消费后台协作文档结果。
+    /// @warning UI 热路径：每帧最多处理固定数量结果，只移动智能指针并触发
+    /// 非阻塞逻辑命令回调。
+    void processRemoteOperationResults();
+    /// @brief 在房主快照追上协议修订后登记等待中的新访客。
+    /// @warning UI 热路径：每帧仅比较修订号；满足条件时才消费低频连接事件。
+    void processPendingPeerConnections();
+    /// @brief 停止并清空远端操作流水线，然后重置规范协作文档。
+    /// @warning 房间生命周期低频阻塞点：仅在创建、加入、断开或析构时调用，
+    /// 可能等待正在执行的纯内存后台任务结束。
+    void resetRemoteOperationPipeline();
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
     /// @brief 在权威文档上重放尚未提交的本地增量，构造本机可见谱面。
@@ -327,6 +350,12 @@ private:
     BeatmapDocumentCodec m_localMutationCodec;
     /// @brief 远端提交数据的本地逻辑命令入口。
     ApplyBeatmapCallback m_applyBeatmapCallback;
+    /// @brief 私有无锁队列、消费者状态与后台任务生命周期。
+    std::unique_ptr<RemoteOperationPipeline> m_remoteOperationPipeline;
+    /// @brief 房主等待最新文档快照完成后再登记的访客连接事件。
+    std::deque<WebRtcTransportEvent> m_pendingPeerConnections;
+    /// @brief 已发布给 Peer 且可安全交给新访客的文档修订号。
+    std::uint64_t m_publishedDocumentRevision{ 0 };
     /// @brief 访客完成资源校验后的会话绑定入口。
     ResourceBundleCallback m_resourceBundleCallback;
     /// @brief 后台资源清单和分块状态机。

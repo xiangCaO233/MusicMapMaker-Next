@@ -15,8 +15,14 @@ target_include_directories(NetworkCollaboration
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(NetworkCollaboration PUBLIC MMM)
 target_link_libraries(
-  NetworkCollaboration PRIVATE 3rd_libdatachannel 3rd_nlohmann_json 3rd_miniz
-                               Config Log Runtime)
+  NetworkCollaboration
+  PRIVATE 3rd_concurrentqueue
+          3rd_libdatachannel
+          3rd_nlohmann_json
+          3rd_miniz
+          Config
+          Log
+          Runtime)
 
 # RTC 诊断测试覆盖配置持久化以及 TURN 长期凭据脱敏。
 mmm_add_test_executable(Collaboration RtcDiagnosticLoggingTest
@@ -58,8 +64,9 @@ add_test(NAME CollaborationResourceSyncTest
 # 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
 mmm_add_test_executable(Collaboration CollaborationRoomTest
                         tests/CollaborationRoomTest.cpp)
-target_link_libraries(CollaborationRoomTest PRIVATE NetworkCollaboration
-                                                    NetworkCollaborationServer)
+target_link_libraries(
+  CollaborationRoomTest PRIVATE NetworkCollaboration NetworkCollaborationServer
+                                Runtime)
 # 同进程混用 libdatachannel 服务端与 WebRTC 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external`
 # 链路保留为手动部署探针。 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
 

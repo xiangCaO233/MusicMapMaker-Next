@@ -162,12 +162,20 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
 
 bool CollaborationPeer::setStateSnapshot(ByteBuffer payload)
 {
-    if ( !m_valid || !m_config.isHost || m_appliedRevision == 0 ||
+    return setStateSnapshot(m_appliedRevision, std::move(payload));
+}
+
+bool CollaborationPeer::setStateSnapshot(std::uint64_t revision,
+                                         ByteBuffer    payload)
+{
+    if ( !m_valid || !m_config.isHost || revision == 0 ||
+         revision > m_appliedRevision ||
+         (m_stateSnapshot && revision < m_stateSnapshot->revision) ||
          payload.empty() ||
          payload.size() > m_config.limits.maxOperationBytes ) {
         return false;
     }
-    m_stateSnapshot = StateSnapshot{ m_appliedRevision, std::move(payload) };
+    m_stateSnapshot = StateSnapshot{ revision, std::move(payload) };
     return true;
 }
 

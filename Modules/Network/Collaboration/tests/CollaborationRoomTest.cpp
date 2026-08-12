@@ -1,6 +1,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 #include "network/collaboration/CollaborationDirectoryClient.h"
 #include "network/collaboration_server/CollaborationSignalingServer.h"
+#include "runtime/AppThreadPool.h"
 
 #include "log/colorful-log.h"
 
@@ -1002,35 +1003,39 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
 int main(int argc, char** argv)
 {
     if ( argc < 2 || !argv[1] ) return 3;
+    auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+    appThreadPool.init();
     const std::string_view mode(argv[1]);
+    int                    result = 3;
     if ( mode == "p2p" && argc == 2 ) {
-        return testPublicDirectoryWebRtcRoom() && testHostAdmissionControl()
-                   ? 0
-                   : 1;
-    }
-    if ( mode == "resource" && argc == 2 ) {
-        return testOneGuestResourceSync() ? 0 : 2;
-    }
-    if ( mode == "external" && argc == 5 ) {
+        result = testPublicDirectoryWebRtcRoom() && testHostAdmissionControl()
+                     ? 0
+                     : 1;
+    } else if ( mode == "resource" && argc == 2 ) {
+        result = testOneGuestResourceSync() ? 0 : 2;
+    } else if ( mode == "external" && argc == 5 ) {
         std::uint32_t          port = 0;
         const std::string_view portText(argv[3]);
         const auto [end, error] = std::from_chars(
             portText.data(), portText.data() + portText.size(), port);
         if ( error != std::errc{} || end != portText.data() + portText.size() ||
              port == 0 || port > 65535 ) {
-            return 3;
+            result = 3;
+        } else {
+            const std::string_view tlsText(argv[4]);
+            if ( tlsText == "true" || tlsText == "false" ) {
+                CollaborationServerEndpoint endpoint;
+                endpoint.address       = argv[2];
+                endpoint.signalingPort = static_cast<std::uint16_t>(port);
+                endpoint.useTls        = tlsText == "true";
+                XLogger::init("CollaborationRoomTest");
+                const bool success =
+                    testExternalPublicDirectoryWebRtcRoom(std::move(endpoint));
+                XLogger::shutdown();
+                result = success ? 0 : 1;
+            }
         }
-        const std::string_view tlsText(argv[4]);
-        if ( tlsText != "true" && tlsText != "false" ) return 3;
-        CollaborationServerEndpoint endpoint;
-        endpoint.address       = argv[2];
-        endpoint.signalingPort = static_cast<std::uint16_t>(port);
-        endpoint.useTls        = tlsText == "true";
-        XLogger::init("CollaborationRoomTest");
-        const bool success =
-            testExternalPublicDirectoryWebRtcRoom(std::move(endpoint));
-        XLogger::shutdown();
-        return success ? 0 : 1;
     }
-    return 3;
+    appThreadPool.shutdown();
+    return result;
 }

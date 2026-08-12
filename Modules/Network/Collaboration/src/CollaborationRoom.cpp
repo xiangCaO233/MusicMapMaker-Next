@@ -1,12 +1,19 @@
 #include "network/collaboration/CollaborationRoom.h"
 
 #include "config/CreatorIdentity.h"
+#include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
+
+#include <concurrentqueue.h>
+#include <ice/thread/ThreadPool.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <utility>
+#include <vector>
 
 namespace MMM::Network::Collaboration
 {
@@ -20,6 +27,8 @@ constexpr std::size_t MAX_COLLABORATION_LOG_ENTRIES = 1000;
 constexpr std::size_t MAX_TRANSPORT_EVENTS_PER_UPDATE = 256;
 /// @brief 每帧最多向权威 Peer 提交的本地谱面操作数。
 constexpr std::size_t MAX_LOCAL_OPERATIONS_PER_UPDATE = 256;
+/// @brief 每帧最多向逻辑线程发布的后台谱面合并结果数。
+constexpr std::size_t MAX_REMOTE_RESULTS_PER_UPDATE = 4;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
 
@@ -51,11 +60,65 @@ constexpr std::uint32_t MAX_VIEWPORT_PUBLISH_RATE_HZ = 60;
 }
 }  // namespace
 
+/// @brief 隔离协作文档后台流水线的队列和任务生命周期实现。
+class CollaborationRoom::RemoteOperationPipeline
+{
+public:
+    /// @brief 后台协作文档流水线接收的一条权威提交。
+    struct Task {
+        /// @brief 房主已经排序的提交内容。
+        CommittedOperation operation;
+        /// @brief 提交者当前对应的 PeerId。
+        PeerId peerId{ 0 };
+        /// @brief 提交者显示身份。
+        std::string creator;
+        /// @brief 当前实例是否为房主，用于生成最新重同步快照。
+        bool host{ false };
+        /// @brief 本地待确认操作是否需要在权威文档上重放。
+        bool reapplyLocalState{ false };
+        /// @brief 本次提交是否由当前进程发起。
+        bool originatedLocally{ false };
+    };
+
+    /// @brief 后台协作文档流水线交还 UI 线程的有界结果。
+    struct Result {
+        /// @brief 提交者当前对应的 PeerId。
+        PeerId peerId{ 0 };
+        /// @brief 提交者稳定协作标识。
+        ParticipantId participantId;
+        /// @brief 提交者显示身份。
+        std::string creator;
+        /// @brief 提交修订号。
+        std::uint64_t revision{ 0 };
+        /// @brief 后台合并成功后需要替换的谱面类别。
+        ::MMM::BeatmapMutationFlags flags{ ::MMM::BeatmapMutationFlags::None };
+        /// @brief 已重放本地待确认操作的可见谱面。
+        std::shared_ptr<::MMM::BeatMap> beatmap;
+        /// @brief 房主用于后续访客重同步的最新快照。
+        std::optional<ByteBuffer> hostSnapshot;
+        /// @brief 后台处理失败时写入协作日志的错误标识。
+        std::string error;
+    };
+
+    /// @brief UI 线程向后台文档消费者投递的无锁权威提交队列。
+    moodycamel::ConcurrentQueue<Task> tasks;
+    /// @brief 后台文档消费者向 UI 线程发布的无锁结果队列。
+    moodycamel::ConcurrentQueue<Result> results;
+    /// @brief 后台消费者状态：0 为空闲、1 为运行、2 为运行且收到新唤醒。
+    /// @warning UI 线程在提交任务后使用 acq_rel 更新，后台消费者在排空边界
+    /// 使用 acq_rel 交接；只协调唯一消费者，不承载文档数据同步。
+    std::atomic_uint8_t workerState{ 0U };
+    /// @brief 已提交后台消费者任务，用于房间销毁前完成全部生命周期握手。
+    std::vector<std::future<void>> workerFutures;
+};
+
 CollaborationRoom::CollaborationRoom()
     : m_nextDirectoryReconnect(std::chrono::steady_clock::now())
     , m_startedAt(std::chrono::steady_clock::now())
     , m_nextViewportPublish(std::chrono::steady_clock::now())
 {
+    m_remoteOperationPipeline = std::make_unique<RemoteOperationPipeline>();
+    m_remoteOperationPipeline->workerFutures.reserve(4U);
 }
 
 CollaborationRoom::~CollaborationRoom()
@@ -64,6 +127,7 @@ CollaborationRoom::~CollaborationRoom()
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
+    resetRemoteOperationPipeline();
 }
 
 bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
@@ -111,7 +175,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_nextViewportPublish = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
-    m_documentCodec.reset();
+    resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(true, std::memory_order_relaxed);
@@ -201,7 +265,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_nextViewportPublish = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
-    m_documentCodec.reset();
+    resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(false, std::memory_order_relaxed);
@@ -372,7 +436,7 @@ void CollaborationRoom::disconnect()
     m_participantId.clear();
     m_operationSessionId.clear();
     m_lastError.clear();
-    m_documentCodec.reset();
+    resetRemoteOperationPipeline();
     m_resourceSync.reset();
     m_resourceManifest.reset();
     m_resourceManifestRecipients.clear();
@@ -387,6 +451,8 @@ void CollaborationRoom::disconnect()
 void CollaborationRoom::update()
 {
     updateDirectory();
+    processRemoteOperationResults();
+    processPendingPeerConnections();
     if ( !m_transport ) return;
 
     ensureGuestPeer();
@@ -664,6 +730,19 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
+            if ( m_peer &&
+                 m_publishedDocumentRevision < m_peer->appliedRevision() ) {
+                const bool alreadyPending =
+                    std::any_of(m_pendingPeerConnections.begin(),
+                                m_pendingPeerConnections.end(),
+                                [&event](const WebRtcTransportEvent& pending) {
+                                    return pending.peerId == event.peerId;
+                                });
+                if ( !alreadyPending ) {
+                    m_pendingPeerConnections.push_back(event);
+                }
+                break;
+            }
             if ( !m_peer || !m_peer->addParticipant(event.peerId,
                                                     event.participantId,
                                                     event.sessionId,
@@ -690,6 +769,10 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::PeerDisconnected:
         if ( m_isHost && m_peer ) {
+            std::erase_if(m_pendingPeerConnections,
+                          [&event](const WebRtcTransportEvent& pending) {
+                              return pending.peerId == event.peerId;
+                          });
             m_peer->removeParticipant(event.peerId);
             m_resourceManifestRecipients.erase(event.peerId);
         } else if ( !m_isHost ) {
@@ -769,25 +852,9 @@ void CollaborationRoom::handleCommittedOperation(
         });
     const PeerId peerId =
         participant == participants().end() ? 0 : participant->first;
-    const std::string creator = participant == participants().end()
-                                    ? std::string{}
-                                    : participant->second.creator;
-    appendLog(CollaborationLogEventType::OperationCommitted,
-              peerId,
-              creator,
-              std::to_string(operation.revision),
-              operation.participantId);
-
-    auto patch = m_documentCodec.apply(operation.payload);
-    if ( !patch.has_value() ) {
-        appendLog(CollaborationLogEventType::Error,
-                  peerId,
-                  creator,
-                  "invalid_beatmap_operation",
-                  operation.participantId);
-        return;
-    }
-    m_hasDocument.store(true, std::memory_order_release);
+    const std::string creator    = participant == participants().end()
+                                       ? std::string{}
+                                       : participant->second.creator;
     const bool originatedLocally = operation.participantId == m_participantId &&
                                    operation.sessionId == m_operationSessionId;
     bool       reapplyLocalState = false;
@@ -802,32 +869,185 @@ void CollaborationRoom::handleCommittedOperation(
         reapplyLocalState       = m_localStateNeedsRebase;
         m_localStateNeedsRebase = false;
     }
-    if ( m_isHost && m_peer ) {
-        auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-        if ( snapshot.has_value() ) {
-            static_cast<void>(
-                m_peer->setStateSnapshot(std::move(snapshot.value())));
+    RemoteOperationPipeline::Task task;
+    task.operation         = operation;
+    task.peerId            = peerId;
+    task.creator           = creator;
+    task.host              = m_isHost;
+    task.reapplyLocalState = reapplyLocalState;
+    task.originatedLocally = originatedLocally;
+    m_remoteOperationPipeline->tasks.enqueue(std::move(task));
+    scheduleRemoteOperationWorker();
+}
+
+void CollaborationRoom::scheduleRemoteOperationWorker()
+{
+    while ( true ) {
+        std::uint8_t state = m_remoteOperationPipeline->workerState.load(
+            std::memory_order_acquire);
+        if ( state == 0U ) {
+            if ( m_remoteOperationPipeline->workerState.compare_exchange_weak(
+                     state,
+                     1U,
+                     std::memory_order_acq_rel,
+                     std::memory_order_acquire) ) {
+                break;
+            }
+            continue;
         }
-    }
-    const bool refreshLocalObjectCommit =
-        originatedLocally &&
-        patch->flags == ::MMM::BeatmapMutationFlags::Objects;
-    if ( m_applyBeatmapCallback && (!originatedLocally || reapplyLocalState ||
-                                    refreshLocalObjectCommit) ) {
-        auto beatmap = materializeRebasedLocalBeatmap();
-        if ( !beatmap ) {
-            appendLog(CollaborationLogEventType::Error,
-                      peerId,
-                      creator,
-                      "invalid_beatmap_document",
-                      operation.participantId);
+        if ( state == 2U ||
+             m_remoteOperationPipeline->workerState.compare_exchange_weak(
+                 state,
+                 2U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
             return;
         }
-        // 本地提交在并发远端操作后需要重物化，但重物化范围仍由该提交的真实
-        // MutationFlags 决定。扩大为 All 会把纯物件 Undo/Redo 误判成全谱替换，
-        // 进而清空访客仍然有效的本地撤销栈。
-        m_applyBeatmapCallback(std::move(beatmap), patch->flags);
     }
+
+    auto* threadPool = Runtime::AppThreadPool::instance().get();
+    if ( !threadPool ) {
+        XERROR("Collaboration document worker requires AppThreadPool");
+        processRemoteOperations();
+        return;
+    }
+    std::erase_if(m_remoteOperationPipeline->workerFutures,
+                  [](std::future<void>& task) {
+                      return task.wait_for(std::chrono::seconds(0)) ==
+                             std::future_status::ready;
+                  });
+    m_remoteOperationPipeline->workerFutures.push_back(
+        threadPool->enqueue([this]() { processRemoteOperations(); }));
+}
+
+void CollaborationRoom::processRemoteOperations()
+{
+    while ( true ) {
+        RemoteOperationPipeline::Task task;
+        while ( m_remoteOperationPipeline->tasks.try_dequeue(task) ) {
+            RemoteOperationPipeline::Result result;
+            result.peerId        = task.peerId;
+            result.participantId = task.operation.participantId;
+            result.creator       = std::move(task.creator);
+            result.revision      = task.operation.revision;
+
+            auto patch = m_documentCodec.apply(task.operation.payload);
+            if ( !patch.has_value() ) {
+                result.error = "invalid_beatmap_operation";
+                m_remoteOperationPipeline->results.enqueue(std::move(result));
+                continue;
+            }
+            m_hasDocument.store(true, std::memory_order_release);
+            result.flags = patch->flags;
+
+            if ( task.host ) {
+                auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+                if ( snapshot.has_value() ) {
+                    result.hostSnapshot.emplace(std::move(snapshot.value()));
+                }
+            }
+
+            const bool refreshLocalObjectCommit =
+                task.originatedLocally &&
+                patch->flags == ::MMM::BeatmapMutationFlags::Objects;
+            if ( !task.originatedLocally || task.reapplyLocalState ||
+                 refreshLocalObjectCommit ) {
+                result.beatmap = materializeRebasedLocalBeatmap();
+                if ( !result.beatmap ) {
+                    result.error = "invalid_beatmap_document";
+                }
+            }
+            m_remoteOperationPipeline->results.enqueue(std::move(result));
+        }
+
+        std::uint8_t expected = 2U;
+        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
+                 expected,
+                 1U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
+            continue;
+        }
+        expected = 1U;
+        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
+                 expected,
+                 0U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
+            return;
+        }
+    }
+}
+
+void CollaborationRoom::processRemoteOperationResults()
+{
+    std::shared_ptr<::MMM::BeatMap> mergedBeatmap;
+    ::MMM::BeatmapMutationFlags mergedFlags = ::MMM::BeatmapMutationFlags::None;
+    for ( std::size_t index = 0; index < MAX_REMOTE_RESULTS_PER_UPDATE;
+          ++index ) {
+        RemoteOperationPipeline::Result result;
+        if ( !m_remoteOperationPipeline->results.try_dequeue(result) ) break;
+
+        appendLog(CollaborationLogEventType::OperationCommitted,
+                  result.peerId,
+                  result.creator,
+                  std::to_string(result.revision),
+                  result.participantId);
+        if ( !result.error.empty() ) {
+            appendLog(CollaborationLogEventType::Error,
+                      result.peerId,
+                      std::move(result.creator),
+                      std::move(result.error),
+                      std::move(result.participantId));
+            continue;
+        }
+        if ( result.hostSnapshot && m_isHost && m_peer ) {
+            if ( m_peer->setStateSnapshot(result.revision,
+                                          std::move(*result.hostSnapshot)) ) {
+                m_publishedDocumentRevision = result.revision;
+            }
+        }
+        if ( result.beatmap ) {
+            mergedFlags |= result.flags;
+            mergedBeatmap = std::move(result.beatmap);
+        }
+    }
+    if ( mergedBeatmap && m_applyBeatmapCallback ) {
+        // 同帧完成的连续修订只回灌最新领域快照，并合并其真实变更类别，避免
+        // 逻辑线程为中间状态重复扫描 ECS。实际应用仍由逻辑命令队列串行完成，
+        // 因而本地手势、交互状态和未确认增量不会交给后台线程。
+        m_applyBeatmapCallback(std::move(mergedBeatmap), mergedFlags);
+    }
+}
+
+void CollaborationRoom::processPendingPeerConnections()
+{
+    if ( m_pendingPeerConnections.empty() || !m_peer ||
+         m_publishedDocumentRevision < m_peer->appliedRevision() ) {
+        return;
+    }
+
+    auto pending = std::move(m_pendingPeerConnections);
+    m_pendingPeerConnections.clear();
+    for ( const auto& event : pending ) {
+        handleTransportEvent(event);
+    }
+}
+
+void CollaborationRoom::resetRemoteOperationPipeline()
+{
+    for ( auto& task : m_remoteOperationPipeline->workerFutures ) {
+        if ( task.valid() ) task.wait();
+    }
+    m_remoteOperationPipeline->workerFutures.clear();
+    RemoteOperationPipeline::Task pendingTask;
+    while ( m_remoteOperationPipeline->tasks.try_dequeue(pendingTask) ) {}
+    RemoteOperationPipeline::Result pendingResult;
+    while ( m_remoteOperationPipeline->results.try_dequeue(pendingResult) ) {}
+    m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
+    m_pendingPeerConnections.clear();
+    m_publishedDocumentRevision = 0;
+    m_documentCodec.reset();
 }
 
 void CollaborationRoom::submitQueuedLocalOperations()
