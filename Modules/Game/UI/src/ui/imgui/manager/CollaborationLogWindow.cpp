@@ -45,6 +45,11 @@ CollaborationLogWindow::CollaborationLogWindow(
                             m_room->state() ==
                                 Network::Collaboration::CollaborationRoomState::
                                     Connected));
+                    const auto allowedFlags =
+                        m_room->localAllowedMutationFlags();
+                    session->setCollaborationAllowedMutationFlags(allowedFlags);
+                    m_lastAppliedPermissionFlags =
+                        static_cast<std::uint8_t>(allowedFlags);
                     session->setMutationObserver(m_room, false);
                     m_room->onBeatmapSynchronized(*beatmap);
                     m_boundSession        = session;
@@ -82,6 +87,8 @@ CollaborationLogWindow::~CollaborationLogWindow()
 {
     if ( auto session = m_boundSession.lock() ) {
         session->setMutationObserver(nullptr);
+        session->setCollaborationAllowedMutationFlags(
+            ::MMM::BeatmapMutationFlags::All);
         if ( m_boundSessionIsGuest ) {
             session->setCollaborationOfflineReadOnly(true);
         }
@@ -166,7 +173,8 @@ void CollaborationLogWindow::updateSessionBinding()
             }
         }
         m_boundSession.reset();
-        m_boundSessionIsGuest = false;
+        m_boundSessionIsGuest        = false;
+        m_lastAppliedPermissionFlags = 0xFFU;
         m_pendingResourceBundle.reset();
         m_hostResourceProject = nullptr;
         m_hostResourceBeatmap = nullptr;
@@ -178,6 +186,14 @@ void CollaborationLogWindow::updateSessionBinding()
                 m_boundSessionIsGuest,
                 state ==
                     Network::Collaboration::CollaborationRoomState::Connected));
+        const auto allowedFlags = m_boundSessionIsGuest
+                                      ? m_room->localAllowedMutationFlags()
+                                      : ::MMM::BeatmapMutationFlags::All;
+        const auto allowedBits  = static_cast<std::uint8_t>(allowedFlags);
+        if ( allowedBits != m_lastAppliedPermissionFlags ) {
+            bound->setCollaborationAllowedMutationFlags(allowedFlags);
+            m_lastAppliedPermissionFlags = allowedBits;
+        }
         refreshHostResources();
         return;
     }
@@ -187,6 +203,10 @@ void CollaborationLogWindow::updateSessionBinding()
     auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
     active->setCollaborationOfflineReadOnly(false);
+    active->setCollaborationAllowedMutationFlags(
+        ::MMM::BeatmapMutationFlags::All);
+    m_lastAppliedPermissionFlags =
+        static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All);
     active->setMutationObserver(m_room, m_room->isHost());
     m_boundSession        = active;
     m_boundSessionIsGuest = false;

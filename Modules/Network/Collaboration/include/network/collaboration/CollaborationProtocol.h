@@ -10,22 +10,23 @@
 namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
-inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 5;
+inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 6;
 
 /// @brief 线协议允许的消息类型。
 enum class CollaborationMessageKind : std::uint8_t {
-    EditRequest         = 1,
-    CommittedOperation  = 2,
-    RevisionAck         = 3,
-    ResyncRequest       = 4,
-    ParticipantIdentity = 5,
-    ParticipantLeft     = 6,
-    StateSnapshot       = 7,
-    ResourceManifest    = 8,
-    ResourceRequest     = 9,
-    ResourceChunk       = 10,
-    ParticipantViewport = 11,
-    ChatMessage         = 12,
+    EditRequest            = 1,
+    CommittedOperation     = 2,
+    RevisionAck            = 3,
+    ResyncRequest          = 4,
+    ParticipantIdentity    = 5,
+    ParticipantLeft        = 6,
+    StateSnapshot          = 7,
+    ResourceManifest       = 8,
+    ResourceRequest        = 9,
+    ResourceChunk          = 10,
+    ParticipantViewport    = 11,
+    ChatMessage            = 12,
+    ParticipantPermissions = 13,
 };
 
 /// @brief 访客确认已经连续应用到的版本。
@@ -85,7 +86,8 @@ using CollaborationMessage =
     std::variant<EditRequest, CommittedOperation, RevisionAck, ResyncRequest,
                  ParticipantIdentity, ParticipantLeft, StateSnapshot,
                  ResourceManifest, ResourceRequest, ResourceChunk,
-                 ParticipantViewport, CollaborationChatMessage>;
+                 ParticipantViewport, CollaborationChatMessage,
+                 ParticipantPermissions>;
 
 /// @brief 协作消息编解码失败原因。
 enum class ProtocolError : std::uint8_t {
@@ -100,6 +102,7 @@ enum class ProtocolError : std::uint8_t {
     InvalidCreatorIdentity,
     InvalidViewportState,
     InvalidChatMessage,
+    InvalidPermissions,
 };
 
 /// @brief 把一条协作消息编码为带版本和长度字段的二进制帧。

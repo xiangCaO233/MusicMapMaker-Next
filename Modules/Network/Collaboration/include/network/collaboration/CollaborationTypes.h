@@ -26,6 +26,47 @@ inline constexpr std::size_t MAX_COLLABORATION_PARTICIPANTS = 8;
 /// @brief 单条协作聊天消息允许的最大 UTF-8 字节数。
 inline constexpr std::size_t MAX_COLLABORATION_CHAT_MESSAGE_BYTES = 1024;
 
+/// @brief 房主可分配给协作者的权限位。
+enum class CollaborationPermission : std::uint32_t {
+    Edit         = 1U << 0U,
+    Objects      = 1U << 1U,
+    Timelines    = 1U << 2U,
+    AudioSamples = 1U << 3U,
+    Metadata     = 1U << 4U,
+    Annotations  = 1U << 5U,
+};
+
+/// @brief 一组可序列化的协作权限位。
+using CollaborationPermissionMask = std::uint32_t;
+
+/// @brief 默认授予已获准访客的完整权限集合。
+inline constexpr CollaborationPermissionMask COLLABORATION_PERMISSION_ALL =
+    static_cast<CollaborationPermissionMask>(CollaborationPermission::Edit) |
+    static_cast<CollaborationPermissionMask>(CollaborationPermission::Objects) |
+    static_cast<CollaborationPermissionMask>(
+        CollaborationPermission::Timelines) |
+    static_cast<CollaborationPermissionMask>(
+        CollaborationPermission::AudioSamples) |
+    static_cast<CollaborationPermissionMask>(
+        CollaborationPermission::Metadata) |
+    static_cast<CollaborationPermissionMask>(
+        CollaborationPermission::Annotations);
+
+/// @brief 判断权限集合是否包含指定权限位。
+[[nodiscard]] constexpr bool hasCollaborationPermission(
+    CollaborationPermissionMask permissions, CollaborationPermission permission)
+{
+    return (permissions &
+            static_cast<CollaborationPermissionMask>(permission)) != 0U;
+}
+
+/// @brief 判断权限集合是否只包含协议支持的权限位。
+[[nodiscard]] constexpr bool isCollaborationPermissionMaskValid(
+    CollaborationPermissionMask permissions)
+{
+    return (permissions & ~COLLABORATION_PERMISSION_ALL) == 0U;
+}
+
 /// @brief 单条规范化增量编辑请求。
 struct EditRequest {
     /// @brief 发起请求的协作者稳定标识。
@@ -96,6 +137,14 @@ struct CollaborationChatMessage {
     std::uint64_t sequence = 0;
     /// @brief 单行 UTF-8 消息正文。
     std::string text;
+};
+
+/// @brief 房主发布的一名参与者权限快照。
+struct ParticipantPermissions {
+    /// @brief 权限所属参与者的临时路由槽位。
+    PeerId peerId = 0;
+    /// @brief 房主当前分配的完整权限位集合。
+    CollaborationPermissionMask permissions = 0;
 };
 
 /// @brief 协作 Peer 的有界处理参数。

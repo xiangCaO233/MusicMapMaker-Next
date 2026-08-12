@@ -64,6 +64,14 @@ public:
     [[nodiscard]] std::expected<BeatmapPatchResult, BeatmapDocumentError> apply(
         std::span<const std::uint8_t> payload);
 
+    /// @brief 不修改本地文档地校验负载并提取其实际数据类别。
+    /// @param payload 待授权的快照或分类增量负载。
+    /// @return 负载结构合法时返回类别与快照标志。
+    /// @warning 房主收到低频编辑请求时调用；会执行有界内存解压和 CBOR
+    /// 解析，但不会物化 BeatMap 或修改编解码基线。
+    [[nodiscard]] static std::expected<BeatmapPatchResult, BeatmapDocumentError>
+    inspect(std::span<const std::uint8_t> payload);
+
     /// @brief 从当前规范文档重建可交给逻辑层的 BeatMap。
     /// @return 尚未收到完整快照或文档不合法时返回空。
     [[nodiscard]] std::shared_ptr<::MMM::BeatMap> materialize() const;

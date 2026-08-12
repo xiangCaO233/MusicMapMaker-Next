@@ -46,6 +46,15 @@ public:
 
     /// @brief 获取用户可读操作名称。
     std::string getName() const override;
+    /// @brief 返回自动采样及其实际扩展的 BGM 轨道元数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return m_beforeBgmTrackCount && m_afterBgmTrackCount &&
+                       *m_beforeBgmTrackCount != *m_afterBgmTrackCount
+                   ? ::MMM::BeatmapMutationFlags::AudioSamples |
+                         ::MMM::BeatmapMutationFlags::Metadata
+                   : ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
 
 private:
     Type                           m_type;    ///< 操作类型。
@@ -93,6 +102,15 @@ public:
 
     /// @brief 获取用户可读操作名称。
     std::string getName() const override;
+    /// @brief 返回批量自动采样及其实际扩展的 BGM 轨道元数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return m_beforeBgmTrackCount && m_afterBgmTrackCount &&
+                       *m_beforeBgmTrackCount != *m_afterBgmTrackCount
+                   ? ::MMM::BeatmapMutationFlags::AudioSamples |
+                         ::MMM::BeatmapMutationFlags::Metadata
+                   : ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
 
 private:
     std::vector<Entry> m_entries;  ///< 批量条目。
@@ -138,6 +156,14 @@ public:
 
     /// @brief 获取用户可读操作名称。
     std::string getName() const override;
+    /// @brief 轨道数操作修改元数据，并在存在自动采样时迁移其绝对轨道。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return m_sampleChanges.empty()
+                   ? ::MMM::BeatmapMutationFlags::Metadata
+                   : ::MMM::BeatmapMutationFlags::Metadata |
+                         ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
 
 private:
     /// @brief 应用轨道数及对应自动采样绝对轨道。
@@ -177,6 +203,11 @@ public:
 
     /// @brief 获取用户可读操作名称。
     std::string getName() const override;
+    /// @brief BGM 轨道数量属于谱面元数据。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Metadata;
+    }
 
 private:
     /// @brief 应用持久化 BGM 轨道数量并同步谱面元数据。

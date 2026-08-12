@@ -19,6 +19,33 @@ namespace MMM::Network::Collaboration
 {
 namespace
 {
+/// @brief 判断权限集合是否覆盖一次谱面分类变更。
+[[nodiscard]] bool permissionsAllowMutation(
+    CollaborationPermissionMask permissions, ::MMM::BeatmapMutationFlags flags)
+{
+    if ( !hasCollaborationPermission(permissions,
+                                     CollaborationPermission::Edit) ) {
+        return false;
+    }
+    const auto allows = [permissions,
+                         flags](::MMM::BeatmapMutationFlags flag,
+                                CollaborationPermission     permission) {
+        return !hasBeatmapMutationFlag(flags, flag) ||
+               hasCollaborationPermission(permissions, permission);
+    };
+    return allows(::MMM::BeatmapMutationFlags::Objects,
+                  CollaborationPermission::Objects) &&
+           allows(::MMM::BeatmapMutationFlags::Timelines,
+                  CollaborationPermission::Timelines) &&
+           allows(::MMM::BeatmapMutationFlags::AudioSamples,
+                  CollaborationPermission::AudioSamples) &&
+           allows(::MMM::BeatmapMutationFlags::Metadata,
+                  CollaborationPermission::Metadata);
+}
+}  // namespace
+
+namespace
+{
 /// @brief 房主使用的固定内部 PeerId。
 constexpr PeerId DEFAULT_HOST_ID = 1;
 /// @brief 每个房间最多保留的日志条数。
@@ -181,6 +208,8 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(COLLABORATION_PERMISSION_ALL,
+                             std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(true, std::memory_order_relaxed);
     m_acceptLocalMutations.store(true, std::memory_order_release);
@@ -212,6 +241,9 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         },
         [this](const CollaborationChatMessage& message) {
             handleChatMessage(message);
+        },
+        [this](PeerId peerId, std::span<const std::uint8_t> payload) {
+            return authorizeParticipantEdit(peerId, payload);
         });
     if ( !m_peer->isValid() ) {
         fail("host_peer_create_failed");
@@ -276,6 +308,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(0U, std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(false, std::memory_order_relaxed);
     m_acceptLocalMutations.store(true, std::memory_order_release);
@@ -348,6 +381,12 @@ bool CollaborationRoom::removeParticipant(PeerId peerId)
         return false;
     }
     return m_transport->disconnectPeer(peerId, "removed_by_host");
+}
+
+bool CollaborationRoom::setParticipantPermissions(
+    PeerId peerId, CollaborationPermissionMask permissions)
+{
+    return m_peer && m_peer->setParticipantPermissions(peerId, permissions);
 }
 
 bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
@@ -456,6 +495,7 @@ void CollaborationRoom::disconnect()
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(0U, std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
 }
 
@@ -475,8 +515,30 @@ void CollaborationRoom::update()
     }
     ensureGuestPeer();
     if ( m_peer ) {
-        submitQueuedLocalOperations();
+        const auto previousPermissions =
+            m_localPermissions.load(std::memory_order_acquire);
         m_peer->update();
+        const auto permission =
+            m_peer->participantPermissions().find(m_peer->localPeerId());
+        const auto currentPermissions =
+            permission == m_peer->participantPermissions().end()
+                ? (m_isHost ? COLLABORATION_PERMISSION_ALL : 0U)
+                : permission->second;
+        m_localPermissions.store(currentPermissions, std::memory_order_release);
+        if ( !m_isHost && previousPermissions != currentPermissions ) {
+            std::lock_guard lock(m_localOperationMutex);
+            const auto      unauthorized =
+                [currentPermissions](const ByteBuffer& payload) {
+                    const auto patch = BeatmapDocumentCodec::inspect(payload);
+                    return !patch || !permissionsAllowMutation(
+                                         currentPermissions, patch->flags);
+                };
+            // 权限收紧时只丢弃已经失去授权的传输增量；不触碰逻辑线程当前
+            // BeatMap、未结束手势或选择状态，仍获授权的其它类别继续排队。
+            std::erase_if(m_inFlightLocalOperations, unauthorized);
+            std::erase_if(m_localOperationQueue, unauthorized);
+        }
+        submitQueuedLocalOperations();
         flushLocalViewport();
     }
     processResourceEvents();
@@ -587,6 +649,53 @@ const std::unordered_map<PeerId, ParticipantIdentity>&
 CollaborationRoom::participants() const
 {
     return m_peer ? m_peer->participantIdentities() : m_emptyParticipants;
+}
+
+const std::unordered_map<PeerId, CollaborationPermissionMask>&
+CollaborationRoom::participantPermissions() const
+{
+    return m_peer ? m_peer->participantPermissions() : m_emptyPermissions;
+}
+
+CollaborationPermissionMask CollaborationRoom::localPermissions() const
+{
+    return m_localPermissions.load(std::memory_order_acquire);
+}
+
+::MMM::BeatmapMutationFlags CollaborationRoom::localAllowedMutationFlags() const
+{
+    const auto permissions = localPermissions();
+    if ( !hasCollaborationPermission(permissions,
+                                     CollaborationPermission::Edit) ) {
+        return ::MMM::BeatmapMutationFlags::None;
+    }
+    auto flags = ::MMM::BeatmapMutationFlags::None;
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Objects) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Objects;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Timelines) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Timelines;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::AudioSamples) ) {
+        flags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Metadata) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Metadata;
+    }
+    return flags;
+}
+
+bool CollaborationRoom::canLocalAnnotate() const
+{
+    const auto permissions = localPermissions();
+    return hasCollaborationPermission(permissions,
+                                      CollaborationPermission::Edit) &&
+           hasCollaborationPermission(permissions,
+                                      CollaborationPermission::Annotations);
 }
 
 const std::vector<CollaborationPendingJoinRequest>&
@@ -883,6 +992,9 @@ void CollaborationRoom::ensureGuestPeer()
         },
         [this](const CollaborationChatMessage& message) {
             handleChatMessage(message);
+        },
+        [this](PeerId peerId, std::span<const std::uint8_t> payload) {
+            return authorizeParticipantEdit(peerId, payload);
         });
     if ( !m_peer->isValid() ) {
         fail("guest_peer_create_failed");
@@ -928,6 +1040,21 @@ void CollaborationRoom::handleCommittedOperation(
     task.originatedLocally = originatedLocally;
     m_remoteOperationPipeline->tasks.enqueue(std::move(task));
     scheduleRemoteOperationWorker();
+}
+
+bool CollaborationRoom::authorizeParticipantEdit(
+    PeerId peerId, std::span<const std::uint8_t> payload) const
+{
+    if ( !m_isHost || !m_peer || peerId == 0 ||
+         peerId == m_peer->localPeerId() ) {
+        return false;
+    }
+    const auto permission = m_peer->participantPermissions().find(peerId);
+    if ( permission == m_peer->participantPermissions().end() ) return false;
+
+    const auto patch = BeatmapDocumentCodec::inspect(payload);
+    return patch.has_value() && !patch->isSnapshot &&
+           permissionsAllowMutation(permission->second, patch->flags);
 }
 
 void CollaborationRoom::scheduleRemoteOperationWorker()
@@ -1112,6 +1239,14 @@ void CollaborationRoom::submitQueuedLocalOperations()
             std::lock_guard lock(m_localOperationMutex);
             if ( m_localOperationQueue.empty() ) return;
             payload = m_localOperationQueue.front();
+        }
+        const auto patch = BeatmapDocumentCodec::inspect(payload);
+        if ( !patch || !permissionsAllowMutation(
+                           m_localPermissions.load(std::memory_order_acquire),
+                           patch->flags) ) {
+            // 权限收紧时保留已经完成的本地编辑及其规范增量，不清空、不覆盖；
+            // 房主重新授权后仍按原顺序提交。
+            return;
         }
         const auto result = m_peer->submitOperation(payload);
         if ( result == SubmitOperationResult::Accepted ) {

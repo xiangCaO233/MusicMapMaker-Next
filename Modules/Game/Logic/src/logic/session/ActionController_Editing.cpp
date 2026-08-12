@@ -1105,6 +1105,23 @@ public:
     /// @brief 获取动作名称。
     std::string getName() const override { return "Replace Beatmap Data"; }
 
+    /// @brief 返回本次替换实际覆盖的全部谱面数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        auto flags = ::MMM::BeatmapMutationFlags::None;
+        if ( m_replaceObjects ) flags |= ::MMM::BeatmapMutationFlags::Objects;
+        if ( m_replaceTimelines ) {
+            flags |= ::MMM::BeatmapMutationFlags::Timelines;
+        }
+        if ( m_replaceAudioSamples || !m_sampleTrackChanges.empty() ) {
+            flags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+        }
+        if ( m_replaceMetadata ) {
+            flags |= ::MMM::BeatmapMutationFlags::Metadata;
+        }
+        return flags;
+    }
+
 private:
     /// @brief 应用指定方向的替换快照。
     /// @param ctx 当前会话上下文。
@@ -1241,6 +1258,13 @@ public:
 
     /// @brief 获取动作名称。
     std::string getName() const override { return "Replace Timings"; }
+
+    /// @brief Timing 替换同时更新从 BPM 推导的首选 BPM 元数据。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Timelines |
+               ::MMM::BeatmapMutationFlags::Metadata;
+    }
 
 private:
     /// @brief 替换前的 Timeline 列表。

@@ -64,7 +64,7 @@ struct CollaborationLogEntry {
     std::string detail;
 };
 
-/// @brief 当前联机会话内一条可由 UI 展示的文字聊天记录。
+/// @brief 当前联机会话内一条可由 UI 展示的聊天记录。
 struct CollaborationChatEntry {
     /// @brief 当前客户端接收记录时分配的严格递增序号。
     std::uint64_t sequence = 0;
@@ -162,6 +162,13 @@ public:
     /// @return 目标是当前在线访客且已开始关闭 P2P 连接时返回 true。
     [[nodiscard]] bool removeParticipant(PeerId peerId);
 
+    /// @brief 房主替换一名在线访客的完整权限集合。
+    /// @param peerId 目标访客路由槽位。
+    /// @param permissions 编辑总开关和各数据类别权限位。
+    /// @return 当前为房主、目标在线且权限合法时返回 true。
+    [[nodiscard]] bool setParticipantPermissions(
+        PeerId peerId, CollaborationPermissionMask permissions);
+
     /// @brief 设置离线房间浏览使用的中心服务器。
     /// @param endpoint 地址、信令端口和 TLS 配置。
     /// @return 当前未加入房间且配置有效时返回 true。
@@ -210,7 +217,7 @@ public:
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
 
-    /// @brief 向当前房间发送一条文字聊天消息。
+    /// @brief 向当前房间发送一条聊天消息。
     /// @param text 单行 UTF-8 正文。
     /// @return 房间未连接或消息不合法时返回对应失败原因。
     [[nodiscard]] SubmitChatMessageResult sendChatMessage(std::string text);
@@ -254,6 +261,16 @@ public:
     /// @brief 获取当前已知参与者的稳定身份表。
     [[nodiscard]] const std::unordered_map<PeerId, ParticipantIdentity>&
     participants() const;
+    /// @brief 获取房主发布的参与者权限表。
+    [[nodiscard]] const std::unordered_map<PeerId, CollaborationPermissionMask>&
+    participantPermissions() const;
+    /// @brief 获取当前客户端的权限快照。
+    /// @return 房主始终为完整权限；访客尚未收到房主快照时为零。
+    [[nodiscard]] CollaborationPermissionMask localPermissions() const;
+    /// @brief 获取当前客户端允许修改的谱面数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags localAllowedMutationFlags() const;
+    /// @brief 查询当前客户端是否允许创建或修改批注。
+    [[nodiscard]] bool canLocalAnnotate() const;
     /// @brief 获取等待房主批准或拒绝的访客请求。
     [[nodiscard]] const std::vector<CollaborationPendingJoinRequest>&
     pendingJoinRequests() const;
@@ -269,7 +286,7 @@ public:
     [[nodiscard]] std::uint32_t viewportPublishRateHz() const;
     /// @brief 获取实时协作日志。
     [[nodiscard]] const std::vector<CollaborationLogEntry>& logs() const;
-    /// @brief 获取当前联机会话内的有界文字聊天记录。
+    /// @brief 获取当前联机会话内的有界聊天记录。
     [[nodiscard]] const std::vector<CollaborationChatEntry>&
     chatMessages() const;
     /// @brief 获取最近错误；没有错误时为空。
@@ -296,6 +313,14 @@ private:
     /// @warning UI 热路径：只整理常量级元数据并写入无锁队列，不得解压、物化
     /// 完整谱面或等待后台任务。
     void handleCommittedOperation(const CommittedOperation& operation);
+    /// @brief 房主在分配 revision 前按规范负载类别强制校验访客权限。
+    /// @param peerId 请求所属访客路由槽位。
+    /// @param payload 待检查的规范化增量文档。
+    /// @return 负载合法且目标拥有全部相关权限时返回 true。
+    /// @warning UI 低频远端编辑路径；执行有界内存解压和 CBOR 解析，不访问
+    /// 文件系统，也不会修改权威文档。
+    [[nodiscard]] bool authorizeParticipantEdit(
+        PeerId peerId, std::span<const std::uint8_t> payload) const;
     /// @brief 确保无锁远端操作队列已有一个后台消费者。
     /// @warning UI 热路径：每次远端提交调用；只在消费者空闲时向共享线程池提交
     /// 一个串行任务，不得等待任务结束。
@@ -409,6 +434,10 @@ private:
     std::atomic_bool m_initialSnapshotQueued{ false };
     /// @brief 当前客户端是否已应用完整房主文档。
     std::atomic_bool m_hasDocument{ false };
+    /// @brief 当前客户端的权限镜像。
+    /// @warning UI 线程在 Peer 更新后写，逻辑线程发布本地变更前读；使用
+    /// acquire/release 保证权限收紧可及时阻止后续增量编码。
+    std::atomic_uint32_t m_localPermissions{ 0U };
     /// @brief 房间启动时钟，用于日志相对时间。
     std::chrono::steady_clock::time_point m_startedAt;
     /// @brief 下一日志序号。
@@ -433,6 +462,8 @@ private:
     std::vector<CollaborationPendingJoinRequest> m_pendingJoinRequests;
     /// @brief 无 Peer 时返回的空参与者表。
     std::unordered_map<PeerId, ParticipantIdentity> m_emptyParticipants;
+    /// @brief 无 Peer 时返回的空权限表。
+    std::unordered_map<PeerId, CollaborationPermissionMask> m_emptyPermissions;
     /// @brief 无 Peer 时返回的空视口状态表。
     std::unordered_map<PeerId, ParticipantViewport> m_emptyViewports;
 };

@@ -173,6 +173,13 @@ moodycamel::ConcurrentQueue<bool>& collaborationOfflineEditBlockedQueue()
     return queue;
 }
 
+/// @brief 获取协作细分权限编辑拦截通知队列。
+moodycamel::ConcurrentQueue<bool>& collaborationPermissionEditBlockedQueue()
+{
+    static moodycamel::ConcurrentQueue<bool> queue;
+    return queue;
+}
+
 /// @brief 构建音频资源变更的完整用户提示。
 /// @param result 待展示结果。
 /// @return 包含目标资源及全部阻止谱面的多行提示。
@@ -266,6 +273,10 @@ void ensureTemporaryProjectSubscriptions()
     eventBus.subscribe<Event::CollaborationOfflineEditBlockedEvent>(
         [](const Event::CollaborationOfflineEditBlockedEvent&) {
             collaborationOfflineEditBlockedQueue().enqueue(true);
+        });
+    eventBus.subscribe<Event::CollaborationPermissionEditBlockedEvent>(
+        [](const Event::CollaborationPermissionEditBlockedEvent&) {
+            collaborationPermissionEditBlockedQueue().enqueue(true);
         });
 
     subscribed = true;
@@ -861,6 +872,10 @@ void MainDockSpaceUI::consumeTemporaryProjectQueues()
         collaborationSafetySignal) ) {
         m_showCollaborationOfflineEditBlockedModal = true;
     }
+    while ( collaborationPermissionEditBlockedQueue().try_dequeue(
+        collaborationSafetySignal) ) {
+        m_showCollaborationPermissionEditBlockedModal = true;
+    }
 }
 
 /// @brief 请求选择临时项目正式保存位置。
@@ -1020,12 +1035,18 @@ void MainDockSpaceUI::renderCollaborationSafetyPopups(float dpiScale)
     const std::string projectPopupId =
         TR("ui.collaboration.project_open_blocked.title").toString() +
         "###CollaborationProjectOpenBlockedModal";
+    const std::string permissionPopupId =
+        TR("ui.collaboration.permission_edit.title").toString() +
+        "###CollaborationPermissionEditBlockedModal";
     if ( m_showCollaborationOfflineEditBlockedModal ) {
         FeedbackOpenPopup(offlinePopupId.c_str());
         m_showCollaborationOfflineEditBlockedModal = false;
     } else if ( m_showCollaborationProjectOpenBlockedModal ) {
         FeedbackOpenPopup(projectPopupId.c_str());
         m_showCollaborationProjectOpenBlockedModal = false;
+    } else if ( m_showCollaborationPermissionEditBlockedModal ) {
+        FeedbackOpenPopup(permissionPopupId.c_str());
+        m_showCollaborationPermissionEditBlockedModal = false;
     }
 
     {
@@ -1053,6 +1074,22 @@ void MainDockSpaceUI::renderCollaborationSafetyPopups(float dpiScale)
             ImGui::TextWrapped(
                 "%s",
                 TR("ui.collaboration.project_open_blocked.message").data());
+            ImGui::Spacing();
+            if ( FeedbackButton(TR("ui.common.confirm").data(),
+                                ImVec2(120.0F * dpiScale, 0.0F)) ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    {
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin(permissionPopupId.c_str(),
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(520.0F * dpiScale, 0.0F)) ) {
+            ImGui::TextWrapped(
+                "%s", TR("ui.collaboration.permission_edit.message").data());
             ImGui::Spacing();
             if ( FeedbackButton(TR("ui.common.confirm").data(),
                                 ImVec2(120.0F * dpiScale, 0.0F)) ) {

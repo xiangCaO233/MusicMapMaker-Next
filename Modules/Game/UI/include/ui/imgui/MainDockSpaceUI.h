@@ -193,6 +193,8 @@ public:
     bool m_showCollaborationProjectOpenBlockedModal{ false };
     /// @brief 是否在下一帧显示离线房间谱面只读提示。
     bool m_showCollaborationOfflineEditBlockedModal{ false };
+    /// @brief 是否在下一帧显示协作细分权限编辑拦截提示。
+    bool m_showCollaborationPermissionEditBlockedModal{ false };
 };
 
 }  // namespace MMM::UI

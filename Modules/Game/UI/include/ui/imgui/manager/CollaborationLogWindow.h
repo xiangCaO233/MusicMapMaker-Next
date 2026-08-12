@@ -3,6 +3,7 @@
 #include "ui/IUIView.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -82,6 +83,8 @@ private:
     bool m_boundSessionIsGuest{ false };
     /// @brief 当前控制器是否已接管访客在线期间的本机项目打开门闩。
     bool m_guestProjectGateHeld{ false };
+    /// @brief 最近一次应用到固定会话的谱面类别权限位。
+    std::uint8_t m_lastAppliedPermissionFlags{ 0xFFU };
     /// @brief 上一次内嵌日志已经展示的条数，用于新日志自动滚动。
     std::size_t m_lastLogCount = 0;
 };

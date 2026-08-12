@@ -11,12 +11,14 @@ CollaborationPeer::CollaborationPeer(
     CollaborationPeerConfig                  config,
     std::unique_ptr<ICollaborationTransport> transport,
     ApplyOperationCallback                   applyCallback,
-    ResourceMessageCallback resourceCallback, ChatMessageCallback chatCallback)
+    ResourceMessageCallback resourceCallback, ChatMessageCallback chatCallback,
+    AuthorizeEditCallback authorizeEditCallback)
     : m_config(std::move(config))
     , m_transport(std::move(transport))
     , m_applyCallback(std::move(applyCallback))
     , m_resourceCallback(std::move(resourceCallback))
     , m_chatCallback(std::move(chatCallback))
+    , m_authorizeEditCallback(std::move(authorizeEditCallback))
 {
     m_config.maxParticipants = std::clamp(m_config.maxParticipants,
                                           MIN_COLLABORATION_PARTICIPANTS,
@@ -52,6 +54,9 @@ CollaborationPeer::CollaborationPeer(
                                  m_config.participantId,
                                  m_config.sessionId,
                                  m_config.creator });
+        m_participantPermissions.emplace(
+            m_config.peerId,
+            m_config.isHost ? COLLABORATION_PERMISSION_ALL : 0U);
     }
 }
 
@@ -104,6 +109,12 @@ CollaborationPeer::participantViewports() const
     return m_participantViewports;
 }
 
+const std::unordered_map<PeerId, CollaborationPermissionMask>&
+CollaborationPeer::participantPermissions() const
+{
+    return m_participantPermissions;
+}
+
 bool CollaborationPeer::addParticipant(PeerId             peerId,
                                        ParticipantId      participantId,
                                        OperationSessionId sessionId,
@@ -144,6 +155,10 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
         static_cast<void>(knownPeerId);
         static_cast<void>(sendMessage(peerId, viewport));
     }
+    for ( const auto& [knownPeerId, permissions] : m_participantPermissions ) {
+        static_cast<void>(sendMessage(
+            peerId, ParticipantPermissions{ knownPeerId, permissions }));
+    }
 
     m_participants.insert(peerId);
     m_lastAcknowledgedRevision.try_emplace(peerId, 0);
@@ -152,8 +167,12 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
                                         std::move(sessionId),
                                         std::move(creator) };
     m_participantIdentities.emplace(peerId, identity);
+    m_participantPermissions.emplace(peerId, COLLABORATION_PERMISSION_ALL);
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, identity));
+        static_cast<void>(sendMessage(
+            participantId,
+            ParticipantPermissions{ peerId, COLLABORATION_PERMISSION_ALL }));
     }
     if ( m_stateSnapshot ) {
         static_cast<void>(sendMessage(peerId, *m_stateSnapshot));
@@ -198,6 +217,7 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     m_lastAcknowledgedRevision.erase(peerId);
     m_participantViewports.erase(peerId);
     m_lastChatSequence.erase(peerId);
+    m_participantPermissions.erase(peerId);
     if ( m_participantIdentities.erase(peerId) == 0 ) {
         return;
     }
@@ -205,6 +225,22 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, participantLeft));
     }
+}
+
+bool CollaborationPeer::setParticipantPermissions(
+    PeerId peerId, CollaborationPermissionMask permissions)
+{
+    if ( !m_valid || !m_config.isHost || peerId == m_config.peerId ||
+         !m_participants.contains(peerId) ||
+         !isCollaborationPermissionMaskValid(permissions) ) {
+        return false;
+    }
+    m_participantPermissions.insert_or_assign(peerId, permissions);
+    const ParticipantPermissions message{ peerId, permissions };
+    for ( const PeerId participantId : m_participants ) {
+        static_cast<void>(sendMessage(participantId, message));
+    }
+    return true;
 }
 
 SubmitOperationResult CollaborationPeer::submitOperation(
@@ -377,6 +413,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
     } else if ( const auto* chat =
                     std::get_if<CollaborationChatMessage>(&message) ) {
         handleChatMessage(senderId, *chat);
+    } else if ( const auto* permissions =
+                    std::get_if<ParticipantPermissions>(&message) ) {
+        handleParticipantPermissions(senderId, *permissions);
     } else if ( (std::holds_alternative<ResourceManifest>(message) ||
                  std::holds_alternative<ResourceChunk>(message)) &&
                 senderId == m_config.hostPeerId && m_resourceCallback ) {
@@ -520,6 +559,22 @@ void CollaborationPeer::handleParticipantLeft(
     m_participantIdentities.erase(participantLeft.peerId);
     m_participantViewports.erase(participantLeft.peerId);
     m_lastChatSequence.erase(participantLeft.peerId);
+    m_participantPermissions.erase(participantLeft.peerId);
+}
+
+void CollaborationPeer::handleParticipantPermissions(
+    PeerId senderId, const ParticipantPermissions& permissions)
+{
+    if ( senderId != m_config.hostPeerId || permissions.peerId == 0 ||
+         !m_participantIdentities.contains(permissions.peerId) ||
+         !isCollaborationPermissionMaskValid(permissions.permissions) ||
+         (permissions.peerId == m_config.hostPeerId &&
+          permissions.permissions != COLLABORATION_PERMISSION_ALL) ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+    m_participantPermissions.insert_or_assign(permissions.peerId,
+                                              permissions.permissions);
 }
 
 void CollaborationPeer::handleParticipantViewport(
@@ -637,6 +692,11 @@ void CollaborationPeer::processHostRequests()
         }
         lastSequence = request.clientSequence;
 
+        if ( !isEditRequestAuthorized(request) ) {
+            ++m_stats.unauthorizedEditRequests;
+            continue;
+        }
+
         CommittedOperation committed;
         committed.revision       = m_nextRevision++;
         committed.participantId  = request.participantId;
@@ -651,6 +711,32 @@ void CollaborationPeer::processHostRequests()
         }
         broadcastCommittedOperation(committed);
     }
+}
+
+bool CollaborationPeer::isEditRequestAuthorized(
+    const EditRequest& request) const
+{
+    if ( request.participantId == m_config.participantId &&
+         request.sessionId == m_config.sessionId ) {
+        return true;
+    }
+    const auto identity = std::find_if(
+        m_participantIdentities.begin(),
+        m_participantIdentities.end(),
+        [&request](const auto& entry) {
+            return entry.second.participantId == request.participantId &&
+                   entry.second.sessionId == request.sessionId;
+        });
+    if ( identity == m_participantIdentities.end() ) return false;
+
+    const auto permissions = m_participantPermissions.find(identity->first);
+    if ( permissions == m_participantPermissions.end() ||
+         !hasCollaborationPermission(permissions->second,
+                                     CollaborationPermission::Edit) ) {
+        return false;
+    }
+    return !m_authorizeEditCallback ||
+           m_authorizeEditCallback(identity->first, request.payload);
 }
 
 void CollaborationPeer::applyCommittedOperation(

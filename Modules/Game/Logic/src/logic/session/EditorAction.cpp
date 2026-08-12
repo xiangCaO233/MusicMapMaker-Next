@@ -16,9 +16,9 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.action").data(), action->getName());
     action->execute(ctx);
+    m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();
-    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -32,8 +32,8 @@ void EditorActionStack::undo(SessionContext& ctx)
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.undo").data(), action->getName());
     action->undo(ctx);
+    m_pendingMutationFlags |= action->mutationFlags();
     m_redoStack.push_back(std::move(action));
-    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -47,8 +47,8 @@ void EditorActionStack::redo(SessionContext& ctx)
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.redo").data(), action->getName());
     action->redo(ctx);
+    m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
-    rememberPendingMutationFlags(ctx);
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -86,17 +86,16 @@ void EditorActionStack::markDirty()
     return flags;
 }
 
-void EditorActionStack::rememberPendingMutationFlags(const SessionContext& ctx)
+::MMM::BeatmapMutationFlags EditorActionStack::undoMutationFlags() const
 {
-    if ( ctx.m_needsNotesSync ) {
-        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
-    }
-    if ( ctx.m_needsTimingsSync ) {
-        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::Timelines;
-    }
-    if ( ctx.m_needsSamplesSync ) {
-        m_pendingMutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
-    }
+    return m_undoStack.empty() ? ::MMM::BeatmapMutationFlags::None
+                               : m_undoStack.back()->mutationFlags();
+}
+
+::MMM::BeatmapMutationFlags EditorActionStack::redoMutationFlags() const
+{
+    return m_redoStack.empty() ? ::MMM::BeatmapMutationFlags::None
+                               : m_redoStack.back()->mutationFlags();
 }
 
 void CompositeEditorAction::execute(SessionContext& ctx)
@@ -124,6 +123,13 @@ void CompositeEditorAction::redo(SessionContext& ctx)
 std::string CompositeEditorAction::getName() const
 {
     return m_name;
+}
+
+::MMM::BeatmapMutationFlags CompositeEditorAction::mutationFlags() const
+{
+    auto flags = ::MMM::BeatmapMutationFlags::None;
+    for ( const auto& action : m_actions ) flags |= action->mutationFlags();
+    return flags;
 }
 
 }  // namespace MMM::Logic

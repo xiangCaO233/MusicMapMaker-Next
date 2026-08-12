@@ -33,6 +33,11 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief Timeline 操作始终修改 Timing 数据。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Timelines;
+    }
 
 private:
     Type                             m_type;    ///< 操作类型
@@ -70,6 +75,11 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief 批量 Timeline 操作始终修改 Timing 数据。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Timelines;
+    }
 
 private:
     /// @brief 批量操作条目。

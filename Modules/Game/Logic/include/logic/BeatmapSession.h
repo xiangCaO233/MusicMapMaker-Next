@@ -50,6 +50,17 @@ public:
     /// @return 离线只读时返回 true。
     [[nodiscard]] bool isCollaborationOfflineReadOnly() const;
 
+    /// @brief 设置当前协作身份可修改的谱面数据类别。
+    /// @param allowedFlags 房主下发权限映射得到的类别位；离线会话传 All。
+    /// @warning UI/逻辑跨线程低频调用；命令入队热路径读取单个原子字节，权限
+    /// 收紧时额外排队一次交互取消命令。
+    void setCollaborationAllowedMutationFlags(
+        ::MMM::BeatmapMutationFlags allowedFlags);
+
+    /// @brief 查询当前协作身份可修改的谱面数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags
+    collaborationAllowedMutationFlags() const;
+
     /// @brief 设置低频谱面领域变化观察者。
     /// @param observer 新观察者；为空时恢复纯离线会话。
     /// @param publishCurrentSnapshot 是否在下一次逻辑更新发布当前完整谱面；
@@ -139,6 +150,14 @@ private:
     /// 离线周期首次拦截时发布一次事件。
     [[nodiscard]] bool blockCollaborationOfflineEdit(const LogicCommand& cmd);
 
+    /// @brief 在入队与消费边界按房主权限拦截本地谱面变更命令。
+    /// @param cmd 待检查命令。
+    /// @return 命令需要至少一个未授权数据类别时返回 true。
+    /// @warning 命令热路径：只读取一个原子字节并执行 variant 类型分派；每个
+    /// 连续拒绝周期最多发布一次提示事件。
+    [[nodiscard]] bool blockCollaborationUnauthorizedEdit(
+        const LogicCommand& cmd, bool inspectSessionState = false);
+
     /// @brief 发布跨线程请求的完整谱面快照。
     /// @warning 逻辑热路径：每 update 仅检查一个 relaxed 原子标志；只有新观察者
     /// 绑定后的单次分支会同步完整 BeatMap 并回调。
@@ -217,9 +236,19 @@ private:
     /// 入队热路径使用 acquire 读取以确保及时拦截编辑命令。
     std::atomic_bool m_collaborationOfflineReadOnly{ false };
 
+    /// @brief 当前协作身份允许修改的谱面类别位。
+    /// @warning UI 线程低频写、所有命令生产线程和逻辑线程读；使用单字节原子
+    /// 避免在输入热路径复制网络层权限状态。
+    std::atomic_uint8_t m_collaborationAllowedMutationFlags{
+        static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All)
+    };
+
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
+
+    /// @brief 当前权限拒绝周期是否已经发布过编辑拦截提示。
+    std::atomic_bool m_permissionEditBlockedNotificationSent{ false };
 
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点

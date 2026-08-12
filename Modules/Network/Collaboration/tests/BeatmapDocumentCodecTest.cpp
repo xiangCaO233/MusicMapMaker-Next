@@ -484,6 +484,36 @@ bool testCategoryDelta()
            restored->m_audioSamples.size() == 1U;
 }
 
+/// @brief 校验授权路径可在不持有文档基线时识别快照与各增量类别。
+bool testPayloadInspectionIsNonMutating()
+{
+    BeatmapDocumentCodec encoder;
+    BeatmapDocumentCodec untouched;
+    auto                 initial = makeCompleteBeatmap("Creator A");
+    auto snapshot = encoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot ) return false;
+    const auto inspectedSnapshot = BeatmapDocumentCodec::inspect(*snapshot);
+    if ( !inspectedSnapshot || !inspectedSnapshot->isSnapshot ||
+         inspectedSnapshot->flags != BeatmapMutationFlags::All ||
+         untouched.hasDocument() ) {
+        return false;
+    }
+
+    initial->m_baseMapMetadata.author = "Creator B";
+    auto metadataDelta =
+        encoder.encode(*initial, BeatmapMutationFlags::Metadata, false);
+    if ( !metadataDelta ) return false;
+    const auto inspectedDelta = BeatmapDocumentCodec::inspect(*metadataDelta);
+    if ( !inspectedDelta || inspectedDelta->isSnapshot ||
+         inspectedDelta->flags != BeatmapMutationFlags::Metadata ||
+         untouched.hasDocument() ) {
+        return false;
+    }
+
+    const MMM::Network::Collaboration::ByteBuffer malformed{ 0xFFU, 0x00U };
+    return !BeatmapDocumentCodec::inspect(malformed).has_value();
+}
+
 /// @brief 校验没有基础快照时拒绝增量和畸形 CBOR。
 bool testInvalidPayloads()
 {
@@ -539,6 +569,7 @@ int main()
                    testStrictCategoryIsolation() &&
                    testRepeatedBidirectionalObjectRoundTrips() &&
                    testConcurrentObjectDeltasMerge() && testCategoryDelta() &&
+                   testPayloadInspectionIsNonMutating() &&
                    testInvalidPayloads() && testLargeSnapshotCompression()
                ? 0
                : 1;

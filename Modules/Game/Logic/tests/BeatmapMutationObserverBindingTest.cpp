@@ -119,7 +119,6 @@ private:
         MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
     });
     session.update(0.0, config, false);
-
     auto observer = std::make_shared<CountingMutationObserver>();
     session.setMutationObserver(observer, false);
     session.update(0.0, config, false);
@@ -350,6 +349,91 @@ private:
     return true;
 }
 
+/// @brief 验证协作细分权限在命令入队和逻辑消费边界拦截未授权类别。
+/// @return Timing 可编辑而元数据被拒绝，切换权限后结果反转时返回 true。
+[[nodiscard]] bool testCollaborationMutationPermissionsAreLocalGate()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+    });
+    session.update(0.0, config, false);
+    const auto initialTimelineCount =
+        session.getContext()
+            .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
+            .size();
+
+    std::atomic_int blockedEvents{ 0 };
+    auto&           eventBus = MMM::Event::EventBus::instance();
+    const auto      subscription =
+        eventBus.subscribe<MMM::Event::CollaborationPermissionEditBlockedEvent>(
+            [&blockedEvents](
+                const MMM::Event::CollaborationPermissionEditBlockedEvent&) {
+                blockedEvents.fetch_add(1, std::memory_order_relaxed);
+            });
+
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::Timelines);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 1.0,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 2.0,
+        },
+    });
+    session.update(0.0, config, false);
+    const bool timingOnlyApplied =
+        session.getContext().trackCount == 4 &&
+        session.getContext()
+                .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
+                .size() == initialTimelineCount + 1U &&
+        blockedEvents.load(std::memory_order_relaxed) == 1;
+
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::Metadata |
+        MMM::BeatmapMutationFlags::AudioSamples);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 2.0,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 3.0,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 7 },
+    });
+    session.update(0.0, config, false);
+    const bool metadataOnlyApplied =
+        session.getContext().trackCount == 7 &&
+        session.getContext()
+                .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
+                .size() == initialTimelineCount + 1U &&
+        blockedEvents.load(std::memory_order_relaxed) == 2;
+
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::All);
+    eventBus.unsubscribe<MMM::Event::CollaborationPermissionEditBlockedEvent>(
+        subscription);
+    if ( !timingOnlyApplied || !metadataOnlyApplied ) {
+        XERROR(
+            "Collaboration mutation permission gate failed: timingOnly={}, "
+            "metadataOnly={}, tracks={}, timelines={}, events={}",
+            timingOnlyApplied,
+            metadataOnlyApplied,
+            session.getContext().trackCount,
+            session.getContext()
+                .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
+                .size(),
+            blockedEvents.load(std::memory_order_relaxed));
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证访客连接门闩会清空旧打开请求并拦截所有后续本机项目请求。
 /// @return 门闩解除前没有项目动作进入逻辑线程时返回 true。
 [[nodiscard]] bool testGuestConnectionBlocksLocalProjectOpening()
@@ -399,6 +483,7 @@ int main()
                    testTimelineCommandsPublishMutations() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
+                   testCollaborationMutationPermissionsAreLocalGate() &&
                    testGuestConnectionBlocksLocalProjectOpening()
                ? 0
                : 1;

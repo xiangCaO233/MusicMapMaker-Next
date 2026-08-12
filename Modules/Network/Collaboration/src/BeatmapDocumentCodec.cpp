@@ -695,6 +695,85 @@ void BeatmapDocumentCodec::synchronizeEncodingBaseline(
 }
 
 std::expected<BeatmapPatchResult, BeatmapDocumentError>
+BeatmapDocumentCodec::inspect(std::span<const std::uint8_t> payload)
+{
+    if ( payload.empty() ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    auto decoded = decodeDocumentPayload(payload);
+    if ( !decoded.has_value() || !decoded->is_object() ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+    const Json&   patch    = decoded.value();
+    std::uint32_t version  = 0;
+    bool          snapshot = false;
+    if ( !readValue(patch, "version", version) ||
+         version != DOCUMENT_FORMAT_VERSION ||
+         !readValue(patch, "snapshot", snapshot) ) {
+        return std::unexpected(BeatmapDocumentError::InvalidPayload);
+    }
+
+    BeatmapPatchResult result;
+    result.isSnapshot          = snapshot;
+    bool       valid           = true;
+    const auto inspectCategory = [&](std::string_view            key,
+                                     ::MMM::BeatmapMutationFlags flag,
+                                     bool                        mustBeArray) {
+        const auto iterator = patch.find(key);
+        if ( iterator == patch.end() ) return;
+        if ( (mustBeArray && !iterator->is_array()) ||
+             (!mustBeArray && !iterator->is_object()) ) {
+            valid = false;
+            return;
+        }
+        result.flags |= flag;
+    };
+    const auto inspectDelta = [&](std::string_view            key,
+                                  ::MMM::BeatmapMutationFlags flag) {
+        const auto iterator = patch.find(key);
+        if ( iterator == patch.end() ) return;
+        if ( !iterator->is_object() ) {
+            valid = false;
+            return;
+        }
+        const auto added   = iterator->find("added");
+        const auto removed = iterator->find("removed");
+        if ( added == iterator->end() || !added->is_array() ||
+             removed == iterator->end() || !removed->is_array() ) {
+            valid = false;
+            return;
+        }
+        result.flags |= flag;
+    };
+
+    if ( snapshot ) {
+        inspectCategory("objects", ::MMM::BeatmapMutationFlags::Objects, true);
+        inspectCategory(
+            "timelines", ::MMM::BeatmapMutationFlags::Timelines, true);
+        inspectCategory(
+            "audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples, true);
+        inspectCategory(
+            "metadata", ::MMM::BeatmapMutationFlags::Metadata, false);
+    } else {
+        inspectDelta("objects_delta", ::MMM::BeatmapMutationFlags::Objects);
+        inspectDelta("timelines_delta", ::MMM::BeatmapMutationFlags::Timelines);
+        inspectDelta("audio_samples_delta",
+                     ::MMM::BeatmapMutationFlags::AudioSamples);
+        inspectCategory(
+            "metadata", ::MMM::BeatmapMutationFlags::Metadata, false);
+    }
+
+    if ( !valid ||
+         (snapshot && result.flags != ::MMM::BeatmapMutationFlags::All) ) {
+        return std::unexpected(BeatmapDocumentError::InvalidDocument);
+    }
+    if ( result.flags == ::MMM::BeatmapMutationFlags::None ) {
+        return std::unexpected(BeatmapDocumentError::EmptyPayload);
+    }
+    return result;
+}
+
+std::expected<BeatmapPatchResult, BeatmapDocumentError>
 BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
 {
     if ( payload.empty() ) {

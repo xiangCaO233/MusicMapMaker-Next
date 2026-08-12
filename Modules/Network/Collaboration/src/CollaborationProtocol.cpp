@@ -455,6 +455,16 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         appendUint64(body, chat->peerId);
         appendUint64(body, chat->sequence);
         appendShortString(body, chat->text);
+    } else if ( const auto* permissions =
+                    std::get_if<ParticipantPermissions>(&message) ) {
+        if ( permissions->peerId == 0 ||
+             !isCollaborationPermissionMaskValid(permissions->permissions) ) {
+            return std::unexpected(ProtocolError::InvalidPermissions);
+        }
+        kind = CollaborationMessageKind::ParticipantPermissions;
+        body.reserve(12U);
+        appendUint64(body, permissions->peerId);
+        appendUint32(body, permissions->permissions);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -715,6 +725,18 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidChatMessage);
         }
         return CollaborationMessage(std::move(chat));
+    }
+    case CollaborationMessageKind::ParticipantPermissions: {
+        ParticipantPermissions permissions;
+        if ( !reader.readUint64(permissions.peerId) ||
+             !reader.readUint32(permissions.permissions) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( reader.remaining() != 0 || permissions.peerId == 0 ||
+             !isCollaborationPermissionMaskValid(permissions.permissions) ) {
+            return std::unexpected(ProtocolError::InvalidPermissions);
+        }
+        return CollaborationMessage(permissions);
     }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);

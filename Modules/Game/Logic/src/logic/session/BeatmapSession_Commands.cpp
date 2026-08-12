@@ -1188,7 +1188,10 @@ bool BeatmapSession::processCommands()
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
     };
     while ( m_commandQueue.try_dequeue(cmd) ) {
-        if ( blockCollaborationOfflineEdit(cmd) ) continue;
+        if ( blockCollaborationOfflineEdit(cmd) ||
+             blockCollaborationUnauthorizedEdit(cmd, true) ) {
+            continue;
+        }
         const auto* authoritativeReplacement =
             std::get_if<CmdReplaceBeatmapData>(&cmd);
         const bool authoritativeSynchronization =

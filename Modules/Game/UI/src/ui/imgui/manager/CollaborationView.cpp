@@ -72,22 +72,6 @@ const char* roomStateText(Network::Collaboration::CollaborationRoomState state)
     }
 }
 
-/// @brief 返回公网目录连接状态对应的本地化文本。
-const char* directoryStateText(
-    Network::Collaboration::CollaborationDirectoryState state)
-{
-    using State = Network::Collaboration::CollaborationDirectoryState;
-    switch ( state ) {
-    case State::Connecting:
-        return TR("ui.collaboration.directory.connecting").data();
-    case State::Connected:
-        return TR("ui.collaboration.directory.connected").data();
-    case State::Error: return TR("ui.collaboration.directory.error").data();
-    case State::Idle:
-    default: return TR("ui.collaboration.directory.idle").data();
-    }
-}
-
 /// @brief 返回资源同步阶段对应的本地化文本。
 const char* resourcePhaseText(
     Network::Collaboration::CollaborationResourceSyncPhase phase)
@@ -122,6 +106,38 @@ void drawRoomInfoLabel(const char* label)
     ImGui::TableSetColumnIndex(1);
 }
 
+/// @brief 绘制当前访客从房主收到的只读权限明细。
+/// @param room 当前协作房间。
+/// @warning UI 热路径：固定绘制六个内存权限位，不执行网络发送。
+void drawLocalPermissionSummary(
+    const Network::Collaboration::CollaborationRoom& room)
+{
+    const auto permissions = room.localPermissions();
+    const auto drawPermission =
+        [permissions](
+            const char*                                     label,
+            Network::Collaboration::CollaborationPermission permission) {
+            const bool enabled =
+                Network::Collaboration::hasCollaborationPermission(permissions,
+                                                                   permission);
+            ImGui::TextDisabled("%s  %s", enabled ? "[+]" : "[-]", label);
+        };
+    drawPermission(TR("ui.collaboration.permissions.edit").data(),
+                   Network::Collaboration::CollaborationPermission::Edit);
+    drawPermission(TR("ui.collaboration.permissions.objects").data(),
+                   Network::Collaboration::CollaborationPermission::Objects);
+    drawPermission(TR("ui.collaboration.permissions.timelines").data(),
+                   Network::Collaboration::CollaborationPermission::Timelines);
+    drawPermission(TR("ui.collaboration.permissions.metadata").data(),
+                   Network::Collaboration::CollaborationPermission::Metadata);
+    drawPermission(
+        TR("ui.collaboration.permissions.audio_samples").data(),
+        Network::Collaboration::CollaborationPermission::AudioSamples);
+    drawPermission(
+        TR("ui.collaboration.permissions.annotations").data(),
+        Network::Collaboration::CollaborationPermission::Annotations);
+}
+
 /// @brief 绘制一名协作成员的表格行和可选跟随按钮。
 /// @param room 当前协作房间。
 /// @param peerId 成员 PeerId。
@@ -143,6 +159,17 @@ void drawParticipantRow(
     ImGui::TextUnformatted(identity.creator.c_str());
     ImGui::SameLine();
     ImGui::TextDisabled("(%.*s)", 8, identity.participantId.c_str());
+    const auto permission = room.participantPermissions().find(peerId);
+    const auto permissionMask =
+        permission == room.participantPermissions().end() ? 0U
+                                                          : permission->second;
+    if ( !Network::Collaboration::hasCollaborationPermission(
+             permissionMask,
+             Network::Collaboration::CollaborationPermission::Edit) ) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "%s", TR("ui.collaboration.permissions.read_only").data());
+    }
 
     ImGui::TableSetColumnIndex(1);
     if ( local ) {
@@ -156,6 +183,71 @@ void drawParticipantRow(
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
         }
         if ( room.isHost() ) {
+            ImGui::SameLine();
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.permissions.manage").data()) ) {
+                FeedbackOpenPopup("CollaborationPermissionsPopup");
+            }
+            if ( ImGui::BeginPopup("CollaborationPermissionsPopup") ) {
+                ImGui::TextUnformatted(identity.creator.c_str());
+                ImGui::Separator();
+
+                auto       updatedPermissions = permissionMask;
+                bool       permissionsChanged = false;
+                const auto drawPermission =
+                    [&](const char* label,
+                        Network::Collaboration::CollaborationPermission
+                            target) {
+                        bool enabled =
+                            Network::Collaboration::hasCollaborationPermission(
+                                updatedPermissions, target);
+                        if ( FeedbackCheckbox(label, &enabled) ) {
+                            const auto bit =
+                                static_cast<Network::Collaboration::
+                                                CollaborationPermissionMask>(
+                                    target);
+                            if ( enabled ) {
+                                updatedPermissions |= bit;
+                            } else {
+                                updatedPermissions &= ~bit;
+                            }
+                            permissionsChanged = true;
+                        }
+                    };
+
+                drawPermission(
+                    TR("ui.collaboration.permissions.edit").data(),
+                    Network::Collaboration::CollaborationPermission::Edit);
+                const bool mayEdit =
+                    Network::Collaboration::hasCollaborationPermission(
+                        updatedPermissions,
+                        Network::Collaboration::CollaborationPermission::Edit);
+                ImGui::BeginDisabled(!mayEdit);
+                drawPermission(
+                    TR("ui.collaboration.permissions.objects").data(),
+                    Network::Collaboration::CollaborationPermission::Objects);
+                drawPermission(
+                    TR("ui.collaboration.permissions.timelines").data(),
+                    Network::Collaboration::CollaborationPermission::Timelines);
+                drawPermission(
+                    TR("ui.collaboration.permissions.metadata").data(),
+                    Network::Collaboration::CollaborationPermission::Metadata);
+                drawPermission(
+                    TR("ui.collaboration.permissions.audio_samples").data(),
+                    Network::Collaboration::CollaborationPermission::
+                        AudioSamples);
+                drawPermission(
+                    TR("ui.collaboration.permissions.annotations").data(),
+                    Network::Collaboration::CollaborationPermission::
+                        Annotations);
+                ImGui::EndDisabled();
+
+                if ( permissionsChanged ) {
+                    static_cast<void>(room.setParticipantPermissions(
+                        peerId, updatedPermissions));
+                }
+                ImGui::EndPopup();
+            }
             ImGui::SameLine();
             if ( FeedbackSmallButton(
                      TR("ui.collaboration.remove_participant").data()) ) {
@@ -263,40 +355,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     }
 
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
-    const auto&              endpoint    = m_room->serverEndpoint();
-    if ( ImGui::BeginTable("CollaborationServerStatusTable",
-                           2,
-                           ImGuiTableFlags_SizingStretchProp) ) {
-        const float labelWidth =
-            std::max(
-                ImGui::CalcTextSize(TR("ui.collaboration.server").data()).x,
-                ImGui::CalcTextSize(
-                    TR("ui.collaboration.directory.status").data())
-                    .x) +
-            ImGui::GetStyle().ItemSpacing.x;
-        ImGui::TableSetupColumn("##ServerStatusLabel",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                labelWidth);
-        ImGui::TableSetupColumn("##ServerStatusValue",
-                                ImGuiTableColumnFlags_WidthStretch);
-        drawRoomInfoLabel(TR("ui.collaboration.server").data());
-        ImGui::Text("%s:%u",
-                    endpoint.address.c_str(),
-                    static_cast<unsigned int>(endpoint.signalingPort));
-        drawRoomInfoLabel(TR("ui.collaboration.directory.status").data());
-        ImGui::TextUnformatted(directoryStateText(m_room->directoryState()));
-        ImGui::EndTable();
-    }
-    if ( sourceManager &&
-         FeedbackButton(TR("ui.collaboration.open_server_settings").data(),
-                        ImVec2(-1.0F, 0.0F)) ) {
-        sourceManager->openSettingsWindow(Event::SettingsTab::Collaboration);
-    }
-    if ( !m_room->directoryError().empty() ) {
-        ImGui::TextWrapped("%s", m_room->directoryError().c_str());
-    }
-
-    ImGui::Spacing();
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.host_room").data(),
                                   headerFlags) ) {
         ImGui::TextWrapped("%s", TR("ui.collaboration.host_desc").data());
@@ -499,7 +557,6 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
 
 void CollaborationView::drawActiveRoom()
 {
-    const auto&              endpoint    = m_room->serverEndpoint();
     const auto&              style       = ImGui::GetStyle();
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
 
@@ -509,7 +566,7 @@ void CollaborationView::drawActiveRoom()
                                2,
                                ImGuiTableFlags_SizingStretchProp) ) {
             const float labelWidth = std::max(
-                ImGui::CalcTextSize(TR("ui.collaboration.server").data()).x,
+                ImGui::CalcTextSize(TR("ui.collaboration.status").data()).x,
                 ImGui::CalcTextSize(TR("ui.collaboration.room_name").data()).x);
             ImGui::TableSetupColumn("##RoomDetailLabel",
                                     ImGuiTableColumnFlags_WidthFixed,
@@ -531,11 +588,6 @@ void CollaborationView::drawActiveRoom()
                 drawRoomInfoLabel(TR("ui.collaboration.room_id").data());
                 ImGui::TextWrapped("%s", m_room->roomId().c_str());
             }
-            drawRoomInfoLabel(TR("ui.collaboration.server").data());
-            ImGui::TextWrapped(
-                "%s:%u",
-                endpoint.address.c_str(),
-                static_cast<unsigned int>(endpoint.signalingPort));
             ImGui::EndTable();
         }
         if ( !m_room->lastError().empty() ) {
@@ -730,7 +782,11 @@ void CollaborationView::drawActiveRoom()
                 style.FramePadding.x * 2.0F +
                 (m_room->isHost()
                      ? ImGui::CalcTextSize(
-                           TR("ui.collaboration.remove_participant").data())
+                           TR("ui.collaboration.permissions.manage").data())
+                               .x +
+                           style.FramePadding.x * 2.0F + style.ItemSpacing.x +
+                           ImGui::CalcTextSize(
+                               TR("ui.collaboration.remove_participant").data())
                                .x +
                            style.FramePadding.x * 2.0F + style.ItemSpacing.x
                      : 0.0F);
@@ -752,6 +808,12 @@ void CollaborationView::drawActiveRoom()
                 }
             }
             ImGui::EndTable();
+        }
+        if ( !m_room->isHost() ) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted(
+                TR("ui.collaboration.permissions.mine").data());
+            drawLocalPermissionSummary(*m_room);
         }
     }
 }

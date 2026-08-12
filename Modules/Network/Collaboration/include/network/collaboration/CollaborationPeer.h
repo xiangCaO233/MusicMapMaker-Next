@@ -49,6 +49,8 @@ struct CollaborationPeerStats {
     std::uint64_t sendFailures = 0;
     /// @brief 因重复或倒序而忽略的聊天消息数。
     std::uint64_t duplicateChatMessages = 0;
+    /// @brief 房主在分配 revision 前拒绝的越权编辑请求数。
+    std::uint64_t unauthorizedEditRequests = 0;
 };
 
 /// @brief 房主和访客共用的权威增量同步状态机。
@@ -67,17 +69,23 @@ public:
     using ChatMessageCallback =
         std::function<void(const CollaborationChatMessage&)>;
 
+    /// @brief 房主按规范化负载内容执行产品层细分权限校验的回调。
+    using AuthorizeEditCallback =
+        std::function<bool(PeerId, std::span<const std::uint8_t>)>;
+
     /// @brief 创建统一房主或访客 Peer。
     /// @param config 身份和有界处理配置。
     /// @param transport 可靠有序字节传输实现。
     /// @param applyCallback 已提交操作的本地应用回调。
     /// @param resourceCallback 资源清单、请求和分块的产品层回调。
     /// @param chatCallback 已验证聊天消息的产品层回调。
+    /// @param authorizeEditCallback 房主分配 revision 前的细分权限校验入口。
     CollaborationPeer(CollaborationPeerConfig                  config,
                       std::unique_ptr<ICollaborationTransport> transport,
                       ApplyOperationCallback                   applyCallback,
-                      ResourceMessageCallback resourceCallback = {},
-                      ChatMessageCallback     chatCallback     = {});
+                      ResourceMessageCallback resourceCallback      = {},
+                      ChatMessageCallback     chatCallback          = {},
+                      AuthorizeEditCallback   authorizeEditCallback = {});
 
     /// @brief 释放 Peer 和其独占传输端点。
     ~CollaborationPeer();
@@ -123,6 +131,11 @@ public:
     [[nodiscard]] const std::unordered_map<PeerId, ParticipantViewport>&
     participantViewports() const;
 
+    /// @brief 返回房主发布的全部参与者权限快照。
+    /// @return 以临时 PeerId 索引的只读权限表。
+    [[nodiscard]] const std::unordered_map<PeerId, CollaborationPermissionMask>&
+    participantPermissions() const;
+
     /// @brief 房主登记一个可提交和接收增量操作的访客。
     /// @param peerId 访客本次连接的路由槽位。
     /// @param participantId 访客不随重连变化的稳定标识。
@@ -149,6 +162,13 @@ public:
     /// @brief 房主移除一个访客及其确认状态。
     /// @param peerId 访客标识。
     void removeParticipant(PeerId peerId);
+
+    /// @brief 房主原子替换一名在线访客的权限并广播新快照。
+    /// @param peerId 目标访客路由槽位。
+    /// @param permissions 只包含协议已知位的完整权限集合。
+    /// @return 当前客户端为房主、目标在线且广播已开始时返回 true。
+    [[nodiscard]] bool setParticipantPermissions(
+        PeerId peerId, CollaborationPermissionMask permissions);
 
     /// @brief 提交一条规范化本地增量操作。
     /// @param payload 与 UI 坐标、渲染状态和 ECS 实体无关的操作负载。
@@ -228,11 +248,23 @@ private:
     void handleParticipantViewport(PeerId                     senderId,
                                    const ParticipantViewport& viewport);
 
-    /// @brief 校验并按房主拓扑转发一条文字聊天消息。
+    /// @brief 校验并按房主拓扑转发一条聊天消息。
     /// @param senderId 传输层确认的直接发送方。
     /// @param chat 消息声明的原始发送者和正文。
     void handleChatMessage(PeerId                          senderId,
                            const CollaborationChatMessage& chat);
+
+    /// @brief 访客接收房主发布的参与者权限快照。
+    /// @param senderId 传输层确认的直接发送方。
+    /// @param permissions 权限所属参与者及其完整权限位。
+    void handleParticipantPermissions(
+        PeerId senderId, const ParticipantPermissions& permissions);
+
+    /// @brief 在房主分配 revision 前执行整体和细分编辑权限校验。
+    /// @param request 已通过身份校验并出队的编辑请求。
+    /// @return 请求来自房主自身或远端权限允许该负载时返回 true。
+    [[nodiscard]] bool isEditRequestAuthorized(
+        const EditRequest& request) const;
 
     /// @brief 访客应用房主提供的完整状态快照并直接追平版本。
     void handleStateSnapshot(PeerId senderId, const StateSnapshot& snapshot);
@@ -272,6 +304,8 @@ private:
     ResourceMessageCallback m_resourceCallback;
     /// @brief 已校验聊天消息的产品层入口。
     ChatMessageCallback m_chatCallback;
+    /// @brief 房主分配 revision 前执行的规范负载细分权限入口。
+    AuthorizeEditCallback m_authorizeEditCallback;
     /// @brief 当前身份和传输是否满足状态机前置条件。
     bool m_valid = false;
     /// @brief 当前客户端下一个本地请求序号。
@@ -299,6 +333,9 @@ private:
     std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
     /// @brief 当前客户端已知的 PeerId 到稳定协作者身份映射。
     std::unordered_map<PeerId, ParticipantIdentity> m_participantIdentities;
+    /// @brief 房主发布并由全部客户端镜像的参与者权限表。
+    std::unordered_map<PeerId, CollaborationPermissionMask>
+        m_participantPermissions;
     /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
     std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
     /// @brief 各参与者最近一次通过校验的聊天消息序号。

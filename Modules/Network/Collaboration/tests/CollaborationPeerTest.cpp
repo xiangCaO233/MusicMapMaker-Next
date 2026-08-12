@@ -19,6 +19,7 @@ using MMM::Network::Collaboration::CollaborationPeerConfig;
 using MMM::Network::Collaboration::CommittedOperation;
 using MMM::Network::Collaboration::LoopbackTransportHub;
 using MMM::Network::Collaboration::ParticipantIdentity;
+using MMM::Network::Collaboration::ParticipantPermissions;
 using MMM::Network::Collaboration::ParticipantViewport;
 using MMM::Network::Collaboration::PeerId;
 using MMM::Network::Collaboration::ProtocolError;
@@ -444,6 +445,42 @@ void pumpPeers(CollaborationPeer&                               host,
     const auto* decodedViewport =
         viewportDecoded ? std::get_if<ParticipantViewport>(&*viewportDecoded)
                         : nullptr;
+    if ( decodedViewport == nullptr ||
+         decodedViewport->peerId != viewport.peerId ||
+         decodedViewport->sequence != viewport.sequence ) {
+        return false;
+    }
+
+    const auto permissionMask =
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Edit) |
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Objects);
+    const ParticipantPermissions permissions{ 7, permissionMask };
+    const auto permissionEncoded = encodeCollaborationMessage(permissions, 4U);
+    const auto permissionDecoded =
+        permissionEncoded
+            ? decodeCollaborationMessage(*permissionEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidPermissions));
+    const auto* decodedPermissions =
+        permissionDecoded
+            ? std::get_if<ParticipantPermissions>(&*permissionDecoded)
+            : nullptr;
+    if ( decodedPermissions == nullptr ||
+         decodedPermissions->peerId != permissions.peerId ||
+         decodedPermissions->permissions != permissions.permissions ) {
+        return false;
+    }
+    const ParticipantPermissions invalidPermissions{ 7, 1U << 31U };
+    const auto                   invalidPermissionResult =
+        encodeCollaborationMessage(invalidPermissions, 4U);
+    if ( invalidPermissionResult || invalidPermissionResult.error() !=
+                                        ProtocolError::InvalidPermissions ) {
+        return false;
+    }
+
     if ( !decodedViewport || decodedViewport->peerId != viewport.peerId ||
          decodedViewport->sequence != viewport.sequence ||
          decodedViewport->playbackTime != viewport.playbackTime ||
@@ -580,6 +617,108 @@ void pumpPeers(CollaborationPeer&                               host,
     auto truncated = decodeCollaborationMessage(encoded.value(), 4);
     return !truncated.has_value() &&
            truncated.error() == ProtocolError::InvalidMessageLength;
+}
+
+/// @brief 验证房主权限快照同步和 revision 前的强制授权不可被访客绕过。
+/// @return 越权请求不推进版本，恢复权限后合法请求正常收敛时返回 true。
+[[nodiscard]] bool testParticipantPermissionsAreAuthoritative()
+{
+    constexpr PeerId        GUEST_ID = 2;
+    LoopbackTransportHub    hub;
+    std::vector<ByteBuffer> hostModel;
+    std::vector<ByteBuffer> guestModel;
+
+    CollaborationPeerConfig hostConfig;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host";
+    hostConfig.isHost  = true;
+    CollaborationPeer host(
+        hostConfig,
+        hub.createEndpoint(HOST_ID),
+        [&hostModel](const CommittedOperation& operation) {
+            hostModel.push_back(operation.payload);
+        },
+        {},
+        {},
+        [](PeerId peerId, std::span<const std::uint8_t> payload) {
+            return peerId == GUEST_ID && !payload.empty() &&
+                   payload.front() == 0x42U;
+        });
+
+    CollaborationPeerConfig guestConfig;
+    setTestPeerIdentity(guestConfig, GUEST_ID);
+    guestConfig.creator = "Guest";
+    guestConfig.isHost  = false;
+    auto guest          = std::make_unique<CollaborationPeer>(
+        guestConfig,
+        hub.createEndpoint(GUEST_ID),
+        [&guestModel](const CommittedOperation& operation) {
+            guestModel.push_back(operation.payload);
+        });
+    if ( !host.addParticipant(GUEST_ID,
+                              guestConfig.participantId,
+                              guestConfig.sessionId,
+                              guestConfig.creator) ) {
+        return false;
+    }
+    std::vector<std::unique_ptr<CollaborationPeer>> guests;
+    guests.push_back(std::move(guest));
+    pumpPeers(host, guests, 3U);
+
+    const auto objectEditPermissions =
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Edit) |
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Objects);
+    if ( !host.setParticipantPermissions(GUEST_ID, objectEditPermissions) ) {
+        return false;
+    }
+    pumpPeers(host, guests, 2U);
+    const auto guestPermission =
+        guests.front()->participantPermissions().find(GUEST_ID);
+    if ( guestPermission == guests.front()->participantPermissions().end() ||
+         guestPermission->second != objectEditPermissions ) {
+        return false;
+    }
+
+    const ByteBuffer rejectedPayload{ 0x41U };
+    if ( guests.front()->submitOperation(rejectedPayload) !=
+         SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    pumpPeers(host, guests, 3U);
+    if ( host.appliedRevision() != 0U ||
+         host.stats().unauthorizedEditRequests != 1U || !hostModel.empty() ||
+         !guestModel.empty() ) {
+        return false;
+    }
+
+    const ByteBuffer acceptedPayload{ 0x42U };
+    if ( guests.front()->submitOperation(acceptedPayload) !=
+         SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    pumpPeers(host, guests, 3U);
+    if ( host.appliedRevision() != 1U ||
+         guests.front()->appliedRevision() != 1U || hostModel.size() != 1U ||
+         guestModel.size() != 1U || hostModel.front() != acceptedPayload ||
+         guestModel.front() != acceptedPayload ) {
+        return false;
+    }
+
+    const auto objectsOnly =
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Objects);
+    if ( !host.setParticipantPermissions(GUEST_ID, objectsOnly) ) return false;
+    pumpPeers(host, guests, 2U);
+    if ( guests.front()->submitOperation(acceptedPayload) !=
+         SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    pumpPeers(host, guests, 3U);
+    return host.appliedRevision() == 1U &&
+           host.stats().unauthorizedEditRequests == 2U &&
+           hostModel.size() == 1U && guestModel.size() == 1U;
 }
 
 /// @brief 验证聊天消息经房主验证转发、重复包去重并拒绝身份伪造。
@@ -1015,5 +1154,6 @@ int main()
     if ( !testTrimmedJournalSnapshotFallback() ) return 6;
     if ( !testReusedPeerIdStartsFreshRequestSequence() ) return 7;
     if ( !testStableIdentityConflictsAreRejected() ) return 8;
+    if ( !testParticipantPermissionsAreAuthoritative() ) return 9;
     return 0;
 }

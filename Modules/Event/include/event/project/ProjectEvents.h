@@ -138,6 +138,10 @@ struct CollaborationProjectOpenBlockedEvent : public ProjectLifecycleEvent {
 struct CollaborationOfflineEditBlockedEvent : public ProjectLifecycleEvent {
 };
 
+/// @brief 协作访客尝试修改房主未授权的数据类别时的拦截事件。
+struct CollaborationPermissionEditBlockedEvent : public ProjectLifecycleEvent {
+};
+
 /// @brief 临时项目只读编辑被拦截事件。
 struct TemporaryProjectEditBlockedEvent : public ProjectLifecycleEvent {
     /// @brief 用户拖拽打开的原始包文件路径。
@@ -225,6 +229,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::CollaborationProjectOpenBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::CollaborationOfflineEditBlockedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::CollaborationPermissionEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);

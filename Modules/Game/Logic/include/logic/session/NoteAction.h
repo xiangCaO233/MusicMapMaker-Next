@@ -37,6 +37,11 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief Note 操作始终修改主谱面物件。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Objects;
+    }
 
 private:
     Type                         m_type;    ///< 操作类型
@@ -80,6 +85,11 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief 批量 Note 操作始终修改主谱面物件。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Objects;
+    }
 
 private:
     std::vector<Entry> m_entries;  ///< 条目列表

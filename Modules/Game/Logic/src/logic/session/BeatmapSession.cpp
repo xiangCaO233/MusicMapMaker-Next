@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommandMutationClassification.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
@@ -11,6 +12,7 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -114,8 +116,79 @@ BeatmapSession::~BeatmapSession() = default;
 
 void BeatmapSession::pushCommand(LogicCommand&& cmd)
 {
-    if ( blockCollaborationOfflineEdit(cmd) ) return;
+    if ( blockCollaborationOfflineEdit(cmd) ||
+         blockCollaborationUnauthorizedEdit(cmd) ) {
+        return;
+    }
     m_commandQueue.enqueue(std::move(cmd));
+}
+
+bool BeatmapSession::blockCollaborationUnauthorizedEdit(
+    const LogicCommand& cmd, bool inspectSessionState)
+{
+    auto required = requiredBeatmapMutationFlags(cmd);
+    if ( inspectSessionState ) {
+        if ( const auto* metadata =
+                 std::get_if<CmdUpdateBeatmapMetadata>(&cmd) ) {
+            const auto samples =
+                m_ctx->sampleRegistry.view<const SampleComponent>();
+            if ( m_ctx->currentBeatmap && !samples.empty() ) {
+                const auto& current = m_ctx->currentBeatmap->m_baseMapMetadata;
+                if ( metadata->baseMeta.track_count != m_ctx->trackCount ||
+                     metadata->baseMeta.main_audio_path !=
+                         current.main_audio_path ||
+                     metadata->baseMeta.song_file_hint !=
+                         current.song_file_hint ) {
+                    required |= ::MMM::BeatmapMutationFlags::AudioSamples;
+                }
+            }
+        } else if ( std::holds_alternative<CmdUpdateTrackCount>(cmd) ) {
+            if ( !m_ctx->sampleRegistry.view<const SampleComponent>()
+                      .empty() ) {
+                required |= ::MMM::BeatmapMutationFlags::AudioSamples;
+            }
+        } else if ( std::holds_alternative<CmdUndo>(cmd) ) {
+            required = m_ctx->actionStack.undoMutationFlags();
+        } else if ( std::holds_alternative<CmdRedo>(cmd) ) {
+            required = m_ctx->actionStack.redoMutationFlags();
+        } else if ( std::holds_alternative<CmdPaste>(cmd) ) {
+            if ( !m_ctx->clipboard.empty() ) {
+                required |= ::MMM::BeatmapMutationFlags::Objects;
+            }
+            if ( !m_ctx->sampleClipboard.empty() ) {
+                required |= ::MMM::BeatmapMutationFlags::AudioSamples;
+            }
+            if ( required == ::MMM::BeatmapMutationFlags::None ) {
+                // 进程外剪贴板尚未解析时无法证明具体类别，必须由完整编辑权限
+                // 接受，避免伪造剪贴板内容绕过本地门闩。
+                required = ::MMM::BeatmapMutationFlags::All;
+            }
+        } else if ( std::holds_alternative<CmdCut>(cmd) ||
+                    std::holds_alternative<CmdDeleteSelected>(cmd) ||
+                    std::holds_alternative<CmdUpdateSelectedObjectSampleVolume>(
+                        cmd) ) {
+            if ( !m_ctx->selectedNoteEntities.empty() ) {
+                required |= ::MMM::BeatmapMutationFlags::Objects;
+            }
+            if ( !m_ctx->selectedSampleEntities.empty() ) {
+                required |= ::MMM::BeatmapMutationFlags::AudioSamples;
+            }
+        }
+    }
+    if ( required == ::MMM::BeatmapMutationFlags::None ) return false;
+
+    const auto allowed = static_cast<::MMM::BeatmapMutationFlags>(
+        m_collaborationAllowedMutationFlags.load(std::memory_order_acquire));
+    const auto requiredBits = static_cast<std::uint8_t>(required);
+    const auto allowedBits  = static_cast<std::uint8_t>(allowed);
+    if ( (requiredBits & allowedBits) == requiredBits ) return false;
+
+    if ( !m_permissionEditBlockedNotificationSent.exchange(
+             true, std::memory_order_acq_rel) ) {
+        Event::EventBus::instance().publish(
+            Event::CollaborationPermissionEditBlockedEvent{});
+    }
+    return true;
 }
 
 bool BeatmapSession::blockCollaborationOfflineEdit(const LogicCommand& cmd)
@@ -148,6 +221,34 @@ void BeatmapSession::setCollaborationOfflineReadOnly(bool readOnly)
 bool BeatmapSession::isCollaborationOfflineReadOnly() const
 {
     return m_collaborationOfflineReadOnly.load(std::memory_order_acquire);
+}
+
+void BeatmapSession::setCollaborationAllowedMutationFlags(
+    ::MMM::BeatmapMutationFlags allowedFlags)
+{
+    const auto sanitized =
+        static_cast<std::uint8_t>(allowedFlags) &
+        static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All);
+    const auto previous = m_collaborationAllowedMutationFlags.exchange(
+        sanitized, std::memory_order_acq_rel);
+    if ( previous == sanitized ) return;
+
+    m_permissionEditBlockedNotificationSent.store(false,
+                                                  std::memory_order_release);
+    if ( sanitized !=
+         static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All) ) {
+        // 权限收紧时复用逻辑线程的交互取消流程，避免正在拖拽或绘制的草稿
+        // 在旧权限下继续提交。
+        m_commandQueue.enqueue(
+            LogicCommand(CmdSetCollaborationOfflineReadOnly{ true }));
+    }
+}
+
+::MMM::BeatmapMutationFlags
+BeatmapSession::collaborationAllowedMutationFlags() const
+{
+    return static_cast<::MMM::BeatmapMutationFlags>(
+        m_collaborationAllowedMutationFlags.load(std::memory_order_acquire));
 }
 
 void BeatmapSession::setMutationObserver(
