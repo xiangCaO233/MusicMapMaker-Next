@@ -686,6 +686,8 @@ return {
 	["ui.collaboration.require_matching_build"] = "仅允许相同构建的客户端",
 	["ui.collaboration.require_matching_build_desc"] = "校验客户端主程序 SHA-256；不一致时在进入房间前自动拒绝。此选项用于版本门禁，不等同于远程可信证明。",
 	["ui.collaboration.start_room"] = "开启协作房间",
+	["ui.collaboration.build_fingerprint_calculating"] = "正在后台校验客户端构建…",
+	["ui.collaboration.build_fingerprint_failed"] = "客户端构建校验初始化失败",
 	["ui.collaboration.online_rooms"] = "在线房间",
 	["ui.collaboration.online"] = "在线",
 	["ui.collaboration.action"] = "操作",

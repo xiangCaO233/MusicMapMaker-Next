@@ -37,6 +37,14 @@ target_link_libraries(RtcDiagnosticLoggingTest PRIVATE NetworkCollaboration
                                                        Config)
 add_test(NAME RtcDiagnosticLoggingTest COMMAND RtcDiagnosticLoggingTest)
 
+# 构建指纹测试覆盖后台任务投递、非阻塞状态查询和最终 SHA-256 格式。
+mmm_add_test_executable(Collaboration CollaborationBuildFingerprintTest
+                        tests/CollaborationBuildFingerprintTest.cpp)
+target_link_libraries(CollaborationBuildFingerprintTest
+                      PRIVATE NetworkCollaboration Runtime)
+add_test(NAME CollaborationBuildFingerprintTest
+         COMMAND CollaborationBuildFingerprintTest)
+
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest
                         tests/CollaborationPeerTest.cpp)

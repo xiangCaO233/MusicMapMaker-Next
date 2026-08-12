@@ -12,6 +12,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
@@ -26,9 +27,17 @@
 
 namespace MMM::UI
 {
+/// @brief 等待后台构建指纹完成的房主开房请求。
+struct CollaborationView::PendingHostStart {
+    /// @brief 用户点击时冻结的房主配置。
+    Network::Collaboration::CollaborationHostRoomConfig config;
+};
+
 struct CollaborationView::PendingGuestJoin {
     /// @brief 已冻结的访客连接配置，避免等待关闭期间读取变化中的 UI 输入。
     Network::Collaboration::CollaborationJoinRoomConfig config;
+    /// @brief 是否已经在构建指纹就绪后请求关闭本机项目状态。
+    bool closeRequested = false;
     /// @brief 开始请求关闭本机状态的单调时间点。
     std::chrono::steady_clock::time_point closeRequestedAt;
 };
@@ -285,6 +294,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
         return;
     }
 
+    advancePendingHostStart();
     advancePendingGuestJoin(sourceManager);
 
     if ( m_room->isActive() ) {
@@ -344,6 +354,9 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         sourceManager && sourceManager->hasActiveProjectUiState() && project;
     const bool hostReady = hasProject && activeSession &&
                            activeSession->getContext().currentBeatmap;
+    const bool fingerprintFailed =
+        Network::Collaboration::collaborationBuildFingerprintState() ==
+        Network::Collaboration::CollaborationBuildFingerprintState::Failed;
     if ( hostReady && !m_roomNameInitialized ) {
         const auto& metadata =
             activeSession->getContext().currentBeatmap->m_baseMapMetadata;
@@ -352,6 +365,12 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                               : std::string_view(metadata.name);
         if ( !roomName.empty() ) setInputBuffer(m_roomName, roomName);
         m_roomNameInitialized = true;
+    }
+    if ( fingerprintFailed ) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+            "%s",
+            TR("ui.collaboration.build_fingerprint_failed").data());
     }
 
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
@@ -385,8 +404,15 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                          &m_requireMatchingBuildFingerprint);
         ImGui::TextWrapped(
             "%s", TR("ui.collaboration.require_matching_build_desc").data());
+        if ( m_pendingHostStart ) {
+            ImGui::TextColored(
+                ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
+                "%s",
+                TR("ui.collaboration.build_fingerprint_calculating").data());
+        }
         ImGui::BeginDisabled(
-            m_pendingGuestJoin || !creatorValid || m_roomName[0] == '\0' ||
+            m_pendingHostStart || m_pendingGuestJoin || !creatorValid ||
+            fingerprintFailed || m_roomName[0] == '\0' ||
             !isCollaborationProjectRequirementSatisfied(true, hostReady));
         if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
                             ImVec2(-1.0F, 0.0F)) ) {
@@ -400,7 +426,15 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
             config.endpoint = m_room->serverEndpoint();
             config.requireMatchingBuildFingerprint =
                 m_requireMatchingBuildFingerprint;
-            static_cast<void>(m_room->startHost(std::move(config)));
+            config.buildFingerprint =
+                Network::Collaboration::collaborationBuildFingerprint();
+            if ( config.buildFingerprint.empty() ) {
+                auto pending       = std::make_unique<PendingHostStart>();
+                pending->config    = std::move(config);
+                m_pendingHostStart = std::move(pending);
+            } else {
+                static_cast<void>(m_room->startHost(std::move(config)));
+            }
         }
         ImGui::EndDisabled();
     }
@@ -413,7 +447,10 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
             ImGui::TextColored(
                 ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
                 "%s",
-                TR("ui.collaboration.closing_local_state").data());
+                !m_pendingGuestJoin->closeRequested
+                    ? TR("ui.collaboration.build_fingerprint_calculating")
+                          .data()
+                    : TR("ui.collaboration.closing_local_state").data());
         } else if ( m_guestJoinPreparationCancelled ) {
             ImGui::TextColored(
                 ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
@@ -474,7 +511,8 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 ImGui::TableSetColumnIndex(2);
                 const bool full = room.participants >= room.capacity;
                 ImGui::BeginDisabled(
-                    m_pendingGuestJoin || !creatorValid || full ||
+                    m_pendingHostStart || m_pendingGuestJoin ||
+                    fingerprintFailed || !creatorValid || full ||
                     !isCollaborationProjectRequirementSatisfied(false,
                                                                 hasProject));
                 if ( FeedbackSmallButton(
@@ -499,7 +537,10 @@ void CollaborationView::beginGuestJoin(std::string creator, std::string roomId,
                                        std::string roomName,
                                        UIManager*  sourceManager)
 {
-    if ( !m_room || m_pendingGuestJoin || m_room->isActive() ) return;
+    if ( !m_room || m_pendingHostStart || m_pendingGuestJoin ||
+         m_room->isActive() ) {
+        return;
+    }
 
     auto pending            = std::make_unique<PendingGuestJoin>();
     pending->config.creator = std::move(creator);
@@ -510,24 +551,31 @@ void CollaborationView::beginGuestJoin(std::string creator, std::string roomId,
     pending->config.endpoint = m_room->serverEndpoint();
     pending->config.resourceCacheRoot =
         Config::AppPaths::configRootPath() / "collaboration-cache";
-    pending->closeRequestedAt       = std::chrono::steady_clock::now();
     m_pendingGuestJoin              = std::move(pending);
     m_guestJoinPreparationCancelled = false;
 
-    auto& projectController = Logic::ProjectController::instance();
-    projectController.setLocalProjectOpeningBlockedByCollaboration(true);
-    const bool hasProject       = projectController.currentProject() != nullptr;
-    const bool hasBeatmapCanvas = hasNonLogoBeatmapSession();
-    if ( needsLocalStateCloseBeforeGuestJoin(hasProject, hasBeatmapCanvas) ) {
-        projectController.requestCloseProject();
-        return;
-    }
+    Logic::ProjectController::instance()
+        .setLocalProjectOpeningBlockedByCollaboration(true);
     advancePendingGuestJoin(sourceManager);
 }
 
 void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
 {
     if ( !m_pendingGuestJoin || !m_room ) return;
+
+    const auto fingerprint =
+        Network::Collaboration::collaborationBuildFingerprint();
+    if ( fingerprint.empty() ) {
+        if ( Network::Collaboration::collaborationBuildFingerprintState() ==
+             Network::Collaboration::CollaborationBuildFingerprintState::
+                 Failed ) {
+            m_pendingGuestJoin.reset();
+            Logic::ProjectController::instance()
+                .setLocalProjectOpeningBlockedByCollaboration(false);
+        }
+        return;
+    }
+    m_pendingGuestJoin->config.buildFingerprint = fingerprint;
 
     auto&      projectController = Logic::ProjectController::instance();
     const bool hasProject       = projectController.currentProject() != nullptr;
@@ -541,6 +589,13 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
         }
         m_room->disconnect();
         projectController.setLocalProjectOpeningBlockedByCollaboration(false);
+        return;
+    }
+
+    if ( !m_pendingGuestJoin->closeRequested ) {
+        m_pendingGuestJoin->closeRequested   = true;
+        m_pendingGuestJoin->closeRequestedAt = std::chrono::steady_clock::now();
+        projectController.requestCloseProject();
         return;
     }
 
@@ -559,6 +614,35 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
     m_pendingGuestJoin.reset();
     m_guestJoinPreparationCancelled = true;
     projectController.setLocalProjectOpeningBlockedByCollaboration(false);
+}
+
+void CollaborationView::advancePendingHostStart()
+{
+    if ( !m_pendingHostStart || !m_room ) return;
+
+    auto&       engine        = Logic::EditorEngine::instance();
+    auto        activeSession = engine.getActiveNonLogoSession();
+    const auto* project       = engine.getCurrentProject();
+    if ( !project || !activeSession ||
+         !activeSession->getContext().currentBeatmap ) {
+        m_pendingHostStart.reset();
+        return;
+    }
+
+    auto fingerprint = Network::Collaboration::collaborationBuildFingerprint();
+    if ( fingerprint.empty() ) {
+        if ( Network::Collaboration::collaborationBuildFingerprintState() ==
+             Network::Collaboration::CollaborationBuildFingerprintState::
+                 Failed ) {
+            m_pendingHostStart.reset();
+        }
+        return;
+    }
+
+    auto config             = std::move(m_pendingHostStart->config);
+    config.buildFingerprint = std::move(fingerprint);
+    m_pendingHostStart.reset();
+    static_cast<void>(m_room->startHost(std::move(config)));
 }
 
 void CollaborationView::drawActiveRoom()

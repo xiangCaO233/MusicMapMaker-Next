@@ -64,7 +64,12 @@ private:
     /// @warning UI 热路径低频分支：等待期间每帧只读取项目和 Session 快照；
     /// 完成后才启动一次网络连接。
     void advancePendingGuestJoin(UIManager* sourceManager);
+    /// @brief 在后台构建指纹就绪后继续用户请求的开房流程。
+    /// @warning UI 热路径低频分支：每帧只读取原子状态并移动至多一份小型配置，
+    /// 同时复查当前项目与谱面快照；不读取文件或等待后台任务。
+    void advancePendingHostStart();
 
+    struct PendingHostStart;
     struct PendingGuestJoin;
 
     /// @brief 应用级协作房间。
@@ -85,6 +90,8 @@ private:
     std::uint64_t m_lastRenderedChatSequence{ 0 };
     /// @brief 上一次发送聊天消息是否被协议或传输拒绝。
     bool m_chatSendFailed{ false };
+    /// @brief 等待后台构建指纹完成的房主开房配置。
+    std::unique_ptr<PendingHostStart> m_pendingHostStart;
     /// @brief 等待全部本机编辑状态安全关闭后的访客加入配置。
     std::unique_ptr<PendingGuestJoin> m_pendingGuestJoin;
     /// @brief 上一次访客入房是否因本机关闭未完成或被取消而中止。

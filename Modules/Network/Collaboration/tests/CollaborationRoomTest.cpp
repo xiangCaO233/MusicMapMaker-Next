@@ -1004,13 +1004,41 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
 
 int main(int argc, char** argv)
 {
-    if ( !MMM::Network::Collaboration::
-             initializeCollaborationBuildFingerprint() ) {
-        return 4;
-    }
     if ( argc < 2 || !argv[1] ) return 3;
     auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
     appThreadPool.init();
+    if ( !MMM::Network::Collaboration::
+             startCollaborationBuildFingerprintInitialization() ) {
+        return 4;
+    }
+    const auto initialFingerprintState =
+        MMM::Network::Collaboration::collaborationBuildFingerprintState();
+    if ( initialFingerprintState !=
+             MMM::Network::Collaboration::CollaborationBuildFingerprintState::
+                 Calculating &&
+         initialFingerprintState !=
+             MMM::Network::Collaboration::CollaborationBuildFingerprintState::
+                 Ready ) {
+        return 4;
+    }
+    constexpr auto FINGERPRINT_TIMEOUT = std::chrono::seconds(30);
+    const auto     fingerprintDeadline =
+        std::chrono::steady_clock::now() + FINGERPRINT_TIMEOUT;
+    while ( MMM::Network::Collaboration::collaborationBuildFingerprintState() ==
+                MMM::Network::Collaboration::
+                    CollaborationBuildFingerprintState::Calculating &&
+            std::chrono::steady_clock::now() < fingerprintDeadline ) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if ( MMM::Network::Collaboration::collaborationBuildFingerprintState() !=
+         MMM::Network::Collaboration::CollaborationBuildFingerprintState::
+             Ready ) {
+        return 4;
+    }
+    if ( !MMM::Network::Collaboration::isValidCollaborationBuildFingerprint(
+             MMM::Network::Collaboration::collaborationBuildFingerprint()) ) {
+        return 4;
+    }
     const std::string_view mode(argv[1]);
     int                    result = 3;
     if ( mode == "p2p" && argc == 2 ) {

@@ -92,7 +92,8 @@ struct CollaborationHostRoomConfig {
     CollaborationServerEndpoint endpoint;
     /// @brief 是否拒绝主程序二进制 SHA-256 与房主不同的访客。
     bool requireMatchingBuildFingerprint{ true };
-    /// @brief 可选的预计算构建指纹；为空时读取当前主程序，主要供嵌入与测试。
+    /// @brief
+    /// 可选的预计算构建指纹；为空时只读取已经就绪的全局缓存，不等待后台任务。
     std::string buildFingerprint;
 };
 
@@ -110,7 +111,8 @@ struct CollaborationJoinRoomConfig {
     CollaborationServerEndpoint endpoint;
     /// @brief 访客内容寻址资源缓存根目录。
     std::filesystem::path resourceCacheRoot;
-    /// @brief 可选的预计算构建指纹；为空时读取当前主程序，主要供嵌入与测试。
+    /// @brief
+    /// 可选的预计算构建指纹；为空时只读取已经就绪的全局缓存，不等待后台任务。
     std::string buildFingerprint;
 };
 

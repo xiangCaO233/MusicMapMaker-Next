@@ -60,7 +60,7 @@ struct WebRtcHostConfig {
     PeerId hostId = 1;
     /// @brief 房间允许的总客户端数。
     std::size_t maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
-    /// @brief 房主当前主程序二进制的 SHA-256 构建指纹。
+    /// @brief 房主当前主程序二进制的 SHA-256 构建指纹；为空时只读取就绪缓存。
     std::string buildFingerprint;
     /// @brief 是否在 P2P 身份握手中拒绝构建指纹不同的访客。
     bool requireMatchingBuildFingerprint{ true };
@@ -80,7 +80,7 @@ struct WebRtcGuestConfig {
     OperationSessionId sessionId;
     /// @brief 房主固定路由槽位。
     PeerId hostId = 1;
-    /// @brief 访客当前主程序二进制的 SHA-256 构建指纹。
+    /// @brief 访客当前主程序二进制的 SHA-256 构建指纹；为空时只读取就绪缓存。
     std::string buildFingerprint;
 };
 

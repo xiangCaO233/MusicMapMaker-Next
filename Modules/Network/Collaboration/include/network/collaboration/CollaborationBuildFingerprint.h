@@ -1,23 +1,43 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace MMM::Network::Collaboration
 {
-/// @brief 在进程入口固定当前主程序二进制的 SHA-256 构建指纹。
-/// @return 成功读取并缓存当前运行映像对应文件时返回 true。
-/// @warning
-/// 仅允许在应用启动的低频路径调用一次；会读取完整主程序文件，必须先于可能替换磁盘
-/// 上可执行文件的更新或构建流程执行。
-[[nodiscard]] bool initializeCollaborationBuildFingerprint();
+/// @brief 当前主程序构建指纹的后台计算状态。
+enum class CollaborationBuildFingerprintState : std::uint8_t {
+    /// @brief 尚未提交后台任务。
+    Uninitialized,
+    /// @brief 后台线程正在读取并计算摘要。
+    Calculating,
+    /// @brief 指纹已经固定并可供只读复制。
+    Ready,
+    /// @brief 无法定位、读取或计算当前主程序摘要。
+    Failed,
+};
 
-/// @brief 计算当前客户端主程序二进制的 SHA-256 构建指纹。
-/// @return 成功时返回 64 位小写十六进制；无法定位或读取程序时返回空。
+/// @brief 在共享线程池中启动当前主程序二进制 SHA-256 构建指纹计算。
+/// @return 已经启动、正在计算或已经得到结果时返回 true；线程池不可用时返回
+/// false。
 /// @warning
-/// 主程序会在进程入口预先固定缓存；嵌入方若跳过初始化，本函数首次调用时会在低频
-/// 路径读取完整主程序文件，禁止从 UI 热路径反复调用。
-[[nodiscard]] const std::string& collaborationBuildFingerprint();
+/// 启动路径仅解析当前程序位置并投递后台任务，不读取程序内容、不等待计算完成；必须
+/// 在共享线程池初始化后从应用启动路径调用，禁止放入 UI 热路径。
+[[nodiscard]] bool startCollaborationBuildFingerprintInitialization();
+
+/// @brief 查询当前主程序构建指纹的后台计算状态。
+/// @return 当前状态快照。
+/// @warning UI 热路径可每帧调用；仅执行一次 acquire 原子读取，不等待后台任务。
+[[nodiscard]] CollaborationBuildFingerprintState
+collaborationBuildFingerprintState();
+
+/// @brief 非阻塞读取已经缓存的客户端主程序二进制 SHA-256 构建指纹。
+/// @return 准备完成时返回 64 位小写十六进制；尚未完成或失败时返回空。
+/// @warning
+/// UI 热路径仅在状态为 Ready 后调用；acquire 状态发布保证只读缓存已经固定。
+/// 函数只复制 64 字节结果，不会触发文件读取、互斥锁或等待后台计算。
+[[nodiscard]] std::string collaborationBuildFingerprint();
 
 /// @brief 校验协作握手使用的 SHA-256 构建指纹格式。
 /// @param fingerprint 待校验的指纹。

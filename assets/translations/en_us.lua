@@ -687,6 +687,8 @@ return {
 	["ui.collaboration.require_matching_build"] = "Require Matching Client Build",
 	["ui.collaboration.require_matching_build_desc"] = "Compare the client executable SHA-256 and reject mismatches before they enter. This is a version gate, not remote attestation.",
 	["ui.collaboration.start_room"] = "Start Collaboration Room",
+	["ui.collaboration.build_fingerprint_calculating"] = "Verifying the client build in the background…",
+	["ui.collaboration.build_fingerprint_failed"] = "Failed to initialize client build verification",
 	["ui.collaboration.online_rooms"] = "Online Rooms",
 	["ui.collaboration.online"] = "Online",
 	["ui.collaboration.action"] = "Action",

@@ -89,11 +89,12 @@ bool testPublishedRoomAppearsInDirectory()
 
     WebRtcTransport  transport;
     WebRtcHostConfig hostConfig;
-    hostConfig.endpoint      = endpoint;
-    hostConfig.roomName      = "Directory Test Room";
-    hostConfig.creator       = "Directory Host";
-    hostConfig.participantId = "a0000000000000000000000000000001";
-    hostConfig.sessionId     = "b0000000000000000000000000000001";
+    hostConfig.endpoint         = endpoint;
+    hostConfig.roomName         = "Directory Test Room";
+    hostConfig.creator          = "Directory Host";
+    hostConfig.buildFingerprint = std::string(64U, 'a');
+    hostConfig.participantId    = "a0000000000000000000000000000001";
+    hostConfig.sessionId        = "b0000000000000000000000000000001";
     if ( !transport.startHost(hostConfig) ) return fail("host_start");
 
     bool        published = false;
