@@ -337,10 +337,10 @@ public:
     /// 中的可见脏状态，供逻辑线程裁剪隐藏 tab 快照。
     void setSessionCanvasVisible(const std::string& cameraId, bool isVisible);
 
-    /**
-     * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态
-
-     */
+    /// @brief 获取会话保护递归锁，以同步访问会话内部状态。
+    /// @return 逻辑线程 Session update 与 UI 低频直接读取共用的递归锁。
+    /// @warning UI 直接访问 SessionContext 或 ECS 的整个期间必须持锁；逻辑线程
+    /// 会在每次 Session update 期间持有同一把锁，UI 持锁范围禁止等待和 I/O。
     std::recursive_mutex& getSessionMutex() const
     {
         return m_sessionRegistry.mutex();
@@ -408,6 +408,12 @@ public:
      * @brief 获取当前播放状态
      */
     bool isPlaybackPlaying() const;
+
+    /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
+    /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
+    /// @warning UI 热路径：菜单状态每帧读取；会短暂锁定 SessionRegistry，
+    /// 只检查常量级选择索引，不遍历 ECS，也不复制 shared_ptr 所有权。
+    bool hasActiveChartObjectSelection() const;
 
     /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
     /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
@@ -565,13 +571,15 @@ private:
 
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
     /// @warning 逻辑热路径/原子：每次 Session update
-    /// 后可能执行；只读取同步开关并遍历当前会话列表。
+    /// 后可能执行；读取同步开关后会短暂持有 SessionRegistry 递归锁并遍历当前
+    /// 会话列表。
     void syncSameMainAudioCanvases();
 
     /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
     /// @param sourceIndex 源 Session 在注册表中的索引。
     /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
-    /// relaxed，并只同步 audioTimelineFingerprint 相同的 Session。
+    /// relaxed，并短暂持有 SessionRegistry 递归锁，只同步
+    /// audioTimelineFingerprint 相同的 Session。
     void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
     /// @brief 发布已打开 Session 的复合时间线指纹，调用者必须持有注册表锁。

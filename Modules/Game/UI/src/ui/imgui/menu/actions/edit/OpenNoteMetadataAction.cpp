@@ -1,11 +1,7 @@
 #include "MetadataEditorWindowRenderers.h"
-#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
-#include "logic/ecs/components/InteractionComponent.h"
-#include "logic/session/context/SessionContext.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <mutex>
 
 namespace MMM::UI
 {
@@ -16,42 +12,11 @@ class OpenNoteMetadataAction final : public IMainMenuItemActionHandler
 {
 public:
     /// @brief 仅在当前会话存在选中玩家物件或自动采样时允许打开。
+    /// @warning UI 热路径：菜单每帧检查；只读取常量级选择索引，不遍历 ECS。
     bool isEnabled(const MainMenuContext& context) const override
     {
         (void)context;
-        bool  hasSelection = false;
-        auto& engine       = Logic::EditorEngine::instance();
-        std::lock_guard<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex());
-        auto session = engine.getActiveSession();
-        if ( session ) {
-            const auto noteSelection =
-                session->getContext()
-                    .noteRegistry.view<const Logic::InteractionComponent>();
-            for ( auto entity : noteSelection ) {
-                if ( noteSelection
-                         .get<const Logic::InteractionComponent>(entity)
-                         .isSelected ) {
-                    hasSelection = true;
-                    break;
-                }
-            }
-            if ( !hasSelection ) {
-                const auto sampleSelection =
-                    session->getContext()
-                        .sampleRegistry
-                        .view<const Logic::InteractionComponent>();
-                for ( auto entity : sampleSelection ) {
-                    if ( sampleSelection
-                             .get<const Logic::InteractionComponent>(entity)
-                             .isSelected ) {
-                        hasSelection = true;
-                        break;
-                    }
-                }
-            }
-        }
-        return hasSelection;
+        return Logic::EditorEngine::instance().hasActiveChartObjectSelection();
     }
 
     /// @brief 打开选中谱面物件属性编辑器窗口。

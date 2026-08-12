@@ -7,6 +7,9 @@
 #include "logic/ProjectDraftLaneService.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/EditorAction.h"
@@ -2256,6 +2259,159 @@ bool testSampleEraseTargetsTypedRegistry()
                    .m_audioResourceId == "effect.wav";
 }
 
+/// @brief 验证绘制模式右键擦除选中折线尾钩时可同时处理其他选中物件。
+/// @return 原折线父子实体和其他选中物件被一次性替换，且 Undo/Redo
+/// 后实体与选择索引保持有效时返回 true。
+bool testSelectedPolylineTailEraseWithOtherSelection()
+{
+    MMM::Logic::SessionContext context;
+    context.lastConfig.settings.enablePolylineEditing = true;
+
+    MMM::Logic::NoteComponent polyline;
+    polyline.m_type       = MMM::NoteType::POLYLINE;
+    polyline.m_timestamp  = 1.0;
+    polyline.m_trackIndex = 0;
+    polyline.m_subNotes   = {
+        {
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
+        },
+        {
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
+        },
+        {
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
+        },
+    };
+
+    const auto parentEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(parentEntity,
+                                                            polyline);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        parentEntity);
+
+    std::vector<entt::entity> childEntities;
+    childEntities.reserve(polyline.m_subNotes.size());
+    for ( std::size_t index = 0; index < polyline.m_subNotes.size(); ++index ) {
+        const auto childEntity = context.noteRegistry.create();
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            childEntity,
+            MMM::Logic::makeNoteComponentFromSubNote(polyline.m_subNotes[index],
+                                                     true,
+                                                     parentEntity,
+                                                     static_cast<int>(index)));
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+            childEntity);
+        childEntities.push_back(childEntity);
+    }
+
+    MMM::Logic::NoteComponent otherNote;
+    otherNote.m_type       = MMM::NoteType::NOTE;
+    otherNote.m_timestamp  = 4.0;
+    otherNote.m_trackIndex = 2;
+    const auto otherEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(otherEntity,
+                                                            otherNote);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(otherEntity);
+
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::PlayerNote, parentEntity, true);
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::PlayerNote, otherEntity, true);
+    context.hoveredEntity     = parentEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredSubIndex = static_cast<int>(polyline.m_subNotes.size() - 1U);
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartErase(context, MMM::Logic::CmdStartErase{});
+    drawTool.handleUpdateErase(context, MMM::Logic::CmdUpdateErase{});
+    drawTool.handleEndErase(context, MMM::Logic::CmdEndErase{});
+
+    const auto selectionIndexIsConsistent = [&context]() {
+        for ( const auto entity : context.selectedNoteEntities ) {
+            const auto* interaction =
+                context.noteRegistry
+                    .try_get<const MMM::Logic::InteractionComponent>(entity);
+            if ( !context.noteRegistry.valid(entity) || !interaction ||
+                 !interaction->isSelected ) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto reducedPolylineIsValid = [&context]() {
+        const auto notes =
+            context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+        if ( notes.size() != 3U ) return false;
+
+        std::size_t rootCount  = 0U;
+        std::size_t childCount = 0U;
+        for ( const auto entity : notes ) {
+            const auto& note =
+                notes.get<const MMM::Logic::NoteComponent>(entity);
+            if ( note.m_isSubNote ) {
+                ++childCount;
+                continue;
+            }
+            ++rootCount;
+            if ( note.m_type != MMM::NoteType::POLYLINE ||
+                 note.m_subNotes.size() != 2U ||
+                 note.m_subNotes.back().type != MMM::NoteType::HOLD ) {
+                return false;
+            }
+        }
+        return rootCount == 1U && childCount == 2U;
+    };
+
+    if ( context.noteRegistry.valid(parentEntity) ||
+         context.noteRegistry.valid(otherEntity) ||
+         !context.selectedNoteEntities.empty() ||
+         !selectionIndexIsConsistent() || !reducedPolylineIsValid() ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Selected Polyline tail erase did not commit atomically");
+        return false;
+    }
+    for ( const auto childEntity : childEntities ) {
+        if ( context.noteRegistry.valid(childEntity) ) {
+            XERROR("Selected Polyline tail erase left an original child");
+            return false;
+        }
+    }
+
+    context.actionStack.undo(context);
+    const auto restoredNotes =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    if ( !context.noteRegistry.valid(parentEntity) ||
+         !context.noteRegistry.valid(otherEntity) ||
+         restoredNotes.size() != 5U || !selectionIndexIsConsistent() ) {
+        XERROR("Selected Polyline tail erase undo did not restore objects");
+        return false;
+    }
+    for ( const auto childEntity : childEntities ) {
+        if ( !context.noteRegistry.valid(childEntity) ) {
+            XERROR("Selected Polyline tail erase undo lost an original child");
+            return false;
+        }
+    }
+
+    context.actionStack.redo(context);
+    return !context.noteRegistry.valid(parentEntity) &&
+           !context.noteRegistry.valid(otherEntity) &&
+           context.selectedNoteEntities.empty() &&
+           selectionIndexIsConsistent() && reducedPolylineIsValid();
+}
+
 /// @brief 验证自动采样悬浮检视包含锚点、实际触发点和音频字段。
 /// @return offset handle 检视快照完整保留资源、音量、偏移与两类时间点时返回
 /// true。
@@ -3468,6 +3624,7 @@ int main()
                    testSelectedObjectSampleVolumeCommand() &&
                    testCollaborationResourcesRouteThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
+                   testSelectedPolylineTailEraseWithOtherSelection() &&
                    testSampleHoverInspectDetails() &&
                    testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testBoundNoteHoverInspectAudioPreview() &&
