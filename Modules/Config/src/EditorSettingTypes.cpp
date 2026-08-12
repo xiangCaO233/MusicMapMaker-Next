@@ -508,6 +508,39 @@ void from_json(const nlohmann::json&            json,
     }
 }
 
+void to_json(nlohmann::json& json, const CollaborationServerSettings& settings)
+{
+    json = nlohmann::json{ { "address", settings.address },
+                           { "signalingPort", settings.signalingPort },
+                           { "useTls", settings.useTls } };
+}
+
+void from_json(const nlohmann::json&        json,
+               CollaborationServerSettings& settings)
+{
+    settings = CollaborationServerSettings{};
+    if ( !json.is_object() ) return;
+
+    if ( const auto address = json.find("address");
+         address != json.end() && address->is_string() ) {
+        const auto value = address->get<std::string>();
+        if ( !value.empty() && value.size() <= 255U ) {
+            settings.address = value;
+        }
+    }
+    if ( const auto port = json.find("signalingPort");
+         port != json.end() && port->is_number_unsigned() ) {
+        const auto value = port->get<std::uint64_t>();
+        if ( value > 0U && value <= 65535U ) {
+            settings.signalingPort = static_cast<std::uint16_t>(value);
+        }
+    }
+    if ( const auto useTls = json.find("useTls");
+         useTls != json.end() && useTls->is_boolean() ) {
+        settings.useTls = useTls->get<bool>();
+    }
+}
+
 void to_json(nlohmann::json& json, const EditorSettings& settings)
 {
     json = nlohmann::json{
@@ -537,6 +570,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
         { "collaborationViewportRenderMode",
           settings.collaborationViewportRenderMode },
+        { "collaborationServer", settings.collaborationServer },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
           settings.pgoProfileUploadConsentAsked },
@@ -646,6 +680,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.collaborationViewportRenderMode =
         json.value("collaborationViewportRenderMode",
                    CollaborationViewportRenderMode::Filled);
+    settings.collaborationServer =
+        json.value("collaborationServer", CollaborationServerSettings{});
     settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
     settings.pgoProfileUploadConsentAsked = json.value(
         "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));

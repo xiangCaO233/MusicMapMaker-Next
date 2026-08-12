@@ -173,14 +173,8 @@ CollaborationView::CollaborationView(
     : ISubView(subViewName), m_room(std::move(room))
 {
     if ( m_room ) {
-        const auto& endpoint = m_room->serverEndpoint();
-        setInputBuffer(m_serverAddress, endpoint.address);
-        m_signalingPort = endpoint.signalingPort;
-        m_useTls        = endpoint.useTls;
         m_viewportPublishRateHz =
             static_cast<int>(m_room->viewportPublishRateHz());
-    } else {
-        setInputBuffer(m_serverAddress, "xiang233.top");
     }
 }
 
@@ -268,59 +262,37 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     }
 
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
-    if ( FeedbackCollapsingHeader(TR("ui.collaboration.server").data(),
-                                  headerFlags) ) {
+    const auto&              endpoint    = m_room->serverEndpoint();
+    if ( ImGui::BeginTable("CollaborationServerStatusTable",
+                           2,
+                           ImGuiTableFlags_SizingStretchProp) ) {
         const float labelWidth =
             std::max(
-                { ImGui::CalcTextSize(
-                      TR("ui.collaboration.server_address").data())
-                      .x,
-                  ImGui::CalcTextSize(
-                      TR("ui.collaboration.signaling_port").data())
-                      .x,
-                  ImGui::CalcTextSize(TR("ui.collaboration.use_tls").data()).x,
-                  ImGui::CalcTextSize(
-                      TR("ui.collaboration.directory.status").data())
-                      .x }) +
+                ImGui::CalcTextSize(TR("ui.collaboration.server").data()).x,
+                ImGui::CalcTextSize(
+                    TR("ui.collaboration.directory.status").data())
+                    .x) +
             ImGui::GetStyle().ItemSpacing.x;
-        if ( ImGui::BeginTable("CollaborationServerSettingsTable",
-                               2,
-                               ImGuiTableFlags_SizingStretchProp) ) {
-            ImGui::TableSetupColumn("##ServerSettingLabel",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    labelWidth);
-            ImGui::TableSetupColumn("##ServerSettingControl",
-                                    ImGuiTableColumnFlags_WidthStretch);
-
-            drawRoomInfoLabel(TR("ui.collaboration.server_address").data());
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputTextWithHint(
-                "##CollaborationServerAddress",
-                TR("ui.collaboration.server_address_hint").data(),
-                m_serverAddress.data(),
-                m_serverAddress.size());
-
-            drawRoomInfoLabel(TR("ui.collaboration.signaling_port").data());
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputInt(
-                "##CollaborationSignalingPort", &m_signalingPort, 0, 0);
-            m_signalingPort = std::clamp(m_signalingPort, 1, 65535);
-
-            drawRoomInfoLabel(TR("ui.collaboration.use_tls").data());
-            FeedbackCheckbox("##CollaborationUseTls", &m_useTls);
-
-            drawRoomInfoLabel(TR("ui.collaboration.directory.status").data());
-            ImGui::TextUnformatted(
-                directoryStateText(m_room->directoryState()));
-            ImGui::EndTable();
-        }
-        if ( FeedbackButton(TR("ui.collaboration.apply_server").data(),
-                            ImVec2(-1.0F, 0.0F)) ) {
-            static_cast<void>(applyServerEndpoint());
-        }
-        if ( !m_room->directoryError().empty() ) {
-            ImGui::TextWrapped("%s", m_room->directoryError().c_str());
-        }
+        ImGui::TableSetupColumn("##ServerStatusLabel",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                labelWidth);
+        ImGui::TableSetupColumn("##ServerStatusValue",
+                                ImGuiTableColumnFlags_WidthStretch);
+        drawRoomInfoLabel(TR("ui.collaboration.server").data());
+        ImGui::Text("%s:%u",
+                    endpoint.address.c_str(),
+                    static_cast<unsigned int>(endpoint.signalingPort));
+        drawRoomInfoLabel(TR("ui.collaboration.directory.status").data());
+        ImGui::TextUnformatted(directoryStateText(m_room->directoryState()));
+        ImGui::EndTable();
+    }
+    if ( sourceManager &&
+         FeedbackButton(TR("ui.collaboration.open_server_settings").data(),
+                        ImVec2(-1.0F, 0.0F)) ) {
+        sourceManager->openSettingsWindow(Event::SettingsTab::Collaboration);
+    }
+    if ( !m_room->directoryError().empty() ) {
+        ImGui::TextWrapped("%s", m_room->directoryError().c_str());
     }
 
     ImGui::Spacing();
@@ -355,17 +327,15 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
             !isCollaborationProjectRequirementSatisfied(true, hostReady));
         if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
                             ImVec2(-1.0F, 0.0F)) ) {
-            if ( applyServerEndpoint() ) {
-                Network::Collaboration::CollaborationHostRoomConfig config;
-                config.creator       = Config::AppConfig::instance()
-                                           .getEditorSettings()
-                                           .defaultCreator;
-                config.participantId = Config::AppConfig::instance()
-                                           .getCollaborationParticipantId();
-                config.roomName      = m_roomName.data();
-                config.endpoint      = m_room->serverEndpoint();
-                static_cast<void>(m_room->startHost(std::move(config)));
-            }
+            Network::Collaboration::CollaborationHostRoomConfig config;
+            config.creator = Config::AppConfig::instance()
+                                 .getEditorSettings()
+                                 .defaultCreator;
+            config.participantId =
+                Config::AppConfig::instance().getCollaborationParticipantId();
+            config.roomName = m_roomName.data();
+            config.endpoint = m_room->serverEndpoint();
+            static_cast<void>(m_room->startHost(std::move(config)));
         }
         ImGui::EndDisabled();
     }
@@ -445,14 +415,12 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 if ( FeedbackSmallButton(
                          full ? TR("ui.collaboration.room_full").data()
                               : TR("ui.collaboration.join_now").data()) ) {
-                    if ( applyServerEndpoint() ) {
-                        beginGuestJoin(Config::AppConfig::instance()
-                                           .getEditorSettings()
-                                           .defaultCreator,
-                                       room.roomId,
-                                       room.roomName,
-                                       sourceManager);
-                    }
+                    beginGuestJoin(Config::AppConfig::instance()
+                                       .getEditorSettings()
+                                       .defaultCreator,
+                                   room.roomId,
+                                   room.roomName,
+                                   sourceManager);
                 }
                 ImGui::EndDisabled();
                 ImGui::PopID();
@@ -785,19 +753,6 @@ void CollaborationView::drawActiveRoom()
             ImGui::EndTable();
         }
     }
-}
-
-bool CollaborationView::applyServerEndpoint()
-{
-    if ( !m_room || m_serverAddress[0] == '\0' || m_signalingPort <= 0 ||
-         m_signalingPort > 65535 ) {
-        return false;
-    }
-    Network::Collaboration::CollaborationServerEndpoint endpoint;
-    endpoint.address       = m_serverAddress.data();
-    endpoint.signalingPort = static_cast<std::uint16_t>(m_signalingPort);
-    endpoint.useTls        = m_useTls;
-    return m_room->setServerEndpoint(std::move(endpoint));
 }
 
 void CollaborationView::drawLogSection(UIManager* sourceManager) const

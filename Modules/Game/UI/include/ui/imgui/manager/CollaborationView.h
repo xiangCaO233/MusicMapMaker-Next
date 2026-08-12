@@ -51,9 +51,6 @@ private:
     /// @brief 在协作侧栏内绘制可收起的实时日志。
     /// @warning UI 热路径：仅在区域展开时委托常驻控制器遍历日志。
     void drawLogSection(UIManager* sourceManager) const;
-    /// @brief 将地址、信令端口和 TLS 控件应用到目录客户端。
-    /// @return 服务器配置有效并成功应用时返回 true。
-    bool applyServerEndpoint();
     /// @brief 开始访客加入流程，必要时先请求关闭全部本机项目与谱面画布。
     void beginGuestJoin(std::string creator, std::string roomId,
                         std::string roomName, UIManager* sourceManager);
@@ -66,12 +63,6 @@ private:
 
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
-    /// @brief 中心服务器地址或域名输入。
-    std::array<char, 256> m_serverAddress{};
-    /// @brief 中心服务器信令端口输入。
-    int m_signalingPort = 443;
-    /// @brief 是否使用 TLS/WSS。
-    bool m_useTls = true;
     /// @brief 公网目录展示的房间名称输入。
     std::array<char, 160> m_roomName{};
     /// @brief 是否已经从当前谱面初始化房间名称。

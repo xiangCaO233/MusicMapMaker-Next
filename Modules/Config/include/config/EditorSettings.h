@@ -456,6 +456,24 @@ void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode);
 void from_json(const nlohmann::json&            json,
                CollaborationViewportRenderMode& mode);
 
+/// @brief 公网协作目录与信令服务器的客户端连接配置。
+struct CollaborationServerSettings {
+    /// @brief 服务器域名或地址，不包含协议、端口和路径。
+    std::string address{ "xiang233.top" };
+
+    /// @brief WebSocket 信令端口。
+    std::uint16_t signalingPort{ 443 };
+
+    /// @brief 是否通过 TLS/WSS 连接服务器。
+    bool useTls{ true };
+};
+
+/// @brief 将协作服务器配置序列化为 JSON。
+void to_json(nlohmann::json& json, const CollaborationServerSettings& settings);
+/// @brief 从 JSON 读取协作服务器配置并约束端口和地址边界。
+void from_json(const nlohmann::json&        json,
+               CollaborationServerSettings& settings);
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -540,6 +558,9 @@ struct EditorSettings {
     CollaborationViewportRenderMode collaborationViewportRenderMode{
         CollaborationViewportRenderMode::Filled
     };
+
+    /// @brief 公网协作目录与信令服务器连接配置。
+    CollaborationServerSettings collaborationServer;
 
     /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
     bool autoUploadPgoProfiles{ false };

@@ -89,6 +89,7 @@ add_library(
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
   src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+  src/ui/imgui/manager/SettingsView_CollaborationTab.cpp
   src/ui/imgui/manager/SettingsView_DebugTab.cpp
   src/ui/imgui/manager/SettingsView_EditorTab.cpp
   src/ui/imgui/manager/SettingsView_ProjectTab.cpp

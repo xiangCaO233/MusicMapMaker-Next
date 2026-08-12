@@ -115,6 +115,13 @@ private:
         ToggleSyncSameMainAudio,
     };
 
+    /// @brief 协作服务器设置最近一次应用结果。
+    enum class CollaborationServerApplyState {
+        None,
+        Succeeded,
+        Failed,
+    };
+
     /// @brief 设置窗口布局测量缓存。
     struct LayoutMetricsCache {
         /// @brief 缓存是否可用。
@@ -197,6 +204,20 @@ private:
     std::array<char, Config::MAX_CREATOR_IDENTITY_BYTES + 1>
         m_defaultCreatorInputBuffer{};
 
+    /// @brief 协作服务器地址的固定长度 UTF-8 输入缓冲区。
+    std::array<char, 256> m_collaborationServerAddressInputBuffer{};
+
+    /// @brief 协作服务器信令端口的待应用输入值。
+    int m_collaborationSignalingPortInput{ 443 };
+
+    /// @brief 协作服务器 TLS/WSS 的待应用输入值。
+    bool m_collaborationUseTlsInput{ true };
+
+    /// @brief 协作服务器设置最近一次应用反馈。
+    CollaborationServerApplyState m_collaborationServerApplyState{
+        CollaborationServerApplyState::None
+    };
+
     /// @brief 新建停靠窗口首帧可能覆盖焦点请求，因此连续请求两帧。
     static constexpr uint8_t FOCUS_REQUEST_FRAME_COUNT = 2;
 
@@ -274,6 +295,9 @@ private:
     /// @brief 从持久化设置刷新默认 Creator 输入缓冲区。
     void refreshDefaultCreatorInputBuffer();
 
+    /// @brief 从持久化设置刷新协作服务器输入缓冲区。
+    void refreshCollaborationServerInputBuffer();
+
     /// @brief 应用皮肤选择并请求图形/音频资源热重载。
     /// @param skinDirectoryName skins 根目录下的皮肤目录名。
     /// @param skinLuaPath 皮肤入口脚本路径。
@@ -318,6 +342,11 @@ private:
 
     /// @brief 绘制视觉设置页。
     void drawVisualSettings();
+
+    /// @brief 绘制多人协作设置页。
+    /// @warning UI 热路径：设置窗口打开且当前页为协作页时每帧执行；仅在
+    /// 用户确认应用时修改目录连接并持久化配置。
+    void drawCollaborationSettings();
 
     /// @brief 绘制项目设置页。
     void drawProjectSettings();

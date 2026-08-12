@@ -89,6 +89,13 @@ mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
 target_link_libraries(SfxConfigTest PRIVATE Config Log)
 add_test(NAME SfxConfigTest COMMAND SfxConfigTest)
 
+# 协作服务器设置测试覆盖端点持久化、旧配置默认值和非法字段回退。
+mmm_add_test_executable(Config CollaborationServerSettingsTest
+                        tests/CollaborationServerSettingsTest.cpp)
+target_link_libraries(CollaborationServerSettingsTest PRIVATE Config Log)
+add_test(NAME CollaborationServerSettingsTest
+         COMMAND CollaborationServerSettingsTest)
+
 # 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
 mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)
