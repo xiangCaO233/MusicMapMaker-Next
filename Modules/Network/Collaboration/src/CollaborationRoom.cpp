@@ -58,6 +58,15 @@ constexpr std::size_t MAX_COLLABORATION_LOG_ENTRIES = 1000;
 constexpr std::size_t MAX_COLLABORATION_CHAT_ENTRIES = 200;
 /// @brief 每帧最多消费的传输生命周期事件数。
 constexpr std::size_t MAX_TRANSPORT_EVENTS_PER_UPDATE = 256;
+
+/// @brief 返回只用于本地诊断的构建指纹短前缀。
+/// @param fingerprint 完整的 SHA-256 构建指纹。
+/// @return 最多前 12 个十六进制字符。
+[[nodiscard]] std::string_view fingerprintPrefix(std::string_view fingerprint)
+{
+    return fingerprint.substr(0,
+                              std::min<std::size_t>(12U, fingerprint.size()));
+}
 /// @brief 每帧最多向权威 Peer 提交的本地谱面操作数。
 constexpr std::size_t MAX_LOCAL_OPERATIONS_PER_UPDATE = 256;
 /// @brief 每帧最多向逻辑线程发布的后台谱面合并结果数。
@@ -881,12 +890,20 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         if ( m_isHost && !event.requestId.empty() ) {
             if ( m_requireMatchingBuildFingerprint &&
                  event.buildFingerprint != m_buildFingerprint ) {
+                XWARN(
+                    "Rejecting collaboration guest because build "
+                    "fingerprints differ: host={} guest={}",
+                    fingerprintPrefix(m_buildFingerprint),
+                    fingerprintPrefix(event.buildFingerprint));
                 static_cast<void>(m_transport->rejectJoinRequest(
                     event.requestId, "build_fingerprint_mismatch"));
-                appendLog(CollaborationLogEventType::Error,
-                          0,
-                          event.creator,
-                          "build_fingerprint_mismatch");
+                const std::string detail =
+                    "build_fingerprint_mismatch host=" +
+                    std::string(fingerprintPrefix(m_buildFingerprint)) +
+                    " guest=" +
+                    std::string(fingerprintPrefix(event.buildFingerprint));
+                appendLog(
+                    CollaborationLogEventType::Error, 0, event.creator, detail);
                 break;
             }
             const bool known = std::any_of(

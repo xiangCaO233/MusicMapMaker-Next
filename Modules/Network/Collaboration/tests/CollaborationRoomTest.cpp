@@ -1,4 +1,5 @@
 #include "network/collaboration/CollaborationRoom.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationDirectoryClient.h"
 #include "network/collaboration_server/CollaborationSignalingServer.h"
 #include "runtime/AppThreadPool.h"
@@ -998,10 +999,15 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
     directory.disconnect();
     return guestRemoved;
 }
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
+    if ( !MMM::Network::Collaboration::
+             initializeCollaborationBuildFingerprint() ) {
+        return 4;
+    }
     if ( argc < 2 || !argv[1] ) return 3;
     auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
     appThreadPool.init();

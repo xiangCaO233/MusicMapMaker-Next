@@ -5,19 +5,35 @@
 #include "network/UpdateChecker.h"
 
 #include <algorithm>
+#include <mutex>
 
 namespace MMM::Network::Collaboration
 {
+namespace
+{
+std::once_flag s_fingerprintInitialization;
+std::string    s_fingerprint;
+
+/// @brief 从当前主程序路径读取并计算一次二进制 SHA-256。
+void initializeFingerprintStorage()
+{
+    const auto executablePath = Network::UpdateChecker::currentExecutablePath();
+    if ( executablePath.empty() ) return;
+    s_fingerprint = Network::AssetSyncService::sha256File(
+        Config::utf8ToPath(executablePath));
+}
+}  // namespace
+
+bool initializeCollaborationBuildFingerprint()
+{
+    std::call_once(s_fingerprintInitialization, initializeFingerprintStorage);
+    return isValidCollaborationBuildFingerprint(s_fingerprint);
+}
+
 const std::string& collaborationBuildFingerprint()
 {
-    static const std::string fingerprint = [] {
-        const auto executablePath =
-            Network::UpdateChecker::currentExecutablePath();
-        if ( executablePath.empty() ) return std::string{};
-        return Network::AssetSyncService::sha256File(
-            Config::utf8ToPath(executablePath));
-    }();
-    return fingerprint;
+    static_cast<void>(initializeCollaborationBuildFingerprint());
+    return s_fingerprint;
 }
 
 bool isValidCollaborationBuildFingerprint(std::string_view fingerprint)

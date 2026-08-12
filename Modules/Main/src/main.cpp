@@ -15,6 +15,7 @@
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/RtcDiagnosticLogging.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -544,11 +545,21 @@ int main(int argc, char* argv[])
     using namespace MMM;
     using namespace Config;
 
+    const bool collaborationFingerprintReady =
+        Network::Collaboration::initializeCollaborationBuildFingerprint();
+
     auto& appThreadPool = Runtime::AppThreadPool::instance();
     appThreadPool.init();
 
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();
+    if ( collaborationFingerprintReady ) {
+        XINFO("Collaboration client build fingerprint: {}",
+              Network::Collaboration::collaborationBuildFingerprint().substr(
+                  0, 12));
+    } else {
+        XERROR("Failed to initialize collaboration client build fingerprint");
+    }
     Network::Collaboration::setRtcDiagnosticLoggingEnabled(
         AppConfig::instance().getEditorSettings().rtcDiagnosticLogging);
     if ( const char* creatorOverride = std::getenv("MMM_CREATOR");
