@@ -217,8 +217,7 @@ bool testDirectoryAndSignalingRelay()
                    { { "type", "join_room" },
                      { "version", 1 },
                      { "roomId", roomId },
-                     { "creator", "Guest Creator" },
-                     { "buildFingerprint", TEST_BUILD_FINGERPRINT } }) ) {
+                     { "creator", "Guest Creator" } }) ) {
         return fail("guest_open_and_join_send");
     }
 
@@ -238,8 +237,7 @@ bool testDirectoryAndSignalingRelay()
     }
     const std::string requestId = requested.value("requestId", "");
     if ( requestId.empty() || requestId != pending.value("requestId", "") ||
-         requested.value("guestBuildFingerprint", "") !=
-             TEST_BUILD_FINGERPRINT ) {
+         requested.contains("guestBuildFingerprint") ) {
         return fail("join_request_identity");
     }
 
@@ -350,6 +348,8 @@ bool testDirectoryAndSignalingRelay()
     const std::string rejectedRequestId =
         rejectedRequested.value("requestId", "");
     if ( rejectedRequestId.empty() ||
+         rejectedRequested.value("guestBuildFingerprint", "") !=
+             TEST_BUILD_FINGERPRINT ||
          !sendJson(*host,
                    { { "type", "reject_join" },
                      { "version", 1 },

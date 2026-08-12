@@ -212,7 +212,7 @@ public:
         int guestWebSocketId = -1;
         /// @brief 访客展示身份。
         std::string creator;
-        /// @brief 访客主程序二进制的 SHA-256 构建指纹。
+        /// @brief 访客主程序二进制的 SHA-256 构建指纹；旧客户端未提交时为空。
         std::string buildFingerprint;
         /// @brief 请求创建时间。
         std::chrono::steady_clock::time_point createdAt =
@@ -670,11 +670,22 @@ private:
         std::string buildFingerprint;
         if ( !readStringField(message, "roomId", roomId) ||
              !readStringField(message, "creator", creator) ||
-             !readStringField(message, "buildFingerprint", buildFingerprint) ||
-             !isValidDisplayText(creator, 64) ||
-             !isValidBuildFingerprint(buildFingerprint) ) {
+             !isValidDisplayText(creator, 64) ) {
             rejectClient(websocketId, "invalid_join");
             return;
+        }
+        const auto fingerprintIterator = message.find("buildFingerprint");
+        if ( fingerprintIterator != message.end() ) {
+            if ( !fingerprintIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_join");
+                return;
+            }
+            buildFingerprint =
+                fingerprintIterator->get_ref<const std::string&>();
+            if ( !isValidBuildFingerprint(buildFingerprint) ) {
+                rejectClient(websocketId, "invalid_join");
+                return;
+            }
         }
         const auto roomIterator = m_rooms.find(roomId);
         if ( roomIterator == m_rooms.end() ) {
@@ -720,12 +731,14 @@ private:
         static_cast<void>(sendJson(websocketId, waiting));
 
         nlohmann::json requested;
-        requested["type"]                  = "join_requested";
-        requested["version"]               = DIRECTORY_PROTOCOL_VERSION;
-        requested["roomId"]                = roomId;
-        requested["requestId"]             = requestId;
-        requested["guestCreator"]          = creator;
-        requested["guestBuildFingerprint"] = buildFingerprint;
+        requested["type"]         = "join_requested";
+        requested["version"]      = DIRECTORY_PROTOCOL_VERSION;
+        requested["roomId"]       = roomId;
+        requested["requestId"]    = requestId;
+        requested["guestCreator"] = creator;
+        if ( !buildFingerprint.empty() ) {
+            requested["guestBuildFingerprint"] = buildFingerprint;
+        }
         if ( !sendJson(roomIterator->second.controlWebSocketId, requested) ) {
             m_pendingJoins.erase(requestId);
             rejectClient(websocketId, "host_unavailable");
