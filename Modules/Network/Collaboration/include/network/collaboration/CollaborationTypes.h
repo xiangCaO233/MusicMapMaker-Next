@@ -23,6 +23,8 @@ using ByteBuffer = std::vector<std::uint8_t>;
 inline constexpr std::size_t MIN_COLLABORATION_PARTICIPANTS = 2;
 /// @brief 单个协作房间允许的最大客户端数。
 inline constexpr std::size_t MAX_COLLABORATION_PARTICIPANTS = 8;
+/// @brief 单条协作聊天消息允许的最大 UTF-8 字节数。
+inline constexpr std::size_t MAX_COLLABORATION_CHAT_MESSAGE_BYTES = 1024;
 
 /// @brief 单条规范化增量编辑请求。
 struct EditRequest {
@@ -84,6 +86,16 @@ struct ParticipantViewport {
     double visibleTimeEnd = 0.0;
     /// @brief 主画布横向像素偏移除以发布端视口宽度后的比例。
     double horizontalOffsetRatio = 0.0;
+};
+
+/// @brief 协作房间内由房主验证并转发的一条文字消息。
+struct CollaborationChatMessage {
+    /// @brief 原始发送者的临时路由槽位。
+    PeerId peerId = 0;
+    /// @brief 原始发送者在本次连接内严格递增的消息序号。
+    std::uint64_t sequence = 0;
+    /// @brief 单行 UTF-8 消息正文。
+    std::string text;
 };
 
 /// @brief 协作 Peer 的有界处理参数。

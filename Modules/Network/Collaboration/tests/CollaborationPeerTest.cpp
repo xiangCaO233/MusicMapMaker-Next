@@ -13,6 +13,7 @@
 namespace
 {
 using MMM::Network::Collaboration::ByteBuffer;
+using MMM::Network::Collaboration::CollaborationChatMessage;
 using MMM::Network::Collaboration::CollaborationPeer;
 using MMM::Network::Collaboration::CollaborationPeerConfig;
 using MMM::Network::Collaboration::CommittedOperation;
@@ -22,6 +23,7 @@ using MMM::Network::Collaboration::ParticipantViewport;
 using MMM::Network::Collaboration::PeerId;
 using MMM::Network::Collaboration::ProtocolError;
 using MMM::Network::Collaboration::SubmitOperationResult;
+using MMM::Network::Collaboration::SubmitChatMessageResult;
 using MMM::Network::Collaboration::StateSnapshot;
 using MMM::Network::Collaboration::decodeCollaborationMessage;
 using MMM::Network::Collaboration::encodeCollaborationMessage;
@@ -457,6 +459,34 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    CollaborationChatMessage chat{ 7, 23, "协作消息" };
+    const auto               chatEncoded = encodeCollaborationMessage(chat, 4U);
+    const auto               chatDecoded =
+        chatEncoded
+            ? decodeCollaborationMessage(*chatEncoded, 4U)
+            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                            ProtocolError>(
+                  std::unexpected(ProtocolError::InvalidChatMessage));
+    const auto* decodedChat =
+        chatDecoded ? std::get_if<CollaborationChatMessage>(&*chatDecoded)
+                    : nullptr;
+    if ( !decodedChat || decodedChat->peerId != chat.peerId ||
+         decodedChat->sequence != chat.sequence ||
+         decodedChat->text != chat.text ) {
+        return false;
+    }
+    chat.text            = " \t";
+    const auto emptyChat = encodeCollaborationMessage(chat, 4U);
+    if ( emptyChat || emptyChat.error() != ProtocolError::InvalidChatMessage ) {
+        return false;
+    }
+    chat.text.assign("\xC0\xAF", 2U);
+    const auto invalidUtf8Chat = encodeCollaborationMessage(chat, 4U);
+    if ( invalidUtf8Chat ||
+         invalidUtf8Chat.error() != ProtocolError::InvalidChatMessage ) {
+        return false;
+    }
+
     MMM::Network::Collaboration::ResourceManifest manifest{
         0x1234U, { 0xA1U, 0xB2U, 0xC3U }
     };
@@ -550,6 +580,115 @@ void pumpPeers(CollaborationPeer&                               host,
     auto truncated = decodeCollaborationMessage(encoded.value(), 4);
     return !truncated.has_value() &&
            truncated.error() == ProtocolError::InvalidMessageLength;
+}
+
+/// @brief 验证聊天消息经房主验证转发、重复包去重并拒绝身份伪造。
+/// @return 三端消息记录一致且伪造消息未进入回调时返回 true。
+[[nodiscard]] bool testChatRoutingAndValidation()
+{
+    constexpr PeerId                                     GUEST_A_ID = 2;
+    constexpr PeerId                                     GUEST_B_ID = 3;
+    LoopbackTransportHub                                 hub;
+    std::array<std::vector<CollaborationChatMessage>, 3> messages;
+
+    CollaborationPeerConfig hostConfig;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host";
+    hostConfig.isHost  = true;
+    CollaborationPeer host(
+        hostConfig,
+        hub.createEndpoint(HOST_ID),
+        nullptr,
+        {},
+        [&messages](const CollaborationChatMessage& message) {
+            messages[0].push_back(message);
+        });
+
+    CollaborationPeerConfig guestAConfig;
+    setTestPeerIdentity(guestAConfig, GUEST_A_ID);
+    guestAConfig.creator     = "Guest A";
+    guestAConfig.isHost      = false;
+    auto  guestATransport    = hub.createEndpoint(GUEST_A_ID);
+    auto* rawGuestATransport = guestATransport.get();
+    auto  guestA             = std::make_unique<CollaborationPeer>(
+        guestAConfig,
+        std::move(guestATransport),
+        nullptr,
+        CollaborationPeer::ResourceMessageCallback{},
+        [&messages](const CollaborationChatMessage& message) {
+            messages[1].push_back(message);
+        });
+
+    CollaborationPeerConfig guestBConfig;
+    setTestPeerIdentity(guestBConfig, GUEST_B_ID);
+    guestBConfig.creator = "Guest B";
+    guestBConfig.isHost  = false;
+    auto guestB          = std::make_unique<CollaborationPeer>(
+        guestBConfig,
+        hub.createEndpoint(GUEST_B_ID),
+        nullptr,
+        CollaborationPeer::ResourceMessageCallback{},
+        [&messages](const CollaborationChatMessage& message) {
+            messages[2].push_back(message);
+        });
+
+    if ( !host.addParticipant(GUEST_A_ID,
+                              guestAConfig.participantId,
+                              guestAConfig.sessionId,
+                              guestAConfig.creator) ||
+         !host.addParticipant(GUEST_B_ID,
+                              guestBConfig.participantId,
+                              guestBConfig.sessionId,
+                              guestBConfig.creator) ) {
+        return false;
+    }
+    std::vector<std::unique_ptr<CollaborationPeer>> guests;
+    guests.push_back(std::move(guestA));
+    guests.push_back(std::move(guestB));
+    pumpPeers(host, guests, 4U);
+
+    hub.setDuplicatePackets(true);
+    if ( host.submitChatMessage("房主消息") !=
+             SubmitChatMessageResult::Accepted ||
+         guests[0]->submitChatMessage("Guest message") !=
+             SubmitChatMessageResult::Accepted ) {
+        return false;
+    }
+    pumpPeers(host, guests, 8U);
+    if ( std::any_of(messages.begin(),
+                     messages.end(),
+                     [](const auto& inbox) {
+                         return inbox.size() != 2U ||
+                                inbox[0].text != "房主消息" ||
+                                inbox[1].text != "Guest message";
+                     }) ||
+         host.stats().duplicateChatMessages == 0U ||
+         guests[0]->stats().duplicateChatMessages == 0U ) {
+        return false;
+    }
+
+    hub.setDuplicatePackets(false);
+    CollaborationChatMessage spoofed{ GUEST_B_ID, 99U, "spoofed" };
+    const auto encodedSpoof = encodeCollaborationMessage(spoofed, 1024U);
+    if ( !encodedSpoof || !rawGuestATransport->send(HOST_ID, *encodedSpoof) ) {
+        return false;
+    }
+    const auto invalidMessagesBefore = host.stats().invalidMessages;
+    pumpPeers(host, guests, 2U);
+    if ( host.stats().invalidMessages != invalidMessagesBefore + 1U ||
+         std::any_of(messages.begin(), messages.end(), [](const auto& inbox) {
+             return inbox.size() != 2U;
+         }) ) {
+        return false;
+    }
+
+    return guests[0]->submitChatMessage("\n") ==
+               SubmitChatMessageResult::InvalidMessage &&
+           guests[1]->submitChatMessage(
+               std::string(MMM::Network::Collaboration::
+                                   MAX_COLLABORATION_CHAT_MESSAGE_BYTES +
+                               1U,
+                           'x')) == SubmitChatMessageResult::InvalidMessage;
 }
 
 /// @brief 验证资源消息只能按访客请求、房主响应的角色方向路由。
@@ -869,11 +1008,12 @@ void pumpPeers(CollaborationPeer&                               host,
 int main()
 {
     if ( !testProtocolBounds() ) return 1;
-    if ( !testResourceMessageRouting() ) return 2;
-    if ( !testEightPeerIncrementalConvergence() ) return 3;
-    if ( !testLateJoinStateSnapshot() ) return 4;
-    if ( !testTrimmedJournalSnapshotFallback() ) return 5;
-    if ( !testReusedPeerIdStartsFreshRequestSequence() ) return 6;
-    if ( !testStableIdentityConflictsAreRejected() ) return 7;
+    if ( !testChatRoutingAndValidation() ) return 2;
+    if ( !testResourceMessageRouting() ) return 3;
+    if ( !testEightPeerIncrementalConvergence() ) return 4;
+    if ( !testLateJoinStateSnapshot() ) return 5;
+    if ( !testTrimmedJournalSnapshotFallback() ) return 6;
+    if ( !testReusedPeerIdStartsFreshRequestSequence() ) return 7;
+    if ( !testStableIdentityConflictsAreRejected() ) return 8;
     return 0;
 }

@@ -251,6 +251,60 @@ private:
            visibleMaximum - visibleMinimum <= MAX_VISIBLE_SPAN &&
            std::abs(viewport.horizontalOffsetRatio) <= MAX_OFFSET_RATIO;
 }
+
+/// @brief 校验单行聊天文本的 UTF-8、控制字符和长度边界。
+/// @param text 待进入协议的聊天正文。
+/// @return 文本非空、含可见内容且每个 UTF-8 序列合法时返回 true。
+[[nodiscard]] bool isChatTextValid(std::string_view text)
+{
+    if ( text.empty() || text.size() > MAX_COLLABORATION_CHAT_MESSAGE_BYTES ) {
+        return false;
+    }
+
+    bool        hasVisibleContent = false;
+    std::size_t offset            = 0;
+    auto        isContinuation    = [](std::uint8_t value) {
+        return value >= 0x80U && value <= 0xBFU;
+    };
+    while ( offset < text.size() ) {
+        const auto first = static_cast<std::uint8_t>(text[offset]);
+        if ( first <= 0x7FU ) {
+            if ( first < 0x20U || first == 0x7FU ) return false;
+            hasVisibleContent = hasVisibleContent || first != 0x20U;
+            ++offset;
+            continue;
+        }
+
+        std::size_t sequenceBytes = 0;
+        if ( first >= 0xC2U && first <= 0xDFU ) {
+            sequenceBytes = 2;
+        } else if ( first >= 0xE0U && first <= 0xEFU ) {
+            sequenceBytes = 3;
+        } else if ( first >= 0xF0U && first <= 0xF4U ) {
+            sequenceBytes = 4;
+        } else {
+            return false;
+        }
+        if ( text.size() - offset < sequenceBytes ) return false;
+
+        const auto second = static_cast<std::uint8_t>(text[offset + 1U]);
+        if ( !isContinuation(second) || (first == 0xE0U && second < 0xA0U) ||
+             (first == 0xEDU && second > 0x9FU) ||
+             (first == 0xF0U && second < 0x90U) ||
+             (first == 0xF4U && second > 0x8FU) ) {
+            return false;
+        }
+        for ( std::size_t index = 2U; index < sequenceBytes; ++index ) {
+            if ( !isContinuation(
+                     static_cast<std::uint8_t>(text[offset + index])) ) {
+                return false;
+            }
+        }
+        hasVisibleContent = true;
+        offset += sequenceBytes;
+    }
+    return hasVisibleContent;
+}
 }  // namespace
 
 std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
@@ -390,6 +444,17 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         appendDouble(body, viewport->visibleTimeStart);
         appendDouble(body, viewport->visibleTimeEnd);
         appendDouble(body, viewport->horizontalOffsetRatio);
+    } else if ( const auto* chat =
+                    std::get_if<CollaborationChatMessage>(&message) ) {
+        if ( chat->peerId == 0 || chat->sequence == 0 ||
+             !isChatTextValid(chat->text) ) {
+            return std::unexpected(ProtocolError::InvalidChatMessage);
+        }
+        kind = CollaborationMessageKind::ChatMessage;
+        body.reserve(18U + chat->text.size());
+        appendUint64(body, chat->peerId);
+        appendUint64(body, chat->sequence);
+        appendShortString(body, chat->text);
     } else {
         return std::unexpected(ProtocolError::UnknownMessageKind);
     }
@@ -631,6 +696,25 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidViewportState);
         }
         return CollaborationMessage(viewport);
+    }
+    case CollaborationMessageKind::ChatMessage: {
+        CollaborationChatMessage chat;
+        std::uint16_t            textBytes = 0;
+        if ( !reader.readUint64(chat.peerId) ||
+             !reader.readUint64(chat.sequence) ||
+             !reader.readUint16(textBytes) ) {
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        }
+        if ( textBytes == 0 ||
+             textBytes > MAX_COLLABORATION_CHAT_MESSAGE_BYTES ||
+             !reader.readString(textBytes, chat.text) ) {
+            return std::unexpected(ProtocolError::InvalidChatMessage);
+        }
+        if ( reader.remaining() != 0 || chat.peerId == 0 ||
+             chat.sequence == 0 || !isChatTextValid(chat.text) ) {
+            return std::unexpected(ProtocolError::InvalidChatMessage);
+        }
+        return CollaborationMessage(std::move(chat));
     }
     }
     return std::unexpected(ProtocolError::UnknownMessageKind);

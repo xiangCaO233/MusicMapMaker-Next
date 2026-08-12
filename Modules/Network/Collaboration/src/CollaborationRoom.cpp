@@ -23,6 +23,8 @@ namespace
 constexpr PeerId DEFAULT_HOST_ID = 1;
 /// @brief 每个房间最多保留的日志条数。
 constexpr std::size_t MAX_COLLABORATION_LOG_ENTRIES = 1000;
+/// @brief 当前联机会话在内存中保留的最大聊天记录数。
+constexpr std::size_t MAX_COLLABORATION_CHAT_ENTRIES = 200;
 /// @brief 每帧最多消费的传输生命周期事件数。
 constexpr std::size_t MAX_TRANSPORT_EVENTS_PER_UPDATE = 256;
 /// @brief 每帧最多向权威 Peer 提交的本地谱面操作数。
@@ -170,6 +172,8 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
@@ -205,6 +209,9 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
             handleResourceMessage(senderId, message);
+        },
+        [this](const CollaborationChatMessage& message) {
+            handleChatMessage(message);
         });
     if ( !m_peer->isValid() ) {
         fail("host_peer_create_failed");
@@ -260,6 +267,8 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_nextViewportPublish = std::chrono::steady_clock::now();
@@ -440,6 +449,8 @@ void CollaborationRoom::disconnect()
     m_resourceSync.reset();
     m_resourceManifest.reset();
     m_resourceManifestRecipients.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
     m_followedParticipantId.clear();
@@ -476,6 +487,12 @@ SubmitOperationResult CollaborationRoom::submitOperation(
 {
     if ( !m_peer ) return SubmitOperationResult::InvalidPeer;
     return m_peer->submitOperation(payload);
+}
+
+SubmitChatMessageResult CollaborationRoom::sendChatMessage(std::string text)
+{
+    if ( !m_peer ) return SubmitChatMessageResult::InvalidPeer;
+    return m_peer->submitChatMessage(std::move(text));
 }
 
 void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport)
@@ -605,6 +622,12 @@ const std::vector<CollaborationLogEntry>& CollaborationRoom::logs() const
     return m_logs;
 }
 
+const std::vector<CollaborationChatEntry>&
+CollaborationRoom::chatMessages() const
+{
+    return m_chatMessages;
+}
+
 const std::string& CollaborationRoom::lastError() const
 {
     return m_lastError;
@@ -669,6 +692,30 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
                      m_logs.begin() +
                          static_cast<std::ptrdiff_t>(
                              m_logs.size() - MAX_COLLABORATION_LOG_ENTRIES));
+    }
+}
+
+void CollaborationRoom::handleChatMessage(
+    const CollaborationChatMessage& message)
+{
+    const auto participant = participants().find(message.peerId);
+    if ( participant == participants().end() ) return;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - m_startedAt);
+    m_chatMessages.push_back({ m_nextChatSequence++,
+                               static_cast<std::uint64_t>(
+                                   std::max<std::int64_t>(0, elapsed.count())),
+                               message.peerId,
+                               participant->second.participantId,
+                               participant->second.creator,
+                               message.text });
+    if ( m_chatMessages.size() > MAX_COLLABORATION_CHAT_ENTRIES ) {
+        m_chatMessages.erase(
+            m_chatMessages.begin(),
+            m_chatMessages.begin() +
+                static_cast<std::ptrdiff_t>(m_chatMessages.size() -
+                                            MAX_COLLABORATION_CHAT_ENTRIES));
     }
 }
 
@@ -833,6 +880,9 @@ void CollaborationRoom::ensureGuestPeer()
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
             handleResourceMessage(senderId, message);
+        },
+        [this](const CollaborationChatMessage& message) {
+            handleChatMessage(message);
         });
     if ( !m_peer->isValid() ) {
         fail("guest_peer_create_failed");

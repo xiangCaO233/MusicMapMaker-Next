@@ -64,6 +64,22 @@ struct CollaborationLogEntry {
     std::string detail;
 };
 
+/// @brief 当前联机会话内一条可由 UI 展示的文字聊天记录。
+struct CollaborationChatEntry {
+    /// @brief 当前客户端接收记录时分配的严格递增序号。
+    std::uint64_t sequence = 0;
+    /// @brief 从本次房间启动起经过的毫秒数。
+    std::uint64_t elapsedMilliseconds = 0;
+    /// @brief 原始发送者的临时路由槽位。
+    PeerId peerId = 0;
+    /// @brief 原始发送者的稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 原始发送者的 Creator 展示身份。
+    std::string creator;
+    /// @brief 已通过协议校验的单行 UTF-8 正文。
+    std::string text;
+};
+
 /// @brief 房主创建房间所需的产品层参数。
 struct CollaborationHostRoomConfig {
     /// @brief 房主 Creator。
@@ -194,6 +210,11 @@ public:
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
 
+    /// @brief 向当前房间发送一条文字聊天消息。
+    /// @param text 单行 UTF-8 正文。
+    /// @return 房间未连接或消息不合法时返回对应失败原因。
+    [[nodiscard]] SubmitChatMessageResult sendChatMessage(std::string text);
+
     /// @brief 更新等待节流发布的本地主画布视口状态。
     /// @param viewport 当前主画布的时间范围和横向偏移比例。
     /// @warning UI 热路径：主画布每帧调用；只覆盖一个固定大小内存状态，
@@ -248,6 +269,9 @@ public:
     [[nodiscard]] std::uint32_t viewportPublishRateHz() const;
     /// @brief 获取实时协作日志。
     [[nodiscard]] const std::vector<CollaborationLogEntry>& logs() const;
+    /// @brief 获取当前联机会话内的有界文字聊天记录。
+    [[nodiscard]] const std::vector<CollaborationChatEntry>&
+    chatMessages() const;
     /// @brief 获取最近错误；没有错误时为空。
     [[nodiscard]] const std::string& lastError() const;
     /// @brief 获取资源同步进度快照。
@@ -307,6 +331,9 @@ private:
     /// @brief 处理一个已校验的资源协议消息。
     void handleResourceMessage(PeerId                      senderId,
                                const CollaborationMessage& message);
+    /// @brief 将已通过 Peer 身份与序号校验的聊天消息加入会话记录。
+    /// @param message 已验证的聊天消息。
+    void handleChatMessage(const CollaborationChatMessage& message);
     /// @brief 将后台资源事件转为 P2P 消息、回调和协作日志。
     void processResourceEvents();
     /// @brief 向指定访客发送当前资源清单。
@@ -388,6 +415,10 @@ private:
     std::uint64_t m_nextLogSequence = 1;
     /// @brief 有界实时日志。
     std::vector<CollaborationLogEntry> m_logs;
+    /// @brief 下一条本地聊天记录序号。
+    std::uint64_t m_nextChatSequence = 1;
+    /// @brief 当前联机会话内的有界聊天记录。
+    std::vector<CollaborationChatEntry> m_chatMessages;
     /// @brief 主画布最近写入且等待节流发布的本地状态。
     std::optional<ParticipantViewport> m_pendingLocalViewport;
     /// @brief 最近一次成功交给 Peer 发布的本地状态。

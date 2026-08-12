@@ -3,6 +3,8 @@
 #include "ui/ISubView.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -48,6 +50,10 @@ private:
     /// @brief 绘制当前房间状态、连接信息和成员列表。
     /// @warning UI 热路径：最多遍历 8 个内存成员记录。
     void drawActiveRoom();
+    /// @brief 绘制当前联机会话的有界文字聊天记录与输入框。
+    /// @warning UI 热路径：仅遍历房间层最多保留的 200 条内存消息；发送操作
+    /// 只投递一条小型可靠消息，不执行文件系统访问或网络等待。
+    void drawChatSection();
     /// @brief 在协作侧栏内绘制可收起的实时日志。
     /// @warning UI 热路径：仅在区域展开时委托常驻控制器遍历日志。
     void drawLogSection(UIManager* sourceManager) const;
@@ -69,6 +75,14 @@ private:
     bool m_roomNameInitialized = false;
     /// @brief 当前客户端向 P2P 房间发布主画布状态的频率。
     int m_viewportPublishRateHz = 10;
+    /// @brief 聊天输入缓冲区字节数，包含末尾空字符。
+    static constexpr std::size_t CHAT_INPUT_BUFFER_BYTES = 1025U;
+    /// @brief 单条协作聊天消息输入缓冲区。
+    std::array<char, CHAT_INPUT_BUFFER_BYTES> m_chatInput{};
+    /// @brief 上一次完成绘制的聊天记录序号，用于新消息自动滚动。
+    std::uint64_t m_lastRenderedChatSequence{ 0 };
+    /// @brief 上一次发送聊天消息是否被协议或传输拒绝。
+    bool m_chatSendFailed{ false };
     /// @brief 等待全部本机编辑状态安全关闭后的访客加入配置。
     std::unique_ptr<PendingGuestJoin> m_pendingGuestJoin;
     /// @brief 上一次访客入房是否因本机关闭未完成或被取消而中止。

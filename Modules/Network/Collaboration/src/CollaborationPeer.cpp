@@ -11,11 +11,12 @@ CollaborationPeer::CollaborationPeer(
     CollaborationPeerConfig                  config,
     std::unique_ptr<ICollaborationTransport> transport,
     ApplyOperationCallback                   applyCallback,
-    ResourceMessageCallback                  resourceCallback)
+    ResourceMessageCallback resourceCallback, ChatMessageCallback chatCallback)
     : m_config(std::move(config))
     , m_transport(std::move(transport))
     , m_applyCallback(std::move(applyCallback))
     , m_resourceCallback(std::move(resourceCallback))
+    , m_chatCallback(std::move(chatCallback))
 {
     m_config.maxParticipants = std::clamp(m_config.maxParticipants,
                                           MIN_COLLABORATION_PARTICIPANTS,
@@ -196,6 +197,7 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     }
     m_lastAcknowledgedRevision.erase(peerId);
     m_participantViewports.erase(peerId);
+    m_lastChatSequence.erase(peerId);
     if ( m_participantIdentities.erase(peerId) == 0 ) {
         return;
     }
@@ -234,6 +236,28 @@ SubmitOperationResult CollaborationPeer::submitOperation(
 
     ++m_nextClientSequence;
     return SubmitOperationResult::Accepted;
+}
+
+SubmitChatMessageResult CollaborationPeer::submitChatMessage(std::string text)
+{
+    if ( !m_valid ) return SubmitChatMessageResult::InvalidPeer;
+
+    CollaborationChatMessage chat;
+    chat.peerId   = m_config.peerId;
+    chat.sequence = m_nextChatSequence;
+    chat.text     = std::move(text);
+    if ( !encodeCollaborationMessage(chat,
+                                     m_config.limits.maxOperationBytes) ) {
+        return SubmitChatMessageResult::InvalidMessage;
+    }
+
+    if ( m_config.isHost ) {
+        handleChatMessage(m_config.peerId, chat);
+    } else if ( !sendMessage(m_config.hostPeerId, chat) ) {
+        return SubmitChatMessageResult::TransportUnavailable;
+    }
+    ++m_nextChatSequence;
+    return SubmitChatMessageResult::Accepted;
 }
 
 bool CollaborationPeer::publishViewport(ParticipantViewport viewport)
@@ -325,6 +349,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
         } else if ( const auto* viewport =
                         std::get_if<ParticipantViewport>(&message) ) {
             handleParticipantViewport(senderId, *viewport);
+        } else if ( const auto* chat =
+                        std::get_if<CollaborationChatMessage>(&message) ) {
+            handleChatMessage(senderId, *chat);
         } else if ( std::holds_alternative<ResourceRequest>(message) &&
                     m_participants.contains(senderId) && m_resourceCallback ) {
             m_resourceCallback(senderId, message);
@@ -347,6 +374,9 @@ void CollaborationPeer::handleMessage(PeerId                      senderId,
     } else if ( const auto* viewport =
                     std::get_if<ParticipantViewport>(&message) ) {
         handleParticipantViewport(senderId, *viewport);
+    } else if ( const auto* chat =
+                    std::get_if<CollaborationChatMessage>(&message) ) {
+        handleChatMessage(senderId, *chat);
     } else if ( (std::holds_alternative<ResourceManifest>(message) ||
                  std::holds_alternative<ResourceChunk>(message)) &&
                 senderId == m_config.hostPeerId && m_resourceCallback ) {
@@ -489,6 +519,7 @@ void CollaborationPeer::handleParticipantLeft(
     }
     m_participantIdentities.erase(participantLeft.peerId);
     m_participantViewports.erase(participantLeft.peerId);
+    m_lastChatSequence.erase(participantLeft.peerId);
 }
 
 void CollaborationPeer::handleParticipantViewport(
@@ -530,6 +561,35 @@ void CollaborationPeer::handleParticipantViewport(
             if ( participantId != senderId ) {
                 static_cast<void>(sendMessage(participantId, viewport));
             }
+        }
+    }
+}
+
+void CollaborationPeer::handleChatMessage(PeerId senderId,
+                                          const CollaborationChatMessage& chat)
+{
+    const bool senderValid =
+        m_config.isHost
+            ? (senderId == m_config.peerId || m_participants.contains(senderId))
+            : senderId == m_config.hostPeerId;
+    if ( !senderValid || (m_config.isHost && chat.peerId != senderId) ||
+         !m_participantIdentities.contains(chat.peerId) ) {
+        ++m_stats.invalidMessages;
+        return;
+    }
+
+    const auto lastSequence = m_lastChatSequence.find(chat.peerId);
+    if ( lastSequence != m_lastChatSequence.end() &&
+         chat.sequence <= lastSequence->second ) {
+        ++m_stats.duplicateChatMessages;
+        return;
+    }
+    m_lastChatSequence.insert_or_assign(chat.peerId, chat.sequence);
+    if ( m_chatCallback ) m_chatCallback(chat);
+
+    if ( m_config.isHost ) {
+        for ( const PeerId participantId : m_participants ) {
+            static_cast<void>(sendMessage(participantId, chat));
         }
     }
 }

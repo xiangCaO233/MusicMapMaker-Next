@@ -197,6 +197,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
 
     if ( m_room->isActive() ) {
         drawActiveRoom();
+        if ( m_room->isActive() ) drawChatSection();
         drawLogSection(sourceManager);
         return;
     }
@@ -752,6 +753,86 @@ void CollaborationView::drawActiveRoom()
             }
             ImGui::EndTable();
         }
+    }
+}
+
+void CollaborationView::drawChatSection()
+{
+    static_assert(CHAT_INPUT_BUFFER_BYTES ==
+                  Network::Collaboration::MAX_COLLABORATION_CHAT_MESSAGE_BYTES +
+                      1U);
+    ImGui::Spacing();
+    if ( !FeedbackCollapsingHeader(TR("ui.collaboration.chat").data(),
+                                   ImGuiTreeNodeFlags_DefaultOpen) ) {
+        return;
+    }
+
+    const auto& messages      = m_room->chatMessages();
+    const float historyHeight = ImGui::GetTextLineHeightWithSpacing() * 8.0F;
+    if ( ImGui::BeginChild("CollaborationChatHistory",
+                           ImVec2(0.0F, historyHeight),
+                           ImGuiChildFlags_Borders) ) {
+        if ( messages.empty() ) {
+            ImGui::TextDisabled("%s", TR("ui.collaboration.chat.empty").data());
+        } else {
+            for ( const auto& message : messages ) {
+                const auto totalSeconds = message.elapsedMilliseconds / 1000U;
+                const auto minutes      = totalSeconds / 60U;
+                const auto seconds      = totalSeconds % 60U;
+                ImGui::PushID(static_cast<int>(message.sequence & 0x7FFFFFFFU));
+                ImGui::TextDisabled("[%02llu:%02llu]",
+                                    static_cast<unsigned long long>(minutes),
+                                    static_cast<unsigned long long>(seconds));
+                ImGui::SameLine();
+                ImGui::TextColored(
+                    ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
+                    "%s:",
+                    message.creator.c_str());
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", message.text.c_str());
+                ImGui::PopID();
+            }
+            if ( messages.back().sequence != m_lastRenderedChatSequence ) {
+                ImGui::SetScrollHereY(1.0F);
+                m_lastRenderedChatSequence = messages.back().sequence;
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    const float sendButtonWidth =
+        ImGui::CalcTextSize(TR("ui.collaboration.chat.send").data()).x +
+        ImGui::GetStyle().FramePadding.x * 2.0F;
+    const float inputWidth =
+        std::max(1.0F,
+                 ImGui::GetContentRegionAvail().x - sendButtonWidth -
+                     ImGui::GetStyle().ItemSpacing.x);
+    const bool canSend = m_room->localPeerId() != 0;
+    ImGui::BeginDisabled(!canSend);
+    ImGui::SetNextItemWidth(inputWidth);
+    const bool enterPressed =
+        ImGui::InputTextWithHint("##CollaborationChatInput",
+                                 TR("ui.collaboration.chat.hint").data(),
+                                 m_chatInput.data(),
+                                 m_chatInput.size(),
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    const bool buttonPressed = FeedbackButton(
+        TR("ui.collaboration.chat.send").data(), ImVec2(sendButtonWidth, 0.0F));
+    ImGui::EndDisabled();
+
+    if ( canSend && (enterPressed || buttonPressed) ) {
+        const auto result = m_room->sendChatMessage(m_chatInput.data());
+        m_chatSendFailed =
+            result != Network::Collaboration::SubmitChatMessageResult::Accepted;
+        if ( !m_chatSendFailed ) {
+            m_chatInput.fill('\0');
+        }
+    }
+    if ( m_chatSendFailed ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "%s",
+                           TR("ui.collaboration.chat.send_failed").data());
     }
 }
 

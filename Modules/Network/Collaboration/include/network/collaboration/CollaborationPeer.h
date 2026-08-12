@@ -23,6 +23,14 @@ enum class SubmitOperationResult : std::uint8_t {
     TransportUnavailable,
 };
 
+/// @brief 本地聊天消息提交结果。
+enum class SubmitChatMessageResult : std::uint8_t {
+    Accepted,
+    InvalidPeer,
+    InvalidMessage,
+    TransportUnavailable,
+};
+
 /// @brief 协作 Peer 的诊断计数。
 struct CollaborationPeerStats {
     /// @brief 无法解析或身份不合法的消息数。
@@ -39,6 +47,8 @@ struct CollaborationPeerStats {
     std::uint64_t resyncUnavailable = 0;
     /// @brief 传输层拒绝发送的消息数。
     std::uint64_t sendFailures = 0;
+    /// @brief 因重复或倒序而忽略的聊天消息数。
+    std::uint64_t duplicateChatMessages = 0;
 };
 
 /// @brief 房主和访客共用的权威增量同步状态机。
@@ -53,15 +63,21 @@ public:
     using ResourceMessageCallback =
         std::function<void(PeerId, const CollaborationMessage&)>;
 
+    /// @brief 已通过发送方与序号校验的聊天消息回调。
+    using ChatMessageCallback =
+        std::function<void(const CollaborationChatMessage&)>;
+
     /// @brief 创建统一房主或访客 Peer。
     /// @param config 身份和有界处理配置。
     /// @param transport 可靠有序字节传输实现。
     /// @param applyCallback 已提交操作的本地应用回调。
     /// @param resourceCallback 资源清单、请求和分块的产品层回调。
+    /// @param chatCallback 已验证聊天消息的产品层回调。
     CollaborationPeer(CollaborationPeerConfig                  config,
                       std::unique_ptr<ICollaborationTransport> transport,
                       ApplyOperationCallback                   applyCallback,
-                      ResourceMessageCallback resourceCallback = {});
+                      ResourceMessageCallback resourceCallback = {},
+                      ChatMessageCallback     chatCallback     = {});
 
     /// @brief 释放 Peer 和其独占传输端点。
     ~CollaborationPeer();
@@ -140,6 +156,11 @@ public:
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
 
+    /// @brief 向当前房间发送一条单行 UTF-8 文字消息。
+    /// @param text 不超过协议上限的非空单行正文。
+    /// @return 消息被房主接收队列接受或成功发送给房主时返回 Accepted。
+    [[nodiscard]] SubmitChatMessageResult submitChatMessage(std::string text);
+
     /// @brief 发布当前客户端最新的主画布视口状态。
     /// @param viewport 不含客户端标识和序号的本地主画布状态。
     /// @return 状态有效且已经写入本地状态表并发送时返回 true。
@@ -207,6 +228,12 @@ private:
     void handleParticipantViewport(PeerId                     senderId,
                                    const ParticipantViewport& viewport);
 
+    /// @brief 校验并按房主拓扑转发一条文字聊天消息。
+    /// @param senderId 传输层确认的直接发送方。
+    /// @param chat 消息声明的原始发送者和正文。
+    void handleChatMessage(PeerId                          senderId,
+                           const CollaborationChatMessage& chat);
+
     /// @brief 访客应用房主提供的完整状态快照并直接追平版本。
     void handleStateSnapshot(PeerId senderId, const StateSnapshot& snapshot);
 
@@ -243,12 +270,16 @@ private:
     ApplyOperationCallback m_applyCallback;
     /// @brief 已校验资源消息的产品层入口。
     ResourceMessageCallback m_resourceCallback;
+    /// @brief 已校验聊天消息的产品层入口。
+    ChatMessageCallback m_chatCallback;
     /// @brief 当前身份和传输是否满足状态机前置条件。
     bool m_valid = false;
     /// @brief 当前客户端下一个本地请求序号。
     std::uint64_t m_nextClientSequence = 1;
     /// @brief 当前客户端下一个本地视口状态序号。
     std::uint64_t m_nextViewportSequence = 1;
+    /// @brief 当前客户端下一条聊天消息序号。
+    std::uint64_t m_nextChatSequence = 1;
     /// @brief 房主要分配的下一个全房间版本。
     std::uint64_t m_nextRevision = 1;
     /// @brief 当前客户端已经连续应用的最高版本。
@@ -270,6 +301,8 @@ private:
     std::unordered_map<PeerId, ParticipantIdentity> m_participantIdentities;
     /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
     std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
+    /// @brief 各参与者最近一次通过校验的聊天消息序号。
+    std::unordered_map<PeerId, std::uint64_t> m_lastChatSequence;
     /// @brief 房主最近一次可独立恢复的完整谱面快照。
     std::optional<StateSnapshot> m_stateSnapshot;
     /// @brief 当前 Peer 累计诊断统计。
