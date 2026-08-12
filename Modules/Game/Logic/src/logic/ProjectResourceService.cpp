@@ -745,6 +745,42 @@ struct ResourcePathRemap {
     std::string m_afterPath;
 };
 
+/// @brief
+/// 目录移动时按存储文本重写子路径，避免文件名中的冒号被路径库解释为卷名。
+/// @param project 资源所属项目。
+/// @param resource 待投影资源。
+/// @param absoluteResourcePath 移动前资源绝对路径。
+/// @param absoluteOldPath 移动源绝对路径。
+/// @param absoluteNewPath 移动目标绝对路径。
+/// @return 能按项目相对目录前缀重写时返回保留原始后缀的路径，否则为空。
+std::optional<std::string> remapStoredChildPathText(
+    const Project& project, const AudioResource& resource,
+    const std::filesystem::path& absoluteResourcePath,
+    const std::filesystem::path& absoluteOldPath,
+    const std::filesystem::path& absoluteNewPath)
+{
+    if ( absoluteResourcePath == absoluteOldPath ) return std::nullopt;
+
+    const auto oldRelative =
+        makeRelativeToProjectRoot(project.m_projectRoot, absoluteOldPath);
+    const auto newRelative =
+        makeRelativeToProjectRoot(project.m_projectRoot, absoluteNewPath);
+    if ( oldRelative.empty() || newRelative.empty() ) return std::nullopt;
+
+    const auto storedPath = normalizePathSeparators(resource.m_path);
+    const auto oldPrefix =
+        Config::pathToUtf8Generic(oldRelative.lexically_normal());
+    if ( storedPath.size() <= oldPrefix.size() ||
+         storedPath.compare(0U, oldPrefix.size(), oldPrefix) != 0 ||
+         storedPath[oldPrefix.size()] != '/' ) {
+        return std::nullopt;
+    }
+
+    const auto newPrefix =
+        Config::pathToUtf8Generic(newRelative.lexically_normal());
+    return newPrefix + storedPath.substr(oldPrefix.size());
+}
+
 /// @brief 计算全部项目音频资源在文件移动后的路径投影。
 /// @param project 待检查项目。
 /// @param absoluteOldPath 移动源绝对路径。
@@ -768,8 +804,14 @@ std::vector<ResourcePathRemap> collectResourcePathProjections(
         const auto relativePath = makeRelativeToProjectRoot(
             project.m_projectRoot, remappedAbsolutePath);
         if ( relativePath.empty() ) continue;
-        const auto remappedPath =
-            Config::pathToUtf8(relativePath.lexically_normal());
+        const auto preservedPath =
+            remapStoredChildPathText(project,
+                                     resource,
+                                     absoluteResourcePath,
+                                     absoluteOldPath,
+                                     absoluteNewPath);
+        const auto remappedPath = preservedPath.value_or(
+            Config::pathToUtf8Generic(relativePath.lexically_normal()));
         result.push_back(ResourcePathRemap{ resource, remappedPath });
     }
     return result;
@@ -810,14 +852,28 @@ std::optional<std::string> makeOsuReferenceAfterMove(
     const Project& project, const std::filesystem::path& mapPathAfterMove,
     const ResourcePathRemap& remap)
 {
-    const auto audioPathAfterMove = resolveStoredProjectPath(
-        project, Config::utf8ToPath(remap.m_afterPath));
-    const auto relative =
-        audioPathAfterMove.lexically_relative(mapPathAfterMove.parent_path());
-    if ( relative.empty() || relative.is_absolute() ) return std::nullopt;
-    auto reference = Config::pathToUtf8(relative);
-    std::replace(reference.begin(), reference.end(), '\\', '/');
-    return reference;
+    const auto storedPath = normalizePathSeparators(remap.m_afterPath);
+    const auto separator  = storedPath.rfind('/');
+    const auto filename   = separator == std::string::npos
+                                ? storedPath
+                                : storedPath.substr(separator + 1U);
+    if ( filename.empty() ) return std::nullopt;
+
+    const auto storedParent =
+        separator == std::string::npos
+            ? std::filesystem::path{}
+            : Config::utf8ToPath(storedPath.substr(0U, separator));
+    const auto audioParentAfterMove =
+        resolveStoredProjectPath(project, storedParent);
+    const auto relativeParent =
+        audioParentAfterMove.lexically_relative(mapPathAfterMove.parent_path());
+    if ( relativeParent.empty() || relativeParent.is_absolute() ) {
+        return std::nullopt;
+    }
+
+    auto reference = Config::pathToUtf8Generic(relativeParent);
+    if ( reference == "." ) return filename;
+    return reference + '/' + filename;
 }
 
 /// @brief 查找一个 osu! 音频引用在移动后的替换文本。

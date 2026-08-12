@@ -44,7 +44,7 @@ std::vector<Event::BeatmapLoadDiagnosticEvent> buildBeatmapLoadDiagnosticEvents(
     std::unordered_set<std::string> emittedKeys;
     emittedKeys.reserve(beatmap.m_loadDiagnostics.size());
 
-    const std::string beatmapPath = Config::pathToUtf8(
+    const std::string beatmapPath = Config::pathToUtf8Generic(
         beatmap.m_baseMapMetadata.map_path.lexically_normal());
     for ( const auto& diagnostic : beatmap.m_loadDiagnostics ) {
         Event::BeatmapLoadDiagnosticKind kind;
@@ -59,8 +59,8 @@ std::vector<Event::BeatmapLoadDiagnosticEvent> buildBeatmapLoadDiagnosticEvents(
             break;
         }
 
-        const std::string relatedPath =
-            Config::pathToUtf8(diagnostic.m_relatedPath.lexically_normal());
+        const std::string relatedPath = Config::pathToUtf8Generic(
+            diagnostic.m_relatedPath.lexically_normal());
         const std::string deduplicationKey =
             std::to_string(static_cast<std::uint8_t>(kind)) + '\n' +
             relatedPath;
