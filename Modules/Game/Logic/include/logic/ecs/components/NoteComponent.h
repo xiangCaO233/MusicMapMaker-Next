@@ -62,6 +62,9 @@ struct NoteComponent {
     /// @brief 原始元数据备份 (用于导出时保持结构一致性)
     ::MMM::NoteMetadata m_metadata;
 
+    /// @brief 整个玩家物件的编辑器注释。
+    std::string m_annotation;
+
     /// @brief 物件命中时触发的可选采样绑定；为空时使用内置打击音效。
     std::optional<::MMM::AudioSampleBinding> m_sampleBinding;
 
@@ -76,6 +79,8 @@ struct NoteComponent {
         int                 trackIndex;
         int                 dtrack;
         ::MMM::NoteMetadata metadata;
+        /// @brief 当前折线子物件的独立编辑器注释。
+        std::string annotation;
         /// @brief 子物件命中时触发的可选采样绑定。
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
         /// @brief 子物件自定义颜色缓存；为空时继承皮肤默认色。

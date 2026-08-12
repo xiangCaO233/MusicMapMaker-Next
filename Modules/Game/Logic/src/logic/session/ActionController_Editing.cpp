@@ -381,6 +381,7 @@ bool isSameSubNoteComponent(const NoteComponent::SubNote& lhs,
            lhs.duration == rhs.duration && lhs.trackIndex == rhs.trackIndex &&
            lhs.dtrack == rhs.dtrack &&
            lhs.metadata.note_properties == rhs.metadata.note_properties &&
+           lhs.annotation == rhs.annotation &&
            isSameSampleBinding(lhs.sampleBinding, rhs.sampleBinding) &&
            isSameNoteColorOverrides(lhs.customColors, rhs.customColors);
 }
@@ -582,6 +583,7 @@ NoteComponent makeNoteComponentFromBeatmapNote(const ::MMM::Note& note)
     component.m_timestamp       = note.m_timestamp / 1000.0;
     component.m_trackIndex      = static_cast<int>(note.m_track);
     component.m_metadata        = note.m_metadata;
+    component.m_annotation      = note.m_annotation;
     component.m_sampleBinding   = note.getSampleBinding();
     component.m_collaborationId = note.m_collaborationId;
 
@@ -609,6 +611,7 @@ NoteComponent::SubNote makeSubNoteComponentFromBeatmapNote(
     subNote.trackIndex      = static_cast<int>(note.m_track);
     subNote.dtrack          = 0;
     subNote.metadata        = note.m_metadata;
+    subNote.annotation      = note.m_annotation;
     subNote.sampleBinding   = note.getSampleBinding();
     subNote.collaborationId = note.m_collaborationId;
 
@@ -689,6 +692,37 @@ std::vector<NoteComponent> makeNoteComponentsFromBeatMap(
             return static_cast<int>(lhs.m_type) < static_cast<int>(rhs.m_type);
         });
     return notes;
+}
+
+/// @brief 按稳定协作标识把来源谱面的注释覆盖到当前物件快照。
+/// @param notes 当前会话根物件快照；未出现在来源中的注释会被清除。
+/// @param source 来源谱面。
+void mergeNoteAnnotationsFromBeatMap(std::vector<NoteComponent>& notes,
+                                     const ::MMM::BeatMap&       source)
+{
+    const auto sourceNotes = makeNoteComponentsFromBeatMap(source);
+    std::unordered_map<std::string, std::string> annotations;
+    for ( const auto& note : sourceNotes ) {
+        if ( !note.m_collaborationId.empty() ) {
+            annotations[note.m_collaborationId] = note.m_annotation;
+        }
+        for ( const auto& subNote : note.m_subNotes ) {
+            if ( !subNote.collaborationId.empty() ) {
+                annotations[subNote.collaborationId] = subNote.annotation;
+            }
+        }
+    }
+
+    for ( auto& note : notes ) {
+        const auto root = annotations.find(note.m_collaborationId);
+        note.m_annotation =
+            root == annotations.end() ? std::string{} : root->second;
+        for ( auto& subNote : note.m_subNotes ) {
+            const auto child = annotations.find(subNote.collaborationId);
+            subNote.annotation =
+                child == annotations.end() ? std::string{} : child->second;
+        }
+    }
 }
 
 /// @brief 从谱面 Timing 构建可替换到当前会话的 Timeline 组件。
@@ -816,6 +850,7 @@ void replaceNoteComponents(SessionContext&                   ctx,
             subComponent.m_parentPolyline  = entity;
             subComponent.m_subIndex        = static_cast<int>(index);
             subComponent.m_metadata        = sub.metadata;
+            subComponent.m_annotation      = sub.annotation;
             subComponent.m_sampleBinding   = sub.sampleBinding;
             subComponent.m_customColors    = sub.customColors;
             subComponent.m_collaborationId = sub.collaborationId;
@@ -1048,6 +1083,7 @@ public:
     /// @param replaceObjects 是否替换玩家物件。
     /// @param replaceTimelines 是否替换 Timing。
     /// @param replaceMetadata 是否替换谱面元数据。
+    /// @param replaceAnnotations 是否按稳定标识替换玩家物件注释。
     /// @param preserveInteraction 是否保留仍存在物件的本地交互状态。
     /// @param beforeNotes 替换前的玩家物件快照。
     /// @param afterNotes 替换后的玩家物件快照。
@@ -1060,8 +1096,8 @@ public:
     /// @param afterPreferenceBpm 替换后的首选 BPM。
     ReplaceBeatmapDataAction(
         bool replaceObjects, bool replaceTimelines, bool replaceMetadata,
-        bool replaceAudioSamples, bool preserveInteraction,
-        std::vector<NoteComponent>                       beforeNotes,
+        bool replaceAudioSamples, bool replaceAnnotations,
+        bool preserveInteraction, std::vector<NoteComponent> beforeNotes,
         std::vector<NoteComponent>                       afterNotes,
         std::vector<TimelineComponent>                   beforeTimelines,
         std::vector<TimelineComponent>                   afterTimelines,
@@ -1075,6 +1111,7 @@ public:
         , m_replaceTimelines(replaceTimelines)
         , m_replaceMetadata(replaceMetadata)
         , m_replaceAudioSamples(replaceAudioSamples)
+        , m_replaceAnnotations(replaceAnnotations)
         , m_preserveInteraction(preserveInteraction)
         , m_beforeNotes(std::move(beforeNotes))
         , m_afterNotes(std::move(afterNotes))
@@ -1119,6 +1156,9 @@ public:
         if ( m_replaceMetadata ) {
             flags |= ::MMM::BeatmapMutationFlags::Metadata;
         }
+        if ( m_replaceAnnotations ) {
+            flags |= ::MMM::BeatmapMutationFlags::Annotations;
+        }
         return flags;
     }
 
@@ -1128,7 +1168,7 @@ private:
     /// @param forward 是否应用替换后的快照。
     void apply(SessionContext& ctx, bool forward)
     {
-        if ( m_replaceObjects ) {
+        if ( m_replaceObjects || m_replaceAnnotations ) {
             replaceNoteComponents(ctx,
                                   forward ? m_afterNotes : m_beforeNotes,
                                   m_preserveInteraction);
@@ -1172,6 +1212,9 @@ private:
 
     /// @brief 是否替换自动采样对象。
     bool m_replaceAudioSamples{ false };
+
+    /// @brief 是否按稳定标识替换玩家物件注释。
+    bool m_replaceAnnotations{ false };
 
     /// @brief 是否保留稳定身份仍存在物件的本地交互状态。
     bool m_preserveInteraction{ false };
@@ -2119,6 +2162,78 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+void ActionController::handleCommand(const CmdSetNoteAnnotation& cmd)
+{
+    if ( cmd.annotation.size() > ::MMM::MAX_NOTE_ANNOTATION_BYTES ||
+         cmd.entity == entt::null || !m_ctx.noteRegistry.valid(cmd.entity) ||
+         !m_ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+        m_ctx.lastActionMessage = "注释目标无效或内容超过 8192 字节";
+        return;
+    }
+
+    entt::entity rootEntity = cmd.entity;
+    std::int32_t subIndex   = cmd.subIndex;
+    const auto&  requested  = m_ctx.noteRegistry.get<NoteComponent>(cmd.entity);
+    if ( requested.m_isSubNote ) {
+        rootEntity = requested.m_parentPolyline;
+        if ( subIndex < 0 ) subIndex = requested.m_subIndex;
+    }
+    if ( rootEntity == entt::null || !m_ctx.noteRegistry.valid(rootEntity) ||
+         !m_ctx.noteRegistry.all_of<NoteComponent>(rootEntity) ) {
+        m_ctx.lastActionMessage = "注释目标已经失效";
+        return;
+    }
+
+    const auto beforeRoot = m_ctx.noteRegistry.get<NoteComponent>(rootEntity);
+    auto       afterRoot  = beforeRoot;
+    if ( subIndex < 0 ) {
+        if ( beforeRoot.m_annotation == cmd.annotation ) return;
+        afterRoot.m_annotation = cmd.annotation;
+    } else {
+        const auto index = static_cast<std::size_t>(subIndex);
+        if ( beforeRoot.m_type != ::MMM::NoteType::POLYLINE ||
+             index >= beforeRoot.m_subNotes.size() ) {
+            m_ctx.lastActionMessage = "折线子音符注释目标已经失效";
+            return;
+        }
+        if ( beforeRoot.m_subNotes[index].annotation == cmd.annotation ) return;
+        afterRoot.m_subNotes[index].annotation = cmd.annotation;
+    }
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({
+        .entity = rootEntity,
+        .before = beforeRoot,
+        .after  = afterRoot,
+    });
+
+    if ( subIndex >= 0 ) {
+        const auto view = m_ctx.noteRegistry.view<const NoteComponent>();
+        for ( const auto entity : view ) {
+            const auto& note = view.get<const NoteComponent>(entity);
+            if ( !note.m_isSubNote || note.m_parentPolyline != rootEntity ||
+                 note.m_subIndex != subIndex ) {
+                continue;
+            }
+            auto afterChild         = note;
+            afterChild.m_annotation = cmd.annotation;
+            entries.push_back({
+                .entity = entity,
+                .before = note,
+                .after  = std::move(afterChild),
+            });
+            break;
+        }
+    }
+
+    auto action = std::make_unique<BatchNoteAction>(
+        std::move(entries),
+        "Set Note Annotation",
+        ::MMM::BeatmapMutationFlags::Annotations);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "已更新物件注释";
+}
+
 void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
 {
     // 元数据编辑窗口仍会在 UI 线程同步读取 ECS；整体替换必须与该读取共用
@@ -2129,7 +2244,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         return;
     }
     if ( !cmd.replaceObjects && !cmd.replaceTimelines && !cmd.replaceMetadata &&
-         !cmd.replaceAudioSamples ) {
+         !cmd.replaceAudioSamples && !cmd.replaceAnnotations ) {
         return;
     }
 
@@ -2139,9 +2254,14 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
 
     std::vector<NoteComponent> beforeNotes;
     std::vector<NoteComponent> afterNotes;
-    if ( cmd.replaceObjects ) {
+    if ( cmd.replaceObjects || cmd.replaceAnnotations ) {
         beforeNotes = collectEditableNoteComponents(m_ctx);
-        afterNotes  = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
+        if ( cmd.replaceObjects ) {
+            afterNotes = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
+        } else {
+            afterNotes = beforeNotes;
+            mergeNoteAnnotationsFromBeatMap(afterNotes, *cmd.sourceBeatmap);
+        }
     }
 
     std::vector<TimelineComponent> beforeTimelines;
@@ -2212,6 +2332,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         cmd.replaceTimelines,
         cmd.replaceMetadata,
         cmd.replaceAudioSamples,
+        cmd.replaceAnnotations,
         cmd.authoritativeRemote,
         std::move(beforeNotes),
         std::move(afterNotes),
@@ -2226,8 +2347,9 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         afterPreferenceBpm);
     if ( cmd.authoritativeRemote ) {
         const bool preservesNoteHistory =
-            cmd.replaceObjects && !cmd.replaceTimelines &&
-            !cmd.replaceMetadata && !cmd.replaceAudioSamples;
+            (cmd.replaceObjects || cmd.replaceAnnotations) &&
+            !cmd.replaceTimelines && !cmd.replaceMetadata &&
+            !cmd.replaceAudioSamples;
         if ( !preservesNoteHistory ) {
             m_ctx.actionStack.clear();
         }

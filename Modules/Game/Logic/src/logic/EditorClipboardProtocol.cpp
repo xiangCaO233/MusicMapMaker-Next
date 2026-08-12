@@ -1,5 +1,6 @@
 #include "logic/EditorClipboardProtocol.h"
 #include "mmm/SafeParse.h"
+#include "mmm/note/Note.h"
 
 #include <fmt/format.h>
 
@@ -627,6 +628,12 @@ void appendBeatLine(std::string& text, const ClipboardItem& item)
 void appendClipboardItem(std::string& text, const ClipboardItem& item)
 {
     appendMainNoteLine(text, item.note);
+    if ( !item.note.m_annotation.empty() ) {
+        text.append("NA");
+        appendSeparator(text);
+        appendEscapedField(text, item.note.m_annotation);
+        appendLineBreak(text);
+    }
     if ( item.note.m_sampleBinding &&
          !item.note.m_sampleBinding->m_audioResourceId.empty() ) {
         text.append("NS");
@@ -642,6 +649,12 @@ void appendClipboardItem(std::string& text, const ClipboardItem& item)
 
     for ( const auto& subNote : item.note.m_subNotes ) {
         appendSubNoteLine(text, subNote);
+        if ( !subNote.annotation.empty() ) {
+            text.append("SA");
+            appendSeparator(text);
+            appendEscapedField(text, subNote.annotation);
+            appendLineBreak(text);
+        }
         if ( subNote.sampleBinding &&
              !subNote.sampleBinding->m_audioResourceId.empty() ) {
             text.append("SS");
@@ -944,6 +957,12 @@ ParsedClipboard parseChartObjectPayload(std::string_view text)
                                     currentSampleItem->sample.m_metadata);
         } else if ( fields[0] == "NB" && currentItem ) {
             parseBeatLine(fields, *currentItem);
+        } else if ( fields[0] == "NA" && currentItem && fields.size() == 2U ) {
+            if ( auto annotation = decodeEscapedField(fields[1]);
+                 annotation &&
+                 annotation->size() <= ::MMM::MAX_NOTE_ANNOTATION_BYTES ) {
+                currentItem->note.m_annotation = std::move(*annotation);
+            }
         } else if ( fields[0] == "NS" && currentItem ) {
             if ( auto binding = parseSampleBindingLine(fields) ) {
                 currentItem->note.m_sampleBinding = std::move(*binding);
@@ -964,6 +983,15 @@ ParsedClipboard parseChartObjectPayload(std::string_view text)
             if ( auto binding = parseSampleBindingLine(fields) ) {
                 currentItem->note.m_subNotes.back().sampleBinding =
                     std::move(*binding);
+            }
+        } else if ( fields[0] == "SA" && currentItem &&
+                    !currentItem->note.m_subNotes.empty() &&
+                    fields.size() == 2U ) {
+            if ( auto annotation = decodeEscapedField(fields[1]);
+                 annotation &&
+                 annotation->size() <= ::MMM::MAX_NOTE_ANNOTATION_BYTES ) {
+                currentItem->note.m_subNotes.back().annotation =
+                    std::move(*annotation);
             }
         } else if ( fields[0] == "SC" && currentItem &&
                     !currentItem->note.m_subNotes.empty() ) {

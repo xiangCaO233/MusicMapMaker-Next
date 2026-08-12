@@ -190,6 +190,99 @@ private:
     return true;
 }
 
+/// @brief 验证折线子音符注释只发布 Annotations 类别并受独立权限门禁。
+/// @return 注释、撤销与权限拒绝均保持精确类别和父子组件一致时返回 true。
+[[nodiscard]] bool testSubNoteAnnotationPermissionAndMutationFlag()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       beatmap = makeBeatmap();
+    auto&                      hold = beatmap->m_noteData.holds.emplace_back();
+    hold.m_timestamp                = 1000.0;
+    hold.m_duration                 = 500.0;
+    hold.m_track                    = 1;
+    hold.m_isSubNote                = true;
+    auto& flick                     = beatmap->m_noteData.flicks.emplace_back();
+    flick.m_timestamp               = 1500.0;
+    flick.m_track                   = 1;
+    flick.m_dtrack                  = 1;
+    flick.m_isSubNote               = true;
+    auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_timestamp = hold.m_timestamp;
+    polyline.m_track     = hold.m_track;
+    polyline.m_subNotes.emplace_back(hold);
+    polyline.m_subNotes.emplace_back(flick);
+    polyline.m_subHolds.emplace_back(hold);
+    polyline.m_subFlicks.emplace_back(flick);
+    beatmap->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) },
+    });
+    session.update(0.0, config, false);
+
+    entt::entity polylineEntity = entt::null;
+    const auto view = session.getContext()
+                          .noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : view ) {
+        const auto& note = view.get<const MMM::Logic::NoteComponent>(entity);
+        if ( !note.m_isSubNote && note.m_type == MMM::NoteType::POLYLINE ) {
+            polylineEntity = entity;
+            break;
+        }
+    }
+    if ( polylineEntity == entt::null ) return false;
+
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::Annotations);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetNoteAnnotation{
+            .entity     = polylineEntity,
+            .subIndex   = 0,
+            .annotation = "检查折线起段",
+        },
+    });
+    session.update(0.0, config, false);
+    const auto& annotated =
+        session.getContext().noteRegistry.get<const MMM::Logic::NoteComponent>(
+            polylineEntity);
+    if ( annotated.m_subNotes.front().annotation != "检查折线起段" ||
+         observer->notificationCount() != 1 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Annotations ) {
+        XERROR("Sub-note annotation did not publish exact mutation category");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    if ( !session.getContext()
+              .noteRegistry.get<const MMM::Logic::NoteComponent>(polylineEntity)
+              .m_subNotes.front()
+              .annotation.empty() ||
+         observer->notificationCount() != 2 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Annotations ) {
+        XERROR("Sub-note annotation undo did not preserve mutation category");
+        return false;
+    }
+
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::Objects);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetNoteAnnotation{
+            .entity     = polylineEntity,
+            .subIndex   = -1,
+            .annotation = "不应写入",
+        },
+    });
+    session.update(0.0, config, false);
+    return session.getContext()
+               .noteRegistry
+               .get<const MMM::Logic::NoteComponent>(polylineEntity)
+               .m_annotation.empty() &&
+           observer->notificationCount() == 2;
+}
+
 /// @brief 验证远端纯物件替换不会覆盖正在绘制的本地折线草稿。
 /// @return 远端物件即时出现且松键后本地折线与远端物件同时存在时返回 true。
 [[nodiscard]] bool testRemoteSynchronizationPreservesActiveBrush()
@@ -481,6 +574,7 @@ int main()
 {
     return testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
+                   testSubNoteAnnotationPermissionAndMutationFlag() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&

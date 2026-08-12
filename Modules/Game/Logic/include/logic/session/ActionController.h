@@ -86,6 +86,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdReplaceBeatmapTimings& cmd);
 
+    /// @brief 处理玩家物件或折线子物件注释修改命令。
+    /// @param cmd 注释目标与内容。
+    void handleCommand(const CmdSetNoteAnnotation& cmd);
+
     /// @brief 处理从其他谱面替换当前谱面数据的命令。
     /// @param cmd 命令数据。
     void handleCommand(const CmdReplaceBeatmapData& cmd);

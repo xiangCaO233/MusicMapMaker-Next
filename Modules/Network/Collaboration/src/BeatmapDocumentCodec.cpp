@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "mmm/Metadata.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Note.h"
 
 #include <miniz.h>
 #include <nlohmann/json.hpp>
@@ -24,7 +25,7 @@ namespace
 {
 using Json = nlohmann::json;
 
-constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 3;
+constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 4;
 /// @brief 协作谱面负载固定魔数，对应 ASCII `MMBD`。
 constexpr std::array<std::uint8_t, 4> DOCUMENT_PAYLOAD_MAGIC{
     'M', 'M', 'B', 'D'
@@ -326,6 +327,30 @@ Json encodeAudioSamples(const ::MMM::BeatMap& beatmap)
     return result;
 }
 
+/// @brief 编码独立于物件几何的玩家物件注释。
+/// @param beatmap 待编码谱面。
+/// @return 以稳定协作标识寻址的非空注释数组。
+Json encodeAnnotations(const ::MMM::BeatMap& beatmap)
+{
+    Json       result = Json::array();
+    const auto append = [&](const ::MMM::Note& note) {
+        if ( note.m_annotation.empty() || note.m_collaborationId.empty() ) {
+            return;
+        }
+        result.push_back(Json{
+            { "collaboration_id", note.m_collaborationId },
+            { "text", note.m_annotation },
+        });
+    };
+    for ( const auto& note : beatmap.m_noteData.notes ) append(note);
+    for ( const auto& hold : beatmap.m_noteData.holds ) append(hold);
+    for ( const auto& flick : beatmap.m_noteData.flicks ) append(flick);
+    for ( const auto& polyline : beatmap.m_noteData.polylines ) {
+        append(polyline);
+    }
+    return result;
+}
+
 Json encodeMetadata(const ::MMM::BeatMap& beatmap)
 {
     const auto& base = beatmap.m_baseMapMetadata;
@@ -502,6 +527,52 @@ bool decodeAudioSamples(const Json& source, ::MMM::BeatMap& beatmap)
     return true;
 }
 
+/// @brief 将独立注释分类应用到已经解码完成的玩家物件。
+/// @param source 注释数组。
+/// @param beatmap 已经包含物件与稳定标识的谱面。
+/// @return 结构、长度和稳定标识均有效时返回 true。
+bool decodeAnnotations(const Json& source, ::MMM::BeatMap& beatmap)
+{
+    if ( !source.is_array() ) return false;
+
+    std::unordered_map<std::string, ::MMM::Note*> notesByIdentity;
+    const auto registerNote = [&](::MMM::Note& note) {
+        if ( note.m_collaborationId.empty() ) return true;
+        return notesByIdentity.emplace(note.m_collaborationId, &note).second;
+    };
+    for ( auto& note : beatmap.m_noteData.notes ) {
+        if ( !registerNote(note) ) return false;
+    }
+    for ( auto& hold : beatmap.m_noteData.holds ) {
+        if ( !registerNote(hold) ) return false;
+    }
+    for ( auto& flick : beatmap.m_noteData.flicks ) {
+        if ( !registerNote(flick) ) return false;
+    }
+    for ( auto& polyline : beatmap.m_noteData.polylines ) {
+        if ( !registerNote(polyline) ) return false;
+    }
+
+    std::unordered_set<std::string> annotatedIdentities;
+    annotatedIdentities.reserve(source.size());
+    for ( const auto& entry : source ) {
+        std::string identity;
+        std::string annotation;
+        if ( !entry.is_object() ||
+             !readValue(entry, "collaboration_id", identity) ||
+             !readValue(entry, "text", annotation) || identity.empty() ||
+             annotation.empty() ||
+             annotation.size() > ::MMM::MAX_NOTE_ANNOTATION_BYTES ||
+             !annotatedIdentities.insert(identity).second ) {
+            return false;
+        }
+        const auto note = notesByIdentity.find(identity);
+        if ( note == notesByIdentity.end() ) return false;
+        note->second->m_annotation = std::move(annotation);
+    }
+    return true;
+}
+
 bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
 {
     if ( !source.is_object() ) return false;
@@ -554,6 +625,7 @@ Json makeDocument(const ::MMM::BeatMap& beatmap)
         { "timelines", encodeTimelines(beatmap) },
         { "audio_samples", encodeAudioSamples(beatmap) },
         { "metadata", encodeMetadata(beatmap) },
+        { "annotations", encodeAnnotations(beatmap) },
     };
 }
 
@@ -619,6 +691,9 @@ std::optional<Json> makeIncrementalPatch(const Json&                 baseline,
     appendArrayDelta("audio_samples",
                      "audio_samples_delta",
                      ::MMM::BeatmapMutationFlags::AudioSamples);
+    appendArrayDelta("annotations",
+                     "annotations_delta",
+                     ::MMM::BeatmapMutationFlags::Annotations);
     if ( hasBeatmapMutationFlag(flags, ::MMM::BeatmapMutationFlags::Metadata) &&
          baseline.at("metadata") != current.at("metadata") ) {
         patch["metadata"] = current.at("metadata");
@@ -684,6 +759,7 @@ std::expected<ByteBuffer, BeatmapDocumentError> BeatmapDocumentCodec::encode(
     updateBaseline("timelines", ::MMM::BeatmapMutationFlags::Timelines);
     updateBaseline("audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples);
     updateBaseline("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+    updateBaseline("annotations", ::MMM::BeatmapMutationFlags::Annotations);
     return encoded;
 }
 
@@ -754,6 +830,8 @@ BeatmapDocumentCodec::inspect(std::span<const std::uint8_t> payload)
             "audio_samples", ::MMM::BeatmapMutationFlags::AudioSamples, true);
         inspectCategory(
             "metadata", ::MMM::BeatmapMutationFlags::Metadata, false);
+        inspectCategory(
+            "annotations", ::MMM::BeatmapMutationFlags::Annotations, true);
     } else {
         inspectDelta("objects_delta", ::MMM::BeatmapMutationFlags::Objects);
         inspectDelta("timelines_delta", ::MMM::BeatmapMutationFlags::Timelines);
@@ -761,6 +839,8 @@ BeatmapDocumentCodec::inspect(std::span<const std::uint8_t> payload)
                      ::MMM::BeatmapMutationFlags::AudioSamples);
         inspectCategory(
             "metadata", ::MMM::BeatmapMutationFlags::Metadata, false);
+        inspectDelta("annotations_delta",
+                     ::MMM::BeatmapMutationFlags::Annotations);
     }
 
     if ( !valid ||
@@ -836,6 +916,7 @@ BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
         copyCategory("audio_samples",
                      ::MMM::BeatmapMutationFlags::AudioSamples);
         copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+        copyCategory("annotations", ::MMM::BeatmapMutationFlags::Annotations);
     } else {
         applyArrayDelta(
             "objects_delta", "objects", ::MMM::BeatmapMutationFlags::Objects);
@@ -846,6 +927,9 @@ BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
                         "audio_samples",
                         ::MMM::BeatmapMutationFlags::AudioSamples);
         copyCategory("metadata", ::MMM::BeatmapMutationFlags::Metadata);
+        applyArrayDelta("annotations_delta",
+                        "annotations",
+                        ::MMM::BeatmapMutationFlags::Annotations);
     }
 
     if ( !valid ||
@@ -865,20 +949,23 @@ BeatmapDocumentCodec::apply(std::span<const std::uint8_t> payload)
 std::shared_ptr<::MMM::BeatMap> BeatmapDocumentCodec::materialize() const
 {
     if ( !m_impl->hasDocument ) return nullptr;
-    const auto objectsIt   = m_impl->document.find("objects");
-    const auto timelinesIt = m_impl->document.find("timelines");
-    const auto samplesIt   = m_impl->document.find("audio_samples");
-    const auto metadataIt  = m_impl->document.find("metadata");
+    const auto objectsIt     = m_impl->document.find("objects");
+    const auto timelinesIt   = m_impl->document.find("timelines");
+    const auto samplesIt     = m_impl->document.find("audio_samples");
+    const auto metadataIt    = m_impl->document.find("metadata");
+    const auto annotationsIt = m_impl->document.find("annotations");
     if ( objectsIt == m_impl->document.end() ||
          timelinesIt == m_impl->document.end() ||
          samplesIt == m_impl->document.end() ||
-         metadataIt == m_impl->document.end() ) {
+         metadataIt == m_impl->document.end() ||
+         annotationsIt == m_impl->document.end() ) {
         return nullptr;
     }
 
     auto beatmap = std::make_shared<::MMM::BeatMap>();
     if ( !decodeMetadata(*metadataIt, *beatmap) ||
          !decodeObjects(*objectsIt, *beatmap) ||
+         !decodeAnnotations(*annotationsIt, *beatmap) ||
          !decodeTimelines(*timelinesIt, *beatmap) ||
          !decodeAudioSamples(*samplesIt, *beatmap) ) {
         return nullptr;

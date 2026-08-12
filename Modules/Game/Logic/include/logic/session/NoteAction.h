@@ -68,9 +68,14 @@ public:
     /// @brief 构造函数
     /// @param entries 批量操作条目列表
     /// @param name 操作描述名称
-    BatchNoteAction(std::vector<Entry> entries,
-                    std::string        name = "Batch Note Action")
-        : m_entries(std::move(entries)), m_name(std::move(name))
+    /// @param mutationFlags 动作对协作谱面造成的精确变更类别。
+    BatchNoteAction(std::vector<Entry>          entries,
+                    std::string                 name = "Batch Note Action",
+                    ::MMM::BeatmapMutationFlags mutationFlags =
+                        ::MMM::BeatmapMutationFlags::Objects)
+        : m_entries(std::move(entries))
+        , m_name(std::move(name))
+        , m_mutationFlags(mutationFlags)
     {
         for ( auto& entry : m_entries ) {
             if ( entry.before || !entry.after ) continue;
@@ -85,15 +90,19 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
-    /// @brief 批量 Note 操作始终修改主谱面物件。
+    /// @brief 返回该批量动作声明的精确谱面变更类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
-        return ::MMM::BeatmapMutationFlags::Objects;
+        return m_mutationFlags;
     }
 
 private:
     std::vector<Entry> m_entries;  ///< 条目列表
     std::string        m_name;     ///< 操作名称
+    /// @brief 该动作对协作同步声明的精确变更类别。
+    ::MMM::BeatmapMutationFlags m_mutationFlags{
+        ::MMM::BeatmapMutationFlags::Objects
+    };
 };
 
 }  // namespace MMM::Logic

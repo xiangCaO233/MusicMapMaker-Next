@@ -13,7 +13,8 @@ enum class BeatmapMutationFlags : std::uint8_t {
     Timelines    = 1U << 1U,
     AudioSamples = 1U << 2U,
     Metadata     = 1U << 3U,
-    All          = Objects | Timelines | AudioSamples | Metadata,
+    Annotations  = 1U << 4U,
+    All          = Objects | Timelines | AudioSamples | Metadata | Annotations,
 };
 
 /// @brief 合并两个谱面变化类别。

@@ -70,6 +70,8 @@ CollaborationLogWindow::CollaborationLogWindow(
                             flags, ::MMM::BeatmapMutationFlags::Metadata),
                         .replaceAudioSamples = hasBeatmapMutationFlag(
                             flags, ::MMM::BeatmapMutationFlags::AudioSamples),
+                        .replaceAnnotations = hasBeatmapMutationFlag(
+                            flags, ::MMM::BeatmapMutationFlags::Annotations),
                         .notifyMutationObserver = false,
                         .authoritativeRemote    = true,
                     }));

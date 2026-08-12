@@ -104,6 +104,7 @@ bool testNoteRoundTrip()
     item.note.m_duration   = 1.25;
     item.note.m_trackIndex = 2;
     item.note.m_dtrack     = 1;
+    item.note.m_annotation = "整条折线\n待复核";
     item.note.m_sampleBinding =
         MMM::AudioSampleBinding{ "main\tbound.wav", 0.35F };
     item.note.m_metadata
@@ -117,6 +118,7 @@ bool testNoteRoundTrip()
     hold.duration      = 0.75;
     hold.trackIndex    = 3;
     hold.dtrack        = 0;
+    hold.annotation    = "起段\t备注";
     hold.sampleBinding = MMM::AudioSampleBinding{ "hold.wav", 0.45F };
     hold.metadata.note_properties[MMM::NoteMetadataType::OSU]["edge"] = "hold";
     hold.customColors.head = glm::vec4{ 0.4F, 0.5F, 0.6F, 1.0F };
@@ -160,6 +162,7 @@ bool testNoteRoundTrip()
     if ( note.m_type != MMM::NoteType::POLYLINE ||
          !near(note.m_timestamp, 12.5) || !near(note.m_duration, 1.25) ||
          note.m_trackIndex != 2 || note.m_dtrack != 1 ||
+         note.m_annotation != "整条折线\n待复核" ||
          !sameBinding(note.m_sampleBinding, item.note.m_sampleBinding) ||
          note.m_subNotes.size() != 2 ) {
         XERROR("Note clipboard protocol changed core note fields");
@@ -177,6 +180,7 @@ bool testNoteRoundTrip()
     }
     if ( note.m_subNotes[0].type != MMM::NoteType::HOLD ||
          !near(note.m_subNotes[0].timestamp, 13.0) ||
+         note.m_subNotes[0].annotation != "起段\t备注" ||
          !sameBinding(note.m_subNotes[0].sampleBinding, hold.sampleBinding) ||
          !sameColor(note.m_subNotes[0].customColors.head,
                     hold.customColors.head) ) {

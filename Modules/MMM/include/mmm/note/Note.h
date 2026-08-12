@@ -2,6 +2,7 @@
 
 #include "mmm/Metadata.h"
 #include "mmm/sample/AudioSample.h"
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -10,6 +11,9 @@
 
 namespace MMM
 {
+
+/// @brief 单个玩家物件注释允许保存和同步的最大 UTF-8 字节数。
+inline constexpr std::size_t MAX_NOTE_ANNOTATION_BYTES = 8192U;
 
 enum class NoteType {
     NOTE,
@@ -45,6 +49,9 @@ public:
 
     /// @brief 所有物件元数据。
     NoteMetadata m_metadata;
+
+    /// @brief 编辑器内的协作注释；原始游戏格式导出时可忽略该字段。
+    std::string m_annotation;
 
     /// @brief 协作会话内稳定的逻辑物件标识；普通谱面格式不会持久化该字段。
     std::string m_collaborationId;

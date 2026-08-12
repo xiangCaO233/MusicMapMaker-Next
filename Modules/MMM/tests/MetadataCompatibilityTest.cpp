@@ -882,6 +882,52 @@ bool testOSUSaverDoesNotSynthesizeAudioSample(
                  "sample");
 }
 
+/// @brief 验证 MMM 原生格式分别保留整条折线与子音符注释。
+/// @param outputDirectory 测试输出目录。
+/// @return 折线结构和两级注释完整往返时返回 true。
+bool testMMMPolylineAnnotationRoundTrip(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count = 4;
+    auto& hold            = source.m_noteData.holds.emplace_back();
+    hold.m_timestamp      = 1000.0;
+    hold.m_duration       = 500.0;
+    hold.m_track          = 1;
+    hold.m_isSubNote      = true;
+    hold.m_annotation     = "折线起段注释";
+    auto& flick           = source.m_noteData.flicks.emplace_back();
+    flick.m_timestamp     = 1500.0;
+    flick.m_track         = 1;
+    flick.m_dtrack        = 1;
+    flick.m_isSubNote     = true;
+    flick.m_annotation    = "折线转向注释";
+    auto& polyline        = source.m_noteData.polylines.emplace_back();
+    polyline.m_timestamp  = hold.m_timestamp;
+    polyline.m_track      = hold.m_track;
+    polyline.m_annotation = "整条折线注释";
+    polyline.m_subNotes.emplace_back(hold);
+    polyline.m_subNotes.emplace_back(flick);
+    polyline.m_subHolds.emplace_back(hold);
+    polyline.m_subFlicks.emplace_back(flick);
+    source.sync();
+
+    const auto path = outputDirectory / "polyline_annotations.mmm";
+    if ( !source.saveToFile(path) ) return false;
+    const auto restored = MMM::BeatMap::loadFromFile(path);
+    if ( restored.m_noteData.polylines.size() != 1U ) {
+        return check(false, "annotated polyline structure should be preserved");
+    }
+    const auto& restoredPolyline = restored.m_noteData.polylines.front();
+    return check(
+        restoredPolyline.m_annotation == "整条折线注释" &&
+            restoredPolyline.m_subNotes.size() == 2U &&
+            restoredPolyline.m_subNotes[0].get().m_annotation ==
+                "折线起段注释" &&
+            restoredPolyline.m_subNotes[1].get().m_annotation == "折线转向注释",
+        "MMM polyline annotations should round-trip independently");
+}
+
 }  // namespace
 
 /// @brief 运行背景元数据格式兼容测试。
@@ -920,6 +966,7 @@ int main(int argc, char* argv[])
     ok &= testSingleAudioExporterCompatibility(outputDirectory);
     ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
+    ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
 
     if ( ok ) {
         XINFO("Metadata compatibility tests passed.");

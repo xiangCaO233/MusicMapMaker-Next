@@ -638,6 +638,18 @@ struct CmdReplaceBeatmapTimings {
     bool keepNonBpmTimings{ false };
 };
 
+/// @brief 修改一个玩家物件或折线子物件的编辑器注释。
+struct CmdSetNoteAnnotation {
+    /// @brief 根玩家物件实体；折线子物件也通过父折线实体寻址。
+    entt::entity entity{ entt::null };
+
+    /// @brief -1 表示整个物件，非负值表示折线子物件索引。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 待保存的 UTF-8 注释；空字符串表示清除。
+    std::string annotation;
+};
+
 /// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
 struct CmdReplaceBeatmapData {
     /// @brief 数据来源谱面。
@@ -654,6 +666,9 @@ struct CmdReplaceBeatmapData {
 
     /// @brief 是否替换自动采样对象。
     bool replaceAudioSamples{ false };
+
+    /// @brief 是否按稳定物件标识替换注释。
+    bool replaceAnnotations{ false };
 
     /// @brief 是否把本次替换继续发布给外部谱面变化观察者。
     bool notifyMutationObserver{ true };
@@ -807,13 +822,13 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
-    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdReplaceBeatmapData, CmdSetCollaborationResources,
+    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 

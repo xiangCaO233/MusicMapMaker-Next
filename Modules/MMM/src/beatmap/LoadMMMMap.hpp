@@ -165,6 +165,18 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
         }
     };
 
+    /// @brief 从 MMM 玩家物件对象加载有界编辑器注释。
+    auto loadNoteAnnotation = [](Note& note, const json& noteJson) {
+        auto annotationIt = noteJson.find("annotation");
+        if ( annotationIt == noteJson.end() || !annotationIt->is_string() ) {
+            return;
+        }
+        const auto& annotation = annotationIt->get_ref<const std::string&>();
+        if ( annotation.size() <= MAX_NOTE_ANNOTATION_BYTES ) {
+            note.m_annotation = annotation;
+        }
+    };
+
     /// @brief 从 MMM 玩家物件对象读取可选命中采样绑定。
     auto readNoteSampleBinding =
         [](const json& noteJson) -> std::optional<AudioSampleBinding> {
@@ -470,6 +482,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 loadNoteSampleBinding(poly, nJson);
 
                 loadNoteMetadata(poly, nJson);
+                loadNoteAnnotation(poly, nJson);
 
                 struct TempSub {
                     NoteType type;
@@ -479,11 +492,28 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     int      dtrack;
                     /// @brief 子物件的可选命中采样绑定。
                     std::optional<AudioSampleBinding> sampleBinding;
+                    /// @brief 子物件的独立编辑器注释。
+                    std::string annotation;
                 };
                 std::vector<TempSub> tempSubs;
+                bool preserveAnnotatedStructure = !poly.m_annotation.empty();
 
                 auto subNotesIt = nJson.find("sub_notes");
                 if ( subNotesIt != nJson.end() && subNotesIt->is_array() ) {
+                    preserveAnnotatedStructure =
+                        preserveAnnotatedStructure ||
+                        std::any_of(
+                            subNotesIt->begin(),
+                            subNotesIt->end(),
+                            [](const json& subNoteJson) {
+                                const auto annotationIt =
+                                    subNoteJson.find("annotation");
+                                return annotationIt != subNoteJson.end() &&
+                                       annotationIt->is_string() &&
+                                       !annotationIt
+                                            ->get_ref<const std::string&>()
+                                            .empty();
+                            });
                     for ( const auto& snJson : *subNotesIt ) {
                         if ( !snJson.is_object() ) continue;
                         std::string stype =
@@ -494,11 +524,18 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         sn.duration  = 0.0;
                         sn.dtrack    = 0;
                         sn.sampleBinding = readNoteSampleBinding(snJson);
-
+                        const std::string annotation =
+                            readMMMString(snJson, "annotation");
+                        if ( annotation.size() <= MAX_NOTE_ANNOTATION_BYTES ) {
+                            sn.annotation = annotation;
+                        }
                         if ( stype == "hold" ) {
                             sn.duration =
                                 readMMMDouble(snJson, "duration", 0.0);
-                            if ( sn.duration < 1e-4 ) continue;
+                            if ( sn.duration < 1e-4 &&
+                                 !preserveAnnotatedStructure ) {
+                                continue;
+                            }
                             sn.type = NoteType::HOLD;
                         } else if ( stype == "flick" ) {
                             sn.type   = NoteType::FLICK;
@@ -510,7 +547,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     }
 
                     // 迭代清洗逻辑
-                    bool changed = true;
+                    bool changed = !preserveAnnotatedStructure;
                     while ( changed ) {
                         changed = false;
 
@@ -565,17 +602,19 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 }
 
                 // 根据清洗后的结果决定最终去向
-                if ( tempSubs.empty() ) {
+                if ( tempSubs.empty() && !preserveAnnotatedStructure ) {
                     // 彻底退化为普通 Note
                     Note& n       = beatMap.m_noteData.notes.emplace_back();
                     n.m_type      = NoteType::NOTE;
                     n.m_timestamp = poly.m_timestamp;
                     n.m_track     = poly.m_track;
                     applyNoteSampleBinding(n, poly.getSampleBinding());
-                    n.m_metadata = poly.m_metadata;
+                    n.m_metadata   = poly.m_metadata;
+                    n.m_annotation = poly.m_annotation;
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
-                } else if ( tempSubs.size() == 1 ) {
+                } else if ( tempSubs.size() == 1 &&
+                            !preserveAnnotatedStructure ) {
                     // 退化为单一物件
                     const auto& s = tempSubs[0];
                     if ( s.type == NoteType::HOLD ) {
@@ -588,7 +627,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        h.m_metadata = poly.m_metadata;
+                        h.m_metadata   = poly.m_metadata;
+                        h.m_annotation = poly.m_annotation;
                     } else if ( s.type == NoteType::FLICK ) {
                         Flick& f = beatMap.m_noteData.flicks.emplace_back();
                         f.m_type = NoteType::FLICK;
@@ -599,7 +639,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        f.m_metadata = poly.m_metadata;
+                        f.m_metadata   = poly.m_metadata;
+                        f.m_annotation = poly.m_annotation;
                     } else {
                         Note& n       = beatMap.m_noteData.notes.emplace_back();
                         n.m_type      = NoteType::NOTE;
@@ -609,7 +650,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        n.m_metadata = poly.m_metadata;
+                        n.m_metadata   = poly.m_metadata;
+                        n.m_annotation = poly.m_annotation;
                     }
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
@@ -619,23 +661,34 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         if ( s.type == NoteType::HOLD ) {
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
-                            h.m_timestamp = s.timestamp;
-                            h.m_track     = s.track;
-                            h.m_duration  = s.duration;
-                            h.m_isSubNote = true;
+                            h.m_timestamp  = s.timestamp;
+                            h.m_track      = s.track;
+                            h.m_duration   = s.duration;
+                            h.m_isSubNote  = true;
+                            h.m_annotation = s.annotation;
                             applyNoteSampleBinding(h, s.sampleBinding);
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
                         } else if ( s.type == NoteType::FLICK ) {
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
-                            f.m_timestamp = s.timestamp;
-                            f.m_track     = s.track;
-                            f.m_dtrack    = s.dtrack;
-                            f.m_isSubNote = true;
+                            f.m_timestamp  = s.timestamp;
+                            f.m_track      = s.track;
+                            f.m_dtrack     = s.dtrack;
+                            f.m_isSubNote  = true;
+                            f.m_annotation = s.annotation;
                             applyNoteSampleBinding(f, s.sampleBinding);
                             poly.m_subNotes.push_back(f);
                             poly.m_subFlicks.push_back(f);
+                        } else {
+                            Note& n  = beatMap.m_noteData.notes.emplace_back();
+                            n.m_type = NoteType::NOTE;
+                            n.m_timestamp  = s.timestamp;
+                            n.m_track      = s.track;
+                            n.m_isSubNote  = true;
+                            n.m_annotation = s.annotation;
+                            applyNoteSampleBinding(n, s.sampleBinding);
+                            poly.m_subNotes.push_back(n);
                         }
                     }
                     // 更新 Polyline 的锚点信息为第一个子物件
@@ -657,6 +710,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 h.m_duration  = readMMMDouble(nJson, "duration", 0.0);
                 loadNoteSampleBinding(h, nJson);
                 loadNoteMetadata(h, nJson);
+                loadNoteAnnotation(h, nJson);
             } else if ( type == "flick" ) {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
                 if ( subNoteKeys.count({ readMMMDouble(nJson, "timestamp", 0.0),
@@ -670,6 +724,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 f.m_dtrack    = readMMMInt(nJson, "dtrack", 0);
                 loadNoteSampleBinding(f, nJson);
                 loadNoteMetadata(f, nJson);
+                loadNoteAnnotation(f, nJson);
             } else {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
                 if ( subNoteKeys.count({ readMMMDouble(nJson, "timestamp", 0.0),
@@ -682,6 +737,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 n.m_track     = readMMMU32(nJson, "track", 0);
                 loadNoteSampleBinding(n, nJson);
                 loadNoteMetadata(n, nJson);
+                loadNoteAnnotation(n, nJson);
             }
         }
     }

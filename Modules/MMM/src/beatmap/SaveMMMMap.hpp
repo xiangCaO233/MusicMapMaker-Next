@@ -177,6 +177,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         json n;
         n["timestamp"] = note.m_timestamp;
         n["track"]     = note.m_track;
+        if ( !note.m_annotation.empty() ) {
+            n["annotation"] = note.m_annotation;
+        }
         if ( const auto binding = note.getSampleBinding() ) {
             n["sample"] = { { "audio_ref", binding->m_audioResourceId },
                             { "volume", binding->m_volume } };
@@ -196,6 +199,46 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         }
         case NoteType::POLYLINE: {
             const auto& poly = static_cast<const Polyline&>(note);
+
+            const bool preserveAnnotatedStructure =
+                !poly.m_annotation.empty() ||
+                std::any_of(poly.m_subNotes.begin(),
+                            poly.m_subNotes.end(),
+                            [](const auto& subNote) {
+                                return !subNote.get().m_annotation.empty();
+                            });
+            if ( preserveAnnotatedStructure ) {
+                n["type"]         = "polyline";
+                json subNotesJson = json::array();
+                for ( const auto& subNoteRef : poly.m_subNotes ) {
+                    const Note& subNote = subNoteRef.get();
+                    json        subJson;
+                    subJson["timestamp"] = subNote.m_timestamp;
+                    subJson["track"]     = subNote.m_track;
+                    if ( subNote.m_type == NoteType::HOLD ) {
+                        subJson["type"] = "hold";
+                        subJson["duration"] =
+                            static_cast<const Hold&>(subNote).m_duration;
+                    } else if ( subNote.m_type == NoteType::FLICK ) {
+                        subJson["type"] = "flick";
+                        subJson["dtrack"] =
+                            static_cast<const Flick&>(subNote).m_dtrack;
+                    } else {
+                        subJson["type"] = "note";
+                    }
+                    if ( const auto binding = subNote.getSampleBinding() ) {
+                        subJson["sample"] = { { "audio_ref",
+                                                binding->m_audioResourceId },
+                                              { "volume", binding->m_volume } };
+                    }
+                    if ( !subNote.m_annotation.empty() ) {
+                        subJson["annotation"] = subNote.m_annotation;
+                    }
+                    subNotesJson.push_back(std::move(subJson));
+                }
+                n["sub_notes"] = std::move(subNotesJson);
+                break;
+            }
 
             // 1. 预处理清洗：过滤 0 长度 Hold，合并同向 Flick
             struct CleanSeg {

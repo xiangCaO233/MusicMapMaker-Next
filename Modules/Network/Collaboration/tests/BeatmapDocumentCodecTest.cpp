@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace
 {
@@ -38,6 +39,7 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     note.m_timestamp       = 1000.0;
     note.m_track           = 1;
     note.m_collaborationId = "note-root";
+    note.m_annotation      = "检查节奏重音";
     note.m_sampleBinding   = MMM::AudioSampleBinding{ "tap.wav", 0.8F };
     note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["color"] =
         "#112233";
@@ -54,6 +56,7 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     subHold.m_track            = 3;
     subHold.m_isSubNote        = true;
     subHold.m_collaborationId  = "polyline-sub-hold";
+    subHold.m_annotation       = "折线起段";
     auto& subFlick             = beatmap->m_noteData.flicks.emplace_back();
     subFlick.m_timestamp       = 2500.0;
     subFlick.m_track           = 3;
@@ -64,6 +67,7 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     polyline.m_timestamp       = subHold.m_timestamp;
     polyline.m_track           = subHold.m_track;
     polyline.m_collaborationId = "polyline-root";
+    polyline.m_annotation      = "整条折线说明";
     polyline.m_subNotes.emplace_back(subHold);
     polyline.m_subNotes.emplace_back(subFlick);
     polyline.m_subHolds.emplace_back(subHold);
@@ -117,6 +121,9 @@ bool testCompleteSnapshotRoundTrip()
            polyline.m_subHolds.size() == 1U &&
            polyline.m_subFlicks.size() == 1U &&
            restored->m_noteData.notes.front().m_sampleBinding.has_value() &&
+           restored->m_noteData.notes.front().m_annotation == "检查节奏重音" &&
+           polyline.m_annotation == "整条折线说明" &&
+           polyline.m_subNotes.front().get().m_annotation == "折线起段" &&
            restored->m_noteData.notes.front()
                    .m_metadata.note_properties.at(MMM::NoteMetadataType::MMM)
                    .at("color") == "#112233" &&
@@ -215,6 +222,27 @@ bool sameObjects(const BeatMap& lhs, const BeatMap& rhs)
     return true;
 }
 
+/// @brief 判断两个谱面的整物件及折线子物件注释是否等价。
+bool sameAnnotations(const BeatMap& lhs, const BeatMap& rhs)
+{
+    const auto annotations = [](const BeatMap& beatmap) {
+        std::unordered_map<std::string, std::string> result;
+        const auto append = [&](const MMM::Note& note) {
+            if ( !note.m_collaborationId.empty() ) {
+                result[note.m_collaborationId] = note.m_annotation;
+            }
+        };
+        for ( const auto& note : beatmap.m_noteData.notes ) append(note);
+        for ( const auto& hold : beatmap.m_noteData.holds ) append(hold);
+        for ( const auto& flick : beatmap.m_noteData.flicks ) append(flick);
+        for ( const auto& polyline : beatmap.m_noteData.polylines ) {
+            append(polyline);
+        }
+        return result;
+    };
+    return annotations(lhs) == annotations(rhs);
+}
+
 /// @brief 判断两个谱面的时间线类别是否逐字段等价。
 bool sameTimelines(const BeatMap& lhs, const BeatMap& rhs)
 {
@@ -286,10 +314,9 @@ bool sameMetadata(const BeatMap& lhs, const BeatMap& rhs)
 bool testStrictCategoryIsolation()
 {
     constexpr std::array FLAGS{
-        BeatmapMutationFlags::Objects,
-        BeatmapMutationFlags::Timelines,
-        BeatmapMutationFlags::AudioSamples,
-        BeatmapMutationFlags::Metadata,
+        BeatmapMutationFlags::Objects,      BeatmapMutationFlags::Timelines,
+        BeatmapMutationFlags::AudioSamples, BeatmapMutationFlags::Metadata,
+        BeatmapMutationFlags::Annotations,
     };
     for ( const auto flag : FLAGS ) {
         BeatmapDocumentCodec receiver;
@@ -306,6 +333,8 @@ bool testStrictCategoryIsolation()
         edited->m_audioSamples.front().m_volume           = 0.25F;
         edited->m_baseMapMetadata.title                   = "Changed Title";
         edited->m_baseMapMetadata.map_length              = 654321.0;
+        edited->m_noteData.notes.front().m_annotation     = "新注释";
+        edited->m_noteData.holds.front().m_annotation     = "新子音符注释";
         edited->sync();
 
         auto snapshot =
@@ -333,7 +362,11 @@ bool testStrictCategoryIsolation()
              sameMetadata(
                  *restored,
                  flag == BeatmapMutationFlags::Metadata ? *edited : *initial) ==
-                 false ) {
+                 false ||
+             sameAnnotations(*restored,
+                             flag == BeatmapMutationFlags::Annotations
+                                 ? *edited
+                                 : *initial) == false ) {
             return false;
         }
     }

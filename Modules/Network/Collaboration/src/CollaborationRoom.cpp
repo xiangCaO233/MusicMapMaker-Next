@@ -42,7 +42,9 @@ namespace
            allows(::MMM::BeatmapMutationFlags::AudioSamples,
                   CollaborationPermission::AudioSamples) &&
            allows(::MMM::BeatmapMutationFlags::Metadata,
-                  CollaborationPermission::Metadata);
+                  CollaborationPermission::Metadata) &&
+           allows(::MMM::BeatmapMutationFlags::Annotations,
+                  CollaborationPermission::Annotations);
 }
 }  // namespace
 
@@ -703,6 +705,10 @@ CollaborationPermissionMask CollaborationRoom::localPermissions() const
     if ( hasCollaborationPermission(permissions,
                                     CollaborationPermission::Metadata) ) {
         flags |= ::MMM::BeatmapMutationFlags::Metadata;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Annotations) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Annotations;
     }
     return flags;
 }

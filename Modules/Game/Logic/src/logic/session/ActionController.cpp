@@ -85,6 +85,7 @@ bool sameSubNote(const NoteComponent::SubNote& lhs,
            lhs.duration == rhs.duration && lhs.trackIndex == rhs.trackIndex &&
            lhs.dtrack == rhs.dtrack &&
            lhs.metadata.note_properties == rhs.metadata.note_properties &&
+           lhs.annotation == rhs.annotation &&
            sameNoteBinding(lhs.sampleBinding, rhs.sampleBinding) &&
            sameNoteColors(lhs.customColors, rhs.customColors) &&
            lhs.collaborationId == rhs.collaborationId;
@@ -136,6 +137,10 @@ void applySelectiveNoteTransition(NoteComponent&       current,
     applyNoteFieldTransition(current.m_metadata.note_properties,
                              expected.m_metadata.note_properties,
                              replacement.m_metadata.note_properties,
+                             equal);
+    applyNoteFieldTransition(current.m_annotation,
+                             expected.m_annotation,
+                             replacement.m_annotation,
                              equal);
     applyNoteFieldTransition(current.m_sampleBinding,
                              expected.m_sampleBinding,

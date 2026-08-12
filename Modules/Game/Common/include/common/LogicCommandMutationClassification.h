@@ -10,8 +10,8 @@ namespace MMM::Logic
 /// @return 不修改谱面，或属于已由开始命令授权的连续交互时返回 None。
 /// @warning 命令入队热路径：只执行一次 variant 类型分派，不访问 ECS、谱面或
 /// 文件系统；无法在入队边界确定选择内容的命令会保守要求全部潜在类别。
-[[nodiscard]] inline ::MMM::BeatmapMutationFlags
-requiredBeatmapMutationFlags(const LogicCommand& command)
+[[nodiscard]] inline ::MMM::BeatmapMutationFlags requiredBeatmapMutationFlags(
+    const LogicCommand& command)
 {
     return std::visit(
         [](const auto& value) {
@@ -33,17 +33,24 @@ requiredBeatmapMutationFlags(const LogicCommand& command)
                 if ( value.replaceAudioSamples ) {
                     flags |= ::MMM::BeatmapMutationFlags::AudioSamples;
                 }
+                if ( value.replaceAnnotations ) {
+                    flags |= ::MMM::BeatmapMutationFlags::Annotations;
+                }
                 return flags;
+            } else if constexpr ( std::is_same_v<T, CmdSetNoteAnnotation> ) {
+                return ::MMM::BeatmapMutationFlags::Annotations;
             } else if constexpr ( std::is_same_v<T, CmdStartDrag> ) {
                 return value.kind == ChartObjectKind::AudioSample
                            ? ::MMM::BeatmapMutationFlags::AudioSamples
                            : ::MMM::BeatmapMutationFlags::Objects;
-            } else if constexpr (
-                std::is_same_v<T, CmdCreateAudioSample> ||
-                std::is_same_v<T, CmdUpdateAudioSampleProperties> ) {
+            } else if constexpr ( std::is_same_v<T, CmdCreateAudioSample> ||
+                                  std::is_same_v<
+                                      T,
+                                      CmdUpdateAudioSampleProperties> ) {
                 return ::MMM::BeatmapMutationFlags::AudioSamples;
             } else if constexpr ( std::is_same_v<
-                                      T, CmdUpdateObjectSampleVolume> ) {
+                                      T,
+                                      CmdUpdateObjectSampleVolume> ) {
                 return value.kind == ChartObjectKind::AudioSample
                            ? ::MMM::BeatmapMutationFlags::AudioSamples
                            : ::MMM::BeatmapMutationFlags::Objects;
@@ -61,30 +68,32 @@ requiredBeatmapMutationFlags(const LogicCommand& command)
                 std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
                 std::is_same_v<T, CmdClearNoteColorOverrides> ) {
                 return ::MMM::BeatmapMutationFlags::Objects;
-            } else if constexpr (
-                std::is_same_v<T, CmdUpdateTimelineEvent> ||
-                std::is_same_v<T, CmdUpdateTimelineEvents> ||
-                std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                std::is_same_v<T, CmdCreateTimelineEvent> ||
-                std::is_same_v<T, CmdCreateTimelineEvents> ||
-                std::is_same_v<T, CmdReplaceBeatmapTimings> ) {
+            } else if constexpr ( std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                                  std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                                  std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                                  std::is_same_v<T, CmdCreateTimelineEvent> ||
+                                  std::is_same_v<T, CmdCreateTimelineEvents> ||
+                                  std::is_same_v<T,
+                                                 CmdReplaceBeatmapTimings> ) {
                 return ::MMM::BeatmapMutationFlags::Timelines;
-            } else if constexpr (
-                std::is_same_v<T, CmdUpdateBeatmapMetadata> ) {
+            } else if constexpr ( std::is_same_v<T,
+                                                 CmdUpdateBeatmapMetadata> ) {
                 return ::MMM::BeatmapMutationFlags::Metadata;
-            } else if constexpr (
-                std::is_same_v<T, CmdMarkBeatmapMetadataDirty> ||
-                std::is_same_v<T, CmdUpdateBgmTrackCount> ) {
+            } else if constexpr ( std::is_same_v<T,
+                                                 CmdMarkBeatmapMetadataDirty> ||
+                                  std::is_same_v<T, CmdUpdateBgmTrackCount> ) {
                 return ::MMM::BeatmapMutationFlags::Metadata;
             } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
                 return ::MMM::BeatmapMutationFlags::Metadata;
-            } else if constexpr (
-                std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ) {
+            } else if constexpr ( std::is_same_v<T, CmdUndo> ||
+                                  std::is_same_v<T, CmdRedo> ) {
                 return ::MMM::BeatmapMutationFlags::None;
-            } else if constexpr (
-                std::is_same_v<T, CmdPaste> || std::is_same_v<T, CmdCut> ||
-                std::is_same_v<T, CmdDeleteSelected> ||
-                std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ) {
+            } else if constexpr ( std::is_same_v<T, CmdPaste> ||
+                                  std::is_same_v<T, CmdCut> ||
+                                  std::is_same_v<T, CmdDeleteSelected> ||
+                                  std::is_same_v<
+                                      T,
+                                      CmdUpdateSelectedObjectSampleVolume> ) {
                 return ::MMM::BeatmapMutationFlags::None;
             } else {
                 return ::MMM::BeatmapMutationFlags::None;
