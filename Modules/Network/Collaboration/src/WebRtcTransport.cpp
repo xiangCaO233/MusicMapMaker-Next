@@ -1,6 +1,7 @@
 #include "network/collaboration/WebRtcTransport.h"
 
 #include "config/CreatorIdentity.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 
 #include <nlohmann/json.hpp>
 #include <rtc/rtc.h>
@@ -97,6 +98,16 @@ bool readUnsignedField(const nlohmann::json& object, std::string_view key,
     return true;
 }
 
+/// @brief 从 JSON 对象读取布尔字段。
+bool readBooleanField(const nlohmann::json& object, std::string_view key,
+                      bool& value)
+{
+    const auto iterator = object.find(key);
+    if ( iterator == object.end() || !iterator->is_boolean() ) return false;
+    value = iterator->get<bool>();
+    return true;
+}
+
 /// @brief 生成仅房主控制连接持有的随机令牌。
 std::string generateOwnerToken()
 {
@@ -181,8 +192,12 @@ public:
             Config::normalizeCollaborationStableId(config.participantId);
         const auto sessionId =
             Config::normalizeCollaborationStableId(config.sessionId);
+        const auto& buildFingerprint = config.buildFingerprint.empty()
+                                           ? collaborationBuildFingerprint()
+                                           : config.buildFingerprint;
         if ( creator.empty() || roomName.empty() || config.hostId == 0 ||
              participantId.empty() || sessionId.empty() ||
+             !isValidCollaborationBuildFingerprint(buildFingerprint) ||
              makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
@@ -197,11 +212,14 @@ public:
             {
                 std::scoped_lock lock(m_mutex);
                 if ( m_running || m_stopping ) return false;
-                m_isHost        = true;
-                m_creator       = creator;
-                m_participantId = participantId;
-                m_sessionId     = sessionId;
-                m_roomName      = roomName;
+                m_isHost           = true;
+                m_creator          = creator;
+                m_participantId    = participantId;
+                m_sessionId        = sessionId;
+                m_buildFingerprint = buildFingerprint;
+                m_requireMatchingBuildFingerprint =
+                    config.requireMatchingBuildFingerprint;
+                m_roomName     = roomName;
                 m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
                 m_ownerToken   = generateOwnerToken();
                 m_localPeerId  = config.hostId;
@@ -230,8 +248,13 @@ public:
             Config::normalizeCollaborationStableId(config.participantId);
         const auto sessionId =
             Config::normalizeCollaborationStableId(config.sessionId);
+        const auto& buildFingerprint = config.buildFingerprint.empty()
+                                           ? collaborationBuildFingerprint()
+                                           : config.buildFingerprint;
         if ( creator.empty() || config.hostId == 0 || participantId.empty() ||
-             sessionId.empty() || !isValidRoomId(config.roomId) ||
+             sessionId.empty() ||
+             !isValidCollaborationBuildFingerprint(buildFingerprint) ||
+             !isValidRoomId(config.roomId) ||
              makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
         }
@@ -247,10 +270,12 @@ public:
             {
                 std::scoped_lock lock(m_mutex);
                 if ( m_running || m_stopping ) return false;
-                m_isHost        = false;
-                m_creator       = creator;
-                m_participantId = participantId;
-                m_sessionId     = sessionId;
+                m_isHost                          = false;
+                m_creator                         = creator;
+                m_participantId                   = participantId;
+                m_sessionId                       = sessionId;
+                m_buildFingerprint                = buildFingerprint;
+                m_requireMatchingBuildFingerprint = true;
                 m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
                 m_roomId       = config.roomId;
                 m_localPeerId  = 0;
@@ -289,7 +314,7 @@ public:
     }
 
     /// @brief 拒绝一个由中心服务暂存的访客加入请求。
-    bool rejectJoinRequest(std::string_view requestId)
+    bool rejectJoinRequest(std::string_view requestId, std::string_view reason)
     {
         std::scoped_lock rtcLock(m_rtcApiMutex);
         Connection*      control = nullptr;
@@ -319,6 +344,7 @@ public:
             { "roomId", roomId },
             { "requestId", request },
             { "ownerToken", ownerToken },
+            { "reason", reason },
         };
         if ( !sendSignal(*control, rejected) ) return false;
         std::scoped_lock lock(m_mutex);
@@ -420,6 +446,7 @@ public:
         m_localPeerId = 0;
         m_participantId.clear();
         m_sessionId.clear();
+        m_buildFingerprint.clear();
         m_roomId.clear();
         m_roomName.clear();
         m_ownerToken.clear();
@@ -585,7 +612,8 @@ private:
     void pushEvent(WebRtcTransportEventType type, PeerId peerId,
                    std::string creator, std::string detail,
                    std::string requestId = {}, ParticipantId participantId = {},
-                   OperationSessionId sessionId = {})
+                   OperationSessionId sessionId        = {},
+                   std::string        buildFingerprint = {})
     {
         std::scoped_lock lock(m_mutex);
         if ( m_stopping ) return;
@@ -598,7 +626,8 @@ private:
                              std::move(sessionId),
                              std::move(creator),
                              std::move(detail),
-                             std::move(requestId) });
+                             std::move(requestId),
+                             std::move(buildFingerprint) });
     }
 
     /// @brief 发送一条 JSON 信令消息。
@@ -737,12 +766,15 @@ private:
         std::string   creator;
         std::string   participantId;
         std::string   sessionId;
+        std::string   buildFingerprint;
         std::uint64_t version = 0;
         if ( !readUnsignedField(message, "version", version) ||
              version != P2P_SIGNALING_PROTOCOL_VERSION ||
              !readStringField(message, "creator", creator) ||
              !readStringField(message, "participantId", participantId) ||
-             !readStringField(message, "sessionId", sessionId) ) {
+             !readStringField(message, "sessionId", sessionId) ||
+             !readStringField(message, "buildFingerprint", buildFingerprint) ||
+             !isValidCollaborationBuildFingerprint(buildFingerprint) ) {
             reject(connection, "invalid_join");
             return;
         }
@@ -752,6 +784,11 @@ private:
         if ( creator.empty() || participantId.empty() || sessionId.empty() ||
              creator != connection.approvedCreator ) {
             reject(connection, "invalid_identity");
+            return;
+        }
+        if ( m_requireMatchingBuildFingerprint &&
+             buildFingerprint != m_buildFingerprint ) {
+            reject(connection, "build_fingerprint_mismatch");
             return;
         }
 
@@ -774,13 +811,16 @@ private:
         }
 
         nlohmann::json accepted;
-        accepted["type"]              = "accepted";
-        accepted["version"]           = P2P_SIGNALING_PROTOCOL_VERSION;
-        accepted["peerId"]            = assignedPeerId;
-        accepted["hostId"]            = m_hostId;
-        accepted["hostCreator"]       = m_creator;
-        accepted["hostParticipantId"] = m_participantId;
-        accepted["hostSessionId"]     = m_sessionId;
+        accepted["type"]                 = "accepted";
+        accepted["version"]              = P2P_SIGNALING_PROTOCOL_VERSION;
+        accepted["peerId"]               = assignedPeerId;
+        accepted["hostId"]               = m_hostId;
+        accepted["hostCreator"]          = m_creator;
+        accepted["hostParticipantId"]    = m_participantId;
+        accepted["hostSessionId"]        = m_sessionId;
+        accepted["hostBuildFingerprint"] = m_buildFingerprint;
+        accepted["requiresMatchingBuildFingerprint"] =
+            m_requireMatchingBuildFingerprint;
         if ( !createPeerConnection(connection, false) ||
              !sendSignal(connection, accepted) ) {
             pushEvent(WebRtcTransportEventType::Error,
@@ -799,6 +839,8 @@ private:
         std::string   hostCreator;
         std::string   hostParticipantId;
         std::string   hostSessionId;
+        std::string   hostBuildFingerprint;
+        bool          requiresMatchingBuildFingerprint = true;
         if ( !readUnsignedField(message, "version", version) ||
              version != P2P_SIGNALING_PROTOCOL_VERSION ||
              !readUnsignedField(message, "peerId", peerId) || peerId == 0 ||
@@ -806,7 +848,13 @@ private:
              !readStringField(message, "hostCreator", hostCreator) ||
              !readStringField(
                  message, "hostParticipantId", hostParticipantId) ||
-             !readStringField(message, "hostSessionId", hostSessionId) ) {
+             !readStringField(message, "hostSessionId", hostSessionId) ||
+             !readStringField(
+                 message, "hostBuildFingerprint", hostBuildFingerprint) ||
+             !readBooleanField(message,
+                               "requiresMatchingBuildFingerprint",
+                               requiresMatchingBuildFingerprint) ||
+             !isValidCollaborationBuildFingerprint(hostBuildFingerprint) ) {
             pushEvent(WebRtcTransportEventType::Error,
                       0,
                       {},
@@ -823,6 +871,14 @@ private:
                       0,
                       {},
                       "invalid_host_identity");
+            return;
+        }
+        if ( requiresMatchingBuildFingerprint &&
+             hostBuildFingerprint != m_buildFingerprint ) {
+            pushEvent(WebRtcTransportEventType::Rejected,
+                      0,
+                      hostCreator,
+                      "build_fingerprint_mismatch");
             return;
         }
 
@@ -939,9 +995,14 @@ private:
             std::string roomId;
             std::string requestId;
             std::string guestCreator;
+            std::string guestBuildFingerprint;
             if ( !readStringField(message, "roomId", roomId) ||
                  !readStringField(message, "requestId", requestId) ||
-                 !readStringField(message, "guestCreator", guestCreator) ) {
+                 !readStringField(message, "guestCreator", guestCreator) ||
+                 !readStringField(
+                     message, "guestBuildFingerprint", guestBuildFingerprint) ||
+                 !isValidCollaborationBuildFingerprint(
+                     guestBuildFingerprint) ) {
                 pushEvent(WebRtcTransportEventType::Error,
                           0,
                           {},
@@ -969,7 +1030,10 @@ private:
                       0,
                       std::move(guestCreator),
                       "approval_required",
-                      std::move(requestId));
+                      std::move(requestId),
+                      {},
+                      {},
+                      std::move(guestBuildFingerprint));
             return true;
         }
         if ( type == "join_pending" ) {
@@ -1023,11 +1087,12 @@ private:
             }
             if ( !m_isHost ) {
                 nlohmann::json join;
-                join["type"]          = "join";
-                join["version"]       = P2P_SIGNALING_PROTOCOL_VERSION;
-                join["creator"]       = m_creator;
-                join["participantId"] = m_participantId;
-                join["sessionId"]     = m_sessionId;
+                join["type"]             = "join";
+                join["version"]          = P2P_SIGNALING_PROTOCOL_VERSION;
+                join["creator"]          = m_creator;
+                join["participantId"]    = m_participantId;
+                join["sessionId"]        = m_sessionId;
+                join["buildFingerprint"] = m_buildFingerprint;
                 if ( !sendSignal(connection, join) ) {
                     pushEvent(WebRtcTransportEventType::Error,
                               m_hostId,
@@ -1195,9 +1260,10 @@ private:
             message["requestId"]  = connection->requestId;
             message["ownerToken"] = owner.m_ownerToken;
         } else {
-            message["type"]    = "join_room";
-            message["roomId"]  = owner.m_roomId;
-            message["creator"] = owner.m_creator;
+            message["type"]             = "join_room";
+            message["roomId"]           = owner.m_roomId;
+            message["creator"]          = owner.m_creator;
+            message["buildFingerprint"] = owner.m_buildFingerprint;
         }
         if ( !owner.sendSignal(*connection, message) ) {
             owner.pushEvent(WebRtcTransportEventType::Error,
@@ -1456,6 +1522,10 @@ private:
     ParticipantId m_participantId;
     /// @brief 当前加入流程生成的操作会话标识。
     OperationSessionId m_sessionId;
+    /// @brief 当前主程序二进制的 SHA-256 构建指纹。
+    std::string m_buildFingerprint;
+    /// @brief 房主是否在身份握手中强制构建指纹相等。
+    bool m_requireMatchingBuildFingerprint = true;
     /// @brief 公网目录展示名称。
     std::string m_roomName;
     /// @brief 中心服务分配的公开房间标识。
@@ -1501,9 +1571,10 @@ bool WebRtcTransport::approveJoinRequest(std::string_view requestId)
     return m_impl->approveJoinRequest(requestId);
 }
 
-bool WebRtcTransport::rejectJoinRequest(std::string_view requestId)
+bool WebRtcTransport::rejectJoinRequest(std::string_view requestId,
+                                        std::string_view reason)
 {
-    return m_impl->rejectJoinRequest(requestId);
+    return m_impl->rejectJoinRequest(requestId, reason);
 }
 
 bool WebRtcTransport::disconnectPeer(PeerId peerId, std::string detail)

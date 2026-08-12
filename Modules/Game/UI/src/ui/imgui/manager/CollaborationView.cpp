@@ -381,6 +381,10 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 m_roomName.size());
             ImGui::EndTable();
         }
+        FeedbackCheckbox(TR("ui.collaboration.require_matching_build").data(),
+                         &m_requireMatchingBuildFingerprint);
+        ImGui::TextWrapped(
+            "%s", TR("ui.collaboration.require_matching_build_desc").data());
         ImGui::BeginDisabled(
             m_pendingGuestJoin || !creatorValid || m_roomName[0] == '\0' ||
             !isCollaborationProjectRequirementSatisfied(true, hostReady));
@@ -394,6 +398,8 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 Config::AppConfig::instance().getCollaborationParticipantId();
             config.roomName = m_roomName.data();
             config.endpoint = m_room->serverEndpoint();
+            config.requireMatchingBuildFingerprint =
+                m_requireMatchingBuildFingerprint;
             static_cast<void>(m_room->startHost(std::move(config)));
         }
         ImGui::EndDisabled();

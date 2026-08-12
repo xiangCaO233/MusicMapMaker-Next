@@ -95,6 +95,27 @@ bool isValidOwnerToken(std::string_view value)
         return std::isalnum(byte) != 0 || character == '-' || character == '_';
     });
 }
+
+/// @brief 校验客户端主程序 SHA-256 构建指纹。
+bool isValidBuildFingerprint(std::string_view value)
+{
+    return value.size() == 64U &&
+           std::all_of(value.begin(), value.end(), [](char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+/// @brief 校验可安全回传给访客的稳定拒绝原因码。
+bool isValidReasonCode(std::string_view value)
+{
+    return !value.empty() && value.size() <= 64U &&
+           std::all_of(value.begin(), value.end(), [](char character) {
+               return (character >= 'a' && character <= 'z') ||
+                      (character >= '0' && character <= '9') ||
+                      character == '_';
+           });
+}
 }  // namespace
 
 class CollaborationSignalingServer::Impl
@@ -191,6 +212,8 @@ public:
         int guestWebSocketId = -1;
         /// @brief 访客展示身份。
         std::string creator;
+        /// @brief 访客主程序二进制的 SHA-256 构建指纹。
+        std::string buildFingerprint;
         /// @brief 请求创建时间。
         std::chrono::steady_clock::time_point createdAt =
             std::chrono::steady_clock::now();
@@ -644,9 +667,12 @@ private:
     {
         std::string roomId;
         std::string creator;
+        std::string buildFingerprint;
         if ( !readStringField(message, "roomId", roomId) ||
              !readStringField(message, "creator", creator) ||
-             !isValidDisplayText(creator, 64) ) {
+             !readStringField(message, "buildFingerprint", buildFingerprint) ||
+             !isValidDisplayText(creator, 64) ||
+             !isValidBuildFingerprint(buildFingerprint) ) {
             rejectClient(websocketId, "invalid_join");
             return;
         }
@@ -678,6 +704,7 @@ private:
         pending.roomId           = roomId;
         pending.guestWebSocketId = websocketId;
         pending.creator          = creator;
+        pending.buildFingerprint = buildFingerprint;
         m_pendingJoins.emplace(requestId, std::move(pending));
 
         Client& client   = m_clients.at(websocketId);
@@ -693,11 +720,12 @@ private:
         static_cast<void>(sendJson(websocketId, waiting));
 
         nlohmann::json requested;
-        requested["type"]         = "join_requested";
-        requested["version"]      = DIRECTORY_PROTOCOL_VERSION;
-        requested["roomId"]       = roomId;
-        requested["requestId"]    = requestId;
-        requested["guestCreator"] = creator;
+        requested["type"]                  = "join_requested";
+        requested["version"]               = DIRECTORY_PROTOCOL_VERSION;
+        requested["roomId"]                = roomId;
+        requested["requestId"]             = requestId;
+        requested["guestCreator"]          = creator;
+        requested["guestBuildFingerprint"] = buildFingerprint;
         if ( !sendJson(roomIterator->second.controlWebSocketId, requested) ) {
             m_pendingJoins.erase(requestId);
             rejectClient(websocketId, "host_unavailable");
@@ -716,7 +744,6 @@ private:
             rejectClient(websocketId, "invalid_accept");
             return;
         }
-
         const auto roomIterator    = m_rooms.find(roomId);
         const auto pendingIterator = m_pendingJoins.find(requestId);
         if ( roomIterator == m_rooms.end() ||
@@ -765,9 +792,22 @@ private:
         std::string roomId;
         std::string requestId;
         std::string ownerToken;
+        std::string reason = "host_rejected";
         if ( !readStringField(message, "roomId", roomId) ||
              !readStringField(message, "requestId", requestId) ||
              !readStringField(message, "ownerToken", ownerToken) ) {
+            rejectClient(websocketId, "invalid_reject");
+            return;
+        }
+        if ( const auto reasonIterator = message.find("reason");
+             reasonIterator != message.end() ) {
+            if ( !reasonIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_reject");
+                return;
+            }
+            reason = reasonIterator->get_ref<const std::string&>();
+        }
+        if ( !isValidReasonCode(reason) ) {
             rejectClient(websocketId, "invalid_reject");
             return;
         }
@@ -792,7 +832,7 @@ private:
         nlohmann::json rejected;
         rejected["type"]    = "error";
         rejected["version"] = DIRECTORY_PROTOCOL_VERSION;
-        rejected["reason"]  = "host_rejected";
+        rejected["reason"]  = reason;
         static_cast<void>(sendJson(guestWebSocketId, rejected));
         closeClient(guestWebSocketId);
     }

@@ -1674,21 +1674,24 @@ void EditorEngine::setTimelineClipboard(
 }
 
 /// @brief 获取编辑器级剪贴板副本。
-std::vector<ClipboardItem> EditorEngine::getClipboard() const
+std::vector<ClipboardItem> EditorEngine::getClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.get();
+    return m_clipboard.get(targetContext);
 }
 
 /// @brief 获取编辑器级自动采样剪贴板副本。
-std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard() const
+std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.getSamples();
+    return m_clipboard.getSamples(targetContext);
 }
 
 /// @brief 获取编辑器级 Timeline 剪贴板副本。
-std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard() const
+std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.getTimelines();
+    return m_clipboard.getTimelines(targetContext);
 }
 
 /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
@@ -1836,7 +1839,16 @@ std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
 /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
 bool EditorEngine::importSystemClipboardText(std::string_view text)
 {
+    auto activeSession = getActiveSession();
+    if ( activeSession && activeSession->isCollaborationClipboardIsolated() ) {
+        return false;
+    }
     return m_clipboard.importSystemText(text);
+}
+
+void EditorEngine::clearClipboardForContext(const SessionContext* context)
+{
+    m_clipboard.clearForContext(context);
 }
 
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。

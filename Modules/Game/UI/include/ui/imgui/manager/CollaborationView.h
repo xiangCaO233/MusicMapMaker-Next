@@ -73,6 +73,8 @@ private:
     std::array<char, 160> m_roomName{};
     /// @brief 是否已经从当前谱面初始化房间名称。
     bool m_roomNameInitialized = false;
+    /// @brief 开房时是否只允许主程序构建指纹与房主一致的访客。
+    bool m_requireMatchingBuildFingerprint = true;
     /// @brief 当前客户端向 P2P 房间发布主画布状态的频率。
     int m_viewportPublishRateHz = 10;
     /// @brief 聊天输入缓冲区字节数，包含末尾空字符。

@@ -23,6 +23,9 @@ using MMM::Network::CollaborationServer::CollaborationSignalingServerConfig;
 
 /// @brief 本机目录与信令集成测试允许的最长等待时间。
 constexpr auto TEST_TIMEOUT = std::chrono::seconds(10);
+/// @brief 测试访客提交的固定 SHA-256 构建指纹。
+constexpr std::string_view TEST_BUILD_FINGERPRINT =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// @brief 测试 WebSocket 的跨回调线程收件箱。
 struct TestSocket {
@@ -214,7 +217,8 @@ bool testDirectoryAndSignalingRelay()
                    { { "type", "join_room" },
                      { "version", 1 },
                      { "roomId", roomId },
-                     { "creator", "Guest Creator" } }) ) {
+                     { "creator", "Guest Creator" },
+                     { "buildFingerprint", TEST_BUILD_FINGERPRINT } }) ) {
         return fail("guest_open_and_join_send");
     }
 
@@ -233,7 +237,9 @@ bool testDirectoryAndSignalingRelay()
         return fail("join_notifications");
     }
     const std::string requestId = requested.value("requestId", "");
-    if ( requestId.empty() || requestId != pending.value("requestId", "") ) {
+    if ( requestId.empty() || requestId != pending.value("requestId", "") ||
+         requested.value("guestBuildFingerprint", "") !=
+             TEST_BUILD_FINGERPRINT ) {
         return fail("join_request_identity");
     }
 
@@ -322,7 +328,8 @@ bool testDirectoryAndSignalingRelay()
                    { { "type", "join_room" },
                      { "version", 1 },
                      { "roomId", roomId },
-                     { "creator", "Rejected Creator" } }) ) {
+                     { "creator", "Rejected Creator" },
+                     { "buildFingerprint", TEST_BUILD_FINGERPRINT } }) ) {
         return fail("rejected_guest_join_send");
     }
     nlohmann::json rejectedPending;
@@ -348,7 +355,8 @@ bool testDirectoryAndSignalingRelay()
                      { "version", 1 },
                      { "roomId", roomId },
                      { "requestId", rejectedRequestId },
-                     { "ownerToken", "0123456789abcdef0123456789abcdef" } }) ) {
+                     { "ownerToken", "0123456789abcdef0123456789abcdef" },
+                     { "reason", "build_fingerprint_mismatch" } }) ) {
         return fail("host_reject_send");
     }
     nlohmann::json rejectedMessage;
@@ -357,7 +365,7 @@ bool testDirectoryAndSignalingRelay()
                         return takeMessage(
                             *rejectedGuest, "error", rejectedMessage);
                     }) ||
-         rejectedMessage.value("reason", "") != "host_rejected" ) {
+         rejectedMessage.value("reason", "") != "build_fingerprint_mismatch" ) {
         return fail("host_reject_delivery");
     }
     return true;

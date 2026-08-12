@@ -94,6 +94,10 @@ struct SessionContext {
     std::shared_ptr<MMM::Project> collaborationProject;
     /// @brief 房主谱面资源路径到本机内容缓存相对路径的映射。
     std::unordered_map<std::string, std::string> collaborationPathRemap;
+    /// @brief 协作期间是否仅允许当前 Session 使用进程内谱面剪贴板。
+    bool collaborationClipboardIsolated{ false };
+    /// @brief 当前协作剪贴板隔离范围，用于阻止跨房间复用残留内容。
+    std::uint64_t        collaborationClipboardScopeId{ 0 };
     Config::EditorConfig lastConfig;  ///< 最近一次同步的编辑器配置
     std::unordered_map<std::string, CameraInfo>
               cameras;               ///< 当前所有活跃视口的信息

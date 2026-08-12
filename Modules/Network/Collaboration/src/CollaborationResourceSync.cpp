@@ -1,5 +1,7 @@
 #include "network/collaboration/CollaborationResourceSync.h"
 
+#include "CollaborationResourceCipher.h"
+
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
@@ -38,7 +40,8 @@ using Json = nlohmann::json;
 /// @brief 资源清单格式版本。
 constexpr std::uint32_t RESOURCE_MANIFEST_VERSION = 1U;
 /// @brief 单次文件请求大小，避免占满数据通道消息上限。
-constexpr std::uint32_t RESOURCE_CHUNK_BYTES = 64U * 1024U;
+constexpr std::uint32_t RESOURCE_CHUNK_BYTES =
+    Detail::COLLABORATION_RESOURCE_BLOCK_BYTES;
 /// @brief 单个清单允许的最大文件数。
 constexpr std::size_t MAX_RESOURCE_FILES = 4096U;
 /// @brief 单个清单允许声明的最大总字节数。
@@ -265,45 +268,6 @@ std::string sha256File(const std::filesystem::path& path,
     }
     if ( input.bad() ) return {};
     return accumulator.finish();
-}
-
-/// @brief 房主资源快照的摘要和实际字节数。
-struct SnapshotDigest {
-    std::string   sha256;
-    std::uint64_t size = 0;
-};
-
-/// @brief 一次流式复制房主资源并对快照字节计算 SHA-256。
-std::optional<SnapshotDigest> snapshotFile(
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination, std::stop_token stopToken)
-{
-    std::ifstream input(source, std::ios::binary);
-    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
-    if ( !input || !output ) return std::nullopt;
-
-    Sha256Accumulator                     accumulator;
-    std::array<std::uint8_t, 64U * 1024U> buffer{};
-    std::uint64_t                         totalBytes = 0;
-    while ( input ) {
-        if ( stopToken.stop_requested() ) return std::nullopt;
-        input.read(reinterpret_cast<char*>(buffer.data()),
-                   static_cast<std::streamsize>(buffer.size()));
-        const auto count = input.gcount();
-        if ( count <= 0 ) continue;
-        const auto byteCount = static_cast<std::size_t>(count);
-        totalBytes += byteCount;
-        if ( totalBytes > MAX_RESOURCE_FILE_BYTES ) return std::nullopt;
-        accumulator.update(
-            std::span<const std::uint8_t>(buffer.data(), byteCount));
-        output.write(reinterpret_cast<const char*>(buffer.data()), count);
-        if ( !output ) return std::nullopt;
-    }
-    output.close();
-    if ( input.bad() || !output || stopToken.stop_requested() ) {
-        return std::nullopt;
-    }
-    return SnapshotDigest{ accumulator.finish(), totalBytes };
 }
 
 /// @brief 判断字符串是否为固定长度的小写 SHA-256。
@@ -560,6 +524,58 @@ struct HostFile {
     ManifestFile          manifest;
     std::filesystem::path sourcePath;
 };
+
+/// @brief 判断待清理目录是否为指定缓存根目录下由本模块生成的直接子目录。
+bool isOwnedGuestSessionRoot(const std::filesystem::path& cacheRoot,
+                             const std::filesystem::path& sessionRoot)
+{
+    if ( cacheRoot.empty() || sessionRoot.empty() ) return false;
+    std::error_code baseError;
+    std::error_code sessionError;
+    const auto      absoluteBase =
+        std::filesystem::absolute(cacheRoot, baseError).lexically_normal();
+    const auto absoluteSession =
+        std::filesystem::absolute(sessionRoot, sessionError).lexically_normal();
+    const auto name = Config::pathToUtf8(absoluteSession.filename());
+    return !baseError && !sessionError && !absoluteBase.empty() &&
+           absoluteSession.parent_path() == absoluteBase &&
+           name.starts_with("session-") && name.size() > 8U;
+}
+
+/// @brief 删除一个已经验证归属关系的访客会话目录。
+void removeOwnedGuestSessionRoot(const std::filesystem::path& cacheRoot,
+                                 const std::filesystem::path& sessionRoot)
+{
+    if ( !isOwnedGuestSessionRoot(cacheRoot, sessionRoot) ) return;
+    std::error_code removeError;
+    std::filesystem::remove_all(sessionRoot, removeError);
+}
+
+/// @brief 让临时素材目录仅对当前用户开放；不支持的文件系统保持原权限。
+void restrictGuestSessionPermissions(const std::filesystem::path& path)
+{
+    std::error_code permissionError;
+    std::filesystem::permissions(path,
+                                 std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::replace,
+                                 permissionError);
+}
+
+/// @brief 将访客临时项目与其加密缓存、明文素材目录绑定到同一生命周期。
+struct GuestResourceBundleOwner {
+    /// @brief 访客临时项目值对象。
+    ::MMM::Project project;
+    /// @brief 用户配置中的协作缓存根目录，仅用于删除边界验证。
+    std::filesystem::path cacheRoot;
+    /// @brief 本次联机会话独占的待清理目录。
+    std::filesystem::path sessionRoot;
+
+    /// @brief 最后一个项目引用释放时自动清理会话目录。
+    ~GuestResourceBundleOwner()
+    {
+        removeOwnedGuestSessionRoot(cacheRoot, sessionRoot);
+    }
+};
 }  // namespace
 
 class CollaborationResourceSync::Impl
@@ -571,6 +587,13 @@ public:
     {
         stopWorker();
         clearHostSnapshot();
+        {
+            std::lock_guard eventLock(m_eventMutex);
+            m_events.clear();
+        }
+        clearGuestSession();
+        Detail::clearCollaborationResourceKey(m_hostResourceKey);
+        Detail::clearCollaborationResourceKey(m_guestResourceKey);
     }
 
     /// @brief 重启后台线程并清空全部状态。
@@ -586,6 +609,11 @@ public:
             std::lock_guard eventLock(m_eventMutex);
             m_events.clear();
         }
+        clearGuestSession();
+        Detail::clearCollaborationResourceKey(m_hostResourceKey);
+        Detail::clearCollaborationResourceKey(m_guestResourceKey);
+        m_hostResourceKeyReady  = false;
+        m_guestResourceKeyReady = false;
         {
             std::lock_guard progressLock(m_progressMutex);
             m_progress = {};
@@ -598,6 +626,7 @@ public:
         m_guestCurrentFile = 0;
         m_guestOffset      = 0;
         m_cacheRoot.clear();
+        m_transferSuffix = makeTransferSuffix();
         startWorker();
     }
 
@@ -738,9 +767,26 @@ private:
         m_hostSnapshotRoot.clear();
     }
 
+    /// @brief 清理尚未发布的访客目录；已发布目录由项目共享生命周期接管。
+    void clearGuestSession()
+    {
+        if ( !m_guestBundlePublished ) {
+            removeOwnedGuestSessionRoot(m_cacheRoot, m_guestSessionRoot);
+        }
+        m_guestBundlePublished = false;
+        m_guestSessionRoot.clear();
+        m_guestEncryptedRoot.clear();
+        m_guestRoot.clear();
+    }
+
     /// @brief 准备房主清单并计算全部文件摘要。
     void prepareHost(HostPreparation preparation, std::stop_token stopToken)
     {
+        if ( !Detail::generateCollaborationResourceKey(m_hostResourceKey) ) {
+            fail("host_resource_key_generation_failed");
+            return;
+        }
+        m_hostResourceKeyReady = true;
         std::vector<HostFile>                        hostFiles;
         std::unordered_map<std::string, std::size_t> sourceIndexes;
         std::unordered_map<std::string, std::string> pathRemap;
@@ -805,10 +851,13 @@ private:
             });
             const auto snapshotPath =
                 m_hostSnapshotRoot /
-                (std::to_string(hostFiles.size()) + safeExtension(sourcePath));
-            const auto digest =
-                snapshotFile(sourcePath, snapshotPath, stopToken);
-            if ( !digest || !isSha256(digest->sha256) ) return std::nullopt;
+                (std::to_string(hostFiles.size()) + ".mmrsc");
+            const auto digest = Detail::encryptCollaborationResourceFile(
+                sourcePath, snapshotPath, m_hostResourceKey, stopToken);
+            if ( !digest || digest->size > MAX_RESOURCE_FILE_BYTES ||
+                 !isSha256(digest->sha256) ) {
+                return std::nullopt;
+            }
             const std::string cachePath =
                 "files/" + digest->sha256 + safeExtension(sourcePath);
             sourceIndexes.emplace(sourceKey, hostFiles.size());
@@ -919,17 +968,41 @@ private:
             fail("invalid_resource_manifest");
             return;
         }
+        if ( !m_guestSessionRoot.empty() ) {
+            clearGuestSession();
+            Detail::clearCollaborationResourceKey(m_guestResourceKey);
+            m_guestResourceKeyReady = false;
+            m_transferSuffix        = makeTransferSuffix();
+        }
         m_guestManifest    = std::move(decoded.value());
         m_hostGeneration   = manifestMessage.generation;
-        m_guestRoot        = m_cacheRoot;
         m_guestCurrentFile = 0;
         m_guestOffset      = 0;
+        if ( !m_guestResourceKeyReady &&
+             !Detail::generateCollaborationResourceKey(m_guestResourceKey) ) {
+            fail("guest_resource_key_generation_failed");
+            return;
+        }
+        m_guestResourceKeyReady = true;
+        if ( m_guestSessionRoot.empty() ) {
+            m_guestSessionRoot = m_cacheRoot / ("session-" + m_transferSuffix);
+            m_guestEncryptedRoot = m_guestSessionRoot / "encrypted";
+            m_guestRoot          = m_guestSessionRoot / "materialized";
+        }
         std::error_code createError;
-        std::filesystem::create_directories(m_guestRoot / "files", createError);
+        std::filesystem::create_directories(m_guestEncryptedRoot / "files",
+                                            createError);
+        if ( !createError ) {
+            std::filesystem::create_directories(m_guestRoot / "files",
+                                                createError);
+        }
         if ( createError ) {
             fail("resource_cache_create_failed");
             return;
         }
+        restrictGuestSessionPermissions(m_guestSessionRoot);
+        restrictGuestSessionPermissions(m_guestEncryptedRoot);
+        restrictGuestSessionPermissions(m_guestRoot);
 
         setProgress([&](auto& progress) {
             progress       = {};
@@ -958,10 +1031,14 @@ private:
                 continue;
             }
             if ( file.size == 0 ) {
-                std::ofstream empty(finalPath,
-                                    std::ios::binary | std::ios::trunc);
-                empty.close();
-                if ( sha256File(finalPath, stopToken) != file.sha256 ) {
+                const auto encryptedPath =
+                    m_guestEncryptedRoot /
+                    Config::utf8ToPath(file.cachePath + ".mmrsc");
+                if ( !Detail::initializeCollaborationResourceFile(encryptedPath,
+                                                                  0U) ||
+                     !Detail::materializeCollaborationResourceFile(
+                         encryptedPath, finalPath, m_guestResourceKey, 0U) ||
+                     sha256File(finalPath, stopToken) != file.sha256 ) {
                     if ( stopToken.stop_requested() ) return;
                     fail("empty_resource_verify_failed");
                     return;
@@ -990,7 +1067,8 @@ private:
     /// @brief 从房主文件读取并发布一个分块。
     void processRequest(PeerId peerId, const ResourceRequest& request)
     {
-        if ( request.generation != m_hostGeneration ||
+        if ( !m_hostResourceKeyReady ||
+             request.generation != m_hostGeneration ||
              request.resourceIndex >= m_hostFiles.size() ||
              request.requestedBytes == 0 ||
              request.requestedBytes > RESOURCE_CHUNK_BYTES ) {
@@ -1005,17 +1083,17 @@ private:
         const auto remaining   = file.manifest.size - request.offset;
         const auto bytesToRead = static_cast<std::size_t>(
             std::min<std::uint64_t>(remaining, request.requestedBytes));
-        ByteBuffer    bytes(bytesToRead);
-        std::ifstream input(file.sourcePath, std::ios::binary);
-        if ( !input ) {
-            fail("host_resource_open_failed");
+        if ( request.offset % RESOURCE_CHUNK_BYTES != 0 ||
+             request.requestedBytes != RESOURCE_CHUNK_BYTES ) {
+            fail("invalid_resource_request_alignment");
             return;
         }
-        input.seekg(static_cast<std::streamoff>(request.offset), std::ios::beg);
-        input.read(reinterpret_cast<char*>(bytes.data()),
-                   static_cast<std::streamsize>(bytes.size()));
-        if ( input.gcount() != static_cast<std::streamsize>(bytes.size()) ) {
-            fail("host_resource_read_failed");
+        auto bytes = Detail::readCollaborationResourceBlock(file.sourcePath,
+                                                            m_hostResourceKey,
+                                                            file.manifest.size,
+                                                            request.offset);
+        if ( !bytes || bytes->size() != bytesToRead ) {
+            fail("host_resource_decrypt_failed");
             return;
         }
         CollaborationResourceSyncEvent event;
@@ -1024,7 +1102,7 @@ private:
         event.message = ResourceChunk{ request.generation,
                                        request.resourceIndex,
                                        request.offset,
-                                       std::move(bytes) };
+                                       std::move(*bytes) };
         pushEvent(std::move(event));
     }
 
@@ -1045,25 +1123,28 @@ private:
             return;
         }
         const auto& file = m_guestManifest->files[expectedIndex];
-        if ( chunk.payload.size() > file.size - m_guestOffset ) {
+        const auto  expectedBytes =
+            static_cast<std::size_t>(std::min<std::uint64_t>(
+                RESOURCE_CHUNK_BYTES, file.size - m_guestOffset));
+        if ( chunk.payload.size() != expectedBytes ||
+             m_guestOffset % RESOURCE_CHUNK_BYTES != 0 ) {
             fail("resource_chunk_overflow");
             return;
         }
         const auto finalPath = m_guestRoot / Config::utf8ToPath(file.cachePath);
-        auto       partPath  = finalPath;
+        const auto encryptedPath =
+            m_guestEncryptedRoot /
+            Config::utf8ToPath(file.cachePath + ".mmrsc");
+        auto partPath = encryptedPath;
         partPath += ".part-" + m_transferSuffix;
-        const auto mode =
-            std::ios::binary | std::ios::out |
-            (m_guestOffset == 0 ? std::ios::trunc : std::ios::app);
-        std::ofstream output(partPath, mode);
-        if ( !output ) {
-            fail("resource_cache_write_open_failed");
-            return;
-        }
-        output.write(reinterpret_cast<const char*>(chunk.payload.data()),
-                     static_cast<std::streamsize>(chunk.payload.size()));
-        output.close();
-        if ( !output ) {
+        if ( (m_guestOffset == 0 &&
+              !Detail::initializeCollaborationResourceFile(partPath,
+                                                           file.size)) ||
+             !Detail::appendCollaborationResourceBlock(partPath,
+                                                       m_guestResourceKey,
+                                                       file.size,
+                                                       m_guestOffset,
+                                                       chunk.payload) ) {
             fail("resource_cache_write_failed");
             return;
         }
@@ -1081,21 +1162,22 @@ private:
         setProgress([](auto& progress) {
             progress.phase = CollaborationResourceSyncPhase::Verifying;
         });
-        std::error_code sizeError;
-        const auto partSize = std::filesystem::file_size(partPath, sizeError);
-        if ( sizeError || partSize != file.size ||
-             sha256File(partPath, stopToken) != file.sha256 ) {
+        if ( !Detail::materializeCollaborationResourceFile(
+                 partPath, finalPath, m_guestResourceKey, file.size) ||
+             sha256File(finalPath, stopToken) != file.sha256 ) {
             if ( stopToken.stop_requested() ) return;
             std::error_code removeError;
             std::filesystem::remove(partPath, removeError);
+            std::filesystem::remove(finalPath, removeError);
             fail("resource_sha256_mismatch");
             return;
         }
         std::error_code removeError;
-        std::filesystem::remove(finalPath, removeError);
+        std::filesystem::remove(encryptedPath, removeError);
         std::error_code renameError;
-        std::filesystem::rename(partPath, finalPath, renameError);
+        std::filesystem::rename(partPath, encryptedPath, renameError);
         if ( renameError ) {
+            std::filesystem::remove(finalPath, removeError);
             fail("resource_cache_commit_failed");
             return;
         }
@@ -1132,10 +1214,14 @@ private:
     /// @brief 发布已经完整校验的访客项目资源。
     void finishGuestBundle(std::string detail)
     {
-        auto project                  = std::make_shared<::MMM::Project>();
-        project->m_projectRoot        = m_guestRoot;
-        project->m_audioResources     = m_guestManifest->audioResources;
-        project->m_isTemporaryProject = true;
+        auto owner         = std::make_shared<GuestResourceBundleOwner>();
+        owner->cacheRoot   = m_cacheRoot;
+        owner->sessionRoot = m_guestSessionRoot;
+        owner->project.m_projectRoot        = m_guestRoot;
+        owner->project.m_audioResources     = m_guestManifest->audioResources;
+        owner->project.m_isTemporaryProject = true;
+        std::shared_ptr<::MMM::Project> project(owner, &owner->project);
+        m_guestBundlePublished = true;
         setProgress([&](auto& progress) {
             progress.phase          = CollaborationResourceSyncPhase::Ready;
             progress.completedFiles = progress.totalFiles;
@@ -1162,14 +1248,30 @@ private:
 
     std::vector<HostFile> m_hostFiles;
     std::uint64_t         m_hostGeneration = 0;
-    /// @brief 房主清单对应的不可变文件快照根目录。
-    std::filesystem::path          m_hostSnapshotRoot;
+    /// @brief 房主清单对应的认证加密不可变快照根目录。
+    std::filesystem::path m_hostSnapshotRoot;
+    /// @brief 房主加密快照的进程内会话密钥。
+    Detail::CollaborationResourceKey m_hostResourceKey{};
+    /// @brief 房主会话密钥是否已成功生成。
+    bool m_hostResourceKeyReady{ false };
+    /// @brief 用户配置中的协作缓存根目录。
     std::filesystem::path          m_cacheRoot;
     std::optional<DecodedManifest> m_guestManifest;
-    std::filesystem::path          m_guestRoot;
-    std::vector<std::size_t>       m_guestMissingFiles;
-    std::size_t                    m_guestCurrentFile = 0;
-    std::uint64_t                  m_guestOffset      = 0;
+    /// @brief 本次访客联机独占、断开后自动删除的目录。
+    std::filesystem::path m_guestSessionRoot;
+    /// @brief 访客认证加密容器根目录。
+    std::filesystem::path m_guestEncryptedRoot;
+    /// @brief 仅在会话活跃期间供解码器读取的临时明文素材根目录。
+    std::filesystem::path m_guestRoot;
+    /// @brief 访客加密缓存的进程内会话密钥。
+    Detail::CollaborationResourceKey m_guestResourceKey{};
+    /// @brief 访客会话密钥是否已成功生成。
+    bool m_guestResourceKeyReady{ false };
+    /// @brief 访客项目是否已接管目录清理生命周期。
+    bool                     m_guestBundlePublished{ false };
+    std::vector<std::size_t> m_guestMissingFiles;
+    std::size_t              m_guestCurrentFile = 0;
+    std::uint64_t            m_guestOffset      = 0;
     /// @brief 本同步器独占的临时文件后缀，防止同机客户端互相截断。
     std::string m_transferSuffix;
 };

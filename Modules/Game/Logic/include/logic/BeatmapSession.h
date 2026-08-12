@@ -50,6 +50,16 @@ public:
     /// @return 离线只读时返回 true。
     [[nodiscard]] bool isCollaborationOfflineReadOnly() const;
 
+    /// @brief 设置谱面剪贴板是否限制在当前协作 Session 内。
+    /// @param isolated 加入协作房间时为 true，退出房间时为 false。
+    /// @warning UI/逻辑跨线程低频调用；原子状态用于在系统剪贴板导入前即时
+    /// 拦截，具体范围切换仍由逻辑命令按序完成。
+    void setCollaborationClipboardIsolated(bool isolated);
+
+    /// @brief 查询当前会话是否启用了协作剪贴板隔离。
+    /// @return 禁止系统剪贴板交换时返回 true。
+    [[nodiscard]] bool isCollaborationClipboardIsolated() const;
+
     /// @brief 设置当前协作身份可修改的谱面数据类别。
     /// @param allowedFlags 房主下发权限映射得到的类别位；离线会话传 All。
     /// @warning UI/逻辑跨线程低频调用；命令入队热路径读取单个原子字节，权限
@@ -202,6 +212,7 @@ private:
     void handleCommand(const CmdLoadBeatmap& cmd);
     void handleCommand(const CmdSetCollaborationResources& cmd);
     void handleCommand(const CmdSetCollaborationOfflineReadOnly& cmd);
+    void handleCommand(const CmdSetCollaborationClipboardIsolation& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
@@ -235,6 +246,15 @@ private:
     /// @warning UI 线程写、所有命令生产线程读；只在协作连接状态变化时写入，
     /// 入队热路径使用 acquire 读取以确保及时拦截编辑命令。
     std::atomic_bool m_collaborationOfflineReadOnly{ false };
+
+    /// @brief 系统剪贴板桥接读取的协作隔离门闩。
+    /// @warning UI 线程低频写、UI 剪贴板路径读；使用 acquire/release 保证房间
+    /// 状态切换后不再导入系统剪贴板。
+    std::atomic_bool m_collaborationClipboardIsolated{ false };
+
+    /// @brief 最近分配给该 Session 的协作剪贴板范围标识。
+    /// @warning UI 线程仅在协作绑定切换时更新，逻辑线程通过排队命令接收副本。
+    std::atomic_uint64_t m_collaborationClipboardScopeId{ 0 };
 
     /// @brief 当前协作身份允许修改的谱面类别位。
     /// @warning UI 线程低频写、所有命令生产线程和逻辑线程读；使用单字节原子

@@ -178,14 +178,17 @@ public:
     void setTimelineClipboard(std::vector<TimelineClipboardItem> items,
                               const SessionContext* sourceContext, bool isCut);
 
-    /// @brief 获取编辑器级剪贴板副本。
-    std::vector<ClipboardItem> getClipboard() const;
+    /// @brief 获取目标会话可访问的编辑器级剪贴板副本。
+    std::vector<ClipboardItem> getClipboard(
+        const SessionContext* targetContext) const;
 
-    /// @brief 获取编辑器级自动采样剪贴板副本。
-    std::vector<SampleClipboardItem> getSampleClipboard() const;
+    /// @brief 获取目标会话可访问的编辑器级自动采样剪贴板副本。
+    std::vector<SampleClipboardItem> getSampleClipboard(
+        const SessionContext* targetContext) const;
 
-    /// @brief 获取编辑器级 Timeline 剪贴板副本。
-    std::vector<TimelineClipboardItem> getTimelineClipboard() const;
+    /// @brief 获取目标会话可访问的编辑器级 Timeline 剪贴板副本。
+    std::vector<TimelineClipboardItem> getTimelineClipboard(
+        const SessionContext* targetContext) const;
 
     /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
     bool isClipboardCutFrom(const SessionContext* context) const;
@@ -204,6 +207,10 @@ public:
     /// @param text 待解析的系统剪贴板文本。
     /// @return 文本属于 MMM 剪贴板载荷时返回 true。
     bool importSystemClipboardText(std::string_view text);
+
+    /// @brief 清除由指定会话写入的编辑器级剪贴板内容。
+    /// @param context 即将退出协作隔离范围的会话上下文。
+    void clearClipboardForContext(const SessionContext* context);
 
     // ========== 多 Session 管理 API ==========
 

@@ -2,8 +2,10 @@
 add_library(
   NetworkCollaboration STATIC
   src/BeatmapDocumentCodec.cpp
+  src/CollaborationBuildFingerprint.cpp
   src/CollaborationPeer.cpp
   src/CollaborationDirectoryClient.cpp
+  src/CollaborationResourceCipher.cpp
   src/CollaborationResourceSync.cpp
   src/CollaborationProtocol.cpp
   src/CollaborationRoom.cpp
@@ -18,10 +20,12 @@ target_link_libraries(
   NetworkCollaboration
   PRIVATE 3rd_concurrentqueue
           3rd_libdatachannel
+          3rd_mbedtls
           3rd_nlohmann_json
           3rd_miniz
           Config
           Log
+          Network
           Runtime)
 
 # RTC 诊断测试覆盖配置持久化以及 TURN 长期凭据脱敏。
@@ -56,6 +60,8 @@ add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
 # 资源状态机测试覆盖清单完整性、分块重组、缓存复用和单文件增量更新。
 mmm_add_test_executable(Collaboration CollaborationResourceSyncTest
                         tests/CollaborationResourceSyncTest.cpp)
+target_include_directories(CollaborationResourceSyncTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(CollaborationResourceSyncTest
                       PRIVATE NetworkCollaboration 3rd_nlohmann_json Runtime)
 add_test(NAME CollaborationResourceSyncTest

@@ -45,6 +45,7 @@ CollaborationLogWindow::CollaborationLogWindow(
                             m_room->state() ==
                                 Network::Collaboration::CollaborationRoomState::
                                     Connected));
+                    session->setCollaborationClipboardIsolated(true);
                     const auto allowedFlags =
                         m_room->localAllowedMutationFlags();
                     session->setCollaborationAllowedMutationFlags(allowedFlags);
@@ -87,10 +88,14 @@ CollaborationLogWindow::~CollaborationLogWindow()
 {
     if ( auto session = m_boundSession.lock() ) {
         session->setMutationObserver(nullptr);
+        session->setCollaborationClipboardIsolated(false);
         session->setCollaborationAllowedMutationFlags(
             ::MMM::BeatmapMutationFlags::All);
         if ( m_boundSessionIsGuest ) {
             session->setCollaborationOfflineReadOnly(true);
+            session->pushCommand(Logic::LogicCommand{
+                Logic::CmdSetCollaborationResources{},
+            });
         }
     }
     if ( m_guestProjectGateHeld ) {
@@ -168,8 +173,12 @@ void CollaborationLogWindow::updateSessionBinding()
     if ( !m_room->isActive() ) {
         if ( bound ) {
             bound->setMutationObserver(nullptr);
+            bound->setCollaborationClipboardIsolated(false);
             if ( m_boundSessionIsGuest ) {
                 bound->setCollaborationOfflineReadOnly(true);
+                bound->pushCommand(Logic::LogicCommand{
+                    Logic::CmdSetCollaborationResources{},
+                });
             }
         }
         m_boundSession.reset();
@@ -203,6 +212,7 @@ void CollaborationLogWindow::updateSessionBinding()
     auto active = Logic::EditorEngine::instance().getActiveNonLogoSession();
     if ( !active ) return;
     active->setCollaborationOfflineReadOnly(false);
+    active->setCollaborationClipboardIsolated(true);
     active->setCollaborationAllowedMutationFlags(
         ::MMM::BeatmapMutationFlags::All);
     m_lastAppliedPermissionFlags =

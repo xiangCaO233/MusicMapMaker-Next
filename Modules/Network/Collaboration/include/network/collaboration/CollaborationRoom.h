@@ -90,6 +90,10 @@ struct CollaborationHostRoomConfig {
     std::string roomName;
     /// @brief 中心服务器地址、信令端口与 TLS 配置。
     CollaborationServerEndpoint endpoint;
+    /// @brief 是否拒绝主程序二进制 SHA-256 与房主不同的访客。
+    bool requireMatchingBuildFingerprint{ true };
+    /// @brief 可选的预计算构建指纹；为空时读取当前主程序，主要供嵌入与测试。
+    std::string buildFingerprint;
 };
 
 /// @brief 访客加入房间所需的产品层参数。
@@ -106,6 +110,8 @@ struct CollaborationJoinRoomConfig {
     CollaborationServerEndpoint endpoint;
     /// @brief 访客内容寻址资源缓存根目录。
     std::filesystem::path resourceCacheRoot;
+    /// @brief 可选的预计算构建指纹；为空时读取当前主程序，主要供嵌入与测试。
+    std::string buildFingerprint;
 };
 
 /// @brief 等待房主决定的访客加入请求。
@@ -114,6 +120,8 @@ struct CollaborationPendingJoinRequest {
     std::string requestId;
     /// @brief 访客提交并经过规范化的 Creator 展示身份。
     std::string creator;
+    /// @brief 访客主程序二进制的 SHA-256 构建指纹。
+    std::string buildFingerprint;
 };
 
 /// @brief 协调 WebRTC 传输、房主权威 Peer 与实时协作日志。
@@ -388,6 +396,10 @@ private:
     ParticipantId m_participantId;
     /// @brief 当前加入房间流程生成且不会复用的操作会话标识。
     OperationSessionId m_operationSessionId;
+    /// @brief 当前主程序二进制的 SHA-256 构建指纹。
+    std::string m_buildFingerprint;
+    /// @brief 房主是否要求访客构建指纹与自己完全一致。
+    bool m_requireMatchingBuildFingerprint{ true };
     /// @brief 最近错误。
     std::string m_lastError;
     /// @brief 访客取得 PeerId 前暂存的传输所有权。

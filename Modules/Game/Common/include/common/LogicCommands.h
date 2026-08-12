@@ -678,6 +678,15 @@ struct CmdSetCollaborationOfflineReadOnly {
     bool readOnly{ false };
 };
 
+/// @brief 切换协作会话的进程内剪贴板隔离范围。
+struct CmdSetCollaborationClipboardIsolation {
+    /// @brief 为 true 时禁止与系统剪贴板及其他 Session 交换谱面内容。
+    bool isolated{ false };
+
+    /// @brief 本次协作绑定的唯一范围标识；非隔离状态为零。
+    std::uint64_t scopeId{ 0 };
+};
+
 /**
  * @brief 从模板创建谱面时可复制的数据类别。
  */
@@ -800,10 +809,11 @@ using LogicCommand = std::variant<
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
     CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 
@@ -844,7 +854,8 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdScroll> ||
                 std::is_same_v<T, CmdPanCanvas> ||
                 std::is_same_v<T, CmdSetCollaborationResources> ||
-                std::is_same_v<T, CmdSetCollaborationOfflineReadOnly>;
+                std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
+                std::is_same_v<T, CmdSetCollaborationClipboardIsolation>;
             return !readOnlyCommand;
         },
         command);

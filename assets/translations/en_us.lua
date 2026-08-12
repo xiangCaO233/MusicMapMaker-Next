@@ -677,6 +677,8 @@ return {
 	["ui.collaboration.host_desc"] = "Publish the current beatmap to the public directory. Collaboration data travels over WebRTC P2P connections between participants.",
 	["ui.collaboration.project_required"] = "Open the beatmap project you want to share before hosting a room.",
 	["ui.collaboration.room_name_hint"] = "Public room name",
+	["ui.collaboration.require_matching_build"] = "Require Matching Client Build",
+	["ui.collaboration.require_matching_build_desc"] = "Compare the client executable SHA-256 and reject mismatches before they enter. This is a version gate, not remote attestation.",
 	["ui.collaboration.start_room"] = "Start Collaboration Room",
 	["ui.collaboration.online_rooms"] = "Online Rooms",
 	["ui.collaboration.online"] = "Online",

@@ -1,5 +1,8 @@
 #include "logic/EditorClipboardProtocol.h"
 
+#include "logic/EditorClipboard.h"
+#include "logic/session/context/SessionContext.h"
+
 #include "log/colorful-log.h"
 #include <cmath>
 #include <glm/glm.hpp>
@@ -411,6 +414,47 @@ bool testPlainTextIgnored()
     return true;
 }
 
+/// @brief 验证协作剪贴板不会导出到系统或跨 Session 泄漏。
+bool testCollaborationClipboardIsolation()
+{
+    MMM::Logic::EditorClipboard clipboard;
+    MMM::Logic::SessionContext  localSource;
+    MMM::Logic::SessionContext  localTarget;
+    ClipboardItem               item;
+    item.note.m_timestamp = 12.5;
+
+    clipboard.set({ item }, &localSource, false);
+    if ( clipboard.get(&localTarget).size() != 1U ||
+         !clipboard.consumePendingSystemText() ) {
+        XERROR("Local clipboard no longer crosses ordinary sessions");
+        return false;
+    }
+
+    MMM::Logic::SessionContext collaborationSource;
+    collaborationSource.collaborationClipboardIsolated = true;
+    collaborationSource.collaborationClipboardScopeId  = 41U;
+    MMM::Logic::SessionContext otherCollaborationSession;
+    otherCollaborationSession.collaborationClipboardIsolated = true;
+    otherCollaborationSession.collaborationClipboardScopeId  = 41U;
+    clipboard.set({ item }, &collaborationSource, true);
+    if ( clipboard.consumePendingSystemText() ||
+         clipboard.get(&collaborationSource).size() != 1U ||
+         !clipboard.get(&localTarget).empty() ||
+         !clipboard.get(&otherCollaborationSession).empty() ||
+         !clipboard.isCutFrom(&collaborationSource) ||
+         clipboard.getCrossSessionCutSource(&localTarget) ) {
+        XERROR("Collaboration clipboard escaped its source session");
+        return false;
+    }
+
+    clipboard.clearForContext(&collaborationSource);
+    if ( !clipboard.get(&collaborationSource).empty() ) {
+        XERROR("Collaboration clipboard survived session cleanup");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main()
@@ -422,5 +466,6 @@ int main()
     if ( !testOutOfRangeSampleBindingVolumeRejected() ) return 1;
     if ( !testTimelineRoundTrip() ) return 1;
     if ( !testPlainTextIgnored() ) return 1;
+    if ( !testCollaborationClipboardIsolation() ) return 1;
     return 0;
 }

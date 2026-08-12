@@ -1,5 +1,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 
+#include "network/collaboration/CollaborationBuildFingerprint.h"
+
 #include "config/CreatorIdentity.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
@@ -166,8 +168,12 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     config.creator = Config::normalizeCreatorIdentity(config.creator);
     config.participantId =
         Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.buildFingerprint.empty() ) {
+        config.buildFingerprint = collaborationBuildFingerprint();
+    }
     if ( config.creator.empty() || config.participantId.empty() ||
          config.roomName.empty() ||
+         !isValidCollaborationBuildFingerprint(config.buildFingerprint) ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_host_configuration");
         return false;
@@ -176,12 +182,15 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
 
     auto             transport = std::make_unique<WebRtcTransport>();
     WebRtcHostConfig transportConfig;
-    transportConfig.endpoint      = config.endpoint;
-    transportConfig.roomName      = config.roomName;
-    transportConfig.creator       = config.creator;
-    transportConfig.participantId = config.participantId;
-    transportConfig.sessionId     = Config::makeCollaborationStableId();
-    transportConfig.hostId        = DEFAULT_HOST_ID;
+    transportConfig.endpoint         = config.endpoint;
+    transportConfig.roomName         = config.roomName;
+    transportConfig.creator          = config.creator;
+    transportConfig.participantId    = config.participantId;
+    transportConfig.sessionId        = Config::makeCollaborationStableId();
+    transportConfig.hostId           = DEFAULT_HOST_ID;
+    transportConfig.buildFingerprint = config.buildFingerprint;
+    transportConfig.requireMatchingBuildFingerprint =
+        config.requireMatchingBuildFingerprint;
     if ( !transport->startHost(transportConfig) ) {
         fail("host_signaling_start_failed");
         return false;
@@ -190,11 +199,13 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_state  = CollaborationRoomState::Hosting;
     m_isHost = true;
     m_roomId.clear();
-    m_roomName           = std::move(config.roomName);
-    m_serverEndpoint     = std::move(config.endpoint);
-    m_creator            = std::move(config.creator);
-    m_participantId      = std::move(config.participantId);
-    m_operationSessionId = std::move(transportConfig.sessionId);
+    m_roomName                        = std::move(config.roomName);
+    m_serverEndpoint                  = std::move(config.endpoint);
+    m_creator                         = std::move(config.creator);
+    m_participantId                   = std::move(config.participantId);
+    m_operationSessionId              = std::move(transportConfig.sessionId);
+    m_buildFingerprint                = std::move(config.buildFingerprint);
+    m_requireMatchingBuildFingerprint = config.requireMatchingBuildFingerprint;
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -266,8 +277,12 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     config.creator = Config::normalizeCreatorIdentity(config.creator);
     config.participantId =
         Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.buildFingerprint.empty() ) {
+        config.buildFingerprint = collaborationBuildFingerprint();
+    }
     if ( config.creator.empty() || config.participantId.empty() ||
          config.roomId.empty() ||
+         !isValidCollaborationBuildFingerprint(config.buildFingerprint) ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_join_configuration");
         return false;
@@ -276,25 +291,28 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
 
     auto              transport = std::make_unique<WebRtcTransport>();
     WebRtcGuestConfig transportConfig;
-    transportConfig.endpoint      = config.endpoint;
-    transportConfig.roomId        = config.roomId;
-    transportConfig.creator       = config.creator;
-    transportConfig.participantId = config.participantId;
-    transportConfig.sessionId     = Config::makeCollaborationStableId();
-    transportConfig.hostId        = DEFAULT_HOST_ID;
+    transportConfig.endpoint         = config.endpoint;
+    transportConfig.roomId           = config.roomId;
+    transportConfig.creator          = config.creator;
+    transportConfig.participantId    = config.participantId;
+    transportConfig.sessionId        = Config::makeCollaborationStableId();
+    transportConfig.hostId           = DEFAULT_HOST_ID;
+    transportConfig.buildFingerprint = config.buildFingerprint;
     if ( !transport->connectToHost(transportConfig) ) {
         fail("signaling_connect_start_failed");
         return false;
     }
 
-    m_state              = CollaborationRoomState::Joining;
-    m_isHost             = false;
-    m_roomId             = std::move(config.roomId);
-    m_roomName           = std::move(config.roomName);
-    m_serverEndpoint     = std::move(config.endpoint);
-    m_creator            = std::move(config.creator);
-    m_participantId      = std::move(config.participantId);
-    m_operationSessionId = std::move(transportConfig.sessionId);
+    m_state                           = CollaborationRoomState::Joining;
+    m_isHost                          = false;
+    m_roomId                          = std::move(config.roomId);
+    m_roomName                        = std::move(config.roomName);
+    m_serverEndpoint                  = std::move(config.endpoint);
+    m_creator                         = std::move(config.creator);
+    m_participantId                   = std::move(config.participantId);
+    m_operationSessionId              = std::move(transportConfig.sessionId);
+    m_buildFingerprint                = std::move(config.buildFingerprint);
+    m_requireMatchingBuildFingerprint = true;
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
@@ -855,6 +873,16 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::JoinRequested:
         if ( m_isHost && !event.requestId.empty() ) {
+            if ( m_requireMatchingBuildFingerprint &&
+                 event.buildFingerprint != m_buildFingerprint ) {
+                static_cast<void>(m_transport->rejectJoinRequest(
+                    event.requestId, "build_fingerprint_mismatch"));
+                appendLog(CollaborationLogEventType::Error,
+                          0,
+                          event.creator,
+                          "build_fingerprint_mismatch");
+                break;
+            }
             const bool known = std::any_of(
                 m_pendingJoinRequests.begin(),
                 m_pendingJoinRequests.end(),
@@ -863,7 +891,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                 });
             if ( !known ) {
                 m_pendingJoinRequests.push_back(
-                    { event.requestId, event.creator });
+                    { event.requestId, event.creator, event.buildFingerprint });
                 appendLog(CollaborationLogEventType::SignalingConnected,
                           0,
                           event.creator,

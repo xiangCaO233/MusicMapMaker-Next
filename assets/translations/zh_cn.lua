@@ -676,6 +676,8 @@ return {
 	["ui.collaboration.host_desc"] = "把当前谱面发布到公网目录。协作数据通过参与者之间的 WebRTC P2P 连接传输。",
 	["ui.collaboration.project_required"] = "开启房间前请先打开要共享的谱面项目。",
 	["ui.collaboration.room_name_hint"] = "公开房间名称",
+	["ui.collaboration.require_matching_build"] = "仅允许相同构建的客户端",
+	["ui.collaboration.require_matching_build_desc"] = "校验客户端主程序 SHA-256；不一致时在进入房间前自动拒绝。此选项用于版本门禁，不等同于远程可信证明。",
 	["ui.collaboration.start_room"] = "开启协作房间",
 	["ui.collaboration.online_rooms"] = "在线房间",
 	["ui.collaboration.online"] = "在线",

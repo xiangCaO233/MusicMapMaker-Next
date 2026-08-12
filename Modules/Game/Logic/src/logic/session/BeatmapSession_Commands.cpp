@@ -1367,6 +1367,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdLoadBeatmap> ||
                     std::is_same_v<T, CmdSetCollaborationResources> ||
                     std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
+                    std::is_same_v<T, CmdSetCollaborationClipboardIsolation> ||
                     std::is_same_v<T, CmdSaveBeatmap> ||
                     std::is_same_v<T, CmdSaveBeatmapAs> ||
                     std::is_same_v<T, CmdPackBeatmap> ||
@@ -1595,9 +1596,47 @@ void BeatmapSession::handleCommand(
     m_ctx->eraserState.targetEntities.clear();
 }
 
+void BeatmapSession::handleCommand(
+    const CmdSetCollaborationClipboardIsolation& cmd)
+{
+    if ( !cmd.isolated ) {
+        EditorEngine::instance().clearClipboardForContext(m_ctx.get());
+        m_ctx->clipboard.clear();
+        m_ctx->sampleClipboard.clear();
+    }
+    m_ctx->collaborationClipboardIsolated = cmd.isolated;
+    m_ctx->collaborationClipboardScopeId  = cmd.isolated ? cmd.scopeId : 0U;
+}
+
 void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 {
-    if ( !cmd.project || !m_ctx->currentBeatmap ) return;
+    if ( !cmd.project ) {
+        if ( m_ctx->collaborationProject ) {
+            for ( const auto& resource :
+                  m_ctx->collaborationProject->m_audioResources ) {
+                if ( resource.m_type != ::MMM::AudioTrackType::Effect ) {
+                    continue;
+                }
+                Audio::AudioManager::instance().unloadSoundEffect(
+                    resource.m_id);
+            }
+        }
+        m_ctx->collaborationProject.reset();
+        m_ctx->collaborationPathRemap.clear();
+        m_ctx->isAudioTimelineDescriptorDirty           = true;
+        m_ctx->isAudioTimelineActivationPending         = true;
+        m_ctx->isAudioTimelineFingerprintPublishPending = true;
+        EditorEngine::instance().registerCurrentProjectEffectSoundEffects();
+
+        if ( m_ctx->currentBeatmap ) {
+            SessionUtils::updateBackgroundSize(
+                *m_ctx,
+                m_ctx->currentBeatmap->m_baseMapMetadata,
+                EditorEngine::instance().getCurrentProject());
+        }
+        return;
+    }
+    if ( !m_ctx->currentBeatmap ) return;
     m_ctx->collaborationProject                     = cmd.project;
     m_ctx->collaborationPathRemap                   = cmd.pathRemap;
     m_ctx->isAudioTimelineDescriptorDirty           = true;

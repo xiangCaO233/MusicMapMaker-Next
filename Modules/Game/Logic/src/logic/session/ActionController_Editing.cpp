@@ -1638,9 +1638,10 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
 /// @warning 低频编辑路径：用户触发粘贴时执行，可能批量创建实体。
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
-    auto noteClipboard     = EditorEngine::instance().getClipboard();
-    auto sampleClipboard   = EditorEngine::instance().getSampleClipboard();
-    auto timelineClipboard = EditorEngine::instance().getTimelineClipboard();
+    auto noteClipboard   = EditorEngine::instance().getClipboard(&m_ctx);
+    auto sampleClipboard = EditorEngine::instance().getSampleClipboard(&m_ctx);
+    auto timelineClipboard =
+        EditorEngine::instance().getTimelineClipboard(&m_ctx);
     if ( noteClipboard.empty() && sampleClipboard.empty() &&
          timelineClipboard.empty() ) {
         noteClipboard   = m_ctx.clipboard;

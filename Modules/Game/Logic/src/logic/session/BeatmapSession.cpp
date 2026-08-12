@@ -223,6 +223,25 @@ bool BeatmapSession::isCollaborationOfflineReadOnly() const
     return m_collaborationOfflineReadOnly.load(std::memory_order_acquire);
 }
 
+void BeatmapSession::setCollaborationClipboardIsolated(bool isolated)
+{
+    static std::atomic_uint64_t nextScopeId{ 1 };
+    const bool previous = m_collaborationClipboardIsolated.exchange(
+        isolated, std::memory_order_acq_rel);
+    if ( previous == isolated ) return;
+
+    const auto scopeId =
+        isolated ? nextScopeId.fetch_add(1, std::memory_order_relaxed) : 0U;
+    m_collaborationClipboardScopeId.store(scopeId, std::memory_order_release);
+    m_commandQueue.enqueue(LogicCommand(
+        CmdSetCollaborationClipboardIsolation{ isolated, scopeId }));
+}
+
+bool BeatmapSession::isCollaborationClipboardIsolated() const
+{
+    return m_collaborationClipboardIsolated.load(std::memory_order_acquire);
+}
+
 void BeatmapSession::setCollaborationAllowedMutationFlags(
     ::MMM::BeatmapMutationFlags allowedFlags)
 {
