@@ -87,6 +87,13 @@ MMM::Project makeProject()
             .m_filePath = "hard.mmm",
         },
     };
+    project.m_draftLaneGroups = {
+        MMM::ProjectDraftLaneGroup{
+            .m_mainAudioResourceId = "main",
+            .m_notePayload         = "draft-payload",
+            .m_runtimeRevision     = 17U,
+        },
+    };
     project.m_excludedAudioPaths = { "unused.wav" };
     return project;
 }
@@ -114,9 +121,10 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
 
     const auto       directory = root / ".mmm";
     const std::array expectedFiles{
-        "manifest.json",           "project.json",  "settings.json",
-        "audio_resources.json",    "beatmaps.json", "workspace.json",
-        "project_audio_tool.json",
+        "manifest.json",  "project.json",
+        "settings.json",  "audio_resources.json",
+        "beatmaps.json",  "draft_lanes.json",
+        "workspace.json", "project_audio_tool.json",
     };
     for ( const auto* filename : expectedFiles ) {
         if ( !check(std::filesystem::is_regular_file(directory / filename),
@@ -166,6 +174,16 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                  "audio resources should round trip") &&
            check(loaded.m_project.m_beatmaps.size() == 1,
                  "beatmaps should round trip") &&
+           check(loaded.m_project.m_draftLaneGroups.size() == 1,
+                 "draft lane groups should round trip") &&
+           check(loaded.m_project.m_draftLaneGroups.front()
+                             .m_mainAudioResourceId == "main" &&
+                     loaded.m_project.m_draftLaneGroups.front().m_notePayload ==
+                         "draft-payload",
+                 "draft lane group identity and payload should round trip") &&
+           check(loaded.m_project.m_draftLaneGroups.front().m_runtimeRevision ==
+                     0U,
+                 "draft lane runtime revision should not persist") &&
            check(
                loaded.m_project.m_settings.m_workspace.m_openBeatmaps.size() ==
                    1,
@@ -190,6 +208,28 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                               .m_width -
                           128.0F) < 1e-6F,
                  "custom block size should round trip");
+}
+
+/// @brief 验证早期分片项目缺少草稿文件时仍按空草稿组载入。
+bool testSplitWithoutDraftFile(const std::filesystem::path& root)
+{
+    MMM::Logic::ProjectStorage storage;
+    std::string                errorMessage;
+    if ( !storage.save(makeProject(), root, errorMessage) ) {
+        XERROR("Failed to prepare legacy split project: {}", errorMessage);
+        return false;
+    }
+
+    std::error_code filesystemError;
+    std::filesystem::remove(root / ".mmm" / "draft_lanes.json",
+                            filesystemError);
+    if ( filesystemError ) return false;
+
+    const auto loaded = storage.load(root);
+    return check(loaded.m_success,
+                 "split project without draft file should load") &&
+           check(loaded.m_project.m_draftLaneGroups.empty(),
+                 "missing draft file should produce an empty group list");
 }
 
 /// @brief 验证资源扫描不会把内部配置目录中的文件识别为谱面。
@@ -260,10 +300,12 @@ int main()
     const auto root = createTestRoot();
     if ( root.empty() ) return 1;
     const auto      fallbackRoot = root / "legacy";
+    const auto      oldSplitRoot = root / "old_split";
     std::error_code filesystemError;
     std::filesystem::create_directories(fallbackRoot, filesystemError);
 
     const bool success = !filesystemError && testSplitRoundTrip(root) &&
+                         testSplitWithoutDraftFile(oldSplitRoot) &&
                          testInternalDirectoryIsNotScanned(root) &&
                          testLegacyFallbackAndRemoval(fallbackRoot);
     std::filesystem::remove_all(root, filesystemError);

@@ -47,6 +47,34 @@ void markNotePruneDirty(SessionContext& ctx)
     ctx.isNoteStatsDirty = true;
 }
 
+/// @brief 标记一次 Note 动作实际涉及的正式谱面与项目草稿数据域。
+/// @return 动作是否涉及正式谱面物件。
+bool markNoteStorageDirty(SessionContext&                     ctx,
+                          const std::optional<NoteComponent>& before,
+                          const std::optional<NoteComponent>& after)
+{
+    const bool touchesDraft =
+        (before && before->m_isDraft) || (after && after->m_isDraft);
+    const bool touchesFormal =
+        (before && !before->m_isDraft) || (after && !after->m_isDraft);
+    ctx.m_needsDraftNotesSync = ctx.m_needsDraftNotesSync || touchesDraft;
+    ctx.m_needsNotesSync      = ctx.m_needsNotesSync || touchesFormal;
+    return touchesFormal;
+}
+
+/// @brief 标记批量 Note 动作实际涉及的数据域。
+/// @return 动作是否涉及正式谱面物件。
+bool markBatchNoteStorageDirty(
+    SessionContext& ctx, const std::vector<BatchNoteAction::Entry>& entries)
+{
+    bool touchesFormal = false;
+    for ( const auto& entry : entries ) {
+        touchesFormal = markNoteStorageDirty(ctx, entry.before, entry.after) ||
+                        touchesFormal;
+    }
+    return touchesFormal;
+}
+
 /// @brief 判断两个可选音符颜色是否相同。
 bool sameOptionalNoteColor(const std::optional<glm::vec4>& lhs,
                            const std::optional<glm::vec4>& rhs)
@@ -134,6 +162,8 @@ void applySelectiveNoteTransition(NoteComponent&       current,
                              equal);
     applyNoteFieldTransition(
         current.m_dtrack, expected.m_dtrack, replacement.m_dtrack, equal);
+    applyNoteFieldTransition(
+        current.m_isDraft, expected.m_isDraft, replacement.m_isDraft, equal);
     applyNoteFieldTransition(current.m_metadata.note_properties,
                              expected.m_metadata.note_properties,
                              replacement.m_metadata.note_properties,
@@ -398,8 +428,11 @@ void NoteAction::execute(SessionContext& ctx)
             XINFO("[Action] Delete Note: Time={:.3f}, Track={}",
                   m_before->m_timestamp,
                   m_before->m_trackIndex);
-            forgetChartObjectSelection(
-                ctx, ChartObjectKind::PlayerNote, m_entity);
+            forgetChartObjectSelection(ctx,
+                                       m_before->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
+                                       m_entity);
             reg.destroy(m_entity);
         }
     } else if ( m_type == Type::Update ) {
@@ -419,8 +452,9 @@ void NoteAction::execute(SessionContext& ctx)
                                      [&](NoteComponent& n) { n = *m_after; });
         }
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     if ( m_type == Type::Delete ) {
         markNotePruneDirty(ctx);
     } else {
@@ -434,8 +468,11 @@ void NoteAction::undo(SessionContext& ctx)
     XINFO("[Undo] NoteAction Type={}", static_cast<int>(m_type));
     if ( m_type == Type::Create ) {
         if ( isActionNoteEntity(reg, m_entity, *m_after) ) {
-            forgetChartObjectSelection(
-                ctx, ChartObjectKind::PlayerNote, m_entity);
+            forgetChartObjectSelection(ctx,
+                                       m_after->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
+                                       m_entity);
             reg.destroy(m_entity);
         }
     } else if ( m_type == Type::Delete ) {
@@ -452,8 +489,9 @@ void NoteAction::undo(SessionContext& ctx)
             });
         }
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     if ( m_type == Type::Create ) {
         markNotePruneDirty(ctx);
     } else {
@@ -475,8 +513,9 @@ void NoteAction::redo(SessionContext& ctx)
             applySelectiveNoteTransition(note, *m_before, *m_after);
         });
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     markNoteOrderDirty(ctx);
 }
 
@@ -526,20 +565,26 @@ void BatchNoteAction::execute(SessionContext& ctx)
             ensureNoteAuxiliaryComponents(reg, entry.entity);
             if ( entry.afterSelected ) {
                 setChartObjectSelected(ctx,
-                                       ChartObjectKind::PlayerNote,
+                                       entry.after->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
                                        entry.entity,
                                        *entry.afterSelected);
             }
         } else if ( entry.before.has_value() ) {
             if ( isActionNoteEntity(reg, entry.entity, *entry.before) ) {
-                forgetChartObjectSelection(
-                    ctx, ChartObjectKind::PlayerNote, entry.entity);
+                forgetChartObjectSelection(ctx,
+                                           entry.before->m_isDraft
+                                               ? ChartObjectKind::DraftNote
+                                               : ChartObjectKind::PlayerNote,
+                                           entry.entity);
                 reg.destroy(entry.entity);
             }
         }
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markBatchNoteStorageDirty(ctx, m_entries) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     bool needsOrderRebuild = false;
     bool needsPrune        = false;
     for ( const auto& entry : m_entries ) {
@@ -571,7 +616,9 @@ void BatchNoteAction::undo(SessionContext& ctx)
             }
             if ( entry.beforeSelected && reg.valid(entry.entity) ) {
                 setChartObjectSelected(ctx,
-                                       ChartObjectKind::PlayerNote,
+                                       entry.before->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
                                        entry.entity,
                                        *entry.beforeSelected);
             }
@@ -582,21 +629,27 @@ void BatchNoteAction::undo(SessionContext& ctx)
                 ensureNoteAuxiliaryComponents(reg, entry.entity);
                 if ( entry.beforeSelected ) {
                     setChartObjectSelected(ctx,
-                                           ChartObjectKind::PlayerNote,
+                                           entry.before->m_isDraft
+                                               ? ChartObjectKind::DraftNote
+                                               : ChartObjectKind::PlayerNote,
                                            entry.entity,
                                            *entry.beforeSelected);
                 }
             }
         } else if ( entry.after.has_value() ) {
             if ( isActionNoteEntity(reg, entry.entity, *entry.after) ) {
-                forgetChartObjectSelection(
-                    ctx, ChartObjectKind::PlayerNote, entry.entity);
+                forgetChartObjectSelection(ctx,
+                                           entry.after->m_isDraft
+                                               ? ChartObjectKind::DraftNote
+                                               : ChartObjectKind::PlayerNote,
+                                           entry.entity);
                 reg.destroy(entry.entity);
             }
         }
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markBatchNoteStorageDirty(ctx, m_entries) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     bool needsOrderRebuild = false;
     bool needsPrune        = false;
     for ( const auto& entry : m_entries ) {
@@ -627,7 +680,9 @@ void BatchNoteAction::redo(SessionContext& ctx)
                     });
                 if ( entry.afterSelected ) {
                     setChartObjectSelected(ctx,
-                                           ChartObjectKind::PlayerNote,
+                                           entry.after->m_isDraft
+                                               ? ChartObjectKind::DraftNote
+                                               : ChartObjectKind::PlayerNote,
                                            entry.entity,
                                            *entry.afterSelected);
                 }
@@ -639,20 +694,26 @@ void BatchNoteAction::redo(SessionContext& ctx)
                 ensureNoteAuxiliaryComponents(reg, entry.entity);
                 if ( entry.afterSelected ) {
                     setChartObjectSelected(ctx,
-                                           ChartObjectKind::PlayerNote,
+                                           entry.after->m_isDraft
+                                               ? ChartObjectKind::DraftNote
+                                               : ChartObjectKind::PlayerNote,
                                            entry.entity,
                                            *entry.afterSelected);
                 }
             }
         } else if ( entry.before &&
                     isActionNoteEntity(reg, entry.entity, *entry.before) ) {
-            forgetChartObjectSelection(
-                ctx, ChartObjectKind::PlayerNote, entry.entity);
+            forgetChartObjectSelection(ctx,
+                                       entry.before->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
+                                       entry.entity);
             reg.destroy(entry.entity);
         }
     }
-    ctx.m_needsNotesSync = true;
-    SessionUtils::markHitEventsDirty(ctx);
+    if ( markBatchNoteStorageDirty(ctx, m_entries) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+    }
     markNoteOrderDirty(ctx);
 }
 

@@ -47,14 +47,17 @@ void mirrorNoteComponent(NoteComponent& note, int trackCount)
 {
     if ( trackCount <= 0 ) return;
 
-    note.m_trackIndex = (trackCount - 1) - note.m_trackIndex;
+    const auto mirrorTrack = [trackCount, isDraft = note.m_isDraft](int track) {
+        return isDraft ? -trackCount - 1 - track : trackCount - 1 - track;
+    };
+    note.m_trackIndex = mirrorTrack(note.m_trackIndex);
     if ( note.m_type == ::MMM::NoteType::FLICK ) {
         note.m_dtrack = -note.m_dtrack;
     }
 
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         for ( auto& sub : note.m_subNotes ) {
-            sub.trackIndex = (trackCount - 1) - sub.trackIndex;
+            sub.trackIndex = mirrorTrack(sub.trackIndex);
             if ( sub.type == ::MMM::NoteType::FLICK ) {
                 sub.dtrack = -sub.dtrack;
             }
@@ -556,7 +559,7 @@ std::vector<NoteComponent> collectEditableNoteComponents(SessionContext& ctx)
     auto                       view = ctx.noteRegistry.view<NoteComponent>();
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
-        if ( note.m_isSubNote ) continue;
+        if ( note.m_isSubNote || note.m_isDraft ) continue;
         notes.push_back(note);
     }
 
@@ -775,7 +778,9 @@ void replaceNoteComponents(SessionContext&                   ctx,
     std::unordered_map<std::string, std::size_t> identityIndex;
     identityIndex.reserve(view.size());
     for ( const auto entity : view ) {
-        existing.push_back({ entity, view.get<const NoteComponent>(entity) });
+        const auto& component = view.get<const NoteComponent>(entity);
+        if ( component.m_isDraft ) continue;
+        existing.push_back({ entity, component });
         const auto& identity = existing.back().component.m_collaborationId;
         if ( !identity.empty() ) {
             identityIndex.try_emplace(identity, existing.size() - 1U);
@@ -880,6 +885,11 @@ void replaceNoteComponents(SessionContext&                   ctx,
 
     if ( preserveInteraction ) {
         std::erase_if(ctx.selectedNoteEntities, [&](entt::entity entity) {
+            if ( ctx.noteRegistry.valid(entity) &&
+                 ctx.noteRegistry.all_of<NoteComponent>(entity) &&
+                 ctx.noteRegistry.get<const NoteComponent>(entity).m_isDraft ) {
+                return false;
+            }
             return !retained.contains(entity) ||
                    !ctx.noteRegistry.valid(entity) ||
                    !ctx.noteRegistry.all_of<InteractionComponent>(entity) ||
@@ -1447,7 +1457,8 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     // 如果没有任何选中的，但有悬停的，也删除悬停的 (符合习惯)
     if ( entries.empty() && sampleEntries.empty() &&
          m_ctx.hoveredEntity != entt::null ) {
-        if ( m_ctx.hoveredObjectKind == ChartObjectKind::PlayerNote &&
+        if ( (m_ctx.hoveredObjectKind == ChartObjectKind::PlayerNote ||
+              m_ctx.hoveredObjectKind == ChartObjectKind::DraftNote) &&
              m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
              m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) &&
              SessionUtils::isNoteEditable(
@@ -1924,8 +1935,14 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             clearChartObjectSelection(m_ctx);
 
             for ( auto entity : pastedNoteEntities ) {
-                setChartObjectSelected(
-                    m_ctx, ChartObjectKind::PlayerNote, entity, true);
+                const auto* note =
+                    m_ctx.noteRegistry.try_get<const NoteComponent>(entity);
+                setChartObjectSelected(m_ctx,
+                                       note && note->m_isDraft
+                                           ? ChartObjectKind::DraftNote
+                                           : ChartObjectKind::PlayerNote,
+                                       entity,
+                                       true);
             }
             for ( auto entity : pastedSampleEntities ) {
                 setChartObjectSelected(

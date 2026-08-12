@@ -99,12 +99,13 @@ std::optional<std::string> sampleMetadataValue(
 bool testNoteRoundTrip()
 {
     ClipboardItem item;
-    item.note.m_type       = MMM::NoteType::POLYLINE;
-    item.note.m_timestamp  = 12.5;
-    item.note.m_duration   = 1.25;
-    item.note.m_trackIndex = 2;
-    item.note.m_dtrack     = 1;
-    item.note.m_annotation = "整条折线\n待复核";
+    item.note.m_type            = MMM::NoteType::POLYLINE;
+    item.note.m_timestamp       = 12.5;
+    item.note.m_duration        = 1.25;
+    item.note.m_trackIndex      = 2;
+    item.note.m_dtrack          = 1;
+    item.note.m_collaborationId = "root%identity";
+    item.note.m_annotation      = "整条折线\n待复核";
     item.note.m_sampleBinding =
         MMM::AudioSampleBinding{ "main\tbound.wav", 0.35F };
     item.note.m_metadata
@@ -113,23 +114,25 @@ bool testNoteRoundTrip()
     item.note.m_customColors.tap = glm::vec4{ 0.1F, 0.2F, 0.3F, 1.0F };
 
     MMM::Logic::NoteComponent::SubNote hold;
-    hold.type          = MMM::NoteType::HOLD;
-    hold.timestamp     = 13.0;
-    hold.duration      = 0.75;
-    hold.trackIndex    = 3;
-    hold.dtrack        = 0;
-    hold.annotation    = "起段\t备注";
-    hold.sampleBinding = MMM::AudioSampleBinding{ "hold.wav", 0.45F };
+    hold.type            = MMM::NoteType::HOLD;
+    hold.timestamp       = 13.0;
+    hold.duration        = 0.75;
+    hold.trackIndex      = 3;
+    hold.dtrack          = 0;
+    hold.collaborationId = "hold-identity";
+    hold.annotation      = "起段\t备注";
+    hold.sampleBinding   = MMM::AudioSampleBinding{ "hold.wav", 0.45F };
     hold.metadata.note_properties[MMM::NoteMetadataType::OSU]["edge"] = "hold";
     hold.customColors.head = glm::vec4{ 0.4F, 0.5F, 0.6F, 1.0F };
 
     MMM::Logic::NoteComponent::SubNote flick;
-    flick.type          = MMM::NoteType::FLICK;
-    flick.timestamp     = 14.0;
-    flick.duration      = 0.0;
-    flick.trackIndex    = 5;
-    flick.dtrack        = -1;
-    flick.sampleBinding = MMM::AudioSampleBinding{ "flick.wav", 0.55F };
+    flick.type            = MMM::NoteType::FLICK;
+    flick.timestamp       = 14.0;
+    flick.duration        = 0.0;
+    flick.trackIndex      = 5;
+    flick.dtrack          = -1;
+    flick.collaborationId = "flick-identity";
+    flick.sampleBinding   = MMM::AudioSampleBinding{ "flick.wav", 0.55F };
     flick.metadata.note_properties[MMM::NoteMetadataType::MALODY]["sound"] =
         "snap";
     flick.customColors.flickArrow = glm::vec4{ 0.7F, 0.8F, 0.9F, 1.0F };
@@ -141,8 +144,22 @@ bool testNoteRoundTrip()
     item.subEndBeats      = { 25.5, 26.0 };
     item.hasBeatPositions = true;
 
-    const std::string text =
+    const auto publicText =
         MMM::Logic::EditorClipboardProtocol::serializeNotes({ item });
+    const auto publicParsed =
+        MMM::Logic::EditorClipboardProtocol::parse(publicText);
+    if ( !publicParsed || publicParsed->notes.size() != 1U ||
+         publicParsed->notes.front().note.m_subNotes.size() != 2U ||
+         !publicParsed->notes.front().note.m_collaborationId.empty() ||
+         !publicParsed->notes.front()
+              .note.m_subNotes.front()
+              .collaborationId.empty() ) {
+        XERROR("Public clipboard payload retained collaboration identities");
+        return false;
+    }
+
+    const std::string text =
+        MMM::Logic::EditorClipboardProtocol::serializeNotes({ item }, true);
     if ( !text.starts_with(MMM::Logic::EditorClipboardProtocol::MAGIC) ||
          text.find('{') != std::string::npos ||
          text.find("\"format\"") != std::string::npos ) {
@@ -150,7 +167,7 @@ bool testNoteRoundTrip()
         return false;
     }
 
-    auto parsed = MMM::Logic::EditorClipboardProtocol::parse(text);
+    auto parsed = MMM::Logic::EditorClipboardProtocol::parse(text, true);
     if ( !parsed || parsed->notes.size() != 1 || !parsed->samples.empty() ||
          !parsed->timelines.empty() ) {
         XERROR("Note clipboard protocol did not parse one note item");
@@ -162,6 +179,7 @@ bool testNoteRoundTrip()
     if ( note.m_type != MMM::NoteType::POLYLINE ||
          !near(note.m_timestamp, 12.5) || !near(note.m_duration, 1.25) ||
          note.m_trackIndex != 2 || note.m_dtrack != 1 ||
+         note.m_collaborationId != "root%identity" ||
          note.m_annotation != "整条折线\n待复核" ||
          !sameBinding(note.m_sampleBinding, item.note.m_sampleBinding) ||
          note.m_subNotes.size() != 2 ) {
@@ -180,6 +198,7 @@ bool testNoteRoundTrip()
     }
     if ( note.m_subNotes[0].type != MMM::NoteType::HOLD ||
          !near(note.m_subNotes[0].timestamp, 13.0) ||
+         note.m_subNotes[0].collaborationId != "hold-identity" ||
          note.m_subNotes[0].annotation != "起段\t备注" ||
          !sameBinding(note.m_subNotes[0].sampleBinding, hold.sampleBinding) ||
          !sameColor(note.m_subNotes[0].customColors.head,
@@ -189,6 +208,7 @@ bool testNoteRoundTrip()
     }
     if ( note.m_subNotes[1].type != MMM::NoteType::FLICK ||
          note.m_subNotes[1].dtrack != -1 ||
+         note.m_subNotes[1].collaborationId != "flick-identity" ||
          !sameBinding(note.m_subNotes[1].sampleBinding, flick.sampleBinding) ||
          !sameColor(note.m_subNotes[1].customColors.flickArrow,
                     flick.customColors.flickArrow) ) {
@@ -205,6 +225,22 @@ bool testNoteRoundTrip()
         return false;
     }
 
+    return true;
+}
+
+/// @brief 验证负轨道剪贴板物件会恢复为草稿域。
+bool testNegativeTrackRestoresDraftDomain()
+{
+    constexpr std::string_view payload =
+        "MMM_CLIPBOARD_V4\tN\n"
+        "N\tn\t1\t0\t-3\t0\t0\t-1\n";
+    const auto parsed = MMM::Logic::EditorClipboardProtocol::parse(payload);
+    if ( !parsed || parsed->notes.size() != 1 ||
+         !parsed->notes.front().note.m_isDraft ||
+         parsed->notes.front().note.m_trackIndex != -3 ) {
+        XERROR("Negative clipboard track did not restore the draft domain");
+        return false;
+    }
     return true;
 }
 
@@ -464,6 +500,7 @@ bool testCollaborationClipboardIsolation()
 int main()
 {
     if ( !testNoteRoundTrip() ) return 1;
+    if ( !testNegativeTrackRestoresDraftDomain() ) return 1;
     if ( !testMixedChartObjectRoundTrip() ) return 1;
     if ( !testLegacyV3Payload() ) return 1;
     if ( !testLegacyV2SampleBindingDefaultsVolume() ) return 1;

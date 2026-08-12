@@ -2,6 +2,7 @@
 
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/session/EditorAction.h"
+#include <algorithm>
 #include <entt/entt.hpp>
 #include <optional>
 
@@ -37,9 +38,14 @@ public:
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
-    /// @brief Note 操作始终修改主谱面物件。
+    /// @brief 草稿专属操作不发布谱面变更，其余操作修改主谱面物件。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        const bool hasFormalBefore = m_before && !m_before->m_isDraft;
+        const bool hasFormalAfter  = m_after && !m_after->m_isDraft;
+        if ( !hasFormalBefore && !hasFormalAfter ) {
+            return ::MMM::BeatmapMutationFlags::None;
+        }
         return ::MMM::BeatmapMutationFlags::Objects;
     }
 
@@ -93,6 +99,12 @@ public:
     /// @brief 返回该批量动作声明的精确谱面变更类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        const bool hasFormalNote = std::any_of(
+            m_entries.begin(), m_entries.end(), [](const Entry& entry) {
+                return (entry.before && !entry.before->m_isDraft) ||
+                       (entry.after && !entry.after->m_isDraft);
+            });
+        if ( !hasFormalNote ) return ::MMM::BeatmapMutationFlags::None;
         return m_mutationFlags;
     }
 

@@ -2,6 +2,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/BeatmapSession.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 
@@ -22,6 +23,7 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
+    ProjectDraftLaneService::sync(ctx);
 }
 
 void EditorActionStack::undo(SessionContext& ctx)
@@ -37,6 +39,7 @@ void EditorActionStack::undo(SessionContext& ctx)
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
+    ProjectDraftLaneService::sync(ctx);
 }
 
 void EditorActionStack::redo(SessionContext& ctx)
@@ -52,6 +55,7 @@ void EditorActionStack::redo(SessionContext& ctx)
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
+    ProjectDraftLaneService::sync(ctx);
 }
 
 void EditorActionStack::clear()

@@ -78,10 +78,13 @@ void updateHoverSubdivisionPreview(RenderSnapshot&         snapshot,
                                    int                     currentBeatDivisor)
 {
     snapshot.hoverSubdivisionPreview = HoverSubdivisionPreview{};
-    if ( inspect.objectKind != ChartObjectKind::PlayerNote ) return;
+    if ( inspect.objectKind != ChartObjectKind::PlayerNote &&
+         inspect.objectKind != ChartObjectKind::DraftNote ) {
+        return;
+    }
 
     const auto* point = inspectedHoverBeatPoint(inspect);
-    if ( !point || !point->show || point->track < 0 ||
+    if ( !point || !point->show || point->track < -snapshot.trackCount ||
          point->track >= snapshot.trackCount || point->denominator <= 1 ||
          !std::isfinite(point->beatStartTime) ||
          !std::isfinite(point->beatEndTime) ||
@@ -121,7 +124,7 @@ void updateCommonSubdivisionPreview(RenderSnapshot&       snapshot,
 {
     const auto validMask =
         commonBeatDivisorMask & Config::COMMON_BEAT_DIVISOR_MASK_ALL;
-    if ( validMask == 0U || !point.show || point.track < 0 ||
+    if ( validMask == 0U || !point.show || point.track < -snapshot.trackCount ||
          point.track >= snapshot.trackCount || !std::isfinite(point.time) ||
          !std::isfinite(point.beatStartTime) ||
          !std::isfinite(point.beatEndTime) ||
@@ -472,10 +475,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
             const auto& note =
                 m_ctx->noteRegistry.get<const NoteComponent>(entity);
-            if ( rebuildStats ) {
+            if ( rebuildStats && !note.m_isDraft ) {
                 accumulateNoteStats(note, beatmap, stats);
             }
-            if ( rebuildDensity ) {
+            if ( rebuildDensity && !note.m_isDraft ) {
                 appendPreviewDensityObjectTimes(
                     note, m_ctx->previewDensityObjectTimes);
             }
@@ -902,6 +905,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
                 // 计算轨道；主画布统一应用相机横向偏移，预览区保持独立布局。
                 CanvasTrackProjection trackProjection;
+                bool                  isInsideTrack = false;
                 if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
                     const float leftX = config.visual.previewConfig.margin.left;
                     const float rightX =
@@ -916,16 +920,29 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             : 0.0F;
                     trackProjection.valid =
                         trackProjection.singleTrackWidth > 0.0F;
+                    snapshot->hoveredTrack = trackProjection.trackAt(
+                        m_ctx->lastMousePos.x, m_ctx->trackCount);
+                    isInsideTrack =
+                        trackProjection.contains(m_ctx->lastMousePos.x);
                 } else {
-                    trackProjection = calculatePlayerTrackProjection(
+                    const auto laneProjection = calculateCanvasLaneProjection(
                         camera.viewportWidth,
                         m_ctx->trackCount,
+                        m_ctx->bgmTrackCount,
                         config.visual.trackLayout.left,
                         config.visual.trackLayout.right,
-                        camera.horizontalOffsetX);
+                        camera.horizontalOffsetX,
+                        true,
+                        config.settings.enableBmsEditing);
+                    trackProjection = laneProjection.player;
+                    const auto lane =
+                        laneProjection.laneAt(m_ctx->lastMousePos.x);
+                    if ( lane ) {
+                        snapshot->hoveredTrack =
+                            lane->absoluteTrack(laneProjection.playerLaneCount);
+                        isInsideTrack = true;
+                    }
                 }
-                snapshot->hoveredTrack = trackProjection.trackAt(
-                    m_ctx->lastMousePos.x, m_ctx->trackCount);
 
                 // --- 磁吸拍线时间戳预览 ---
                 auto snap = SessionUtils::getSnapResult(snapshot->hoveredTime,
@@ -939,9 +956,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         snapshotFallbackBpm);
 
                 // 判断是否在轨道框内
-                const bool isInsideTrack =
-                    trackProjection.contains(m_ctx->lastMousePos.x);
-
                 if ( snap.isSnapped ) {
                     if ( cameraId == "Timeline" || isInsideTrack ) {
                         snapshot->isSnapped          = true;
@@ -1104,7 +1118,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                           inspectEntity != entt::null &&
                                           inspectEntity == m_ctx->draggedEntity;
                 const auto* inter =
-                    (inspectObjectKind == ChartObjectKind::PlayerNote &&
+                    ((inspectObjectKind == ChartObjectKind::PlayerNote ||
+                      inspectObjectKind == ChartObjectKind::DraftNote) &&
                      inspectEntity != entt::null &&
                      m_ctx->noteRegistry.valid(inspectEntity))
                         ? m_ctx->noteRegistry
@@ -1122,7 +1137,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     (inter && (inter->isHovered || inter->isDragging));
                 const auto* inspectNote =
                     shouldInspect &&
-                            inspectObjectKind == ChartObjectKind::PlayerNote
+                            (inspectObjectKind == ChartObjectKind::PlayerNote ||
+                             inspectObjectKind == ChartObjectKind::DraftNote)
                         ? m_ctx->noteRegistry.try_get<const NoteComponent>(
                               inspectEntity)
                         : nullptr;
@@ -1139,7 +1155,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     HoverInspectInfo inspect;
                     inspect.show       = true;
                     inspect.entity     = inspectEntity;
-                    inspect.objectKind = ChartObjectKind::PlayerNote;
+                    inspect.objectKind = inspectObjectKind;
 
                     auto setLegacyPoint = [&](const HoverBeatPoint& point) {
                         if ( !point.show ) return;
@@ -1451,7 +1467,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             if ( !m_ctx->eraserState.isShiftDown ) {
                 // 非 Shift：悬停在 Polyline 的任意子物件时，允许局部高亮红色
                 if ( m_ctx->hoveredEntity != entt::null &&
-                     m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
+                     (m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote ||
+                      m_ctx->hoveredObjectKind == ChartObjectKind::DraftNote) &&
                      m_ctx->noteRegistry.all_of<NoteComponent>(
                          m_ctx->hoveredEntity) ) {
                     const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(

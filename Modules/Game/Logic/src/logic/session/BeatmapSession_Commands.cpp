@@ -1700,7 +1700,8 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             m_ctx->selectedNoteEntities.erase(entity);
         }
 
-        if ( m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
+        if ( (m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote ||
+              m_ctx->hoveredObjectKind == ChartObjectKind::DraftNote) &&
              m_ctx->hoveredEntity != entt::null &&
              m_ctx->noteRegistry.valid(m_ctx->hoveredEntity) &&
              m_ctx->noteRegistry.all_of<NoteComponent>(m_ctx->hoveredEntity) &&
@@ -1845,10 +1846,9 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         } else {
             EditorEngine::instance().syncProjectWithFile(savePath);
         }
-        if ( syncSavedMetadataToProjectEntry(
-                 m_ctx->currentBeatmap->m_baseMapMetadata) ) {
-            EditorEngine::instance().saveProject();
-        }
+        static_cast<void>(syncSavedMetadataToProjectEntry(
+            m_ctx->currentBeatmap->m_baseMapMetadata));
+        EditorEngine::instance().saveProject();
     }
 }
 

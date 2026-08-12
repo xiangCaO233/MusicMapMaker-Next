@@ -144,7 +144,8 @@ bool isEditablePlayerNote(const SessionContext& ctx, entt::entity entity)
 bool isEditableChartObject(const SessionContext& ctx, ChartObjectKind kind,
                            entt::entity entity)
 {
-    if ( kind == ChartObjectKind::PlayerNote ) {
+    if ( kind == ChartObjectKind::PlayerNote ||
+         kind == ChartObjectKind::DraftNote ) {
         return isEditablePlayerNote(ctx, entity);
     }
     return entity != entt::null && ctx.sampleRegistry.valid(entity) &&
@@ -752,7 +753,9 @@ void collectAllPrimaryNoteCandidates(
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
         if ( !note.m_isSubNote ) {
-            candidates.push_back({ ChartObjectKind::PlayerNote, entity });
+            candidates.push_back({ note.m_isDraft ? ChartObjectKind::DraftNote
+                                                  : ChartObjectKind::PlayerNote,
+                                   entity });
         }
     }
 }
@@ -816,7 +819,9 @@ bool collectMarqueeBoxCandidates(
             const auto& note =
                 ctx.noteRegistry.get<const NoteComponent>(entity);
             if ( note.m_isSubNote ) continue;
-            candidates.push_back({ ChartObjectKind::PlayerNote, entity });
+            candidates.push_back({ note.m_isDraft ? ChartObjectKind::DraftNote
+                                                  : ChartObjectKind::PlayerNote,
+                                   entity });
         }
     };
 
@@ -1116,8 +1121,11 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
             continue;
         }
 
-        setChartObjectSelected(
-            m_ctx, ChartObjectKind::PlayerNote, entity, true);
+        setChartObjectSelected(m_ctx,
+                               note.m_isDraft ? ChartObjectKind::DraftNote
+                                              : ChartObjectKind::PlayerNote,
+                               entity,
+                               true);
     }
     auto sampleView = m_ctx.sampleRegistry.view<SampleComponent>();
     for ( auto entity : sampleView ) {
@@ -1227,9 +1235,10 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
     timestamp = std::max(0.0, timestamp);
 
     SampleComponent sample{
-        .m_timestamp       = timestamp,
-        .m_offsetMs        = 0,
-        .m_track           = lane->absoluteTrack(projection.playerLaneCount),
+        .m_timestamp = timestamp,
+        .m_offsetMs  = 0,
+        .m_track     = static_cast<std::uint32_t>(
+            lane->absoluteTrack(projection.playerLaneCount)),
         .m_audioResourceId = resource->m_id,
         .m_volume          = 1.0F,
     };
@@ -1774,7 +1783,8 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
 
     for ( const auto& candidate : candidates ) {
         bool isSelectedInAny = false;
-        if ( candidate.kind == ChartObjectKind::PlayerNote ) {
+        if ( candidate.kind == ChartObjectKind::PlayerNote ||
+             candidate.kind == ChartObjectKind::DraftNote ) {
             if ( !m_ctx.noteRegistry.valid(candidate.entity) ||
                  !m_ctx.noteRegistry.all_of<NoteComponent>(candidate.entity) ) {
                 continue;
@@ -1795,7 +1805,7 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
             }
             if ( !isSelectedInAny ) continue;
             setChartObjectSelected(
-                m_ctx, ChartObjectKind::PlayerNote, candidate.entity, true);
+                m_ctx, candidate.kind, candidate.entity, true);
             continue;
         }
 

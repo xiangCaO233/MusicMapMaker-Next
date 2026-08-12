@@ -524,7 +524,7 @@ void rebuildHitEvents(SessionContext& ctx)
 
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
-        if ( note.m_isSubNote ) continue;
+        if ( note.m_isSubNote || note.m_isDraft ) continue;
 
         double noteEndTime = note.m_timestamp + note.m_duration;
         if ( noteEndTime > maxEndTime ) {

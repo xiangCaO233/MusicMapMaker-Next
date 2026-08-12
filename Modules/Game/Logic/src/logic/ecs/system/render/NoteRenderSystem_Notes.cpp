@@ -124,7 +124,7 @@ static double getCarrierEndAnchorTime(const NoteComponent& note,
     return note.m_timestamp + note.m_duration;
 }
 
-/// @brief 在玩家轨道物件锚点上方绘制绑定音效标签。
+/// @brief 在草稿或玩家轨道物件锚点上方绘制绑定音效标签。
 /// @warning
 /// 主画布热路径：只处理调用方已剔除的物件锚点，不得访问文件系统或分配堆内存。
 static void renderBoundSampleLabelAt(Batcher& batcher, const ScrollCache* cache,
@@ -136,7 +136,7 @@ static void renderBoundSampleLabelAt(Batcher& batcher, const ScrollCache* cache,
                                      float singleTrackW, float renderScaleY,
                                      float noteScaleY, glm::vec4 color)
 {
-    if ( binding.m_audioResourceId.empty() || trackIndex < 0 ||
+    if ( binding.m_audioResourceId.empty() || trackIndex < -trackCount ||
          trackIndex >= trackCount ) {
         return;
     }
@@ -165,8 +165,8 @@ void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config, Batcher& batcher,
-    float leftX, float rightX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY)
+    float leftX, float clipLeftX, float rightX, float topY, float bottomY,
+    float singleTrackW, float renderScaleY)
 {
     // 1. 准备上下文与颜色
     NoteRenderSystem::NoteRenderContext ctx =
@@ -200,6 +200,7 @@ void NoteRenderSystem::renderNotes(
 
     // 2. 生成碰撞盒并获取可见实体
     if ( shouldGenerateHitboxes ) {
+        const std::size_t hitboxStart = snapshot->hitboxes.size();
         NoteRenderSystem::generateNoteHitboxes(registry,
                                                snapshot,
                                                ctx,
@@ -211,6 +212,16 @@ void NoteRenderSystem::renderNotes(
                                                singleTrackW,
                                                renderScaleY,
                                                config);
+        for ( std::size_t index = hitboxStart;
+              index < snapshot->hitboxes.size();
+              ++index ) {
+            auto&       hitbox = snapshot->hitboxes[index];
+            const auto* note =
+                registry.try_get<const NoteComponent>(hitbox.entity);
+            if ( note && note->m_isDraft ) {
+                hitbox.kind = ChartObjectKind::DraftNote;
+            }
+        }
     }
 
     // 3. 基础层渲染
@@ -245,6 +256,7 @@ void NoteRenderSystem::renderNotes(
                                           (float)currentTime,
                                           judgmentLineY,
                                           leftX,
+                                          clipLeftX,
                                           rightX,
                                           topY,
                                           bottomY,
@@ -271,6 +283,7 @@ void NoteRenderSystem::renderNotes(
                                          noteEntities,
                                          judgmentLineY,
                                          leftX,
+                                         clipLeftX,
                                          rightX,
                                          topY,
                                          bottomY,
@@ -1020,10 +1033,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
         glm::vec4 curColorArrow =
             resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
-        bool isFullErasing =
-            snapshot->erasingObjectKind == ChartObjectKind::PlayerNote &&
-            snapshot->erasingEntities.count(entity) &&
-            snapshot->erasingSubIndex == -1;
+        const auto objectKind    = note.m_isDraft ? ChartObjectKind::DraftNote
+                                                  : ChartObjectKind::PlayerNote;
+        bool       isFullErasing = snapshot->erasingObjectKind == objectKind &&
+                                   snapshot->erasingEntities.count(entity) &&
+                                   snapshot->erasingSubIndex == -1;
         if ( isFullErasing ) {
             curColorNote     = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorHead     = { 1.0f, 0.2f, 0.2f, 1.0f };
@@ -1174,8 +1188,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
     const NoteRenderSystem::NoteRenderContext& ctx,
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, float currentTime,
-    float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
-    float singleTrackW, float renderScaleY)
+    float judgmentLineY, float leftX, float clipLeftX, float rightX, float topY,
+    float bottomY, float singleTrackW, float renderScaleY)
 {
     std::vector<entt::entity> glowEntities;
     glowEntities.reserve(noteEntities.size());
@@ -1189,7 +1203,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
     if ( glowEntities.empty() ) return;
 
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
-    glowBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
+    glowBatcher.setScissor(clipLeftX, topY, rightX - clipLeftX, bottomY - topY);
     /// @brief 发光实体继承可见实体时间升序。
     /// 继承可见实体时间升序，反向绘制即可获得原先的后到前覆盖顺序。
     for ( auto it = glowEntities.rbegin(); it != glowEntities.rend(); ++it ) {
@@ -1305,8 +1319,8 @@ void NoteRenderSystem::renderOverlapMasks(
     const NoteRenderSystem::NoteRenderContext& ctx,
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
-    float leftX, float rightX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY)
+    float leftX, float clipLeftX, float rightX, float topY, float bottomY,
+    float singleTrackW, float renderScaleY)
 {
     if ( !snapshot || !ctx.cache || noteEntities.size() < 2 ) return;
 
@@ -1414,7 +1428,7 @@ void NoteRenderSystem::renderOverlapMasks(
 
     auto appendMask = [&](float x, float y, float w, float h, int count) {
         if ( w <= 0.0f || h <= 0.0f || count < 2 ) return;
-        if ( x > rightX || x + w < leftX || y > bottomY || y + h < topY )
+        if ( x > rightX || x + w < clipLeftX || y > bottomY || y + h < topY )
             return;
 
         // 这里不能预先合并成外接矩形，否则相邻遮罩之间的空区域也会被误涂红。

@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -28,7 +29,9 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -496,6 +499,40 @@ bool testBrushCrossesPlayerAndBgmLanes()
            near(note.m_sampleBinding->m_volume, 0.6);
 }
 
+/// @brief 验证画笔在横向平移后可直接创建并更新负轨草稿物件。
+/// @return 最终物件保持草稿域且不产生正式谱面变更时返回 true。
+bool testBrushCreatesDraftNote()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.cameras["Basic2DCanvas"].horizontalOffsetX = 400.0F;
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 150.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId   = "Basic2DCanvas",
+                                   .mouseX     = 250.0F,
+                                   .mouseY     = 300.0F,
+                                   .isCtrlDown = true,
+                               });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( notes.size() != 1U ) return false;
+    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+    return note.m_isDraft && note.m_trackIndex == -3 &&
+           context.currentBeatmap->m_noteData.notes.empty() &&
+           context.actionStack.takePendingMutationFlags() ==
+               MMM::BeatmapMutationFlags::None;
+}
+
 /// @brief 验证横向相机偏移被渲染和拾取共用的轨道投影正确应用。
 /// @return 投影边界、轨道宽度和拾取结果正确时返回 true。
 bool testTrackProjectionUsesCameraOffset()
@@ -515,18 +552,36 @@ bool testTrackProjectionUsesCameraOffset()
     return true;
 }
 
-/// @brief 验证玩家轨道与 BGM 轨道共用统一地址和连续横向投影。
+/// @brief 验证草稿、玩家与 BGM 轨道共用统一地址和连续横向投影。
 /// @return 边界、绝对轨道及运行时追加轨映射均正确时返回 true。
 bool testUnifiedLaneProjection()
 {
     const auto projection = MMM::Logic::calculateCanvasLaneProjection(
         1000.0F, 4, 2, 0.1F, 0.5F, 0.0F);
+    const auto firstDraft = projection.laneAt(-300.0F);
+    const auto lastDraft  = projection.laneAt(99.0F);
     const auto playerLane = projection.laneAt(499.0F);
     const auto firstBgm   = projection.laneAt(500.0F);
     const auto appendBgm  = projection.laneAt(700.0F);
     const auto outside    = projection.laneAt(800.0F);
     const auto visible    = projection.visibleBgmRange(550.0F, 650.0F);
-    if ( !projection.valid || projection.bgmLaneCount != 3 || !playerLane ||
+    const auto firstDraftBounds =
+        projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, 0U });
+    if ( !projection.valid || projection.draftLaneCount != 4 ||
+         !near(projection.draftLeftX, -300.0) ||
+         !near(projection.draftRightX, 100.0) || !firstDraft ||
+         *firstDraft !=
+             MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Draft,
+                                            0 } ||
+         firstDraft->absoluteTrack(4) != -4 || !lastDraft ||
+         lastDraft->absoluteTrack(4) != -1 || !firstDraftBounds ||
+         !near(firstDraftBounds->leftX, -300.0) ||
+         !near(firstDraftBounds->rightX, -200.0) ||
+         projection.laneAt(-301.0F).has_value() ||
+         MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-1, 4) !=
+             MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Draft,
+                                            3 } ||
+         projection.bgmLaneCount != 3 || !playerLane ||
          *playerLane !=
              MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Player,
                                             3 } ||
@@ -535,10 +590,191 @@ bool testUnifiedLaneProjection()
              MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Bgm,
                                             2 } ||
          outside || !visible || visible->first != 0 || visible->second != 2 ) {
-        XERROR("Unified canvas lane projection did not map BGM lanes");
+        XERROR("Unified canvas lane projection did not map all lane areas");
         return false;
     }
     return true;
+}
+
+/// @brief 收集会话内草稿根物件的稳定 ID。
+std::unordered_set<std::string> collectDraftRootIds(
+    const MMM::Logic::SessionContext& context)
+{
+    std::unordered_set<std::string> identities;
+    const auto                      view =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : view ) {
+        const auto& note = view.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_isDraft && !note.m_isSubNote ) {
+            identities.insert(note.m_collaborationId);
+        }
+    }
+    return identities;
+}
+
+/// @brief 验证草稿区按主音频共享、并发合并且不写入正式谱面。
+/// @return 同主音频画布共享三方合并结果，不同主音频隔离时返回 true。
+bool testProjectDraftLaneSharingAndIsolation()
+{
+    auto project              = std::make_shared<MMM::Project>();
+    project->m_audioResources = {
+        MMM::AudioResource{
+            .m_id   = "shared-main",
+            .m_path = "song.ogg",
+            .m_type = MMM::AudioTrackType::Main,
+        },
+        MMM::AudioResource{
+            .m_id   = "other-main",
+            .m_path = "other.ogg",
+            .m_type = MMM::AudioTrackType::Main,
+        },
+    };
+
+    const auto configure = [&](MMM::Logic::SessionContext& context,
+                               std::string_view            audioPath) {
+        context.collaborationProject = project;
+        context.currentBeatmap       = std::make_shared<MMM::BeatMap>();
+        context.trackCount           = 4;
+        context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+        context.currentBeatmap->m_baseMapMetadata.map_path    = "chart.mmm";
+        context.currentBeatmap->m_baseMapMetadata.song_file_hint =
+            std::string(audioPath);
+        MMM::Logic::ProjectDraftLaneService::load(context, project.get());
+    };
+
+    MMM::Logic::SessionContext first;
+    configure(first, "song.ogg");
+    const auto formalEntity = first.noteRegistry.create();
+    first.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        formalEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::NOTE,
+            .m_timestamp       = 0.5,
+            .m_trackIndex      = 1,
+            .m_collaborationId = "formal",
+        });
+    const auto draftAEntity = first.noteRegistry.create();
+    first.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draftAEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::NOTE,
+            .m_timestamp       = 1.0,
+            .m_trackIndex      = -4,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-a",
+        });
+    first.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(first);
+
+    first.m_needsNotesSync = true;
+    MMM::Logic::SessionUtils::syncBeatmap(first);
+    MMM::Logic::SessionUtils::rebuildHitEvents(first);
+    if ( project->m_draftLaneGroups.size() != 1 ||
+         first.currentBeatmap->m_noteData.notes.size() != 1 ||
+         first.currentBeatmap->m_noteData.notes.front().m_track != 1 ||
+         first.hitEvents.size() != 1 ) {
+        XERROR("Draft notes leaked into the formal beatmap or hit events");
+        return false;
+    }
+
+    MMM::Logic::SessionContext second;
+    configure(second, "song.ogg");
+    if ( collectDraftRootIds(second) !=
+         std::unordered_set<std::string>{ "draft-a" } ) {
+        XERROR("A beatmap using the same main audio did not load drafts");
+        return false;
+    }
+
+    const auto draftBEntity = first.noteRegistry.create();
+    first.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draftBEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::HOLD,
+            .m_timestamp       = 2.0,
+            .m_duration        = 0.5,
+            .m_trackIndex      = -1,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-b",
+        });
+    first.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(first);
+
+    entt::entity draftAToDelete = entt::null;
+    const auto   secondView =
+        second.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : secondView ) {
+        const auto& note =
+            secondView.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_collaborationId == "draft-a" ) {
+            draftAToDelete = entity;
+            break;
+        }
+    }
+    if ( draftAToDelete != entt::null ) {
+        second.noteRegistry.destroy(draftAToDelete);
+    }
+    const auto draftCEntity = second.noteRegistry.create();
+    second.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draftCEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::FLICK,
+            .m_timestamp       = 3.0,
+            .m_trackIndex      = -3,
+            .m_dtrack          = 1,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-c",
+        });
+    second.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(second);
+
+    first.isDragging        = true;
+    first.draggedObjectKind = MMM::Logic::ChartObjectKind::DraftNote;
+    MMM::Logic::ProjectDraftLaneService::refreshIfChanged(first);
+    if ( !collectDraftRootIds(first).contains("draft-a") ) {
+        XERROR("Draft refresh replaced a local in-progress drag");
+        return false;
+    }
+    first.isDragging = false;
+    MMM::Logic::ProjectDraftLaneService::refreshIfChanged(first);
+    const auto mergedIds = collectDraftRootIds(first);
+    if ( mergedIds !=
+         std::unordered_set<std::string>{ "draft-b", "draft-c" } ) {
+        XERROR("Concurrent draft edits did not merge by stable identity");
+        return false;
+    }
+
+    MMM::Logic::SessionContext isolated;
+    configure(isolated, "other.ogg");
+    return isolated.m_draftLaneGroupId == "other-main" &&
+           collectDraftRootIds(isolated).empty();
+}
+
+/// @brief 验证草稿物件镜像保持在左侧草稿域且不发布正式谱面变更。
+bool testDraftMirrorStaysInDraftDomain()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::FLICK,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -4,
+            .m_dtrack     = 1,
+            .m_isDraft    = true,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdMirrorSelected{});
+    const auto& mirrored =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return mirrored.m_isDraft && mirrored.m_trackIndex == -1 &&
+           mirrored.m_dtrack == -1 && !context.m_needsNotesSync &&
+           context.actionStack.takePendingMutationFlags() ==
+               MMM::BeatmapMutationFlags::None;
 }
 
 /// @brief 验证逻辑视口 Resize 后横向位移保持相同比例。
@@ -3204,8 +3440,11 @@ int main()
                    testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
                    testBrushCrossesPlayerAndBgmLanes() &&
+                   testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
+                   testProjectDraftLaneSharingAndIsolation() &&
+                   testDraftMirrorStaysInDraftDomain() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&

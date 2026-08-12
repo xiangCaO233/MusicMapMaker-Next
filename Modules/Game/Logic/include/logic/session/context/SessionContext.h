@@ -68,6 +68,15 @@ struct SessionContext {
     /// @brief 自动采样已选实体索引，避免框选热路径扫描完整 Registry。
     std::unordered_set<entt::entity> selectedSampleEntities;
 
+    /// @brief 当前谱面解析到的主音频草稿共享组 ID。
+    std::string m_draftLaneGroupId;
+
+    /// @brief 当前会话已载入的草稿共享组进程内版本。
+    std::uint64_t m_draftLaneGroupRevision{ 0U };
+
+    /// @brief 当前会话上次同步完成时的草稿组载荷，用于三方合并。
+    std::string m_draftLaneBasePayload;
+
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
     double animateTime{ 0.0 };  ///< 当前动画渲染时间，已包含视觉偏移。
     /// @brief 当前暂停态滚动动画的目标渲染时间，单位秒。
@@ -267,7 +276,9 @@ struct SessionContext {
     } eraserState;
 
     // --- 同步脏标记 ---
-    bool m_needsNotesSync{ false };    ///< 音响实体有变更，需同步到 BeatMap
+    bool m_needsNotesSync{ false };  ///< 音响实体有变更，需同步到 BeatMap
+    /// @brief 项目级草稿物件有变更，需要同步到项目数据。
+    bool m_needsDraftNotesSync{ false };
     bool m_needsSamplesSync{ false };  ///< 自动采样实体有变更，需同步到 BeatMap
     bool m_needsTimingsSync{ false };  ///< 时间线实体有变更，需同步到 BeatMap
 

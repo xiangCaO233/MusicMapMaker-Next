@@ -272,8 +272,8 @@ bool isEntitySelected(const entt::registry& registry, entt::entity entity)
 struct UnifiedDragTarget {
     /// @brief 目标锚点或实际触发时间，单位秒。
     double time{ 0.0 };
-    /// @brief 玩家/BGM 共用的绝对轨道。
-    std::uint32_t absoluteTrack{ 0 };
+    /// @brief 草稿/玩家/BGM 共用的有符号轨道，负值表示草稿轨。
+    std::int32_t absoluteTrack{ 0 };
     /// @brief 玩家轨道投影左边界。
     float leftX{ 0.0F };
     /// @brief 单轨逻辑宽度。
@@ -357,7 +357,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         if ( lane ) {
             address = *lane;
         } else if ( cmd.mouseX < projection.player.leftX ) {
-            address = { CanvasLaneKind::Player, 0 };
+            address = { CanvasLaneKind::Draft, 0 };
         } else if ( projection.bgmLaneCount > 0 ) {
             address = { CanvasLaneKind::Bgm,
                         projection.bgmLaneCount - std::uint32_t{ 1 } };
@@ -404,6 +404,26 @@ bool noteFitsPlayerArea(const NoteComponent& note, std::int32_t trackCount)
                        });
 }
 
+/// @brief 判断草稿物件是否完整位于左侧 K 条草稿轨中。
+bool noteFitsDraftArea(const NoteComponent& note, std::int32_t trackCount)
+{
+    if ( trackCount <= 0 ) return false;
+    const auto fits = [trackCount](::MMM::NoteType type,
+                                   std::int32_t    track,
+                                   std::int32_t    dtrack) {
+        if ( track < -trackCount || track >= 0 ) return false;
+        if ( type != ::MMM::NoteType::FLICK ) return true;
+        const auto endTrack = track + dtrack;
+        return endTrack >= -trackCount && endTrack < 0;
+    };
+    if ( !fits(note.m_type, note.m_trackIndex, note.m_dtrack) ) return false;
+    return std::all_of(note.m_subNotes.begin(),
+                       note.m_subNotes.end(),
+                       [&](const NoteComponent::SubNote& sub) {
+                           return fits(sub.type, sub.trackIndex, sub.dtrack);
+                       });
+}
+
 /// @brief 判断拖动可变字段是否保持不变。
 /// @warning 释放低频路径：仅遍历单个 Polyline 的局部子物件。
 bool sameDraggedNoteState(const NoteComponent& lhs, const NoteComponent& rhs)
@@ -411,6 +431,7 @@ bool sameDraggedNoteState(const NoteComponent& lhs, const NoteComponent& rhs)
     if ( lhs.m_timestamp != rhs.m_timestamp ||
          lhs.m_trackIndex != rhs.m_trackIndex ||
          lhs.m_duration != rhs.m_duration || lhs.m_dtrack != rhs.m_dtrack ||
+         lhs.m_isDraft != rhs.m_isDraft ||
          lhs.m_subNotes.size() != rhs.m_subNotes.size() ) {
         return false;
     }
@@ -527,7 +548,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.dragSampleRenderPinnedEntities.clear();
 
     if ( cmd.entity == entt::null ) return;
-    if ( cmd.kind == ChartObjectKind::PlayerNote ) {
+    if ( cmd.kind == ChartObjectKind::PlayerNote ||
+         cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
             ctx.noteRegistry.try_get<const NoteComponent>(cmd.entity);
         if ( !note ||
@@ -541,6 +563,9 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.dragCameraId      = cmd.cameraId;
     ctx.draggedPart       = static_cast<HoverPart>(ctx.hoveredPart);
     ctx.draggedSubIndex   = ctx.hoveredSubIndex;
+    if ( cmd.kind == ChartObjectKind::DraftNote ) {
+        m_usesUnifiedObjectDrag = true;
+    }
 
     if ( cmd.kind == ChartObjectKind::AudioSample ) {
         auto& registry = ctx.sampleRegistry;
@@ -744,7 +769,8 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
                                        const CmdUpdateDrag& cmd)
 {
     if ( !m_usesUnifiedObjectDrag &&
-         ctx.draggedObjectKind == ChartObjectKind::PlayerNote ) {
+         (ctx.draggedObjectKind == ChartObjectKind::PlayerNote ||
+          ctx.draggedObjectKind == ChartObjectKind::DraftNote) ) {
         if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) return false;
         const auto cameraIterator = ctx.cameras.find(cmd.cameraId);
         if ( cameraIterator == ctx.cameras.end() ) return false;
@@ -754,7 +780,9 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
             ctx.lastConfig.visual.trackLayout.left,
             ctx.lastConfig.visual.trackLayout.right,
             cameraIterator->second.horizontalOffsetX);
-        if ( !playerProjection.valid || cmd.mouseX < playerProjection.rightX ) {
+        if ( !playerProjection.valid ||
+             (cmd.mouseX >= playerProjection.leftX &&
+              cmd.mouseX < playerProjection.rightX) ) {
             return false;
         }
     }
@@ -797,7 +825,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
 
     const bool targetIsBgm =
         target->absoluteTrack >=
-        static_cast<std::uint32_t>(std::max(0, ctx.trackCount));
+        static_cast<std::int32_t>(std::max(0, ctx.trackCount));
     if ( !m_usesUnifiedObjectDrag &&
          ctx.draggedObjectKind == ChartObjectKind::PlayerNote &&
          !targetIsBgm ) {
@@ -868,9 +896,13 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
     const std::int64_t maximumAccessibleTrack =
         static_cast<std::int64_t>(std::max(0, ctx.trackCount)) +
         static_cast<std::int64_t>(std::max(0, ctx.bgmTrackCount));
+    const std::int64_t minimumAccessibleTrack =
+        m_initialSampleStates.empty()
+            ? -static_cast<std::int64_t>(std::max(0, ctx.trackCount))
+            : 0;
     if ( minimumTrack != std::numeric_limits<std::int64_t>::max() &&
          maximumTrack != std::numeric_limits<std::int64_t>::min() ) {
-        const std::int64_t minimumDelta = -minimumTrack;
+        const std::int64_t minimumDelta = minimumAccessibleTrack - minimumTrack;
         const std::int64_t maximumDelta = maximumAccessibleTrack - maximumTrack;
         if ( minimumDelta <= maximumDelta ) {
             deltaTrack = std::clamp(deltaTrack, minimumDelta, maximumDelta);
@@ -905,6 +937,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
             std::clamp<std::int64_t>(movedTrack,
                                      std::numeric_limits<int>::min(),
                                      std::numeric_limits<int>::max()));
+        note->m_isDraft = note->m_trackIndex < 0;
         for ( std::size_t index = 0; index < note->m_subNotes.size() &&
                                      index < state.note.m_subNotes.size();
               ++index ) {
@@ -1312,6 +1345,15 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             ctx.noteRegistry.try_get<const NoteComponent>(entity);
         if ( !current || current->m_isSubNote ) continue;
 
+        if ( current->m_trackIndex < 0 ) {
+            if ( !noteFitsDraftArea(*current, ctx.trackCount) ) {
+                rejectionReason =
+                    "草稿物件拖动结果超出左侧草稿轨道区，已取消本次操作";
+                break;
+            }
+            continue;
+        }
+
         if ( current->m_trackIndex < ctx.trackCount ) {
             if ( !noteFitsPlayerArea(*current, ctx.trackCount) ) {
                 rejectionReason =
@@ -1576,6 +1618,7 @@ void GrabTool::syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
         subNC.m_duration      = sub.duration;
         subNC.m_trackIndex    = sub.trackIndex;
         subNC.m_dtrack        = sub.dtrack;
+        subNC.m_isDraft       = note.m_isDraft;
         subNC.m_metadata      = sub.metadata;
         subNC.m_sampleBinding = sub.sampleBinding;
         subNC.m_customColors  = sub.customColors;
@@ -1653,6 +1696,7 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
                                              true,
                                              ctx.draggedEntity,
                                              static_cast<int>(newIndex));
+            after.m_isDraft = parentAfter.m_isDraft;
 
             if ( childIt != children.end() ) {
                 childIt->kept = true;

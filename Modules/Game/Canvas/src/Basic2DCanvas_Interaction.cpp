@@ -2354,22 +2354,17 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     }
 
-    const float trackLeftX =
-        targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
-    const auto runtimeBgmTrackCount =
-        currentSnapshot->bmsEditingEnabled
-            ? std::min<std::int64_t>(static_cast<std::int64_t>(std::max(
-                                         0, currentSnapshot->bgmTrackCount)) +
-                                         1,
-                                     std::numeric_limits<std::int32_t>::max())
-            : std::int64_t{ 0 };
-    const float trackRightX =
-        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX +
-        (currentSnapshot->trackCount > 0
-             ? (targetWidth * (layout.right - layout.left) /
-                static_cast<float>(currentSnapshot->trackCount)) *
-                   static_cast<float>(runtimeBgmTrackCount)
-             : 0.0F);
+    const auto laneProjection = Logic::calculateCanvasLaneProjection(
+        targetWidth,
+        currentSnapshot->trackCount,
+        currentSnapshot->bgmTrackCount,
+        layout.left,
+        layout.right,
+        currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        currentSnapshot->bmsEditingEnabled);
+    const float trackLeftX  = laneProjection.draftLeftX;
+    const float trackRightX = laneProjection.bgmRightX;
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
@@ -2882,7 +2877,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     auto processColorToolTarget = [&](Logic::EditTool tool) {
         if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ||
-             hoveredObjectKind != Logic::ChartObjectKind::PlayerNote ) {
+             (hoveredObjectKind != Logic::ChartObjectKind::PlayerNote &&
+              hoveredObjectKind != Logic::ChartObjectKind::DraftNote) ) {
             return;
         }
         if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;

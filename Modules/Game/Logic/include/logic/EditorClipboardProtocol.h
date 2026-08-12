@@ -32,8 +32,11 @@ struct ParsedClipboard {
 
 /// @brief 将音符剪贴板条目序列化为系统剪贴板文本载荷。
 /// @param items 待序列化的音符剪贴板条目。
+/// @param preserveCollaborationIdentity 是否保留物件协作身份；普通剪贴板必须
+/// 保持 false，仅项目内部共享载荷可以启用。
 /// @return 适用于 ImGui 和系统剪贴板 API 的 UTF-8 文本载荷。
-std::string serializeNotes(const std::vector<ClipboardItem>& items);
+std::string serializeNotes(const std::vector<ClipboardItem>& items,
+                           bool preserveCollaborationIdentity = false);
 
 /// @brief 将混合谱面物件剪贴板序列化为系统剪贴板文本载荷。
 /// @param notes 待序列化的音符剪贴板条目。
@@ -50,7 +53,10 @@ std::string serializeTimelines(const std::vector<TimelineClipboardItem>& items);
 
 /// @brief 将系统剪贴板文本解析为 MMM 剪贴板载荷。
 /// @param text 当前系统剪贴板中的文本。
+/// @param preserveCollaborationIdentity 是否接受载荷中的协作稳定身份；系统
+/// 剪贴板必须保持 false，仅可信项目内部载荷可以启用。
 /// @return 文本符合协议时返回解析后的剪贴板内容。
-std::optional<ParsedClipboard> parse(std::string_view text);
+std::optional<ParsedClipboard> parse(
+    std::string_view text, bool preserveCollaborationIdentity = false);
 
 }  // namespace MMM::Logic::EditorClipboardProtocol

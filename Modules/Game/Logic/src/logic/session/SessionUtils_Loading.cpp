@@ -4,6 +4,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -112,9 +113,13 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.dragInitialSample.reset();
     ctx.isDragging = false;
     ctx.eraserState.targetEntities.clear();
-    ctx.eraserState.isActive                     = false;
-    ctx.eraserState.targetObjectKind             = ChartObjectKind::PlayerNote;
-    ctx.audioTimelineDescriptor                  = {};
+    ctx.eraserState.isActive         = false;
+    ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+    ctx.audioTimelineDescriptor      = {};
+    ctx.m_draftLaneGroupId.clear();
+    ctx.m_draftLaneGroupRevision = 0U;
+    ctx.m_draftLaneBasePayload.clear();
+    ctx.m_needsDraftNotesSync                    = false;
     ctx.audioTimelineTotalTime                   = 0.0;
     ctx.missingAudioTimelineClipCount            = 0U;
     ctx.isAudioTimelineDescriptorDirty           = true;
@@ -446,6 +451,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         beatmap->m_timings.size(),
         beatmap->m_audioSamples.size());
 
+    ProjectDraftLaneService::load(ctx, project);
+
     ctx.m_needsTimingsSync = false;
     ctx.m_needsNotesSync   = false;
     ctx.m_needsSamplesSync = false;
@@ -511,7 +518,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
         for ( auto entity : noteView ) {
             const auto& nc = noteView.get<NoteComponent>(entity);
-            if ( nc.m_isSubNote ) continue;
+            if ( nc.m_isSubNote || nc.m_isDraft ) continue;
             if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
 
             NoteComponent syncedNote = nc;
@@ -559,7 +566,9 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
         for ( auto entity : noteView ) {
             const auto& nc = noteView.get<NoteComponent>(entity);
-            if ( nc.m_type != ::MMM::NoteType::POLYLINE ) continue;
+            if ( nc.m_isDraft || nc.m_type != ::MMM::NoteType::POLYLINE ) {
+                continue;
+            }
 
             NoteComponent syncedPolyline = nc;
             if ( hasAnyNoteColorOverride(syncedPolyline.m_customColors) ) {

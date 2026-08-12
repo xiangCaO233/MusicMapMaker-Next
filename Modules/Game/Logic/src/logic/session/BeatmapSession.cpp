@@ -4,6 +4,7 @@
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
@@ -507,6 +508,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
 {
     m_ctx->lastConfig      = config;
     m_ctx->isActiveSession = isActiveSession;
+    ProjectDraftLaneService::refreshIfChanged(*m_ctx);
     if ( !isActiveSession && m_ctx->isPlaying ) {
         m_ctx->isPlaying = false;
     }

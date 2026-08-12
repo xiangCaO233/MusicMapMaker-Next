@@ -53,6 +53,9 @@ struct NoteComponent {
     /// @brief 是否为折线内部子物件（如果是，则在标准渲染流程中跳过）
     bool m_isSubNote{ false };
 
+    /// @brief 是否属于项目级草稿轨而非当前正式谱面。
+    bool m_isDraft{ false };
+
     /// @brief 如果是子物件，指向所属的 Polyline 父实体
     entt::entity m_parentPolyline{ entt::null };
 

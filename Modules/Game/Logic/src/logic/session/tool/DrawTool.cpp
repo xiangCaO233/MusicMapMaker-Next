@@ -55,7 +55,8 @@ bool isPlaceableNote(const NoteComponent& note)
 /// @return 悬停对象属于玩家物件域且实体有效时返回 true。
 bool isHoveredPlayerNote(const SessionContext& ctx)
 {
-    if ( ctx.hoveredObjectKind != ChartObjectKind::PlayerNote ||
+    if ( (ctx.hoveredObjectKind != ChartObjectKind::PlayerNote &&
+          ctx.hoveredObjectKind != ChartObjectKind::DraftNote) ||
          ctx.hoveredEntity == entt::null ||
          !ctx.noteRegistry.valid(ctx.hoveredEntity) ||
          !ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
@@ -573,7 +574,12 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
         const bool targetCreatesAudioSample =
             currentLane->kind == CanvasLaneKind::Bgm;
-        if ( targetCreatesAudioSample != ctx.brushState.createsAudioSample ) {
+        const bool changesNoteDomain =
+            !targetCreatesAudioSample && !ctx.brushState.createsAudioSample &&
+            ((currentLane->kind == CanvasLaneKind::Draft) !=
+             (ctx.brushState.track < 0));
+        if ( targetCreatesAudioSample != ctx.brushState.createsAudioSample ||
+             changesNoteDomain ) {
             if ( !targetCreatesAudioSample &&
                  !ctx.brushState.selectedAudioResourceId.empty() &&
                  ctx.brushState.selectedAudioTrackType ==
@@ -614,9 +620,13 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-            ? static_cast<int>(currentLane->index)
+            ? currentLane->absoluteTrack(
+                  static_cast<std::uint32_t>(ctx.trackCount))
             : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
-    currentTrack = std::clamp(currentTrack, 0, ctx.trackCount - 1);
+    const bool editsDraft   = ctx.brushState.track < 0;
+    const int  minimumTrack = editsDraft ? -ctx.trackCount : 0;
+    const int  maximumTrack = editsDraft ? -1 : ctx.trackCount - 1;
+    currentTrack = std::clamp(currentTrack, minimumTrack, maximumTrack);
 
     if ( cmd.isShiftDown && !ctx.lastConfig.settings.enablePolylineEditing ) {
         const float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
@@ -661,8 +671,9 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
             if ( !timeChanged && diffY <= 5.0f ) {
                 int dtrack = currentTrack - ctx.brushState.startTrack;
-                if ( dtrack != 0 && (ctx.brushState.startTrack + dtrack >= 0) &&
-                     (ctx.brushState.startTrack + dtrack < ctx.trackCount) ) {
+                if ( dtrack != 0 &&
+                     ctx.brushState.startTrack + dtrack >= minimumTrack &&
+                     ctx.brushState.startTrack + dtrack <= maximumTrack ) {
                     ctx.brushState.type   = ::MMM::NoteType::FLICK;
                     ctx.brushState.dtrack = dtrack;
                 } else {
@@ -859,6 +870,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_trackIndex    = ctx.brushState.track;
     note.m_dtrack        = ctx.brushState.dtrack;
     note.m_type          = ctx.brushState.type;
+    note.m_isDraft       = note.m_trackIndex < 0;
     note.m_sampleBinding = ctx.brushState.activeSampleBinding;
     applyNoteColorOverrides(note, ctx.brushState.customColors);
 
@@ -1302,6 +1314,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             const auto&   s     = note.m_subNotes[i];
             NoteComponent subNC = makeNoteComponentFromSubNote(
                 s, true, parentEnt, static_cast<int>(i));
+            subNC.m_isDraft = note.m_isDraft;
 
             entt::entity subEnt = ctx.noteRegistry.create();
             mergeDeleteEntries.push_back({ subEnt, std::nullopt, subNC });
@@ -1335,7 +1348,7 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
     ctx.eraserState.isShiftDown = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        ctx.eraserState.targetObjectKind = ctx.hoveredObjectKind;
         entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
@@ -1361,7 +1374,7 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
     // 每帧只标记当前鼠标正下方的物件，移开就取消
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        ctx.eraserState.targetObjectKind = ctx.hoveredObjectKind;
         entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
@@ -1520,6 +1533,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
+                                        nextNC.m_isDraft = nc.m_isDraft;
                                         if ( !nextNC.m_sampleBinding &&
                                              inheritsParentSound ) {
                                             nextNC.m_sampleBinding =
@@ -1557,6 +1571,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_customColors =
                                             nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
+                                        nextNC.m_isDraft        = nc.m_isDraft;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
                                         nextNC.m_subNotes       = part;
@@ -1576,6 +1591,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                                     true,
                                                     parentEnt,
                                                     static_cast<int>(i));
+                                            subNC.m_isDraft = nc.m_isDraft;
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();
@@ -1644,6 +1660,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
+                                        nextNC.m_isDraft = nc.m_isDraft;
                                         if ( !nextNC.m_sampleBinding &&
                                              inheritsParentSound ) {
                                             nextNC.m_sampleBinding =
@@ -1681,6 +1698,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_customColors =
                                             nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
+                                        nextNC.m_isDraft        = nc.m_isDraft;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
                                         nextNC.m_subNotes       = part;
@@ -1700,6 +1718,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                                     true,
                                                     parentEnt,
                                                     static_cast<int>(i));
+                                            subNC.m_isDraft = nc.m_isDraft;
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();

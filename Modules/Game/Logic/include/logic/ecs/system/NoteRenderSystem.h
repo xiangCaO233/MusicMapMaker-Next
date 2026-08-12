@@ -147,9 +147,9 @@ private:
                             const std::string& cameraId, double currentTime,
                             float judgmentLineY, int32_t trackCount,
                             const Config::EditorConfig& config,
-                            Batcher& batcher, float leftX, float rightX,
-                            float topY, float bottomY, float singleTrackW,
-                            float renderScaleY);
+                            Batcher& batcher, float leftX, float clipLeftX,
+                            float rightX, float topY, float bottomY,
+                            float singleTrackW, float renderScaleY);
 
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
@@ -199,8 +199,8 @@ private:
         entt::registry& registry, RenderSnapshot* snapshot,
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float currentTime,
-        float judgmentLineY, float leftX, float rightX, float topY,
-        float bottomY, float singleTrackW, float renderScaleY);
+        float judgmentLineY, float leftX, float clipLeftX, float rightX,
+        float topY, float bottomY, float singleTrackW, float renderScaleY);
 
     /// @brief 生成并绘制当前快照中的重叠物件顶层遮罩。
     /// @warning
@@ -210,7 +210,7 @@ private:
         entt::registry& registry, RenderSnapshot* snapshot,
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
-        float leftX, float rightX, float topY, float bottomY,
+        float leftX, float clipLeftX, float rightX, float topY, float bottomY,
         float singleTrackW, float renderScaleY);
 
     /// @warning 热路径：单个 Tap 几何生成时执行；不得分配 GPU
