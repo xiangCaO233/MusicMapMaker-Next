@@ -414,7 +414,20 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     double              anchorBeat = 0.0;
     double              anchorTime = 0.0;
     double              anchorBpm  = getInitialBpm();
-    for ( auto& ev : bpmEvents ) {
+    for ( std::size_t index = 0; index < bpmEvents.size(); ++index ) {
+        auto& ev = bpmEvents[index];
+        if ( index == 0 ) {
+            const double firstBpm   = ev.bpm > 0.0 ? ev.bpm : getInitialBpm();
+            const double beatLength = 60000.0 / firstBpm;
+            const double unwrappedDelay =
+                ev.delayMs > 1e-9 ? ev.delayMs - beatLength : ev.delayMs;
+            ev.timestamp = ev.beat * beatLength + unwrappedDelay;
+            bpmTimestampsBySourceOrder[ev.sourceOrder] = ev.timestamp;
+            anchorBeat                                 = ev.beat;
+            anchorTime                                 = ev.timestamp;
+            anchorBpm                                  = ev.bpm;
+            continue;
+        }
         ev.timestamp = anchorTime +
                        (ev.beat - anchorBeat) * (60000.0 / anchorBpm) +
                        ev.delayMs;
@@ -425,7 +438,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     auto getBpmAtBeat = [&](double beat) {
-        double curBpm = getInitialBpm();
+        double curBpm =
+            bpmEvents.empty() ? getInitialBpm() : bpmEvents.front().bpm;
         for ( const auto& ev : bpmEvents ) {
             if ( ev.beat > beat + 1e-9 ) break;
             curBpm = ev.bpm;
@@ -439,7 +453,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             relative = &ev;
         }
         if ( relative == nullptr ) {
-            return beat * (60000.0 / getInitialBpm());
+            if ( bpmEvents.empty() ) {
+                return beat * (60000.0 / getInitialBpm());
+            }
+            const auto& first = bpmEvents.front();
+            return first.timestamp +
+                   (beat - first.beat) * (60000.0 / first.bpm);
         }
         return relative->timestamp +
                (beat - relative->beat) * (60000.0 / relative->bpm);
@@ -448,19 +467,11 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
 
-    /// @brief 统计被钳制到第 0 拍供运行时使用的 Malody 特效事件数量。
-    std::size_t clampedNegativeEffectCount = 0;
-
     for ( auto& ev : rawEvents ) {
         Timing timing;
-        double runtimeBeat = ev.beat;
-        if ( !ev.isBpm && runtimeBeat < 0.0 ) {
-            runtimeBeat = 0.0;
-            ++clampedNegativeEffectCount;
-        }
         timing.m_timestamp = ev.isBpm
                                  ? bpmTimestampsBySourceOrder[ev.bpmSourceOrder]
-                                 : getAbsTime(runtimeBeat);
+                                 : getAbsTime(ev.beat);
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -469,7 +480,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            currentBpm                     = getBpmAtBeat(runtimeBeat);
+            currentBpm                     = getBpmAtBeat(ev.beat);
             timing.m_timingEffect          = ev.effect;
             timing.m_bpm                   = currentBpm;
             timing.m_timingEffectParameter = ev.value;
@@ -493,11 +504,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
         }
         beatMap.m_timings.push_back(timing);
-    }
-
-    if ( clampedNegativeEffectCount > 0 ) {
-        XINFO("已将 {} 个负 beat Malody effect 运行时位置收束到 beat 0",
-              clampedNegativeEffectCount);
     }
 
     if ( beatMap.m_timings.empty() ) {

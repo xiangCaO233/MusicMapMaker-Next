@@ -357,8 +357,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      });
 
     /// @brief 非 Malody 来源首次投影到 Malody 时使用的拍轴原点。
-    /// @details 首个 BPM 必须建立为 beat 0，其时间戳投影到 delay，不能把
-    /// 整张谱换算成正的小数拍偏移。
     const Timing* generatedFirstBpmOrigin = nullptr;
     if ( !bpmTimings.empty() ) {
         const Timing& firstBpm = *bpmTimings.front();
@@ -368,6 +366,30 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              (!source->second.contains("beat") &&
               !source->second.contains("delay")) ) {
             generatedFirstBpmOrigin = &firstBpm;
+        }
+    }
+
+    /// @brief 首个 BPM 在 Malody 拍轴上的规范化拍号。
+    double firstBpmOriginBeat = 0.0;
+    /// @brief 首 BPM 的非负回卷 delay。
+    double firstBpmDelayMs = 0.0;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const double  firstBpmValue =
+            firstBpm.m_bpm > 0.0 ? firstBpm.m_bpm : 120.0;
+        const double firstBeatLength = 60000.0 / firstBpmValue;
+
+        double wholeBeat = std::floor(firstBpm.m_timestamp / firstBeatLength);
+        double delayMs   = firstBpm.m_timestamp - wholeBeat * firstBeatLength;
+        if ( std::abs(delayMs) <= 1e-6 ||
+             std::abs(delayMs - firstBeatLength) <= 1e-6 ) {
+            if ( delayMs > firstBeatLength * 0.5 ) {
+                wholeBeat += 1.0;
+            }
+            firstBpmOriginBeat = wholeBeat;
+        } else {
+            firstBpmOriginBeat = wholeBeat + 1.0;
+            firstBpmDelayMs    = delayMs;
         }
     }
 
@@ -381,16 +403,18 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         double lastTime   = 0;
         double lastBeat   = 0;
 
-        if ( generatedFirstBpmOrigin != nullptr ) {
-            lastTime = generatedFirstBpmOrigin->m_timestamp;
-            if ( generatedFirstBpmOrigin->m_bpm > 0.0 ) {
-                currentBpm = generatedFirstBpmOrigin->m_bpm;
+        if ( !bpmTimings.empty() ) {
+            const Timing& firstBpm = *bpmTimings.front();
+            lastTime               = firstBpm.m_timestamp;
+            lastBeat               = firstBpmOriginBeat;
+            if ( firstBpm.m_bpm > 0.0 ) {
+                currentBpm = firstBpm.m_bpm;
             }
         }
 
         for ( const Timing* timing : bpmTimings ) {
             const Timing& t = *timing;
-            if ( timing == generatedFirstBpmOrigin ) continue;
+            if ( timing == bpmTimings.front() ) continue;
             if ( t.m_timestamp > time + 1e-4 ) break;
 
             if ( const auto originalBeat = getMalodyTimingBeat(t) ) {
@@ -467,8 +491,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
                 }
             }
-            if ( &t == generatedFirstBpmOrigin ) {
-                tj["delay"] = t.m_timestamp;
+            if ( !bpmTimings.empty() && &t == bpmTimings.front() ) {
+                tj["beat"]  = timeToBeat(t.m_timestamp);
+                tj["delay"] = firstBpmDelayMs;
             }
             timeArr.push_back(tj);
         }
@@ -920,7 +945,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         }
         // beat 是 m_timestamp 的格式投影；不能让导入时保留的旧 beat
         // 覆盖编辑器已经移动过的锚点。位于生成拍轴之前的采样锚定到
-        // beat 0，并把时间差折入自身 offset，以保持实际播放时刻不变。
+        // 首 BPM 的规范化拍号，并把时间差折入自身
+        // offset，以保持实际播放时刻不变。
         std::int64_t exportedOffset = sample.m_offsetMs;
         if ( generatedFirstBpmOrigin != nullptr &&
              sample.m_timestamp <

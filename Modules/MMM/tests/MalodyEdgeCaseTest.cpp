@@ -816,7 +816,7 @@ void test_multiple_sound_objects_round_trip_without_global_shift()
     XINFO("PASS: Multiple SOUND objects round trip independently");
 }
 
-/// @brief 验证 time.delay 只延迟对应 Timing 锚点及其后续拍号映射。
+/// @brief 验证首 time.delay 回卷后，后续 delay 仅延迟对应 Timing 锚点。
 void test_timing_delay_and_sample_offset_round_trip_independently()
 {
     XINFO("=== Test: Timing delay and sample offset round trip ===");
@@ -866,11 +866,11 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     loaded.sync();
     TEST_ASSERT(loaded.m_timings.size() == 3,
                 "timing delay map should keep three BPM timings");
-    TEST_ASSERT(std::abs(loaded.m_timings[0].m_timestamp - 100.0) < 1e-6,
-                "first timing should apply its delay exactly once");
-    TEST_ASSERT(std::abs(loaded.m_timings[1].m_timestamp - 2300.0) < 1e-6,
+    TEST_ASSERT(std::abs(loaded.m_timings[0].m_timestamp + 400.0) < 1e-6,
+                "first timing should unwrap its non-negative delay");
+    TEST_ASSERT(std::abs(loaded.m_timings[1].m_timestamp - 1800.0) < 1e-6,
                 "second timing should apply its 200ms delay once");
-    TEST_ASSERT(std::abs(loaded.m_timings[2].m_timestamp - 2350.0) < 1e-6,
+    TEST_ASSERT(std::abs(loaded.m_timings[2].m_timestamp - 1850.0) < 1e-6,
                 "same-beat timings should accumulate delay in source order");
     TEST_ASSERT(loaded.m_noteData.notes.size() == 2,
                 "timing delay map should keep two playable notes");
@@ -887,19 +887,19 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
                 "note before delayed timing should load");
     TEST_ASSERT(afterDelay != loaded.m_noteData.notes.end(),
                 "note after delayed timing should load");
-    TEST_ASSERT(std::abs(beforeDelay->m_timestamp - 1600.0) < 1e-6,
+    TEST_ASSERT(std::abs(beforeDelay->m_timestamp - 1100.0) < 1e-6,
                 "later timing delay must not shift earlier notes");
-    TEST_ASSERT(std::abs(afterDelay->m_timestamp - 3350.0) < 1e-6,
+    TEST_ASSERT(std::abs(afterDelay->m_timestamp - 2850.0) < 1e-6,
                 "later notes should use the delayed BPM anchor");
 
     TEST_ASSERT(loaded.m_audioSamples.size() == 1,
                 "timing delay map should keep one automatic sample");
     const auto& sample = loaded.m_audioSamples.front();
-    TEST_ASSERT(std::abs(sample.m_timestamp - 3350.0) < 1e-6,
+    TEST_ASSERT(std::abs(sample.m_timestamp - 2850.0) < 1e-6,
                 "sample anchor should follow only the timing delay");
     TEST_ASSERT(sample.m_offsetMs == -75,
                 "sample should keep its independent signed offset");
-    TEST_ASSERT(std::abs(sample.effectiveTimestamp() - 3275.0) < 1e-6,
+    TEST_ASSERT(std::abs(sample.effectiveTimestamp() - 2775.0) < 1e-6,
                 "sample offset should affect only effective playback time");
 
     // 强制导出器从内部时间戳重算 beat，覆盖 delay 的逆向换算路径。
@@ -949,11 +949,11 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     reloaded.sync();
     TEST_ASSERT(reloaded.m_timings.size() == 3,
                 "round trip should keep three timings");
-    TEST_ASSERT(std::abs(reloaded.m_timings[0].m_timestamp - 100.0) < 1e-6,
-                "round trip should apply first timing delay once");
-    TEST_ASSERT(std::abs(reloaded.m_timings[1].m_timestamp - 2300.0) < 1e-6,
+    TEST_ASSERT(std::abs(reloaded.m_timings[0].m_timestamp + 400.0) < 1e-6,
+                "round trip should keep the unwrapped first timing");
+    TEST_ASSERT(std::abs(reloaded.m_timings[1].m_timestamp - 1800.0) < 1e-6,
                 "round trip should keep delayed timing timestamp");
-    TEST_ASSERT(std::abs(reloaded.m_timings[2].m_timestamp - 2350.0) < 1e-6,
+    TEST_ASSERT(std::abs(reloaded.m_timings[2].m_timestamp - 1850.0) < 1e-6,
                 "round trip should keep same-beat timing order");
     TEST_ASSERT(reloaded.m_noteData.notes.size() == 2,
                 "round trip should keep both playable notes");
@@ -966,15 +966,15 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
                      reloaded.m_noteData.notes.end(),
                      [](const MMM::Note& note) { return note.m_track == 1; });
     TEST_ASSERT(reloadedBeforeDelay != reloaded.m_noteData.notes.end() &&
-                    std::abs(reloadedBeforeDelay->m_timestamp - 1600.0) < 1e-6,
+                    std::abs(reloadedBeforeDelay->m_timestamp - 1100.0) < 1e-6,
                 "round trip must not shift the note before delayed timing");
     TEST_ASSERT(reloadedAfterDelay != reloaded.m_noteData.notes.end() &&
-                    std::abs(reloadedAfterDelay->m_timestamp - 3350.0) < 1e-6,
+                    std::abs(reloadedAfterDelay->m_timestamp - 2850.0) < 1e-6,
                 "round trip should keep the note after delayed timing");
     TEST_ASSERT(reloaded.m_audioSamples.size() == 1,
                 "round trip should keep one automatic sample");
     TEST_ASSERT(
-        std::abs(reloaded.m_audioSamples.front().m_timestamp - 3350.0) < 1e-6,
+        std::abs(reloaded.m_audioSamples.front().m_timestamp - 2850.0) < 1e-6,
         "round trip should keep sample anchor separate from its offset");
     TEST_ASSERT(reloaded.m_audioSamples.front().m_offsetMs == -75,
                 "round trip should keep signed sample offset");
@@ -1011,8 +1011,8 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
 
         TEST_ASSERT(exported["time"].size() == 1,
                     "lead-in export should keep one timing");
-        TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
-                    "first timing should define Malody beat zero");
+        TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 1, 0, 1 }),
+                    "positive first timing should advance one wrapped beat");
         TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
                              LEAD_IN_MS) < 1e-6,
                     "first timing delay should preserve the lead-in");
@@ -1021,8 +1021,8 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
             exported["note"].begin(), exported["note"].end(), isSoundNode);
         TEST_ASSERT(sampleIt != exported["note"].end(),
                     "lead-in export should keep the main sample");
-        TEST_ASSERT((*sampleIt)["beat"] == json::array({ 0, 0, 1 }),
-                    "pre-roll sample should anchor at beat zero");
+        TEST_ASSERT((*sampleIt)["beat"] == json::array({ 1, 0, 1 }),
+                    "pre-roll sample should anchor at the first timing beat");
         TEST_ASSERT(sampleIt->value("offset", 0) == -237,
                     "pre-roll sample should compensate the timing delay");
 
@@ -1032,8 +1032,8 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
                          [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(noteIt != exported["note"].end(),
                     "lead-in export should keep the playable note");
-        TEST_ASSERT((*noteIt)["beat"] == json::array({ 0, 0, 1 }),
-                    "playable note at first timing should remain on beat zero");
+        TEST_ASSERT((*noteIt)["beat"] == json::array({ 1, 0, 1 }),
+                    "playable note should follow the wrapped timing beat");
 
         MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
         reloaded.sync();
@@ -1053,6 +1053,151 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
     }
 
     XINFO("PASS: Non-Malody lead-in uses timing delay and sample compensation");
+}
+
+/// @brief 验证 Malody 首 timing 的非负 delay 按首 BPM 拍长回卷。
+void test_first_timing_delay_unwraps_with_its_bpm()
+{
+    XINFO("=== Test: First timing delay unwraps with first BPM ===");
+
+    constexpr double BPM              = 210.0;
+    constexpr double WRAPPED_DELAY_MS = 237.032272;
+    constexpr double BEAT_LENGTH_MS   = 60000.0 / BPM;
+    constexpr double EXPECTED_TIME_MS = WRAPPED_DELAY_MS - BEAT_LENGTH_MS;
+
+    const fs::path sourcePath = std::filesystem::temp_directory_path() /
+                                "edge_wrapped_first_timing_source.mc";
+    const fs::path exportPath = std::filesystem::temp_directory_path() /
+                                "edge_wrapped_first_timing_export.mc";
+
+    json fileData;
+    fileData["meta"] = { { "id", 0 },
+                         { "creator", "Test" },
+                         { "version", "Wrapped" },
+                         { "mode", 7 },
+                         { "mode_ext", { { "bar_begin", 0 } } },
+                         { "song",
+                           { { "title", "Wrapped" },
+                             { "artist", "Test" },
+                             { "file", "music.ogg" },
+                             { "bpm", BPM } } } };
+    fileData["time"] = json::array({ { { "beat", json::array({ 0, 0, 1 }) },
+                                       { "bpm", BPM },
+                                       { "delay", WRAPPED_DELAY_MS } } });
+    fileData["note"] = json::array(
+        { { { "beat", json::array({ 0, 0, 1 }) }, { "x", 31 }, { "w", 60 } },
+          { { "beat", json::array({ 0, 0, 1 }) },
+            { "type", 1 },
+            { "sound", "music.ogg" },
+            { "offset", 237 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open wrapped timing input");
+    source << fileData.dump();
+    source.close();
+
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(loaded.m_timings.size() == 1,
+                "wrapped timing map should keep its first timing");
+    TEST_ASSERT(std::abs(loaded.m_timings.front().m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+                "237.032ms at 210 BPM should unwrap to about -48.682ms");
+    TEST_ASSERT(loaded.m_noteData.notes.size() == 1 &&
+                    std::abs(loaded.m_noteData.notes.front().m_timestamp -
+                             EXPECTED_TIME_MS) < 1e-6,
+                "playable beat zero should use the unwrapped timing anchor");
+    TEST_ASSERT(loaded.m_audioSamples.size() == 1 &&
+                    std::abs(loaded.m_audioSamples.front().m_timestamp -
+                             EXPECTED_TIME_MS) < 1e-6,
+                "sample beat zero should use the unwrapped timing anchor");
+    TEST_ASSERT(loaded.m_audioSamples.front().m_offsetMs == 237,
+                "sample offset must remain an independent signed field");
+
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "wrapped timing map should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+    TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+                "wrapped first timing should keep beat zero");
+    TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
+                         WRAPPED_DELAY_MS) < 1e-6,
+                "wrapped first timing should keep its non-negative delay");
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    reloaded.sync();
+    TEST_ASSERT(reloaded.m_timings.size() == 1 &&
+                    std::abs(reloaded.m_timings.front().m_timestamp -
+                             EXPECTED_TIME_MS) < 1e-6,
+                "wrapped delay should remain stable after round trip");
+
+    for ( const int mode : { 0, 7 } ) {
+        auto generated = makeMinimalBeatMap(mode, 4);
+        generated.m_baseMapMetadata.preference_bpm = 123.0;
+        auto& firstTiming                   = generated.m_timings.front();
+        firstTiming.m_timestamp             = EXPECTED_TIME_MS;
+        firstTiming.m_bpm                   = BPM;
+        firstTiming.m_beat_length           = BEAT_LENGTH_MS;
+        firstTiming.m_timingEffectParameter = BPM;
+
+        MMM::Timing& scroll            = generated.m_timings.emplace_back();
+        scroll.m_timestamp             = EXPECTED_TIME_MS;
+        scroll.m_bpm                   = BPM;
+        scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+        scroll.m_timingEffectParameter = 1.25;
+        scroll.m_beat_length           = 1.25;
+
+        MMM::Note& note  = generated.m_noteData.notes.emplace_back();
+        note.m_type      = MMM::NoteType::NOTE;
+        note.m_timestamp = EXPECTED_TIME_MS;
+        note.m_track     = 0;
+        generated.sync();
+
+        const fs::path generatedPath =
+            std::filesystem::temp_directory_path() /
+            (std::string("edge_generated_wrapped_first_timing_") +
+             (mode == 0 ? "key.mc" : "slide.mc"));
+        TEST_ASSERT(generated.saveToFile(generatedPath),
+                    "generated wrapped timing map should export");
+
+        std::ifstream generatedFile(generatedPath);
+        json          generatedJson;
+        generatedFile >> generatedJson;
+        TEST_ASSERT(
+            generatedJson["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+            "negative first timing should move back to beat zero");
+        TEST_ASSERT(
+            std::abs(generatedJson["time"][0].value("delay", 0.0) -
+                     WRAPPED_DELAY_MS) < 1e-6,
+            "negative first timing should add one first-BPM beat to delay");
+        TEST_ASSERT(
+            !generatedJson["effect"].empty() &&
+                generatedJson["effect"][0]["beat"] == json::array({ 0, 0, 1 }),
+            "effect at the negative first timing should keep beat zero");
+
+        MMM::BeatMap generatedReloaded =
+            MMM::BeatMap::loadFromFile(generatedPath);
+        generatedReloaded.sync();
+        TEST_ASSERT(generatedReloaded.m_timings.size() == 2,
+                    "generated wrapped map should keep BPM and effect");
+        TEST_ASSERT(
+            std::abs(generatedReloaded.m_timings[0].m_timestamp -
+                     EXPECTED_TIME_MS) < 1e-6 &&
+                std::abs(generatedReloaded.m_timings[1].m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+            "generated BPM and effect should round trip at negative time");
+        TEST_ASSERT(std::abs(generatedReloaded.m_timings[1].m_bpm - BPM) < 1e-6,
+                    "effect before a positive first beat should use first BPM");
+        TEST_ASSERT(
+            generatedReloaded.m_noteData.notes.size() == 1 &&
+                std::abs(
+                    generatedReloaded.m_noteData.notes.front().m_timestamp -
+                    EXPECTED_TIME_MS) < 1e-6,
+            "generated playable note should round trip at beat zero");
+    }
+
+    XINFO("PASS: First timing delay unwraps with first BPM");
 }
 
 /// @brief 验证缺少 x 的旧版自动采样按 Malody Pro Editor 规则展开。
@@ -1568,6 +1713,7 @@ int main()
     test_multiple_sound_objects_round_trip_without_global_shift();
     test_timing_delay_and_sample_offset_round_trip_independently();
     test_non_malody_lead_in_exports_timing_origin_and_audio_compensation();
+    test_first_timing_delay_unwraps_with_its_bpm();
     test_legacy_samples_without_x_use_pro_editor_tracks();
     test_invalid_sample_track_and_song_hint_conflict();
     testEditedSampleTimestampOverridesImportedBeat();
