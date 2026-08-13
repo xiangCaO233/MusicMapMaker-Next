@@ -982,6 +982,79 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     XINFO("PASS: Timing delay and sample offset round trip independently");
 }
 
+/// @brief 验证非 Malody 谱面的前导时间导出为拍轴 delay 和采样补偿。
+void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
+{
+    XINFO("=== Test: Non-Malody lead-in exports without shifting notes ===");
+
+    constexpr double LEAD_IN_MS = 237.0;
+    for ( const int mode : { 0, 7 } ) {
+        auto beatMap                          = makeMinimalBeatMap(mode, 4);
+        beatMap.m_timings.front().m_timestamp = LEAD_IN_MS;
+
+        MMM::Note& note  = beatMap.m_noteData.notes.emplace_back();
+        note.m_type      = MMM::NoteType::NOTE;
+        note.m_timestamp = LEAD_IN_MS;
+        note.m_track     = 0;
+        beatMap.sync();
+
+        const std::string modeName = mode == 0 ? "key" : "slide";
+        const fs::path    outputPath =
+            std::filesystem::temp_directory_path() /
+            ("edge_non_malody_lead_in_" + modeName + ".mc");
+        TEST_ASSERT(beatMap.saveToFile(outputPath),
+                    "non-Malody lead-in map should save");
+
+        std::ifstream outputFile(outputPath);
+        json          exported;
+        outputFile >> exported;
+
+        TEST_ASSERT(exported["time"].size() == 1,
+                    "lead-in export should keep one timing");
+        TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+                    "first timing should define Malody beat zero");
+        TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
+                             LEAD_IN_MS) < 1e-6,
+                    "first timing delay should preserve the lead-in");
+
+        const auto sampleIt = std::find_if(
+            exported["note"].begin(), exported["note"].end(), isSoundNode);
+        TEST_ASSERT(sampleIt != exported["note"].end(),
+                    "lead-in export should keep the main sample");
+        TEST_ASSERT((*sampleIt)["beat"] == json::array({ 0, 0, 1 }),
+                    "pre-roll sample should anchor at beat zero");
+        TEST_ASSERT(sampleIt->value("offset", 0) == -237,
+                    "pre-roll sample should compensate the timing delay");
+
+        const auto noteIt =
+            std::find_if(exported["note"].begin(),
+                         exported["note"].end(),
+                         [](const json& node) { return !isSoundNode(node); });
+        TEST_ASSERT(noteIt != exported["note"].end(),
+                    "lead-in export should keep the playable note");
+        TEST_ASSERT((*noteIt)["beat"] == json::array({ 0, 0, 1 }),
+                    "playable note at first timing should remain on beat zero");
+
+        MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
+        reloaded.sync();
+        TEST_ASSERT(reloaded.m_timings.size() == 1 &&
+                        std::abs(reloaded.m_timings.front().m_timestamp -
+                                 LEAD_IN_MS) < 1e-6,
+                    "round trip should keep the first timing timestamp");
+        TEST_ASSERT(reloaded.m_noteData.notes.size() == 1 &&
+                        std::abs(reloaded.m_noteData.notes.front().m_timestamp -
+                                 LEAD_IN_MS) < 1e-6,
+                    "round trip should keep the playable note timestamp");
+        TEST_ASSERT(
+            reloaded.m_audioSamples.size() == 1 &&
+                std::abs(reloaded.m_audioSamples.front().effectiveTimestamp()) <
+                    1e-6,
+            "round trip should keep audio playback at time zero");
+    }
+
+    XINFO("PASS: Non-Malody lead-in uses timing delay and sample compensation");
+}
+
 /// @brief 验证缺少 x 的旧版自动采样按 Malody Pro Editor 规则展开。
 void test_legacy_samples_without_x_use_pro_editor_tracks()
 {
@@ -1494,6 +1567,7 @@ int main()
     test_sound_track_does_not_expand_key_count();
     test_multiple_sound_objects_round_trip_without_global_shift();
     test_timing_delay_and_sample_offset_round_trip_independently();
+    test_non_malody_lead_in_exports_timing_origin_and_audio_compensation();
     test_legacy_samples_without_x_use_pro_editor_tracks();
     test_invalid_sample_track_and_song_hint_conflict();
     testEditedSampleTimestampOverridesImportedBeat();

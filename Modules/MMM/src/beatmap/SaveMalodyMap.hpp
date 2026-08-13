@@ -356,6 +356,21 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          return lhs->m_timestamp < rhs->m_timestamp;
                      });
 
+    /// @brief 非 Malody 来源首次投影到 Malody 时使用的拍轴原点。
+    /// @details 首个 BPM 必须建立为 beat 0，其时间戳投影到 delay，不能把
+    /// 整张谱换算成正的小数拍偏移。
+    const Timing* generatedFirstBpmOrigin = nullptr;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const auto    source   = firstBpm.m_metadata.timing_properties.find(
+            TimingMetadataType::MALODY);
+        if ( source == firstBpm.m_metadata.timing_properties.end() ||
+             (!source->second.contains("beat") &&
+              !source->second.contains("delay")) ) {
+            generatedFirstBpmOrigin = &firstBpm;
+        }
+    }
+
     /// @brief 按 Malody 的逐 Timing delay 锚点将毫秒时间转换为拍号。
     /// @param time 待转换的绝对时间，单位为毫秒。
     /// @return Malody beat 三元数组。
@@ -366,8 +381,16 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         double lastTime   = 0;
         double lastBeat   = 0;
 
+        if ( generatedFirstBpmOrigin != nullptr ) {
+            lastTime = generatedFirstBpmOrigin->m_timestamp;
+            if ( generatedFirstBpmOrigin->m_bpm > 0.0 ) {
+                currentBpm = generatedFirstBpmOrigin->m_bpm;
+            }
+        }
+
         for ( const Timing* timing : bpmTimings ) {
             const Timing& t = *timing;
+            if ( timing == generatedFirstBpmOrigin ) continue;
             if ( t.m_timestamp > time + 1e-4 ) break;
 
             if ( const auto originalBeat = getMalodyTimingBeat(t) ) {
@@ -443,6 +466,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                         tj[key] = parseMalodyJsonOrString(val);
                     }
                 }
+            }
+            if ( &t == generatedFirstBpmOrigin ) {
+                tj["delay"] = t.m_timestamp;
             }
             timeArr.push_back(tj);
         }
@@ -893,8 +919,33 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
         }
         // beat 是 m_timestamp 的格式投影；不能让导入时保留的旧 beat
-        // 覆盖编辑器已经移动过的锚点。
-        sampleJson["beat"] = timeToBeat(sample.m_timestamp);
+        // 覆盖编辑器已经移动过的锚点。位于生成拍轴之前的采样锚定到
+        // beat 0，并把时间差折入自身 offset，以保持实际播放时刻不变。
+        std::int64_t exportedOffset = sample.m_offsetMs;
+        if ( generatedFirstBpmOrigin != nullptr &&
+             sample.m_timestamp <
+                 generatedFirstBpmOrigin->m_timestamp - 1e-4 ) {
+            sampleJson["beat"] =
+                timeToBeat(generatedFirstBpmOrigin->m_timestamp);
+            const long double adjustedOffset =
+                static_cast<long double>(sample.m_offsetMs) +
+                static_cast<long double>(sample.m_timestamp) -
+                static_cast<long double>(generatedFirstBpmOrigin->m_timestamp);
+            const long double minimumOffset = static_cast<long double>(
+                std::numeric_limits<std::int64_t>::min());
+            const long double maximumOffset = static_cast<long double>(
+                std::numeric_limits<std::int64_t>::max());
+            if ( adjustedOffset <= minimumOffset ) {
+                exportedOffset = std::numeric_limits<std::int64_t>::min();
+            } else if ( adjustedOffset >= maximumOffset ) {
+                exportedOffset = std::numeric_limits<std::int64_t>::max();
+            } else {
+                exportedOffset =
+                    static_cast<std::int64_t>(std::llround(adjustedOffset));
+            }
+        } else {
+            sampleJson["beat"] = timeToBeat(sample.m_timestamp);
+        }
 
         // Malody Slide 游戏逻辑只识别字符串 SOUND；Key 模式保留数值 1，
         // 兼容 BMS 编辑与既有 Key 谱面。
@@ -904,7 +955,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             sampleJson["type"] = 1;
         }
         sampleJson["sound"]  = sample.m_audioResourceId;
-        sampleJson["offset"] = sample.m_offsetMs;
+        sampleJson["offset"] = exportedOffset;
         if ( !saveAsSlideMode ) {
             sampleJson["x"] = sample.m_track;
         }
