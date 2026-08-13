@@ -89,6 +89,11 @@ mmm_add_test_executable(Logic ObjectPlacementSnapTest
 target_link_libraries(ObjectPlacementSnapTest PRIVATE Logic Log)
 add_test(NAME ObjectPlacementSnapTest COMMAND ObjectPlacementSnapTest)
 
+# 拍号累计测试覆盖短 BPM 段与整拍边界。
+mmm_add_test_executable(Logic BeatIndexTest tests/BeatIndexTest.cpp)
+target_link_libraries(BeatIndexTest PRIVATE Logic Log)
+add_test(NAME BeatIndexTest COMMAND BeatIndexTest)
+
 # 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。
 mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
 target_link_libraries(ProjectStorageTest PRIVATE Logic Log)

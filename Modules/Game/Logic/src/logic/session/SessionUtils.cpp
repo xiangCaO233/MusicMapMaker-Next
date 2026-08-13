@@ -86,8 +86,14 @@ int calculateBeatIndex(double                                       time,
         }
         if ( time >= nextBpmTime ) {
             const double beatDuration = 60.0 / bpm;
-            totalBeats += static_cast<int64_t>(std::round(
-                (nextBpmTime - currentBpm->m_timestamp) / beatDuration));
+            const double segmentDuration =
+                nextBpmTime - currentBpm->m_timestamp;
+            auto beatsInBpm = static_cast<int64_t>(
+                std::ceil(segmentDuration / beatDuration - 1e-6));
+            if ( segmentDuration > 0.0 ) {
+                beatsInBpm = std::max<int64_t>(beatsInBpm, 1);
+            }
+            totalBeats += beatsInBpm;
             continue;
         }
         break;
