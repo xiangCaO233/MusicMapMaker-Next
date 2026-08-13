@@ -681,6 +681,10 @@ struct CmdReplaceBeatmapData {
     /// @brief 是否为房主排序后下发的远端权威状态。
     /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
     bool authoritativeRemote{ false };
+
+    /// @brief 该权威状态已经包含的本机变化序号。
+    /// 逻辑线程只允许覆盖不新于此序号的本地编辑，0 表示没有待确认本地变化。
+    std::uint64_t includedLocalMutationSequence{ 0 };
 };
 
 /// @brief 将已经完整校验的协作资源绑定到当前访客会话。

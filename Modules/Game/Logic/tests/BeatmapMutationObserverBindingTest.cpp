@@ -21,11 +21,12 @@ class CountingMutationObserver final : public MMM::IBeatmapMutationObserver
 {
 public:
     /// @copydoc MMM::IBeatmapMutationObserver::onBeatmapMutated
-    void onBeatmapMutated(const MMM::BeatMap&,
-                          MMM::BeatmapMutationFlags flags) override
+    std::uint64_t onBeatmapMutated(const MMM::BeatMap&,
+                                   MMM::BeatmapMutationFlags flags) override
     {
         ++m_notificationCount;
         m_lastFlags = flags;
+        return m_nextMutationSequence++;
     }
 
     /// @copydoc MMM::IBeatmapMutationObserver::onBeatmapSynchronized
@@ -56,6 +57,8 @@ private:
     MMM::BeatmapMutationFlags m_lastFlags{ MMM::BeatmapMutationFlags::None };
     /// @brief 已经收到的权威基线同步次数。
     int m_synchronizationCount{ 0 };
+    /// @brief 模拟协作层接受本地变化后分配的严格递增序号。
+    std::uint64_t m_nextMutationSequence{ 1 };
 };
 
 /// @brief 创建可载入会话的最小谱面。
@@ -396,6 +399,122 @@ private:
             hasRootNote(session, 1.0, 3),
             hasCommittedPolyline(session),
             session.getContext().isNoteStatsDirty);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证活跃框选期间的旧权威状态不会在命令队列内自旋或覆盖本地编辑。
+/// @return 旧状态留在队列外，且只有包含本地变化序号的新状态能够回灌时返回
+/// true。
+[[nodiscard]] bool testRemoteSynchronizationWaitsForLocalMutationReceipt()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       initial = makeBeatmap();
+    auto& initialNote       = initial->m_noteData.notes.emplace_back();
+    initialNote.m_timestamp = 500.0;
+    initialNote.m_track     = 2;
+    initial->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(initial) },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdChangeTool{ .tool = MMM::Logic::EditTool::Marquee },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSelectAll{} });
+    session.update(0.0, config, false);
+
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    session.getContextMutable().isSelecting = true;
+
+    auto&      loadedContext = session.getContext();
+    const auto loadedNotes =
+        loadedContext.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    if ( loadedNotes.empty() ) return false;
+    const auto& loadedInitial =
+        loadedNotes.get<const MMM::Logic::NoteComponent>(*loadedNotes.begin());
+
+    auto  staleAuthority     = makeBeatmap();
+    auto& staleInitial       = staleAuthority->m_noteData.notes.emplace_back();
+    staleInitial.m_timestamp = 500.0;
+    staleInitial.m_track     = 2;
+    staleInitial.m_collaborationId = loadedInitial.m_collaborationId;
+    auto& staleRemote       = staleAuthority->m_noteData.notes.emplace_back();
+    staleRemote.m_timestamp = 1000.0;
+    staleRemote.m_track     = 3;
+    staleRemote.m_collaborationId = "remote-marquee-note";
+    staleAuthority->sync();
+
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdDeleteSelected{} });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = std::move(staleAuthority),
+            .replaceObjects                = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .includedLocalMutationSequence = 0,
+        },
+    });
+    session.update(0.1, config, false);
+    if ( session.hasPendingCommands() || observer->notificationCount() != 1 ||
+         observer->synchronizationCount() != 0 ||
+         hasRootNote(session, 0.5, 2) || hasRootNote(session, 1.0, 3) ) {
+        XERROR(
+            "Deferred authority spun or overwrote a local delete: pending={}, "
+            "mutations={}, syncs={}, deletedReturned={}, remoteVisible={}",
+            session.hasPendingCommands(),
+            observer->notificationCount(),
+            observer->synchronizationCount(),
+            hasRootNote(session, 0.5, 2),
+            hasRootNote(session, 1.0, 3));
+        return false;
+    }
+
+    session.update(0.2, config, false);
+    if ( session.hasPendingCommands() ||
+         observer->synchronizationCount() != 0 ) {
+        XERROR(
+            "Deferred authority re-entered the command queue while selecting");
+        return false;
+    }
+
+    session.getContextMutable().isSelecting = false;
+    session.update(0.3, config, false);
+    if ( session.hasPendingCommands() ||
+         observer->synchronizationCount() != 0 ||
+         hasRootNote(session, 0.5, 2) ) {
+        XERROR(
+            "Unconfirmed local delete was replaced after gesture completion");
+        return false;
+    }
+
+    auto  confirmedAuthority = makeBeatmap();
+    auto& confirmedRemote = confirmedAuthority->m_noteData.notes.emplace_back();
+    confirmedRemote.m_timestamp       = 1000.0;
+    confirmedRemote.m_track           = 3;
+    confirmedRemote.m_collaborationId = "remote-marquee-note";
+    confirmedAuthority->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = std::move(confirmedAuthority),
+            .replaceObjects                = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .includedLocalMutationSequence = 1,
+        },
+    });
+    session.update(0.4, config, false);
+    if ( observer->synchronizationCount() != 1 ||
+         hasRootNote(session, 0.5, 2) || !hasRootNote(session, 1.0, 3) ) {
+        XERROR(
+            "Confirmed authority did not preserve local deletion: syncs={}, "
+            "deletedReturned={}, remoteVisible={}",
+            observer->synchronizationCount(),
+            hasRootNote(session, 0.5, 2),
+            hasRootNote(session, 1.0, 3));
         return false;
     }
     return true;
@@ -745,6 +864,7 @@ int main()
                    testTimelineCommandsPublishMutations() &&
                    testSubNoteAnnotationPermissionAndMutationFlag() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
+                   testRemoteSynchronizationWaitsForLocalMutationReceipt() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&
                    testCollaborationBgmPermissionIsLocalGate() &&

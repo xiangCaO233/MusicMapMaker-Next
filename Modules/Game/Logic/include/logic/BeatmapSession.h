@@ -6,6 +6,7 @@
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -272,6 +273,16 @@ private:
     /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed
     /// 即可，因为观察者指针自身通过 acquire/release 原子传递。
     std::atomic_bool m_mutationSnapshotRequested{ false };
+
+    /// @brief 当前观察者成功排队且尚需权威结果覆盖的最新本地物件变化序号。
+    /// @warning UI 线程仅在观察者切换时清零，逻辑线程在低频 mutation 回调后
+    /// 写入；权威命令消费路径读取，用于阻止旧快照覆盖未确认编辑。
+    std::atomic_uint64_t m_latestAcceptedLocalObjectMutationSequence{ 0 };
+
+    /// @brief 活跃手势或本地确认屏障外等待的最新远端权威替换。
+    /// 仅由逻辑线程访问，并在新权威状态到达时直接覆盖旧状态，避免命令队列
+    /// 自旋重试和中间快照造成视觉回退。
+    std::optional<CmdReplaceBeatmapData> m_deferredAuthoritativeReplacement;
 
     /// @brief 协作访客谱面断线后的入队级只读门闩。
     /// @warning UI 线程写、所有命令生产线程读；只在协作连接状态变化时写入，

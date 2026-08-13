@@ -375,6 +375,8 @@ void BeatmapSession::setMutationObserver(
     bool                                             publishCurrentSnapshot)
 {
     const bool requestSnapshot = observer != nullptr && publishCurrentSnapshot;
+    m_latestAcceptedLocalObjectMutationSequence.store(
+        0, std::memory_order_release);
     std::atomic_store_explicit(
         &m_mutationObserver, std::move(observer), std::memory_order_release);
     m_mutationSnapshotRequested.store(requestSnapshot,
@@ -392,8 +394,8 @@ void BeatmapSession::publishRequestedMutationSnapshot()
     if ( !observer || !m_ctx->currentBeatmap ) return;
 
     SessionUtils::syncBeatmap(*m_ctx);
-    observer->onBeatmapMutated(*m_ctx->currentBeatmap,
-                               ::MMM::BeatmapMutationFlags::All);
+    static_cast<void>(observer->onBeatmapMutated(
+        *m_ctx->currentBeatmap, ::MMM::BeatmapMutationFlags::All));
 }
 
 /// @brief 判断会话是否存在等待逻辑线程消费的指令。

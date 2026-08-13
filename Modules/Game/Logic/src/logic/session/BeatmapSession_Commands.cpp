@@ -1206,23 +1206,47 @@ bool BeatmapSession::processCommands()
                                                   std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
             SessionUtils::syncBeatmap(*m_ctx);
-            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
+            const auto sequence = observer->onBeatmapMutated(
+                *m_ctx->currentBeatmap, mutationFlags);
+            if ( sequence != 0 &&
+                 mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
+                const auto activeObserver = std::atomic_load_explicit(
+                    &m_mutationObserver, std::memory_order_acquire);
+                if ( activeObserver == observer ) {
+                    m_latestAcceptedLocalObjectMutationSequence.store(
+                        sequence, std::memory_order_release);
+                }
+            }
         }
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
+    };
+    const auto localGestureActive = [this]() {
+        return m_ctx->isDragging || m_ctx->isSelecting ||
+               m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
     };
     while ( m_commandQueue.try_dequeue(cmd) ) {
         if ( blockCollaborationOfflineEdit(cmd) ||
              blockCollaborationUnauthorizedEdit(cmd, true) ) {
             continue;
         }
-        const auto* authoritativeReplacement =
+        auto* authoritativeReplacement =
             std::get_if<CmdReplaceBeatmapData>(&cmd);
         const bool authoritativeSynchronization =
             authoritativeReplacement &&
             authoritativeReplacement->authoritativeRemote;
-        const bool localGestureActive =
-            m_ctx->isDragging || m_ctx->isSelecting ||
-            m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
+        if ( authoritativeSynchronization &&
+             m_deferredAuthoritativeReplacement ) {
+            authoritativeReplacement->replaceObjects |=
+                m_deferredAuthoritativeReplacement->replaceObjects;
+            authoritativeReplacement->replaceTimelines |=
+                m_deferredAuthoritativeReplacement->replaceTimelines;
+            authoritativeReplacement->replaceMetadata |=
+                m_deferredAuthoritativeReplacement->replaceMetadata;
+            authoritativeReplacement->replaceAudioSamples |=
+                m_deferredAuthoritativeReplacement->replaceAudioSamples;
+            authoritativeReplacement->replaceAnnotations |=
+                m_deferredAuthoritativeReplacement->replaceAnnotations;
+        }
         const bool preservesActiveBrush =
             authoritativeSynchronization &&
             authoritativeReplacement->replaceObjects &&
@@ -1234,12 +1258,34 @@ bool BeatmapSession::processCommands()
             !m_ctx->eraserState.isActive &&
             m_ctx->draggedEntity == entt::null && !m_ctx->dragInitialNote &&
             !m_ctx->dragInitialSample;
-        if ( authoritativeSynchronization && localGestureActive &&
-             !preservesActiveBrush ) {
-            m_commandQueue.enqueue(std::move(cmd));
-            break;
-        }
         if ( authoritativeSynchronization ) publishPendingMutation();
+        const auto latestLocalObjectMutationSequence =
+            m_latestAcceptedLocalObjectMutationSequence.load(
+                std::memory_order_acquire);
+        const bool waitsForLocalMutation =
+            authoritativeSynchronization &&
+            authoritativeReplacement->replaceObjects &&
+            authoritativeReplacement->includedLocalMutationSequence <
+                latestLocalObjectMutationSequence;
+        if ( authoritativeSynchronization &&
+             ((localGestureActive() && !preservesActiveBrush) ||
+              waitsForLocalMutation) ) {
+            // 活跃手势期间把最新权威状态留在命令队列外；旧实现重新入队后会让
+            // Unlimited 逻辑线程持续执行完整 Session 更新。若本地变化尚未包含
+            // 在该状态中，也必须等待带确认序号的新结果，避免画布先回退再恢复。
+            m_deferredAuthoritativeReplacement = *authoritativeReplacement;
+            processed                          = true;
+            continue;
+        }
+        if ( authoritativeSynchronization ) {
+            if ( authoritativeReplacement->replaceObjects &&
+                 authoritativeReplacement->includedLocalMutationSequence >=
+                     latestLocalObjectMutationSequence ) {
+                m_latestAcceptedLocalObjectMutationSequence.store(
+                    0, std::memory_order_release);
+            }
+            m_deferredAuthoritativeReplacement.reset();
+        }
 
         std::optional<SessionContext::BrushState> preservedBrushState;
         bool        preservedBrushDragging = false;
@@ -1270,6 +1316,11 @@ bool BeatmapSession::processCommands()
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
                     replacedEditorConfig = true;
+                }
+                if constexpr ( std::is_same_v<T, CmdLoadBeatmap> ) {
+                    m_deferredAuthoritativeReplacement.reset();
+                    m_latestAcceptedLocalObjectMutationSequence.store(
+                        0, std::memory_order_release);
                 }
                 if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
@@ -1578,6 +1629,18 @@ bool BeatmapSession::processCommands()
     }
 
     publishPendingMutation();
+    const auto deferredCoversLocalObjects =
+        m_deferredAuthoritativeReplacement &&
+        (!m_deferredAuthoritativeReplacement->replaceObjects ||
+         m_deferredAuthoritativeReplacement->includedLocalMutationSequence >=
+             m_latestAcceptedLocalObjectMutationSequence.load(
+                 std::memory_order_acquire));
+    if ( m_deferredAuthoritativeReplacement && !localGestureActive() &&
+         deferredCoversLocalObjects ) {
+        m_commandQueue.enqueue(
+            LogicCommand(std::move(*m_deferredAuthoritativeReplacement)));
+        m_deferredAuthoritativeReplacement.reset();
+    }
     return processed;
 }
 

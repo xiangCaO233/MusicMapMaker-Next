@@ -46,11 +46,12 @@ public:
     /// @brief 保存最近一次谱面变化类型。
     /// @param beatMap 发生变化的谱面。
     /// @param flags 本次变化包含的数据类别。
-    void onBeatmapMutated(const MMM::BeatMap&       beatMap,
-                          MMM::BeatmapMutationFlags flags) override
+    std::uint64_t onBeatmapMutated(const MMM::BeatMap&       beatMap,
+                                   MMM::BeatmapMutationFlags flags) override
     {
         (void)beatMap;
         m_flags = flags;
+        return 0;
     }
 
     /// @brief 最近一次收到的谱面变化类型。

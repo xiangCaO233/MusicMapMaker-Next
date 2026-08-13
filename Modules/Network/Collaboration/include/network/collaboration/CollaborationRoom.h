@@ -131,8 +131,9 @@ class CollaborationRoom : public ::MMM::IBeatmapMutationObserver
 {
 public:
     /// @brief 把房主已排序的谱面状态回灌到当前本地会话。
-    using ApplyBeatmapCallback = std::function<void(
-        std::shared_ptr<::MMM::BeatMap>, ::MMM::BeatmapMutationFlags)>;
+    using ApplyBeatmapCallback =
+        std::function<void(std::shared_ptr<::MMM::BeatMap>,
+                           ::MMM::BeatmapMutationFlags, std::uint64_t)>;
     /// @brief 访客资源完整校验后绑定到协作会话的入口。
     using ResourceBundleCallback =
         std::function<void(CollaborationResourceBundle)>;
@@ -204,10 +205,12 @@ public:
                               const ::MMM::BeatMap& beatmap);
 
     /// @brief 接收逻辑线程已经物化的本地谱面变化并排队发送。
+    /// @return 成功编码并排队后的本地变化序号；拒绝或无净变化时返回 0。
     /// @warning 逻辑线程低频编辑分支调用；只执行内存编码和有界入队，
     /// 不直接访问 WebRTC 或等待 UI 线程。
-    void onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
-                          ::MMM::BeatmapMutationFlags flags) override;
+    [[nodiscard]] std::uint64_t onBeatmapMutated(
+        const ::MMM::BeatMap&       beatmap,
+        ::MMM::BeatmapMutationFlags flags) override;
 
     /// @brief 接收逻辑线程已经合并远端提交后的本地编码基线。
     /// @warning 逻辑线程低频远端提交路径调用；仅执行内存编码并获取短期互斥锁。
@@ -311,6 +314,22 @@ private:
     /// @brief 隔离无锁队列与后台任务生命周期的私有实现。
     class RemoteOperationPipeline;
 
+    /// @brief 一条已经编码且等待权威提交的本地谱面变化。
+    struct LocalOperation {
+        /// @brief 与进程内 ECS 无关的规范增量负载。
+        ByteBuffer payload;
+        /// @brief 当前房间内严格递增的本地变化序号。
+        std::uint64_t sequence{ 0 };
+    };
+
+    /// @brief 权威文档重放待确认本地变化后的可见谱面。
+    struct RebasedLocalBeatmap {
+        /// @brief 可安全回灌逻辑线程的领域谱面。
+        std::shared_ptr<::MMM::BeatMap> beatmap;
+        /// @brief 该谱面已经包含的最新本地变化序号。
+        std::uint64_t includedLocalMutationSequence{ 0 };
+    };
+
     /// @brief 驱动目录订阅并在断线后低频重连。
     /// @warning UI 热路径：只处理有界事件队列，重连受时间节流。
     void updateDirectory();
@@ -356,8 +375,10 @@ private:
     /// @brief 向协作状态机提交逻辑线程排队的本地谱面操作。
     void submitQueuedLocalOperations();
     /// @brief 在权威文档上重放尚未提交的本地增量，构造本机可见谱面。
-    [[nodiscard]] std::shared_ptr<::MMM::BeatMap>
-    materializeRebasedLocalBeatmap();
+    /// @param committedLocalMutationSequence 当前权威提交已确认的本地变化序号。
+    [[nodiscard]] std::optional<RebasedLocalBeatmap>
+    materializeRebasedLocalBeatmap(
+        std::uint64_t committedLocalMutationSequence);
     /// @brief 关闭本地谱面变更入口并丢弃尚未提交的操作。
     /// @warning UI 网络事件路径调用；会短暂获取本地操作队列锁，以与逻辑线程
     /// 正在编码的 mutation 完成终止握手。
@@ -434,9 +455,9 @@ private:
     /// @brief 已发送当前清单的访客集合。
     std::unordered_set<PeerId> m_resourceManifestRecipients;
     /// @brief 逻辑线程等待 UI 网络循环提交的本地操作。
-    std::deque<ByteBuffer> m_localOperationQueue;
+    std::deque<LocalOperation> m_localOperationQueue;
     /// @brief 已交给可靠传输且等待房主提交回执的本地操作。
-    std::deque<ByteBuffer> m_inFlightLocalOperations;
+    std::deque<LocalOperation> m_inFlightLocalOperations;
     /// @brief 保护本地操作队列。
     std::mutex m_localOperationMutex;
     /// @brief 当前房间是否接受逻辑线程发布的谱面变化。
@@ -445,6 +466,8 @@ private:
     bool m_localOperationSubmitBlocked = false;
     /// @brief 远端回灌曾覆盖含待确认编辑的本地状态，需要由本人提交回执重放。
     bool m_localStateNeedsRebase = false;
+    /// @brief 下一条成功编码的本地谱面变化序号。
+    std::uint64_t m_nextLocalMutationSequence{ 1 };
     /// @brief 当前房间角色是否为房主。
     std::atomic_bool m_hostRoleForObserver{ false };
     /// @brief 房主是否已经排队初始完整快照。

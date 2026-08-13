@@ -307,13 +307,15 @@ bool testPublicDirectoryWebRtcRoom()
     std::size_t                    hostApplyCount = 0;
     host.setApplyBeatmapCallback(
         [&hostModel, &hostApplyCount](std::shared_ptr<const BeatMap> beatmap,
-                                      BeatmapMutationFlags) {
+                                      BeatmapMutationFlags,
+                                      std::uint64_t) {
             hostModel = std::move(beatmap);
             ++hostApplyCount;
         });
     auto initial = makeBeatmap(1000.0, "Host Creator");
     hostModel    = initial;
-    host.onBeatmapMutated(*initial, BeatmapMutationFlags::All);
+    static_cast<void>(
+        host.onBeatmapMutated(*initial, BeatmapMutationFlags::All));
     host.update();
     if ( !hasExpectedState(hostModel, 1000.0, "Host Creator") ||
          hostApplyCount != 0U ) {
@@ -323,16 +325,24 @@ bool testPublicDirectoryWebRtcRoom()
     std::vector<std::shared_ptr<const BeatMap>> guestModels(GUEST_COUNT);
     std::vector<std::size_t>                    guestApplyCounts(GUEST_COUNT);
     std::vector<std::vector<BeatmapMutationFlags>> guestApplyFlags(GUEST_COUNT);
+    std::vector<std::vector<std::uint64_t>>        guestApplyMutationSequences(
+        GUEST_COUNT);
     guests.reserve(GUEST_COUNT);
     for ( std::size_t index = 0; index < GUEST_COUNT; ++index ) {
         auto guest = std::make_unique<CollaborationRoom>();
         guest->setApplyBeatmapCallback(
-            [&guestModels, &guestApplyCounts, &guestApplyFlags, index](
-                std::shared_ptr<const BeatMap> beatmap,
-                BeatmapMutationFlags           flags) {
+            [&guestModels,
+             &guestApplyCounts,
+             &guestApplyFlags,
+             &guestApplyMutationSequences,
+             index](std::shared_ptr<const BeatMap> beatmap,
+                    BeatmapMutationFlags           flags,
+                    std::uint64_t includedLocalMutationSequence) {
                 guestModels[index] = std::move(beatmap);
                 ++guestApplyCounts[index];
                 guestApplyFlags[index].push_back(flags);
+                guestApplyMutationSequences[index].push_back(
+                    includedLocalMutationSequence);
             });
         CollaborationJoinRoomConfig guestConfig;
         guestConfig.creator       = "Guest " + std::to_string(index + 1);
@@ -421,6 +431,7 @@ bool testPublicDirectoryWebRtcRoom()
     for ( std::size_t index = 0; index < guests.size(); ++index ) {
         guests[index]->onBeatmapSynchronized(*guestModels[index]);
         guestApplyFlags[index].clear();
+        guestApplyMutationSequences[index].clear();
     }
 
     auto  hostConcurrent      = makeBeatmap(1000.0, "Host Creator");
@@ -435,9 +446,10 @@ bool testPublicDirectoryWebRtcRoom()
     guestConcurrent->sync();
     hostModel           = hostConcurrent;
     guestModels.front() = guestConcurrent;
-    host.onBeatmapMutated(*hostConcurrent, BeatmapMutationFlags::Objects);
-    guests.front()->onBeatmapMutated(*guestConcurrent,
-                                     BeatmapMutationFlags::Objects);
+    static_cast<void>(
+        host.onBeatmapMutated(*hostConcurrent, BeatmapMutationFlags::Objects));
+    static_cast<void>(guests.front()->onBeatmapMutated(
+        *guestConcurrent, BeatmapMutationFlags::Objects));
     const bool concurrentEditsConverged =
         pumpUntil(server, host, guests, [&]() {
             return hasRootNoteTimestamps(hostModel,
@@ -466,9 +478,10 @@ bool testPublicDirectoryWebRtcRoom()
     auto guestReset     = makeBeatmap(1000.0, "Host Creator");
     hostModel           = hostReset;
     guestModels.front() = guestReset;
-    host.onBeatmapMutated(*hostReset, BeatmapMutationFlags::Objects);
-    guests.front()->onBeatmapMutated(*guestReset,
-                                     BeatmapMutationFlags::Objects);
+    static_cast<void>(
+        host.onBeatmapMutated(*hostReset, BeatmapMutationFlags::Objects));
+    static_cast<void>(guests.front()->onBeatmapMutated(
+        *guestReset, BeatmapMutationFlags::Objects));
     if ( !pumpUntil(server, host, guests, [&]() {
              return hasExpectedState(hostModel, 1000.0, "Host Creator") &&
                     hasExpectedState(
@@ -481,9 +494,10 @@ bool testPublicDirectoryWebRtcRoom()
     guests.front()->onBeatmapSynchronized(*guestModels.front());
 
     const auto guestApplyCountBeforeLocalEdit = guestApplyCounts.front();
-    auto       guestEdit = makeBeatmap(1250.0, "Host Creator");
-    guestModels.front()  = guestEdit;
-    guests.front()->onBeatmapMutated(*guestEdit, BeatmapMutationFlags::Objects);
+    auto       guestEdit                 = makeBeatmap(1250.0, "Host Creator");
+    guestModels.front()                  = guestEdit;
+    const auto guestEditMutationSequence = guests.front()->onBeatmapMutated(
+        *guestEdit, BeatmapMutationFlags::Objects);
     const bool guestEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Creator") ) {
             return false;
@@ -493,20 +507,30 @@ bool testPublicDirectoryWebRtcRoom()
                 return hasExpectedState(model, 1250.0, "Host Creator");
             });
     });
-    if ( !guestEditConverged ||
-         guestApplyCounts.front() <= guestApplyCountBeforeLocalEdit ) {
+    const auto latestGuestAppliedMutationSequence =
+        guestApplyMutationSequences.front().empty()
+            ? 0
+            : *std::max_element(guestApplyMutationSequences.front().begin(),
+                                guestApplyMutationSequences.front().end());
+    if ( !guestEditConverged || guestEditMutationSequence == 0 ||
+         guestApplyCounts.front() <= guestApplyCountBeforeLocalEdit ||
+         latestGuestAppliedMutationSequence < guestEditMutationSequence ) {
         XERROR(
             "Guest edit failed to converge or refresh its local view: "
-            "participants={}, applyBefore={}, applyAfter={}",
+            "participants={}, applyBefore={}, applyAfter={}, mutation={}, "
+            "included={}",
             host.participants().size(),
             guestApplyCountBeforeLocalEdit,
-            guestApplyCounts.front());
+            guestApplyCounts.front(),
+            guestEditMutationSequence,
+            latestGuestAppliedMutationSequence);
         return false;
     }
 
     auto hostEdit = makeBeatmap(1250.0, "Host Revised");
     hostModel     = hostEdit;
-    host.onBeatmapMutated(*hostEdit, BeatmapMutationFlags::Metadata);
+    static_cast<void>(
+        host.onBeatmapMutated(*hostEdit, BeatmapMutationFlags::Metadata));
     const bool hostEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Revised") ) {
             return false;
@@ -640,7 +664,8 @@ bool testHostAdmissionControl()
     }
 
     auto sharedBeatmap = makeBeatmap(1000.0, "Admission Host");
-    host.onBeatmapMutated(*sharedBeatmap, BeatmapMutationFlags::All);
+    static_cast<void>(
+        host.onBeatmapMutated(*sharedBeatmap, BeatmapMutationFlags::All));
     if ( !pumpUntil(server, host, guests, [&]() {
              return countLogs(*guests.back(),
                               CollaborationLogEventType::OperationCommitted) >=
@@ -664,8 +689,8 @@ bool testHostAdmissionControl()
         countLogDetails(*guests.back(), "local_operation_submit_failed");
     sharedBeatmap->m_noteData.notes.front().m_timestamp = 1250.0;
     sharedBeatmap->sync();
-    guests.back()->onBeatmapMutated(*sharedBeatmap,
-                                    BeatmapMutationFlags::Objects);
+    static_cast<void>(guests.back()->onBeatmapMutated(
+        *sharedBeatmap, BeatmapMutationFlags::Objects));
     guests.back()->update();
     if ( countLogDetails(*guests.back(), "local_operation_submit_failed") !=
          submitFailuresBefore ) {

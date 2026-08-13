@@ -26,7 +26,8 @@ CollaborationLogWindow::CollaborationLogWindow(
     if ( m_room ) {
         m_room->setApplyBeatmapCallback(
             [this](std::shared_ptr<::MMM::BeatMap> beatmap,
-                   ::MMM::BeatmapMutationFlags     flags) {
+                   ::MMM::BeatmapMutationFlags     flags,
+                   std::uint64_t includedLocalMutationSequence) {
                 auto session = m_boundSession.lock();
                 if ( !beatmap ) return;
                 if ( !session && !m_room->isHost() ) {
@@ -74,6 +75,8 @@ CollaborationLogWindow::CollaborationLogWindow(
                             flags, ::MMM::BeatmapMutationFlags::Annotations),
                         .notifyMutationObserver = false,
                         .authoritativeRemote    = true,
+                        .includedLocalMutationSequence =
+                            includedLocalMutationSequence,
                     }));
             });
         m_room->setResourceBundleCallback(
