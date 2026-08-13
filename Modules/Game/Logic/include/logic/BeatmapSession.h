@@ -108,6 +108,13 @@ public:
     /// 调度前调用；只读取会话热状态和队列近似长度。
     bool needsRealtimeUpdate() const;
 
+    /// @brief 判断会话是否需要在 Unlimited 模式下逐逻辑轮次推进。
+    /// @return 播放时钟或同音轨播放跟随正在推进时返回 true。
+    /// @warning 逻辑热路径：持有 SessionRegistry 锁时调用；只读取播放状态。
+    /// 交互命令由无锁命令队列立即唤醒，视觉动画按既有维护间隔推进，不得在此
+    /// 扩大为全部 needsRealtimeUpdate 状态以免重新引入 UI 锁饥饿。
+    bool needsUnlimitedPolling() const;
+
     /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
     /// @param trigger 触发自动保存的编辑器事件。
     /// @warning UI 线程或 Session 切换路径低频写入，逻辑线程每次 update

@@ -124,6 +124,12 @@ mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
 
+# Unlimited 空闲门控测试确保暂停时不争抢 Session 锁，实时工作仍保持无限更新。
+mmm_add_test_executable(Logic UnlimitedIdleUpdateGateTest
+                        tests/UnlimitedIdleUpdateGateTest.cpp)
+target_link_libraries(UnlimitedIdleUpdateGateTest PRIVATE Logic Log)
+add_test(NAME UnlimitedIdleUpdateGateTest COMMAND UnlimitedIdleUpdateGateTest)
+
 # 连续播放时钟测试覆盖 block 内推演、校准、暂停、Seek、循环与 UI 补间。
 mmm_add_test_executable(Logic PlaybackVisualClockTest
                         tests/PlaybackVisualClockTest.cpp)

@@ -6,6 +6,7 @@
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectDraftLaneService.h"
+#include "logic/UnlimitedIdleUpdateGate.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
@@ -39,7 +40,8 @@ constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
 constexpr double METADATA_AUTO_SAVE_IDLE_SECONDS = 0.75;
 
 /// @brief 非忙碌状态下 Session 逻辑轻量轮询的最小间隔。
-constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS = 0.0005;
+constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS =
+    std::chrono::duration<double>(UNLIMITED_IDLE_SESSION_POLL_INTERVAL).count();
 
 /// @brief 视觉动画目标值的吸附阈值。
 constexpr double VISUAL_ANIMATION_EPSILON = 0.0001;
@@ -409,6 +411,12 @@ bool BeatmapSession::needsRealtimeUpdate() const
            m_ctx->eraserState.isActive || m_ctx->animateTimeAnimationActive ||
            m_ctx->animatedTimelineZoomAnimationActive ||
            std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
+}
+
+/// @brief 判断会话是否需要在 Unlimited 模式下逐逻辑轮次推进。
+bool BeatmapSession::needsUnlimitedPolling() const
+{
+    return m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
 }
 
 /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
