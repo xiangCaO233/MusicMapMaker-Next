@@ -1824,8 +1824,20 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
 
 void ToolbarView::initializeColorPalette()
 {
-    loadSoftwareDefaultPalette();
+    loadSkinDefaultPalette();
     m_colorPaletteInitialized = true;
+}
+
+void ToolbarView::refreshPaletteAfterSkinChange()
+{
+    if ( !m_colorPaletteInitialized ) return;
+
+    if ( m_activePaletteSelection == PaletteSelectionKind::SkinDefault ) {
+        loadSkinDefaultPalette();
+    } else if ( m_activePaletteSelection ==
+                PaletteSelectionKind::InheritSoftwareDefault ) {
+        loadSoftwareDefaultPalette();
+    }
 }
 
 void ToolbarView::loadSkinDefaultPalette()
@@ -1905,10 +1917,12 @@ void ToolbarView::applyProjectPalettePreference()
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
 
     std::string projectKey;
-    std::string preferenceSource = "inherit";
-    std::string schemeName       = settings.defaultColorPaletteSchemeName;
+    std::string preferenceSource = "skin";
+    std::string schemeName       = Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
     if ( project ) {
-        projectKey = Config::pathToUtf8(project->m_projectRoot);
+        projectKey       = Config::pathToUtf8(project->m_projectRoot);
+        preferenceSource = "inherit";
+        schemeName       = settings.defaultColorPaletteSchemeName;
         if ( !project->m_settings.m_colorPaletteSchemeName.empty() ) {
             preferenceSource = "project";
             schemeName       = project->m_settings.m_colorPaletteSchemeName;

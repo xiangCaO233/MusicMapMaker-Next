@@ -105,6 +105,25 @@ bool testProjectAudioToolWorkspaceRoundTrip()
                  "legacy project audio placements should keep automatic size");
 }
 
+/// @brief 验证新项目和缺少方案字段的项目默认使用皮肤配色。
+/// @return 新旧结构均默认为皮肤方案且显式继承值仍保留时返回 true。
+bool testProjectColorPaletteDefaults()
+{
+    const MMM::ProjectSettings defaults;
+    const auto legacy = json::object().get<MMM::ProjectSettings>();
+    const auto inherited =
+        json{ { "m_colorPaletteSchemeName", "" } }.get<MMM::ProjectSettings>();
+    const std::string_view skinDefault =
+        MMM::Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+    return check(defaults.m_colorPaletteSchemeName == skinDefault,
+                 "new projects should default to the skin palette") &&
+           check(legacy.m_colorPaletteSchemeName == skinDefault,
+                 "projects without a palette field should use the skin "
+                 "palette") &&
+           check(inherited.m_colorPaletteSchemeName.empty(),
+                 "explicit software palette inheritance should remain intact");
+}
+
 /// @brief 验证 osu! 字符串 Video 事件能够作为唯一背景载入。
 /// @param outputDirectory 测试输出目录。
 /// @return 验证是否通过。
@@ -952,6 +971,7 @@ int main(int argc, char* argv[])
 
     bool ok = true;
     ok &= testProjectAudioToolWorkspaceRoundTrip();
+    ok &= testProjectColorPaletteDefaults();
     ok &= testPureStringVideoEvent(outputDirectory);
     ok &= testNumericVideoEventPriority(outputDirectory);
     ok &= testImageEventFallback(outputDirectory);

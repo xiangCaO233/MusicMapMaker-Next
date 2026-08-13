@@ -15,6 +15,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -171,6 +172,13 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     settings.selectedSkinDirectory = skinDirectoryName;
     m_layoutMetricsCache.valid     = false;
     m_hasPreparedLayoutMetrics     = false;
+
+    if ( m_sourceManager ) {
+        if ( auto* mainDock = m_sourceManager->getView<MainDockSpaceUI>(
+                 "MainDockSpaceUI") ) {
+            mainDock->refreshPaletteAfterSkinChange();
+        }
+    }
 
     auto& audio = Audio::AudioManager::instance();
     audio.clearSoundEffects();

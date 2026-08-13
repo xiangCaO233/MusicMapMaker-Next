@@ -30,6 +30,9 @@ public:
     /// @warning UI 热路径：每帧执行，禁止引入阻塞或文件系统操作。
     void update(UIManager* sourceManager) override;
 
+    /// @brief 在皮肤切换完成后刷新仍依赖皮肤的当前调色盘。
+    void refreshPaletteAfterSkinChange();
+
 private:
     /// @brief 当前调色盘选择来源。
     enum class PaletteSelectionKind {
@@ -226,7 +229,7 @@ private:
                         const char* shortLabel, float width, float height,
                         bool showLabel) const;
 
-    /// @brief 从软件默认方案初始化调色盘颜色。
+    /// @brief 从当前皮肤默认方案初始化调色盘颜色。
     void initializeColorPalette();
 
     /// @brief 将调色盘重置为当前皮肤默认配色。

@@ -57,6 +57,11 @@ MainDockSpaceUI::MainDockSpaceUI(const std::string& name)
 
 MainDockSpaceUI::~MainDockSpaceUI() = default;
 
+void MainDockSpaceUI::refreshPaletteAfterSkinChange()
+{
+    m_toolbarView.refreshPaletteAfterSkinChange();
+}
+
 namespace
 {
 /// @brief 无边框窗口缩放热区基础宽度。

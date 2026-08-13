@@ -65,6 +65,9 @@ public:
 
     void update(UIManager* sourceManager) override;
 
+    /// @brief 在新皮肤已生效后刷新工具栏中依赖皮肤的调色盘。
+    void refreshPaletteAfterSkinChange();
+
     void* getActualInstance() override { return this; }
 
     /// @brief 是否需要重载
