@@ -527,6 +527,152 @@ private:
     return true;
 }
 
+/// @brief 验证关闭 BGM 权限后会拦截轨道数、绘制、擦除及撤销入口。
+/// @return BGM 编辑保持不变且普通物件仍可编辑时返回 true。
+[[nodiscard]] bool testCollaborationBgmPermissionIsLocalGate()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    config.visual.trackLayout.left   = 0.1F;
+    config.visual.trackLayout.right  = 0.5F;
+    config.visual.judgeline_pos      = 0.5F;
+    config.settings.enableBmsEditing = true;
+
+    auto beatmap                               = makeBeatmap();
+    beatmap->m_baseMapMetadata.bgm_track_count = 1;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateViewport{
+            .cameraId = "Basic2DCanvas",
+            .width    = 1000.0F,
+            .height   = 600.0F,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdChangeTool{ .tool = MMM::Logic::EditTool::Draw },
+    });
+    session.update(0.0, config, false);
+
+    std::atomic_int blockedEvents{ 0 };
+    auto&           eventBus = MMM::Event::EventBus::instance();
+    const auto      subscription =
+        eventBus.subscribe<MMM::Event::CollaborationPermissionEditBlockedEvent>(
+            [&blockedEvents](
+                const MMM::Event::CollaborationPermissionEditBlockedEvent&) {
+                blockedEvents.fetch_add(1, std::memory_order_relaxed);
+            });
+
+    const auto withoutBgm = MMM::BeatmapMutationFlags::Objects |
+                            MMM::BeatmapMutationFlags::Timelines |
+                            MMM::BeatmapMutationFlags::Metadata |
+                            MMM::BeatmapMutationFlags::Annotations;
+    session.setCollaborationAllowedMutationFlags(withoutBgm);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateBgmTrackCount{ .bgmTrackCount = 2 },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas",
+            .mouseX   = 550.0F,
+            .mouseY   = 150.0F,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" },
+    });
+    session.update(0.1, config, false);
+    const bool directBgmEditsBlocked =
+        session.getContext().bgmTrackCount == 1 &&
+        session.getContext()
+            .sampleRegistry.view<const MMM::Logic::SampleComponent>()
+            .empty();
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas",
+            .mouseX   = 150.0F,
+            .mouseY   = 150.0F,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" },
+    });
+    session.update(0.2, config, false);
+    const bool objectEditStillAllowed =
+        session.getContext()
+            .noteRegistry.view<const MMM::Logic::NoteComponent>()
+            .size() == 1U;
+
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::All);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas",
+            .mouseX   = 550.0F,
+            .mouseY   = 150.0F,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateBgmTrackCount{ .bgmTrackCount = 2 },
+    });
+    session.update(0.3, config, false);
+
+    const auto samples =
+        session.getContext()
+            .sampleRegistry.view<const MMM::Logic::SampleComponent>();
+    const auto sampleEntity = samples.empty() ? entt::null : *samples.begin();
+    session.setCollaborationAllowedMutationFlags(withoutBgm);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdSetHoveredEntity{
+            .entity   = sampleEntity,
+            .part     = 0,
+            .subIndex = -1,
+            .kind     = MMM::Logic::ChartObjectKind::AudioSample,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdStartErase{ .cameraId = "Basic2DCanvas" },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdEndErase{ .cameraId = "Basic2DCanvas" },
+    });
+    session.update(0.4, config, false);
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.5, config, false);
+
+    const bool eraseAndUndoBlocked =
+        sampleEntity != entt::null &&
+        session.getContext().sampleRegistry.valid(sampleEntity) &&
+        session.getContext().bgmTrackCount == 2;
+    session.setCollaborationAllowedMutationFlags(
+        MMM::BeatmapMutationFlags::All);
+    eventBus.unsubscribe<MMM::Event::CollaborationPermissionEditBlockedEvent>(
+        subscription);
+
+    if ( !directBgmEditsBlocked || !objectEditStillAllowed ||
+         !eraseAndUndoBlocked ||
+         blockedEvents.load(std::memory_order_relaxed) < 2 ) {
+        XERROR(
+            "Collaboration BGM permission gate failed: direct={}, object={}, "
+            "eraseUndo={}, bgmTracks={}, samples={}, events={}",
+            directBgmEditsBlocked,
+            objectEditStillAllowed,
+            eraseAndUndoBlocked,
+            session.getContext().bgmTrackCount,
+            session.getContext()
+                .sampleRegistry.view<const MMM::Logic::SampleComponent>()
+                .size(),
+            blockedEvents.load(std::memory_order_relaxed));
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证访客连接门闩会清空旧打开请求并拦截所有后续本机项目请求。
 /// @return 门闩解除前没有项目动作进入逻辑线程时返回 true。
 [[nodiscard]] bool testGuestConnectionBlocksLocalProjectOpening()
@@ -578,6 +724,7 @@ int main()
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&
+                   testCollaborationBgmPermissionIsLocalGate() &&
                    testGuestConnectionBlocksLocalProjectOpening()
                ? 0
                : 1;

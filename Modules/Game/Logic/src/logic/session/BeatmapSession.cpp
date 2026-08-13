@@ -9,6 +9,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 
 #include "logic/session/ActionController.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
@@ -56,6 +57,61 @@ constexpr double BOUND_SOUND_PREFETCH_WINDOW_SECONDS = 5.0;
 
 /// @brief 单次预读最多检查的打击事件数量。
 constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
+
+/// @brief 判断画笔位置将编辑普通物件还是 BGM 自动采样。
+/// @param ctx 当前谱面会话。
+/// @param cameraId 命令所属画布 ID。
+/// @param mouseX 鼠标在画布内的横坐标。
+/// @return BGM 轨道返回 AudioSamples，其余位置返回 Objects。
+/// @warning 命令权限检查热路径：只读取相机和配置缓存并执行常量级投影计算。
+[[nodiscard]] ::MMM::BeatmapMutationFlags brushMutationFlagsAt(
+    const SessionContext& ctx, const std::string& cameraId, float mouseX)
+{
+    if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
+        return ::MMM::BeatmapMutationFlags::Objects;
+    }
+
+    const auto camera = ctx.cameras.find(cameraId);
+    if ( camera == ctx.cameras.end() ) {
+        return ::MMM::BeatmapMutationFlags::Objects;
+    }
+    const auto lanes =
+        calculateCanvasLaneProjection(camera->second.viewportWidth,
+                                      ctx.trackCount,
+                                      ctx.bgmTrackCount,
+                                      ctx.lastConfig.visual.trackLayout.left,
+                                      ctx.lastConfig.visual.trackLayout.right,
+                                      camera->second.horizontalOffsetX,
+                                      true,
+                                      ctx.lastConfig.settings.enableBmsEditing);
+    const auto lane = lanes.laneAt(mouseX);
+    return lane && lane->kind == CanvasLaneKind::Bgm
+               ? ::MMM::BeatmapMutationFlags::AudioSamples
+               : ::MMM::BeatmapMutationFlags::Objects;
+}
+
+/// @brief 返回当前悬停物件对应的协作权限类别。
+/// @param ctx 当前谱面会话。
+/// @return 有效悬停物件的数据类别；没有有效目标时返回 None。
+/// @warning 命令权限检查热路径：仅在两个独立 Registry 中执行常量级实体查询。
+[[nodiscard]] ::MMM::BeatmapMutationFlags hoveredMutationFlags(
+    const SessionContext& ctx)
+{
+    if ( ctx.hoveredEntity == entt::null ) {
+        return ::MMM::BeatmapMutationFlags::None;
+    }
+    if ( ctx.hoveredObjectKind == ChartObjectKind::AudioSample ) {
+        return ctx.sampleRegistry.valid(ctx.hoveredEntity) &&
+                       ctx.sampleRegistry.all_of<SampleComponent>(
+                           ctx.hoveredEntity)
+                   ? ::MMM::BeatmapMutationFlags::AudioSamples
+                   : ::MMM::BeatmapMutationFlags::None;
+    }
+    return ctx.noteRegistry.valid(ctx.hoveredEntity) &&
+                   ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity)
+               ? ::MMM::BeatmapMutationFlags::Objects
+               : ::MMM::BeatmapMutationFlags::None;
+}
 
 /// @brief 将当前时间窗口内的物件绑定音效增量加入后台加载队列。
 /// @param ctx 当前谱面会话。
@@ -148,6 +204,31 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
                       .empty() ) {
                 required |= ::MMM::BeatmapMutationFlags::AudioSamples;
             }
+        } else if ( const auto* startBrush =
+                        std::get_if<CmdStartBrush>(&cmd) ) {
+            required = brushMutationFlagsAt(
+                *m_ctx, startBrush->cameraId, startBrush->mouseX);
+        } else if ( const auto* updateBrush =
+                        std::get_if<CmdUpdateBrush>(&cmd) ) {
+            required = brushMutationFlagsAt(
+                *m_ctx, updateBrush->cameraId, updateBrush->mouseX);
+        } else if ( std::holds_alternative<CmdEndBrush>(cmd) ) {
+            required = m_ctx->brushState.isActive
+                           ? (m_ctx->brushState.createsAudioSample
+                                  ? ::MMM::BeatmapMutationFlags::AudioSamples
+                                  : ::MMM::BeatmapMutationFlags::Objects)
+                           : ::MMM::BeatmapMutationFlags::None;
+        } else if ( std::holds_alternative<CmdStartErase>(cmd) ||
+                    std::holds_alternative<CmdUpdateErase>(cmd) ) {
+            required = hoveredMutationFlags(*m_ctx);
+        } else if ( std::holds_alternative<CmdEndErase>(cmd) ) {
+            required = m_ctx->eraserState.isActive &&
+                               !m_ctx->eraserState.targetEntities.empty()
+                           ? (m_ctx->eraserState.targetObjectKind ==
+                                      ChartObjectKind::AudioSample
+                                  ? ::MMM::BeatmapMutationFlags::AudioSamples
+                                  : ::MMM::BeatmapMutationFlags::Objects)
+                           : ::MMM::BeatmapMutationFlags::None;
         } else if ( std::holds_alternative<CmdUndo>(cmd) ) {
             required = m_ctx->actionStack.undoMutationFlags();
         } else if ( std::holds_alternative<CmdRedo>(cmd) ) {

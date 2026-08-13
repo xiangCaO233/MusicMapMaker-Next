@@ -203,10 +203,11 @@ public:
 
     /// @brief 获取用户可读操作名称。
     std::string getName() const override;
-    /// @brief BGM 轨道数量属于谱面元数据。
+    /// @brief BGM 轨道数量同时影响元数据与自动采样轨道投影。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
-        return ::MMM::BeatmapMutationFlags::Metadata;
+        return ::MMM::BeatmapMutationFlags::Metadata |
+               ::MMM::BeatmapMutationFlags::AudioSamples;
     }
 
 private:

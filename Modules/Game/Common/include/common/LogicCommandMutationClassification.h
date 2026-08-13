@@ -54,13 +54,16 @@ namespace MMM::Logic
                 return value.kind == ChartObjectKind::AudioSample
                            ? ::MMM::BeatmapMutationFlags::AudioSamples
                            : ::MMM::BeatmapMutationFlags::Objects;
+            } else if constexpr ( std::is_same_v<T, CmdStartBrush> ||
+                                  std::is_same_v<T, CmdUpdateBrush> ||
+                                  std::is_same_v<T, CmdEndBrush> ||
+                                  std::is_same_v<T, CmdStartErase> ||
+                                  std::is_same_v<T, CmdUpdateErase> ||
+                                  std::is_same_v<T, CmdEndErase> ) {
+                // 画笔和橡皮擦可在玩家物件与 BGM 自动采样之间切换，具体类别
+                // 必须结合会话中的轨道投影或当前手势状态判断。
+                return ::MMM::BeatmapMutationFlags::None;
             } else if constexpr (
-                std::is_same_v<T, CmdStartBrush> ||
-                std::is_same_v<T, CmdUpdateBrush> ||
-                std::is_same_v<T, CmdEndBrush> ||
-                std::is_same_v<T, CmdStartErase> ||
-                std::is_same_v<T, CmdUpdateErase> ||
-                std::is_same_v<T, CmdEndErase> ||
                 std::is_same_v<T, CmdMirrorSelected> ||
                 std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
                 std::is_same_v<T, CmdApplyNoteColorToSelection> ||
@@ -82,7 +85,10 @@ namespace MMM::Logic
             } else if constexpr ( std::is_same_v<T,
                                                  CmdMarkBeatmapMetadataDirty> ||
                                   std::is_same_v<T, CmdUpdateBgmTrackCount> ) {
-                return ::MMM::BeatmapMutationFlags::Metadata;
+                return std::is_same_v<T, CmdUpdateBgmTrackCount>
+                           ? ::MMM::BeatmapMutationFlags::Metadata |
+                                 ::MMM::BeatmapMutationFlags::AudioSamples
+                           : ::MMM::BeatmapMutationFlags::Metadata;
             } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
                 return ::MMM::BeatmapMutationFlags::Metadata;
             } else if constexpr ( std::is_same_v<T, CmdUndo> ||
