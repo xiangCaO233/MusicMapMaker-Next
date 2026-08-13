@@ -539,6 +539,11 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
             app->m_windowFrameAdapter->handleClientFocusChange(focused ==
                                                                GLFW_TRUE);
         }
+        Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+            .type           = Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED,
+            .hasStateChange = true,
+            .isFocused      = focused == GLFW_TRUE,
+        });
     });
     glfwSetKeyCallback(m_windowHandle, GLFW_KeyCallback);
     glfwSetDropCallback(m_windowHandle, GLFW_DropCallback);
@@ -730,6 +735,7 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                     case Event::NativeEventType::GLFW_WINDOW_RESIZED:
                     case Event::NativeEventType::
                         GLFW_WINDOW_CONTENT_SCALE_CHANGED:
+                    case Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED:
                         break;
                     }
                 });
@@ -1246,6 +1252,11 @@ void NativeWindow::handleWindowIconify(int iconified)
     }
 
     if ( iconified == GLFW_TRUE ) {
+        Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+            .type           = Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED,
+            .hasStateChange = true,
+            .isFocused      = false,
+        });
 #ifdef _WIN32
         m_restoreMaximizedAfterIconify =
             shouldPreserveWin32MaximizedRestore(m_windowHandle,

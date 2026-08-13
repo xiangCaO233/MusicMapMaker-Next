@@ -863,6 +863,7 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
+    target.settings.autoSave             = source.settings.autoSave;
     target.settings.collaborationViewportRenderMode =
         source.settings.collaborationViewportRenderMode;
     target.settings.shortcutConfig = source.settings.shortcutConfig;
@@ -2765,6 +2766,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     if ( previousIndex >= 0 &&
          previousIndex < static_cast<int32_t>(sessions.size()) &&
          sessions[previousIndex].session ) {
+        if ( previousIndex != index ) {
+            sessions[previousIndex].session->requestAutoSave(
+                AutoSaveTrigger::BeatmapSwitch);
+        }
         auto& previousCtx =
             sessions[previousIndex].session->getContextMutable();
         previousFingerprint = sessions[previousIndex].audioTimelineFingerprint;
@@ -2853,6 +2858,21 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         activeSession->pushCommand(
             CmdUpdateViewport{ cameraId, size.x, size.y });
     }
+}
+
+/// @brief 为当前活动谱面提交一次跨线程自动保存事件。
+void EditorEngine::requestAutoSaveForActiveSession(AutoSaveTrigger trigger)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    auto&         sessions    = m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[static_cast<size_t>(activeIndex)].session ) {
+        return;
+    }
+    sessions[static_cast<size_t>(activeIndex)].session->requestAutoSave(
+        trigger);
 }
 
 /// @brief 请求 UI 线程将指定 Session 对应的画布窗口聚焦到前台。
@@ -3139,6 +3159,9 @@ void EditorEngine::loop()
                     entry.session->hasPendingCommands();
                 const bool hasPendingMetadataAutoSave =
                     entry.session->hasPendingMetadataAutoSave();
+                const bool needsAutoSavePolling =
+                    entry.session->needsAutoSavePolling(
+                        editorConfigSnapshot.settings.autoSave);
                 bool shouldUpdateSession = isActiveSession;
                 if ( !shouldUpdateSession ) {
                     const bool needsRealtimeUpdate =
@@ -3148,7 +3171,8 @@ void EditorEngine::loop()
                     } else if ( hadPendingCommands ) {
                         shouldUpdateSession = true;
                     } else if ( !isVisibleSession &&
-                                !hasPendingMetadataAutoSave ) {
+                                !hasPendingMetadataAutoSave &&
+                                !needsAutoSavePolling ) {
                         shouldUpdateSession = false;
                     } else {
                         const auto& lastBackgroundUpdate =

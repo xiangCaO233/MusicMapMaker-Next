@@ -4,6 +4,7 @@
 
 namespace MMM::UI
 {
+class IStatusMessageSink;
 
 /// @brief 消费谱面保存结果事件并渲染鼠标附近的反馈气泡。
 class SaveResultFeedback final
@@ -29,8 +30,9 @@ public:
 
     /// @brief 消费保存结果并更新反馈气泡计时器。
     /// @param deltaSeconds 自上一帧以来经过的秒数。
+    /// @param statusMessageSink 自动保存成功时使用的状态栏消息入口。
     /// @warning UI 热路径：每帧仅消费少量事件并更新常量规模状态。
-    void update(float deltaSeconds);
+    void update(float deltaSeconds, IStatusMessageSink& statusMessageSink);
 
     /// @brief 渲染当前有效的保存结果反馈气泡。
     /// @param dpiScale 当前窗口内容缩放。

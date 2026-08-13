@@ -265,6 +265,11 @@ private:
     /// 窗口列表并投递少量矩形。
     void syncNativeWindowDragAreas();
 
+    /// @brief 检测 ImGui 根窗口焦点转移并提交低频自动保存事件。
+    /// @warning UI 热路径：每帧只比较两个 ImGuiID；事件分支仅设置 Session
+    /// 原子位，不执行文件 I/O 或复制谱面数据。
+    void trackImGuiFocusForAutoSave();
+
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
 
@@ -350,6 +355,15 @@ private:
 
     /// @brief 临时项目保存到正式目录事件订阅 ID。
     Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
+
+    /// @brief 原生窗口焦点状态事件订阅 ID。
+    Event::SubscriptionID m_nativeWindowFocusSubId{ 0 };
+
+    /// @brief 上一帧拥有导航焦点的 ImGui 根窗口 ID。
+    ImGuiID m_lastFocusedImGuiRootId{ 0 };
+
+    /// @brief 是否已经取得首帧 ImGui 焦点基线。
+    bool m_imGuiFocusTrackingInitialized{ false };
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };

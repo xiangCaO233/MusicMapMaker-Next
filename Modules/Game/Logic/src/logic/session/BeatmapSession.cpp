@@ -1,6 +1,7 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommandMutationClassification.h"
+#include "config/EditorSettings.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
@@ -150,6 +151,26 @@ double sanitizeTimelineZoom(double zoom)
         return 1.0;
     }
     return zoom;
+}
+
+/// @brief 判断当前配置是否启用了指定自动保存事件。
+/// @param config 软件全局自动保存配置。
+/// @param trigger 待检查的事件。
+/// @return 事件模式已启用且对应事件开关打开时返回 true。
+[[nodiscard]] bool isAutoSaveTriggerEnabled(
+    const Config::AutoSaveConfig& config, AutoSaveTrigger trigger)
+{
+    if ( config.mode != Config::AutoSaveMode::EventTriggered ) return false;
+
+    switch ( trigger ) {
+    case AutoSaveTrigger::ObjectModified: return config.onObjectModified;
+    case AutoSaveTrigger::BeatmapSwitch: return config.onBeatmapSwitch;
+    case AutoSaveTrigger::ImGuiWindowFocusLost:
+        return config.onImGuiWindowFocusLost;
+    case AutoSaveTrigger::NativeWindowFocusLost:
+        return config.onNativeWindowFocusLost;
+    }
+    return false;
 }
 }  // namespace
 
@@ -390,6 +411,25 @@ bool BeatmapSession::needsRealtimeUpdate() const
            std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
 }
 
+/// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
+void BeatmapSession::requestAutoSave(AutoSaveTrigger trigger)
+{
+    m_requestedAutoSaveTriggers.fetch_or(autoSaveTriggerBit(trigger),
+                                         std::memory_order_relaxed);
+}
+
+/// @brief 判断后台会话是否仍需轮询自动保存期限或事件请求。
+bool BeatmapSession::needsAutoSavePolling(
+    const Config::AutoSaveConfig& config) const
+{
+    if ( m_requestedAutoSaveTriggers.load(std::memory_order_relaxed) != 0U ||
+         m_triggeredAutoSavePending ) {
+        return true;
+    }
+    return config.mode == Config::AutoSaveMode::Timed &&
+           m_ctx->currentBeatmap && m_ctx->actionStack.isDirty();
+}
+
 /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
 /// @warning 逻辑热路径：每个 Session update
 /// 调用；普通路径只做常量级状态判断，只有空闲超时脏分支允许全量同步 BeatMap。
@@ -445,6 +485,69 @@ void BeatmapSession::flushDeferredMetadataAutoSave(double currentSysTime,
     (void)flushPendingMetadataAutoSave();
 }
 
+/// @brief 消费全局配置允许的事件请求并推进定时/事件自动保存。
+void BeatmapSession::flushConfiguredAutoSave(
+    double currentSysTime, bool isEditingBusy,
+    const Config::AutoSaveConfig& config)
+{
+    const std::uint8_t requestedTriggers =
+        m_requestedAutoSaveTriggers.exchange(0U, std::memory_order_relaxed);
+    constexpr AutoSaveTrigger EXTERNAL_TRIGGERS[]{
+        AutoSaveTrigger::BeatmapSwitch,
+        AutoSaveTrigger::ImGuiWindowFocusLost,
+        AutoSaveTrigger::NativeWindowFocusLost,
+    };
+    for ( const AutoSaveTrigger trigger : EXTERNAL_TRIGGERS ) {
+        if ( (requestedTriggers & autoSaveTriggerBit(trigger)) != 0U &&
+             isAutoSaveTriggerEnabled(config, trigger) ) {
+            m_triggeredAutoSavePending = true;
+        }
+    }
+
+    const bool hasUnsavedChanges =
+        m_ctx->currentBeatmap &&
+        (m_ctx->actionStack.isDirty() || m_metadataAutoSavePending);
+
+    if ( config.mode == Config::AutoSaveMode::Timed ) {
+        m_triggeredAutoSavePending   = false;
+        const double intervalSeconds = config.intervalSeconds();
+        if ( m_timedAutoSaveDeadline <= 0.0 ||
+             m_timedAutoSaveIntervalSeconds != intervalSeconds ) {
+            m_timedAutoSaveIntervalSeconds = intervalSeconds;
+            m_timedAutoSaveDeadline        = currentSysTime + intervalSeconds;
+            return;
+        }
+        if ( currentSysTime < m_timedAutoSaveDeadline || isEditingBusy ) {
+            return;
+        }
+
+        m_timedAutoSaveDeadline = currentSysTime + intervalSeconds;
+        if ( hasUnsavedChanges ) {
+            handleCommand(CmdSaveBeatmap{
+                .kind = BeatmapSaveKind::TimedAutoSave,
+            });
+        }
+        return;
+    }
+
+    m_timedAutoSaveDeadline        = 0.0;
+    m_timedAutoSaveIntervalSeconds = 0.0;
+    if ( config.mode != Config::AutoSaveMode::EventTriggered ) {
+        m_triggeredAutoSavePending = false;
+        return;
+    }
+    if ( !m_triggeredAutoSavePending ) return;
+
+    if ( isEditingBusy ) return;
+
+    m_triggeredAutoSavePending = false;
+    if ( hasUnsavedChanges ) {
+        handleCommand(CmdSaveBeatmap{
+            .kind = BeatmapSaveKind::TriggeredAutoSave,
+        });
+    }
+}
+
 /// @brief 立即落盘尚在等待空闲期的元数据自动保存。
 /// @warning 低频阻塞路径：仅允许逻辑线程在打包、项目关闭或尾随自动保存
 /// 超时时调用；可能同步谱面数据、访问文件系统并保存项目配置。
@@ -453,7 +556,10 @@ bool BeatmapSession::flushPendingMetadataAutoSave()
     if ( !m_metadataAutoSavePending ) return true;
     if ( !m_ctx->currentBeatmap ) return false;
 
-    handleCommand(CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+    handleCommand(CmdSaveBeatmap{
+        .allowExternallyModifiedOverwrite = true,
+        .kind                             = BeatmapSaveKind::TriggeredAutoSave,
+    });
     return !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty();
 }
 
@@ -467,7 +573,10 @@ bool BeatmapSession::saveDirtyBeatmapForPackaging()
         return true;
     }
 
-    handleCommand(CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+    handleCommand(CmdSaveBeatmap{
+        .allowExternallyModifiedOverwrite = true,
+        .kind                             = BeatmapSaveKind::Internal,
+    });
     return !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty();
 }
 
@@ -648,6 +757,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     }
     flushDeferredBeatmapSync(currentSysTime, processed, isBusy);
     const bool isMetadataEditingBusy = isInteracting || hasPendingCommands();
+    flushConfiguredAutoSave(currentSysTime,
+                            isMetadataEditingBusy,
+                            effectiveConfig.settings.autoSave);
     flushDeferredMetadataAutoSave(currentSysTime, isMetadataEditingBusy);
     m_ctx->lastSnapshotTime = currentSysTime;
 

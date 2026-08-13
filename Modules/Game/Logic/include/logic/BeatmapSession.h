@@ -11,8 +11,9 @@
 
 namespace MMM::Config
 {
+struct AutoSaveConfig;
 struct EditorConfig;
-}
+}  // namespace MMM::Config
 namespace MMM::Logic
 {
 
@@ -107,6 +108,20 @@ public:
     /// 调度前调用；只读取会话热状态和队列近似长度。
     bool needsRealtimeUpdate() const;
 
+    /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
+    /// @param trigger 触发自动保存的编辑器事件。
+    /// @warning UI 线程或 Session 切换路径低频写入，逻辑线程每次 update
+    /// 只交换一个原子位掩码；用于避免在 UI/GLFW 回调中执行文件 I/O。
+    void requestAutoSave(AutoSaveTrigger trigger);
+
+    /// @brief 判断后台会话是否仍需轮询自动保存期限或事件请求。
+    /// @param config 当前软件全局自动保存配置。
+    /// @return 存在事件请求，或定时模式下谱面未保存时返回 true。
+    /// @warning 逻辑调度热路径：仅读取原子位、布尔状态和撤销栈脏标记，
+    /// 不访问文件系统或遍历 ECS。
+    [[nodiscard]] bool needsAutoSavePolling(
+        const Config::AutoSaveConfig& config) const;
+
     /// @brief 判断会话是否仍需低频轮询元数据尾随保存。
     /// @return 存在等待空闲期的元数据保存时返回 true。
     /// @warning 逻辑线程调度路径：只读取逻辑线程维护的布尔状态。
@@ -145,6 +160,15 @@ private:
     /// 调用同步文件保存流程。
     void flushDeferredMetadataAutoSave(double currentSysTime,
                                        bool   isEditingBusy);
+
+    /// @brief 消费全局配置允许的事件请求并推进定时/事件自动保存。
+    /// @param currentSysTime 当前单调系统时间（秒）。
+    /// @param isEditingBusy 当前会话是否仍处于连续交互或命令堆积状态。
+    /// @param config 当前软件全局自动保存配置。
+    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅到期且存在未保存
+    /// 修改的低频分支允许同步谱面并访问文件系统。
+    void flushConfiguredAutoSave(double currentSysTime, bool isEditingBusy,
+                                 const Config::AutoSaveConfig& config);
 
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
@@ -263,6 +287,11 @@ private:
         static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All)
     };
 
+    /// @brief UI 与谱面切换路径提交、逻辑线程消费的自动保存事件位。
+    /// @warning 多个低频生产者执行 relaxed fetch_or，逻辑线程每 update
+    /// 执行一次 relaxed exchange；事件仅用于唤醒保存调度，不承载其它数据。
+    std::atomic_uint8_t m_requestedAutoSaveTriggers{ 0U };
+
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
@@ -281,6 +310,15 @@ private:
 
     /// @brief 最近一次元数据编辑后的自动保存计时点（秒）。
     double m_lastMetadataUpdateTime{ 0.0 };
+
+    /// @brief 是否有已启用的编辑器事件正在等待会话空闲后自动保存。
+    bool m_triggeredAutoSavePending{ false };
+
+    /// @brief 当前定时自动保存周期的下一次截止时间（单调秒）。
+    double m_timedAutoSaveDeadline{ 0.0 };
+
+    /// @brief 最近一次用于生成截止时间的定时间隔秒数。
+    double m_timedAutoSaveIntervalSeconds{ 0.0 };
 
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
     /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/AutoSaveTypes.h"
+
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
@@ -473,6 +475,9 @@ struct CmdSelectAll {
 struct CmdSaveBeatmap {
     /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
     bool allowExternallyModifiedOverwrite{ false };
+
+    /// @brief 保存来源，用于选择自动保存调度和 UI 反馈策略。
+    BeatmapSaveKind kind{ BeatmapSaveKind::Manual };
 };
 
 /**

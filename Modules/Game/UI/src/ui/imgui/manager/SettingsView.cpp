@@ -87,7 +87,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 31> labels{
+        const std::array<const char*, 38> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.default_creator").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
@@ -114,6 +114,16 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
                 .data(),
             TR_CACHE("ui.settings.software.picker_style").data(),
             TR_CACHE("ui.settings.software.save_format").data(),
+            TR_CACHE("ui.settings.software.auto_save.mode").data(),
+            TR_CACHE("ui.settings.software.auto_save.interval_unit").data(),
+            TR_CACHE("ui.settings.software.auto_save.interval").data(),
+            TR_CACHE("ui.settings.software.auto_save.on_object_modified")
+                .data(),
+            TR_CACHE("ui.settings.software.auto_save.on_beatmap_switch").data(),
+            TR_CACHE("ui.settings.software.auto_save.on_imgui_focus_lost")
+                .data(),
+            TR_CACHE("ui.settings.software.auto_save.on_native_focus_lost")
+                .data(),
             TR_CACHE("ui.settings.software.time_format").data(),
             TR_CACHE("ui.settings.software.recent_limit").data(),
             TR_CACHE("ui.settings.software.sync_mode").data(),

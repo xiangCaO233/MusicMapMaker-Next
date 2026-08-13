@@ -96,6 +96,11 @@ target_link_libraries(CollaborationServerSettingsTest PRIVATE Config Log)
 add_test(NAME CollaborationServerSettingsTest
          COMMAND CollaborationServerSettingsTest)
 
+# 自动保存配置测试覆盖定时单位、范围约束、事件开关和旧配置默认值。
+mmm_add_test_executable(Config AutoSaveConfigTest tests/AutoSaveConfigTest.cpp)
+target_link_libraries(AutoSaveConfigTest PRIVATE Config Log)
+add_test(NAME AutoSaveConfigTest COMMAND AutoSaveConfigTest)
+
 # 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
 mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)

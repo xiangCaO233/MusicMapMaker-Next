@@ -251,6 +251,12 @@ public:
      */
     void setActiveSessionIndex(int32_t index);
 
+    /// @brief 为当前活动谱面提交一次跨线程自动保存事件。
+    /// @param trigger 需要由逻辑线程按全局配置筛选的事件来源。
+    /// @warning UI/原生窗口低频回调路径：只短暂持有 SessionRegistry 锁并
+    /// 设置单个原子位，不执行谱面同步或文件 I/O。
+    void requestAutoSaveForActiveSession(AutoSaveTrigger trigger);
+
     /// @brief 请求 UI 线程将指定 Session 对应的画布窗口聚焦到前台。
     /// @param index 目标 Session 索引。
     /// @warning 逻辑/UI 热路径原子：低频写入，UI 同步阶段读取；只传递索引。

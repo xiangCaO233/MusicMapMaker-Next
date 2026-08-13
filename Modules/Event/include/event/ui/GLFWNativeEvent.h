@@ -12,6 +12,7 @@ enum class NativeEventType {
     GLFW_TOGGLE_WINDOW_MAXIMIZE,
     GLFW_WINDOW_RESIZED,
     GLFW_WINDOW_CONTENT_SCALE_CHANGED,
+    GLFW_WINDOW_FOCUS_CHANGED,
 };
 
 struct GLFWNativeEvent : public BaseEvent {
@@ -20,6 +21,8 @@ struct GLFWNativeEvent : public BaseEvent {
     // 状态数据 (主要用于系统触发的回调同步)
     bool hasStateChange = false;
     bool isMaximized    = false;
+    /// @brief 焦点状态事件中原生窗口当前是否拥有输入焦点。
+    bool isFocused = true;
 };
 
 }  // namespace MMM::Event

@@ -411,6 +411,68 @@ void from_json(const nlohmann::json& json, SaveFormatPreference& preference)
     }
 }
 
+void to_json(nlohmann::json& json, const AutoSaveMode& mode)
+{
+    switch ( mode ) {
+    case AutoSaveMode::Timed: json = "Timed"; break;
+    case AutoSaveMode::EventTriggered: json = "EventTriggered"; break;
+    case AutoSaveMode::Disabled:
+    default: json = "Disabled"; break;
+    }
+}
+
+void from_json(const nlohmann::json& json, AutoSaveMode& mode)
+{
+    mode = AutoSaveMode::Disabled;
+    if ( !json.is_string() ) return;
+
+    const auto value = json.get<std::string>();
+    if ( value == "Timed" ) {
+        mode = AutoSaveMode::Timed;
+    } else if ( value == "EventTriggered" ) {
+        mode = AutoSaveMode::EventTriggered;
+    }
+}
+
+void to_json(nlohmann::json& json, const AutoSaveIntervalUnit& unit)
+{
+    json = unit == AutoSaveIntervalUnit::Minutes ? "Minutes" : "Seconds";
+}
+
+void from_json(const nlohmann::json& json, AutoSaveIntervalUnit& unit)
+{
+    unit = AutoSaveIntervalUnit::Seconds;
+    if ( json.is_string() && json.get<std::string>() == "Minutes" ) {
+        unit = AutoSaveIntervalUnit::Minutes;
+    }
+}
+
+void to_json(nlohmann::json& json, const AutoSaveConfig& config)
+{
+    json = nlohmann::json{
+        { "mode", config.mode },
+        { "intervalUnit", config.intervalUnit },
+        { "intervalValue", std::clamp(config.intervalValue, 5, 60) },
+        { "onObjectModified", config.onObjectModified },
+        { "onBeatmapSwitch", config.onBeatmapSwitch },
+        { "onImGuiWindowFocusLost", config.onImGuiWindowFocusLost },
+        { "onNativeWindowFocusLost", config.onNativeWindowFocusLost },
+    };
+}
+
+void from_json(const nlohmann::json& json, AutoSaveConfig& config)
+{
+    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.intervalUnit =
+        json.value("intervalUnit", AutoSaveIntervalUnit::Seconds);
+    config.intervalValue = std::clamp(json.value("intervalValue", 30), 5, 60);
+    config.onObjectModified       = json.value("onObjectModified", true);
+    config.onBeatmapSwitch        = json.value("onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+    config.onNativeWindowFocusLost =
+        json.value("onNativeWindowFocusLost", true);
+}
+
 void to_json(nlohmann::json& json, const TimeFormatPreference& preference)
 {
     json = "Clock";
@@ -589,6 +651,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "marqueeThickness", settings.marqueeThickness },
         { "marqueeRounding", settings.marqueeRounding },
         { "saveFormatPreference", settings.saveFormatPreference },
+        { "autoSave", settings.autoSave },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", settings.timeFormatPreference },
@@ -703,6 +766,7 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.marqueeRounding  = json.value("marqueeRounding", 0.0f);
     settings.saveFormatPreference =
         json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);
     settings.timeFormatPreference =

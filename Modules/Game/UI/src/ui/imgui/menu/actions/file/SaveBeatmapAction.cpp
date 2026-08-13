@@ -67,6 +67,10 @@ void ensureSaveActionSubscriptions()
         });
     Event::EventBus::instance().subscribe<Event::BeatmapSaveResultEvent>(
         [](const Event::BeatmapSaveResultEvent& event) {
+            if ( event.presentation !=
+                 Event::BeatmapSavePresentation::Transient ) {
+                return;
+            }
             getSaveResultQueue().enqueue(SaveResultPayload{
                 .isExport = event.isExport,
             });

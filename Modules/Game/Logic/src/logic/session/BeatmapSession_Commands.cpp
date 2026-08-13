@@ -44,6 +44,24 @@
 
 namespace
 {
+/// @brief 将逻辑保存来源映射为 UI 反馈策略。
+/// @param kind 谱面保存请求来源。
+/// @return 保存成功时应采用的界面反馈形式。
+[[nodiscard]] MMM::Event::BeatmapSavePresentation savePresentationFor(
+    MMM::Logic::BeatmapSaveKind kind)
+{
+    switch ( kind ) {
+    case MMM::Logic::BeatmapSaveKind::TimedAutoSave:
+        return MMM::Event::BeatmapSavePresentation::TimedAutoSaveStatus;
+    case MMM::Logic::BeatmapSaveKind::TriggeredAutoSave:
+        return MMM::Event::BeatmapSavePresentation::TriggeredAutoSaveStatus;
+    case MMM::Logic::BeatmapSaveKind::Internal:
+        return MMM::Event::BeatmapSavePresentation::Silent;
+    case MMM::Logic::BeatmapSaveKind::Manual:
+    default: return MMM::Event::BeatmapSavePresentation::Transient;
+    }
+}
+
 /// @brief 在存在当前项目时，将元数据路径解析为项目内路径。
 std::filesystem::path resolveCurrentProjectPath(
     const std::filesystem::path& path)
@@ -1179,6 +1197,11 @@ bool BeatmapSession::processCommands()
         ::MMM::BeatmapMutationFlags::None;
     const auto publishPendingMutation = [this, &mutationFlags]() {
         if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
+        if ( autoSave.mode == Config::AutoSaveMode::EventTriggered &&
+             autoSave.onObjectModified ) {
+            m_triggeredAutoSavePending = true;
+        }
         auto observer = std::atomic_load_explicit(&m_mutationObserver,
                                                   std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
@@ -1308,12 +1331,18 @@ bool BeatmapSession::processCommands()
                                         TR("ui.status.category.beatmap"),
                                         TR("ui.status.beatmap.no_load"));
                     }
-                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ||
-                                      std::is_same_v<T, CmdSaveBeatmapAs> ) {
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmapAs> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}",
                                     TR("ui.status.category.beatmap"),
                                     TR("ui.status.beatmap.saved"));
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ) {
+                    if ( arg.kind == BeatmapSaveKind::Manual ) {
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {}",
+                                        TR("ui.status.category.beatmap"),
+                                        TR("ui.status.beatmap.saved"));
+                    }
                 } else if constexpr ( std::is_same_v<T, CmdMirrorSelected> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}",
@@ -1824,17 +1853,19 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             XERROR("SaveBeatmap: failed to save to {}",
                    Config::pathToUtf8(savePath));
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-                .path     = Config::pathToUtf8(savePath),
-                .success  = false,
-                .isExport = false,
+                .path         = Config::pathToUtf8(savePath),
+                .success      = false,
+                .isExport     = false,
+                .presentation = savePresentationFor(cmd.kind),
             });
             restorePendingMetadataAutoSave();
             return;
         }
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-            .path     = Config::pathToUtf8(savePath),
-            .success  = true,
-            .isExport = false,
+            .path         = Config::pathToUtf8(savePath),
+            .success      = true,
+            .isExport     = false,
+            .presentation = savePresentationFor(cmd.kind),
         });
         auto storedSavePath = makeCurrentProjectRelativePath(savePath);
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;

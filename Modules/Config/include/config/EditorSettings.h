@@ -326,6 +326,68 @@ void to_json(nlohmann::json& json, const SaveFormatPreference& preference);
 /// @brief 从稳定文本读取保存格式偏好。
 void from_json(const nlohmann::json& json, SaveFormatPreference& preference);
 
+/// @brief 自动保存调度模式。
+enum class AutoSaveMode {
+    Disabled,       ///< 不启用通用自动保存。
+    Timed,          ///< 按固定时间间隔保存。
+    EventTriggered  ///< 在启用的编辑器事件发生后保存。
+};
+
+/// @brief 将自动保存模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const AutoSaveMode& mode);
+/// @brief 从稳定文本读取自动保存模式。
+void from_json(const nlohmann::json& json, AutoSaveMode& mode);
+
+/// @brief 自动保存定时间隔单位。
+enum class AutoSaveIntervalUnit {
+    Seconds,  ///< 秒。
+    Minutes   ///< 分钟。
+};
+
+/// @brief 将自动保存间隔单位序列化为稳定文本。
+void to_json(nlohmann::json& json, const AutoSaveIntervalUnit& unit);
+/// @brief 从稳定文本读取自动保存间隔单位。
+void from_json(const nlohmann::json& json, AutoSaveIntervalUnit& unit);
+
+/// @brief 软件全局自动保存配置。
+struct AutoSaveConfig {
+    /// @brief 自动保存调度模式。
+    AutoSaveMode mode{ AutoSaveMode::Disabled };
+
+    /// @brief 定时间隔单位。
+    AutoSaveIntervalUnit intervalUnit{ AutoSaveIntervalUnit::Seconds };
+
+    /// @brief 定时间隔数值；读取配置时限制为 5~60。
+    int intervalValue{ 30 };
+
+    /// @brief 任意谱面物件修改提交后是否触发自动保存。
+    bool onObjectModified{ true };
+
+    /// @brief 切换活动谱面时是否触发自动保存。
+    bool onBeatmapSwitch{ true };
+
+    /// @brief ImGui 根窗口丢失焦点时是否触发自动保存。
+    bool onImGuiWindowFocusLost{ true };
+
+    /// @brief 程序原生窗口丢失焦点或最小化时是否触发自动保存。
+    bool onNativeWindowFocusLost{ true };
+
+    /// @brief 将配置的 5~60 定时间隔换算为秒。
+    /// @return 可供逻辑调度器使用的秒数。
+    [[nodiscard]] double intervalSeconds() const
+    {
+        const int safeValue = std::clamp(intervalValue, 5, 60);
+        return intervalUnit == AutoSaveIntervalUnit::Minutes
+                   ? static_cast<double>(safeValue) * 60.0
+                   : static_cast<double>(safeValue);
+    }
+};
+
+/// @brief 将自动保存配置序列化为 JSON。
+void to_json(nlohmann::json& json, const AutoSaveConfig& config);
+/// @brief 从 JSON 读取自动保存配置并约束定时间隔。
+void from_json(const nlohmann::json& json, AutoSaveConfig& config);
+
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
     Clock,         ///< 时:分:秒.毫秒
@@ -612,6 +674,9 @@ struct EditorSettings {
 
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
+
+    /// @brief 对所有项目生效的软件全局自动保存配置。
+    AutoSaveConfig autoSave;
 
     /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
     bool autoAddStoreModeExtForMalodyExport{ false };
