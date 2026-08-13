@@ -698,12 +698,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         m_ctx->isNoteStatsDirty || m_ctx->isTransformDirty ||
         m_ctx->isBpmEventsDirty || m_ctx->isMarqueeSelectionDirty ||
         isTimelineCacheDirty;
-    const bool isVisualAnimationStillActive =
-        m_ctx->animateTimeAnimationActive ||
-        m_ctx->animatedTimelineZoomAnimationActive;
-    const bool forceRenderSnapshot = processed || isEdgeScrollActive ||
-                                     isVisualAnimationStillActive ||
-                                     playbackJumped || hasRenderDirtyState;
+    // 连续视野动画必须遵守自适应快照间隔，避免逻辑线程空转时无限重建快照。
+    const bool forceRenderSnapshot =
+        processed || playbackJumped || hasRenderDirtyState;
     if ( shouldUpdateRenderSnapshot(
              currentSysTime, forceRenderSnapshot, effectiveConfig) ) {
         updateECSAndRender(effectiveConfig, isActiveSession);

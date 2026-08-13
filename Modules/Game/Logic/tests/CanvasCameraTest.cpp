@@ -2496,6 +2496,7 @@ bool testSampleHoverInspectDetails()
 
     context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity).m_offsetMs =
         0;
+    context.isTransformDirty = true;
     session.update(0.0, config, true);
     const auto* zeroOffsetSnapshot = bufferIt->second->pullLatestSnapshot();
     if ( !zeroOffsetSnapshot || !zeroOffsetSnapshot->hoverInspect.head.show ||
@@ -2576,6 +2577,7 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     context.draggedEntity     = entity;
     context.draggedObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
     context.draggedPart       = MMM::Logic::HoverPart::Head;
+    context.isTransformDirty  = true;
     session.update(0.0, config, true);
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
@@ -2590,6 +2592,7 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     config.settings.objectPlacementSnapMode =
         MMM::Config::ObjectPlacementSnapMode::CommonBeatDivisors;
     config.settings.commonBeatDivisorMask = commonBeatDivisorMask;
+    context.isTransformDirty              = true;
     session.update(0.0, config, true);
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
@@ -2607,6 +2610,7 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     context.draggedEntity = entt::null;
 
     config.settings.beatDivisor = 6;
+    context.isTransformDirty    = true;
     session.update(0.0, config, true);
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
@@ -2622,6 +2626,7 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     context.brushState.time               = 1.0;
     context.brushState.duration           = 0.1;
     context.brushState.track              = 4;
+    context.isTransformDirty              = true;
     session.update(0.0, config, true);
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || !snapshot->hoverSubdivisionPreview.show ||
@@ -2636,6 +2641,7 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     }
 
     context.brushState.createsAudioSample = true;
+    context.isTransformDirty              = true;
     session.update(0.0, config, true);
     snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->hoverSubdivisionPreview.show ) {
