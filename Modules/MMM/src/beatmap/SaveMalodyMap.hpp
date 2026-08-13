@@ -256,6 +256,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     const std::string songFileValue =
         hasExplicitSongFileHint ? Config::pathToUtf8(songFileHint)
                                 : Config::pathToUtf8(songFileHint.filename());
+    const std::string songFileNameValue =
+        Config::pathToUtf8(Config::utf8ToPath(songFileValue).filename());
     song["file"] = songFileValue;
     song["bpm"]  = beatMap.m_baseMapMetadata.preference_bpm;
 
@@ -356,6 +358,18 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          return lhs->m_timestamp < rhs->m_timestamp;
                      });
 
+    /// @brief 判断采样是否对应 Malody 的主音频提示。
+    /// @param sample 待判断的自动采样。
+    /// @return 资源标识或文件名与 meta.song.file 一致时返回 true。
+    auto isMainSongSample = [&](const AudioSampleEvent& sample) {
+        if ( songFileValue.empty() ) return false;
+        if ( sample.m_audioResourceId == songFileValue ) return true;
+        if ( songFileNameValue.empty() ) return false;
+        const std::string sampleFileName = Config::pathToUtf8(
+            Config::utf8ToPath(sample.m_audioResourceId).filename());
+        return sampleFileName == songFileNameValue;
+    };
+
     /// @brief 非 Malody 来源首次投影到 Malody 时使用的拍轴原点。
     const Timing* generatedFirstBpmOrigin = nullptr;
     if ( !bpmTimings.empty() ) {
@@ -369,6 +383,43 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
+    /// @brief 需要与首红线共同回卷的主音频采样。
+    const AudioSampleEvent* wrappedMainSample = nullptr;
+    /// @brief 首红线与主音频相对时间回卷一拍后的非负 Malody 值。
+    double wrappedMainOffsetMs = 0.0;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const double  firstBpmValue =
+            firstBpm.m_bpm > 0.0 ? firstBpm.m_bpm : 120.0;
+        const double firstBeatLength = 60000.0 / firstBpmValue;
+
+        for ( const auto& sample : beatMap.m_audioSamples ) {
+            const double effectiveTimestamp = sample.effectiveTimestamp();
+            if ( !isMainSongSample(sample) ||
+                 std::abs(effectiveTimestamp) > 0.51 ) {
+                continue;
+            }
+            if ( wrappedMainSample == nullptr ||
+                 std::abs(effectiveTimestamp) <
+                     std::abs(wrappedMainSample->effectiveTimestamp()) ) {
+                wrappedMainSample = &sample;
+            }
+        }
+
+        if ( wrappedMainSample != nullptr && firstBeatLength > 0.0 ) {
+            const double signedOffset =
+                wrappedMainSample->effectiveTimestamp() - firstBpm.m_timestamp;
+            // 仅把“主音频零点略早于首拍”的负相位回卷一拍；大于
+            // 半拍的前导时间和其它采样继续保留普通有符号 offset。
+            if ( signedOffset < -1e-4 &&
+                 signedOffset > -firstBeatLength * 0.5 ) {
+                wrappedMainOffsetMs = signedOffset + firstBeatLength;
+            } else {
+                wrappedMainSample = nullptr;
+            }
+        }
+    }
+
     /// @brief 首个 BPM 在 Malody 拍轴上的规范化拍号。
     double firstBpmOriginBeat = 0.0;
     /// @brief 首 BPM 的非负回卷 delay。
@@ -379,17 +430,30 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             firstBpm.m_bpm > 0.0 ? firstBpm.m_bpm : 120.0;
         const double firstBeatLength = 60000.0 / firstBpmValue;
 
-        double wholeBeat = std::floor(firstBpm.m_timestamp / firstBeatLength);
-        double delayMs   = firstBpm.m_timestamp - wholeBeat * firstBeatLength;
-        if ( std::abs(delayMs) <= 1e-6 ||
-             std::abs(delayMs - firstBeatLength) <= 1e-6 ) {
-            if ( delayMs > firstBeatLength * 0.5 ) {
-                wholeBeat += 1.0;
+        if ( wrappedMainSample != nullptr ) {
+            firstBpmOriginBeat = 0.0;
+            firstBpmDelayMs    = wrappedMainOffsetMs;
+            if ( const auto originalDelay =
+                     getMalodyTimingNumber(firstBpm, "delay");
+                 originalDelay && *originalDelay > firstBeatLength * 0.5 &&
+                 *originalDelay < firstBeatLength + 1e-6 &&
+                 std::abs(*originalDelay - wrappedMainOffsetMs) <= 0.51 ) {
+                firstBpmDelayMs = *originalDelay;
             }
-            firstBpmOriginBeat = wholeBeat;
         } else {
-            firstBpmOriginBeat = wholeBeat + 1.0;
-            firstBpmDelayMs    = delayMs;
+            double wholeBeat =
+                std::floor(firstBpm.m_timestamp / firstBeatLength);
+            double delayMs = firstBpm.m_timestamp - wholeBeat * firstBeatLength;
+            if ( std::abs(delayMs) <= 1e-6 ||
+                 std::abs(delayMs - firstBeatLength) <= 1e-6 ) {
+                if ( delayMs > firstBeatLength * 0.5 ) {
+                    wholeBeat += 1.0;
+                }
+                firstBpmOriginBeat = wholeBeat;
+            } else {
+                firstBpmOriginBeat = wholeBeat + 1.0;
+                firstBpmDelayMs    = delayMs;
+            }
         }
     }
 
@@ -948,9 +1012,13 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         // 首 BPM 的规范化拍号，并把时间差折入自身
         // offset，以保持实际播放时刻不变。
         std::int64_t exportedOffset = sample.m_offsetMs;
-        if ( generatedFirstBpmOrigin != nullptr &&
-             sample.m_timestamp <
-                 generatedFirstBpmOrigin->m_timestamp - 1e-4 ) {
+        if ( &sample == wrappedMainSample ) {
+            sampleJson["beat"] = timeToBeat(bpmTimings.front()->m_timestamp);
+            exportedOffset =
+                static_cast<std::int64_t>(std::llround(wrappedMainOffsetMs));
+        } else if ( generatedFirstBpmOrigin != nullptr &&
+                    sample.m_timestamp <
+                        generatedFirstBpmOrigin->m_timestamp - 1e-4 ) {
             sampleJson["beat"] =
                 timeToBeat(generatedFirstBpmOrigin->m_timestamp);
             const long double adjustedOffset =

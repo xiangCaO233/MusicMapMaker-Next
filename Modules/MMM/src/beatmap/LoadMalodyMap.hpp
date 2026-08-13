@@ -288,6 +288,61 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         return false;
     };
 
+    /// @brief 判断自动采样是否引用 meta.song.file 指定的主音频。
+    /// @param node 待判断的 Malody note 节点。
+    /// @return sound 字段与主音频路径或文件名一致时返回 true。
+    auto isMainSongSample = [&](const json& node) {
+        const auto sound = node.find("sound");
+        if ( sound == node.end() || !sound->is_string() ||
+             basemeta.song_file_hint.empty() ) {
+            return false;
+        }
+        const std::string& resourceId = sound->get_ref<const std::string&>();
+        const std::string  songFileValue =
+            Config::pathToUtf8(basemeta.song_file_hint);
+        if ( resourceId == songFileValue ) return true;
+        return Config::utf8ToPath(resourceId).filename() ==
+               basemeta.song_file_hint.filename();
+    };
+
+    /// @brief 与首红线 delay 成对回卷的主 SOUND 节点。
+    const json* wrappedMainSoundNode = nullptr;
+    /// @brief 首红线相对主音频零点的正向时间，单位为毫秒。
+    double wrappedFirstTimingPhaseMs = 0.0;
+    /// @brief 主 SOUND 减回一拍后的有符号 offset，单位为毫秒。
+    double wrappedMainSignedOffsetMs = 0.0;
+    if ( !bpmEvents.empty() && fileData.contains("note") ) {
+        const auto&  firstBpmEvent = bpmEvents.front();
+        const double firstBpm =
+            firstBpmEvent.bpm > 0.0 ? firstBpmEvent.bpm : 120.0;
+        const double firstBeatLengthMs = 60000.0 / firstBpm;
+        const double phaseMs = firstBeatLengthMs - firstBpmEvent.delayMs;
+        if ( firstBpmEvent.delayMs > firstBeatLengthMs * 0.5 &&
+             firstBpmEvent.delayMs <= firstBeatLengthMs + 1e-6 &&
+             phaseMs >= -1e-6 ) {
+            for ( const auto& node : fileData["note"] ) {
+                if ( !isSoundNote(node) || !isMainSongSample(node) ||
+                     !node.contains("beat") ) {
+                    continue;
+                }
+                const double sampleBeat = beatToDouble(node["beat"]);
+                const double sampleOffset =
+                    readMalodyJsonDouble(node, "offset", 0.0);
+                // Malody 会把小于半拍的负前导量回卷为同拍的大正数；
+                // time.delay 与主 SOUND.offset 成对出现才可安全逆变换。
+                if ( std::abs(sampleBeat - firstBpmEvent.beat) <= 1e-6 &&
+                     sampleOffset > firstBeatLengthMs * 0.5 &&
+                     std::abs(sampleOffset - firstBpmEvent.delayMs) <= 0.51 ) {
+                    wrappedMainSoundNode      = &node;
+                    wrappedFirstTimingPhaseMs = std::max(0.0, phaseMs);
+                    wrappedMainSignedOffsetMs =
+                        sampleOffset - firstBeatLengthMs;
+                    break;
+                }
+            }
+        }
+    }
+
     // 2.5 预扫描：通过统计学特征自动识别轨道数 (针对 Mode 7 / 坐标模式)
     std::map<int, int> xFreq;
     int                maxColumnField    = -1;
@@ -419,9 +474,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         if ( index == 0 ) {
             const double firstBpm   = ev.bpm > 0.0 ? ev.bpm : getInitialBpm();
             const double beatLength = 60000.0 / firstBpm;
-            const double unwrappedDelay =
-                ev.delayMs > 1e-9 ? ev.delayMs - beatLength : ev.delayMs;
-            ev.timestamp = ev.beat * beatLength + unwrappedDelay;
+            if ( wrappedMainSoundNode != nullptr ) {
+                ev.timestamp = ev.beat * beatLength + wrappedFirstTimingPhaseMs;
+            } else {
+                const double unwrappedDelay =
+                    ev.delayMs > 1e-9 ? ev.delayMs - beatLength : ev.delayMs;
+                ev.timestamp = ev.beat * beatLength + unwrappedDelay;
+            }
             bpmTimestampsBySourceOrder[ev.sourceOrder] = ev.timestamp;
             anchorBeat                                 = ev.beat;
             anchorTime                                 = ev.timestamp;
@@ -553,8 +612,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                 AudioSampleEvent& sample =
                     beatMap.m_audioSamples.emplace_back();
-                sample.m_timestamp = startTime;
-                sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
+                if ( &n == wrappedMainSoundNode ) {
+                    sample.m_timestamp = startTime;
+                    sample.m_offsetMs  = static_cast<std::int64_t>(
+                        std::llround(wrappedMainSignedOffsetMs));
+                } else {
+                    sample.m_timestamp = startTime;
+                    sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
+                }
                 sample.m_audioResourceId =
                     soundIt->get_ref<const std::string&>();
                 sample.m_volume = Internal::malodyGainPercentToVolume(
