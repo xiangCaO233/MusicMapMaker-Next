@@ -518,7 +518,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                              m_ctx->noteRegistry.get<const NoteComponent>(b)
                                  .m_timestamp;
                   });
-        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync, true);
+        // 状态栏统计直接以当前 ECS 为准，不依赖延迟写回的 BeatMap 音符容器。
+        // 否则 m_needsNotesSync 等待空闲期间 isNoteStatsDirty 无法消费，
+        // 会让每个逻辑 update 都强制生成全部视口的渲染快照。
+        rebuildNotePrefixAndStats(true, true);
         ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNoteOrderDirty = false;
         m_ctx->isNotePruneDirty = false;
@@ -532,10 +535,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                            m_ctx->sortedNoteEntities.end(),
                            isEntityInvalid),
             m_ctx->sortedNoteEntities.end());
-        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync, true);
+        rebuildNotePrefixAndStats(true, true);
         ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNotePruneDirty = false;
-    } else if ( m_ctx->isNoteStatsDirty && !m_ctx->m_needsNotesSync ) {
+    } else if ( m_ctx->isNoteStatsDirty ) {
         rebuildNotePrefixAndStats(true, false);
     }
 

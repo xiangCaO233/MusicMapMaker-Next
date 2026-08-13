@@ -1025,6 +1025,64 @@ bool testSessionSelectsKeyCountLayout()
                 config.visual.canvasComponents.beatNumber.anchorX);
 }
 
+/// @brief 验证正式音符等待延迟同步时仍会立即消费渲染统计脏标记。
+/// @return 创建与撤销后的单次 update 均刷新统计且不提前写回 BeatMap 时返回
+/// true。
+bool testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+
+    MMM::Logic::NoteComponent note;
+    note.m_type       = MMM::NoteType::NOTE;
+    note.m_timestamp  = 1.0;
+    note.m_trackIndex = 1;
+    context.actionStack.pushAndExecute(std::make_unique<MMM::Logic::NoteAction>(
+                                           MMM::Logic::NoteAction::Type::Create,
+                                           entt::null,
+                                           std::nullopt,
+                                           note),
+                                       context);
+    if ( !context.m_needsNotesSync || !context.isNoteStatsDirty ) {
+        XERROR("Note creation did not schedule deferred data and stats sync");
+        return false;
+    }
+
+    const auto config = context.lastConfig;
+    session.update(0.0, config, false);
+    if ( !context.m_needsNotesSync || context.isNoteStatsDirty ||
+         context.noteCount != 1U ) {
+        XERROR(
+            "Deferred note sync kept render stats dirty after creation: "
+            "pending={}, dirty={}, count={}",
+            context.m_needsNotesSync,
+            context.isNoteStatsDirty,
+            context.noteCount);
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !context.m_needsNotesSync || !context.isNoteStatsDirty ) {
+        XERROR("Note undo did not schedule deferred data and stats sync");
+        return false;
+    }
+
+    session.update(0.0, config, false);
+    if ( !context.m_needsNotesSync || context.isNoteStatsDirty ||
+         context.noteCount != 0U ) {
+        XERROR(
+            "Deferred note sync kept render stats dirty after undo: "
+            "pending={}, "
+            "dirty={}, count={}",
+            context.m_needsNotesSync,
+            context.isNoteStatsDirty,
+            context.noteCount);
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证交互命令执行前已经物化当前 Key 数的轨道与判定线布局。
 /// @return 画笔在专属布局中的鼠标位置生成同轨同时间预览时返回 true。
 bool testQueuedBrushUsesKeyCountLayout()
@@ -3716,6 +3774,7 @@ int main()
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
+                   testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty() &&
                    testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&

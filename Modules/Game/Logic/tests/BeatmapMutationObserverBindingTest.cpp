@@ -368,15 +368,34 @@ private:
          observer->lastFlags() != MMM::BeatmapMutationFlags::Objects ||
          observer->synchronizationCount() != 1 ||
          !hasRootNote(session, 1.0, 3) || hasRootNote(session, 0.5, 2) ||
-         !hasCommittedPolyline(session) ) {
+         !hasCommittedPolyline(session) ||
+         session.getContext().isNoteStatsDirty ) {
         XERROR(
             "Active Polyline did not commit on top of the remote baseline: "
-            "mutations={}, syncs={}, added={}, deleted={}, polyline={}",
+            "mutations={}, syncs={}, added={}, deleted={}, polyline={}, "
+            "statsDirty={}",
             observer->notificationCount(),
             observer->synchronizationCount(),
             hasRootNote(session, 1.0, 3),
             !hasRootNote(session, 0.5, 2),
-            hasCommittedPolyline(session));
+            hasCommittedPolyline(session),
+            session.getContext().isNoteStatsDirty);
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.4, config, false);
+    if ( observer->notificationCount() != 2 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Objects ||
+         !hasRootNote(session, 1.0, 3) || hasCommittedPolyline(session) ||
+         session.getContext().isNoteStatsDirty ) {
+        XERROR(
+            "Collaborative Polyline undo left render stats dirty: "
+            "mutations={}, added={}, polyline={}, statsDirty={}",
+            observer->notificationCount(),
+            hasRootNote(session, 1.0, 3),
+            hasCommittedPolyline(session),
+            session.getContext().isNoteStatsDirty);
         return false;
     }
     return true;
