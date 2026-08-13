@@ -442,8 +442,8 @@ private:
     return true;
 }
 
-/// @brief 验证协作细分权限在命令入队和逻辑消费边界拦截未授权类别。
-/// @return Timing 可编辑而元数据被拒绝，切换权限后结果反转时返回 true。
+/// @brief 验证协作细分权限拦截未授权类别并逐次提示独立编辑尝试。
+/// @return 权限门闩与重复拒绝提示均正确时返回 true。
 [[nodiscard]] bool testCollaborationMutationPermissionsAreLocalGate()
 {
     MMM::Logic::BeatmapSession session;
@@ -479,12 +479,16 @@ private:
         },
     });
     session.update(0.0, config, false);
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpdateTrackCount{ .trackCount = 8 },
+    });
+    session.update(0.0, config, false);
     const bool timingOnlyApplied =
         session.getContext().trackCount == 4 &&
         session.getContext()
                 .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
                 .size() == initialTimelineCount + 1U &&
-        blockedEvents.load(std::memory_order_relaxed) == 1;
+        blockedEvents.load(std::memory_order_relaxed) == 2;
 
     session.setCollaborationAllowedMutationFlags(
         MMM::BeatmapMutationFlags::Metadata |
@@ -505,7 +509,7 @@ private:
         session.getContext()
                 .timelineRegistry.view<const MMM::Logic::TimelineComponent>()
                 .size() == initialTimelineCount + 1U &&
-        blockedEvents.load(std::memory_order_relaxed) == 2;
+        blockedEvents.load(std::memory_order_relaxed) == 3;
 
     session.setCollaborationAllowedMutationFlags(
         MMM::BeatmapMutationFlags::All);

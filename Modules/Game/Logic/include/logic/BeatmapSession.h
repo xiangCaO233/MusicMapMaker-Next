@@ -267,9 +267,6 @@ private:
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
 
-    /// @brief 当前权限拒绝周期是否已经发布过编辑拦截提示。
-    std::atomic_bool m_permissionEditBlockedNotificationSent{ false };
-
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点
     double m_lastDeferredBeatmapSyncTime{

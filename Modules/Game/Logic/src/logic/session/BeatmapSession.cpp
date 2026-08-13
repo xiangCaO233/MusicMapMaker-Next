@@ -265,11 +265,8 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
     const auto allowedBits  = static_cast<std::uint8_t>(allowed);
     if ( (requiredBits & allowedBits) == requiredBits ) return false;
 
-    if ( !m_permissionEditBlockedNotificationSent.exchange(
-             true, std::memory_order_acq_rel) ) {
-        Event::EventBus::instance().publish(
-            Event::CollaborationPermissionEditBlockedEvent{});
-    }
+    Event::EventBus::instance().publish(
+        Event::CollaborationPermissionEditBlockedEvent{});
     return true;
 }
 
@@ -334,8 +331,6 @@ void BeatmapSession::setCollaborationAllowedMutationFlags(
         sanitized, std::memory_order_acq_rel);
     if ( previous == sanitized ) return;
 
-    m_permissionEditBlockedNotificationSent.store(false,
-                                                  std::memory_order_release);
     if ( sanitized !=
          static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All) ) {
         // 权限收紧时复用逻辑线程的交互取消流程，避免正在拖拽或绘制的草稿
