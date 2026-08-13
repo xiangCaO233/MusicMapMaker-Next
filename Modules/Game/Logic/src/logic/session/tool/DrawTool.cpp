@@ -668,8 +668,21 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             bool  timeChanged =
                 std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
 
-            // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
-            if ( !timeChanged && diffY <= 5.0f ) {
+            const bool extendsEstablishedFlick =
+                ctx.brushState.type == ::MMM::NoteType::FLICK &&
+                ctx.brushState.dtrack != 0 &&
+                currentTrack != ctx.brushState.startTrack &&
+                (timeChanged || diffY > 5.0F);
+
+            // 已经明确横移成 Flick 后再纵向延伸时，必须保留横向优先顺序；
+            // 否则重新分类会先改成 Hold，导致 L 形折线反转为钩子。
+            if ( extendsEstablishedFlick ) {
+                ctx.brushState.type = ::MMM::NoteType::FLICK;
+                ctx.brushState.dtrack =
+                    currentTrack - ctx.brushState.startTrack;
+                ctx.brushState.duration = 0.0;
+            } else if ( !timeChanged && diffY <= 5.0f ) {
+                // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
                 int dtrack = currentTrack - ctx.brushState.startTrack;
                 if ( dtrack != 0 &&
                      ctx.brushState.startTrack + dtrack >= minimumTrack &&

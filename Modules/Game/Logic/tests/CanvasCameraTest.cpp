@@ -193,6 +193,63 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
+/// @brief 验证先横移再纵向绘制的 L 形折线保持 Flick、Hold 顺序。
+/// @return 横向段位于纵向段之前时返回 true。
+bool testPolylinePreservesHorizontalFirstGestureOrder()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = true;
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId    = "Basic2DCanvas",
+                                  .mouseX      = 150.0F,
+                                  .mouseY      = 300.0F,
+                                  .isShiftDown = true,
+                                  .isCtrlDown  = true,
+                              });
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId    = "Basic2DCanvas",
+                                   .mouseX      = 250.0F,
+                                   .mouseY      = 300.0F,
+                                   .isShiftDown = true,
+                                   .isCtrlDown  = true,
+                               });
+    const bool horizontalPreviewEstablished =
+        context.brushState.type == MMM::NoteType::FLICK &&
+        context.brushState.dtrack == 1 &&
+        context.brushState.polylineSegments.empty();
+
+    drawTool.handleUpdateBrush(context,
+                               MMM::Logic::CmdUpdateBrush{
+                                   .cameraId    = "Basic2DCanvas",
+                                   .mouseX      = 250.0F,
+                                   .mouseY      = 200.0F,
+                                   .isShiftDown = true,
+                                   .isCtrlDown  = true,
+                               });
+    const auto& segments = context.brushState.polylineSegments;
+    const bool  horizontalThenVertical =
+        context.brushState.type == MMM::NoteType::POLYLINE &&
+        segments.size() == 2U && segments[0].type == MMM::NoteType::FLICK &&
+        segments[0].trackIndex == 0 && segments[0].dtrack == 1 &&
+        segments[1].type == MMM::NoteType::HOLD &&
+        segments[1].trackIndex == 1 && segments[1].duration > 0.0;
+    if ( !horizontalPreviewEstablished || !horizontalThenVertical ) {
+        XERROR(
+            "Horizontal-first Polyline order failed: preview={}, type={}, "
+            "segments={}",
+            horizontalPreviewEstablished,
+            static_cast<int>(context.brushState.type),
+            segments.size());
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证关闭 BMS 编辑后 BGM 区不参与投影与画笔交互。
 /// @return 玩家轨道仍可寻址且 BGM 区不会创建自动采样时返回 true。
 bool testBmsEditingHidesBgmLanes()
@@ -3645,6 +3702,7 @@ int main()
 {
     return testKeyModeInteractionRestriction() &&
                    testKeyModeBrushCreatesOnlyHold() &&
+                   testPolylinePreservesHorizontalFirstGestureOrder() &&
                    testBmsEditingHidesBgmLanes() &&
                    testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
