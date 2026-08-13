@@ -113,34 +113,39 @@ std::shared_ptr<BeatMap> makeBeatmap(double noteTimestamp, std::string author)
     beatmap->m_baseMapMetadata.bgm_track_count = 1;
     beatmap->m_baseMapMetadata.preference_bpm  = 150.0;
 
-    auto& note           = beatmap->m_noteData.notes.emplace_back();
-    note.m_timestamp     = noteTimestamp;
-    note.m_track         = 2;
-    note.m_sampleBinding = MMM::AudioSampleBinding{
+    auto& note             = beatmap->m_noteData.notes.emplace_back();
+    note.m_timestamp       = noteTimestamp;
+    note.m_track           = 2;
+    note.m_collaborationId = "room-note-root";
+    note.m_sampleBinding   = MMM::AudioSampleBinding{
         .m_audioResourceId = "tap.wav",
         .m_volume          = 0.45F,
     };
     note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["transport"] =
         "preserved";
 
-    auto& hold       = beatmap->m_noteData.holds.emplace_back();
-    hold.m_timestamp = 2000.0;
-    hold.m_duration  = 600.0;
-    hold.m_track     = 3;
+    auto& hold             = beatmap->m_noteData.holds.emplace_back();
+    hold.m_timestamp       = 2000.0;
+    hold.m_duration        = 600.0;
+    hold.m_track           = 3;
+    hold.m_collaborationId = "room-hold-root";
 
-    auto& subHold        = beatmap->m_noteData.holds.emplace_back();
-    subHold.m_timestamp  = 2800.0;
-    subHold.m_duration   = 400.0;
-    subHold.m_track      = 1;
-    subHold.m_isSubNote  = true;
-    auto& subFlick       = beatmap->m_noteData.flicks.emplace_back();
-    subFlick.m_timestamp = 3200.0;
-    subFlick.m_track     = 1;
-    subFlick.m_dtrack    = 2;
-    subFlick.m_isSubNote = true;
-    auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
-    polyline.m_timestamp = subHold.m_timestamp;
-    polyline.m_track     = subHold.m_track;
+    auto& subHold              = beatmap->m_noteData.holds.emplace_back();
+    subHold.m_timestamp        = 2800.0;
+    subHold.m_duration         = 400.0;
+    subHold.m_track            = 1;
+    subHold.m_isSubNote        = true;
+    subHold.m_collaborationId  = "room-polyline-sub-hold";
+    auto& subFlick             = beatmap->m_noteData.flicks.emplace_back();
+    subFlick.m_timestamp       = 3200.0;
+    subFlick.m_track           = 1;
+    subFlick.m_dtrack          = 2;
+    subFlick.m_isSubNote       = true;
+    subFlick.m_collaborationId = "room-polyline-sub-flick";
+    auto& polyline             = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_timestamp       = subHold.m_timestamp;
+    polyline.m_track           = subHold.m_track;
+    polyline.m_collaborationId = "room-polyline-root";
     polyline.m_subHolds.emplace_back(subHold);
     polyline.m_subFlicks.emplace_back(subFlick);
     polyline.m_subNotes.emplace_back(subHold);
@@ -276,6 +281,30 @@ bool hasRootNoteTimestamps(const std::shared_ptr<const BeatMap>& beatmap,
     });
 }
 
+/// @brief 判断房主和访客连续写入的稳定 ID 物件是否全部收敛。
+bool hasConcurrentBurstNotes(const std::shared_ptr<const BeatMap>& beatmap,
+                             std::size_t                           count)
+{
+    if ( !beatmap || beatmap->m_noteData.notes.size() != 3U + count * 2U ) {
+        return false;
+    }
+    for ( std::size_t index = 0; index < count; ++index ) {
+        const auto contains = [&](std::string_view prefix) {
+            const std::string identity =
+                std::string(prefix) + std::to_string(index);
+            return std::any_of(beatmap->m_noteData.notes.begin(),
+                               beatmap->m_noteData.notes.end(),
+                               [&identity](const MMM::Note& note) {
+                                   return note.m_collaborationId == identity;
+                               });
+        };
+        if ( !contains("host-burst-") || !contains("guest-burst-") ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 覆盖中心信令、真实 WebRTC、初始快照和双向增量收敛。
 bool testPublicDirectoryWebRtcRoom()
 {
@@ -327,6 +356,9 @@ bool testPublicDirectoryWebRtcRoom()
     std::vector<std::vector<BeatmapMutationFlags>> guestApplyFlags(GUEST_COUNT);
     std::vector<std::vector<std::uint64_t>>        guestApplyMutationSequences(
         GUEST_COUNT);
+    std::vector<std::vector<std::uint64_t>> guestAcknowledgedMutationSequences(
+        GUEST_COUNT);
+    std::vector<std::uint64_t> guestRequiredMutationSequences(GUEST_COUNT);
     guests.reserve(GUEST_COUNT);
     for ( std::size_t index = 0; index < GUEST_COUNT; ++index ) {
         auto guest = std::make_unique<CollaborationRoom>();
@@ -335,14 +367,27 @@ bool testPublicDirectoryWebRtcRoom()
              &guestApplyCounts,
              &guestApplyFlags,
              &guestApplyMutationSequences,
+             &guestRequiredMutationSequences,
              index](std::shared_ptr<const BeatMap> beatmap,
                     BeatmapMutationFlags           flags,
                     std::uint64_t includedLocalMutationSequence) {
+                if ( includedLocalMutationSequence <
+                     guestRequiredMutationSequences[index] ) {
+                    return;
+                }
                 guestModels[index] = std::move(beatmap);
                 ++guestApplyCounts[index];
                 guestApplyFlags[index].push_back(flags);
                 guestApplyMutationSequences[index].push_back(
                     includedLocalMutationSequence);
+            });
+        guest->setLocalMutationAcknowledgedCallback(
+            [&guestAcknowledgedMutationSequences,
+             &guestRequiredMutationSequences,
+             index](std::uint64_t sequence) {
+                guestAcknowledgedMutationSequences[index].push_back(sequence);
+                guestRequiredMutationSequences[index] =
+                    std::max(guestRequiredMutationSequences[index], sequence);
             });
         CollaborationJoinRoomConfig guestConfig;
         guestConfig.creator       = "Guest " + std::to_string(index + 1);
@@ -432,17 +477,20 @@ bool testPublicDirectoryWebRtcRoom()
         guests[index]->onBeatmapSynchronized(*guestModels[index]);
         guestApplyFlags[index].clear();
         guestApplyMutationSequences[index].clear();
+        guestAcknowledgedMutationSequences[index].clear();
     }
 
     auto  hostConcurrent      = makeBeatmap(1000.0, "Host Creator");
     auto& hostAddedNote       = hostConcurrent->m_noteData.notes.emplace_back();
     hostAddedNote.m_timestamp = 3000.0;
     hostAddedNote.m_track     = 0;
+    hostAddedNote.m_collaborationId = "host-concurrent-note";
     hostConcurrent->sync();
     auto  guestConcurrent = makeBeatmap(1000.0, "Host Creator");
     auto& guestAddedNote  = guestConcurrent->m_noteData.notes.emplace_back();
-    guestAddedNote.m_timestamp = 4000.0;
-    guestAddedNote.m_track     = 1;
+    guestAddedNote.m_timestamp       = 4000.0;
+    guestAddedNote.m_track           = 1;
+    guestAddedNote.m_collaborationId = "guest-concurrent-note";
     guestConcurrent->sync();
     hostModel           = hostConcurrent;
     guestModels.front() = guestConcurrent;
@@ -474,6 +522,57 @@ bool testPublicDirectoryWebRtcRoom()
     host.onBeatmapSynchronized(*hostModel);
     guests.front()->onBeatmapSynchronized(*guestModels.front());
 
+    constexpr std::size_t CONCURRENT_BURST_COUNT = 32;
+    auto                  hostBurst = makeBeatmap(1000.0, "Host Creator");
+    auto& hostBurstEarlier       = hostBurst->m_noteData.notes.emplace_back();
+    hostBurstEarlier.m_timestamp = 3000.0;
+    hostBurstEarlier.m_track     = 0;
+    hostBurstEarlier.m_collaborationId = "host-concurrent-note";
+    auto& hostBurstGuestEarlier = hostBurst->m_noteData.notes.emplace_back();
+    hostBurstGuestEarlier.m_timestamp       = 4000.0;
+    hostBurstGuestEarlier.m_track           = 1;
+    hostBurstGuestEarlier.m_collaborationId = "guest-concurrent-note";
+    auto guestBurst                      = makeBeatmap(1000.0, "Host Creator");
+    guestBurst->m_noteData.notes         = hostBurst->m_noteData.notes;
+    std::uint64_t lastGuestBurstSequence = 0;
+    for ( std::size_t index = 0; index < CONCURRENT_BURST_COUNT; ++index ) {
+        auto& hostNote             = hostBurst->m_noteData.notes.emplace_back();
+        hostNote.m_timestamp       = 5000.0 + static_cast<double>(index);
+        hostNote.m_track           = static_cast<std::uint32_t>(index % 6U);
+        hostNote.m_collaborationId = "host-burst-" + std::to_string(index);
+        hostBurst->sync();
+        static_cast<void>(
+            host.onBeatmapMutated(*hostBurst, BeatmapMutationFlags::Objects));
+
+        auto& guestNote       = guestBurst->m_noteData.notes.emplace_back();
+        guestNote.m_timestamp = 6000.0 + static_cast<double>(index);
+        guestNote.m_track     = static_cast<std::uint32_t>(index % 6U);
+        guestNote.m_collaborationId = "guest-burst-" + std::to_string(index);
+        guestBurst->sync();
+        lastGuestBurstSequence = guests.front()->onBeatmapMutated(
+            *guestBurst, BeatmapMutationFlags::Objects);
+    }
+    hostModel                              = hostBurst;
+    guestModels.front()                    = guestBurst;
+    guestRequiredMutationSequences.front() = lastGuestBurstSequence;
+    if ( lastGuestBurstSequence == 0 ||
+         !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return hasConcurrentBurstNotes(
+                                   hostModel, CONCURRENT_BURST_COUNT) &&
+                               hasConcurrentBurstNotes(guestModels.front(),
+                                                       CONCURRENT_BURST_COUNT);
+                    }) ||
+         countLogDetails(host, "invalid_beatmap_document") != 0U ||
+         countLogDetails(*guests.front(), "invalid_beatmap_document") != 0U ) {
+        XERROR("Concurrent object burst failed to converge without errors");
+        return false;
+    }
+    host.onBeatmapSynchronized(*hostModel);
+    guests.front()->onBeatmapSynchronized(*guestModels.front());
+
     auto hostReset      = makeBeatmap(1000.0, "Host Creator");
     auto guestReset     = makeBeatmap(1000.0, "Host Creator");
     hostModel           = hostReset;
@@ -498,25 +597,45 @@ bool testPublicDirectoryWebRtcRoom()
     guestModels.front()                  = guestEdit;
     const auto guestEditMutationSequence = guests.front()->onBeatmapMutated(
         *guestEdit, BeatmapMutationFlags::Objects);
+    guestRequiredMutationSequences.front() = guestEditMutationSequence;
     const bool guestEditConverged = pumpUntil(server, host, guests, [&]() {
         if ( !hasExpectedState(hostModel, 1250.0, "Host Creator") ) {
             return false;
         }
-        return std::all_of(
-            guestModels.begin(), guestModels.end(), [](const auto& model) {
-                return hasExpectedState(model, 1250.0, "Host Creator");
-            });
+        const auto appliedSequence =
+            guestApplyMutationSequences.front().empty()
+                ? 0
+                : *std::max_element(guestApplyMutationSequences.front().begin(),
+                                    guestApplyMutationSequences.front().end());
+        const auto acknowledgedSequence =
+            guestAcknowledgedMutationSequences.front().empty()
+                ? 0
+                : *std::max_element(
+                      guestAcknowledgedMutationSequences.front().begin(),
+                      guestAcknowledgedMutationSequences.front().end());
+        return std::max(appliedSequence, acknowledgedSequence) >=
+                   guestEditMutationSequence &&
+               std::all_of(guestModels.begin(),
+                           guestModels.end(),
+                           [](const auto& model) {
+                               return hasExpectedState(
+                                   model, 1250.0, "Host Creator");
+                           });
     });
-    const auto latestGuestAppliedMutationSequence =
+    const auto latestGuestAppliedMutationSequence = std::max(
         guestApplyMutationSequences.front().empty()
             ? 0
             : *std::max_element(guestApplyMutationSequences.front().begin(),
-                                guestApplyMutationSequences.front().end());
+                                guestApplyMutationSequences.front().end()),
+        guestAcknowledgedMutationSequences.front().empty()
+            ? 0
+            : *std::max_element(
+                  guestAcknowledgedMutationSequences.front().begin(),
+                  guestAcknowledgedMutationSequences.front().end()));
     if ( !guestEditConverged || guestEditMutationSequence == 0 ||
-         guestApplyCounts.front() <= guestApplyCountBeforeLocalEdit ||
          latestGuestAppliedMutationSequence < guestEditMutationSequence ) {
         XERROR(
-            "Guest edit failed to converge or refresh its local view: "
+            "Guest edit failed to converge or acknowledge its local view: "
             "participants={}, applyBefore={}, applyAfter={}, mutation={}, "
             "included={}",
             host.participants().size(),

@@ -76,6 +76,12 @@ public:
     /// @return 尚未收到完整快照或文档不合法时返回空。
     [[nodiscard]] std::shared_ptr<::MMM::BeatMap> materialize() const;
 
+    /// @brief 复制当前规范文档供后台重放本地待确认增量。
+    /// @return 尚未收到完整快照时返回空。
+    /// @warning 协作后台合并路径调用；只复制内存文档，不执行 CBOR 编解码或
+    /// 压缩，仍应仅在确实存在待重放增量时使用。
+    [[nodiscard]] std::unique_ptr<BeatmapDocumentCodec> cloneDocument() const;
+
     /// @brief 把当前规范文档重新编码为完整快照。
     /// @return 尚未收到完整快照时返回 MissingSnapshot。
     [[nodiscard]] std::expected<ByteBuffer, BeatmapDocumentError>

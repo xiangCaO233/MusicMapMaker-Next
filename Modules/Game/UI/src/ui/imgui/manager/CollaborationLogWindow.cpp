@@ -79,6 +79,15 @@ CollaborationLogWindow::CollaborationLogWindow(
                             includedLocalMutationSequence,
                     }));
             });
+        m_room->setLocalMutationAcknowledgedCallback(
+            [this](std::uint64_t sequence) {
+                if ( auto session = m_boundSession.lock() ) {
+                    session->pushCommand(Logic::LogicCommand(
+                        Logic::CmdAcknowledgeCollaborationMutation{
+                            .sequence = sequence,
+                        }));
+                }
+            });
         m_room->setResourceBundleCallback(
             [this](Network::Collaboration::CollaborationResourceBundle bundle) {
                 m_pendingResourceBundle = std::make_shared<
@@ -109,6 +118,7 @@ CollaborationLogWindow::~CollaborationLogWindow()
     }
     if ( m_room ) {
         m_room->setApplyBeatmapCallback(nullptr);
+        m_room->setLocalMutationAcknowledgedCallback(nullptr);
         m_room->setResourceBundleCallback(nullptr);
     }
 }
@@ -137,14 +147,20 @@ void CollaborationLogWindow::renderInline()
                            ImVec2(0.0f, logHeight),
                            ImGuiChildFlags_Borders,
                            ImGuiWindowFlags_HorizontalScrollbar) ) {
-        for ( const auto& entry : m_room->logs() ) {
-            const std::string line = formatEntry(entry);
-            if ( entry.type ==
-                 Network::Collaboration::CollaborationLogEventType::Error ) {
-                ImGui::TextColored(
-                    ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "%s", line.c_str());
-            } else {
-                ImGui::TextUnformatted(line.c_str());
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(m_room->logs().size()));
+        while ( clipper.Step() ) {
+            for ( int index = clipper.DisplayStart; index < clipper.DisplayEnd;
+                  ++index ) {
+                const auto&       entry = m_room->logs()[index];
+                const std::string line  = formatEntry(entry);
+                if ( entry.type == Network::Collaboration::
+                                       CollaborationLogEventType::Error ) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "%s", line.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.c_str());
+                }
             }
         }
         if ( m_room->logs().size() > m_lastLogCount ) {

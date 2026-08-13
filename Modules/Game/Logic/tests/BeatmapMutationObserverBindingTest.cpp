@@ -491,6 +491,17 @@ private:
         return false;
     }
 
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdAcknowledgeCollaborationMutation{ .sequence = 1 },
+    });
+    session.update(0.35, config, false);
+    if ( session.hasPendingCommands() ||
+         observer->synchronizationCount() != 0 ||
+         hasRootNote(session, 0.5, 2) || hasRootNote(session, 1.0, 3) ) {
+        XERROR("Local receipt applied a stale deferred object snapshot");
+        return false;
+    }
+
     auto  confirmedAuthority = makeBeatmap();
     auto& confirmedRemote = confirmedAuthority->m_noteData.notes.emplace_back();
     confirmedRemote.m_timestamp       = 1000.0;

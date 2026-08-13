@@ -134,6 +134,9 @@ public:
     using ApplyBeatmapCallback =
         std::function<void(std::shared_ptr<::MMM::BeatMap>,
                            ::MMM::BeatmapMutationFlags, std::uint64_t)>;
+    /// @brief 通知逻辑线程本地变化已经进入房主权威文档。
+    using LocalMutationAcknowledgedCallback =
+        std::function<void(std::uint64_t)>;
     /// @brief 访客资源完整校验后绑定到协作会话的入口。
     using ResourceBundleCallback =
         std::function<void(CollaborationResourceBundle)>;
@@ -192,6 +195,11 @@ public:
     /// @brief 设置远端提交谱面数据的本地逻辑命令入口。
     /// @param callback UI 线程调用的非阻塞回灌函数。
     void setApplyBeatmapCallback(ApplyBeatmapCallback callback);
+
+    /// @brief 设置本地谱面变化的轻量权威确认入口。
+    /// @param callback UI 线程调用的非阻塞逻辑命令入口。
+    void setLocalMutationAcknowledgedCallback(
+        LocalMutationAcknowledgedCallback callback);
 
     /// @brief 设置访客资源完成回调。
     /// @param callback UI 线程消费的资源包回调。
@@ -440,6 +448,8 @@ private:
     BeatmapDocumentCodec m_localMutationCodec;
     /// @brief 远端提交数据的本地逻辑命令入口。
     ApplyBeatmapCallback m_applyBeatmapCallback;
+    /// @brief 本地提交无需整谱回灌时使用的序号确认入口。
+    LocalMutationAcknowledgedCallback m_localMutationAcknowledgedCallback;
     /// @brief 私有无锁队列、消费者状态与后台任务生命周期。
     std::unique_ptr<RemoteOperationPipeline> m_remoteOperationPipeline;
     /// @brief 房主等待最新文档快照完成后再登记的访客连接事件。
@@ -466,8 +476,16 @@ private:
     bool m_localOperationSubmitBlocked = false;
     /// @brief 远端回灌曾覆盖含待确认编辑的本地状态，需要由本人提交回执重放。
     bool m_localStateNeedsRebase = false;
+    /// @brief 已收到但逻辑线程尚未确认应用的远端权威状态。
+    /// 由本地操作互斥锁保护，用于保证此期间产生的本地编辑在提交回执时取得
+    /// 一次合并后的权威结果，而不是仅收到轻量序号确认。
+    bool m_remoteStateApplyPending = false;
     /// @brief 下一条成功编码的本地谱面变化序号。
     std::uint64_t m_nextLocalMutationSequence{ 1 };
+    /// @brief 房主权威文档已经确认的最新本地变化序号。
+    /// 由本地操作互斥锁保护，并附加到后续所有物化结果，防止较早完成的后台
+    /// 快照在确认到达后反向覆盖本地状态。
+    std::uint64_t m_latestCommittedLocalMutationSequence{ 0 };
     /// @brief 当前房间角色是否为房主。
     std::atomic_bool m_hostRoleForObserver{ false };
     /// @brief 房主是否已经排队初始完整快照。

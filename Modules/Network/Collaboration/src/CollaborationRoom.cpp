@@ -71,6 +71,8 @@ constexpr std::size_t MAX_TRANSPORT_EVENTS_PER_UPDATE = 256;
 constexpr std::size_t MAX_LOCAL_OPERATIONS_PER_UPDATE = 256;
 /// @brief 每帧最多向逻辑线程发布的后台谱面合并结果数。
 constexpr std::size_t MAX_REMOTE_RESULTS_PER_UPDATE = 4;
+/// @brief 每帧最多追加的后台操作日志数。
+constexpr std::size_t MAX_REMOTE_LOG_RESULTS_PER_UPDATE = 256;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
 
@@ -126,6 +128,8 @@ public:
 
     /// @brief 后台协作文档流水线交还 UI 线程的有界结果。
     struct Result {
+        /// @brief 是否把该结果记录为一条独立提交日志。
+        bool logOperation{ true };
         /// @brief 提交者当前对应的 PeerId。
         PeerId peerId{ 0 };
         /// @brief 提交者稳定协作标识。
@@ -150,6 +154,8 @@ public:
     moodycamel::ConcurrentQueue<Task> tasks;
     /// @brief 后台文档消费者向 UI 线程发布的无锁结果队列。
     moodycamel::ConcurrentQueue<Result> results;
+    /// @brief 不得阻塞最新谱面交付的独立操作日志队列。
+    moodycamel::ConcurrentQueue<Result> operationLogs;
     /// @brief 后台消费者状态：0 为空闲、1 为运行、2 为运行且收到新唤醒。
     /// @warning UI 线程在提交任务后使用 acq_rel 更新，后台消费者在排空边界
     /// 使用 acq_rel 交接；只协调唯一消费者，不承载文档数据同步。
@@ -245,9 +251,11 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         m_localMutationCodec.reset();
         m_localOperationQueue.clear();
         m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked = false;
-        m_localStateNeedsRebase       = false;
-        m_nextLocalMutationSequence   = 1;
+        m_localOperationSubmitBlocked          = false;
+        m_localStateNeedsRebase                = false;
+        m_remoteStateApplyPending              = false;
+        m_nextLocalMutationSequence            = 1;
+        m_latestCommittedLocalMutationSequence = 0;
     }
 
     m_transport = transport.get();
@@ -356,9 +364,11 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
         m_localMutationCodec.reset();
         m_localOperationQueue.clear();
         m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked = false;
-        m_localStateNeedsRebase       = false;
-        m_nextLocalMutationSequence   = 1;
+        m_localOperationSubmitBlocked          = false;
+        m_localStateNeedsRebase                = false;
+        m_remoteStateApplyPending              = false;
+        m_nextLocalMutationSequence            = 1;
+        m_latestCommittedLocalMutationSequence = 0;
     }
     m_transport        = transport.get();
     m_pendingTransport = std::move(transport);
@@ -449,6 +459,12 @@ void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
     m_applyBeatmapCallback = std::move(callback);
 }
 
+void CollaborationRoom::setLocalMutationAcknowledgedCallback(
+    LocalMutationAcknowledgedCallback callback)
+{
+    m_localMutationAcknowledgedCallback = std::move(callback);
+}
+
 void CollaborationRoom::setResourceBundleCallback(
     ResourceBundleCallback callback)
 {
@@ -486,6 +502,7 @@ std::uint64_t CollaborationRoom::onBeatmapMutated(
     const std::uint64_t sequence = m_nextLocalMutationSequence++;
     m_localOperationQueue.push_back(
         LocalOperation{ std::move(payload.value()), sequence });
+    if ( m_remoteStateApplyPending ) m_localStateNeedsRebase = true;
     if ( snapshot ) {
         m_initialSnapshotQueued.store(true, std::memory_order_relaxed);
     }
@@ -498,6 +515,7 @@ void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
     std::lock_guard lock(m_localOperationMutex);
     if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
     m_localMutationCodec.synchronizeEncodingBaseline(beatmap);
+    m_remoteStateApplyPending = false;
     if ( !m_localOperationQueue.empty() ||
          !m_inFlightLocalOperations.empty() ) {
         m_localStateNeedsRebase = true;
@@ -1092,20 +1110,32 @@ void CollaborationRoom::handleCommittedOperation(
                                    operation.sessionId == m_operationSessionId;
     bool       reapplyLocalState = false;
     std::uint64_t committedLocalMutationSequence = 0;
-    if ( originatedLocally ) {
+    {
         std::lock_guard lock(m_localOperationMutex);
-        const auto      matching =
-            std::find_if(m_inFlightLocalOperations.begin(),
-                         m_inFlightLocalOperations.end(),
-                         [&operation](const LocalOperation& pending) {
-                             return pending.payload == operation.payload;
-                         });
-        if ( matching != m_inFlightLocalOperations.end() ) {
-            committedLocalMutationSequence = matching->sequence;
-            m_inFlightLocalOperations.erase(matching);
+        if ( !originatedLocally ) {
+            m_remoteStateApplyPending = true;
+            if ( !m_localOperationQueue.empty() ||
+                 !m_inFlightLocalOperations.empty() ) {
+                m_localStateNeedsRebase = true;
+            }
         }
-        reapplyLocalState       = m_localStateNeedsRebase;
-        m_localStateNeedsRebase = false;
+        if ( originatedLocally ) {
+            const auto matching =
+                std::find_if(m_inFlightLocalOperations.begin(),
+                             m_inFlightLocalOperations.end(),
+                             [&operation](const LocalOperation& pending) {
+                                 return pending.payload == operation.payload;
+                             });
+            if ( matching != m_inFlightLocalOperations.end() ) {
+                committedLocalMutationSequence = matching->sequence;
+                m_latestCommittedLocalMutationSequence =
+                    std::max(m_latestCommittedLocalMutationSequence,
+                             committedLocalMutationSequence);
+                m_inFlightLocalOperations.erase(matching);
+            }
+            reapplyLocalState       = m_localStateNeedsRebase;
+            m_localStateNeedsRebase = false;
+        }
     }
     RemoteOperationPipeline::Task task;
     task.operation                      = operation;
@@ -1176,6 +1206,13 @@ void CollaborationRoom::scheduleRemoteOperationWorker()
 
 void CollaborationRoom::processRemoteOperations()
 {
+    std::vector<RemoteOperationPipeline::Result> batchResults;
+    ::MMM::BeatmapMutationFlags                  batchVisibleFlags =
+        ::MMM::BeatmapMutationFlags::None;
+    std::uint64_t              batchCommittedLocalMutationSequence = 0;
+    bool                       batchNeedsMaterialization           = false;
+    bool                       batchHost                           = false;
+    std::optional<std::size_t> lastSuccessfulResult;
     while ( true ) {
         RemoteOperationPipeline::Task task;
         while ( m_remoteOperationPipeline->tasks.try_dequeue(task) ) {
@@ -1188,35 +1225,21 @@ void CollaborationRoom::processRemoteOperations()
             auto patch = m_documentCodec.apply(task.operation.payload);
             if ( !patch.has_value() ) {
                 result.error = "invalid_beatmap_operation";
-                m_remoteOperationPipeline->results.enqueue(std::move(result));
+                batchResults.push_back(std::move(result));
                 continue;
             }
             m_hasDocument.store(true, std::memory_order_release);
             result.flags = patch->flags;
-
-            if ( task.host ) {
-                auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-                if ( snapshot.has_value() ) {
-                    result.hostSnapshot.emplace(std::move(snapshot.value()));
-                }
+            batchHost    = task.host;
+            batchCommittedLocalMutationSequence =
+                std::max(batchCommittedLocalMutationSequence,
+                         task.committedLocalMutationSequence);
+            if ( !task.originatedLocally || task.reapplyLocalState ) {
+                batchNeedsMaterialization = true;
+                batchVisibleFlags |= patch->flags;
             }
-
-            const bool refreshLocalObjectCommit =
-                task.originatedLocally &&
-                patch->flags == ::MMM::BeatmapMutationFlags::Objects;
-            if ( !task.originatedLocally || task.reapplyLocalState ||
-                 refreshLocalObjectCommit ) {
-                auto rebased = materializeRebasedLocalBeatmap(
-                    task.committedLocalMutationSequence);
-                if ( !rebased ) {
-                    result.error = "invalid_beatmap_document";
-                } else {
-                    result.beatmap = std::move(rebased->beatmap);
-                    result.includedLocalMutationSequence =
-                        rebased->includedLocalMutationSequence;
-                }
-            }
-            m_remoteOperationPipeline->results.enqueue(std::move(result));
+            lastSuccessfulResult = batchResults.size();
+            batchResults.push_back(std::move(result));
         }
 
         std::uint8_t expected = 2U;
@@ -1225,8 +1248,51 @@ void CollaborationRoom::processRemoteOperations()
                  1U,
                  std::memory_order_acq_rel,
                  std::memory_order_acquire) ) {
+            // 有新任务在本轮排空期间到达时继续合并，不为即将过时的中间
+            // revision 重复物化整张 BeatMap 或压缩房主快照。
             continue;
         }
+
+        if ( lastSuccessfulResult ) {
+            const auto& latest = batchResults[*lastSuccessfulResult];
+            RemoteOperationPipeline::Result delivery;
+            delivery.logOperation  = false;
+            delivery.peerId        = latest.peerId;
+            delivery.participantId = latest.participantId;
+            delivery.creator       = latest.creator;
+            delivery.revision      = latest.revision;
+            delivery.flags         = batchVisibleFlags;
+            delivery.includedLocalMutationSequence =
+                batchCommittedLocalMutationSequence;
+            if ( batchNeedsMaterialization ) {
+                auto rebased = materializeRebasedLocalBeatmap(
+                    batchCommittedLocalMutationSequence);
+                if ( !rebased ) {
+                    delivery.error = "invalid_beatmap_document";
+                } else {
+                    delivery.beatmap = std::move(rebased->beatmap);
+                    delivery.includedLocalMutationSequence =
+                        rebased->includedLocalMutationSequence;
+                }
+            }
+            if ( batchHost && delivery.error.empty() ) {
+                auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+                if ( snapshot.has_value() ) {
+                    delivery.hostSnapshot.emplace(std::move(snapshot.value()));
+                }
+            }
+            m_remoteOperationPipeline->results.enqueue(std::move(delivery));
+        }
+        for ( auto& result : batchResults ) {
+            m_remoteOperationPipeline->operationLogs.enqueue(std::move(result));
+        }
+        batchResults.clear();
+        batchVisibleFlags                   = ::MMM::BeatmapMutationFlags::None;
+        batchCommittedLocalMutationSequence = 0;
+        batchNeedsMaterialization           = false;
+        batchHost                           = false;
+        lastSuccessfulResult.reset();
+
         expected = 1U;
         if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
                  expected,
@@ -1242,24 +1308,23 @@ void CollaborationRoom::processRemoteOperationResults()
 {
     std::shared_ptr<::MMM::BeatMap> mergedBeatmap;
     ::MMM::BeatmapMutationFlags mergedFlags = ::MMM::BeatmapMutationFlags::None;
-    std::uint64_t               mergedLocalMutationSequence = 0;
-    for ( std::size_t index = 0; index < MAX_REMOTE_RESULTS_PER_UPDATE;
-          ++index ) {
-        RemoteOperationPipeline::Result result;
-        if ( !m_remoteOperationPipeline->results.try_dequeue(result) ) break;
-
-        appendLog(CollaborationLogEventType::OperationCommitted,
-                  result.peerId,
-                  result.creator,
-                  std::to_string(result.revision),
-                  result.participantId);
+    std::uint64_t               mergedLocalMutationSequence       = 0;
+    std::uint64_t               acknowledgedLocalMutationSequence = 0;
+    const auto consumeResult = [&](RemoteOperationPipeline::Result result) {
+        if ( result.logOperation ) {
+            appendLog(CollaborationLogEventType::OperationCommitted,
+                      result.peerId,
+                      result.creator,
+                      std::to_string(result.revision),
+                      result.participantId);
+        }
         if ( !result.error.empty() ) {
             appendLog(CollaborationLogEventType::Error,
                       result.peerId,
                       std::move(result.creator),
                       std::move(result.error),
                       std::move(result.participantId));
-            continue;
+            return;
         }
         if ( result.hostSnapshot && m_isHost && m_peer ) {
             if ( m_peer->setStateSnapshot(result.revision,
@@ -1273,7 +1338,25 @@ void CollaborationRoom::processRemoteOperationResults()
             mergedLocalMutationSequence =
                 std::max(mergedLocalMutationSequence,
                          result.includedLocalMutationSequence);
+        } else {
+            acknowledgedLocalMutationSequence =
+                std::max(acknowledgedLocalMutationSequence,
+                         result.includedLocalMutationSequence);
         }
+    };
+    for ( std::size_t index = 0; index < MAX_REMOTE_RESULTS_PER_UPDATE;
+          ++index ) {
+        RemoteOperationPipeline::Result result;
+        if ( !m_remoteOperationPipeline->results.try_dequeue(result) ) break;
+        consumeResult(std::move(result));
+    }
+    for ( std::size_t index = 0; index < MAX_REMOTE_LOG_RESULTS_PER_UPDATE;
+          ++index ) {
+        RemoteOperationPipeline::Result result;
+        if ( !m_remoteOperationPipeline->operationLogs.try_dequeue(result) ) {
+            break;
+        }
+        consumeResult(std::move(result));
     }
     if ( mergedBeatmap && m_applyBeatmapCallback ) {
         // 同帧完成的连续修订只回灌最新领域快照，并合并其真实变更类别，避免
@@ -1281,6 +1364,10 @@ void CollaborationRoom::processRemoteOperationResults()
         // 因而本地手势、交互状态和未确认增量不会交给后台线程。
         m_applyBeatmapCallback(
             std::move(mergedBeatmap), mergedFlags, mergedLocalMutationSequence);
+    }
+    if ( acknowledgedLocalMutationSequence != 0 &&
+         m_localMutationAcknowledgedCallback ) {
+        m_localMutationAcknowledgedCallback(acknowledgedLocalMutationSequence);
     }
 }
 
@@ -1308,6 +1395,8 @@ void CollaborationRoom::resetRemoteOperationPipeline()
     while ( m_remoteOperationPipeline->tasks.try_dequeue(pendingTask) ) {}
     RemoteOperationPipeline::Result pendingResult;
     while ( m_remoteOperationPipeline->results.try_dequeue(pendingResult) ) {}
+    while (
+        m_remoteOperationPipeline->operationLogs.try_dequeue(pendingResult) ) {}
     m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
     m_pendingPeerConnections.clear();
     m_publishedDocumentRevision = 0;
@@ -1364,12 +1453,14 @@ std::optional<CollaborationRoom::RebasedLocalBeatmap>
 CollaborationRoom::materializeRebasedLocalBeatmap(
     std::uint64_t committedLocalMutationSequence)
 {
-    auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-    if ( !snapshot.has_value() ) return std::nullopt;
-
     std::vector<LocalOperation> pending;
+    std::uint64_t               includedLocalMutationSequence =
+        committedLocalMutationSequence;
     {
         std::lock_guard lock(m_localOperationMutex);
+        includedLocalMutationSequence =
+            std::max(includedLocalMutationSequence,
+                     m_latestCommittedLocalMutationSequence);
         pending.reserve(m_inFlightLocalOperations.size() +
                         m_localOperationQueue.size());
         pending.insert(pending.end(),
@@ -1380,18 +1471,25 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
                        m_localOperationQueue.end());
     }
 
-    BeatmapDocumentCodec localView;
-    if ( !localView.apply(*snapshot).has_value() ) return std::nullopt;
-    std::uint64_t includedLocalMutationSequence =
-        committedLocalMutationSequence;
+    if ( pending.empty() ) {
+        auto beatmap = m_documentCodec.materialize();
+        if ( !beatmap ) return std::nullopt;
+        return RebasedLocalBeatmap{
+            .beatmap                       = std::move(beatmap),
+            .includedLocalMutationSequence = includedLocalMutationSequence,
+        };
+    }
+
+    auto localView = m_documentCodec.cloneDocument();
+    if ( !localView ) return std::nullopt;
     for ( const auto& operation : pending ) {
-        if ( !localView.apply(operation.payload).has_value() ) {
+        if ( !localView->apply(operation.payload).has_value() ) {
             return std::nullopt;
         }
         includedLocalMutationSequence =
             std::max(includedLocalMutationSequence, operation.sequence);
     }
-    auto beatmap = localView.materialize();
+    auto beatmap = localView->materialize();
     if ( !beatmap ) return std::nullopt;
     return RebasedLocalBeatmap{
         .beatmap                       = std::move(beatmap),
@@ -1405,9 +1503,11 @@ void CollaborationRoom::stopAcceptingLocalMutations()
     std::lock_guard lock(m_localOperationMutex);
     m_localOperationQueue.clear();
     m_inFlightLocalOperations.clear();
-    m_localOperationSubmitBlocked = false;
-    m_localStateNeedsRebase       = false;
-    m_nextLocalMutationSequence   = 1;
+    m_localOperationSubmitBlocked          = false;
+    m_localStateNeedsRebase                = false;
+    m_remoteStateApplyPending              = false;
+    m_nextLocalMutationSequence            = 1;
+    m_latestCommittedLocalMutationSequence = 0;
 }
 
 void CollaborationRoom::flushLocalViewport()

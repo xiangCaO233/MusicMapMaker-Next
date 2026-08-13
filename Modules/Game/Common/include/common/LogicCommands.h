@@ -687,6 +687,12 @@ struct CmdReplaceBeatmapData {
     std::uint64_t includedLocalMutationSequence{ 0 };
 };
 
+/// @brief 确认协作权威文档已经接纳指定本地谱面变化。
+struct CmdAcknowledgeCollaborationMutation {
+    /// @brief 已由房主提交的本地变化序号。
+    std::uint64_t sequence{ 0 };
+};
+
 /// @brief 将已经完整校验的协作资源绑定到当前访客会话。
 struct CmdSetCollaborationResources {
     /// @brief 以协作缓存为根的只读临时项目。
@@ -832,12 +838,13 @@ using LogicCommand = std::variant<
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdReplaceBeatmapData, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 
@@ -877,6 +884,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdCopy> || std::is_same_v<T, CmdSelectAll> ||
                 std::is_same_v<T, CmdScroll> ||
                 std::is_same_v<T, CmdPanCanvas> ||
+                std::is_same_v<T, CmdAcknowledgeCollaborationMutation> ||
                 std::is_same_v<T, CmdSetCollaborationResources> ||
                 std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
                 std::is_same_v<T, CmdSetCollaborationClipboardIsolation>;

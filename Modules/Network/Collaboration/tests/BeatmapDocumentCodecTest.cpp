@@ -492,6 +492,46 @@ bool testConcurrentObjectDeltasMerge()
         });
 }
 
+/// @brief 校验两端从同一旧基线修改同一稳定物件时采用房主顺序覆盖而不重复。
+bool testConcurrentSameObjectUsesStableIdentity()
+{
+    BeatmapDocumentCodec firstEncoder;
+    BeatmapDocumentCodec secondEncoder;
+    BeatmapDocumentCodec authority;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    auto                 snapshot =
+        firstEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() ||
+         !authority.apply(snapshot.value()).has_value() ) {
+        return false;
+    }
+    secondEncoder.synchronizeEncodingBaseline(*initial);
+
+    auto firstEdit = makeCompleteBeatmap("Creator");
+    firstEdit->m_noteData.notes.front().m_timestamp = 1250.0;
+    firstEdit->sync();
+    auto secondEdit = makeCompleteBeatmap("Creator");
+    secondEdit->m_noteData.notes.front().m_track = 5;
+    secondEdit->sync();
+
+    auto firstDelta =
+        firstEncoder.encode(*firstEdit, BeatmapMutationFlags::Objects, false);
+    auto secondDelta =
+        secondEncoder.encode(*secondEdit, BeatmapMutationFlags::Objects, false);
+    if ( !firstDelta.has_value() || !secondDelta.has_value() ||
+         !authority.apply(firstDelta.value()).has_value() ||
+         !authority.apply(secondDelta.value()).has_value() ) {
+        return false;
+    }
+
+    const auto merged = authority.materialize();
+    return merged && merged->m_noteData.notes.size() == 1U &&
+           merged->m_noteData.notes.front().m_collaborationId == "note-root" &&
+           std::abs(merged->m_noteData.notes.front().m_timestamp - 1000.0) <
+               1e-9 &&
+           merged->m_noteData.notes.front().m_track == 5U;
+}
+
 /// @brief 校验元数据增量小于完整快照且不会覆盖其它谱面类别。
 bool testCategoryDelta()
 {
@@ -577,9 +617,10 @@ bool testLargeSnapshotCompression()
     constexpr std::size_t LARGE_NOTE_COUNT = 20000;
     beatmap->m_noteData.notes.clear();
     for ( std::size_t index = 0; index < LARGE_NOTE_COUNT; ++index ) {
-        auto& note       = beatmap->m_noteData.notes.emplace_back();
-        note.m_timestamp = static_cast<double>(index) * 25.0;
-        note.m_track     = static_cast<int>(index % 6U);
+        auto& note             = beatmap->m_noteData.notes.emplace_back();
+        note.m_timestamp       = static_cast<double>(index) * 25.0;
+        note.m_track           = static_cast<int>(index % 6U);
+        note.m_collaborationId = "large-note-" + std::to_string(index);
     }
     beatmap->sync();
 
@@ -589,9 +630,35 @@ bool testLargeSnapshotCompression()
     }
     auto applied = receiver.apply(snapshot.value());
     if ( !applied.has_value() || !applied->isSnapshot ) return false;
+    constexpr std::size_t INCREMENTAL_EDIT_COUNT = 64;
+    for ( std::size_t index = 0; index < INCREMENTAL_EDIT_COUNT; ++index ) {
+        beatmap->m_noteData.notes[index].m_timestamp += 1.0;
+        auto delta =
+            encoder.encode(*beatmap, BeatmapMutationFlags::Objects, false);
+        if ( !delta.has_value() || delta->size() >= 2048U ||
+             !receiver.apply(delta.value()).has_value() ) {
+            return false;
+        }
+    }
     const auto restored = receiver.materialize();
-    return restored && restored->m_noteData.notes.size() == LARGE_NOTE_COUNT &&
-           restored->m_noteData.notes.back().m_track == 1;
+    if ( !restored || restored->m_noteData.notes.size() != LARGE_NOTE_COUNT ) {
+        return false;
+    }
+    const auto last =
+        std::find_if(restored->m_noteData.notes.begin(),
+                     restored->m_noteData.notes.end(),
+                     [](const MMM::Note& note) {
+                         return note.m_collaborationId == "large-note-19999";
+                     });
+    const auto first =
+        std::find_if(restored->m_noteData.notes.begin(),
+                     restored->m_noteData.notes.end(),
+                     [](const MMM::Note& note) {
+                         return note.m_collaborationId == "large-note-0";
+                     });
+    return last != restored->m_noteData.notes.end() && last->m_track == 1 &&
+           first != restored->m_noteData.notes.end() &&
+           first->m_timestamp == 1.0;
 }
 }  // namespace
 
@@ -601,7 +668,9 @@ int main()
                    testPolylineReferencesPreventDuplicateRootObjects() &&
                    testStrictCategoryIsolation() &&
                    testRepeatedBidirectionalObjectRoundTrips() &&
-                   testConcurrentObjectDeltasMerge() && testCategoryDelta() &&
+                   testConcurrentObjectDeltasMerge() &&
+                   testConcurrentSameObjectUsesStableIdentity() &&
+                   testCategoryDelta() &&
                    testPayloadInspectionIsNonMutating() &&
                    testInvalidPayloads() && testLargeSnapshotCompression()
                ? 0

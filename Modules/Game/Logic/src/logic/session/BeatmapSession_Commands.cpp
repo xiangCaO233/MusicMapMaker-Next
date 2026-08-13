@@ -1224,9 +1224,41 @@ bool BeatmapSession::processCommands()
         return m_ctx->isDragging || m_ctx->isSelecting ||
                m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
     };
+    const auto replacementHasCategories =
+        [](const CmdReplaceBeatmapData& value) {
+            return value.replaceObjects || value.replaceTimelines ||
+                   value.replaceMetadata || value.replaceAudioSamples ||
+                   value.replaceAnnotations;
+        };
     while ( m_commandQueue.try_dequeue(cmd) ) {
         if ( blockCollaborationOfflineEdit(cmd) ||
              blockCollaborationUnauthorizedEdit(cmd, true) ) {
+            continue;
+        }
+        if ( const auto* acknowledgement =
+                 std::get_if<CmdAcknowledgeCollaborationMutation>(&cmd) ) {
+            const auto latestLocalObjectMutationSequence =
+                m_latestAcceptedLocalObjectMutationSequence.load(
+                    std::memory_order_acquire);
+            if ( acknowledgement->sequence >=
+                 latestLocalObjectMutationSequence ) {
+                m_latestAcceptedLocalObjectMutationSequence.store(
+                    acknowledgement->sequence, std::memory_order_release);
+            }
+            if ( m_deferredAuthoritativeReplacement &&
+                 m_deferredAuthoritativeReplacement->replaceObjects &&
+                 m_deferredAuthoritativeReplacement
+                         ->includedLocalMutationSequence <
+                     acknowledgement->sequence ) {
+                // 本地提交回执不能让早于该提交的权威快照重新覆盖物件；其他
+                // 数据类别仍可继续应用，物件会由随后已重放本地增量的结果更新。
+                m_deferredAuthoritativeReplacement->replaceObjects = false;
+                if ( !replacementHasCategories(
+                         *m_deferredAuthoritativeReplacement) ) {
+                    m_deferredAuthoritativeReplacement.reset();
+                }
+            }
+            processed = true;
             continue;
         }
         auto* authoritativeReplacement =
@@ -1282,7 +1314,8 @@ bool BeatmapSession::processCommands()
                  authoritativeReplacement->includedLocalMutationSequence >=
                      latestLocalObjectMutationSequence ) {
                 m_latestAcceptedLocalObjectMutationSequence.store(
-                    0, std::memory_order_release);
+                    authoritativeReplacement->includedLocalMutationSequence,
+                    std::memory_order_release);
             }
             m_deferredAuthoritativeReplacement.reset();
         }
