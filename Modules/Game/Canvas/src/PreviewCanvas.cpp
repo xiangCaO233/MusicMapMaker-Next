@@ -305,6 +305,18 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
     drawList->PopClipRect();
 }
 
+/// @brief 提交密度栏最近一次连续 Seek。
+/// @warning UI 热路径：仅在拖动结束或窗口中断交互时发布一条命令。
+void PreviewCanvas::commitDensitySeekScrub()
+{
+    if ( !m_wasDensitySeekActive ) return;
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{
+        .time        = m_lastDensitySeekCommandTime,
+        .isScrubbing = false,
+    }));
+    m_wasDensitySeekActive = false;
+}
+
 /// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
 /// @param canvasPos 预览画布内容左上角屏幕坐标。
 /// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
@@ -312,7 +324,7 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
 /// @param dpiScale 当前窗口 DPI 缩放。
 /// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
 /// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
-/// 仅在目标时间变化时发布 Seek。
+/// 拖动变化时发布本地预览 Seek，松手时固定发布一次最终提交。
 std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
     float dpiScale)
@@ -320,7 +332,7 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const auto layout = calculatePreviewDensityRailLayout(
         canvasPos, canvasSize, reservedWidth, dpiScale);
     if ( !layout.valid ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
@@ -336,37 +348,47 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     ImGui::SetCursorScreenPos(previousCursor);
 
     if ( !m_currentSnapshot ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
     const double duration = m_currentSnapshot->previewDensity.duration;
     const ImVec2 mousePos = ImGui::GetMousePos();
     if ( !std::isfinite(duration) || duration <= 0.0 ||
          !ImGui::IsMousePosValid(&mousePos) || !std::isfinite(mousePos.y) ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
     const auto targetTime = previewDensityTimeAtY(
         mousePos.y, layout.innerMin.y, layout.innerMax.y, duration);
     if ( !targetTime ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
-    const bool interactionEnded = deactivated && m_wasDensitySeekActive;
-    const bool interactionFrame = isActive || interactionEnded;
-    if ( interactionFrame &&
-         (!m_wasDensitySeekActive ||
-          std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6) ) {
-        const double visualOffset = Config::AppConfig::instance()
-                                        .getVisualConfig()
-                                        .getEffectiveVisualOffset();
+    const bool targetChanged =
+        std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6;
+    const auto dispatch = resolvePreviewDensitySeekDispatch(
+        isActive, deactivated, m_wasDensitySeekActive, targetChanged);
+    const bool interactionFrame =
+        dispatch != PreviewDensitySeekDispatch::None || isActive;
+    const double visualOffset = Config::AppConfig::instance()
+                                    .getVisualConfig()
+                                    .getEffectiveVisualOffset();
+    const double commandTime  = *targetTime - visualOffset;
+    if ( dispatch == PreviewDensitySeekDispatch::Preview ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdSeek{ *targetTime - visualOffset }));
-        m_lastDensitySeekTime = *targetTime;
+            Logic::CmdSeek{ .time = commandTime, .isScrubbing = true }));
+        m_lastDensitySeekTime        = *targetTime;
+        m_lastDensitySeekCommandTime = commandTime;
+    } else if ( dispatch == PreviewDensitySeekDispatch::Commit ) {
+        m_lastDensitySeekTime        = *targetTime;
+        m_lastDensitySeekCommandTime = commandTime;
+        commitDensitySeekScrub();
     }
-    m_wasDensitySeekActive = isActive;
+    if ( dispatch != PreviewDensitySeekDispatch::Commit ) {
+        m_wasDensitySeekActive = isActive;
+    }
 
     if ( isHovered || interactionFrame ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
@@ -388,7 +410,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showPreviewWindow ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return;
     }
 
@@ -399,7 +421,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
-        m_wasDensitySeekActive           = false;
+        commitDensitySeekScrub();
         editorSettings.showPreviewWindow = false;
         appConfig.save();
         return;

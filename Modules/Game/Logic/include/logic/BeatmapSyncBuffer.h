@@ -447,7 +447,9 @@ struct RenderSnapshot {
     double backgroundVideoStartTime{ 0.0 };
 
     // 播放状态
-    bool   isPlaying{ false };
+    bool isPlaying{ false };
+    /// @brief 本地是否正在预览连续 Seek；为 true 时联机视口暂缓发送。
+    bool   isSeekScrubbing{ false };
     double currentTime{ 0.0 };
     /// @brief 当前主画布内容相对基础轨道布局的横向逻辑像素偏移。
     float canvasHorizontalOffsetX{ 0.0F };
@@ -689,6 +691,7 @@ struct RenderSnapshot {
         backgroundIsVideo            = false;
         backgroundVideoStartTime     = 0.0;
         isPlaying                    = false;
+        isSeekScrubbing              = false;
         currentTime                  = 0.0;
         canvasHorizontalOffsetX      = 0.0F;
         playbackTime                 = 0.0;

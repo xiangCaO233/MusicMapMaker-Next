@@ -2652,6 +2652,53 @@ bool testHoverSubdivisionPreviewUsesInspectedTrackAndBeat()
     return true;
 }
 
+/// @brief 验证连续 Seek 状态会进入主画布快照，并在最终提交后清除。
+/// @return 拖动预览与松手提交快照携带正确状态时返回 true。
+bool testSeekScrubStatePropagatesToCanvasSnapshot()
+{
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 4;
+    MMM::Note note;
+    note.m_timestamp = 10'000.0;
+    note.m_track     = 0;
+    beatmap->m_noteData.notes.push_back(std::move(note));
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+    configureObjectEditingCanvas(context);
+    const auto config = context.lastConfig;
+
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSeek{
+        .time        = 5.0,
+        .isScrubbing = true,
+    } });
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Continuous seek did not publish a main-canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->isSeekScrubbing ) {
+        XERROR("Continuous seek state was missing from the canvas snapshot");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSeek{
+        .time        = 7.0,
+        .isScrubbing = false,
+    } });
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->isSeekScrubbing ) {
+        XERROR(
+            "Committed seek did not release canvas viewport synchronization");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证绑定采样的玩家物件会向主画布公开独立试听字段。
 /// @return 悬浮信息保留实体类型、资源 ID 和物件音量时返回 true。
 bool testBoundNoteHoverInspectAudioPreview()
@@ -3633,6 +3680,7 @@ int main()
                    testSelectedPolylineTailEraseWithOtherSelection() &&
                    testSampleHoverInspectDetails() &&
                    testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
+                   testSeekScrubStatePropagatesToCanvasSnapshot() &&
                    testBoundNoteHoverInspectAudioPreview() &&
                    testSampleAnchorDragUsesSingleAction() &&
                    testVerticalObjectDragLock() &&

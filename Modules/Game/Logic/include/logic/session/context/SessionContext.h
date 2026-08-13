@@ -90,6 +90,8 @@ struct SessionContext {
     /// @brief 时间线缩放动画是否仍需继续推进。
     bool animatedTimelineZoomAnimationActive{ false };
     bool isPlaying{ false };  ///< 是否正在播放
+    /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
+    bool isSeekScrubbing{ false };
     /// @brief 当前会话是否拥有全局音频时间线的控制权。
     bool isActiveSession{ false };
     /// @brief 是否作为同复合时间线后台跟随者读取全局 transport。

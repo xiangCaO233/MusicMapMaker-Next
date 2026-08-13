@@ -127,6 +127,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isAudioTimelineFingerprintPublishPending = true;
 
     ctx.isPlaying                         = false;
+    ctx.isSeekScrubbing                   = false;
     ctx.isAudioTimelineSyncFollower       = false;
     ctx.restartPlaybackAfterFinishPending = false;
     ctx.currentTime                       = 0.0;

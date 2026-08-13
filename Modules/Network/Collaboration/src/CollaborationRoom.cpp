@@ -225,7 +225,8 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_localViewportPublishDeferred = false;
+    m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
@@ -332,7 +333,8 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_localViewportPublishDeferred = false;
+    m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
@@ -521,6 +523,7 @@ void CollaborationRoom::disconnect()
     m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
+    m_localViewportPublishDeferred = false;
     m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -586,15 +589,22 @@ SubmitChatMessageResult CollaborationRoom::sendChatMessage(std::string text)
     return m_peer->submitChatMessage(std::move(text));
 }
 
-void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport)
+void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport,
+                                             bool deferUntilCommitted)
 {
-    if ( !m_peer || !std::isfinite(viewport.playbackTime) ||
+    if ( !std::isfinite(viewport.playbackTime) ||
          !std::isfinite(viewport.visualTime) ||
          !std::isfinite(viewport.visibleTimeStart) ||
          !std::isfinite(viewport.visibleTimeEnd) ||
          !std::isfinite(viewport.horizontalOffsetRatio) ) {
         return;
     }
+    const bool wasDeferred         = m_localViewportPublishDeferred;
+    m_localViewportPublishDeferred = deferUntilCommitted;
+    if ( wasDeferred && !deferUntilCommitted ) {
+        m_nextViewportPublish = std::chrono::steady_clock::now();
+    }
+    if ( !m_peer ) return;
     viewport.peerId        = 0;
     viewport.sequence      = 0;
     m_pendingLocalViewport = viewport;
@@ -1362,7 +1372,10 @@ void CollaborationRoom::stopAcceptingLocalMutations()
 
 void CollaborationRoom::flushLocalViewport()
 {
-    if ( !m_peer || !m_pendingLocalViewport ) return;
+    if ( !m_peer || !m_pendingLocalViewport ||
+         m_localViewportPublishDeferred ) {
+        return;
+    }
     if ( m_lastPublishedLocalViewport &&
          !viewportChanged(*m_lastPublishedLocalViewport,
                           *m_pendingLocalViewport) ) {

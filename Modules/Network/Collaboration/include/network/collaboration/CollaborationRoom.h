@@ -234,9 +234,12 @@ public:
 
     /// @brief 更新等待节流发布的本地主画布视口状态。
     /// @param viewport 当前主画布的时间范围和横向偏移比例。
+    /// @param deferUntilCommitted 连续本地预览期间为 true；房间仅保留最新状态，
+    /// 松手提交后才允许发送。
     /// @warning UI 热路径：主画布每帧调用；只覆盖一个固定大小内存状态，
     /// 实际网络发送由 update 按固定频率执行。
-    void publishLocalViewport(ParticipantViewport viewport);
+    void publishLocalViewport(ParticipantViewport viewport,
+                              bool                deferUntilCommitted = false);
 
     /// @brief 设置 P2P 主画布状态的本地发送频率。
     /// @param rateHz 目标频率；房间层限制到 5～60 Hz。
@@ -466,6 +469,8 @@ private:
     std::optional<ParticipantViewport> m_pendingLocalViewport;
     /// @brief 最近一次成功交给 Peer 发布的本地状态。
     std::optional<ParticipantViewport> m_lastPublishedLocalViewport;
+    /// @brief 连续本地 Seek 预览期间是否暂缓发送视口，直至最终位置提交。
+    bool m_localViewportPublishDeferred{ false };
     /// @brief 允许下一次视口状态发送的时间点。
     std::chrono::steady_clock::time_point m_nextViewportPublish;
     /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。

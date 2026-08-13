@@ -332,6 +332,18 @@ TimelineCanvas::TimelineCanvas(
     m_targetHeight = h;
 }
 
+/// @brief 提交总时间轴最近一次连续 Seek。
+/// @warning UI 热路径：仅在拖动结束或窗口中断交互时发布一条命令。
+void TimelineCanvas::commitAudioTimeSliderScrub()
+{
+    if ( !m_isAudioTimeSliderScrubbing ) return;
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{
+        .time        = m_audioTimeSliderScrubTarget,
+        .isScrubbing = false,
+    }));
+    m_isAudioTimeSliderScrubbing = false;
+}
+
 /// @brief 更新 Timeline 窗口、画布交互与叠加控件。
 /// @param sourceManager UI 管理器。
 /// @warning UI 热路径：窗口可见时每帧调用，只做绘制和输入处理。
@@ -341,6 +353,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showTimelineWindow ) {
+        commitAudioTimeSliderScrub();
         return;
     }
 
@@ -365,6 +378,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
     m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
     if ( !windowOpen ) {
+        commitAudioTimeSliderScrub();
         m_wasFocusedLastFrame             = false;
         m_hasTimingInteractionFocus       = false;
         editorSettings.showTimelineWindow = false;
@@ -373,6 +387,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
 
     ImVec2 size = ImGui::GetContentRegionAvail();
+    if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ||
+         m_currentSnapshot->totalTime <= 0.0 ) {
+        commitAudioTimeSliderScrub();
+    }
 
     if ( m_currentSnapshot ) {
         // 1. 绘制垂直音频时间滚动条及时间点表格按钮
@@ -414,12 +432,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     }));
             }
             if ( sliderDeactivatedAfterEdit && m_isAudioTimeSliderScrubbing ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdSeek{
-                        .time        = m_audioTimeSliderScrubTarget,
-                        .isScrubbing = false,
-                    }));
-                m_isAudioTimeSliderScrubbing = false;
+                commitAudioTimeSliderScrub();
             }
 
             if ( sliderActive || ImGui::IsItemHovered() ) {

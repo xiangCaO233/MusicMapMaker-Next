@@ -788,8 +788,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         snapshot->atlasUvRevision,
                                         snapshot->asciiFontAtlasMetrics,
                                         snapshot->unicodeFontMetrics);
-        snapshot->isPlaying   = snapshotIsPlaying;
-        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->isPlaying       = snapshotIsPlaying;
+        snapshot->isSeekScrubbing = m_ctx->isSeekScrubbing;
+        snapshot->currentTime     = m_ctx->animateTime;  // 快照使用动画时间
         snapshot->canvasHorizontalOffsetX =
             SessionUtils::isMainCanvasCameraId(cameraId)
                 ? camera.horizontalOffsetX

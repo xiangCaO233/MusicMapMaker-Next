@@ -451,7 +451,8 @@ void Basic2DCanvas::updateCollaborationViewports(
     localViewport.horizontalOffsetRatio =
         static_cast<double>(m_currentSnapshot->canvasHorizontalOffsetX) /
         static_cast<double>(canvasSize.x);
-    room->publishLocalViewport(localViewport);
+    room->publishLocalViewport(localViewport,
+                               m_currentSnapshot->isSeekScrubbing);
 
     const auto followedPeerId = room->followedPeerId();
     if ( followedPeerId != m_lastFollowedPeerId ) {

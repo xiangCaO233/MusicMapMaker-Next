@@ -145,11 +145,15 @@ private:
     /// @param dpiScale 当前窗口 DPI 缩放。
     /// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
     /// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
-    /// 仅在目标时间变化时发布 Seek。
+    /// 拖动变化时发布本地预览 Seek，松手时固定发布一次最终提交。
     std::optional<double> handleDensitySeekInteraction(const ImVec2& canvasPos,
                                                        const ImVec2& canvasSize,
                                                        float reservedWidth,
                                                        float dpiScale);
+
+    /// @brief 提交密度栏最近一次连续 Seek，并结束联机视口延迟发布状态。
+    /// @warning UI 热路径：仅在拖动结束或窗口中断交互时发布一条命令。
+    void commitDensitySeekScrub();
 
     /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
     struct LastMouseCommand {
@@ -220,6 +224,9 @@ private:
 
     /// @brief 上一次已发布的密度栏目标时间，用于过滤静止拖动帧。
     double m_lastDensitySeekTime{ 0.0 };
+
+    /// @brief 密度栏最近一次连续 Seek 对应的音频时间，用于松手提交。
+    double m_lastDensitySeekCommandTime{ 0.0 };
 };
 
 }  // namespace MMM::Canvas

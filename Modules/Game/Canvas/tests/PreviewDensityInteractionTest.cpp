@@ -102,6 +102,24 @@ bool testInvalidInputs()
            !MMM::Canvas::previewDensityTimeAtY(60.0, 10.0, 110.0, nan);
 }
 
+/// @brief 验证密度栏仅在拖动变化时预览，并在松手时固定提交一次。
+/// @return 按下、静止、移动和松手帧均得到正确发布类型时返回 true。
+bool testSeekDispatchLifecycle()
+{
+    using MMM::Canvas::PreviewDensitySeekDispatch;
+    using MMM::Canvas::resolvePreviewDensitySeekDispatch;
+    return resolvePreviewDensitySeekDispatch(true, false, false, false) ==
+               PreviewDensitySeekDispatch::Preview &&
+           resolvePreviewDensitySeekDispatch(true, false, true, false) ==
+               PreviewDensitySeekDispatch::None &&
+           resolvePreviewDensitySeekDispatch(true, false, true, true) ==
+               PreviewDensitySeekDispatch::Preview &&
+           resolvePreviewDensitySeekDispatch(false, true, true, false) ==
+               PreviewDensitySeekDispatch::Commit &&
+           resolvePreviewDensitySeekDispatch(false, true, false, true) ==
+               PreviewDensitySeekDispatch::None;
+}
+
 }  // namespace
 
 /// @brief 覆盖预览密度栏拖动 Seek 的纵向时间映射。
@@ -110,7 +128,8 @@ int main()
 {
     return testTimeProjection() && testTimeProjectionClamp() &&
                    testVerticalAxisMapping() && testOutOfBoundsClamp() &&
-                   testInvalidInputs() && testDensityColorGradient()
+                   testInvalidInputs() && testDensityColorGradient() &&
+                   testSeekDispatchLifecycle()
                ? 0
                : 1;
 }

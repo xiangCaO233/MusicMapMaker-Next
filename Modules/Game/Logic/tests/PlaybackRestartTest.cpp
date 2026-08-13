@@ -392,6 +392,37 @@ bool testSeekCancelsPendingRestart()
     return true;
 }
 
+/// @brief 验证连续 Seek 仅在拖动期间保持联机视口延迟发布状态。
+/// @return 预览命令置位且最终提交命令清除状态时返回 true。
+bool testSeekScrubStateEndsOnCommit()
+{
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.audioTimelineDescriptor.m_chartEndSeconds = 20.0;
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 6.0, .isScrubbing = true });
+    if ( !context.isSeekScrubbing || !near(context.currentTime, 6.0) ) {
+        XERROR("Continuous seek did not enter local preview state");
+        return false;
+    }
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 9.0, .isScrubbing = true });
+    if ( !context.isSeekScrubbing || !near(context.currentTime, 9.0) ) {
+        XERROR("Continuous seek did not update its local preview target");
+        return false;
+    }
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 9.0, .isScrubbing = false });
+    if ( context.isSeekScrubbing || !near(context.currentTime, 9.0) ) {
+        XERROR("Committed seek did not release viewport synchronization");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行复合时间线播放控制权与重播策略测试。
@@ -408,7 +439,8 @@ int main()
                    testBackgroundSessionCannotControlKeySoundGain() &&
                    testEditorConfigSynchronizesGlobalKeySoundControls() &&
                    testBeatDivisorUpdatePreservesCollaborationViewportRenderMode() &&
-                   testSeekCancelsPendingRestart()
+                   testSeekCancelsPendingRestart() &&
+                   testSeekScrubStateEndsOnCommit()
                ? 0
                : 1;
 }
