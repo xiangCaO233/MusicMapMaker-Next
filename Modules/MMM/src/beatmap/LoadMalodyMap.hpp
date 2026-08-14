@@ -826,28 +826,34 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
                 int trackCount = basemeta.track_count;
-                int x_w =
-                    (trackCount == 4)
-                        ? 64
-                        : (trackCount == 5
-                               ? 51
-                               : (trackCount == 6 ? 43
-                                                  : static_cast<int>(std::round(
-                                                        256.0 / trackCount))));
-                int w_w =
-                    (trackCount == 4)
-                        ? 60
-                        : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
+                int flickWidthBase =
+                    trackCount == 4   ? 60
+                    : trackCount == 5 ? 50
+                    : trackCount == 6 ? 40
+                    : trackCount == 7 ? 30
+                    : trackCount == 8
+                        ? 20
+                        : static_cast<int>(std::round(256.0 / trackCount));
 
-                // 处理滑键 Flick (dtrack = (w - w_w) / x_w，方向由 dir 决定)
+                // Flick 的 w
+                // 个位表示跨轨数；十位基数同时落在皮肤的键数识别区间。
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();
                 flick.m_type      = NoteType::FLICK;
                 flick.m_timestamp = startTime;
                 flick.m_track     = track;
 
-                int wVal            = n.value("w", w_w);
-                int distance_pixels = wVal - w_w;
-                int distance        = distance_pixels;
+                int wVal = n.value("w", flickWidthBase);
+                int distance;
+                if ( trackCount == 7 && wVal >= 37 ) {
+                    // 兼容旧写出器使用 37 作为 7K Flick 基数的文件。
+                    distance = wVal - 37;
+                } else if ( trackCount == 8 && wVal >= 32 ) {
+                    // 兼容旧写出器使用 32 作为 8K Flick 基数的文件。
+                    distance = wVal - 32;
+                } else {
+                    distance = wVal - flickWidthBase;
+                }
+                distance = std::max(0, distance);
 
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)

@@ -1,12 +1,14 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <nlohmann/json.hpp>
 #include <string>
 
 using json = nlohmann::json;
@@ -304,6 +306,116 @@ void test_slide_mode_saves_xw()
     TEST_ASSERT(!gameNotes[0].contains("endbeat"), "should NOT have endbeat");
 
     XINFO("PASS: Slide mode note correctly uses x + w");
+}
+
+/// @brief 确认 7K、8K Slide 写出遵循 Rhythm Master 皮肤的分轨与宽度规则。
+void test_slide_mode_7k_8k_uses_skin_compatible_layout()
+{
+    XINFO("=== Test: Slide 7K/8K uses skin-compatible layout ===");
+
+    struct SlideLayoutCase {
+        int trackCount;
+        int noteWidth;
+        int flickWidth;
+        int noteX;
+        int flickX;
+        int segmentOffset;
+    };
+
+    constexpr std::array<SlideLayoutCase, 2> cases{
+        SlideLayoutCase{ 7, 30, 36, 55, 18, 182 },
+        SlideLayoutCase{ 8, 20, 27, 48, 16, 192 },
+    };
+
+    for ( const auto& testCase : cases ) {
+        auto bm = makeMinimalBeatMap(7 /*Slide*/, testCase.trackCount);
+
+        MMM::Note& note  = bm.m_noteData.notes.emplace_back();
+        note.m_type      = MMM::NoteType::NOTE;
+        note.m_timestamp = 1000.0;
+        note.m_track     = 1;
+
+        MMM::Flick& flick = bm.m_noteData.flicks.emplace_back();
+        flick.m_type      = MMM::NoteType::FLICK;
+        flick.m_timestamp = 1250.0;
+        flick.m_track     = 0;
+        flick.m_dtrack    = testCase.trackCount - 1;
+
+        MMM::Polyline& polyline = bm.m_noteData.polylines.emplace_back();
+        polyline.m_type         = MMM::NoteType::POLYLINE;
+        polyline.m_timestamp    = 1500.0;
+        polyline.m_track        = 1;
+
+        MMM::Flick& subFlick = bm.m_noteData.flicks.emplace_back();
+        subFlick.m_type      = MMM::NoteType::FLICK;
+        subFlick.m_timestamp = 1750.0;
+        subFlick.m_track     = 1;
+        subFlick.m_dtrack    = testCase.trackCount - 2;
+        subFlick.m_isSubNote = true;
+        polyline.m_subNotes.push_back(subFlick);
+        polyline.m_subFlicks.push_back(subFlick);
+
+        bm.sync();
+        const fs::path outPath =
+            std::filesystem::temp_directory_path() /
+            ("edge_slide_" + std::to_string(testCase.trackCount) + "k.mc");
+        TEST_ASSERT(bm.saveToFile(outPath), "7K/8K Slide map should save");
+
+        std::ifstream ifs(outPath);
+        json          document;
+        ifs >> document;
+
+        const json* noteNode     = nullptr;
+        const json* flickNode    = nullptr;
+        const json* polylineNode = nullptr;
+        for ( const auto& node : document["note"] ) {
+            if ( isSoundNode(node) ) continue;
+            if ( node.contains("dir") ) {
+                flickNode = &node;
+            } else if ( node.contains("seg") ) {
+                polylineNode = &node;
+            } else {
+                noteNode = &node;
+            }
+        }
+
+        TEST_ASSERT(noteNode != nullptr && flickNode != nullptr &&
+                        polylineNode != nullptr,
+                    "7K/8K Slide output should keep all note forms");
+        TEST_ASSERT(
+            noteNode->value("x", -1) == testCase.noteX &&
+                noteNode->value("w", -1) == testCase.noteWidth,
+            "plain note should use the skin-compatible center and width");
+        TEST_ASSERT(
+            flickNode->value("x", -1) == testCase.flickX &&
+                flickNode->value("w", -1) == testCase.flickWidth,
+            "Flick width should preserve its encoded cross-lane distance");
+        TEST_ASSERT(
+            polylineNode->value("x", -1) == testCase.noteX &&
+                polylineNode->value("w", -1) == testCase.noteWidth,
+            "Polyline root should stay inside the skin key-width range");
+        TEST_ASSERT((*polylineNode)["seg"].size() == 1 &&
+                        (*polylineNode)["seg"][0].value("x", 0) ==
+                            testCase.segmentOffset,
+                    "Polyline segment should land on the target lane center");
+
+        const auto reloaded     = MMM::BeatMap::loadFromFile(outPath);
+        const bool decodedFlick = std::any_of(
+            reloaded.m_noteData.flicks.begin(),
+            reloaded.m_noteData.flicks.end(),
+            [&](const MMM::Flick& loadedFlick) {
+                return !loadedFlick.m_isSubNote &&
+                       std::abs(loadedFlick.m_timestamp - 1250.0) < 1e-5 &&
+                       loadedFlick.m_dtrack == testCase.trackCount - 1;
+            });
+        TEST_ASSERT(decodedFlick,
+                    "7K/8K Flick distance should survive MC round trip");
+
+        std::error_code removeError;
+        std::filesystem::remove(outPath, removeError);
+    }
+
+    XINFO("PASS: Slide 7K/8K layout matches the skin rules");
 }
 
 /// @brief 确认不支持的 Malody mode 会阻止导出。
@@ -1823,6 +1935,7 @@ int main()
     test_polyline_all_cleaned_degrade_to_note();
     test_key_mode_hold_uses_endbeat();
     test_slide_mode_saves_xw();
+    test_slide_mode_7k_8k_uses_skin_compatible_layout();
     test_unsupported_malody_mode_rejected();
     test_key_mode_polyline_exports_key_fields();
     test_key_mode_flick_exports_single_note();
