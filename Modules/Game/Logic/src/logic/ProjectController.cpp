@@ -6,13 +6,16 @@
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 
+#include <fmt/format.h>
+#include <miniz.h>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <fmt/format.h>
+#include <cstdint>
 #include <fstream>
-#include <miniz.h>
 #include <optional>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -151,6 +154,185 @@ std::string normalizeArchiveName(std::string archiveName)
         archiveName.pop_back();
     }
     return archiveName;
+}
+
+/// @brief ZIP 中央目录固定头长度。
+constexpr std::size_t ZIP_CENTRAL_DIRECTORY_HEADER_SIZE = 46U;
+
+/// @brief ZIP 中央目录文件名长度字段偏移。
+constexpr std::size_t ZIP_FILENAME_LENGTH_OFFSET = 28U;
+
+/// @brief ZIP 中央目录扩展字段长度字段偏移。
+constexpr std::size_t ZIP_EXTRA_FIELD_LENGTH_OFFSET = 30U;
+
+/// @brief ZIP 中央目录头签名。
+constexpr std::uint32_t ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014B50U;
+
+/// @brief Info-ZIP Unicode Path 扩展字段标识。
+constexpr std::uint16_t ZIP_UNICODE_PATH_EXTRA_FIELD_ID = 0x7075U;
+
+/// @brief 从 ZIP 小端字节中读取 16 位无符号整数。
+/// @param data 至少包含两个字节的输入位置。
+/// @return 读取出的整数。
+std::uint16_t readZipLittleEndian16(const std::uint8_t* data)
+{
+    return static_cast<std::uint16_t>(data[0]) |
+           (static_cast<std::uint16_t>(data[1]) << 8U);
+}
+
+/// @brief 从 ZIP 小端字节中读取 32 位无符号整数。
+/// @param data 至少包含四个字节的输入位置。
+/// @return 读取出的整数。
+std::uint32_t readZipLittleEndian32(const std::uint8_t* data)
+{
+    return static_cast<std::uint32_t>(data[0]) |
+           (static_cast<std::uint32_t>(data[1]) << 8U) |
+           (static_cast<std::uint32_t>(data[2]) << 16U) |
+           (static_cast<std::uint32_t>(data[3]) << 24U);
+}
+
+/// @brief 检查字符串是否是结构合法且不含 NUL 的 UTF-8。
+/// @param value 待检查字节串。
+/// @return 可安全作为项目相对路径时返回 true。
+bool isValidArchiveUtf8(std::string_view value)
+{
+    std::size_t index = 0U;
+    while ( index < value.size() ) {
+        const auto first = static_cast<std::uint8_t>(value[index]);
+        if ( first == 0U ) return false;
+        if ( first <= 0x7FU ) {
+            ++index;
+            continue;
+        }
+
+        std::size_t  continuationCount = 0U;
+        std::uint8_t secondMinimum     = 0x80U;
+        std::uint8_t secondMaximum     = 0xBFU;
+        if ( first >= 0xC2U && first <= 0xDFU ) {
+            continuationCount = 1U;
+        } else if ( first >= 0xE0U && first <= 0xEFU ) {
+            continuationCount = 2U;
+            if ( first == 0xE0U ) secondMinimum = 0xA0U;
+            if ( first == 0xEDU ) secondMaximum = 0x9FU;
+        } else if ( first >= 0xF0U && first <= 0xF4U ) {
+            continuationCount = 3U;
+            if ( first == 0xF0U ) secondMinimum = 0x90U;
+            if ( first == 0xF4U ) secondMaximum = 0x8FU;
+        } else {
+            return false;
+        }
+
+        if ( continuationCount > value.size() - index - 1U ) return false;
+        const auto second = static_cast<std::uint8_t>(value[index + 1U]);
+        if ( second < secondMinimum || second > secondMaximum ) return false;
+        for ( std::size_t continuationIndex = 2U;
+              continuationIndex <= continuationCount;
+              ++continuationIndex ) {
+            const auto continuation =
+                static_cast<std::uint8_t>(value[index + continuationIndex]);
+            if ( continuation < 0x80U || continuation > 0xBFU ) return false;
+        }
+        index += continuationCount + 1U;
+    }
+    return true;
+}
+
+/// @brief 按 ZIP 中央目录和 Info-ZIP Unicode Path 扩展解析条目路径。
+/// @param packageBytes 完整谱面包字节。
+/// @param zipArchive 已由 miniz 初始化的 ZIP 读取器。
+/// @param fileStat 当前中央目录条目信息。
+/// @param archiveName 接收 UTF-8 条目路径。
+/// @param errorMessage 接收解析失败原因。
+/// @return 得到安全的 UTF-8 路径时返回 true。
+bool resolveZipArchiveName(const std::vector<std::uint8_t>& packageBytes,
+                           const mz_zip_archive&            zipArchive,
+                           const mz_zip_archive_file_stat&  fileStat,
+                           std::string& archiveName, std::string& errorMessage)
+{
+    archiveName.clear();
+
+    const auto centralDirectoryOffset = zipArchive.m_central_directory_file_ofs;
+    if ( centralDirectoryOffset > packageBytes.size() ||
+         fileStat.m_central_dir_ofs >
+             packageBytes.size() - centralDirectoryOffset ) {
+        errorMessage = "谱面包中央目录偏移无效";
+        return false;
+    }
+
+    const auto headerOffset = static_cast<std::size_t>(
+        centralDirectoryOffset + fileStat.m_central_dir_ofs);
+    if ( headerOffset > packageBytes.size() ||
+         ZIP_CENTRAL_DIRECTORY_HEADER_SIZE >
+             packageBytes.size() - headerOffset ) {
+        errorMessage = "谱面包中央目录条目不完整";
+        return false;
+    }
+
+    const auto* header = packageBytes.data() + headerOffset;
+    if ( readZipLittleEndian32(header) != ZIP_CENTRAL_DIRECTORY_SIGNATURE ) {
+        errorMessage = "谱面包中央目录条目签名无效";
+        return false;
+    }
+
+    const auto filenameLength = static_cast<std::size_t>(
+        readZipLittleEndian16(header + ZIP_FILENAME_LENGTH_OFFSET));
+    const auto extraFieldLength = static_cast<std::size_t>(
+        readZipLittleEndian16(header + ZIP_EXTRA_FIELD_LENGTH_OFFSET));
+    const auto payloadOffset = headerOffset + ZIP_CENTRAL_DIRECTORY_HEADER_SIZE;
+    if ( filenameLength > packageBytes.size() - payloadOffset ||
+         extraFieldLength >
+             packageBytes.size() - payloadOffset - filenameLength ) {
+        errorMessage = "谱面包中央目录文件名或扩展字段不完整";
+        return false;
+    }
+
+    const auto*       rawFilenameBytes = packageBytes.data() + payloadOffset;
+    const std::string rawFilename(
+        reinterpret_cast<const char*>(rawFilenameBytes), filenameLength);
+    const auto rawFilenameCrc = static_cast<std::uint32_t>(
+        mz_crc32(0U, rawFilenameBytes, filenameLength));
+
+    const auto* extraField                = rawFilenameBytes + filenameLength;
+    std::size_t remainingExtraFieldLength = extraFieldLength;
+    while ( remainingExtraFieldLength > 0U ) {
+        if ( remainingExtraFieldLength < 4U ) {
+            errorMessage = "谱面包中央目录扩展字段不完整";
+            return false;
+        }
+
+        const auto fieldId = readZipLittleEndian16(extraField);
+        const auto fieldSize =
+            static_cast<std::size_t>(readZipLittleEndian16(extraField + 2U));
+        extraField += 4U;
+        remainingExtraFieldLength -= 4U;
+        if ( fieldSize > remainingExtraFieldLength ) {
+            errorMessage = "谱面包中央目录扩展字段长度无效";
+            return false;
+        }
+
+        if ( fieldId == ZIP_UNICODE_PATH_EXTRA_FIELD_ID && fieldSize >= 5U &&
+             extraField[0] == 1U &&
+             readZipLittleEndian32(extraField + 1U) == rawFilenameCrc ) {
+            const std::string unicodeFilename(
+                reinterpret_cast<const char*>(extraField + 5U), fieldSize - 5U);
+            if ( !isValidArchiveUtf8(unicodeFilename) ) {
+                errorMessage = "谱面包 Unicode 路径不是合法 UTF-8";
+                return false;
+            }
+            archiveName = normalizeArchiveName(unicodeFilename);
+            return true;
+        }
+
+        extraField += fieldSize;
+        remainingExtraFieldLength -= fieldSize;
+    }
+
+    if ( !isValidArchiveUtf8(rawFilename) ) {
+        errorMessage = "谱面包条目文件名不是 UTF-8，且缺少有效的 Unicode 路径";
+        return false;
+    }
+    archiveName = normalizeArchiveName(rawFilename);
+    return true;
 }
 
 /// @brief 判断 Windows 文件名片段是否包含不兼容字符或形式。
@@ -335,8 +517,15 @@ bool extractZipPackageToDirectory(const std::filesystem::path& packagePath,
             break;
         }
 
-        const std::string archiveName =
-            normalizeArchiveName(std::string(fileStat.m_filename));
+        std::string archiveName;
+        if ( !resolveZipArchiveName(packageBytes,
+                                    zipArchive,
+                                    fileStat,
+                                    archiveName,
+                                    errorMessage) ) {
+            success = false;
+            break;
+        }
         if ( archiveName.empty() ) continue;
         if ( auto unsafeReason = describeUnsafeArchiveName(archiveName) ) {
             errorMessage = fmt::format("{}：{}", *unsafeReason, archiveName);

@@ -99,6 +99,13 @@ mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
 target_link_libraries(ProjectStorageTest PRIVATE Logic Log)
 add_test(NAME ProjectStorageTest COMMAND ProjectStorageTest)
 
+# 临时谱面包测试覆盖旧编码文件名通过 Info-ZIP Unicode Path 恢复为 UTF-8。
+mmm_add_test_executable(Logic TemporaryPackageUnicodePathTest
+                        tests/TemporaryPackageUnicodePathTest.cpp)
+target_link_libraries(TemporaryPackageUnicodePathTest PRIVATE Logic Log)
+add_test(NAME TemporaryPackageUnicodePathTest
+         COMMAND TemporaryPackageUnicodePathTest "${MMM_TEST_RESOURCE_DIR}")
+
 mmm_add_test_executable(Logic ProjectAudioReferenceTest
                         tests/ProjectAudioReferenceTest.cpp)
 target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
