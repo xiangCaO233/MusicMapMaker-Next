@@ -5,6 +5,18 @@
 #include <chrono>
 #include <thread>
 
+namespace
+{
+/// @brief 确保测试在线程池依赖的日志系统析构前完成显式关闭。
+struct AppThreadPoolShutdownGuard {
+    /// @brief 待关闭的应用线程池单例。
+    MMM::Runtime::AppThreadPool& pool;
+
+    /// @brief 在 main 返回前关闭线程池，避免静态析构阶段继续写日志。
+    ~AppThreadPoolShutdownGuard() { pool.shutdown(); }
+};
+}  // namespace
+
 /// @brief 验证构建指纹后台计算不会阻塞调用方并最终发布正确格式。
 int main()
 {
@@ -12,6 +24,7 @@ int main()
 
     auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
     appThreadPool.init();
+    AppThreadPoolShutdownGuard shutdownGuard{ appThreadPool };
 
     const auto scheduleStartedAt = std::chrono::steady_clock::now();
     if ( !startCollaborationBuildFingerprintInitialization() ) return 1;

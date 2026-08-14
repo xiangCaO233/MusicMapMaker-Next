@@ -75,6 +75,16 @@ constexpr std::size_t MAX_REMOTE_RESULTS_PER_UPDATE = 4;
 constexpr std::size_t MAX_REMOTE_LOG_RESULTS_PER_UPDATE = 256;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
+/// @brief 房主完整重同步快照的最短刷新间隔；普通操作增量不受此限制。
+constexpr auto HOST_SNAPSHOT_REFRESH_INTERVAL = std::chrono::seconds(1);
+
+/// @brief 获取 steady_clock 当前时间的纳秒整数，供跨线程非阻塞截止时间比较。
+std::int64_t steadyNowNanoseconds()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 /// @brief 目录连接失败后的重试间隔。
 constexpr auto DIRECTORY_RECONNECT_INTERVAL = std::chrono::seconds(5);
@@ -142,6 +152,11 @@ public:
         ::MMM::BeatmapMutationFlags flags{ ::MMM::BeatmapMutationFlags::None };
         /// @brief 已重放本地待确认操作的可见谱面。
         std::shared_ptr<::MMM::BeatMap> beatmap;
+        /// @brief 当前可见谱面相对上次交付发生变化的根物件稳定标识。
+        std::optional<std::vector<std::string>> objectDeltaIdentities;
+        /// @brief 后台已经完成扫描和编码的玩家物件基线。
+        std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline>
+            objectEncodingBaseline;
         /// @brief 可见谱面已经包含的最新本地变化序号。
         std::uint64_t includedLocalMutationSequence{ 0 };
         /// @brief 房主用于后续访客重同步的最新快照。
@@ -160,8 +175,21 @@ public:
     /// @warning UI 线程在提交任务后使用 acq_rel 更新，后台消费者在排空边界
     /// 使用 acq_rel 交接；只协调唯一消费者，不承载文档数据同步。
     std::atomic_uint8_t workerState{ 0U };
+    /// @brief 权威文档是否存在尚未压缩进房主重同步快照的修订。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；仅用于低频任务调度，
+    /// 使用 acquire/release，不能承载文档数据或替代唯一消费者所有权。
+    std::atomic_bool hostSnapshotDirty{ false };
+    /// @brief 等待写入下一份房主重同步快照的最新权威修订号。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；只用于给快照标记修订。
+    std::atomic_uint64_t pendingHostSnapshotRevision{ 0U };
+    /// @brief 下次允许压缩完整房主快照的 steady_clock 纳秒时间。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；每帧只做一次 relaxed
+    /// 整数比较，避免完整 JSON 压缩随每条物件操作重复执行。
+    std::atomic_int64_t nextHostSnapshotBuildNanoseconds{ 0 };
     /// @brief 已提交后台消费者任务，用于房间销毁前完成全部生命周期握手。
     std::vector<std::future<void>> workerFutures;
+    /// @brief 上一次交付给逻辑线程的可见规范文档，仅由唯一后台消费者访问。
+    std::unique_ptr<BeatmapDocumentCodec> visibleDocument;
 };
 
 CollaborationRoom::CollaborationRoom()
@@ -515,6 +543,35 @@ void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
     std::lock_guard lock(m_localOperationMutex);
     if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
     m_localMutationCodec.synchronizeEncodingBaseline(beatmap);
+    m_pendingObjectEncodingBaselines.clear();
+    m_remoteStateApplyPending = false;
+    if ( !m_localOperationQueue.empty() ||
+         !m_inFlightLocalOperations.empty() ) {
+        m_localStateNeedsRebase = true;
+    }
+}
+
+void CollaborationRoom::onAuthoritativeBeatmapApplied(
+    std::uint64_t revision, std::uint64_t includedLocalMutationSequence)
+{
+    std::lock_guard lock(m_localOperationMutex);
+    const auto      baseline =
+        std::find_if(m_pendingObjectEncodingBaselines.begin(),
+                     m_pendingObjectEncodingBaselines.end(),
+                     [revision](const PendingObjectEncodingBaseline& pending) {
+                         return pending.revision == revision;
+                     });
+    if ( baseline != m_pendingObjectEncodingBaselines.end() &&
+         baseline->includedLocalMutationSequence ==
+             includedLocalMutationSequence &&
+         m_nextLocalMutationSequence - 1U <= includedLocalMutationSequence ) {
+        m_localMutationCodec.synchronizeObjectEncodingBaseline(
+            std::move(baseline->baseline));
+    }
+    std::erase_if(m_pendingObjectEncodingBaselines,
+                  [revision](const PendingObjectEncodingBaseline& pending) {
+                      return pending.revision <= revision;
+                  });
     m_remoteStateApplyPending = false;
     if ( !m_localOperationQueue.empty() ||
          !m_inFlightLocalOperations.empty() ) {
@@ -561,6 +618,14 @@ void CollaborationRoom::disconnect()
 void CollaborationRoom::update()
 {
     updateDirectory();
+    if ( m_isHost &&
+         m_remoteOperationPipeline->hostSnapshotDirty.load(
+             std::memory_order_acquire) &&
+         steadyNowNanoseconds() >=
+             m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.load(
+                 std::memory_order_relaxed) ) {
+        scheduleRemoteOperationWorker();
+    }
     processRemoteOperationResults();
     processPendingPeerConnections();
     if ( !m_transport ) return;
@@ -1213,6 +1278,33 @@ void CollaborationRoom::processRemoteOperations()
     bool                       batchNeedsMaterialization           = false;
     bool                       batchHost                           = false;
     std::optional<std::size_t> lastSuccessfulResult;
+    const auto                 buildHostSnapshotIfDue =
+        [this](RemoteOperationPipeline::Result& delivery) {
+            if ( !m_remoteOperationPipeline->hostSnapshotDirty.load(
+                     std::memory_order_acquire) ) {
+                return;
+            }
+            const auto now = steadyNowNanoseconds();
+            const auto deadline =
+                m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds
+                    .load(std::memory_order_relaxed);
+            if ( now < deadline ) return;
+
+            m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
+                now + std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          HOST_SNAPSHOT_REFRESH_INTERVAL)
+                          .count(),
+                std::memory_order_relaxed);
+            auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+            if ( !snapshot.has_value() ) return;
+
+            delivery.revision =
+                m_remoteOperationPipeline->pendingHostSnapshotRevision.load(
+                    std::memory_order_acquire);
+            delivery.hostSnapshot.emplace(std::move(snapshot.value()));
+            m_remoteOperationPipeline->hostSnapshotDirty.store(
+                false, std::memory_order_release);
+        };
     while ( true ) {
         RemoteOperationPipeline::Task task;
         while ( m_remoteOperationPipeline->tasks.try_dequeue(task) ) {
@@ -1237,6 +1329,13 @@ void CollaborationRoom::processRemoteOperations()
             if ( !task.originatedLocally || task.reapplyLocalState ) {
                 batchNeedsMaterialization = true;
                 batchVisibleFlags |= patch->flags;
+            } else if ( !batchNeedsMaterialization ) {
+                // 本机提交已经存在于 ECS；在尚未混入待回灌远端提交时，直接把
+                // 权威文档记为可见基线，避免下一名协作者编辑时重复回灌本机
+                // 此前写入的全部物件。若本批已含远端提交则保留旧基线，确保
+                // 远端差量不会被后续本机回执提前吞掉。
+                m_remoteOperationPipeline->visibleDocument =
+                    m_documentCodec.cloneDocument();
             }
             lastSuccessfulResult = batchResults.size();
             batchResults.push_back(std::move(result));
@@ -1270,18 +1369,50 @@ void CollaborationRoom::processRemoteOperations()
                 if ( !rebased ) {
                     delivery.error = "invalid_beatmap_document";
                 } else {
+                    const bool onlyObjects =
+                        batchVisibleFlags ==
+                        ::MMM::BeatmapMutationFlags::Objects;
+                    if ( onlyObjects &&
+                         m_remoteOperationPipeline->visibleDocument ) {
+                        delivery.objectDeltaIdentities =
+                            rebased->document
+                                ->changedObjectIdentitiesComparedTo(
+                                    *m_remoteOperationPipeline
+                                         ->visibleDocument);
+                        if ( delivery.objectDeltaIdentities ) {
+                            delivery.objectEncodingBaseline =
+                                BeatmapDocumentCodec::
+                                    prepareObjectEncodingBaseline(
+                                        *rebased->beatmap);
+                            if ( !delivery.objectEncodingBaseline ) {
+                                delivery.objectDeltaIdentities.reset();
+                            }
+                        }
+                    }
+                    m_remoteOperationPipeline->visibleDocument =
+                        std::move(rebased->document);
                     delivery.beatmap = std::move(rebased->beatmap);
                     delivery.includedLocalMutationSequence =
                         rebased->includedLocalMutationSequence;
                 }
             }
             if ( batchHost && delivery.error.empty() ) {
-                auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-                if ( snapshot.has_value() ) {
-                    delivery.hostSnapshot.emplace(std::move(snapshot.value()));
-                }
+                m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
+                    delivery.revision, std::memory_order_release);
+                m_remoteOperationPipeline->hostSnapshotDirty.store(
+                    true, std::memory_order_release);
             }
+            buildHostSnapshotIfDue(delivery);
             m_remoteOperationPipeline->results.enqueue(std::move(delivery));
+        } else if ( m_remoteOperationPipeline->hostSnapshotDirty.load(
+                        std::memory_order_acquire) ) {
+            RemoteOperationPipeline::Result snapshotDelivery;
+            snapshotDelivery.logOperation = false;
+            buildHostSnapshotIfDue(snapshotDelivery);
+            if ( snapshotDelivery.hostSnapshot ) {
+                m_remoteOperationPipeline->results.enqueue(
+                    std::move(snapshotDelivery));
+            }
         }
         for ( auto& result : batchResults ) {
             m_remoteOperationPipeline->operationLogs.enqueue(std::move(result));
@@ -1306,10 +1437,14 @@ void CollaborationRoom::processRemoteOperations()
 
 void CollaborationRoom::processRemoteOperationResults()
 {
-    std::shared_ptr<::MMM::BeatMap> mergedBeatmap;
+    std::shared_ptr<::MMM::BeatMap>         mergedBeatmap;
+    std::optional<std::vector<std::string>> mergedObjectDeltaIdentities;
+    std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline>
+                                mergedObjectEncodingBaseline;
     ::MMM::BeatmapMutationFlags mergedFlags = ::MMM::BeatmapMutationFlags::None;
     std::uint64_t               mergedLocalMutationSequence       = 0;
     std::uint64_t               acknowledgedLocalMutationSequence = 0;
+    std::uint64_t               mergedRevision                    = 0;
     const auto consumeResult = [&](RemoteOperationPipeline::Result result) {
         if ( result.logOperation ) {
             appendLog(CollaborationLogEventType::OperationCommitted,
@@ -1333,8 +1468,31 @@ void CollaborationRoom::processRemoteOperationResults()
             }
         }
         if ( result.beatmap ) {
+            if ( hasBeatmapMutationFlag(
+                     result.flags, ::MMM::BeatmapMutationFlags::Objects) ) {
+                if ( !mergedBeatmap ) {
+                    mergedObjectDeltaIdentities =
+                        std::move(result.objectDeltaIdentities);
+                } else if ( mergedObjectDeltaIdentities &&
+                            result.objectDeltaIdentities ) {
+                    auto& merged = *mergedObjectDeltaIdentities;
+                    merged.insert(merged.end(),
+                                  std::make_move_iterator(
+                                      result.objectDeltaIdentities->begin()),
+                                  std::make_move_iterator(
+                                      result.objectDeltaIdentities->end()));
+                    std::sort(merged.begin(), merged.end());
+                    merged.erase(std::unique(merged.begin(), merged.end()),
+                                 merged.end());
+                } else {
+                    mergedObjectDeltaIdentities.reset();
+                }
+            }
             mergedFlags |= result.flags;
             mergedBeatmap = std::move(result.beatmap);
+            mergedObjectEncodingBaseline =
+                std::move(result.objectEncodingBaseline);
+            mergedRevision = result.revision;
             mergedLocalMutationSequence =
                 std::max(mergedLocalMutationSequence,
                          result.includedLocalMutationSequence);
@@ -1359,11 +1517,33 @@ void CollaborationRoom::processRemoteOperationResults()
         consumeResult(std::move(result));
     }
     if ( mergedBeatmap && m_applyBeatmapCallback ) {
+        if ( mergedFlags != ::MMM::BeatmapMutationFlags::Objects ||
+             !mergedObjectEncodingBaseline ) {
+            mergedObjectDeltaIdentities.reset();
+        }
         // 同帧完成的连续修订只回灌最新领域快照，并合并其真实变更类别，避免
         // 逻辑线程为中间状态重复扫描 ECS。实际应用仍由逻辑命令队列串行完成，
         // 因而本地手势、交互状态和未确认增量不会交给后台线程。
-        m_applyBeatmapCallback(
-            std::move(mergedBeatmap), mergedFlags, mergedLocalMutationSequence);
+        if ( mergedObjectEncodingBaseline && mergedObjectDeltaIdentities ) {
+            std::lock_guard lock(m_localOperationMutex);
+            m_pendingObjectEncodingBaselines.push_back(
+                PendingObjectEncodingBaseline{
+                    .revision = mergedRevision,
+                    .includedLocalMutationSequence =
+                        mergedLocalMutationSequence,
+                    .baseline = std::move(mergedObjectEncodingBaseline),
+                });
+            constexpr std::size_t MAX_PENDING_OBJECT_BASELINES = 16U;
+            while ( m_pendingObjectEncodingBaselines.size() >
+                    MAX_PENDING_OBJECT_BASELINES ) {
+                m_pendingObjectEncodingBaselines.pop_front();
+            }
+        }
+        m_applyBeatmapCallback(std::move(mergedBeatmap),
+                               mergedFlags,
+                               mergedLocalMutationSequence,
+                               mergedRevision,
+                               std::move(mergedObjectDeltaIdentities));
     }
     if ( acknowledgedLocalMutationSequence != 0 &&
          m_localMutationAcknowledgedCallback ) {
@@ -1398,6 +1578,17 @@ void CollaborationRoom::resetRemoteOperationPipeline()
     while (
         m_remoteOperationPipeline->operationLogs.try_dequeue(pendingResult) ) {}
     m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
+    m_remoteOperationPipeline->visibleDocument.reset();
+    m_remoteOperationPipeline->hostSnapshotDirty.store(
+        false, std::memory_order_release);
+    m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
+        0U, std::memory_order_release);
+    m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
+        0, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(m_localOperationMutex);
+        m_pendingObjectEncodingBaselines.clear();
+    }
     m_pendingPeerConnections.clear();
     m_publishedDocumentRevision = 0;
     m_documentCodec.reset();
@@ -1472,10 +1663,13 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
     }
 
     if ( pending.empty() ) {
-        auto beatmap = m_documentCodec.materialize();
+        auto document = m_documentCodec.cloneDocument();
+        if ( !document ) return std::nullopt;
+        auto beatmap = document->materialize();
         if ( !beatmap ) return std::nullopt;
         return RebasedLocalBeatmap{
             .beatmap                       = std::move(beatmap),
+            .document                      = std::move(document),
             .includedLocalMutationSequence = includedLocalMutationSequence,
         };
     }
@@ -1493,6 +1687,7 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
     if ( !beatmap ) return std::nullopt;
     return RebasedLocalBeatmap{
         .beatmap                       = std::move(beatmap),
+        .document                      = std::move(localView),
         .includedLocalMutationSequence = includedLocalMutationSequence,
     };
 }

@@ -47,6 +47,23 @@ void markNotePruneDirty(SessionContext& ctx)
     ctx.isNoteStatsDirty = true;
 }
 
+/// @brief 尝试把单个音符动作直接合并进已构建缓存。
+/// @return 缓存已经更新或动作未实际改变实体时返回 true。
+bool applySingleNoteCacheMutation(SessionContext& ctx, entt::entity entity,
+                                  const std::optional<NoteComponent>& before,
+                                  const std::optional<NoteComponent>& after)
+{
+    if ( !before && !after ) return true;
+    const SessionUtils::NoteCacheMutationView mutation{
+        .entity = entity,
+        .before = before ? &*before : nullptr,
+        .after  = after ? &*after : nullptr,
+    };
+    return SessionUtils::applyNoteCacheMutationsIncrementally(
+        ctx,
+        std::span<const SessionUtils::NoteCacheMutationView>(&mutation, 1U));
+}
+
 /// @brief 标记一次 Note 动作实际涉及的正式谱面与项目草稿数据域。
 /// @return 动作是否涉及正式谱面物件。
 bool markNoteStorageDirty(SessionContext&                     ctx,
@@ -409,13 +426,22 @@ std::string BatchTimelineAction::getName() const
 
 void NoteAction::execute(SessionContext& ctx)
 {
-    auto& reg = ctx.noteRegistry;
+    auto&                        reg                = ctx.noteRegistry;
+    const bool                   hadPendingNoteSync = ctx.m_needsNotesSync;
+    std::optional<NoteComponent> cacheBefore;
+    std::optional<NoteComponent> cacheAfter;
+    bool                         beatmapUpdatedIncrementally = false;
     if ( m_type == Type::Create ) {
         ensureNoteCollaborationIdentity(*m_after);
         if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
         reg.emplace_or_replace<NoteComponent>(m_entity, *m_after);
         reg.emplace_or_replace<TransformComponent>(m_entity);
         reg.emplace_or_replace<InteractionComponent>(m_entity);
+        cacheAfter = reg.get<NoteComponent>(m_entity);
+        if ( !hadPendingNoteSync ) {
+            beatmapUpdatedIncrementally =
+                SessionUtils::syncCreatedNoteToBeatmap(ctx, *cacheAfter);
+        }
         XINFO("[Action] Create Note: Type={}, Time={:.3f}, Track={}",
               (int)m_after->m_type,
               m_after->m_timestamp,
@@ -425,6 +451,7 @@ void NoteAction::execute(SessionContext& ctx)
             auto& current = reg.get<NoteComponent>(m_entity);
             ensureNoteCollaborationIdentity(current);
             inheritNoteIdentity(current, m_before);
+            cacheBefore = current;
             XINFO("[Action] Delete Note: Time={:.3f}, Track={}",
                   m_before->m_timestamp,
                   m_before->m_trackIndex);
@@ -441,6 +468,7 @@ void NoteAction::execute(SessionContext& ctx)
             ensureNoteCollaborationIdentity(current);
             inheritNoteIdentity(current, m_before);
             inheritNoteIdentity(current, m_after);
+            cacheBefore = current;
             XINFO(
                 "[Action] Update Note: Time [{:.3f} -> {:.3f}], Track [{} -> "
                 "{}]",
@@ -450,10 +478,20 @@ void NoteAction::execute(SessionContext& ctx)
                 m_after->m_trackIndex);
             reg.patch<NoteComponent>(m_entity,
                                      [&](NoteComponent& n) { n = *m_after; });
+            cacheAfter = reg.get<NoteComponent>(m_entity);
         }
     }
-    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+    const bool formalMutation = markNoteStorageDirty(ctx, m_before, m_after);
+    if ( formalMutation && beatmapUpdatedIncrementally ) {
+        ctx.m_needsNotesSync = false;
+    }
+    const bool cacheUpdated =
+        applySingleNoteCacheMutation(ctx, m_entity, cacheBefore, cacheAfter);
+    if ( formalMutation && !cacheUpdated ) {
         SessionUtils::markHitEventsDirty(ctx);
+    }
+    if ( cacheUpdated ) {
+        return;
     }
     if ( m_type == Type::Delete ) {
         markNotePruneDirty(ctx);
@@ -464,10 +502,13 @@ void NoteAction::execute(SessionContext& ctx)
 
 void NoteAction::undo(SessionContext& ctx)
 {
-    auto& reg = ctx.noteRegistry;
+    auto&                        reg = ctx.noteRegistry;
+    std::optional<NoteComponent> cacheBefore;
+    std::optional<NoteComponent> cacheAfter;
     XINFO("[Undo] NoteAction Type={}", static_cast<int>(m_type));
     if ( m_type == Type::Create ) {
         if ( isActionNoteEntity(reg, m_entity, *m_after) ) {
+            cacheBefore = reg.get<NoteComponent>(m_entity);
             forgetChartObjectSelection(ctx,
                                        m_after->m_isDraft
                                            ? ChartObjectKind::DraftNote
@@ -481,17 +522,24 @@ void NoteAction::undo(SessionContext& ctx)
             reg.emplace<NoteComponent>(m_entity, *m_before);
             reg.emplace<TransformComponent>(m_entity);
             reg.emplace<InteractionComponent>(m_entity);
+            cacheAfter = reg.get<NoteComponent>(m_entity);
         }
     } else if ( m_type == Type::Update ) {
         if ( isActionNoteEntity(reg, m_entity, *m_after) ) {
+            cacheBefore = reg.get<NoteComponent>(m_entity);
             reg.patch<NoteComponent>(m_entity, [&](NoteComponent& note) {
                 applySelectiveNoteTransition(note, *m_after, *m_before);
             });
+            cacheAfter = reg.get<NoteComponent>(m_entity);
         }
     }
-    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+    const bool formalMutation = markNoteStorageDirty(ctx, m_before, m_after);
+    const bool cacheUpdated =
+        applySingleNoteCacheMutation(ctx, m_entity, cacheBefore, cacheAfter);
+    if ( formalMutation && !cacheUpdated ) {
         SessionUtils::markHitEventsDirty(ctx);
     }
+    if ( cacheUpdated ) return;
     if ( m_type == Type::Create ) {
         markNotePruneDirty(ctx);
     } else {
@@ -507,16 +555,23 @@ void NoteAction::redo(SessionContext& ctx)
         return;
     }
 
-    auto& reg = ctx.noteRegistry;
+    auto&                        reg = ctx.noteRegistry;
+    std::optional<NoteComponent> cacheBefore;
+    std::optional<NoteComponent> cacheAfter;
     if ( isActionNoteEntity(reg, m_entity, *m_before) ) {
+        cacheBefore = reg.get<NoteComponent>(m_entity);
         reg.patch<NoteComponent>(m_entity, [&](NoteComponent& note) {
             applySelectiveNoteTransition(note, *m_before, *m_after);
         });
+        cacheAfter = reg.get<NoteComponent>(m_entity);
     }
-    if ( markNoteStorageDirty(ctx, m_before, m_after) ) {
+    const bool formalMutation = markNoteStorageDirty(ctx, m_before, m_after);
+    const bool cacheUpdated =
+        applySingleNoteCacheMutation(ctx, m_entity, cacheBefore, cacheAfter);
+    if ( formalMutation && !cacheUpdated ) {
         SessionUtils::markHitEventsDirty(ctx);
     }
-    markNoteOrderDirty(ctx);
+    if ( !cacheUpdated ) markNoteOrderDirty(ctx);
 }
 
 std::string NoteAction::getName() const

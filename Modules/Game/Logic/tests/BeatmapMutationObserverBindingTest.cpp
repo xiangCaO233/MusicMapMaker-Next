@@ -13,6 +13,9 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace
 {
@@ -35,6 +38,16 @@ public:
         ++m_synchronizationCount;
     }
 
+    /// @copydoc MMM::IBeatmapMutationObserver::onAuthoritativeBeatmapApplied
+    void onAuthoritativeBeatmapApplied(
+        std::uint64_t revision,
+        std::uint64_t includedLocalMutationSequence) override
+    {
+        ++m_authoritativeApplyCount;
+        m_lastAuthoritativeRevision         = revision;
+        m_lastIncludedLocalMutationSequence = includedLocalMutationSequence;
+    }
+
     /// @brief 返回已经收到的通知次数。
     [[nodiscard]] int notificationCount() const { return m_notificationCount; }
 
@@ -50,6 +63,18 @@ public:
         return m_synchronizationCount;
     }
 
+    /// @brief 返回已经收到的后台权威基线安装确认次数。
+    [[nodiscard]] int authoritativeApplyCount() const
+    {
+        return m_authoritativeApplyCount;
+    }
+
+    /// @brief 返回最后确认的权威修订号。
+    [[nodiscard]] std::uint64_t lastAuthoritativeRevision() const
+    {
+        return m_lastAuthoritativeRevision;
+    }
+
 private:
     /// @brief 已经收到的通知次数。
     int m_notificationCount{ 0 };
@@ -57,6 +82,12 @@ private:
     MMM::BeatmapMutationFlags m_lastFlags{ MMM::BeatmapMutationFlags::None };
     /// @brief 已经收到的权威基线同步次数。
     int m_synchronizationCount{ 0 };
+    /// @brief 已经收到的后台权威基线安装确认次数。
+    int m_authoritativeApplyCount{ 0 };
+    /// @brief 最后确认的权威修订号。
+    std::uint64_t m_lastAuthoritativeRevision{ 0 };
+    /// @brief 最后确认状态包含的本地变化序号。
+    std::uint64_t m_lastIncludedLocalMutationSequence{ 0 };
     /// @brief 模拟协作层接受本地变化后分配的严格递增序号。
     std::uint64_t m_nextMutationSequence{ 1 };
 };
@@ -91,6 +122,25 @@ private:
         }
     }
     return false;
+}
+
+/// @brief 按稳定协作标识查找非子物件实体。
+/// @param session 待检查会话。
+/// @param identity 根物件稳定协作标识。
+/// @return 找到时返回实体，否则返回 entt::null。
+[[nodiscard]] entt::entity findRootNoteByIdentity(
+    const MMM::Logic::BeatmapSession& session, std::string_view identity)
+{
+    const auto& context = session.getContext();
+    const auto  notes =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : notes ) {
+        const auto& note = notes.get<const MMM::Logic::NoteComponent>(entity);
+        if ( !note.m_isSubNote && note.m_collaborationId == identity ) {
+            return entity;
+        }
+    }
+    return entt::null;
 }
 
 /// @brief 判断会话中是否存在已经提交的折线根物件。
@@ -531,6 +581,91 @@ private:
     return true;
 }
 
+/// @brief 验证后台物件差量只更新目标实体并以常量时间确认编码基线。
+/// @return 未变化实体身份保留、增删改正确且不触发完整基线扫描时返回 true。
+[[nodiscard]] bool testPreparedRemoteObjectDeltaAppliesIncrementally()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       initial    = makeBeatmap();
+    const auto                 appendNote = [](MMM::BeatMap& beatmap,
+                                               double        timestamp,
+                                               std::uint32_t track,
+                                               std::string   identity) {
+        auto& note             = beatmap.m_noteData.notes.emplace_back();
+        note.m_timestamp       = timestamp;
+        note.m_track           = track;
+        note.m_collaborationId = std::move(identity);
+    };
+    appendNote(*initial, 500.0, 0, "unchanged-note");
+    appendNote(*initial, 750.0, 1, "changed-note");
+    appendNote(*initial, 900.0, 2, "removed-note");
+    initial->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(initial) },
+    });
+    session.update(0.0, config, false);
+
+    const auto unchangedEntity =
+        findRootNoteByIdentity(session, "unchanged-note");
+    const auto changedEntity = findRootNoteByIdentity(session, "changed-note");
+    if ( unchangedEntity == entt::null || changedEntity == entt::null ) {
+        return false;
+    }
+
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+    auto updated = makeBeatmap();
+    appendNote(*updated, 500.0, 0, "unchanged-note");
+    appendNote(*updated, 1250.0, 3, "changed-note");
+    appendNote(*updated, 1500.0, 2, "added-note");
+    updated->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = std::move(updated),
+            .replaceObjects                = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .includedLocalMutationSequence = 0,
+            .objectDeltaIdentities = std::vector<std::string>{ "changed-note",
+                                                               "removed-note",
+                                                               "added-note" },
+            .authoritativeRevision = 42,
+            .objectEncodingBaselinePrepared = true,
+        },
+    });
+    session.update(0.1, config, false);
+
+    const auto currentChanged = findRootNoteByIdentity(session, "changed-note");
+    const auto currentAdded   = findRootNoteByIdentity(session, "added-note");
+    const auto& context       = session.getContext();
+    if ( findRootNoteByIdentity(session, "unchanged-note") != unchangedEntity ||
+         currentChanged != changedEntity || currentAdded == entt::null ||
+         findRootNoteByIdentity(session, "removed-note") != entt::null ||
+         !hasRootNote(session, 1.25, 3) || !hasRootNote(session, 1.5, 2) ||
+         context.m_needsNotesSync ||
+         context.currentBeatmap->m_noteData.notes.size() != 3U ||
+         observer->synchronizationCount() != 0 ||
+         observer->authoritativeApplyCount() != 1 ||
+         observer->lastAuthoritativeRevision() != 42 ) {
+        XERROR(
+            "Prepared remote object delta did not stay incremental: "
+            "unchanged={}, changed={}, added={}, removed={}, pendingSync={}, "
+            "fullSyncs={}, preparedSyncs={}, revision={}",
+            findRootNoteByIdentity(session, "unchanged-note") ==
+                unchangedEntity,
+            currentChanged == changedEntity,
+            currentAdded != entt::null,
+            findRootNoteByIdentity(session, "removed-note") == entt::null,
+            context.m_needsNotesSync,
+            observer->synchronizationCount(),
+            observer->authoritativeApplyCount(),
+            observer->lastAuthoritativeRevision());
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证房间掉线后编辑命令被统一拦截且提示在一个离线周期只发布一次。
 /// @return 只读状态保持谱面不变，解除只读后编辑恢复时返回 true。
 [[nodiscard]] bool testOfflineCollaborationSessionIsReadOnly()
@@ -876,6 +1011,7 @@ int main()
                    testSubNoteAnnotationPermissionAndMutationFlag() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testRemoteSynchronizationWaitsForLocalMutationReceipt() &&
+                   testPreparedRemoteObjectDeltaAppliesIncrementally() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&
                    testCollaborationBgmPermissionIsLocalGate() &&

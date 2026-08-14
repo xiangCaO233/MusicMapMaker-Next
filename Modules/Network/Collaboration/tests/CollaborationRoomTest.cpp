@@ -337,7 +337,9 @@ bool testPublicDirectoryWebRtcRoom()
     host.setApplyBeatmapCallback(
         [&hostModel, &hostApplyCount](std::shared_ptr<const BeatMap> beatmap,
                                       BeatmapMutationFlags,
-                                      std::uint64_t) {
+                                      std::uint64_t,
+                                      std::uint64_t,
+                                      std::optional<std::vector<std::string>>) {
             hostModel = std::move(beatmap);
             ++hostApplyCount;
         });
@@ -354,7 +356,9 @@ bool testPublicDirectoryWebRtcRoom()
     std::vector<std::shared_ptr<const BeatMap>> guestModels(GUEST_COUNT);
     std::vector<std::size_t>                    guestApplyCounts(GUEST_COUNT);
     std::vector<std::vector<BeatmapMutationFlags>> guestApplyFlags(GUEST_COUNT);
-    std::vector<std::vector<std::uint64_t>>        guestApplyMutationSequences(
+    std::vector<std::vector<std::optional<std::vector<std::string>>>>
+                                            guestApplyObjectDeltas(GUEST_COUNT);
+    std::vector<std::vector<std::uint64_t>> guestApplyMutationSequences(
         GUEST_COUNT);
     std::vector<std::vector<std::uint64_t>> guestAcknowledgedMutationSequences(
         GUEST_COUNT);
@@ -366,11 +370,15 @@ bool testPublicDirectoryWebRtcRoom()
             [&guestModels,
              &guestApplyCounts,
              &guestApplyFlags,
+             &guestApplyObjectDeltas,
              &guestApplyMutationSequences,
              &guestRequiredMutationSequences,
              index](std::shared_ptr<const BeatMap> beatmap,
                     BeatmapMutationFlags           flags,
-                    std::uint64_t includedLocalMutationSequence) {
+                    std::uint64_t includedLocalMutationSequence,
+                    std::uint64_t,
+                    std::optional<std::vector<std::string>>
+                        objectDeltaIdentities) {
                 if ( includedLocalMutationSequence <
                      guestRequiredMutationSequences[index] ) {
                     return;
@@ -378,6 +386,8 @@ bool testPublicDirectoryWebRtcRoom()
                 guestModels[index] = std::move(beatmap);
                 ++guestApplyCounts[index];
                 guestApplyFlags[index].push_back(flags);
+                guestApplyObjectDeltas[index].push_back(
+                    std::move(objectDeltaIdentities));
                 guestApplyMutationSequences[index].push_back(
                     includedLocalMutationSequence);
             });
@@ -476,6 +486,7 @@ bool testPublicDirectoryWebRtcRoom()
     for ( std::size_t index = 0; index < guests.size(); ++index ) {
         guests[index]->onBeatmapSynchronized(*guestModels[index]);
         guestApplyFlags[index].clear();
+        guestApplyObjectDeltas[index].clear();
         guestApplyMutationSequences[index].clear();
         guestAcknowledgedMutationSequences[index].clear();
     }
@@ -517,6 +528,24 @@ bool testPublicDirectoryWebRtcRoom()
                          return flags != BeatmapMutationFlags::Objects;
                      }) ) {
         XERROR("Concurrent object rebase widened its replacement flags");
+        return false;
+    }
+    const bool backgroundDeltaDelivered =
+        GUEST_COUNT < 2U ||
+        std::any_of(
+            guestApplyObjectDeltas[1].begin(),
+            guestApplyObjectDeltas[1].end(),
+            [](const auto& delta) {
+                return delta &&
+                       std::find(delta->begin(),
+                                 delta->end(),
+                                 "host-concurrent-note") != delta->end() &&
+                       std::find(delta->begin(),
+                                 delta->end(),
+                                 "guest-concurrent-note") != delta->end();
+            });
+    if ( !backgroundDeltaDelivered ) {
+        XERROR("Remote object updates did not expose background ID deltas");
         return false;
     }
     host.onBeatmapSynchronized(*hostModel);

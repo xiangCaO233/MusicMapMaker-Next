@@ -14,7 +14,9 @@
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -27,7 +29,10 @@ CollaborationLogWindow::CollaborationLogWindow(
         m_room->setApplyBeatmapCallback(
             [this](std::shared_ptr<::MMM::BeatMap> beatmap,
                    ::MMM::BeatmapMutationFlags     flags,
-                   std::uint64_t includedLocalMutationSequence) {
+                   std::uint64_t includedLocalMutationSequence,
+                   std::uint64_t authoritativeRevision,
+                   std::optional<std::vector<std::string>>
+                       objectDeltaIdentities) {
                 auto session = m_boundSession.lock();
                 if ( !beatmap ) return;
                 if ( !session && !m_room->isHost() ) {
@@ -60,6 +65,8 @@ CollaborationLogWindow::CollaborationLogWindow(
                     return;
                 }
                 if ( !session ) return;
+                const bool objectEncodingBaselinePrepared =
+                    objectDeltaIdentities.has_value();
                 session->pushCommand(
                     Logic::LogicCommand(Logic::CmdReplaceBeatmapData{
                         .sourceBeatmap  = std::move(beatmap),
@@ -77,6 +84,11 @@ CollaborationLogWindow::CollaborationLogWindow(
                         .authoritativeRemote    = true,
                         .includedLocalMutationSequence =
                             includedLocalMutationSequence,
+                        .objectDeltaIdentities =
+                            std::move(objectDeltaIdentities),
+                        .authoritativeRevision = authoritativeRevision,
+                        .objectEncodingBaselinePrepared =
+                            objectEncodingBaselinePrepared,
                     }));
             });
         m_room->setLocalMutationAcknowledgedCallback(

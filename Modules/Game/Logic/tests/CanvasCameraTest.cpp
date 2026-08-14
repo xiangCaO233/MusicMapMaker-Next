@@ -1026,14 +1026,15 @@ bool testSessionSelectsKeyCountLayout()
                 config.visual.canvasComponents.beatNumber.anchorX);
 }
 
-/// @brief 验证正式音符等待延迟同步时仍会立即消费渲染统计脏标记。
-/// @return 创建与撤销后的单次 update 均刷新统计且不提前写回 BeatMap 时返回
-/// true。
+/// @brief 验证新建正式音符直接增量维护领域谱面和渲染统计缓存。
+/// @return 创建立即写回单个领域对象，撤销仍可延迟全量写回时返回 true。
 bool testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty()
 {
     MMM::Logic::BeatmapSession session;
     auto&                      context = session.getContextMutable();
     configureObjectEditingCanvas(context);
+    const auto config = context.lastConfig;
+    session.update(0.0, config, false);
 
     MMM::Logic::NoteComponent note;
     note.m_type       = MMM::NoteType::NOTE;
@@ -1045,14 +1046,15 @@ bool testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty()
                                            std::nullopt,
                                            note),
                                        context);
-    if ( !context.m_needsNotesSync || !context.isNoteStatsDirty ) {
-        XERROR("Note creation did not schedule deferred data and stats sync");
+    if ( context.m_needsNotesSync || context.isNoteStatsDirty ||
+         context.noteCount != 1U ||
+         context.currentBeatmap->m_noteData.notes.size() != 1U ) {
+        XERROR("Note creation did not update deferred data and stats caches");
         return false;
     }
 
-    const auto config = context.lastConfig;
     session.update(0.0, config, false);
-    if ( !context.m_needsNotesSync || context.isNoteStatsDirty ||
+    if ( context.m_needsNotesSync || context.isNoteStatsDirty ||
          context.noteCount != 1U ) {
         XERROR(
             "Deferred note sync kept render stats dirty after creation: "
@@ -1064,8 +1066,9 @@ bool testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty()
     }
 
     context.actionStack.undo(context);
-    if ( !context.m_needsNotesSync || !context.isNoteStatsDirty ) {
-        XERROR("Note undo did not schedule deferred data and stats sync");
+    if ( !context.m_needsNotesSync || context.isNoteStatsDirty ||
+         context.noteCount != 0U ) {
+        XERROR("Note undo did not update deferred data and stats caches");
         return false;
     }
 

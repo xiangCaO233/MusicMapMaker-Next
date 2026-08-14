@@ -131,9 +131,9 @@ class CollaborationRoom : public ::MMM::IBeatmapMutationObserver
 {
 public:
     /// @brief 把房主已排序的谱面状态回灌到当前本地会话。
-    using ApplyBeatmapCallback =
-        std::function<void(std::shared_ptr<::MMM::BeatMap>,
-                           ::MMM::BeatmapMutationFlags, std::uint64_t)>;
+    using ApplyBeatmapCallback = std::function<void(
+        std::shared_ptr<::MMM::BeatMap>, ::MMM::BeatmapMutationFlags,
+        std::uint64_t, std::uint64_t, std::optional<std::vector<std::string>>)>;
     /// @brief 通知逻辑线程本地变化已经进入房主权威文档。
     using LocalMutationAcknowledgedCallback =
         std::function<void(std::uint64_t)>;
@@ -223,6 +223,14 @@ public:
     /// @brief 接收逻辑线程已经合并远端提交后的本地编码基线。
     /// @warning 逻辑线程低频远端提交路径调用；仅执行内存编码并获取短期互斥锁。
     void onBeatmapSynchronized(const ::MMM::BeatMap& beatmap) override;
+
+    /// @brief 安装逻辑线程已经应用的权威修订对应的后台物件编码基线。
+    /// @param revision 已应用的权威文档修订号。
+    /// @param includedLocalMutationSequence 该修订包含的最新本地变化序号。
+    /// @warning 逻辑线程远端提交路径调用；只进行有界状态检查和容器移动。
+    void onAuthoritativeBeatmapApplied(
+        std::uint64_t revision,
+        std::uint64_t includedLocalMutationSequence) override;
 
     /// @brief 主动离开并回到离线状态。
     void disconnect();
@@ -334,8 +342,20 @@ private:
     struct RebasedLocalBeatmap {
         /// @brief 可安全回灌逻辑线程的领域谱面。
         std::shared_ptr<::MMM::BeatMap> beatmap;
+        /// @brief 与领域谱面对应、供后台计算下一次可见差量的规范文档。
+        std::unique_ptr<BeatmapDocumentCodec> document;
         /// @brief 该谱面已经包含的最新本地变化序号。
         std::uint64_t includedLocalMutationSequence{ 0 };
+    };
+
+    /// @brief 等待逻辑线程确认应用的后台物件编码基线。
+    struct PendingObjectEncodingBaseline {
+        /// @brief 基线对应的权威文档修订号。
+        std::uint64_t revision{ 0 };
+        /// @brief 基线已经包含的最新本地变化序号。
+        std::uint64_t includedLocalMutationSequence{ 0 };
+        /// @brief 后台完整准备、逻辑线程只需移动安装的物件基线。
+        std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline> baseline;
     };
 
     /// @brief 驱动目录订阅并在断线后低频重连。
@@ -468,6 +488,8 @@ private:
     std::deque<LocalOperation> m_localOperationQueue;
     /// @brief 已交给可靠传输且等待房主提交回执的本地操作。
     std::deque<LocalOperation> m_inFlightLocalOperations;
+    /// @brief 已交付且等待逻辑线程按修订顺序确认的物件编码基线。
+    std::deque<PendingObjectEncodingBaseline> m_pendingObjectEncodingBaselines;
     /// @brief 保护本地操作队列。
     std::mutex m_localOperationMutex;
     /// @brief 当前房间是否接受逻辑线程发布的谱面变化。

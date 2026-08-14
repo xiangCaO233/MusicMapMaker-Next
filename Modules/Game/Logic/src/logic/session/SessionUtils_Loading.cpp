@@ -464,6 +464,73 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isSamplePruneDirty = false;
 }
 
+bool SessionUtils::syncCreatedNoteToBeatmap(SessionContext&      ctx,
+                                            const NoteComponent& note)
+{
+    if ( !ctx.currentBeatmap || note.m_isDraft || note.m_isSubNote ||
+         note.m_collaborationId.empty() ||
+         (note.m_type != ::MMM::NoteType::NOTE &&
+          note.m_type != ::MMM::NoteType::HOLD &&
+          note.m_type != ::MMM::NoteType::FLICK) ) {
+        return false;
+    }
+
+    NoteComponent synchronized = note;
+    if ( hasAnyNoteColorOverride(synchronized.m_customColors) ) {
+        writeNoteColorOverridesToMetadata(synchronized);
+    }
+
+    auto& mutex = EditorEngine::instance().getSessionMutex();
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    ::MMM::Note*                          appended = nullptr;
+    if ( synchronized.m_type == ::MMM::NoteType::NOTE ) {
+        auto& target      = ctx.currentBeatmap->m_noteData.notes;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::NOTE;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    } else if ( synchronized.m_type == ::MMM::NoteType::HOLD ) {
+        auto& target      = ctx.currentBeatmap->m_noteData.holds;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::HOLD;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_duration        = synchronized.m_duration * 1000.0;
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    } else {
+        auto& target      = ctx.currentBeatmap->m_noteData.flicks;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::FLICK;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track  = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_dtrack = synchronized.m_dtrack;
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    }
+
+    const auto insertion = std::upper_bound(
+        ctx.currentBeatmap->m_allNotes.begin(),
+        ctx.currentBeatmap->m_allNotes.end(),
+        appended->m_timestamp,
+        [](double timestamp, const std::reference_wrapper<::MMM::Note>& value) {
+            return timestamp < value.get().m_timestamp;
+        });
+    ctx.currentBeatmap->m_allNotes.insert(insertion, *appended);
+    return true;
+}
+
 
 void SessionUtils::syncBeatmap(SessionContext& ctx)
 {

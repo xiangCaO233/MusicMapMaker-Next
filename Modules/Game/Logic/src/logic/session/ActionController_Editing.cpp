@@ -17,11 +17,13 @@
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <fmt/format.h>
+#include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <mutex>
 #include <string_view>
@@ -697,6 +699,44 @@ std::vector<NoteComponent> makeNoteComponentsFromBeatMap(
     return notes;
 }
 
+/// @brief 从完整谱面中只构建指定稳定标识对应的根物件组件。
+/// @param beatMap 后台已经物化的最新可见谱面。
+/// @param identities 本轮发生增删改的根物件稳定标识。
+/// @return 最新谱面中仍存在的目标根物件组件。
+std::vector<NoteComponent> makeChangedNoteComponentsFromBeatMap(
+    const ::MMM::BeatMap&                  beatMap,
+    const std::unordered_set<std::string>& identities)
+{
+    std::vector<NoteComponent> notes;
+    notes.reserve(identities.size());
+    const auto appendRoot = [&](const ::MMM::Note& note) {
+        if ( note.m_isSubNote ||
+             !identities.contains(note.m_collaborationId) ) {
+            return;
+        }
+        notes.push_back(makeNoteComponentFromBeatmapNote(note));
+    };
+    for ( const auto& note : beatMap.m_noteData.notes ) appendRoot(note);
+    for ( const auto& hold : beatMap.m_noteData.holds ) appendRoot(hold);
+    for ( const auto& flick : beatMap.m_noteData.flicks ) appendRoot(flick);
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        if ( !identities.contains(polyline.m_collaborationId) ) continue;
+        auto component   = makeNoteComponentFromBeatmapNote(polyline);
+        component.m_type = ::MMM::NoteType::POLYLINE;
+        component.m_subNotes.reserve(polyline.m_subNotes.size());
+        for ( const auto& subNote : polyline.m_subNotes ) {
+            component.m_subNotes.push_back(
+                makeSubNoteComponentFromBeatmapNote(subNote.get()));
+        }
+        if ( !component.m_subNotes.empty() ) {
+            component.m_timestamp  = component.m_subNotes.front().timestamp;
+            component.m_trackIndex = component.m_subNotes.front().trackIndex;
+        }
+        notes.push_back(std::move(component));
+    }
+    return notes;
+}
+
 /// @brief 按稳定协作标识把来源谱面的注释覆盖到当前物件快照。
 /// @param notes 当前会话根物件快照；未出现在来源中的注释会被清除。
 /// @param source 来源谱面。
@@ -943,6 +983,208 @@ void replaceNoteComponents(SessionContext&                   ctx,
     ctx.m_needsNotesSync = true;
     SessionUtils::markHitEventsDirty(ctx);
     markReplacementNoteOrderDirty(ctx);
+}
+
+/// @brief 按后台差量只更新指定稳定标识对应的 ECS 物件。
+/// @param ctx 当前会话上下文。
+/// @param source 后台已经物化的最新可见谱面。
+/// @param changedIdentities 本轮增删改的根物件稳定标识。
+/// @warning 远端物件提交路径：会扫描 Registry 建立目标实体索引，但只复制、
+/// 创建或销毁实际变化的物件，禁止从每帧更新路径调用。
+void applyIncrementalNoteComponents(
+    SessionContext& ctx, const ::MMM::BeatMap& source,
+    const std::vector<std::string>& changedIdentities)
+{
+    std::unordered_set<std::string> identities(changedIdentities.begin(),
+                                               changedIdentities.end());
+    if ( identities.empty() ) return;
+
+    struct ExistingNote {
+        /// @brief 同步前的实体。
+        entt::entity entity{ entt::null };
+        /// @brief 同步前的目标组件快照。
+        NoteComponent component;
+    };
+
+    struct OwnedCacheMutation {
+        /// @brief 差量对应的实体。
+        entt::entity entity{ entt::null };
+        /// @brief 应用远端差量前的组件。
+        std::optional<NoteComponent> before;
+        /// @brief 应用远端差量后的组件。
+        std::optional<NoteComponent> after;
+    };
+
+    std::vector<ExistingNote>                     existing;
+    std::unordered_map<std::string, entt::entity> existingByIdentity;
+    std::unordered_set<entt::entity>              targetRoots;
+    const auto view = ctx.noteRegistry.view<const NoteComponent>();
+    for ( const auto entity : view ) {
+        const auto& note = view.get<const NoteComponent>(entity);
+        if ( note.m_isDraft || note.m_isSubNote ||
+             !identities.contains(note.m_collaborationId) ) {
+            continue;
+        }
+        existing.push_back({ entity, note });
+        targetRoots.insert(entity);
+        if ( !note.m_collaborationId.empty() ) {
+            existingByIdentity.try_emplace(note.m_collaborationId, entity);
+        }
+    }
+    for ( const auto entity : view ) {
+        const auto& note = view.get<const NoteComponent>(entity);
+        if ( note.m_isDraft || !note.m_isSubNote ||
+             !targetRoots.contains(note.m_parentPolyline) ) {
+            continue;
+        }
+        existing.push_back({ entity, note });
+        if ( !note.m_collaborationId.empty() ) {
+            existingByIdentity.try_emplace(note.m_collaborationId, entity);
+        }
+    }
+
+    std::vector<OwnedCacheMutation>               cacheMutations;
+    std::unordered_map<entt::entity, std::size_t> cacheMutationByEntity;
+    cacheMutations.reserve(existing.size() + identities.size());
+    cacheMutationByEntity.reserve(existing.size() + identities.size());
+    for ( const auto& entry : existing ) {
+        cacheMutationByEntity.emplace(entry.entity, cacheMutations.size());
+        cacheMutations.push_back({
+            .entity = entry.entity,
+            .before = entry.component,
+        });
+    }
+    const auto recordAfter = [&](entt::entity         entity,
+                                 const NoteComponent& component) {
+        const auto found = cacheMutationByEntity.find(entity);
+        if ( found != cacheMutationByEntity.end() ) {
+            cacheMutations[found->second].after = component;
+            return;
+        }
+        cacheMutationByEntity.emplace(entity, cacheMutations.size());
+        cacheMutations.push_back({
+            .entity = entity,
+            .after  = component,
+        });
+    };
+
+    std::unordered_set<entt::entity> retained;
+    retained.reserve(existing.size() + identities.size());
+    const auto acquireEntity = [&](std::string_view identity,
+                                   bool expectedSubNote) -> entt::entity {
+        if ( identity.empty() ) return entt::null;
+        const auto found = existingByIdentity.find(std::string(identity));
+        if ( found == existingByIdentity.end() ||
+             retained.contains(found->second) ||
+             !ctx.noteRegistry.valid(found->second) ) {
+            return entt::null;
+        }
+        const auto& current =
+            ctx.noteRegistry.get<const NoteComponent>(found->second);
+        return current.m_isSubNote == expectedSubNote ? found->second
+                                                      : entt::null;
+    };
+
+    const auto desiredNotes =
+        makeChangedNoteComponentsFromBeatMap(source, identities);
+    for ( const auto& desired : desiredNotes ) {
+        auto       root = acquireEntity(desired.m_collaborationId, false);
+        const bool retainedRoot = root != entt::null;
+        if ( root == entt::null ) root = ctx.noteRegistry.create();
+        retained.insert(root);
+        ctx.noteRegistry.emplace_or_replace<NoteComponent>(root, desired);
+        recordAfter(root, desired);
+        ensureReplacementNoteAuxiliaryComponents(
+            ctx.noteRegistry, root, retainedRoot);
+
+        if ( desired.m_type != ::MMM::NoteType::POLYLINE ) continue;
+        for ( std::size_t index = 0; index < desired.m_subNotes.size();
+              ++index ) {
+            const auto&   sub = desired.m_subNotes[index];
+            NoteComponent child;
+            child.m_type            = sub.type;
+            child.m_timestamp       = sub.timestamp;
+            child.m_duration        = sub.duration;
+            child.m_trackIndex      = sub.trackIndex;
+            child.m_dtrack          = sub.dtrack;
+            child.m_isSubNote       = true;
+            child.m_parentPolyline  = root;
+            child.m_subIndex        = static_cast<int>(index);
+            child.m_metadata        = sub.metadata;
+            child.m_annotation      = sub.annotation;
+            child.m_sampleBinding   = sub.sampleBinding;
+            child.m_customColors    = sub.customColors;
+            child.m_collaborationId = sub.collaborationId;
+
+            auto childEntity = acquireEntity(child.m_collaborationId, true);
+            const bool retainedChild = childEntity != entt::null;
+            if ( childEntity == entt::null ) {
+                childEntity = ctx.noteRegistry.create();
+            }
+            retained.insert(childEntity);
+            ctx.noteRegistry.emplace_or_replace<NoteComponent>(childEntity,
+                                                               child);
+            recordAfter(childEntity, child);
+            ensureReplacementNoteAuxiliaryComponents(
+                ctx.noteRegistry, childEntity, retainedChild);
+        }
+    }
+
+    std::unordered_set<entt::entity> removed;
+    for ( const auto& entry : existing ) {
+        if ( retained.contains(entry.entity) ||
+             !ctx.noteRegistry.valid(entry.entity) ) {
+            continue;
+        }
+        removed.insert(entry.entity);
+        ctx.noteRegistry.destroy(entry.entity);
+    }
+    std::erase_if(ctx.selectedNoteEntities, [&](entt::entity entity) {
+        return removed.contains(entity);
+    });
+    if ( removed.contains(ctx.hoveredEntity) ) {
+        ctx.hoveredEntity     = entt::null;
+        ctx.hoveredObjectKind = ChartObjectKind::PlayerNote;
+        ctx.hoveredPart       = static_cast<std::int32_t>(HoverPart::None);
+        ctx.hoveredSubIndex   = -1;
+    }
+    if ( !ctx.marqueeBoxes.empty() ) ctx.isMarqueeSelectionDirty = true;
+
+    ctx.m_needsNotesSync = true;
+    std::vector<SessionUtils::NoteCacheMutationView> cacheMutationViews;
+    cacheMutationViews.reserve(cacheMutations.size());
+    for ( const auto& mutation : cacheMutations ) {
+        cacheMutationViews.push_back({
+            .entity = mutation.entity,
+            .before = mutation.before ? &*mutation.before : nullptr,
+            .after  = mutation.after ? &*mutation.after : nullptr,
+        });
+    }
+    if ( !SessionUtils::applyNoteCacheMutationsIncrementally(
+             ctx, cacheMutationViews) ) {
+        SessionUtils::markHitEventsDirty(ctx);
+        markReplacementNoteOrderDirty(ctx);
+    }
+}
+
+/// @brief 在线程池释放已经被最新权威状态换出的旧领域物件容器。
+/// @param retiredBeatmap 已不再由逻辑线程读取、内部持有旧物件容器的谱面。
+/// @warning 联机物件提交路径每次调用一次；这里保留 shared_ptr 是为了保证旧
+/// 容器跨线程释放期间的生命周期。若直接在逻辑线程析构，大谱面的逐元素释放
+/// 仍会造成可见掉帧，目前没有不转移所有权且能安全后台释放的替代方案。
+void retireBeatmapObjectStorage(std::shared_ptr<::MMM::BeatMap> retiredBeatmap)
+{
+    if ( !retiredBeatmap ) return;
+    auto release = [beatmap = std::move(retiredBeatmap)]() mutable {
+        beatmap->m_allNotes.clear();
+        beatmap->m_noteData = {};
+    };
+    auto* threadPool = Runtime::AppThreadPool::instance().get();
+    if ( threadPool ) {
+        static_cast<void>(threadPool->enqueue(std::move(release)));
+    } else {
+        release();
+    }
 }
 
 /// @brief 收集当前会话中全部自动采样组件。
@@ -2262,6 +2504,29 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
     }
     if ( !cmd.replaceObjects && !cmd.replaceTimelines && !cmd.replaceMetadata &&
          !cmd.replaceAudioSamples && !cmd.replaceAnnotations ) {
+        return;
+    }
+
+    const bool appliesPreparedObjectDelta =
+        cmd.authoritativeRemote && cmd.replaceObjects &&
+        !cmd.replaceTimelines && !cmd.replaceMetadata &&
+        !cmd.replaceAudioSamples && !cmd.replaceAnnotations &&
+        cmd.objectEncodingBaselinePrepared &&
+        cmd.objectDeltaIdentities.has_value();
+    if ( appliesPreparedObjectDelta ) {
+        applyIncrementalNoteComponents(
+            m_ctx, *cmd.sourceBeatmap, *cmd.objectDeltaIdentities);
+        if ( m_ctx.currentBeatmap.get() != cmd.sourceBeatmap.get() ) {
+            std::swap(m_ctx.currentBeatmap->m_noteData,
+                      cmd.sourceBeatmap->m_noteData);
+            std::swap(m_ctx.currentBeatmap->m_allNotes,
+                      cmd.sourceBeatmap->m_allNotes);
+            retireBeatmapObjectStorage(cmd.sourceBeatmap);
+        }
+        m_ctx.m_needsNotesSync = false;
+        m_ctx.actionStack.markDirty();
+        m_ctx.lastActionMessage = fmt::format(
+            "{} {}", TR("ui.status.category.action"), "联机物件增量更新");
         return;
     }
 

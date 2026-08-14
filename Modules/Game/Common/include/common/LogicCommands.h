@@ -658,7 +658,7 @@ struct CmdSetNoteAnnotation {
 /// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
 struct CmdReplaceBeatmapData {
     /// @brief 数据来源谱面。
-    std::shared_ptr<const MMM::BeatMap> sourceBeatmap;
+    std::shared_ptr<MMM::BeatMap> sourceBeatmap;
 
     /// @brief 是否替换物件数据。
     bool replaceObjects{ false };
@@ -685,6 +685,15 @@ struct CmdReplaceBeatmapData {
     /// @brief 该权威状态已经包含的本机变化序号。
     /// 逻辑线程只允许覆盖不新于此序号的本地编辑，0 表示没有待确认本地变化。
     std::uint64_t includedLocalMutationSequence{ 0 };
+
+    /// @brief 后台算出的根物件增删改稳定标识；空 optional 表示完整替换。
+    std::optional<std::vector<std::string>> objectDeltaIdentities;
+
+    /// @brief 后台物件编码基线对应的权威文档修订号。
+    std::uint64_t authoritativeRevision{ 0 };
+
+    /// @brief 是否可在应用后以常量时间安装对应的后台物件编码基线。
+    bool objectEncodingBaselinePrepared{ false };
 };
 
 /// @brief 确认协作权威文档已经接纳指定本地谱面变化。

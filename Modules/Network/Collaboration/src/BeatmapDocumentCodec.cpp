@@ -1096,6 +1096,16 @@ public:
     std::uint64_t       objectEncodingGeneration{ 1 };
 };
 
+/// @brief 后台已经完成全部扫描和编码的玩家物件基线。
+class BeatmapDocumentCodec::ObjectEncodingBaseline
+{
+public:
+    /// @brief 编码基线中的完整玩家物件数组。
+    Json objects = Json::array();
+    /// @brief 按稳定标识索引的领域物件编码缓存。
+    ObjectEncodingCache cache;
+};
+
 BeatmapDocumentCodec::BeatmapDocumentCodec() : m_impl(std::make_unique<Impl>())
 {
 }
@@ -1224,6 +1234,29 @@ void BeatmapDocumentCodec::synchronizeEncodingBaseline(
         m_impl->hasObjectEncodingCache = false;
     }
     m_impl->objectEncodingGeneration = 1;
+}
+
+std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline>
+BeatmapDocumentCodec::prepareObjectEncodingBaseline(
+    const ::MMM::BeatMap& beatmap)
+{
+    auto cache = makeObjectEncodingCache(beatmap);
+    if ( !cache ) return nullptr;
+
+    auto baseline     = std::make_shared<ObjectEncodingBaseline>();
+    baseline->objects = encodeObjects(beatmap);
+    baseline->cache   = std::move(*cache);
+    return baseline;
+}
+
+void BeatmapDocumentCodec::synchronizeObjectEncodingBaseline(
+    std::shared_ptr<ObjectEncodingBaseline> baseline)
+{
+    if ( !baseline || !m_impl->hasEncodingBaseline ) return;
+    m_impl->encodingBaseline["objects"] = std::move(baseline->objects);
+    m_impl->objectEncodingCache         = std::move(baseline->cache);
+    m_impl->hasObjectEncodingCache      = true;
+    m_impl->objectEncodingGeneration    = 1;
 }
 
 std::expected<BeatmapPatchResult, BeatmapDocumentError>
@@ -1502,6 +1535,57 @@ BeatmapDocumentCodec::cloneDocument() const
     clone->m_impl->document    = m_impl->document;
     clone->m_impl->hasDocument = true;
     return clone;
+}
+
+std::optional<std::vector<std::string>>
+BeatmapDocumentCodec::changedObjectIdentitiesComparedTo(
+    const BeatmapDocumentCodec& previous) const
+{
+    if ( !m_impl->hasDocument || !previous.m_impl->hasDocument ) {
+        return std::nullopt;
+    }
+    const auto currentObjects  = m_impl->document.find("objects");
+    const auto previousObjects = previous.m_impl->document.find("objects");
+    if ( currentObjects == m_impl->document.end() ||
+         previousObjects == previous.m_impl->document.end() ||
+         !currentObjects->is_array() || !previousObjects->is_array() ) {
+        return std::nullopt;
+    }
+
+    std::unordered_map<std::string_view, const Json*> currentByIdentity;
+    std::unordered_map<std::string_view, const Json*> previousByIdentity;
+    currentByIdentity.reserve(currentObjects->size());
+    previousByIdentity.reserve(previousObjects->size());
+    const auto indexObjects = [](const Json& objects, auto& index) {
+        for ( const auto& object : objects ) {
+            const auto* identity = collaborationIdentity(object);
+            if ( !identity || !index.emplace(*identity, &object).second ) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if ( !indexObjects(*currentObjects, currentByIdentity) ||
+         !indexObjects(*previousObjects, previousByIdentity) ) {
+        return std::nullopt;
+    }
+
+    std::vector<std::string> changed;
+    changed.reserve(currentObjects->size() + previousObjects->size());
+    for ( const auto& object : *currentObjects ) {
+        const auto& identity = *collaborationIdentity(object);
+        const auto  before   = previousByIdentity.find(identity);
+        if ( before == previousByIdentity.end() || *before->second != object ) {
+            changed.push_back(identity);
+        }
+    }
+    for ( const auto& object : *previousObjects ) {
+        const auto& identity = *collaborationIdentity(object);
+        if ( !currentByIdentity.contains(identity) ) {
+            changed.push_back(identity);
+        }
+    }
+    return changed;
 }
 
 std::expected<ByteBuffer, BeatmapDocumentError>

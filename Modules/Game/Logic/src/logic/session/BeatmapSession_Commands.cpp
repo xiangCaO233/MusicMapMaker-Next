@@ -1268,16 +1268,40 @@ bool BeatmapSession::processCommands()
             authoritativeReplacement->authoritativeRemote;
         if ( authoritativeSynchronization &&
              m_deferredAuthoritativeReplacement ) {
-            authoritativeReplacement->replaceObjects |=
-                m_deferredAuthoritativeReplacement->replaceObjects;
+            const auto& deferred = *m_deferredAuthoritativeReplacement;
+            if ( deferred.replaceObjects ) {
+                if ( !authoritativeReplacement->replaceObjects ) {
+                    authoritativeReplacement->objectDeltaIdentities =
+                        deferred.objectDeltaIdentities;
+                } else if ( authoritativeReplacement->objectDeltaIdentities &&
+                            deferred.objectDeltaIdentities ) {
+                    auto& identities =
+                        *authoritativeReplacement->objectDeltaIdentities;
+                    identities.insert(identities.end(),
+                                      deferred.objectDeltaIdentities->begin(),
+                                      deferred.objectDeltaIdentities->end());
+                    std::sort(identities.begin(), identities.end());
+                    identities.erase(
+                        std::unique(identities.begin(), identities.end()),
+                        identities.end());
+                } else {
+                    authoritativeReplacement->objectDeltaIdentities.reset();
+                }
+            }
+            if ( deferred.replaceObjects &&
+                 !authoritativeReplacement->replaceObjects ) {
+                authoritativeReplacement->objectEncodingBaselinePrepared =
+                    false;
+            }
+            authoritativeReplacement->replaceObjects |= deferred.replaceObjects;
             authoritativeReplacement->replaceTimelines |=
-                m_deferredAuthoritativeReplacement->replaceTimelines;
+                deferred.replaceTimelines;
             authoritativeReplacement->replaceMetadata |=
-                m_deferredAuthoritativeReplacement->replaceMetadata;
+                deferred.replaceMetadata;
             authoritativeReplacement->replaceAudioSamples |=
-                m_deferredAuthoritativeReplacement->replaceAudioSamples;
+                deferred.replaceAudioSamples;
             authoritativeReplacement->replaceAnnotations |=
-                m_deferredAuthoritativeReplacement->replaceAnnotations;
+                deferred.replaceAnnotations;
         }
         const bool preservesActiveBrush =
             authoritativeSynchronization &&
@@ -1652,11 +1676,19 @@ bool BeatmapSession::processCommands()
             },
             cmd);
         if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
-            SessionUtils::syncBeatmap(*m_ctx);
             auto observer = std::atomic_load_explicit(
                 &m_mutationObserver, std::memory_order_acquire);
             if ( observer ) {
-                observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+                if ( authoritativeReplacement
+                         ->objectEncodingBaselinePrepared ) {
+                    observer->onAuthoritativeBeatmapApplied(
+                        authoritativeReplacement->authoritativeRevision,
+                        authoritativeReplacement
+                            ->includedLocalMutationSequence);
+                } else {
+                    SessionUtils::syncBeatmap(*m_ctx);
+                    observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+                }
             }
         }
     }

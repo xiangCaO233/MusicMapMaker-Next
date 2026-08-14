@@ -63,5 +63,17 @@ public:
     {
         static_cast<void>(beatmap);
     }
+
+    /// @brief 确认逻辑线程已经应用后台准备好的远端权威状态。
+    /// @param revision 已应用的权威文档修订号。
+    /// @param includedLocalMutationSequence 该状态包含的最新本地变化序号。
+    /// @warning 逻辑线程远端提交路径调用；实现只能完成常量时间状态交接，
+    /// 禁止重新扫描谱面、等待后台任务或访问网络。
+    virtual void onAuthoritativeBeatmapApplied(
+        std::uint64_t revision, std::uint64_t includedLocalMutationSequence)
+    {
+        static_cast<void>(revision);
+        static_cast<void>(includedLocalMutationSequence);
+    }
 };
 }  // namespace MMM

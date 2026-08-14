@@ -5,7 +5,10 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <vector>
 
 namespace MMM
 {
@@ -34,6 +37,9 @@ struct BeatmapPatchResult {
 class BeatmapDocumentCodec
 {
 public:
+    /// @brief 可在后台准备、随后常量时间安装的物件编码基线。
+    class ObjectEncodingBaseline;
+
     /// @brief 创建空协作文档。
     BeatmapDocumentCodec();
     /// @brief 释放内部 JSON 文档状态。
@@ -58,6 +64,20 @@ public:
     /// @warning 只能由持有该编码器外部同步锁的低频谱面同步路径调用。
     void synchronizeEncodingBaseline(const ::MMM::BeatMap& beatmap);
 
+    /// @brief 在后台从完整谱面准备玩家物件编码基线。
+    /// @param beatmap 已物化且在调用期间保持只读的谱面。
+    /// @return 标识合法时返回可移动基线，否则返回空。
+    /// @warning 后台任务路径：会完整扫描并编码玩家物件，禁止在逻辑或 UI
+    /// 热路径调用。
+    [[nodiscard]] static std::shared_ptr<ObjectEncodingBaseline>
+    prepareObjectEncodingBaseline(const ::MMM::BeatMap& beatmap);
+
+    /// @brief 安装后台准备好的玩家物件编码基线。
+    /// @param baseline 待安装的物件基线。
+    /// @warning 逻辑线程远端提交确认路径：只移动已准备容器，不遍历谱面。
+    void synchronizeObjectEncodingBaseline(
+        std::shared_ptr<ObjectEncodingBaseline> baseline);
+
     /// @brief 将房主已排序的快照或分类增量应用到本地规范文档。
     /// @param payload CBOR 二进制负载。
     /// @return 成功时返回负载类别。
@@ -81,6 +101,14 @@ public:
     /// @warning 协作后台合并路径调用；只复制内存文档，不执行 CBOR 编解码或
     /// 压缩，仍应仅在确实存在待重放增量时使用。
     [[nodiscard]] std::unique_ptr<BeatmapDocumentCodec> cloneDocument() const;
+
+    /// @brief 计算当前文档相对旧可见文档发生变化的根物件稳定标识。
+    /// @param previous 上一次已经交付给逻辑线程的可见文档。
+    /// @return 标识完整且唯一时返回增删改标识；否则返回空并要求完整替换。
+    /// @warning 协作后台合并路径调用；只比较内存 JSON，不物化领域对象。
+    [[nodiscard]] std::optional<std::vector<std::string>>
+    changedObjectIdentitiesComparedTo(
+        const BeatmapDocumentCodec& previous) const;
 
     /// @brief 把当前规范文档重新编码为完整快照。
     /// @return 尚未收到完整快照时返回 MissingSnapshot。

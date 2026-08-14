@@ -587,6 +587,44 @@ bool testPayloadInspectionIsNonMutating()
     return !BeatmapDocumentCodec::inspect(malformed).has_value();
 }
 
+/// @brief 校验后台可见文档比较只返回实际增删改的根物件稳定标识。
+bool testChangedObjectIdentitiesComparedToVisibleDocument()
+{
+    BeatmapDocumentCodec initialEncoder;
+    BeatmapDocumentCodec updatedEncoder;
+    BeatmapDocumentCodec initialDocument;
+    BeatmapDocumentCodec updatedDocument;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    auto                 updated = makeCompleteBeatmap("Creator");
+
+    updated->m_noteData.notes.front().m_timestamp += 25.0;
+    updated->m_noteData.flicks.front().m_collaborationId = "added-flick";
+    updated->m_noteData.polylines.clear();
+    updated->m_noteData.holds.clear();
+    updated->m_noteData.flicks.pop_back();
+    updated->sync();
+
+    const auto initialSnapshot =
+        initialEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    const auto updatedSnapshot =
+        updatedEncoder.encode(*updated, BeatmapMutationFlags::All, true);
+    if ( !initialSnapshot || !updatedSnapshot ||
+         !initialDocument.apply(*initialSnapshot) ||
+         !updatedDocument.apply(*updatedSnapshot) ) {
+        return false;
+    }
+
+    auto changed =
+        updatedDocument.changedObjectIdentitiesComparedTo(initialDocument);
+    if ( !changed ) return false;
+    std::sort(changed->begin(), changed->end());
+    const std::array<std::string, 4> expected{
+        "added-flick", "flick-root", "note-root", "polyline-root"
+    };
+    return changed->size() == expected.size() &&
+           std::equal(changed->begin(), changed->end(), expected.begin());
+}
+
 /// @brief 校验没有基础快照时拒绝增量和畸形 CBOR。
 bool testInvalidPayloads()
 {
@@ -671,6 +709,7 @@ int main()
                    testConcurrentObjectDeltasMerge() &&
                    testConcurrentSameObjectUsesStableIdentity() &&
                    testCategoryDelta() &&
+                   testChangedObjectIdentitiesComparedToVisibleDocument() &&
                    testPayloadInspectionIsNonMutating() &&
                    testInvalidPayloads() && testLargeSnapshotCompression()
                ? 0
