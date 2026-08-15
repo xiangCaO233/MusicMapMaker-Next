@@ -62,6 +62,13 @@ target_include_directories(CanvasTabTitleTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
 
+# 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。
+mmm_add_test_executable(Canvas CanvasContentVisibilityTest
+                        tests/CanvasContentVisibilityTest.cpp)
+target_include_directories(CanvasContentVisibilityTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CanvasContentVisibilityTest COMMAND CanvasContentVisibilityTest)
+
 # Timeline Timing 悬浮提示使用纯映射，独立覆盖界面术语与数值单位。
 mmm_add_test_executable(Canvas TimelineTimingTooltipTest
                         tests/TimelineTimingTooltipTest.cpp)

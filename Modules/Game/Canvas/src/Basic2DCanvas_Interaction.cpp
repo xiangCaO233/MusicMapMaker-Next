@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 
 #include "audio/AudioManager.h"
+#include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/AudioResourceDragPayload.h"
@@ -2516,8 +2517,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                          localMousePos.y);
 
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( !audioPreviewOverlayBlocksCanvas && isHovered &&
-         currentSnapshot->isHoveringCanvas && !currentSnapshot->isPlaying ) {
+    if ( shouldShowCanvasHoverInspection(currentSnapshot->hasBeatmap,
+                                         audioPreviewOverlayBlocksCanvas,
+                                         isHovered,
+                                         currentSnapshot->isHoveringCanvas,
+                                         currentSnapshot->isPlaying) ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
