@@ -34,6 +34,8 @@ constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
 /// @brief 房间目录封面 Base64 文本上限，预留 JSON 与信令字段空间。
 constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
+/// @brief 单条封面上传消息携带的 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_CHUNK_BYTES = 8U * 1024U;
 /// @brief WebRTC 协商的数据通道消息上限。
 constexpr int MAX_DATA_CHANNEL_MESSAGE_BYTES = 2 * 1024 * 1024;
 /// @brief 回调线程允许积压的完整 DataChannel 消息数。
@@ -655,6 +657,36 @@ private:
                RTC_ERR_SUCCESS;
     }
 
+    /// @brief 在房间注册完成后分块上传可选封面，避免大首帧阻塞建房。
+    bool sendRoomCover(Connection& connection)
+    {
+        std::string coverImage;
+        {
+            std::scoped_lock lock(m_mutex);
+            if ( m_stopping || m_roomCoverImage.empty() ) return true;
+            coverImage = m_roomCoverImage;
+        }
+
+        const std::size_t chunkCount =
+            (coverImage.size() + MAX_ROOM_COVER_CHUNK_BYTES - 1U) /
+            MAX_ROOM_COVER_CHUNK_BYTES;
+        for ( std::size_t chunkIndex = 0; chunkIndex < chunkCount;
+              ++chunkIndex ) {
+            const std::size_t offset = chunkIndex * MAX_ROOM_COVER_CHUNK_BYTES;
+            nlohmann::json    message;
+            message["type"]       = "set_room_cover";
+            message["version"]    = BROKER_PROTOCOL_VERSION;
+            message["chunkIndex"] = chunkIndex;
+            message["chunkCount"] = chunkCount;
+            message["coverChunk"] =
+                coverImage.substr(offset,
+                                  std::min(MAX_ROOM_COVER_CHUNK_BYTES,
+                                           coverImage.size() - offset));
+            if ( !sendSignal(connection, message) ) return false;
+        }
+        return true;
+    }
+
     /// @brief 校验并保存服务端下发的 ICE URI。
     bool updateIceServers(const nlohmann::json& message)
     {
@@ -992,7 +1024,25 @@ private:
             pushEvent(WebRtcTransportEventType::RoomPublished,
                       m_hostId,
                       m_creator,
-                      std::move(roomId));
+                      roomId);
+            if ( !sendRoomCover(connection) ) {
+                pushEvent(WebRtcTransportEventType::Error,
+                          m_hostId,
+                          m_creator,
+                          "room_cover_upload_failed");
+            }
+            return true;
+        }
+        if ( type == "room_cover_rejected" &&
+             connection.role == ConnectionRole::HostControl ) {
+            std::string reason;
+            if ( !readStringField(message, "reason", reason) ) {
+                reason = "room_cover_rejected";
+            }
+            pushEvent(WebRtcTransportEventType::Error,
+                      m_hostId,
+                      m_creator,
+                      std::move(reason));
             return true;
         }
         if ( type == "join_requested" &&
@@ -1253,12 +1303,9 @@ private:
         nlohmann::json message;
         message["version"] = BROKER_PROTOCOL_VERSION;
         if ( connection->role == ConnectionRole::HostControl ) {
-            message["type"]     = "create_room";
-            message["roomName"] = owner.m_roomName;
-            message["creator"]  = owner.m_creator;
-            if ( !owner.m_roomCoverImage.empty() ) {
-                message["coverImage"] = owner.m_roomCoverImage;
-            }
+            message["type"]       = "create_room";
+            message["roomName"]   = owner.m_roomName;
+            message["creator"]    = owner.m_creator;
             message["ownerToken"] = owner.m_ownerToken;
             message["capacity"]   = owner.m_maxParticipants;
         } else if ( owner.m_isHost ) {
@@ -1536,7 +1583,7 @@ private:
     bool m_requireMatchingBuildFingerprint = true;
     /// @brief 公网目录展示名称。
     std::string m_roomName;
-    /// @brief 仅随开房控制消息提交给目录服务的 Base64 JPEG 缩略图。
+    /// @brief 房间注册后分块提交给目录服务的 Base64 JPEG 缩略图。
     std::string m_roomCoverImage;
     /// @brief 中心服务分配的公开房间标识。
     std::string m_roomId;

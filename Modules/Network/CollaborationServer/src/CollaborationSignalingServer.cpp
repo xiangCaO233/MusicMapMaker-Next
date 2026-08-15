@@ -31,6 +31,12 @@ constexpr std::string_view SIGNALING_PATH = "/mmm-collaboration";
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
 /// @brief 单间房卡封面 Base64 文本上限。
 constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
+/// @brief 单条封面上传消息携带的 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_CHUNK_BYTES = 8U * 1024U;
+/// @brief 单次封面上传允许的最大分块数量。
+constexpr std::size_t MAX_ROOM_COVER_CHUNKS =
+    (MAX_ROOM_COVER_BASE64_BYTES + MAX_ROOM_COVER_CHUNK_BYTES - 1U) /
+    MAX_ROOM_COVER_CHUNK_BYTES;
 /// @brief 回调线程允许积压的事件上限。
 constexpr std::size_t MAX_CALLBACK_EVENTS = 8192;
 /// @brief 未声明身份的连接保留时间。
@@ -224,6 +230,12 @@ public:
         std::string hostCreator;
         /// @brief 按需下发给目录客户端的 Base64 JPEG 封面缩略图。
         std::string coverImage;
+        /// @brief 尚未接收完整的 Base64 JPEG 封面缩略图。
+        std::string pendingCoverImage;
+        /// @brief 当前封面上传等待的下一分块序号。
+        std::size_t nextCoverChunkIndex = 0;
+        /// @brief 当前封面上传声明的总分块数。
+        std::size_t expectedCoverChunks = 0;
         /// @brief 仅房主知道的控制令牌。
         std::string ownerToken;
         /// @brief 房主控制 WebSocket。
@@ -596,6 +608,9 @@ private:
         } else if ( type == "update_room" &&
                     client.role == ClientRole::HostControl ) {
             handleUpdateRoom(websocketId, message);
+        } else if ( type == "set_room_cover" &&
+                    client.role == ClientRole::HostControl ) {
+            handleSetRoomCover(websocketId, message);
         } else if ( type == "create_room" &&
                     client.role == ClientRole::Unknown ) {
             handleCreateRoom(websocketId, message);
@@ -639,6 +654,81 @@ private:
                 static_cast<std::size_t>(participants);
             m_directoryDirty = true;
         }
+    }
+
+    /// @brief 拒绝可选封面上传但保留已经发布的房间控制连接。
+    void rejectRoomCoverUpload(int websocketId, Room& room,
+                               std::string_view reason)
+    {
+        room.pendingCoverImage.clear();
+        room.nextCoverChunkIndex = 0;
+        room.expectedCoverChunks = 0;
+        XWARN("Collaboration room cover from client {} rejected: {}",
+              websocketId,
+              reason);
+        const nlohmann::json response = {
+            { "type", "room_cover_rejected" },
+            { "version", DIRECTORY_PROTOCOL_VERSION },
+            { "reason", reason },
+        };
+        static_cast<void>(sendJson(websocketId, response));
+    }
+
+    /// @brief 接收房主在房间注册完成后分块提交的可选封面。
+    void handleSetRoomCover(int websocketId, const nlohmann::json& message)
+    {
+        const auto clientIterator = m_clients.find(websocketId);
+        if ( clientIterator == m_clients.end() ) return;
+        const auto roomIterator = m_rooms.find(clientIterator->second.roomId);
+        if ( roomIterator == m_rooms.end() ) return;
+
+        Room&         room = roomIterator->second;
+        std::string   coverChunk;
+        std::uint64_t chunkIndex = 0;
+        std::uint64_t chunkCount = 0;
+        if ( !readStringField(message, "coverChunk", coverChunk) ||
+             !readUnsignedField(message, "chunkIndex", chunkIndex) ||
+             !readUnsignedField(message, "chunkCount", chunkCount) ||
+             coverChunk.empty() ||
+             coverChunk.size() > MAX_ROOM_COVER_CHUNK_BYTES ||
+             chunkCount == 0 || chunkCount > MAX_ROOM_COVER_CHUNKS ||
+             chunkIndex >= chunkCount ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_chunk");
+            return;
+        }
+
+        if ( chunkIndex == 0 ) {
+            room.pendingCoverImage.clear();
+            room.pendingCoverImage.reserve(
+                std::min(MAX_ROOM_COVER_BASE64_BYTES,
+                         static_cast<std::size_t>(chunkCount) *
+                             MAX_ROOM_COVER_CHUNK_BYTES));
+            room.nextCoverChunkIndex = 0;
+            room.expectedCoverChunks = static_cast<std::size_t>(chunkCount);
+        }
+        if ( room.expectedCoverChunks != chunkCount ||
+             room.nextCoverChunkIndex != chunkIndex ||
+             room.pendingCoverImage.size() + coverChunk.size() >
+                 MAX_ROOM_COVER_BASE64_BYTES ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_sequence");
+            return;
+        }
+
+        room.pendingCoverImage.append(coverChunk);
+        ++room.nextCoverChunkIndex;
+        if ( room.nextCoverChunkIndex != room.expectedCoverChunks ) return;
+        if ( !isValidRoomCoverImage(room.pendingCoverImage) ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_image");
+            return;
+        }
+
+        room.coverImage          = std::move(room.pendingCoverImage);
+        room.nextCoverChunkIndex = 0;
+        room.expectedCoverChunks = 0;
+        m_directoryDirty         = true;
     }
 
     /// @brief 注册一个公开房间和房主控制连接。

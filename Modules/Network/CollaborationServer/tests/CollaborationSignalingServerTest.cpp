@@ -179,7 +179,6 @@ bool testDirectoryAndSignalingRelay()
                      { "version", 1 },
                      { "roomName", "Public Test Room" },
                      { "creator", "Host Creator" },
-                     { "coverImage", "SGVsbG8=" },
                      { "ownerToken", "0123456789abcdef0123456789abcdef" },
                      { "capacity", 8 } }) ) {
         return fail("room_requests_send");
@@ -208,7 +207,34 @@ bool testDirectoryAndSignalingRelay()
         return fail("room_created_and_listed");
     }
     const std::string roomId = created["roomId"].get<std::string>();
-    if ( !roomList["rooms"][0].value("hasCoverImage", false) ||
+    if ( roomList["rooms"][0].value("hasCoverImage", false) ||
+         !sendJson(*host,
+                   { { "type", "set_room_cover" },
+                     { "version", 1 },
+                     { "chunkIndex", 0 },
+                     { "chunkCount", 2 },
+                     { "coverChunk", "SGVs" } }) ||
+         !sendJson(*host,
+                   { { "type", "set_room_cover" },
+                     { "version", 1 },
+                     { "chunkIndex", 1 },
+                     { "chunkCount", 2 },
+                     { "coverChunk", "bG8=" } }) ) {
+        return fail("room_cover_upload");
+    }
+    bool receivedCoveredRoomList = false;
+    if ( !pumpUntil(server,
+                    [&]() {
+                        if ( takeMessage(*directory, "room_list", roomList) &&
+                             roomList.contains("rooms") &&
+                             roomList["rooms"].is_array() &&
+                             roomList["rooms"].size() == 1U &&
+                             roomList["rooms"][0].value("hasCoverImage",
+                                                        false) ) {
+                            receivedCoveredRoomList = true;
+                        }
+                        return receivedCoveredRoomList;
+                    }) ||
          !sendJson(*directory,
                    { { "type", "get_room_cover" },
                      { "version", 1 },

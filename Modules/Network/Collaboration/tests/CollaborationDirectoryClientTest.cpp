@@ -4,6 +4,7 @@
 
 #include "log/colorful-log.h"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -87,12 +88,13 @@ bool testPublishedRoomAppearsInDirectory()
         return fail("directory_bootstrap");
     }
 
-    WebRtcTransport  transport;
-    WebRtcHostConfig hostConfig;
+    WebRtcTransport   transport;
+    WebRtcHostConfig  hostConfig;
+    const std::string roomCoverImage(80U * 1024U, 'A');
     hostConfig.endpoint         = endpoint;
     hostConfig.roomName         = "Directory Test Room";
     hostConfig.creator          = "Directory Host";
-    hostConfig.roomCoverImage   = "SGVsbG8=";
+    hostConfig.roomCoverImage   = roomCoverImage;
     hostConfig.buildFingerprint = std::string(64U, 'a');
     hostConfig.participantId    = "a0000000000000000000000000000001";
     hostConfig.sessionId        = "b0000000000000000000000000000001";
@@ -117,7 +119,8 @@ bool testPublishedRoomAppearsInDirectory()
                                (published &&
                                 directory.state() ==
                                     CollaborationDirectoryState::Connected &&
-                                directory.rooms().size() == 1U);
+                                directory.rooms().size() == 1U &&
+                                directory.rooms().front().hasCoverImage);
                     }) ||
          !transportError.empty() ) {
         if ( !transportError.empty() ) {
@@ -135,7 +138,7 @@ bool testPublishedRoomAppearsInDirectory()
         return fail("room_snapshot");
     }
     if ( !pumpUntil(server, directory, [&]() {
-             return directory.roomCover(room.roomId) == "SGVsbG8=";
+             return directory.roomCover(room.roomId) == roomCoverImage;
          }) ) {
         return fail("room_cover");
     }
@@ -177,11 +180,82 @@ bool testExternalDirectoryEndpoint(std::string   address,
     XERROR("External collaboration directory probe timed out");
     return false;
 }
+
+/// @brief 验证公网端点能够发布并取回大尺寸分块房间封面。
+bool testExternalRoomCover(std::string address, std::uint16_t signalingPort,
+                           bool useTls)
+{
+    CollaborationServerEndpoint endpoint;
+    endpoint.address       = std::move(address);
+    endpoint.signalingPort = signalingPort;
+    endpoint.useTls        = useTls;
+
+    CollaborationDirectoryClient directory;
+    if ( !directory.connect(endpoint) ) return false;
+
+    WebRtcTransport   transport;
+    WebRtcHostConfig  hostConfig;
+    const std::string roomCoverImage(80U * 1024U, 'A');
+    hostConfig.endpoint         = endpoint;
+    hostConfig.roomName         = "External Cover Probe";
+    hostConfig.creator          = "Cover Probe Host";
+    hostConfig.roomCoverImage   = roomCoverImage;
+    hostConfig.buildFingerprint = std::string(64U, 'a');
+    hostConfig.participantId    = "c0000000000000000000000000000001";
+    hostConfig.sessionId        = "d0000000000000000000000000000001";
+    if ( !transport.startHost(hostConfig) ) return false;
+
+    bool        published      = false;
+    bool        coverRequested = false;
+    std::string transportError;
+    const auto  deadline = std::chrono::steady_clock::now() + TEST_TIMEOUT;
+    while ( std::chrono::steady_clock::now() < deadline ) {
+        directory.update();
+        WebRtcTransportEvent event;
+        while ( transport.receiveEvent(event) ) {
+            if ( event.type == WebRtcTransportEventType::RoomPublished ) {
+                published = true;
+            } else if ( event.type == WebRtcTransportEventType::Error ) {
+                transportError = std::move(event.detail);
+            }
+        }
+        if ( !transportError.empty() ) {
+            XERROR("External room cover probe failed: {}", transportError);
+            return false;
+        }
+        if ( directory.state() == CollaborationDirectoryState::Error ) {
+            XERROR("External room cover directory failed: {}",
+                   directory.lastError());
+            return false;
+        }
+
+        const auto roomIterator =
+            std::find_if(directory.rooms().begin(),
+                         directory.rooms().end(),
+                         [&transport](const auto& room) {
+                             return room.roomId == transport.roomId();
+                         });
+        if ( published && roomIterator != directory.rooms().end() &&
+             roomIterator->hasCoverImage && !coverRequested ) {
+            coverRequested = directory.requestRoomCover(roomIterator->roomId);
+        }
+        if ( coverRequested &&
+             directory.roomCover(transport.roomId()) == roomCoverImage ) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    XERROR("External room cover probe timed out: published={}, room_id={}",
+           published,
+           transport.roomId());
+    return false;
+}
 }  // namespace
 
 int main(int argc, char** argv)
 {
-    if ( argc == 5 && std::string_view(argv[1]) == "external" ) {
+    const std::string_view mode = argc > 1 ? argv[1] : "";
+    if ( argc == 5 && (mode == "external" || mode == "external-room") ) {
         std::uint32_t          port = 0;
         const std::string_view portText(argv[3]);
         const auto [end, error] = std::from_chars(
@@ -193,8 +267,15 @@ int main(int argc, char** argv)
         const std::string_view tlsText(argv[4]);
         if ( tlsText != "true" && tlsText != "false" ) return 2;
         XLogger::init("CollaborationDirectoryClientTest");
-        const bool success = testExternalDirectoryEndpoint(
-            argv[2], static_cast<std::uint16_t>(port), tlsText == "true");
+        const bool success =
+            mode == "external"
+                ? testExternalDirectoryEndpoint(
+                      argv[2],
+                      static_cast<std::uint16_t>(port),
+                      tlsText == "true")
+                : testExternalRoomCover(argv[2],
+                                        static_cast<std::uint16_t>(port),
+                                        tlsText == "true");
         XLogger::shutdown();
         return success ? 0 : 1;
     }
