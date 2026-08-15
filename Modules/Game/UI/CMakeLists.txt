@@ -56,6 +56,7 @@ add_library(
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp
+  src/ui/imgui/menu/actions/view/AnnotationDetailsToggleAction.cpp
   src/ui/imgui/menu/actions/view/FixedToolWindowToggleAction.cpp
   src/ui/imgui/menu/actions/view/ManagerLabelsToggleAction.cpp
   src/ui/imgui/menu/actions/view/PreviewWindowToggleAction.cpp

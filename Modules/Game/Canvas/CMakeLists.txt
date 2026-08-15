@@ -84,3 +84,10 @@ target_include_directories(HoverLayerSelectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(HoverLayerSelectionTest PRIVATE Common 3rd_entt)
 add_test(NAME HoverLayerSelectionTest COMMAND HoverLayerSelectionTest)
+
+# 批注详情卡片布局是无图形依赖的纯计算，覆盖拥挤标记的避让与边界约束。
+mmm_add_test_executable(Canvas AnnotationDetailLayoutTest
+                        tests/AnnotationDetailLayoutTest.cpp)
+target_include_directories(AnnotationDetailLayoutTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AnnotationDetailLayoutTest COMMAND AnnotationDetailLayoutTest)

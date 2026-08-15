@@ -292,6 +292,12 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
         json.value("editSelectedVolume", defaults.editSelectedVolume);
     config.addSelectedAnnotation =
         json.value("addSelectedAnnotation", defaults.addSelectedAnnotation);
+    const ShortcutBinding legacyAnnotationShortcut{ true,  "A",  true,
+                                                    false, true, false };
+    if ( shortcutBindingsConflict(config.addSelectedAnnotation,
+                                  legacyAnnotationShortcut) ) {
+        config.addSelectedAnnotation = defaults.addSelectedAnnotation;
+    }
     config.deleteSelected =
         json.value("deleteSelected", defaults.deleteSelected);
     config.togglePlayback =
@@ -682,6 +688,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "showTimelineWindow", settings.showTimelineWindow },
         { "timelineProfessionalMode", settings.timelineProfessionalMode },
         { "showPreviewWindow", settings.showPreviewWindow },
+        { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
         { "fixedToolWindow", settings.fixedToolWindow },
         { "showManagerLabels", settings.showManagerLabels },
@@ -807,11 +814,12 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.showTimelineWindow   = json.value("showTimelineWindow", true);
     settings.timelineProfessionalMode =
         json.value("timelineProfessionalMode", false);
-    settings.showPreviewWindow = json.value("showPreviewWindow", true);
-    settings.showToolLabels    = json.value("showToolLabels", false);
-    settings.fixedToolWindow   = json.value("fixedToolWindow", true);
-    settings.showManagerLabels = json.value("showManagerLabels", true);
-    settings.aesthetics        = json.value("aesthetics", UIAestheticsConfig());
+    settings.showPreviewWindow     = json.value("showPreviewWindow", true);
+    settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
+    settings.showToolLabels        = json.value("showToolLabels", false);
+    settings.fixedToolWindow       = json.value("fixedToolWindow", true);
+    settings.showManagerLabels     = json.value("showManagerLabels", true);
+    settings.aesthetics    = json.value("aesthetics", UIAestheticsConfig());
     settings.colorPalettes = json.value("colorPalettes", ColorPaletteConfig());
     settings.defaultColorPaletteSchemeName =
         json.value("defaultColorPaletteSchemeName",

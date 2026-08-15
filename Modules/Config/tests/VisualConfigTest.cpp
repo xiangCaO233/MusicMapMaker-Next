@@ -314,8 +314,8 @@ bool testSelectedVolumeShortcutRoundTrip()
     return true;
 }
 
-/// @brief 验证添加选中物件批注快捷键可持久化且旧配置使用默认组合键。
-/// @return 自定义组合键往返无损且缺失字段恢复为 Ctrl+Alt+A 时返回 true。
+/// @brief 验证添加选中物件批注快捷键可持久化并迁移旧默认组合键。
+/// @return 自定义组合键往返无损且缺失或旧默认字段恢复为 Ctrl+R 时返回 true。
 bool testSelectedAnnotationShortcutRoundTrip()
 {
     MMM::Config::EditorSettings source;
@@ -326,14 +326,40 @@ bool testSelectedAnnotationShortcutRoundTrip()
     const auto           restored = encoded.get<MMM::Config::EditorSettings>();
     const auto           legacy =
         nlohmann::json::object().get<MMM::Config::EditorSettings>();
-    const auto& binding       = restored.shortcutConfig.addSelectedAnnotation;
-    const auto& legacyBinding = legacy.shortcutConfig.addSelectedAnnotation;
+    nlohmann::json oldDefaultJson;
+    oldDefaultJson["shortcutConfig"]["addSelectedAnnotation"] =
+        MMM::Config::ShortcutBinding{ true, "A", true, false, true, false };
+    const auto  migrated = oldDefaultJson.get<MMM::Config::EditorSettings>();
+    const auto& binding  = restored.shortcutConfig.addSelectedAnnotation;
+    const auto& legacyBinding   = legacy.shortcutConfig.addSelectedAnnotation;
+    const auto& migratedBinding = migrated.shortcutConfig.addSelectedAnnotation;
     if ( !binding.enabled || binding.key != "N" || !binding.ctrl ||
          !binding.shift || binding.alt || binding.super ||
-         !legacyBinding.enabled || legacyBinding.key != "A" ||
-         !legacyBinding.ctrl || legacyBinding.shift || !legacyBinding.alt ||
-         legacyBinding.super ) {
+         !legacyBinding.enabled || legacyBinding.key != "R" ||
+         !legacyBinding.ctrl || legacyBinding.shift || legacyBinding.alt ||
+         legacyBinding.super || !migratedBinding.enabled ||
+         migratedBinding.key != "R" || !migratedBinding.ctrl ||
+         migratedBinding.shift || migratedBinding.alt ||
+         migratedBinding.super ) {
         XERROR("Selected annotation shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证批注详情显示开关可持久化且旧配置默认关闭。
+/// @return 开关往返无损且缺失字段保持关闭时返回 true。
+bool testAnnotationDetailVisibilityRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.showAnnotationDetails = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( !restored.showAnnotationDetails || legacy.showAnnotationDetails ) {
+        XERROR("Annotation detail visibility did not preserve compatibility");
         return false;
     }
     return true;
@@ -640,6 +666,7 @@ int main()
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testSelectedAnnotationShortcutRoundTrip() &&
+                   testAnnotationDetailVisibilityRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
                    testShortcutConflictDetection() &&
                    testRenderingDefaultsReset() &&

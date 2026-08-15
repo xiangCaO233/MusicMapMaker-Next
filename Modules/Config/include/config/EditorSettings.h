@@ -276,7 +276,7 @@ struct ShortcutConfig {
 
     /// @brief 为当前选中的单个物件添加批注。
     ShortcutBinding addSelectedAnnotation{
-        true, "A", true, false, true, false
+        true, "R", true, false, false, false
     };
 
     /// @brief 删除当前选中物件。
@@ -759,6 +759,9 @@ struct EditorSettings {
 
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };
+
+    /// @brief 是否在主画布中绘制带连线的批注详情卡片。
+    bool showAnnotationDetails{ false };
 
     /// @brief 是否在工具栏图标下方显示简短标签。
     bool showToolLabels{ false };

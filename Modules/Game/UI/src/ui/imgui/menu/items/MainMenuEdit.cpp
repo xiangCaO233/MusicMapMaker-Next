@@ -87,7 +87,7 @@ MainMenuEdit::MainMenuEdit()
         ICON_MMM_COMMENT,
         "ui.edit.add_selected_annotation",
         MainMenuItemTextKind::TranslationKey,
-        "Ctrl+Alt+A",
+        "Ctrl+R",
         createAddSelectedObjectAnnotationAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(

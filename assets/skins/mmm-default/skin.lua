@@ -80,6 +80,13 @@ local Skin = {
 			marker = { 0.42, 0.72, 0.96, 0.98 },
 			marker_hover = { 0.68, 0.86, 1.0, 1.0 },
 			marker_text = { 0.04, 0.08, 0.12, 1.0 },
+			connector = { 0.42, 0.72, 0.96, 0.86 },
+			detail_background = { 0.045, 0.065, 0.090, 0.96 },
+			detail_border = { 0.34, 0.62, 0.82, 0.90 },
+			detail_border_hover = { 0.68, 0.86, 1.0, 1.0 },
+			detail_header = { 0.72, 0.88, 1.0, 1.0 },
+			detail_text = { 0.92, 0.96, 1.0, 1.0 },
+			detail_muted = { 0.62, 0.70, 0.78, 1.0 },
 		},
 
 		-- 拍线配色与线宽配置

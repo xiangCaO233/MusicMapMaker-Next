@@ -104,6 +104,7 @@ return {
 	["ui.view"] = "&View",
 	["ui.view.timeline"] = "Timeline Window",
 	["ui.view.preview"] = "Preview Window",
+	["ui.view.annotation_details"] = "Show Connected Annotation Details",
 	["ui.view.show_tool_labels"] = "Show Tool Labels",
 	["ui.view.fixed_tool_window"] = "Fixed Tool Window",
 	["ui.view.show_manager_labels"] = "Show Manager Labels",

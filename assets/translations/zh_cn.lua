@@ -103,6 +103,7 @@ return {
 	["ui.view"] = "查看(&V)",
 	["ui.view.timeline"] = "时间线窗口",
 	["ui.view.preview"] = "预览窗口",
+	["ui.view.annotation_details"] = "显示批注连线详情",
 	["ui.view.show_tool_labels"] = "显示工具标签名称",
 	["ui.view.fixed_tool_window"] = "固定工具窗口",
 	["ui.view.show_manager_labels"] = "显示管理器标签名称",
