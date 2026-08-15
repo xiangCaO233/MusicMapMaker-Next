@@ -97,13 +97,11 @@ private:
     void setRoomCoverPath(const std::filesystem::path& path, bool customized);
     /// @brief 将一份 Base64 封面排入下一次 GPU 资源准备。
     void queueRoomCoverTexture(std::string key, std::string_view base64);
-    /// @brief 绘制固定比例封面或主题色占位图。
+    /// @brief 绘制固定比例封面或跟随当前 UI 主题的中性占位图。
     /// @param textureKey 纹理缓存键。
-    /// @param fallbackSeed 无纹理时用于生成稳定主题色的字符串。
     /// @param size 绘制尺寸。
     /// @warning UI 热路径：仅提交一个 hit zone 与少量 ImDrawList 命令。
-    void drawRoomCover(std::string_view textureKey,
-                       std::string_view fallbackSeed, ImVec2 size);
+    void drawRoomCover(std::string_view textureKey, ImVec2 size);
 
     struct PendingHostStart;
     struct PendingGuestJoin;

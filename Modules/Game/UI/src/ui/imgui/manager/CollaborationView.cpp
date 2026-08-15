@@ -29,7 +29,6 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <nfd.h>
 #include <string>
 #include <system_error>
@@ -570,9 +569,7 @@ void CollaborationView::queueRoomCoverTexture(std::string      key,
     m_pendingRoomCoverTextures.emplace(std::move(key), base64);
 }
 
-void CollaborationView::drawRoomCover(std::string_view textureKey,
-                                      std::string_view fallbackSeed,
-                                      ImVec2           size)
+void CollaborationView::drawRoomCover(std::string_view textureKey, ImVec2 size)
 {
     size.x = std::max(size.x, 1.0F);
     size.y = std::max(size.y, 1.0F);
@@ -586,17 +583,8 @@ void CollaborationView::drawRoomCover(std::string_view textureKey,
     if ( texture != m_roomCoverTextures.end() && texture->second ) {
         drawList->AddImage(texture->second->getImTextureID(), minimum, maximum);
     } else {
-        const std::size_t seed  = std::hash<std::string_view>{}(fallbackSeed);
-        const float       hue   = static_cast<float>(seed % 360U) / 360.0F;
-        float             red   = 0.0F;
-        float             green = 0.0F;
-        float             blue  = 0.0F;
-        ImGui::ColorConvertHSVtoRGB(hue, 0.42F, 0.32F, red, green, blue);
         drawList->AddRectFilled(
-            minimum,
-            maximum,
-            ImGui::GetColorU32(ImVec4(red, green, blue, 1.0F)),
-            rounding);
+            minimum, maximum, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
         const char*  placeholder = "MMM";
         const ImVec2 textSize    = ImGui::CalcTextSize(placeholder);
         drawList->AddText(ImVec2((minimum.x + maximum.x - textSize.x) * 0.5F,
@@ -707,7 +695,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         ImGui::PushID("HostRoomCoverPreview");
         const float coverWidth = ImGui::GetContentRegionAvail().x;
         drawRoomCover(HOST_ROOM_COVER_TEXTURE_KEY,
-                      m_roomName.data(),
                       ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
         if ( ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
             ImGui::BeginTooltip();
@@ -867,7 +854,6 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                     }
                     drawRoomCover(
                         room.roomId,
-                        room.roomName,
                         ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
 
                     ImGui::TableSetColumnIndex(1);
