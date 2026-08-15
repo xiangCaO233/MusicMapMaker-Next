@@ -53,6 +53,25 @@ bool testCollaborationStatusPrecedesBeatmapName()
                "* (离线) Offline Map";
 }
 
+/// @brief 验证关闭最后的协作谱面后占位画布不会继承离线标记。
+/// @return 占位页清除标记，真实谱面画布在房间启动时正常标记时返回 true。
+bool testCollaborationCanvasStateResetsForPlaceholder()
+{
+    const bool offlinePlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, true, false, false, true);
+    const bool joiningPlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, true, true, false, true);
+    const bool joinedBeatmap = MMM::Canvas::resolveCollaborationCanvasState(
+        false, false, true, false, true);
+    const bool disconnectedBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, false, false, true, true);
+    return !offlinePlaceholder && !joiningPlaceholder && joinedBeatmap &&
+           disconnectedBeatmap;
+}
+
 }  // namespace
 
 /// @brief 覆盖主画布标签的标题和脏标志布局规则。
@@ -63,7 +82,8 @@ int main()
                    testCleanTitleHasNoMarker() &&
                    testDirtyUnnamedBeatmapKeepsMarker() &&
                    testPlaceholderIgnoresDirtyState() &&
-                   testCollaborationStatusPrecedesBeatmapName()
+                   testCollaborationStatusPrecedesBeatmapName() &&
+                   testCollaborationCanvasStateResetsForPlaceholder()
                ? 0
                : 1;
 }

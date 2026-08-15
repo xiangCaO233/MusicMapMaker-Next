@@ -6,6 +6,24 @@
 namespace MMM::Canvas
 {
 
+/// @brief 根据会话和房间生命周期归约画布的协作标记。
+/// @param wasCollaborationCanvas 画布上一帧是否已绑定协作会话。
+/// @param isLogoPlaceholder 当前 Session 是否已重置为欢迎占位页。
+/// @param roomLifecycleActive 当前房间是否处于非 Idle 生命周期。
+/// @param wasRoomLifecycleActive 上一帧房间是否处于非 Idle 生命周期。
+/// @param isActiveCanvas 当前画布是否属于活动 Session。
+/// @return 占位页始终返回
+/// false；真实谱面保留已有标记，并在房间启动时标记活动画布。
+/// @warning UI 热路径：每帧只执行常量布尔运算。
+[[nodiscard]] constexpr bool resolveCollaborationCanvasState(
+    bool wasCollaborationCanvas, bool isLogoPlaceholder,
+    bool roomLifecycleActive, bool wasRoomLifecycleActive, bool isActiveCanvas)
+{
+    if ( isLogoPlaceholder ) return false;
+    return wasCollaborationCanvas ||
+           (roomLifecycleActive && !wasRoomLifecycleActive && isActiveCanvas);
+}
+
 /// @brief 构造主画布标签的可见标题。
 /// @param fallbackTitle 未加载谱面时使用的回退标题。
 /// @param hasBeatmap 当前快照是否包含谱面。

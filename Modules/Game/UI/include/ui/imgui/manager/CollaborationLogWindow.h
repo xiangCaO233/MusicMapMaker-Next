@@ -37,7 +37,7 @@ public:
     CollaborationLogWindow(
         const std::string&                                         name,
         std::shared_ptr<Network::Collaboration::CollaborationRoom> room);
-    /// @brief 解除会话观察者和网络回灌回调。
+    /// @brief 解除会话观察者和网络回灌回调，保留离线会话的已缓存资源。
     ~CollaborationLogWindow() override;
 
     /// @brief 每帧驱动协作房间与会话绑定。

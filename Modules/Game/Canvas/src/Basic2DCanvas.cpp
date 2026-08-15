@@ -194,11 +194,13 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    bool    showClose = false;
-    int32_t myIndex   = findSessionIndex();
+    bool    showClose         = false;
+    bool    isLogoPlaceholder = false;
+    int32_t myIndex           = findSessionIndex();
     if ( myIndex != -1 ) {
         const auto* entry = engine.getSessionEntry(myIndex);
-        showClose         = entry && !entry->isLogoPlaceholder;
+        isLogoPlaceholder = entry && entry->isLogoPlaceholder;
+        showClose         = entry && !isLogoPlaceholder;
     }
 
     auto* collaborationRoom =
@@ -207,10 +209,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         collaborationRoom &&
         collaborationRoom->state() !=
             Network::Collaboration::CollaborationRoomState::Idle;
-    if ( roomLifecycleActive && !m_wasCollaborationRoomLifecycleActive &&
-         myIndex == engine.getActiveSessionIndex() ) {
-        m_isCollaborationCanvas = true;
-    }
+    m_isCollaborationCanvas = resolveCollaborationCanvasState(
+        m_isCollaborationCanvas,
+        isLogoPlaceholder,
+        roomLifecycleActive,
+        m_wasCollaborationRoomLifecycleActive,
+        myIndex == engine.getActiveSessionIndex());
     m_wasCollaborationRoomLifecycleActive = roomLifecycleActive;
 
     std::string_view collaborationStatusLabel;

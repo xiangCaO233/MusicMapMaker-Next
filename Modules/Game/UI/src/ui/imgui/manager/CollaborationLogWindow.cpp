@@ -119,9 +119,6 @@ CollaborationLogWindow::~CollaborationLogWindow()
             ::MMM::BeatmapMutationFlags::All);
         if ( m_boundSessionIsGuest ) {
             session->setCollaborationOfflineReadOnly(true);
-            session->pushCommand(Logic::LogicCommand{
-                Logic::CmdSetCollaborationResources{},
-            });
         }
     }
     if ( m_guestProjectGateHeld ) {
@@ -208,10 +205,9 @@ void CollaborationLogWindow::updateSessionBinding()
             bound->setMutationObserver(nullptr);
             bound->setCollaborationClipboardIsolated(false);
             if ( m_boundSessionIsGuest ) {
+                // 断线后的访客会话仍使用已校验的本地缓存资源；
+                // 资源绑定只在换谱或会话销毁时释放。
                 bound->setCollaborationOfflineReadOnly(true);
-                bound->pushCommand(Logic::LogicCommand{
-                    Logic::CmdSetCollaborationResources{},
-                });
             }
         }
         m_boundSession.reset();

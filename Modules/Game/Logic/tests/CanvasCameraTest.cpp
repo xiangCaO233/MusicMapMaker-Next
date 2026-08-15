@@ -2423,6 +2423,17 @@ bool testCollaborationResourcesRouteThroughSession()
         return false;
     }
 
+    session.setCollaborationOfflineReadOnly(true);
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    if ( context.collaborationProject != replacementProject ||
+         context.collaborationPathRemap != replacementRemap ) {
+        XERROR("Offline collaboration session discarded cached resources");
+        return false;
+    }
+
+    session.setCollaborationOfflineReadOnly(false);
+    session.update(0.0, MMM::Config::EditorConfig{}, false);
+
     auto replacement = std::make_shared<MMM::BeatMap>();
     replacement->m_baseMapMetadata.track_count = 4;
     session.pushCommand(MMM::Logic::LogicCommand{
