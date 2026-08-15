@@ -229,6 +229,20 @@ struct ShortcutBinding {
     bool super{ false };
 };
 
+/// @brief 判断两个已启用快捷键绑定是否使用同一按键组合。
+/// @param lhs 第一个快捷键绑定。
+/// @param rhs 第二个快捷键绑定。
+/// @return 两者均有效且按键及全部修饰键相同时返回 true。
+/// @warning 设置页热路径：仅比较两个短字符串和四个修饰键标志。
+[[nodiscard]] constexpr bool shortcutBindingsConflict(
+    const ShortcutBinding& lhs, const ShortcutBinding& rhs)
+{
+    return lhs.enabled && rhs.enabled && !lhs.key.empty() && !rhs.key.empty() &&
+           lhs.key == rhs.key && lhs.ctrl == rhs.ctrl &&
+           lhs.shift == rhs.shift && lhs.alt == rhs.alt &&
+           lhs.super == rhs.super;
+}
+
 /// @brief 将快捷键绑定序列化为 JSON。
 void to_json(nlohmann::json& json, const ShortcutBinding& binding);
 /// @brief 从 JSON 读取快捷键绑定。

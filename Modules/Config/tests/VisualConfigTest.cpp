@@ -339,6 +339,27 @@ bool testPlaybackShortcutRoundTrip()
     return true;
 }
 
+/// @brief 验证快捷键冲突仅匹配完全相同的有效按键组合。
+/// @return 相同组合冲突，禁用、空键位和不同修饰键均不冲突时返回 true。
+bool testShortcutConflictDetection()
+{
+    using MMM::Config::ShortcutBinding;
+    const ShortcutBinding base{ true, "P", true, false, false, false };
+    const ShortcutBinding same{ true, "P", true, false, false, false };
+    const ShortcutBinding shifted{ true, "P", true, true, false, false };
+    const ShortcutBinding disabled{ false, "P", true, false, false, false };
+    const ShortcutBinding empty{ true, "", true, false, false, false };
+
+    if ( !MMM::Config::shortcutBindingsConflict(base, same) ||
+         MMM::Config::shortcutBindingsConflict(base, shifted) ||
+         MMM::Config::shortcutBindingsConflict(base, disabled) ||
+         MMM::Config::shortcutBindingsConflict(base, empty) ) {
+        XERROR("Shortcut conflict detection did not match exact bindings");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
 /// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
 bool testRenderingDefaultsReset()
@@ -594,6 +615,7 @@ int main()
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
+                   testShortcutConflictDetection() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&

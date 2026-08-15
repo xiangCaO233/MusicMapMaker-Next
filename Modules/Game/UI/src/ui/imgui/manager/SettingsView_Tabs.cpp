@@ -1,6 +1,8 @@
-#include "imgui.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+
+#include "imgui.h"
 
 namespace MMM::UI
 {
@@ -11,9 +13,10 @@ namespace MMM::UI
 /// @param label 设置项标签文本。
 /// @param labelWidth 标签列固定宽度。
 /// @param widget 设置项右侧控件绘制回调。
+/// @param dangerLabel 是否使用危险色绘制标签。
 void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   const char* label, float labelWidth,
-                                  CLayBox::DrawFunc widget)
+                                  CLayBox::DrawFunc widget, bool dangerLabel)
 {
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
@@ -28,15 +31,21 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
         .setAlignment(Alignment::Center());
 
     // 1. 说明标签 (采用 Fit 自动匹配内容宽度)
-    leftBox.addElement(labelId + "_lbl",
-                       Sizing::Fit(),
-                       Sizing::Grow(),
-                       [label](Clay_BoundingBox r, bool) {
-                           float textH  = ImGui::CalcTextSize(label).y;
-                           float offset = (r.height - textH) * 0.5f;
-                           ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-                           ImGui::Text("%s", label);
-                       });
+    leftBox.addElement(
+        labelId + "_lbl",
+        Sizing::Fit(),
+        Sizing::Grow(),
+        [label, dangerLabel](Clay_BoundingBox r, bool) {
+            float textH  = ImGui::CalcTextSize(label).y;
+            float offset = (r.height - textH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+            if ( dangerLabel ) {
+                ImGui::TextColored(
+                    Utils::UIThemeUtils::getDangerColor(), "%s", label);
+            } else {
+                ImGui::Text("%s", label);
+            }
+        });
 
     // 2. 弹簧 spacer
     leftBox.addElement(

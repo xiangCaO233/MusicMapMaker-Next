@@ -368,10 +368,12 @@ private:
     /// @param target 当前控件对应的录制目标。
     /// @param id ImGui 控件 ID 后缀。
     /// @param width 控件可用宽度。
+    /// @param conflicted 当前绑定是否与其他快捷键冲突。
     /// @param changed 发生修改时写入 true。
     void drawShortcutBindingControl(Config::ShortcutBinding& binding,
                                     ShortcutRecordTarget target, const char* id,
-                                    float width, bool& changed);
+                                    float width, bool conflicted,
+                                    bool& changed);
 
     /// @brief 绘制调试设置页。
     /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。
@@ -394,8 +396,10 @@ private:
     /// @param label 设置项标签。
     /// @param labelWidth 标签列宽度。
     /// @param widget 控件绘制回调。
+    /// @param dangerLabel 是否使用危险色绘制标签。
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
-                        float labelWidth, CLayBox::DrawFunc widget);
+                        float labelWidth, CLayBox::DrawFunc widget,
+                        bool dangerLabel = false);
 
     /// @brief 添加一个带自动换行的 RadioButton 组。
     /// @param parent 接收设置行的父级布局。
