@@ -53,6 +53,18 @@ constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 /// @brief 画布悬浮信息相对鼠标的屏幕偏移。
 constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
 
+/// @brief 画布悬浮信息窗口背景透明度。
+constexpr float CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA = 0.70F;
+
+/// @brief 画布悬浮信息窗口的内边距。
+constexpr float CANVAS_HOVER_OVERLAY_PADDING = 12.0F;
+
+/// @brief 画布悬浮信息窗口的横向元素间距。
+constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
+
+/// @brief 画布悬浮信息窗口的纵向元素间距。
+constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
+
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
 
@@ -613,7 +625,7 @@ bool beginCanvasHoverOverlay(const ImVec2& mousePos)
     ImGui::SetNextWindowPos(ImVec2(mousePos.x + xOffset, mousePos.y + yOffset),
                             ImGuiCond_Always,
                             pivot);
-    ImGui::SetNextWindowBgAlpha(0.7f);
+    ImGui::SetNextWindowBgAlpha(CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA);
 
     constexpr ImGuiWindowFlags overlayFlags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
@@ -737,7 +749,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
     constexpr float CARD_MIN_WIDTH  = 170.0F;
     constexpr float CARD_MAX_WIDTH  = 340.0F;
     constexpr float CARD_GAP        = 5.0F;
-    constexpr float CARD_PADDING    = 8.0F;
+    constexpr float CARD_PADDING    = CANVAS_HOVER_OVERLAY_PADDING;
     constexpr float SCROLLBAR_SPACE = 7.0F;
     constexpr float CONNECTOR_ELBOW = 9.0F;
     const float     rightAvailable =
@@ -761,28 +773,19 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
     const ImU32 connectorColor = annotationUiColor(
         "annotations.connector", ImVec4(0.42F, 0.72F, 0.96F, 0.86F));
-    const ImU32 backgroundColor = annotationUiColor(
-        "annotations.detail_background", ImVec4(0.045F, 0.065F, 0.090F, 0.96F));
-    const ImU32 borderColor = annotationUiColor(
-        "annotations.detail_border", ImVec4(0.34F, 0.62F, 0.82F, 0.90F));
-    const ImU32 hoverBorderColor = annotationUiColor(
-        "annotations.detail_border_hover", ImVec4(0.68F, 0.86F, 1.0F, 1.0F));
-    const ImU32 headerColor = annotationUiColor(
-        "annotations.detail_header", ImVec4(0.72F, 0.88F, 1.0F, 1.0F));
-    const ImU32 contentColor = annotationUiColor(
-        "annotations.detail_text", ImVec4(0.92F, 0.96F, 1.0F, 1.0F));
-    const ImU32 mutedColor = annotationUiColor(
-        "annotations.detail_muted", ImVec4(0.62F, 0.70F, 0.78F, 1.0F));
-    const UI::MarkdownStyle markdownStyle{
-        .textColor     = contentColor,
-        .strongColor   = headerColor,
-        .mutedColor    = mutedColor,
-        .linkColor     = headerColor,
-        .codeTextColor = contentColor,
-        .codeBackgroundColor =
-            ImGui::ColorConvertFloat4ToU32(ImVec4(0.10F, 0.14F, 0.19F, 0.96F)),
-        .accentColor = borderColor,
-    };
+    const auto& imguiStyle      = ImGui::GetStyle();
+    ImVec4      background      = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    background.w                = CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA;
+    const ImU32 backgroundColor = ImGui::ColorConvertFloat4ToU32(background);
+    const ImU32 borderColor     = ImGui::GetColorU32(ImGuiCol_Border);
+    const ImU32 headerColor     = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 mutedColor      = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImU32 scrollbarBackgroundColor =
+        ImGui::GetColorU32(ImGuiCol_ScrollbarBg);
+    const ImU32 scrollbarColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrab);
+    const ImU32 scrollbarHoverColor =
+        ImGui::GetColorU32(ImGuiCol_ScrollbarGrabHovered);
+    const UI::MarkdownStyle         markdownStyle = UI::defaultMarkdownStyle();
     const UI::MarkdownRenderOptions markdownOptions{
         .wrapWidth        = contentWidth,
         .compact          = true,
@@ -817,7 +820,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
             };
             placements[cardCount] = {
                 marker.canvasY,
-                CARD_PADDING * 3.0F + fontSize * 2.0F + visibleContentHeight,
+                CARD_PADDING * 2.0F +
+                    CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
+                    fontSize * 2.0F + visibleContentHeight,
                 0.0F,
             };
             ++cardCount;
@@ -888,18 +893,16 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                               canvasScreenY + cardTopY };
         const ImVec2 cardMax{ canvasScreenX + cardRightX,
                               canvasScreenY + cardBottomY };
-        drawList->AddRectFilled(cardMin, cardMax, backgroundColor, 4.0F);
-        drawList->AddRect(cardMin,
-                          cardMax,
-                          hovered ? hoverBorderColor : borderColor,
-                          4.0F,
-                          ImDrawFlags_None,
-                          hovered ? 2.0F : 1.0F);
-        drawList->AddRectFilled(cardMin,
-                                { cardMax.x, cardMin.y + 3.0F },
-                                hovered ? hoverBorderColor : borderColor,
-                                4.0F,
-                                ImDrawFlags_RoundCornersTop);
+        drawList->AddRectFilled(
+            cardMin, cardMax, backgroundColor, imguiStyle.WindowRounding);
+        if ( imguiStyle.WindowBorderSize > 0.0F ) {
+            drawList->AddRect(cardMin,
+                              cardMax,
+                              borderColor,
+                              imguiStyle.WindowRounding,
+                              ImDrawFlags_None,
+                              imguiStyle.WindowBorderSize);
+        }
 
         const std::string_view author =
             entry.item->author.empty()
@@ -931,11 +934,13 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                           entry.item->targetMissing ? " !" : "");
         }
         const ImVec2 metadataPos{ cardMin.x + CARD_PADDING,
-                                  cardMin.y + CARD_PADDING + fontSize + 2.0F };
+                                  cardMin.y + CARD_PADDING + fontSize +
+                                      CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y };
         drawList->AddText(metadataPos, mutedColor, metadata);
 
         const ImVec2 contentMin{ cardMin.x + CARD_PADDING,
-                                 metadataPos.y + fontSize + 5.0F };
+                                 metadataPos.y + fontSize +
+                                     CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y };
         const ImVec2 contentMax{ cardMax.x - CARD_PADDING - SCROLLBAR_SPACE,
                                  cardMax.y - CARD_PADDING };
         const float  visibleContentHeight =
@@ -986,13 +991,13 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
             const float scrollbarX = cardMax.x - CARD_PADDING * 0.5F;
             drawList->AddRectFilled({ scrollbarX - SCROLLBAR_WIDTH, trackTop },
                                     { scrollbarX, trackBottom },
-                                    ImGui::ColorConvertFloat4ToU32(
-                                        ImVec4(0.20F, 0.26F, 0.32F, 0.80F)),
+                                    scrollbarBackgroundColor,
                                     2.0F);
-            drawList->AddRectFilled({ scrollbarX - SCROLLBAR_WIDTH, thumbTop },
-                                    { scrollbarX, thumbTop + thumbHeight },
-                                    hovered ? hoverBorderColor : borderColor,
-                                    2.0F);
+            drawList->AddRectFilled(
+                { scrollbarX - SCROLLBAR_WIDTH, thumbTop },
+                { scrollbarX, thumbTop + thumbHeight },
+                hovered ? scrollbarHoverColor : scrollbarColor,
+                2.0F);
         }
     }
     drawList->PopClipRect();
@@ -3276,8 +3281,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( currentSnapshot->isSnapped || isEditTool ||
                  currentSnapshot->hoverInspect.show ) {
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                    ImVec2(12, 12));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+                                    ImVec2(CANVAS_HOVER_OVERLAY_PADDING,
+                                           CANVAS_HOVER_OVERLAY_PADDING));
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_ItemSpacing,
+                    ImVec2(CANVAS_HOVER_OVERLAY_ITEM_SPACING_X,
+                           CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y));
 
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {

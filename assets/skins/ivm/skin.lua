@@ -67,12 +67,6 @@ return {
 			marker_hover = { 1.0, 0.58, 0.60, 1.0 },
 			marker_text = { 0.08, 0.02, 0.02, 1.0 },
 			connector = { 0.92, 0.26, 0.30, 0.88 },
-			detail_background = { 0.055, 0.045, 0.050, 0.97 },
-			detail_border = { 0.78, 0.18, 0.22, 0.92 },
-			detail_border_hover = { 1.0, 0.58, 0.60, 1.0 },
-			detail_header = { 1.0, 0.72, 0.74, 1.0 },
-			detail_text = { 0.94, 0.92, 0.93, 1.0 },
-			detail_muted = { 0.70, 0.64, 0.66, 1.0 },
 		},
 
 		beat_lines = {
