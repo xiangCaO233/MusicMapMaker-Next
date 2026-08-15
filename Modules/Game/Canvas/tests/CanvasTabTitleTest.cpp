@@ -53,23 +53,34 @@ bool testCollaborationStatusPrecedesBeatmapName()
                "* (离线) Offline Map";
 }
 
-/// @brief 验证关闭最后的协作谱面后占位画布不会继承离线标记。
-/// @return 占位页清除标记，真实谱面画布在房间启动时正常标记时返回 true。
-bool testCollaborationCanvasStateResetsForPlaceholder()
+/// @brief 验证协作画布在欢迎页复用、断线和关闭过程中的标记生命周期。
+/// @return 远端谱面正确标记、断线保留且回到欢迎页后清除时返回 true。
+bool testCollaborationCanvasStateLifecycle()
 {
     const bool offlinePlaceholder =
         MMM::Canvas::resolveCollaborationCanvasState(
-            true, true, false, false, true);
+            true, true, false, false, false, true);
     const bool joiningPlaceholder =
         MMM::Canvas::resolveCollaborationCanvasState(
-            false, true, true, false, true);
-    const bool joinedBeatmap = MMM::Canvas::resolveCollaborationCanvasState(
-        false, false, true, false, true);
+            false, true, true, true, false, true);
+    const bool joinedThroughReusedPlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, false, true, true, true, true);
+    const bool joinedDirectly = MMM::Canvas::resolveCollaborationCanvasState(
+        false, false, false, true, false, true);
     const bool disconnectedBeatmap =
         MMM::Canvas::resolveCollaborationCanvasState(
-            true, false, false, true, true);
-    return !offlinePlaceholder && !joiningPlaceholder && joinedBeatmap &&
-           disconnectedBeatmap;
+            true, false, false, false, true, true);
+    const bool inactiveOfflineBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, false, false, false, true, false);
+    const bool additionalLocalBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, false, false, false, false, true);
+    return !offlinePlaceholder && !joiningPlaceholder &&
+           joinedThroughReusedPlaceholder && joinedDirectly &&
+           disconnectedBeatmap && inactiveOfflineBeatmap &&
+           !additionalLocalBeatmap;
 }
 
 }  // namespace
@@ -83,7 +94,7 @@ int main()
                    testDirtyUnnamedBeatmapKeepsMarker() &&
                    testPlaceholderIgnoresDirtyState() &&
                    testCollaborationStatusPrecedesBeatmapName() &&
-                   testCollaborationCanvasStateResetsForPlaceholder()
+                   testCollaborationCanvasStateLifecycle()
                ? 0
                : 1;
 }

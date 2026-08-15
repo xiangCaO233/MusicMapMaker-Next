@@ -212,9 +212,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     m_isCollaborationCanvas = resolveCollaborationCanvasState(
         m_isCollaborationCanvas,
         isLogoPlaceholder,
+        m_wasLogoPlaceholder,
         roomLifecycleActive,
         m_wasCollaborationRoomLifecycleActive,
         myIndex == engine.getActiveSessionIndex());
+    m_wasLogoPlaceholder                  = isLogoPlaceholder;
     m_wasCollaborationRoomLifecycleActive = roomLifecycleActive;
 
     std::string_view collaborationStatusLabel;
