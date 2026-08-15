@@ -418,10 +418,10 @@ bool runMalodyDelayRoundTrip(const std::filesystem::path& outputRoot)
         "Malody delay remains numeric in exported mc");
 
     MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
-    // 首 timing 的非负 delay 以变速后 240 BPM 的一拍为周期回卷。
+    // 没有同值主 SOUND 配对时，首 timing.delay 保持普通局部延迟语义。
     ok &= check(reloaded.m_timings.size() == 2 &&
-                    isNearlyEqual(reloaded.m_timings[0].m_timestamp, -100.0) &&
-                    isNearlyEqual(reloaded.m_timings[1].m_timestamp, 860.0),
+                    isNearlyEqual(reloaded.m_timings[0].m_timestamp, 150.0) &&
+                    isNearlyEqual(reloaded.m_timings[1].m_timestamp, 1110.0),
                 "scaled Malody timing anchors survive mc round trip");
     return ok;
 }
