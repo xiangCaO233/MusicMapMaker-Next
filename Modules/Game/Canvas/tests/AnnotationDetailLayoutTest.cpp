@@ -40,11 +40,36 @@ bool testCardsShiftAwayFromBottom()
            cards[1].topY >= cards[0].topY + cards[0].height + 5.0F &&
            cards[0].topY >= 10.0F;
 }
+
+/// @brief 验证滚轮只浏览长文，不再负责切换批注。
+bool testWheelOnlyScrollsMarkdown()
+{
+    const auto scrolled =
+        MMM::Canvas::updateAnnotationDetailWheel(-1.0F, 0.0F, 120.0F, 36.0F);
+    const auto atBottom =
+        MMM::Canvas::updateAnnotationDetailWheel(-1.0F, 120.0F, 120.0F, 36.0F);
+
+    return scrolled.consumed && near(scrolled.scrollY, 36.0F) &&
+           !atBottom.consumed && near(atBottom.scrollY, 120.0F);
+}
+
+/// @brief 验证方向键选择会循环经过同一时间戳的全部批注。
+bool testDirectionKeysCycleItems()
+{
+    return MMM::Canvas::stepAnnotationDetailItem(3U, 1U, -1) == 0U &&
+           MMM::Canvas::stepAnnotationDetailItem(3U, 1U, 1) == 2U &&
+           MMM::Canvas::stepAnnotationDetailItem(3U, 0U, -1) == 2U &&
+           MMM::Canvas::stepAnnotationDetailItem(3U, 2U, 1) == 0U;
+}
 }  // namespace
 
 /// @brief 运行批注详情卡片布局回归测试。
 /// @return 全部布局断言通过时返回 0。
 int main()
 {
-    return testCardsAvoidOverlap() && testCardsShiftAwayFromBottom() ? 0 : 1;
+    return testCardsAvoidOverlap() && testCardsShiftAwayFromBottom() &&
+                   testWheelOnlyScrollsMarkdown() &&
+                   testDirectionKeysCycleItems()
+               ? 0
+               : 1;
 }

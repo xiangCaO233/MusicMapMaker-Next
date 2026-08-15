@@ -266,6 +266,10 @@ private:
     std::string m_annotationHoverMarkerId;
     /// @brief 当前悬浮标记中由滚轮选择的详细批注索引。
     std::size_t m_annotationHoverDetailIndex{ 0U };
+    /// @brief 当前保留正文滚动位置的连线卡片批注 ID。
+    std::string m_annotationDetailScrollItemId;
+    /// @brief 当前连线卡片 Markdown 正文的纵向滚动偏移。
+    float m_annotationDetailScrollY{ 0.0F };
     /// @brief 上一次发送给逻辑线程的鼠标状态。
     LastMouseCommand m_lastMouseCommand;
     /// @brief 上一次发送给逻辑线程的悬浮实体。

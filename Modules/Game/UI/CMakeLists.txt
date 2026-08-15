@@ -17,6 +17,7 @@ add_library(
   src/ui/imgui/menu/MainMenuView.cpp
   src/ui/imgui/menu/MainMenuNavigationController.cpp
   src/ui/imgui/menu/MainMenuRegistry.cpp
+  src/ui/imgui/markdown/MarkdownRenderer.cpp
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp
   src/ui/imgui/menu/actions/edit/CopyAction.cpp
@@ -161,6 +162,20 @@ target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PlaybackShortcutRoutingTest PRIVATE 3rd_imgui)
 add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
+
+# Markdown 解析器为批注与更新日志共享，覆盖块级和行内语法的稳定拆分。
+mmm_add_test_executable(UI MarkdownParserTest tests/MarkdownParserTest.cpp)
+target_include_directories(MarkdownParserTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME MarkdownParserTest COMMAND MarkdownParserTest)
+
+# Markdown 绘制测试创建最小 ImGui 帧，覆盖测量、流式绘制与矩形裁剪入口。
+mmm_add_test_executable(UI MarkdownRendererTest tests/MarkdownRendererTest.cpp
+                        src/ui/imgui/markdown/MarkdownRenderer.cpp)
+target_include_directories(MarkdownRendererTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
+add_test(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。
 mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
