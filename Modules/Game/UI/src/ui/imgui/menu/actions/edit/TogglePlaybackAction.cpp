@@ -1,3 +1,4 @@
+#include "config/AppConfig.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -8,6 +9,7 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <imgui.h>
+#include <string>
 
 namespace MMM::UI
 {
@@ -46,6 +48,19 @@ public:
                    : ICON_MMM_PLAY;
     }
 
+    /// @brief 获取用户配置的播放切换快捷键提示。
+    const char* shortcut(const MainMenuContext& context,
+                         const char*            fallbackShortcut) const override
+    {
+        (void)context;
+        (void)fallbackShortcut;
+        const auto& shortcutConfig =
+            Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+        m_shortcutBuffer =
+            ShortcutUtils::formatShortcut(shortcutConfig.togglePlayback);
+        return m_shortcutBuffer.empty() ? nullptr : m_shortcutBuffer.c_str();
+    }
+
     /// @brief 切换播放状态。
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
@@ -56,42 +71,59 @@ public:
         MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ !playing });
     }
 
-    /// @brief 消费空格播放暂停快捷键。
+    /// @brief 消费播放暂停快捷键，并保留 BPM 工具对空格键的专用路由。
     /// @param context 单帧主菜单上下文。
     /// @return 快捷键触发时返回 true。
     /// @warning UI 热路径：每帧只读取输入状态和当前交互状态。
     bool handleShortcut(MainMenuContext& context) override
     {
-        ImGuiIO& io = ImGui::GetIO();
-        if ( !ImGui::IsKeyPressed(ImGuiKey_Space, false) ) return false;
-
+        ImGuiIO&      io           = ImGui::GetIO();
         ImGuiContext* imguiContext = ImGui::GetCurrentContext();
-        const bool bpmToolFocused  = isBpmMeasurementToolFocused(imguiContext);
-        auto*      bpmTool =
-            bpmToolFocused && context.sourceManager
-                ? context.sourceManager->getView<BpmMeasurementToolView>(
-                      "BpmMeasurementTool")
-                : nullptr;
-        const bool hasModifier =
-            io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
-        const BpmSpaceShortcutDisposition bpmDisposition =
-            resolveBpmSpaceShortcutDisposition(bpmToolFocused,
-                                               hasModifier,
-                                               io.WantTextInput,
-                                               bpmTool != nullptr);
-        if ( bpmDisposition != BpmSpaceShortcutDisposition::NotOwned ) {
-            // BPM 窗口层级拥有空格键时禁止导航控件再次激活，也禁止事件
-            // 穿透至背后的谱面编辑器。
-            consumePlaybackShortcutNavigationActivation(imguiContext);
-            if ( bpmDisposition == BpmSpaceShortcutDisposition::ToggleTool ) {
-                bpmTool->togglePlaybackFromShortcut();
+        if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
+            const bool bpmToolFocused =
+                isBpmMeasurementToolFocused(imguiContext);
+            auto* bpmTool =
+                bpmToolFocused && context.sourceManager
+                    ? context.sourceManager->getView<BpmMeasurementToolView>(
+                          "BpmMeasurementTool")
+                    : nullptr;
+            const bool hasModifier =
+                io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
+            const BpmSpaceShortcutDisposition bpmDisposition =
+                resolveBpmSpaceShortcutDisposition(bpmToolFocused,
+                                                   hasModifier,
+                                                   io.WantTextInput,
+                                                   bpmTool != nullptr);
+            if ( bpmDisposition != BpmSpaceShortcutDisposition::NotOwned ) {
+                // BPM 窗口层级拥有空格键时禁止导航控件再次激活，也禁止事件
+                // 穿透至背后的谱面编辑器。
+                consumePlaybackShortcutNavigationActivation(imguiContext);
+                if ( bpmDisposition ==
+                     BpmSpaceShortcutDisposition::ToggleTool ) {
+                    bpmTool->togglePlaybackFromShortcut();
+                }
+                return true;
             }
-            return true;
         }
 
-        if ( io.KeyCtrl || io.KeyAlt || io.KeySuper ) return false;
-
+        const auto& shortcutConfig =
+            Config::AppConfig::instance().getEditorSettings().shortcutConfig;
         auto& engine = Logic::EditorEngine::instance();
+        bool  playbackShortcutPressed =
+            ShortcutUtils::isShortcutPressed(shortcutConfig.togglePlayback);
+        // 画笔绘制期间 Shift 是交互修饰键，继续允许它叠加在用户绑定上。
+        if ( !playbackShortcutPressed && io.KeyShift &&
+             !shortcutConfig.togglePlayback.shift &&
+             engine.isActiveSessionDrawingBrush() ) {
+            auto shiftedBinding  = shortcutConfig.togglePlayback;
+            shiftedBinding.shift = true;
+            playbackShortcutPressed =
+                ShortcutUtils::isShortcutPressed(shiftedBinding);
+        }
+        if ( !playbackShortcutPressed ) {
+            return false;
+        }
+
         if ( ImGui::IsAnyItemActive() ) {
             const bool timelineMarqueeSelecting =
                 context.sourceManager &&
@@ -108,16 +140,18 @@ public:
                     timelineTimingDragging,
                     timelineMarqueeSelecting);
             if ( !allowPlaybackToggle ) return false;
-        } else if ( io.KeyShift ) {
-            return false;
         }
 
-        // 全局播放快捷键已消费空格后，禁止同一按键再激活当前获得导航焦点的
+        // 全局播放快捷键已消费按键后，禁止同一按键再激活当前获得导航焦点的
         // 协作跟随按钮或远端位置跳转热区。
         consumePlaybackShortcutNavigationActivation(imguiContext);
         execute(context, MainMenuItemActivation{});
         return true;
     }
+
+private:
+    /// @brief 当前帧快捷键显示缓存。
+    mutable std::string m_shortcutBuffer;
 };
 }  // namespace
 

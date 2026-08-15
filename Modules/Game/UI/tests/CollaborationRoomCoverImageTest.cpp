@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/CollaborationRoomCoverImage.h"
+#include "ui/imgui/manager/CollaborationDefaultFollowPolicy.h"
 
 #include "config/Utf8Path.h"
 
@@ -32,13 +33,28 @@ bool testInvalidInputs(const std::filesystem::path& sourcePath)
                MMM::UI::CollaborationRoomCoverImageError::FileUnavailable &&
            !MMM::UI::decodeCollaborationRoomCoverImage("not-base64");
 }
+
+/// @brief 验证房间字段仅在未自定义时跟随谱面默认值。
+constexpr bool testDefaultFollowPolicy()
+{
+    using MMM::UI::CollaborationDefaultMode;
+    return MMM::UI::shouldFollowCollaborationDefault(
+               CollaborationDefaultMode::Follow) &&
+           !MMM::UI::shouldFollowCollaborationDefault(
+               CollaborationDefaultMode::Custom) &&
+           MMM::UI::resolveCollaborationTextDefaultMode("Map A", "Map A") ==
+               CollaborationDefaultMode::Follow &&
+           MMM::UI::resolveCollaborationTextDefaultMode("My Room", "Map A") ==
+               CollaborationDefaultMode::Custom;
+}
 }  // namespace
 
-/// @brief 运行协作房卡封面缩略图生成与解码回归测试。
+/// @brief 运行协作房卡封面和默认值跟随策略回归测试。
 int main(int argc, char** argv)
 {
     if ( argc != 2 || !argv[1] ) return 2;
     const std::filesystem::path sourcePath = MMM::Config::utf8ToPath(argv[1]);
+    static_assert(testDefaultFollowPolicy());
     return testImageRoundTrip(sourcePath) && testInvalidInputs(sourcePath) ? 0
                                                                            : 1;
 }

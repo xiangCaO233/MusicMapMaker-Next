@@ -195,6 +195,11 @@ void SettingsView::drawShortcutSettings()
                    shortcutConfig.deleteSelected,
                    ShortcutRecordTarget::DeleteSelected,
                    "DeleteSelected");
+    addShortcutRow(shortcutSection,
+                   TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
+                   shortcutConfig.togglePlayback,
+                   ShortcutRecordTarget::TogglePlayback,
+                   "TogglePlayback");
 
     addShortcutRow(
         shortcutSection,

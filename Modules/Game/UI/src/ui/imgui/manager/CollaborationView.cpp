@@ -515,7 +515,8 @@ void CollaborationView::setRoomCoverPath(const std::filesystem::path& path,
     if ( path.empty() ) {
         m_roomCoverPath.clear();
         m_roomCoverImage.clear();
-        m_roomCoverCustomized = customized;
+        m_roomCoverDefaultMode = customized ? CollaborationDefaultMode::Custom
+                                            : CollaborationDefaultMode::Follow;
         if ( const auto pending =
                  m_pendingRoomCoverTextures.find(HOST_ROOM_COVER_TEXTURE_KEY);
              pending != m_pendingRoomCoverTextures.end() ) {
@@ -541,9 +542,10 @@ void CollaborationView::setRoomCoverPath(const std::filesystem::path& path,
         return;
     }
 
-    m_roomCoverPath       = path;
-    m_roomCoverImage      = result.base64;
-    m_roomCoverCustomized = customized;
+    m_roomCoverPath        = path;
+    m_roomCoverImage       = result.base64;
+    m_roomCoverDefaultMode = customized ? CollaborationDefaultMode::Custom
+                                        : CollaborationDefaultMode::Follow;
     if ( const auto removal =
              m_roomCoverTextureRemovals.find(HOST_ROOM_COVER_TEXTURE_KEY);
          removal != m_roomCoverTextureRemovals.end() ) {
@@ -646,28 +648,24 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         ImGui::Separator();
         ImGui::Spacing();
     }
-    if ( hostReady && !m_roomNameInitialized ) {
-        const auto& metadata =
-            activeSession->getContext().currentBeatmap->m_baseMapMetadata;
-        const std::string_view roomName = !metadata.title.empty()
-                                              ? std::string_view(metadata.title)
-                                              : std::string_view(metadata.name);
-        if ( !roomName.empty() ) setInputBuffer(m_roomName, roomName);
-        m_roomNameInitialized = true;
-    }
     if ( hostReady ) {
         const auto& metadata =
             activeSession->getContext().currentBeatmap->m_baseMapMetadata;
-        const bool beatmapChanged = metadata.map_path != m_roomCoverBeatmapKey;
-        if ( beatmapChanged ) {
-            m_roomCoverBeatmapKey = metadata.map_path;
-            m_roomCoverCustomized = false;
+        const std::string_view defaultRoomName =
+            !metadata.title.empty() ? std::string_view(metadata.title)
+                                    : std::string_view(metadata.name);
+        if ( defaultRoomName != m_defaultRoomName ) {
+            m_defaultRoomName.assign(defaultRoomName);
+            if ( shouldFollowCollaborationDefault(m_roomNameDefaultMode) ) {
+                setInputBuffer(m_roomName, m_defaultRoomName);
+            }
         }
+
         const auto defaultCover =
             resolveDefaultRoomCoverPath(metadata, project);
-        if ( defaultCover != m_defaultRoomCoverPath || beatmapChanged ) {
+        if ( defaultCover != m_defaultRoomCoverPath ) {
             m_defaultRoomCoverPath = defaultCover;
-            if ( !m_roomCoverCustomized ) {
+            if ( shouldFollowCollaborationDefault(m_roomCoverDefaultMode) ) {
                 setRoomCoverPath(defaultCover, false);
             }
         }
@@ -713,13 +711,11 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                 openRoomCoverFilePicker();
             }
             ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled(m_defaultRoomCoverPath.empty());
             if ( FeedbackSmallButton(
                      TR("ui.collaboration.cover_use_beatmap").data()) ) {
-                m_roomCoverCustomized = false;
+                m_roomCoverDefaultMode = CollaborationDefaultMode::Follow;
                 setRoomCoverPath(m_defaultRoomCoverPath, false);
             }
-            ImGui::EndDisabled();
             ImGui::TableSetColumnIndex(2);
             ImGui::BeginDisabled(m_roomCoverImage.empty());
             if ( FeedbackSmallButton(
@@ -736,11 +732,21 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         }
 
         ImGui::TextDisabled("%s", TR("ui.collaboration.room_name").data());
+        ImGui::SameLine();
+        if ( FeedbackSmallButton(
+                 TR("ui.collaboration.room_name_follow_beatmap").data()) ) {
+            m_roomNameDefaultMode = CollaborationDefaultMode::Follow;
+            setInputBuffer(m_roomName, m_defaultRoomName);
+        }
         ImGui::SetNextItemWidth(-1.0F);
-        ImGui::InputTextWithHint("##CollaborationRoomName",
-                                 TR("ui.collaboration.room_name_hint").data(),
-                                 m_roomName.data(),
-                                 m_roomName.size());
+        if ( ImGui::InputTextWithHint(
+                 "##CollaborationRoomName",
+                 TR("ui.collaboration.room_name_hint").data(),
+                 m_roomName.data(),
+                 m_roomName.size()) ) {
+            m_roomNameDefaultMode = resolveCollaborationTextDefaultMode(
+                std::string_view(m_roomName.data()), m_defaultRoomName);
+        }
         FeedbackCheckbox(TR("ui.collaboration.require_matching_build").data(),
                          &m_requireMatchingBuildFingerprint);
         ImGui::SameLine();

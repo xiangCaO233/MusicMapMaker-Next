@@ -17,6 +17,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -579,6 +580,17 @@ void ToolbarView::update(UIManager* sourceManager)
                 ImGui::PopStyleColor(3);
                 advanceItem();
             };
+
+        const bool playbackPlaying = engine.isPlaybackPlaying();
+        drawRuntimeToggleButton(
+            playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
+            playbackPlaying,
+            TR("ui.toolbar.play_pause").data(),
+            TR("ui.toolbar.short.play_pause").data(),
+            shortcutConfig.togglePlayback,
+            [](bool shouldPlay) {
+                MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ shouldPlay });
+            });
 
         const bool isLayoutEditing = m_currentTool == Logic::EditTool::Layout;
         ImGui::BeginDisabled(isLayoutEditing);

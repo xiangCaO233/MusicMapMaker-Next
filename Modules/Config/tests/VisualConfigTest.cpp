@@ -314,6 +314,31 @@ bool testSelectedVolumeShortcutRoundTrip()
     return true;
 }
 
+/// @brief 验证播放切换快捷键可持久化且旧配置保持空格默认值。
+/// @return 自定义组合键往返无损且缺失字段恢复为空格时返回 true。
+bool testPlaybackShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.togglePlayback =
+        MMM::Config::ShortcutBinding{ true, "P", true, false, true, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding       = restored.shortcutConfig.togglePlayback;
+    const auto& legacyBinding = legacy.shortcutConfig.togglePlayback;
+    if ( !binding.enabled || binding.key != "P" || !binding.ctrl ||
+         binding.shift || !binding.alt || binding.super ||
+         !legacyBinding.enabled || legacyBinding.key != "Space" ||
+         legacyBinding.ctrl || legacyBinding.shift || legacyBinding.alt ||
+         legacyBinding.super ) {
+        XERROR("Playback shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证布局菜单的物件与背景复位仅影响各自管理的配置。
 /// @return 两组字段恢复应用默认值且背景电平图等无关字段保持不变时返回 true。
 bool testRenderingDefaultsReset()
@@ -568,6 +593,7 @@ int main()
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
+                   testPlaybackShortcutRoundTrip() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&

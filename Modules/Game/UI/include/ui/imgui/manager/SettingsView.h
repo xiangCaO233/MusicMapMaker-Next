@@ -104,6 +104,7 @@ private:
         MirrorPaste,
         EditSelectedVolume,
         DeleteSelected,
+        TogglePlayback,
         ToggleReverseScroll,
         ToggleScrollSnap,
         ToggleSnapFloor,

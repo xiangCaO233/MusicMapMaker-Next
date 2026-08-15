@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/ISubView.h"
+#include "ui/imgui/manager/CollaborationDefaultFollowPolicy.h"
 
 #include <array>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 
 namespace MMM::Network::Collaboration
 {
@@ -110,8 +112,11 @@ private:
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
     /// @brief 公网目录展示的房间名称输入。
     std::array<char, 160> m_roomName{};
-    /// @brief 是否已经从当前谱面初始化房间名称。
-    bool m_roomNameInitialized = false;
+    /// @brief 当前谱面提供的默认房间名称。
+    std::string m_defaultRoomName;
+    /// @brief 房间名是否自动跟随当前谱面默认值。
+    CollaborationDefaultMode m_roomNameDefaultMode =
+        CollaborationDefaultMode::Follow;
     /// @brief 当前谱面默认封面解析到的绝对路径。
     std::filesystem::path m_defaultRoomCoverPath;
     /// @brief 当前准备发布的房卡封面源文件。
@@ -120,10 +125,9 @@ private:
     std::string m_roomCoverImage;
     /// @brief 当前封面生成错误对应的翻译键；为空表示没有错误。
     std::string m_roomCoverErrorKey;
-    /// @brief 当前封面是否由用户显式选择，而非跟随谱面默认值。
-    bool m_roomCoverCustomized = false;
-    /// @brief 上次初始化封面的谱面路径键，用于切谱后恢复默认封面。
-    std::filesystem::path m_roomCoverBeatmapKey;
+    /// @brief 房间封面是否自动跟随当前谱面默认值。
+    CollaborationDefaultMode m_roomCoverDefaultMode =
+        CollaborationDefaultMode::Follow;
     /// @brief 等待 GPU 资源准备阶段解码上传的 Base64 图片。
     std::map<std::string, std::string, std::less<>> m_pendingRoomCoverTextures;
     /// @brief 已上传的房卡封面纹理。

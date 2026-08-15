@@ -265,6 +265,9 @@ struct ShortcutConfig {
         true, "Delete", false, false, false, false
     };
 
+    /// @brief 切换谱面播放与暂停状态。
+    ShortcutBinding togglePlayback{ true, "Space", false, false, false, false };
+
     /// @brief 切换反转滚动方向。
     ShortcutBinding toggleReverseScroll{
         false, "", false, false, false, false
