@@ -65,6 +65,58 @@ constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
 /// @brief 画布悬浮信息窗口的纵向元素间距。
 constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
 
+/// @brief 绘制当前悬浮物件的高对比几何提示。
+/// @param candidate 当前方向键悬浮层选中的候选。
+/// @param canvasPosition 画布左上角屏幕坐标。
+/// @param canvasWidth 画布可见宽度。
+/// @param canvasHeight 画布可见高度。
+/// @warning UI 热路径：悬浮物件时每帧调用一次，只追加固定数量 ImGui 几何。
+void renderObjectHoverHint(const HoverLayerCandidate& candidate,
+                           ImVec2 canvasPosition, float canvasWidth,
+                           float canvasHeight)
+{
+    const auto   bounds = calculateHoverHintBounds(candidate);
+    const ImVec2 minimum{ canvasPosition.x + bounds.left,
+                          canvasPosition.y + bounds.top };
+    const ImVec2 maximum{ canvasPosition.x + bounds.right,
+                          canvasPosition.y + bounds.bottom };
+
+    auto& skin        = Config::SkinManager::instance();
+    auto  accentColor = skin.getColor("preview.judgeline");
+    if ( accentColor.r == 1.0F && accentColor.g == 0.0F &&
+         accentColor.b == 1.0F ) {
+        const ImVec4 fallback = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        accentColor = { fallback.x, fallback.y, fallback.z, fallback.w };
+    }
+
+    const ImU32 accent = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 1.0F });
+    const ImU32 fill = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 0.16F });
+    constexpr ImU32 SHADOW   = IM_COL32(0, 0, 0, 230);
+    constexpr float ROUNDING = 4.0F;
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        canvasPosition,
+        { canvasPosition.x + canvasWidth, canvasPosition.y + canvasHeight },
+        true);
+    drawList->AddRectFilled(minimum, maximum, fill, ROUNDING);
+    drawList->AddRect(minimum, maximum, SHADOW, ROUNDING, 0, 6.0F);
+    drawList->AddRect(minimum, maximum, accent, ROUNDING, 0, 2.5F);
+
+    const float markerX = (minimum.x + maximum.x) * 0.5F;
+    drawList->AddTriangleFilled({ markerX - 5.0F, minimum.y - 7.0F },
+                                { markerX + 5.0F, minimum.y - 7.0F },
+                                { markerX, minimum.y - 1.0F },
+                                SHADOW);
+    drawList->AddTriangleFilled({ markerX - 3.5F, minimum.y - 5.5F },
+                                { markerX + 3.5F, minimum.y - 5.5F },
+                                { markerX, minimum.y - 1.5F },
+                                accent);
+    drawList->PopClipRect();
+}
+
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
 
@@ -3574,7 +3626,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                     { hitbox.entity,
                       hitbox.kind,
                       static_cast<std::uint8_t>(hitbox.part),
-                      hitbox.subIndex });
+                      hitbox.subIndex,
+                      it->x,
+                      it->y,
+                      it->w,
+                      it->h });
                 if ( !appended ) continue;
                 layerSignature +=
                     std::to_string(static_cast<uint32_t>(
@@ -3617,6 +3673,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredObjectKind     = candidate.kind;
         hoveredPart           = candidate.part;
         hoveredSubIndex       = candidate.subIndex;
+        renderObjectHoverHint(candidate, windowPos, targetWidth, targetHeight);
     }
 
     bool shouldSendHover = !m_hasLastHovered ||

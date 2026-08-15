@@ -1,5 +1,6 @@
 #include "canvas/HoverLayerSelection.h"
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -63,6 +64,45 @@ bool testDistinctObjectsRemainSeparateLayers()
            candidates.size() == 4;
 }
 
+/// @brief 使用小容差比较悬浮提示框坐标。
+/// @param lhs 左值。
+/// @param rhs 右值。
+/// @return 两个坐标足够接近时返回 true。
+bool near(float lhs, float rhs)
+{
+    return std::abs(lhs - rhs) < 1e-4F;
+}
+
+/// @brief 验证极小物件的悬浮提示框扩大到最低可见尺寸且中心不漂移。
+/// @return 提示框保持中心并达到 32 像素时返回 true。
+bool testSmallObjectHoverHintUsesMinimumExtent()
+{
+    const MMM::Canvas::HoverLayerCandidate candidate{
+        .x      = 100.0F,
+        .y      = 40.0F,
+        .width  = 8.0F,
+        .height = 12.0F,
+    };
+    const auto bounds = MMM::Canvas::calculateHoverHintBounds(candidate);
+    return near(bounds.left, 88.0F) && near(bounds.top, 30.0F) &&
+           near(bounds.right, 120.0F) && near(bounds.bottom, 62.0F);
+}
+
+/// @brief 验证普通物件的悬浮提示框只追加固定留白。
+/// @return 四周各扩展 5 像素时返回 true。
+bool testLargeObjectHoverHintUsesPadding()
+{
+    const MMM::Canvas::HoverLayerCandidate candidate{
+        .x      = 10.0F,
+        .y      = 20.0F,
+        .width  = 50.0F,
+        .height = 30.0F,
+    };
+    const auto bounds = MMM::Canvas::calculateHoverHintBounds(candidate);
+    return near(bounds.left, 5.0F) && near(bounds.top, 15.0F) &&
+           near(bounds.right, 65.0F) && near(bounds.bottom, 55.0F);
+}
+
 }  // namespace
 
 /// @brief 覆盖主画布悬浮层按物件去重规则。
@@ -70,7 +110,9 @@ bool testDistinctObjectsRemainSeparateLayers()
 int main()
 {
     return testSameSampleHitboxesShareOneLayer() &&
-                   testDistinctObjectsRemainSeparateLayers()
+                   testDistinctObjectsRemainSeparateLayers() &&
+                   testSmallObjectHoverHintUsesMinimumExtent() &&
+                   testLargeObjectHoverHintUsesPadding()
                ? 0
                : 1;
 }
