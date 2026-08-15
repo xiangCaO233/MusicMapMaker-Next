@@ -91,7 +91,7 @@ json makeMalodyMap()
     return map;
 }
 
-/// @brief 验证玩家命中采样与自动采样在 Malody 和 MMM v2 中独立往返。
+/// @brief 验证玩家命中采样与自动采样在 Malody 和当前 MMM 格式中独立往返。
 /// @param outputDirectory 测试输出目录。
 /// @return 两种格式均保留通用字段时返回 true。
 bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
@@ -170,7 +170,7 @@ bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
         }
         input >> nativeJson;
     }
-    if ( nativeJson.value("format_version", 0) != 2 ||
+    if ( nativeJson.value("format_version", 0) != 3 ||
          !nativeJson.contains("audio_samples") ||
          nativeJson["audio_samples"].size() != 1 ||
          nativeJson["audio_samples"][0].value("offset_ms", 0) != -125 ||
@@ -178,7 +178,7 @@ bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
          nativeJson["audio_samples"][0].value("audio_ref", "") != "audio.ogg" ||
          std::abs(nativeJson["audio_samples"][0].value("volume", 0.0) - 0.8) >
              1e-6 ) {
-        XERROR("MMM v2 automatic sample JSON is incomplete");
+        XERROR("MMM v3 automatic sample JSON is incomplete");
         return false;
     }
     if ( nativeJson["note"].size() != 1 ||
@@ -189,7 +189,7 @@ bool testMalodyAndNativeRoundTrip(const fs::path& outputDirectory)
              "sample.wav" ||
          std::abs(nativeJson["note"][0]["sample"].value("volume", 0.0) - 0.65) >
              1e-6 ) {
-        XERROR("MMM v2 playable sample binding is not canonical");
+        XERROR("MMM v3 playable sample binding is not canonical");
         return false;
     }
 

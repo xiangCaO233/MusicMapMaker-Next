@@ -30,12 +30,18 @@ struct WebRtcTransportEvent {
     WebRtcTransportEventType type = WebRtcTransportEventType::Error;
     /// @brief 事件关联的远端 PeerId；尚未分配时为 0。
     PeerId peerId = 0;
+    /// @brief 事件关联的远端稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 事件关联的远端操作会话标识。
+    OperationSessionId sessionId;
     /// @brief 事件关联的远端 Creator。
     std::string creator;
     /// @brief 面向诊断日志的简短详情。
     std::string detail;
     /// @brief 等待房主处理的服务端加入请求标识；其它事件为空。
     std::string requestId;
+    /// @brief 加入请求携带的主程序二进制 SHA-256 构建指纹。
+    std::string buildFingerprint;
 };
 
 /// @brief 房主通过公网目录发布房间所需配置。
@@ -46,10 +52,20 @@ struct WebRtcHostConfig {
     std::string roomName;
     /// @brief 房主 Creator 展示身份。
     std::string creator;
-    /// @brief 房主稳定 PeerId。
+    /// @brief 公网目录卡片按需下发的 Base64 JPEG 封面缩略图。
+    std::string roomCoverImage;
+    /// @brief 房主持久化的稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 房主本次房间生命周期的操作会话标识。
+    OperationSessionId sessionId;
+    /// @brief 房主固定路由槽位。
     PeerId hostId = 1;
     /// @brief 房间允许的总客户端数。
     std::size_t maxParticipants = MAX_COLLABORATION_PARTICIPANTS;
+    /// @brief 房主当前主程序二进制的 SHA-256 构建指纹；为空时只读取就绪缓存。
+    std::string buildFingerprint;
+    /// @brief 是否在 P2P 身份握手中拒绝构建指纹不同的访客。
+    bool requireMatchingBuildFingerprint{ true };
 };
 
 /// @brief 访客通过公网目录加入房间所需配置。
@@ -60,8 +76,14 @@ struct WebRtcGuestConfig {
     std::string roomId;
     /// @brief 当前访客 Creator 展示身份。
     std::string creator;
-    /// @brief 房主稳定 PeerId。
+    /// @brief 当前访客持久化的稳定协作者标识。
+    ParticipantId participantId;
+    /// @brief 当前访客本次加入流程的操作会话标识。
+    OperationSessionId sessionId;
+    /// @brief 房主固定路由槽位。
     PeerId hostId = 1;
+    /// @brief 访客当前主程序二进制的 SHA-256 构建指纹；为空时只读取就绪缓存。
+    std::string buildFingerprint;
 };
 
 /// @brief 基于 libdatachannel 的可靠有序 WebRTC DataChannel 传输。
@@ -99,7 +121,8 @@ public:
     /// @brief 房主拒绝一个仍在中心服务等待的加入请求。
     /// @param requestId 服务端生成并随 JoinRequested 事件提供的请求标识。
     /// @return 拒绝指令成功发送到房主控制连接时返回 true。
-    [[nodiscard]] bool rejectJoinRequest(std::string_view requestId);
+    [[nodiscard]] bool rejectJoinRequest(
+        std::string_view requestId, std::string_view reason = "host_rejected");
 
     /// @brief 房主主动关闭一个已建立的访客 P2P 连接。
     /// @param peerId 待移出的远端 PeerId。

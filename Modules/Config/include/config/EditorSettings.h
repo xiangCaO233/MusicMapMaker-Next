@@ -229,6 +229,20 @@ struct ShortcutBinding {
     bool super{ false };
 };
 
+/// @brief 判断两个已启用快捷键绑定是否使用同一按键组合。
+/// @param lhs 第一个快捷键绑定。
+/// @param rhs 第二个快捷键绑定。
+/// @return 两者均有效且按键及全部修饰键相同时返回 true。
+/// @warning 设置页热路径：仅比较两个短字符串和四个修饰键标志。
+[[nodiscard]] constexpr bool shortcutBindingsConflict(
+    const ShortcutBinding& lhs, const ShortcutBinding& rhs)
+{
+    return lhs.enabled && rhs.enabled && !lhs.key.empty() && !rhs.key.empty() &&
+           lhs.key == rhs.key && lhs.ctrl == rhs.ctrl &&
+           lhs.shift == rhs.shift && lhs.alt == rhs.alt &&
+           lhs.super == rhs.super;
+}
+
 /// @brief 将快捷键绑定序列化为 JSON。
 void to_json(nlohmann::json& json, const ShortcutBinding& binding);
 /// @brief 从 JSON 读取快捷键绑定。
@@ -260,10 +274,18 @@ struct ShortcutConfig {
     /// @brief 打开选中物件批量音量编辑器。
     ShortcutBinding editSelectedVolume{ false, "", false, false, false, false };
 
+    /// @brief 为当前选中的单个物件添加批注。
+    ShortcutBinding addSelectedAnnotation{
+        true, "R", true, false, false, false
+    };
+
     /// @brief 删除当前选中物件。
     ShortcutBinding deleteSelected{
         true, "Delete", false, false, false, false
     };
+
+    /// @brief 切换谱面播放与暂停状态。
+    ShortcutBinding togglePlayback{ true, "Space", false, false, false, false };
 
     /// @brief 切换反转滚动方向。
     ShortcutBinding toggleReverseScroll{
@@ -325,6 +347,68 @@ enum class SaveFormatPreference {
 void to_json(nlohmann::json& json, const SaveFormatPreference& preference);
 /// @brief 从稳定文本读取保存格式偏好。
 void from_json(const nlohmann::json& json, SaveFormatPreference& preference);
+
+/// @brief 自动保存调度模式。
+enum class AutoSaveMode {
+    Disabled,       ///< 不启用通用自动保存。
+    Timed,          ///< 按固定时间间隔保存。
+    EventTriggered  ///< 在启用的编辑器事件发生后保存。
+};
+
+/// @brief 将自动保存模式序列化为稳定文本。
+void to_json(nlohmann::json& json, const AutoSaveMode& mode);
+/// @brief 从稳定文本读取自动保存模式。
+void from_json(const nlohmann::json& json, AutoSaveMode& mode);
+
+/// @brief 自动保存定时间隔单位。
+enum class AutoSaveIntervalUnit {
+    Seconds,  ///< 秒。
+    Minutes   ///< 分钟。
+};
+
+/// @brief 将自动保存间隔单位序列化为稳定文本。
+void to_json(nlohmann::json& json, const AutoSaveIntervalUnit& unit);
+/// @brief 从稳定文本读取自动保存间隔单位。
+void from_json(const nlohmann::json& json, AutoSaveIntervalUnit& unit);
+
+/// @brief 软件全局自动保存配置。
+struct AutoSaveConfig {
+    /// @brief 自动保存调度模式。
+    AutoSaveMode mode{ AutoSaveMode::Disabled };
+
+    /// @brief 定时间隔单位。
+    AutoSaveIntervalUnit intervalUnit{ AutoSaveIntervalUnit::Seconds };
+
+    /// @brief 定时间隔数值；读取配置时限制为 5~60。
+    int intervalValue{ 30 };
+
+    /// @brief 任意谱面物件修改提交后是否触发自动保存。
+    bool onObjectModified{ true };
+
+    /// @brief 切换活动谱面时是否触发自动保存。
+    bool onBeatmapSwitch{ true };
+
+    /// @brief ImGui 根窗口丢失焦点时是否触发自动保存。
+    bool onImGuiWindowFocusLost{ true };
+
+    /// @brief 程序原生窗口丢失焦点或最小化时是否触发自动保存。
+    bool onNativeWindowFocusLost{ true };
+
+    /// @brief 将配置的 5~60 定时间隔换算为秒。
+    /// @return 可供逻辑调度器使用的秒数。
+    [[nodiscard]] double intervalSeconds() const
+    {
+        const int safeValue = std::clamp(intervalValue, 5, 60);
+        return intervalUnit == AutoSaveIntervalUnit::Minutes
+                   ? static_cast<double>(safeValue) * 60.0
+                   : static_cast<double>(safeValue);
+    }
+};
+
+/// @brief 将自动保存配置序列化为 JSON。
+void to_json(nlohmann::json& json, const AutoSaveConfig& config);
+/// @brief 从 JSON 读取自动保存配置并约束定时间隔。
+void from_json(const nlohmann::json& json, AutoSaveConfig& config);
 
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
@@ -456,6 +540,24 @@ void to_json(nlohmann::json& json, const CollaborationViewportRenderMode& mode);
 void from_json(const nlohmann::json&            json,
                CollaborationViewportRenderMode& mode);
 
+/// @brief 公网协作目录与信令服务器的客户端连接配置。
+struct CollaborationServerSettings {
+    /// @brief 服务器域名或地址，不包含协议、端口和路径。
+    std::string address{ "xiang233.top" };
+
+    /// @brief WebSocket 信令端口。
+    std::uint16_t signalingPort{ 443 };
+
+    /// @brief 是否通过 TLS/WSS 连接服务器。
+    bool useTls{ true };
+};
+
+/// @brief 将协作服务器配置序列化为 JSON。
+void to_json(nlohmann::json& json, const CollaborationServerSettings& settings);
+/// @brief 从 JSON 读取协作服务器配置并约束端口和地址边界。
+void from_json(const nlohmann::json&        json,
+               CollaborationServerSettings& settings);
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -541,6 +643,9 @@ struct EditorSettings {
         CollaborationViewportRenderMode::Filled
     };
 
+    /// @brief 公网协作目录与信令服务器连接配置。
+    CollaborationServerSettings collaborationServer;
+
     /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
     bool autoUploadPgoProfiles{ false };
 
@@ -592,6 +697,9 @@ struct EditorSettings {
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
+    /// @brief 对所有项目生效的软件全局自动保存配置。
+    AutoSaveConfig autoSave;
+
     /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
     bool autoAddStoreModeExtForMalodyExport{ false };
 
@@ -618,6 +726,11 @@ struct EditorSettings {
 
     /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
     bool enableBmsEditing{ true };
+
+    /// @brief 当前构建是否发布项目级草稿轨功能。
+    /// @details
+    /// 内部发布门禁，不序列化也不向设置界面开放；底层草稿数据继续保留。
+    bool enableDraftLanes{ false };
 
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
@@ -651,6 +764,9 @@ struct EditorSettings {
 
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };
+
+    /// @brief 是否在主画布中绘制带连线的批注详情卡片。
+    bool showAnnotationDetails{ false };
 
     /// @brief 是否在工具栏图标下方显示简短标签。
     bool showToolLabels{ false };

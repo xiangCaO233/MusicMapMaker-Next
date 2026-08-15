@@ -3,6 +3,7 @@
 #include "ui/IUIView.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -26,30 +27,32 @@ class BeatmapSession;
 
 namespace MMM::UI
 {
-/// @brief 持续驱动协作房间并实时展示所有客户端动态的独立窗口。
+/// @brief 持续驱动协作房间，并为协作侧栏提供内嵌日志。
 class CollaborationLogWindow final : public IUIView
 {
 public:
-    /// @brief 创建应用级协作日志窗口。
+    /// @brief 创建应用级协作控制器与日志绘制器。
     /// @param name 稳定视图名。
     /// @param room 应用级协作房间。
     CollaborationLogWindow(
         const std::string&                                         name,
         std::shared_ptr<Network::Collaboration::CollaborationRoom> room);
-    /// @brief 解除会话观察者和网络回灌回调。
+    /// @brief 解除会话观察者和网络回灌回调，保留离线会话的已缓存资源。
     ~CollaborationLogWindow() override;
 
-    /// @brief 每帧驱动协作房间，并在可见时绘制日志。
-    /// @warning UI 热路径：每帧执行一次有界网络队列轮询；只在窗口可见时
-    /// 遍历最多 1000 条日志，不执行文件系统访问或阻塞等待。
+    /// @brief 每帧驱动协作房间与会话绑定。
+    /// @warning UI 热路径：每帧执行一次有界网络队列轮询，不执行
+    /// 文件系统访问或阻塞等待。
     void update(UIManager* sourceManager) override;
 
-    /// @brief 该常驻控制视图始终保留在 UIManager 中。
+    /// @brief 在当前协作侧栏中绘制固定日志区域。
+    /// @warning UI 热路径：仅在协作侧栏可见时遍历最多 1000 条内存日志。
+    void renderInline();
+
+    /// @brief 该常驻协作控制器始终保留在 UIManager 中。
     [[nodiscard]] bool isOpen() const override;
-    /// @brief 设置日志窗口可见性，不销毁后台协作控制器。
+    /// @brief 忽略通用窗口开关，避免销毁后台协作控制器。
     void setOpen(bool open) override;
-    /// @brief 显示协作日志窗口。
-    void show();
 
 private:
     /// @brief 格式化一条结构化日志。
@@ -80,11 +83,9 @@ private:
     bool m_boundSessionIsGuest{ false };
     /// @brief 当前控制器是否已接管访客在线期间的本机项目打开门闩。
     bool m_guestProjectGateHeld{ false };
-    /// @brief 独立日志窗口当前是否可见。
-    bool m_windowVisible = false;
-    /// @brief 上一帧房间是否处于活动状态。
-    bool m_wasRoomActive = false;
-    /// @brief 上一帧已经展示的日志条数，用于新日志自动滚动。
+    /// @brief 最近一次应用到固定会话的谱面类别权限位。
+    std::uint8_t m_lastAppliedPermissionFlags{ 0xFFU };
+    /// @brief 上一次内嵌日志已经展示的条数，用于新日志自动滚动。
     std::size_t m_lastLogCount = 0;
 };
 }  // namespace MMM::UI

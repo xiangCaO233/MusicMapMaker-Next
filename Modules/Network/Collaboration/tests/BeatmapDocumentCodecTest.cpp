@@ -1,5 +1,6 @@
 #include "network/collaboration/BeatmapDocumentCodec.h"
 
+#include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
@@ -34,31 +35,39 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     beatmap->m_metadata.map_properties[MMM::MapMetadataType::MALODY]["mode"] =
         "key";
 
-    auto& note           = beatmap->m_noteData.notes.emplace_back();
-    note.m_timestamp     = 1000.0;
-    note.m_track         = 1;
-    note.m_sampleBinding = MMM::AudioSampleBinding{ "tap.wav", 0.8F };
+    auto& note             = beatmap->m_noteData.notes.emplace_back();
+    note.m_timestamp       = 1000.0;
+    note.m_track           = 1;
+    note.m_collaborationId = "note-root";
+    note.m_annotation      = "检查节奏重音";
+    note.m_sampleBinding   = MMM::AudioSampleBinding{ "tap.wav", 0.8F };
     note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["color"] =
         "#112233";
 
-    auto& flick       = beatmap->m_noteData.flicks.emplace_back();
-    flick.m_timestamp = 1500.0;
-    flick.m_track     = 2;
-    flick.m_dtrack    = -1;
+    auto& flick             = beatmap->m_noteData.flicks.emplace_back();
+    flick.m_timestamp       = 1500.0;
+    flick.m_track           = 2;
+    flick.m_dtrack          = -1;
+    flick.m_collaborationId = "flick-root";
 
-    auto& subHold        = beatmap->m_noteData.holds.emplace_back();
-    subHold.m_timestamp  = 2000.0;
-    subHold.m_duration   = 500.0;
-    subHold.m_track      = 3;
-    subHold.m_isSubNote  = true;
-    auto& subFlick       = beatmap->m_noteData.flicks.emplace_back();
-    subFlick.m_timestamp = 2500.0;
-    subFlick.m_track     = 3;
-    subFlick.m_dtrack    = 2;
-    subFlick.m_isSubNote = true;
-    auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
-    polyline.m_timestamp = subHold.m_timestamp;
-    polyline.m_track     = subHold.m_track;
+    auto& subHold              = beatmap->m_noteData.holds.emplace_back();
+    subHold.m_timestamp        = 2000.0;
+    subHold.m_duration         = 500.0;
+    subHold.m_track            = 3;
+    subHold.m_isSubNote        = true;
+    subHold.m_collaborationId  = "polyline-sub-hold";
+    subHold.m_annotation       = "折线起段";
+    auto& subFlick             = beatmap->m_noteData.flicks.emplace_back();
+    subFlick.m_timestamp       = 2500.0;
+    subFlick.m_track           = 3;
+    subFlick.m_dtrack          = 2;
+    subFlick.m_isSubNote       = true;
+    subFlick.m_collaborationId = "polyline-sub-flick";
+    auto& polyline             = beatmap->m_noteData.polylines.emplace_back();
+    polyline.m_timestamp       = subHold.m_timestamp;
+    polyline.m_track           = subHold.m_track;
+    polyline.m_collaborationId = "polyline-root";
+    polyline.m_annotation      = "整条折线说明";
     polyline.m_subNotes.emplace_back(subHold);
     polyline.m_subNotes.emplace_back(subFlick);
     polyline.m_subHolds.emplace_back(subHold);
@@ -79,8 +88,35 @@ std::shared_ptr<BeatMap> makeCompleteBeatmap(std::string author)
     sample.m_track           = 6;
     sample.m_audioResourceId = "bgm.wav";
     sample.m_volume          = 0.65F;
+    sample.m_collaborationId = "sample-root";
     sample.m_metadata.sample_properties[MMM::SampleMetadataType::MMM]["lane"] =
         "0";
+
+    beatmap->m_annotations = {
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-timestamp",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .m_timestamp  = 1000.0,
+            .m_author     = "Creator A",
+            .m_content    = "# 节奏\n检查重音",
+        },
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-note",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+            .m_targetId   = "note-root",
+            .m_timestamp  = 1000.0,
+            .m_author     = "Reviewer",
+            .m_content    = "物件批注",
+        },
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-sample",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE,
+            .m_targetId   = "sample-root",
+            .m_timestamp  = 725.0,
+            .m_author     = "Reviewer",
+            .m_content    = "采样批注",
+        },
+    };
     beatmap->sync();
     return beatmap;
 }
@@ -92,10 +128,14 @@ bool testCompleteSnapshotRoundTrip()
     BeatmapDocumentCodec receiver;
     const auto           source = makeCompleteBeatmap("Creator A");
     auto snapshot = encoder.encode(*source, BeatmapMutationFlags::All, true);
-    if ( !snapshot.has_value() || snapshot->empty() ) return false;
+    if ( !snapshot.has_value() || snapshot->empty() ) {
+        XERROR("Complete snapshot could not be encoded");
+        return false;
+    }
     auto applied = receiver.apply(snapshot.value());
     if ( !applied.has_value() || !applied->isSnapshot ||
          applied->flags != BeatmapMutationFlags::All ) {
+        XERROR("Complete snapshot could not be applied");
         return false;
     }
     const auto restored = receiver.materialize();
@@ -104,19 +144,27 @@ bool testCompleteSnapshotRoundTrip()
          restored->m_noteData.flicks.size() != 2U ||
          restored->m_noteData.polylines.size() != 1U ||
          restored->m_timings.size() != 1U ||
-         restored->m_audioSamples.size() != 1U ) {
+         restored->m_audioSamples.size() != 1U ||
+         restored->m_annotations.size() != 3U ) {
+        XERROR("Complete snapshot restored unexpected category counts");
         return false;
     }
     const auto& polyline = restored->m_noteData.polylines.front();
-    return polyline.m_subNotes.size() == 2U &&
-           polyline.m_subHolds.size() == 1U &&
-           polyline.m_subFlicks.size() == 1U &&
-           restored->m_noteData.notes.front().m_sampleBinding.has_value() &&
-           restored->m_noteData.notes.front()
-                   .m_metadata.note_properties.at(MMM::NoteMetadataType::MMM)
-                   .at("color") == "#112233" &&
-           restored->m_audioSamples.front().m_offsetMs == -25 &&
-           std::abs(restored->m_timings.front().m_bpm - 180.0) < 1e-9;
+    const bool  matches =
+        polyline.m_subNotes.size() == 2U && polyline.m_subHolds.size() == 1U &&
+        polyline.m_subFlicks.size() == 1U &&
+        restored->m_noteData.notes.front().m_sampleBinding.has_value() &&
+        restored->m_noteData.notes.front()
+                .m_metadata.note_properties.at(MMM::NoteMetadataType::MMM)
+                .at("color") == "#112233" &&
+        restored->m_audioSamples.front().m_offsetMs == -25 &&
+        restored->m_audioSamples.front().m_collaborationId == "sample-root" &&
+        restored->m_annotations == source->m_annotations &&
+        std::abs(restored->m_timings.front().m_bpm - 180.0) < 1e-9;
+    if ( !matches ) {
+        XERROR("Complete snapshot fields did not round-trip");
+    }
+    return matches;
 }
 
 /// @brief 校验 Polyline 实际引用是子物件身份的权威来源。
@@ -159,6 +207,7 @@ bool sameObjects(const BeatMap& lhs, const BeatMap& rhs)
              std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
              left.m_track != right.m_track ||
              left.m_isSubNote != right.m_isSubNote ||
+             left.m_collaborationId != right.m_collaborationId ||
              left.m_metadata.note_properties !=
                  right.m_metadata.note_properties ||
              !sameBinding(left.m_sampleBinding, right.m_sampleBinding) ) {
@@ -209,6 +258,12 @@ bool sameObjects(const BeatMap& lhs, const BeatMap& rhs)
     return true;
 }
 
+/// @brief 判断两个谱面的独立多批注记录是否等价。
+bool sameAnnotations(const BeatMap& lhs, const BeatMap& rhs)
+{
+    return lhs.m_annotations == rhs.m_annotations;
+}
+
 /// @brief 判断两个谱面的时间线类别是否逐字段等价。
 bool sameTimelines(const BeatMap& lhs, const BeatMap& rhs)
 {
@@ -240,6 +295,7 @@ bool sameAudioSamples(const BeatMap& lhs, const BeatMap& rhs)
         if ( std::abs(left.m_timestamp - right.m_timestamp) >= 1e-9 ||
              left.m_offsetMs != right.m_offsetMs ||
              left.m_track != right.m_track ||
+             left.m_collaborationId != right.m_collaborationId ||
              left.m_audioResourceId != right.m_audioResourceId ||
              std::abs(left.m_volume - right.m_volume) >= 1e-6F ||
              left.m_metadata.sample_properties !=
@@ -280,10 +336,9 @@ bool sameMetadata(const BeatMap& lhs, const BeatMap& rhs)
 bool testStrictCategoryIsolation()
 {
     constexpr std::array FLAGS{
-        BeatmapMutationFlags::Objects,
-        BeatmapMutationFlags::Timelines,
-        BeatmapMutationFlags::AudioSamples,
-        BeatmapMutationFlags::Metadata,
+        BeatmapMutationFlags::Objects,      BeatmapMutationFlags::Timelines,
+        BeatmapMutationFlags::AudioSamples, BeatmapMutationFlags::Metadata,
+        BeatmapMutationFlags::Annotations,
     };
     for ( const auto flag : FLAGS ) {
         BeatmapDocumentCodec receiver;
@@ -300,6 +355,14 @@ bool testStrictCategoryIsolation()
         edited->m_audioSamples.front().m_volume           = 0.25F;
         edited->m_baseMapMetadata.title                   = "Changed Title";
         edited->m_baseMapMetadata.map_length              = 654321.0;
+        edited->m_annotations.front().m_content           = "## 新批注";
+        edited->m_annotations.emplace_back(MMM::BeatmapAnnotation{
+            .m_id         = "annotation-added",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .m_timestamp  = 2500.0,
+            .m_author     = "Creator B",
+            .m_content    = "- 并发追加",
+        });
         edited->sync();
 
         auto snapshot =
@@ -327,7 +390,11 @@ bool testStrictCategoryIsolation()
              sameMetadata(
                  *restored,
                  flag == BeatmapMutationFlags::Metadata ? *edited : *initial) ==
-                 false ) {
+                 false ||
+             sameAnnotations(*restored,
+                             flag == BeatmapMutationFlags::Annotations
+                                 ? *edited
+                                 : *initial) == false ) {
             return false;
         }
     }
@@ -402,22 +469,25 @@ bool testConcurrentObjectDeltasMerge()
     firstGuestEncoder.synchronizeEncodingBaseline(*initial);
     secondGuestEncoder.synchronizeEncodingBaseline(*initial);
 
-    auto  hostEdit       = makeCompleteBeatmap("Creator");
-    auto& hostNote       = hostEdit->m_noteData.notes.emplace_back();
-    hostNote.m_timestamp = 3000.0;
-    hostNote.m_track     = 0;
+    auto  hostEdit             = makeCompleteBeatmap("Creator");
+    auto& hostNote             = hostEdit->m_noteData.notes.emplace_back();
+    hostNote.m_timestamp       = 3000.0;
+    hostNote.m_track           = 0;
+    hostNote.m_collaborationId = "host-added-note";
     hostEdit->sync();
 
     auto  firstGuestEdit = makeCompleteBeatmap("Creator");
     auto& firstGuestNote = firstGuestEdit->m_noteData.notes.emplace_back();
-    firstGuestNote.m_timestamp = 4000.0;
-    firstGuestNote.m_track     = 1;
+    firstGuestNote.m_timestamp       = 4000.0;
+    firstGuestNote.m_track           = 1;
+    firstGuestNote.m_collaborationId = "first-guest-added-note";
     firstGuestEdit->sync();
 
     auto  secondGuestEdit = makeCompleteBeatmap("Creator");
     auto& secondGuestNote = secondGuestEdit->m_noteData.notes.emplace_back();
-    secondGuestNote.m_timestamp = 5000.0;
-    secondGuestNote.m_track     = 2;
+    secondGuestNote.m_timestamp       = 5000.0;
+    secondGuestNote.m_track           = 2;
+    secondGuestNote.m_collaborationId = "second-guest-added-note";
     secondGuestEdit->sync();
 
     auto hostDelta =
@@ -450,6 +520,97 @@ bool testConcurrentObjectDeltasMerge()
         });
 }
 
+/// @brief 校验两端从同一旧基线修改同一稳定物件时采用房主顺序覆盖而不重复。
+bool testConcurrentSameObjectUsesStableIdentity()
+{
+    BeatmapDocumentCodec firstEncoder;
+    BeatmapDocumentCodec secondEncoder;
+    BeatmapDocumentCodec authority;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    auto                 snapshot =
+        firstEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot.has_value() ||
+         !authority.apply(snapshot.value()).has_value() ) {
+        return false;
+    }
+    secondEncoder.synchronizeEncodingBaseline(*initial);
+
+    auto firstEdit = makeCompleteBeatmap("Creator");
+    firstEdit->m_noteData.notes.front().m_timestamp = 1250.0;
+    firstEdit->sync();
+    auto secondEdit = makeCompleteBeatmap("Creator");
+    secondEdit->m_noteData.notes.front().m_track = 5;
+    secondEdit->sync();
+
+    auto firstDelta =
+        firstEncoder.encode(*firstEdit, BeatmapMutationFlags::Objects, false);
+    auto secondDelta =
+        secondEncoder.encode(*secondEdit, BeatmapMutationFlags::Objects, false);
+    if ( !firstDelta.has_value() || !secondDelta.has_value() ||
+         !authority.apply(firstDelta.value()).has_value() ||
+         !authority.apply(secondDelta.value()).has_value() ) {
+        return false;
+    }
+
+    const auto merged = authority.materialize();
+    return merged && merged->m_noteData.notes.size() == 1U &&
+           merged->m_noteData.notes.front().m_collaborationId == "note-root" &&
+           std::abs(merged->m_noteData.notes.front().m_timestamp - 1000.0) <
+               1e-9 &&
+           merged->m_noteData.notes.front().m_track == 5U;
+}
+
+/// @brief 校验两个客户端从同一基线新增批注时按稳定 ID 合并。
+/// @return 两端新增批注均保留且原批注不丢失时返回 true。
+bool testConcurrentAnnotationDeltasMerge()
+{
+    BeatmapDocumentCodec firstEncoder;
+    BeatmapDocumentCodec secondEncoder;
+    BeatmapDocumentCodec authority;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    const auto           snapshot =
+        firstEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot || !authority.apply(*snapshot) ) return false;
+    secondEncoder.synchronizeEncodingBaseline(*initial);
+
+    auto firstEdit = makeCompleteBeatmap("Creator");
+    firstEdit->m_annotations.emplace_back(MMM::BeatmapAnnotation{
+        .m_id         = "annotation-from-first",
+        .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+        .m_timestamp  = 3000.0,
+        .m_author     = "First Creator",
+        .m_content    = "第一个客户端",
+    });
+    auto secondEdit = makeCompleteBeatmap("Creator");
+    secondEdit->m_annotations.emplace_back(MMM::BeatmapAnnotation{
+        .m_id         = "annotation-from-second",
+        .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+        .m_timestamp  = 3000.0,
+        .m_author     = "Second Creator",
+        .m_content    = "第二个客户端",
+    });
+
+    const auto firstDelta = firstEncoder.encode(
+        *firstEdit, BeatmapMutationFlags::Annotations, false);
+    const auto secondDelta = secondEncoder.encode(
+        *secondEdit, BeatmapMutationFlags::Annotations, false);
+    if ( !firstDelta || !secondDelta || !authority.apply(*firstDelta) ||
+         !authority.apply(*secondDelta) ) {
+        return false;
+    }
+
+    const auto merged = authority.materialize();
+    if ( !merged || merged->m_annotations.size() != 5U ) return false;
+    const auto hasId = [&](std::string_view identity) {
+        return std::any_of(merged->m_annotations.begin(),
+                           merged->m_annotations.end(),
+                           [&](const auto& annotation) {
+                               return annotation.m_id == identity;
+                           });
+    };
+    return hasId("annotation-from-first") && hasId("annotation-from-second");
+}
+
 /// @brief 校验元数据增量小于完整快照且不会覆盖其它谱面类别。
 bool testCategoryDelta()
 {
@@ -473,6 +634,74 @@ bool testCategoryDelta()
            restored->m_noteData.notes.size() == 1U &&
            restored->m_noteData.notes.front().m_timestamp == 1000.0 &&
            restored->m_audioSamples.size() == 1U;
+}
+
+/// @brief 校验授权路径可在不持有文档基线时识别快照与各增量类别。
+bool testPayloadInspectionIsNonMutating()
+{
+    BeatmapDocumentCodec encoder;
+    BeatmapDocumentCodec untouched;
+    auto                 initial = makeCompleteBeatmap("Creator A");
+    auto snapshot = encoder.encode(*initial, BeatmapMutationFlags::All, true);
+    if ( !snapshot ) return false;
+    const auto inspectedSnapshot = BeatmapDocumentCodec::inspect(*snapshot);
+    if ( !inspectedSnapshot || !inspectedSnapshot->isSnapshot ||
+         inspectedSnapshot->flags != BeatmapMutationFlags::All ||
+         untouched.hasDocument() ) {
+        return false;
+    }
+
+    initial->m_baseMapMetadata.author = "Creator B";
+    auto metadataDelta =
+        encoder.encode(*initial, BeatmapMutationFlags::Metadata, false);
+    if ( !metadataDelta ) return false;
+    const auto inspectedDelta = BeatmapDocumentCodec::inspect(*metadataDelta);
+    if ( !inspectedDelta || inspectedDelta->isSnapshot ||
+         inspectedDelta->flags != BeatmapMutationFlags::Metadata ||
+         untouched.hasDocument() ) {
+        return false;
+    }
+
+    const MMM::Network::Collaboration::ByteBuffer malformed{ 0xFFU, 0x00U };
+    return !BeatmapDocumentCodec::inspect(malformed).has_value();
+}
+
+/// @brief 校验后台可见文档比较只返回实际增删改的根物件稳定标识。
+bool testChangedObjectIdentitiesComparedToVisibleDocument()
+{
+    BeatmapDocumentCodec initialEncoder;
+    BeatmapDocumentCodec updatedEncoder;
+    BeatmapDocumentCodec initialDocument;
+    BeatmapDocumentCodec updatedDocument;
+    auto                 initial = makeCompleteBeatmap("Creator");
+    auto                 updated = makeCompleteBeatmap("Creator");
+
+    updated->m_noteData.notes.front().m_timestamp += 25.0;
+    updated->m_noteData.flicks.front().m_collaborationId = "added-flick";
+    updated->m_noteData.polylines.clear();
+    updated->m_noteData.holds.clear();
+    updated->m_noteData.flicks.pop_back();
+    updated->sync();
+
+    const auto initialSnapshot =
+        initialEncoder.encode(*initial, BeatmapMutationFlags::All, true);
+    const auto updatedSnapshot =
+        updatedEncoder.encode(*updated, BeatmapMutationFlags::All, true);
+    if ( !initialSnapshot || !updatedSnapshot ||
+         !initialDocument.apply(*initialSnapshot) ||
+         !updatedDocument.apply(*updatedSnapshot) ) {
+        return false;
+    }
+
+    auto changed =
+        updatedDocument.changedObjectIdentitiesComparedTo(initialDocument);
+    if ( !changed ) return false;
+    std::sort(changed->begin(), changed->end());
+    const std::array<std::string, 4> expected{
+        "added-flick", "flick-root", "note-root", "polyline-root"
+    };
+    return changed->size() == expected.size() &&
+           std::equal(changed->begin(), changed->end(), expected.begin());
 }
 
 /// @brief 校验没有基础快照时拒绝增量和畸形 CBOR。
@@ -505,9 +734,10 @@ bool testLargeSnapshotCompression()
     constexpr std::size_t LARGE_NOTE_COUNT = 20000;
     beatmap->m_noteData.notes.clear();
     for ( std::size_t index = 0; index < LARGE_NOTE_COUNT; ++index ) {
-        auto& note       = beatmap->m_noteData.notes.emplace_back();
-        note.m_timestamp = static_cast<double>(index) * 25.0;
-        note.m_track     = static_cast<int>(index % 6U);
+        auto& note             = beatmap->m_noteData.notes.emplace_back();
+        note.m_timestamp       = static_cast<double>(index) * 25.0;
+        note.m_track           = static_cast<int>(index % 6U);
+        note.m_collaborationId = "large-note-" + std::to_string(index);
     }
     beatmap->sync();
 
@@ -517,20 +747,64 @@ bool testLargeSnapshotCompression()
     }
     auto applied = receiver.apply(snapshot.value());
     if ( !applied.has_value() || !applied->isSnapshot ) return false;
+    constexpr std::size_t INCREMENTAL_EDIT_COUNT = 64;
+    for ( std::size_t index = 0; index < INCREMENTAL_EDIT_COUNT; ++index ) {
+        beatmap->m_noteData.notes[index].m_timestamp += 1.0;
+        auto delta =
+            encoder.encode(*beatmap, BeatmapMutationFlags::Objects, false);
+        if ( !delta.has_value() || delta->size() >= 2048U ||
+             !receiver.apply(delta.value()).has_value() ) {
+            return false;
+        }
+    }
     const auto restored = receiver.materialize();
-    return restored && restored->m_noteData.notes.size() == LARGE_NOTE_COUNT &&
-           restored->m_noteData.notes.back().m_track == 1;
+    if ( !restored || restored->m_noteData.notes.size() != LARGE_NOTE_COUNT ) {
+        return false;
+    }
+    const auto last =
+        std::find_if(restored->m_noteData.notes.begin(),
+                     restored->m_noteData.notes.end(),
+                     [](const MMM::Note& note) {
+                         return note.m_collaborationId == "large-note-19999";
+                     });
+    const auto first =
+        std::find_if(restored->m_noteData.notes.begin(),
+                     restored->m_noteData.notes.end(),
+                     [](const MMM::Note& note) {
+                         return note.m_collaborationId == "large-note-0";
+                     });
+    return last != restored->m_noteData.notes.end() && last->m_track == 1 &&
+           first != restored->m_noteData.notes.end() &&
+           first->m_timestamp == 1.0;
 }
 }  // namespace
 
 int main()
 {
-    return testCompleteSnapshotRoundTrip() &&
-                   testPolylineReferencesPreventDuplicateRootObjects() &&
-                   testStrictCategoryIsolation() &&
-                   testRepeatedBidirectionalObjectRoundTrips() &&
-                   testConcurrentObjectDeltasMerge() && testCategoryDelta() &&
-                   testInvalidPayloads() && testLargeSnapshotCompression()
+    const auto check = [](bool result, std::string_view name) {
+        if ( !result ) XERROR("Beatmap document codec test failed: {}", name);
+        return result;
+    };
+    return check(testCompleteSnapshotRoundTrip(), "complete snapshot") &&
+                   check(testPolylineReferencesPreventDuplicateRootObjects(),
+                         "polyline references") &&
+                   check(testStrictCategoryIsolation(), "category isolation") &&
+                   check(testRepeatedBidirectionalObjectRoundTrips(),
+                         "bidirectional object round trips") &&
+                   check(testConcurrentObjectDeltasMerge(),
+                         "concurrent object deltas") &&
+                   check(testConcurrentSameObjectUsesStableIdentity(),
+                         "same object identity") &&
+                   check(testConcurrentAnnotationDeltasMerge(),
+                         "concurrent annotation deltas") &&
+                   check(testCategoryDelta(), "category delta") &&
+                   check(testChangedObjectIdentitiesComparedToVisibleDocument(),
+                         "changed object identities") &&
+                   check(testPayloadInspectionIsNonMutating(),
+                         "payload inspection") &&
+                   check(testInvalidPayloads(), "invalid payloads") &&
+                   check(testLargeSnapshotCompression(),
+                         "large snapshot compression")
                ? 0
                : 1;
 }

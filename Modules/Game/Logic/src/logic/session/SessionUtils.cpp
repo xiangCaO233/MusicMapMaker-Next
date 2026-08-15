@@ -18,6 +18,402 @@
 namespace MMM::Logic::SessionUtils
 {
 
+namespace
+{
+/// @brief 单个顶层音符对状态栏统计的贡献。
+struct NoteStatisticsContribution {
+    /// @brief 可计数物件数量。
+    std::size_t noteCount{ 0U };
+    /// @brief 最大连击数量。
+    std::size_t maxCombo{ 0U };
+};
+
+/// @brief 计算 Hold 区间内的四分之一拍连击增量。
+std::size_t calculateIntervalCombos(double startTime, double endTime,
+                                    const ::MMM::BeatMap* beatmap)
+{
+    if ( !beatmap || endTime <= startTime ) return 0U;
+
+    double      totalQuarterBeats = 0.0;
+    double      currentTime       = startTime;
+    double      currentBpm        = beatmap->m_baseMapMetadata.preference_bpm;
+    std::size_t nextTimingIndex   = 0U;
+    if ( currentBpm <= 0.0 ) currentBpm = 120.0;
+
+    for ( std::size_t index = 0U; index < beatmap->m_timings.size(); ++index ) {
+        const auto& timing = beatmap->m_timings[index];
+        if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) continue;
+        if ( timing.m_timestamp <= startTime ) {
+            currentBpm = timing.m_bpm;
+        } else {
+            nextTimingIndex = index;
+            break;
+        }
+    }
+
+    while ( currentTime < endTime ) {
+        double      nextEventTime = endTime;
+        double      nextBpm       = currentBpm;
+        std::size_t foundIndex    = beatmap->m_timings.size();
+        for ( std::size_t index = nextTimingIndex;
+              index < beatmap->m_timings.size();
+              ++index ) {
+            const auto& timing = beatmap->m_timings[index];
+            if ( timing.m_timingEffect == ::MMM::TimingEffect::BPM &&
+                 timing.m_timestamp > currentTime ) {
+                if ( timing.m_timestamp < endTime ) {
+                    nextEventTime = timing.m_timestamp;
+                    nextBpm       = timing.m_bpm;
+                    foundIndex    = index + 1U;
+                }
+                break;
+            }
+        }
+        totalQuarterBeats +=
+            (nextEventTime - currentTime) * (currentBpm / 15.0);
+        currentTime = nextEventTime;
+        currentBpm  = nextBpm;
+        if ( foundIndex < beatmap->m_timings.size() ) {
+            nextTimingIndex = foundIndex;
+        }
+    }
+
+    const double tolerance = 0.003 * (currentBpm / 15.0);
+    return static_cast<std::size_t>(std::floor(totalQuarterBeats + tolerance));
+}
+
+/// @brief 计算单个音符组件对状态栏统计的贡献。
+NoteStatisticsContribution calculateNoteStatistics(
+    const NoteComponent& note, const ::MMM::BeatMap* beatmap)
+{
+    NoteStatisticsContribution result;
+    if ( note.m_isDraft || note.m_isSubNote ) return result;
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            if ( sub.type == ::MMM::NoteType::NOTE ||
+                 sub.type == ::MMM::NoteType::HOLD ||
+                 sub.type == ::MMM::NoteType::FLICK ) {
+                ++result.noteCount;
+            }
+        }
+    } else if ( note.m_type == ::MMM::NoteType::NOTE ||
+                note.m_type == ::MMM::NoteType::HOLD ||
+                note.m_type == ::MMM::NoteType::FLICK ) {
+        ++result.noteCount;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::NOTE ||
+         note.m_type == ::MMM::NoteType::FLICK ) {
+        ++result.maxCombo;
+    } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        ++result.maxCombo;
+        result.maxCombo += calculateIntervalCombos(
+            note.m_timestamp, note.m_timestamp + note.m_duration, beatmap);
+    } else if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                !note.m_subNotes.empty() ) {
+        ++result.maxCombo;
+        if ( note.m_subNotes.front().type == ::MMM::NoteType::HOLD ) {
+            const auto& first = note.m_subNotes.front();
+            result.maxCombo += calculateIntervalCombos(
+                first.timestamp, first.timestamp + first.duration, beatmap);
+        }
+        for ( std::size_t index = 1U; index < note.m_subNotes.size();
+              ++index ) {
+            const auto& sub = note.m_subNotes[index];
+            if ( sub.type == ::MMM::NoteType::FLICK ) {
+                ++result.maxCombo;
+            } else if ( sub.type == ::MMM::NoteType::HOLD ) {
+                result.maxCombo += calculateIntervalCombos(
+                    sub.timestamp, sub.timestamp + sub.duration, beatmap);
+            }
+        }
+    }
+    return result;
+}
+
+/// @brief 将单个顶层音符的可计数时间追加到输出缓存。
+void appendDensityTimes(const NoteComponent& note, std::vector<double>& output)
+{
+    if ( note.m_isDraft || note.m_isSubNote ) return;
+    const auto append = [&output](::MMM::NoteType type, double timestamp) {
+        if ( (type == ::MMM::NoteType::NOTE || type == ::MMM::NoteType::HOLD ||
+              type == ::MMM::NoteType::FLICK) &&
+             std::isfinite(timestamp) && timestamp >= 0.0 ) {
+            output.push_back(timestamp);
+        }
+    };
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            append(sub.type, sub.timestamp);
+        }
+    } else {
+        append(note.m_type, note.m_timestamp);
+    }
+}
+
+/// @brief 计算音符用于可见性前缀的结束时间。
+double noteEndTime(const NoteComponent& note)
+{
+    double result = note.m_timestamp + std::max(0.0, note.m_duration);
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            result =
+                std::max(result, sub.timestamp + std::max(0.0, sub.duration));
+        }
+    }
+    return result;
+}
+
+/// @brief 判断两个可选采样绑定是否相同。
+bool sameSampleBinding(const std::optional<::MMM::AudioSampleBinding>& lhs,
+                       const std::optional<::MMM::AudioSampleBinding>& rhs)
+{
+    if ( lhs.has_value() != rhs.has_value() ) return false;
+    return !lhs || (lhs->m_audioResourceId == rhs->m_audioResourceId &&
+                    lhs->m_volume == rhs->m_volume);
+}
+
+/// @brief 将单个正式顶层音符转换为打击事件。
+void appendHitEvents(const NoteComponent&                        note,
+                     std::vector<System::HitFXSystem::HitEvent>& output)
+{
+    using HitEvent = System::HitFXSystem::HitEvent;
+    using HitRole  = HitEvent::Role;
+    if ( note.m_isDraft || note.m_isSubNote ) return;
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( std::size_t index = 0U; index < note.m_subNotes.size();
+              ++index ) {
+            const auto& sub = note.m_subNotes[index];
+            HitRole   role = index == 0U ? HitRole::Head
+                                         : (index + 1U == note.m_subNotes.size()
+                                                ? HitRole::Tail
+                                                : HitRole::Internal);
+            const int span = sub.type == ::MMM::NoteType::FLICK
+                                 ? std::abs(sub.dtrack) + 1
+                                 : 1;
+            auto      binding = sub.sampleBinding;
+            if ( !binding && role == HitRole::Head ) {
+                binding = note.m_sampleBinding;
+            }
+            output.push_back({ sub.timestamp,
+                               sub.type,
+                               role,
+                               span,
+                               sub.trackIndex,
+                               sub.dtrack,
+                               sub.duration,
+                               true,
+                               std::move(binding) });
+        }
+        return;
+    }
+
+    const int span =
+        note.m_type == ::MMM::NoteType::FLICK ? std::abs(note.m_dtrack) + 1 : 1;
+    output.push_back({ note.m_timestamp,
+                       note.m_type,
+                       HitRole::None,
+                       span,
+                       note.m_trackIndex,
+                       note.m_dtrack,
+                       note.m_duration,
+                       false,
+                       note.m_sampleBinding });
+}
+
+/// @brief 判断两个打击事件是否来自同一个音符状态。
+bool sameHitEvent(const System::HitFXSystem::HitEvent& lhs,
+                  const System::HitFXSystem::HitEvent& rhs)
+{
+    return lhs.timestamp == rhs.timestamp && lhs.type == rhs.type &&
+           lhs.role == rhs.role && lhs.trackSpan == rhs.trackSpan &&
+           lhs.trackIndex == rhs.trackIndex &&
+           lhs.trackOffset == rhs.trackOffset && lhs.duration == rhs.duration &&
+           lhs.isSubNote == rhs.isSubNote &&
+           sameSampleBinding(lhs.sampleBinding, rhs.sampleBinding);
+}
+}  // namespace
+
+bool applyNoteCacheMutationsIncrementally(
+    SessionContext& ctx, std::span<const NoteCacheMutationView> mutations)
+{
+    if ( mutations.empty() ) return true;
+    if ( ctx.isNoteOrderDirty || ctx.isNotePruneDirty || ctx.isNoteStatsDirty ||
+         ctx.sortedNoteEntities.size() != ctx.sortedNoteMaxEndPrefix.size() ) {
+        return false;
+    }
+
+    std::unordered_set<entt::entity>           affectedEntities;
+    std::vector<entt::entity>                  replacementEntities;
+    std::vector<double>                        removedDensityTimes;
+    std::vector<double>                        addedDensityTimes;
+    std::vector<System::HitFXSystem::HitEvent> removedHitEvents;
+    std::vector<System::HitFXSystem::HitEvent> addedHitEvents;
+    NoteStatisticsContribution                 beforeStatistics;
+    NoteStatisticsContribution                 afterStatistics;
+    double earliestTimestamp = std::numeric_limits<double>::infinity();
+    bool   touchesFormalNote = false;
+
+    affectedEntities.reserve(mutations.size());
+    replacementEntities.reserve(mutations.size());
+    for ( const auto& mutation : mutations ) {
+        if ( mutation.entity == entt::null ||
+             !affectedEntities.insert(mutation.entity).second ) {
+            return false;
+        }
+        if ( mutation.before ) {
+            earliestTimestamp =
+                std::min(earliestTimestamp, mutation.before->m_timestamp);
+            const auto contribution = calculateNoteStatistics(
+                *mutation.before, ctx.currentBeatmap.get());
+            beforeStatistics.noteCount += contribution.noteCount;
+            beforeStatistics.maxCombo += contribution.maxCombo;
+            appendDensityTimes(*mutation.before, removedDensityTimes);
+            if ( !mutation.before->m_isDraft &&
+                 !mutation.before->m_isSubNote ) {
+                touchesFormalNote = true;
+                if ( !ctx.isHitEventsDirty ) {
+                    appendHitEvents(*mutation.before, removedHitEvents);
+                }
+            }
+        }
+        if ( mutation.after ) {
+            if ( !ctx.noteRegistry.valid(mutation.entity) ||
+                 !ctx.noteRegistry.all_of<NoteComponent>(mutation.entity) ) {
+                return false;
+            }
+            replacementEntities.push_back(mutation.entity);
+            earliestTimestamp =
+                std::min(earliestTimestamp, mutation.after->m_timestamp);
+            const auto contribution = calculateNoteStatistics(
+                *mutation.after, ctx.currentBeatmap.get());
+            afterStatistics.noteCount += contribution.noteCount;
+            afterStatistics.maxCombo += contribution.maxCombo;
+            appendDensityTimes(*mutation.after, addedDensityTimes);
+            if ( !mutation.after->m_isDraft && !mutation.after->m_isSubNote ) {
+                touchesFormalNote = true;
+                if ( !ctx.isHitEventsDirty ) {
+                    appendHitEvents(*mutation.after, addedHitEvents);
+                }
+            }
+        }
+    }
+
+    for ( const auto& mutation : mutations ) {
+        if ( mutation.before &&
+             std::find(ctx.sortedNoteEntities.begin(),
+                       ctx.sortedNoteEntities.end(),
+                       mutation.entity) == ctx.sortedNoteEntities.end() ) {
+            return false;
+        }
+    }
+
+    std::erase_if(ctx.sortedNoteEntities, [&](entt::entity entity) {
+        return affectedEntities.contains(entity);
+    });
+    const auto entityLess = [&ctx](entt::entity lhs, entt::entity rhs) {
+        return ctx.noteRegistry.get<const NoteComponent>(lhs).m_timestamp <
+               ctx.noteRegistry.get<const NoteComponent>(rhs).m_timestamp;
+    };
+    std::sort(
+        replacementEntities.begin(), replacementEntities.end(), entityLess);
+    std::vector<entt::entity> mergedEntities;
+    mergedEntities.reserve(ctx.sortedNoteEntities.size() +
+                           replacementEntities.size());
+    std::merge(ctx.sortedNoteEntities.begin(),
+               ctx.sortedNoteEntities.end(),
+               replacementEntities.begin(),
+               replacementEntities.end(),
+               std::back_inserter(mergedEntities),
+               entityLess);
+    ctx.sortedNoteEntities.swap(mergedEntities);
+
+    const auto prefixBegin = std::lower_bound(
+        ctx.sortedNoteEntities.begin(),
+        ctx.sortedNoteEntities.end(),
+        earliestTimestamp,
+        [&ctx](entt::entity entity, double timestamp) {
+            return ctx.noteRegistry.get<const NoteComponent>(entity)
+                       .m_timestamp < timestamp;
+        });
+    const auto prefixIndex = static_cast<std::size_t>(
+        std::distance(ctx.sortedNoteEntities.begin(), prefixBegin));
+    ctx.sortedNoteMaxEndPrefix.resize(ctx.sortedNoteEntities.size());
+    double maximumEnd =
+        prefixIndex == 0U ? 0.0 : ctx.sortedNoteMaxEndPrefix[prefixIndex - 1U];
+    for ( std::size_t index = prefixIndex;
+          index < ctx.sortedNoteEntities.size();
+          ++index ) {
+        const auto entity = ctx.sortedNoteEntities[index];
+        maximumEnd        = std::max(
+            maximumEnd,
+            noteEndTime(ctx.noteRegistry.get<const NoteComponent>(entity)));
+        ctx.sortedNoteMaxEndPrefix[index] = maximumEnd;
+    }
+
+    ctx.noteCount = ctx.noteCount >= beforeStatistics.noteCount
+                        ? ctx.noteCount - beforeStatistics.noteCount
+                        : 0U;
+    ctx.maxCombo  = ctx.maxCombo >= beforeStatistics.maxCombo
+                        ? ctx.maxCombo - beforeStatistics.maxCombo
+                        : 0U;
+    ctx.noteCount += afterStatistics.noteCount;
+    ctx.maxCombo += afterStatistics.maxCombo;
+
+    for ( const double timestamp : removedDensityTimes ) {
+        const auto found =
+            std::lower_bound(ctx.previewDensityObjectTimes.begin(),
+                             ctx.previewDensityObjectTimes.end(),
+                             timestamp);
+        if ( found == ctx.previewDensityObjectTimes.end() ||
+             *found != timestamp ) {
+            return false;
+        }
+        ctx.previewDensityObjectTimes.erase(found);
+    }
+    for ( const double timestamp : addedDensityTimes ) {
+        const auto insertion =
+            std::upper_bound(ctx.previewDensityObjectTimes.begin(),
+                             ctx.previewDensityObjectTimes.end(),
+                             timestamp);
+        ctx.previewDensityObjectTimes.insert(insertion, timestamp);
+    }
+    ctx.isPreviewDensityDirty =
+        !removedDensityTimes.empty() || !addedDensityTimes.empty();
+
+    if ( touchesFormalNote && !ctx.isHitEventsDirty ) {
+        for ( const auto& event : removedHitEvents ) {
+            const auto range = std::equal_range(
+                ctx.hitEvents.begin(), ctx.hitEvents.end(), event);
+            const auto found = std::find_if(
+                range.first, range.second, [&](const auto& current) {
+                    return sameHitEvent(current, event);
+                });
+            if ( found == range.second ) {
+                ctx.isHitEventsDirty = true;
+                break;
+            }
+            ctx.hitEvents.erase(found);
+        }
+        if ( !ctx.isHitEventsDirty ) {
+            for ( auto& event : addedHitEvents ) {
+                const auto insertion = std::upper_bound(
+                    ctx.hitEvents.begin(), ctx.hitEvents.end(), event);
+                ctx.hitEvents.insert(insertion, std::move(event));
+            }
+            syncHitIndex(ctx);
+        }
+    }
+
+    ++ctx.noteVisibilityIndexRevision;
+    ctx.isNoteOrderDirty = false;
+    ctx.isNotePruneDirty = false;
+    ctx.isNoteStatsDirty = false;
+    return true;
+}
+
 bool isNoteEditable(const NoteComponent&          note,
                     const Config::EditorSettings& settings)
 {
@@ -86,8 +482,14 @@ int calculateBeatIndex(double                                       time,
         }
         if ( time >= nextBpmTime ) {
             const double beatDuration = 60.0 / bpm;
-            totalBeats += static_cast<int64_t>(std::round(
-                (nextBpmTime - currentBpm->m_timestamp) / beatDuration));
+            const double segmentDuration =
+                nextBpmTime - currentBpm->m_timestamp;
+            auto beatsInBpm = static_cast<int64_t>(
+                std::ceil(segmentDuration / beatDuration - 1e-6));
+            if ( segmentDuration > 0.0 ) {
+                beatsInBpm = std::max<int64_t>(beatsInBpm, 1);
+            }
+            totalBeats += beatsInBpm;
             continue;
         }
         break;
@@ -524,7 +926,7 @@ void rebuildHitEvents(SessionContext& ctx)
 
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
-        if ( note.m_isSubNote ) continue;
+        if ( note.m_isSubNote || note.m_isDraft ) continue;
 
         double noteEndTime = note.m_timestamp + note.m_duration;
         if ( noteEndTime > maxEndTime ) {

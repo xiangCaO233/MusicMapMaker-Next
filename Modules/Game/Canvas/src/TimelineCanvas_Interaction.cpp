@@ -6,6 +6,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
+#include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/ClipboardBridge.h"
@@ -968,10 +969,13 @@ void TimelineCanvas::commitTimingEraseTargets()
 /// @param cut 是否在复制后删除原 Timing。
 void TimelineCanvas::copySelectedTimingEvents(bool cut)
 {
+    auto activeSession = Logic::EditorEngine::instance().getActiveSession();
+    const auto* clipboardContext =
+        activeSession ? &activeSession->getContext() : nullptr;
     m_timingClipboard.clear();
     if ( m_selectedTimingEntities.empty() ) {
         Logic::EditorEngine::instance().setTimelineClipboard(
-            {}, nullptr, false);
+            {}, clipboardContext, false);
         return;
     }
 
@@ -984,7 +988,7 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
     }
     if ( selectedTargets.empty() ) {
         Logic::EditorEngine::instance().setTimelineClipboard(
-            {}, nullptr, false);
+            {}, clipboardContext, false);
         return;
     }
 
@@ -1027,7 +1031,7 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         sharedClipboard.push_back(std::move(sharedEntry));
     }
     Logic::EditorEngine::instance().setTimelineClipboard(
-        std::move(sharedClipboard), nullptr, false);
+        std::move(sharedClipboard), clipboardContext, false);
 
     if ( cut ) {
         deleteSelectedTimingEvents();
@@ -1038,8 +1042,11 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
 /// @param anchorTime 粘贴锚点时间，单位秒。
 void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 {
+    auto activeSession = Logic::EditorEngine::instance().getActiveSession();
+    const auto* clipboardContext =
+        activeSession ? &activeSession->getContext() : nullptr;
     auto timingClipboard =
-        Logic::EditorEngine::instance().getTimelineClipboard();
+        Logic::EditorEngine::instance().getTimelineClipboard(clipboardContext);
     if ( timingClipboard.empty() ) {
         return;
     }

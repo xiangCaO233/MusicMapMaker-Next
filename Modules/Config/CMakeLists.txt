@@ -89,6 +89,18 @@ mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
 target_link_libraries(SfxConfigTest PRIVATE Config Log)
 add_test(NAME SfxConfigTest COMMAND SfxConfigTest)
 
+# 协作服务器设置测试覆盖端点持久化、旧配置默认值和非法字段回退。
+mmm_add_test_executable(Config CollaborationServerSettingsTest
+                        tests/CollaborationServerSettingsTest.cpp)
+target_link_libraries(CollaborationServerSettingsTest PRIVATE Config Log)
+add_test(NAME CollaborationServerSettingsTest
+         COMMAND CollaborationServerSettingsTest)
+
+# 自动保存配置测试覆盖定时单位、范围约束、事件开关和旧配置默认值。
+mmm_add_test_executable(Config AutoSaveConfigTest tests/AutoSaveConfigTest.cpp)
+target_link_libraries(AutoSaveConfigTest PRIVATE Config Log)
+add_test(NAME AutoSaveConfigTest COMMAND AutoSaveConfigTest)
+
 # 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
 mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)
@@ -111,3 +123,14 @@ add_test(
   NAME TranslationResourceMigrationTest
   COMMAND TranslationResourceMigrationTest
           "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
+
+# 默认中英文翻译键必须一一对应，避免界面直接回显未翻译的键名。
+mmm_add_test_executable(Config DefaultTranslationParityTest
+                        tests/DefaultTranslationParityTest.cpp)
+target_link_libraries(DefaultTranslationParityTest PRIVATE Config Log)
+add_test(
+  NAME DefaultTranslationParityTest
+  COMMAND
+    DefaultTranslationParityTest
+    "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
+    "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")

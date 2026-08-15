@@ -64,6 +64,7 @@ constexpr const char* ICON_MMM_PASTE = "\xef\x83\xaa";  ///< \uf0ea paste
 constexpr const char* ICON_MMM_MIRROR = "\xef\x81\xbe";  ///< \uf07e arrows-h
 constexpr const char* ICON_MMM_SELECT_ALL =
     "\xef\x89\x87";  ///< \uf247 object-group
+constexpr const char* ICON_MMM_COMMENT = "\xef\x81\xb5";  ///< \uf075 comment
 
 constexpr const char* ICON_MMM_ARROWS_UP_DOWN =
     "\xef\x81\xbd";  ///< \uf07d arrows-up-down

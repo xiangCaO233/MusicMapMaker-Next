@@ -93,13 +93,6 @@ if(PROJECT_LINKAGE STREQUAL "shared" AND NOT MSVC)
 endif()
 
 if(MSVC)
-  # MSVC 构建需要 VCPKG_ROOT，用于查找部分系统级预构建依赖。
-  if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
-    message(
-      FATAL_ERROR
-        "VCPKG_ROOT environment variable is required when building with MSVC.")
-  endif()
-  file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
   if(PROJECT_LINKAGE STREQUAL "shared")
     # 动态链接偏好使用 /MD 或 /MDd，避免把 MSVCRT 静态并入本体。
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")

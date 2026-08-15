@@ -103,37 +103,6 @@ inline json parseMalodyJsonOrString(const std::string& text)
     return text;
 }
 
-/// @brief 将 Malody beat 数组转换为小数拍号。
-/// @param beatArray Malody beat 数组。
-/// @return 成功时返回小数拍号，否则返回空。
-inline std::optional<double> malodyBeatArrayToDouble(const json& beatArray)
-{
-    if ( !beatArray.is_array() || beatArray.size() < 3 ||
-         !beatArray[0].is_number() || !beatArray[1].is_number() ||
-         !beatArray[2].is_number() ) {
-        return std::nullopt;
-    }
-
-    const double denominator = beatArray[2].get<double>();
-    if ( std::abs(denominator) < std::numeric_limits<double>::epsilon() ) {
-        return std::nullopt;
-    }
-    return beatArray[0].get<double>() +
-           beatArray[1].get<double>() / denominator;
-}
-
-/// @brief 无异常解析并校验 Malody beat 数组。
-/// @param text 元数据文本。
-/// @return 成功时返回合法 beat 数组，否则返回空。
-inline std::optional<json> parseMalodyBeatJsonValue(const std::string& text)
-{
-    auto parsed = parseMalodyJsonValue(text);
-    if ( !parsed || !malodyBeatArrayToDouble(*parsed) ) {
-        return std::nullopt;
-    }
-    return parsed;
-}
-
 /// @brief 判断当前导出器是否支持指定 Malody mode。
 /// @param mode Malody 模式编号。
 /// @return 支持 key(0) 或 slide(7) 时返回 true。
@@ -153,33 +122,40 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    int defaultXW =
-        (trackCount == 4)
-            ? 64
-            : (trackCount == 5
-                   ? 51
-                   : (trackCount == 6
-                          ? 43
-                          : static_cast<int>(std::round(256.0 / trackCount))));
-    int defaultWW =
-        (trackCount == 4)
-            ? 60
-            : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : defaultXW));
+    const double defaultXW     = trackCount == 4   ? 64.0
+                                 : trackCount == 5 ? 51.0
+                                 : trackCount == 6 ? 43.0
+                                 : trackCount == 7
+                                     ? 36.5
+                                     : 256.0 / static_cast<double>(trackCount);
+    const int    defaultWW     = trackCount == 4   ? 60
+                                 : trackCount == 5 ? 50
+                                 : trackCount == 6 ? 40
+                                 : trackCount == 7 ? 30
+                                 : trackCount == 8
+                                     ? 20
+                                     : static_cast<int>(std::round(defaultXW));
+    const int defaultLongNoteW = trackCount == 7 || trackCount == 8
+                                     ? defaultWW
+                                     : static_cast<int>(std::round(defaultXW));
+    const int defaultFlickW    = trackCount == 7   ? 30
+                                 : trackCount == 8 ? 20
+                                                   : defaultWW;
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {
-        int x_w    = defaultXW;
-        int center = 0;
+        double center = 0.0;
         if ( trackCount == 4 )
-            center = 31;
+            center = 31.0;
         else if ( trackCount == 5 )
-            center = 25;
+            center = 25.0;
         else if ( trackCount == 6 )
-            center = 21;
+            center = 21.0;
         else
-            center = x_w / 2;
+            center = defaultXW / 2.0;
 
-        return column * x_w + center;
+        return static_cast<int>(
+            std::round(static_cast<double>(column) * defaultXW + center));
     };
 
     // 谱面基础元数据
@@ -256,6 +232,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     const std::string songFileValue =
         hasExplicitSongFileHint ? Config::pathToUtf8(songFileHint)
                                 : Config::pathToUtf8(songFileHint.filename());
+    const std::string songFileNameValue =
+        Config::pathToUtf8(Config::utf8ToPath(songFileValue).filename());
     song["file"] = songFileValue;
     song["bpm"]  = beatMap.m_baseMapMetadata.preference_bpm;
 
@@ -325,24 +303,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                                      : std::nullopt;
     };
 
-    /// @brief 从 Timing 的 Malody 元数据恢复原始拍号。
-    /// @param timing 待读取的 Timing。
-    /// @return 元数据含合法 beat 数组时返回绝对拍数。
-    auto getMalodyTimingBeat =
-        [](const Timing& timing) -> std::optional<double> {
-        const auto source = timing.m_metadata.timing_properties.find(
-            TimingMetadataType::MALODY);
-        if ( source == timing.m_metadata.timing_properties.end() ) {
-            return std::nullopt;
-        }
-        const auto beat = source->second.find("beat");
-        if ( beat == source->second.end() ) {
-            return std::nullopt;
-        }
-        const auto beatJson = parseMalodyJsonValue(beat->second);
-        return beatJson ? malodyBeatArrayToDouble(*beatJson) : std::nullopt;
-    };
-
     std::vector<const Timing*> bpmTimings;
     bpmTimings.reserve(beatMap.m_timings.size());
     for ( const auto& timing : beatMap.m_timings ) {
@@ -356,6 +316,192 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                          return lhs->m_timestamp < rhs->m_timestamp;
                      });
 
+    /// @brief 判断采样是否对应 Malody 的主音频提示。
+    /// @param sample 待判断的自动采样。
+    /// @return 资源标识或文件名与 meta.song.file 一致时返回 true。
+    auto isMainSongSample = [&](const AudioSampleEvent& sample) {
+        if ( songFileValue.empty() ) return false;
+        if ( sample.m_audioResourceId == songFileValue ) return true;
+        if ( songFileNameValue.empty() ) return false;
+        const std::string sampleFileName = Config::pathToUtf8(
+            Config::utf8ToPath(sample.m_audioResourceId).filename());
+        return sampleFileName == songFileNameValue;
+    };
+
+    /// @brief 非 Malody 来源首次投影到 Malody 时使用的拍轴原点。
+    const Timing* generatedFirstBpmOrigin = nullptr;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const auto    source   = firstBpm.m_metadata.timing_properties.find(
+            TimingMetadataType::MALODY);
+        if ( source == firstBpm.m_metadata.timing_properties.end() ||
+             (!source->second.contains("beat") &&
+              !source->second.contains("delay")) ) {
+            generatedFirstBpmOrigin = &firstBpm;
+        }
+    }
+
+    /// @brief 需要与首红线共同编码歌曲相位的主音频采样。
+    const AudioSampleEvent* wrappedMainSample = nullptr;
+    /// @brief 当前配对采样是否来自旧版 MMM 的锚点加整数 offset 形态。
+    bool wrappedMainSampleUsesLegacyShape = false;
+    /// @brief 音频零点减首红线时间按首拍长回卷后的非负 Malody 值。
+    double wrappedMainOffsetMs = 0.0;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const double  firstBpmValue =
+            firstBpm.m_bpm > 0.0 ? firstBpm.m_bpm : 120.0;
+        const double firstBeatLength = 60000.0 / firstBpmValue;
+        const auto   originalFirstDelay =
+            getMalodyTimingNumber(firstBpm, "delay");
+
+        for ( const auto& sample : beatMap.m_audioSamples ) {
+            const double effectiveTimestamp = sample.effectiveTimestamp();
+            if ( !isMainSongSample(sample) ) {
+                continue;
+            }
+
+            // 新规范形态必须精确位于时间零点。旧版 Loader 曾保存为
+            // “首 Timing 锚点 + 回卷后的整数 offset”，只对该可识别形态
+            // 保留 0.51 ms 的整数化兼容窗口，避免吞掉用户的细微移动。
+            const bool normalizedShape =
+                std::abs(sample.m_timestamp) <= 1e-6 && sample.m_offsetMs == 0;
+            bool legacyShape = false;
+            if ( !normalizedShape && originalFirstDelay &&
+                 *originalFirstDelay > firstBeatLength * 0.5 &&
+                 *originalFirstDelay <= firstBeatLength + 1e-6 &&
+                 std::abs(sample.m_timestamp - firstBpm.m_timestamp) <= 1e-6 ) {
+                double originalTimingPhase =
+                    std::fmod(-*originalFirstDelay, firstBeatLength);
+                if ( originalTimingPhase < 0.0 ) {
+                    originalTimingPhase += firstBeatLength;
+                }
+                if ( std::abs(originalTimingPhase) <= 1e-6 ||
+                     std::abs(originalTimingPhase - firstBeatLength) <= 1e-6 ) {
+                    originalTimingPhase = 0.0;
+                }
+                const double legacyWholeBeat =
+                    std::round((firstBpm.m_timestamp - originalTimingPhase) /
+                               firstBeatLength);
+                const bool legacyEffectiveTimeMatches =
+                    std::abs(effectiveTimestamp -
+                             legacyWholeBeat * firstBeatLength) <= 0.51;
+                const std::int64_t roundedDelay = static_cast<std::int64_t>(
+                    std::llround(*originalFirstDelay));
+                for ( std::int64_t delta = -1; delta <= 1; ++delta ) {
+                    const std::int64_t sourceOffset = roundedDelay + delta;
+                    if ( static_cast<double>(sourceOffset) <=
+                             firstBeatLength * 0.5 ||
+                         std::abs(static_cast<double>(sourceOffset) -
+                                  *originalFirstDelay) > 0.51 ) {
+                        continue;
+                    }
+                    const auto legacyOffset = static_cast<std::int64_t>(
+                        std::llround(static_cast<double>(sourceOffset) -
+                                     firstBeatLength));
+                    if ( legacyEffectiveTimeMatches &&
+                         sample.m_offsetMs == legacyOffset ) {
+                        legacyShape = true;
+                        break;
+                    }
+                }
+            }
+            if ( !normalizedShape && !legacyShape ) {
+                continue;
+            }
+
+            const bool currentIsNormalized = wrappedMainSample != nullptr &&
+                                             !wrappedMainSampleUsesLegacyShape;
+            const bool sameShapeKind = wrappedMainSample != nullptr &&
+                                       normalizedShape == currentIsNormalized;
+            if ( wrappedMainSample == nullptr ||
+                 (normalizedShape && !currentIsNormalized) ||
+                 (sameShapeKind &&
+                  std::abs(effectiveTimestamp) <
+                      std::abs(wrappedMainSample->effectiveTimestamp())) ) {
+                wrappedMainSample                = &sample;
+                wrappedMainSampleUsesLegacyShape = legacyShape;
+            }
+        }
+
+        if ( wrappedMainSample != nullptr && firstBeatLength > 0.0 ) {
+            const double signedOffset =
+                wrappedMainSample->effectiveTimestamp() - firstBpm.m_timestamp;
+            wrappedMainOffsetMs = std::fmod(signedOffset, firstBeatLength);
+            if ( wrappedMainOffsetMs < 0.0 ) {
+                wrappedMainOffsetMs += firstBeatLength;
+            }
+            if ( std::abs(wrappedMainOffsetMs) <= 1e-6 ||
+                 std::abs(wrappedMainOffsetMs - firstBeatLength) <= 1e-6 ) {
+                wrappedMainOffsetMs = 0.0;
+            }
+        }
+    }
+
+    /// @brief 首个 BPM 在 Malody 拍轴上的规范化拍号。
+    double firstBpmOriginBeat = 0.0;
+    /// @brief 首 BPM 的非负回卷 delay。
+    double firstBpmDelayMs = 0.0;
+    /// @brief 正相位回卷时 note[] 内容在 Malody 拍轴上的整拍补偿。
+    int malodyNoteBeatShift = 0;
+    if ( !bpmTimings.empty() ) {
+        const Timing& firstBpm = *bpmTimings.front();
+        const double  firstBpmValue =
+            firstBpm.m_bpm > 0.0 ? firstBpm.m_bpm : 120.0;
+        const double firstBeatLength = 60000.0 / firstBpmValue;
+
+        if ( wrappedMainSample != nullptr ) {
+            firstBpmDelayMs = wrappedMainOffsetMs;
+            if ( const auto originalDelay =
+                     getMalodyTimingNumber(firstBpm, "delay");
+                 originalDelay && *originalDelay >= -1e-6 ) {
+                double originalPhase =
+                    std::fmod(*originalDelay, firstBeatLength);
+                if ( originalPhase < 0.0 ) {
+                    originalPhase += firstBeatLength;
+                }
+                const double phaseDifference =
+                    std::abs(originalPhase - wrappedMainOffsetMs);
+                const double circularPhaseDifference = std::min(
+                    phaseDifference, firstBeatLength - phaseDifference);
+                const double phaseTolerance =
+                    wrappedMainSampleUsesLegacyShape ? 0.51 : 1e-6;
+                if ( circularPhaseDifference <= phaseTolerance ) {
+                    firstBpmDelayMs = *originalDelay;
+                }
+            }
+            double timingPhase = std::fmod(-firstBpmDelayMs, firstBeatLength);
+            if ( timingPhase < 0.0 ) {
+                timingPhase += firstBeatLength;
+            }
+            if ( std::abs(timingPhase) <= 1e-6 ||
+                 std::abs(timingPhase - firstBeatLength) <= 1e-6 ) {
+                timingPhase = 0.0;
+            }
+            // delay 只保存一拍内相位，整拍移动由首 timing 与主 SOUND
+            // 共同使用的 beat 承担，确保编辑后仍可无损导回 MMM。
+            firstBpmOriginBeat = std::round(
+                (firstBpm.m_timestamp - timingPhase) / firstBeatLength);
+            const double exportedFirstTimingTimestamp =
+                firstBpmOriginBeat * firstBeatLength + timingPhase;
+            if ( exportedFirstTimingTimestamp > 1e-6 && timingPhase > 1e-6 ) {
+                malodyNoteBeatShift = 1;
+            }
+        } else {
+            double wholeBeat =
+                std::floor(firstBpm.m_timestamp / firstBeatLength);
+            double delayMs = firstBpm.m_timestamp - wholeBeat * firstBeatLength;
+            if ( std::abs(delayMs) <= 1e-6 ) {
+                delayMs = 0.0;
+            } else if ( std::abs(delayMs - firstBeatLength) <= 1e-6 ) {
+                wholeBeat += 1.0;
+                delayMs = 0.0;
+            }
+            firstBpmOriginBeat = wholeBeat;
+            firstBpmDelayMs    = delayMs;
+        }
+    }
+
     /// @brief 按 Malody 的逐 Timing delay 锚点将毫秒时间转换为拍号。
     /// @param time 待转换的绝对时间，单位为毫秒。
     /// @return Malody beat 三元数组。
@@ -366,18 +512,24 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         double lastTime   = 0;
         double lastBeat   = 0;
 
+        if ( !bpmTimings.empty() ) {
+            const Timing& firstBpm = *bpmTimings.front();
+            lastTime               = firstBpm.m_timestamp;
+            lastBeat               = firstBpmOriginBeat;
+            if ( firstBpm.m_bpm > 0.0 ) {
+                currentBpm = firstBpm.m_bpm;
+            }
+        }
+
         for ( const Timing* timing : bpmTimings ) {
             const Timing& t = *timing;
+            if ( timing == bpmTimings.front() ) continue;
             if ( t.m_timestamp > time + 1e-4 ) break;
 
-            if ( const auto originalBeat = getMalodyTimingBeat(t) ) {
-                lastBeat = *originalBeat;
-            } else {
-                const double delayMs =
-                    getMalodyTimingNumber(t, "delay").value_or(0.0);
-                lastBeat += (t.m_timestamp - delayMs - lastTime) /
-                            (60000.0 / currentBpm);
-            }
+            const double delayMs =
+                getMalodyTimingNumber(t, "delay").value_or(0.0);
+            lastBeat +=
+                (t.m_timestamp - delayMs - lastTime) / (60000.0 / currentBpm);
             lastTime = t.m_timestamp;
             if ( t.m_bpm > 0.0 ) {
                 currentBpm = t.m_bpm;
@@ -410,27 +562,26 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return json::array({ integerBeat, n / gcd, 1920 / gcd });
     };
 
+    /// @brief 将普通 note[] 内容转换到带首拍相位补偿的 Malody 拍轴。
+    /// @param time 物件绝对时间，单位为毫秒。
+    /// @return 已应用整拍补偿的 Malody beat 三元数组。
+    auto timeToMalodyNoteBeat = [&](double time) {
+        json beat = timeToBeat(time);
+        if ( malodyNoteBeatShift != 0 ) {
+            beat[0] = beat[0].get<int>() + malodyNoteBeatShift;
+        }
+        return beat;
+    };
+
     // 计时与效果数据
     json timeArr = json::array();
     for ( const auto& t : beatMap.m_timings ) {
         if ( t.m_timingEffect == TimingEffect::BPM ) {
             json tj;
 
-            bool hasBeat = false;
-            if ( auto it = t.m_metadata.timing_properties.find(
-                     TimingMetadataType::MALODY);
-                 it != t.m_metadata.timing_properties.end() ) {
-                if ( it->second.contains("beat") ) {
-                    if ( auto beatJson =
-                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
-                        tj["beat"] = *beatJson;
-                        hasBeat    = true;
-                    }
-                }
-            }
-            if ( !hasBeat ) {
-                tj["beat"] = timeToBeat(t.m_timestamp);
-            }
+            // beat 必须由当前内部时间线重新计算；导入元数据中的旧拍号
+            // 只用于诊断，不能覆盖用户移动或变速后的实际位置。
+            tj["beat"] = timeToBeat(t.m_timestamp);
 
             tj["bpm"] = t.m_bpm;
 
@@ -439,10 +590,14 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      TimingMetadataType::MALODY);
                  it != t.m_metadata.timing_properties.end() ) {
                 for ( const auto& [key, val] : it->second ) {
-                    if ( key != "bpm" ) {  // 已经有 bpm 了，排除
+                    if ( key != "bpm" && key != "beat" ) {
                         tj[key] = parseMalodyJsonOrString(val);
                     }
                 }
+            }
+            if ( !bpmTimings.empty() && &t == bpmTimings.front() ) {
+                tj["beat"]  = timeToBeat(t.m_timestamp);
+                tj["delay"] = firstBpmDelayMs;
             }
             timeArr.push_back(tj);
         }
@@ -485,21 +640,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( currentScroll != 1.0 ) {
                 json resetEj;
 
-                bool hasBeat = false;
-                if ( auto it = t.m_metadata.timing_properties.find(
-                         TimingMetadataType::MALODY);
-                     it != t.m_metadata.timing_properties.end() ) {
-                    if ( it->second.contains("beat") ) {
-                        if ( auto beatJson = parseMalodyBeatJsonValue(
-                                 it->second.at("beat")) ) {
-                            resetEj["beat"] = *beatJson;
-                            hasBeat         = true;
-                        }
-                    }
-                }
-                if ( !hasBeat ) {
-                    resetEj["beat"] = timeToBeat(t.m_timestamp);
-                }
+                resetEj["beat"]   = timeToBeat(t.m_timestamp);
                 resetEj["scroll"] = 1.0;
                 effectArr.push_back(resetEj);
                 currentScroll = 1.0;
@@ -510,22 +651,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              t.m_timingEffect == TimingEffect::JUMP ||
              t.m_timingEffect == TimingEffect::HS ) {
             json ej;
-
-            bool hasBeat = false;
-            if ( auto it = t.m_metadata.timing_properties.find(
-                     TimingMetadataType::MALODY);
-                 it != t.m_metadata.timing_properties.end() ) {
-                if ( it->second.contains("beat") ) {
-                    if ( auto beatJson =
-                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
-                        ej["beat"] = *beatJson;
-                        hasBeat    = true;
-                    }
-                }
-            }
-            if ( !hasBeat ) {
-                ej["beat"] = timeToBeat(t.m_timestamp);
-            }
+            ej["beat"] = timeToBeat(t.m_timestamp);
 
             if ( t.m_timingEffect == TimingEffect::SCROLL ) {
                 ej["scroll"] = t.m_timingEffectParameter;
@@ -545,7 +671,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  it != t.m_metadata.timing_properties.end() ) {
                 for ( const auto& [key, val] : it->second ) {
                     if ( key != "scroll" && key != "jump" && key != "hs" &&
-                         key != "effect" ) {
+                         key != "effect" && key != "beat" ) {
                         ej[key] = parseMalodyJsonOrString(val);
                     }
                 }
@@ -569,35 +695,17 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return subNotePtrs.count(&note) > 0;
     };
 
-    auto serializeToMalody = [&](const Note& note, bool allowBeatMetadata) {
+    auto serializeToMalody = [&](const Note& note) {
         json nj;
-
-        bool hasBeat = false;
-        if ( allowBeatMetadata ) {
-            if ( auto it = note.m_metadata.note_properties.find(
-                     NoteMetadataType::MALODY);
-                 it != note.m_metadata.note_properties.end() ) {
-                if ( it->second.contains("beat") ) {
-                    if ( auto beatJson =
-                             parseMalodyBeatJsonValue(it->second.at("beat")) ) {
-                        nj["beat"] = *beatJson;
-                        hasBeat    = true;
-                    }
-                }
-            }
-        }
-
-        if ( !hasBeat ) {
-            nj["beat"] = timeToBeat(note.m_timestamp);
-        }
+        nj["beat"] = timeToMalodyNoteBeat(note.m_timestamp);
 
         if ( saveAsSlideMode ) {
             nj["x"] = columnToX((int)note.m_track);
-            // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度
-            // (60/50/40)
+            // 4K 至 6K 的 Polyline 和 Hold 根节点沿用网格宽度；7K、8K
+            // 按皮肤的十位宽度规则固定为 30、20，避免键数误判。
             nj["w"] = (note.m_type == NoteType::POLYLINE ||
                        note.m_type == NoteType::HOLD)
-                          ? defaultXW
+                          ? defaultLongNoteW
                           : defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
@@ -607,7 +715,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             double rootBeatVal =
                 rootBeatArr[0].get<double>() +
                 (rootBeatArr[1].get<double>() / rootBeatArr[2].get<double>());
-            auto   relBeatArr = timeToBeat(targetTime);
+            auto   relBeatArr = timeToMalodyNoteBeat(targetTime);
             double relBeatVal =
                 relBeatArr[0].get<double>() +
                 (relBeatArr[1].get<double>() / relBeatArr[2].get<double>()) -
@@ -657,7 +765,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
                 nj["seg"].push_back(sj);
             } else {
-                nj["endbeat"] = timeToBeat(h.m_timestamp + h.m_duration);
+                nj["endbeat"] =
+                    timeToMalodyNoteBeat(h.m_timestamp + h.m_duration);
             }
         } else if ( note.m_type == NoteType::FLICK ) {
             const auto& f = static_cast<const Flick&>(note);
@@ -665,7 +774,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( saveAsSlideMode ) {
                 // Slide 模式：Flick 导出为 dir + w
                 nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-                int wVal  = defaultWW + std::abs(f.m_dtrack);
+                int wVal  = defaultFlickW + std::abs(f.m_dtrack);
                 nj["w"]   = wVal;
             }
             // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
@@ -772,7 +881,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 if ( s.type == NoteType::FLICK &&
                      std::abs(s.timestamp - p.m_timestamp) < 1e-5 ) {
                     nj["dir"]     = (s.dtrack < 0) ? 8 : 2;
-                    nj["w"]       = defaultWW + std::abs(s.dtrack);
+                    nj["w"]       = defaultFlickW + std::abs(s.dtrack);
                     exportedAsDir = true;
                 }
             }
@@ -787,8 +896,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 for ( size_t i = 0; i < cleanSubs.size(); ++i ) {
                     const auto& s = cleanSubs[i];
 
-                    double   current_time  = s.timestamp;
-                    uint32_t current_track = s.track;
+                    double current_time  = s.timestamp;
+                    int    current_track = s.track;
                     if ( s.type == NoteType::HOLD ) {
                         current_time += s.duration;
                     } else if ( s.type == NoteType::FLICK ) {
@@ -796,30 +905,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
 
                     json sj;
-                    bool hasBeatMetadata = false;
-                    if ( s.original_sn ) {
-                        if ( auto it =
-                                 s.original_sn->m_metadata.note_properties.find(
-                                     NoteMetadataType::MALODY);
-                             it !=
-                             s.original_sn->m_metadata.note_properties.end() ) {
-                            if ( it->second.contains("beat") ) {
-                                if ( auto beatJson = parseMalodyBeatJsonValue(
-                                         it->second.at("beat")) ) {
-                                    sj["beat"]      = *beatJson;
-                                    hasBeatMetadata = true;
-                                }
-                            }
-                        }
-                    }
+                    sj["beat"] = getRelBeat(current_time, nj["beat"]);
 
-                    if ( !hasBeatMetadata ) {
-                        sj["beat"] = getRelBeat(current_time, nj["beat"]);
-                    }
-
-                    int x_offset = static_cast<int>(
-                        std::round((int(current_track) - int(p.m_track)) *
-                                   (float)defaultXW));
+                    int x_offset = columnToX(current_track) -
+                                   columnToX(static_cast<int>(p.m_track));
                     if ( x_offset != 0 ) {
                         sj["x"] = x_offset;
                     }
@@ -893,8 +982,38 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
         }
         // beat 是 m_timestamp 的格式投影；不能让导入时保留的旧 beat
-        // 覆盖编辑器已经移动过的锚点。
-        sampleJson["beat"] = timeToBeat(sample.m_timestamp);
+        // 覆盖编辑器已经移动过的锚点。位于生成拍轴之前的采样锚定到
+        // 首 BPM 的规范化拍号，并把时间差折入自身
+        // offset，以保持实际播放时刻不变。
+        std::int64_t exportedOffset = sample.m_offsetMs;
+        if ( &sample == wrappedMainSample ) {
+            sampleJson["beat"] = timeToBeat(bpmTimings.front()->m_timestamp);
+            exportedOffset =
+                static_cast<std::int64_t>(std::llround(firstBpmDelayMs));
+        } else if ( generatedFirstBpmOrigin != nullptr &&
+                    sample.m_timestamp <
+                        generatedFirstBpmOrigin->m_timestamp - 1e-4 ) {
+            sampleJson["beat"] =
+                timeToMalodyNoteBeat(generatedFirstBpmOrigin->m_timestamp);
+            const long double adjustedOffset =
+                static_cast<long double>(sample.m_offsetMs) +
+                static_cast<long double>(sample.m_timestamp) -
+                static_cast<long double>(generatedFirstBpmOrigin->m_timestamp);
+            const long double minimumOffset = static_cast<long double>(
+                std::numeric_limits<std::int64_t>::min());
+            const long double maximumOffset = static_cast<long double>(
+                std::numeric_limits<std::int64_t>::max());
+            if ( adjustedOffset <= minimumOffset ) {
+                exportedOffset = std::numeric_limits<std::int64_t>::min();
+            } else if ( adjustedOffset >= maximumOffset ) {
+                exportedOffset = std::numeric_limits<std::int64_t>::max();
+            } else {
+                exportedOffset =
+                    static_cast<std::int64_t>(std::llround(adjustedOffset));
+            }
+        } else {
+            sampleJson["beat"] = timeToMalodyNoteBeat(sample.m_timestamp);
+        }
 
         // Malody Slide 游戏逻辑只识别字符串 SOUND；Key 模式保留数值 1，
         // 兼容 BMS 编辑与既有 Key 谱面。
@@ -904,7 +1023,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             sampleJson["type"] = 1;
         }
         sampleJson["sound"]  = sample.m_audioResourceId;
-        sampleJson["offset"] = sample.m_offsetMs;
+        sampleJson["offset"] = exportedOffset;
         if ( !saveAsSlideMode ) {
             sampleJson["x"] = sample.m_track;
         }
@@ -940,38 +1059,37 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         noteArr.push_back(serializeAudioSample(*sample));
     }
 
-    std::vector<std::pair<const Note*, bool>> sortedNotes;
+    std::vector<const Note*> sortedNotes;
     for ( const auto& n : beatMap.m_noteData.notes )
-        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
     for ( const auto& n : beatMap.m_noteData.holds )
-        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
     for ( const auto& n : beatMap.m_noteData.flicks )
-        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
     for ( const auto& poly : beatMap.m_noteData.polylines ) {
         if ( isSubNote(poly) ) continue;
         if ( saveAsKeyMode && !poly.m_subNotes.empty() ) {
             for ( const auto& subNoteRef : poly.m_subNotes ) {
                 const Note& subNote = subNoteRef.get();
                 if ( subNote.m_type == NoteType::HOLD ) {
-                    sortedNotes.emplace_back(&subNote, false);
+                    sortedNotes.push_back(&subNote);
                 }
             }
         } else {
-            sortedNotes.emplace_back(&poly, true);
+            sortedNotes.push_back(&poly);
         }
     }
 
-    std::sort(
-        sortedNotes.begin(),
-        sortedNotes.end(),
-        [](const auto& a, const auto& b) {
-            if ( std::abs(a.first->m_timestamp - b.first->m_timestamp) > 1e-6 )
-                return a.first->m_timestamp < b.first->m_timestamp;
-            return a.first->m_track < b.first->m_track;
-        });
+    std::sort(sortedNotes.begin(),
+              sortedNotes.end(),
+              [](const auto& a, const auto& b) {
+                  if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-6 )
+                      return a->m_timestamp < b->m_timestamp;
+                  return a->m_track < b->m_track;
+              });
 
-    for ( const auto& [note, allowBeatMetadata] : sortedNotes ) {
-        noteArr.push_back(serializeToMalody(*note, allowBeatMetadata));
+    for ( const Note* note : sortedNotes ) {
+        noteArr.push_back(serializeToMalody(*note));
     }
 
     std::ofstream ofs(path);

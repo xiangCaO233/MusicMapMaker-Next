@@ -32,6 +32,9 @@ public:
 
     /// @brief 获取操作描述名称
     virtual std::string getName() const = 0;
+
+    /// @brief 返回该操作执行、撤销或重做会修改的谱面数据类别。
+    [[nodiscard]] virtual ::MMM::BeatmapMutationFlags mutationFlags() const = 0;
 };
 
 /// @brief 操作栈管理器，维护撤销栈和重做栈。
@@ -68,6 +71,12 @@ public:
     /// @return 自上次取出后执行、撤销或重做所修改的谱面数据类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags takePendingMutationFlags();
 
+    /// @brief 获取下一次撤销将修改的数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags undoMutationFlags() const;
+
+    /// @brief 获取下一次重做将修改的数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags redoMutationFlags() const;
+
     /// @brief 获取撤销栈深度
     size_t getUndoStackSize() const { return m_undoStack.size(); }
 
@@ -75,10 +84,6 @@ public:
     size_t getRedoStackSize() const { return m_redoStack.size(); }
 
 private:
-    /// @brief 在同步脏标记被清除前记录本次操作实际修改的数据类别。
-    /// @param ctx 已执行操作的会话上下文。
-    void rememberPendingMutationFlags(const SessionContext& ctx);
-
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
     size_t m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
@@ -116,6 +121,9 @@ public:
 
     /// @brief 获取复合操作名称。
     std::string getName() const override;
+
+    /// @brief 合并全部子操作的数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override;
 
 private:
     std::vector<std::unique_ptr<IEditorAction>> m_actions;  ///< 子操作。

@@ -2,6 +2,7 @@
 
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/session/EditorAction.h"
+#include <algorithm>
 #include <entt/entt.hpp>
 #include <optional>
 
@@ -25,12 +26,28 @@ public:
                std::optional<NoteComponent> after)
         : m_type(type), m_entity(entity), m_before(before), m_after(after)
     {
+        if ( m_type == Type::Create && m_after ) {
+            m_after->m_collaborationId.clear();
+            for ( auto& subNote : m_after->m_subNotes ) {
+                subNote.collaborationId.clear();
+            }
+        }
     }
 
     void        execute(SessionContext& ctx) override;
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief 草稿专属操作不发布谱面变更，其余操作修改主谱面物件。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        const bool hasFormalBefore = m_before && !m_before->m_isDraft;
+        const bool hasFormalAfter  = m_after && !m_after->m_isDraft;
+        if ( !hasFormalBefore && !hasFormalAfter ) {
+            return ::MMM::BeatmapMutationFlags::None;
+        }
+        return ::MMM::BeatmapMutationFlags::Objects;
+    }
 
 private:
     Type                         m_type;    ///< 操作类型
@@ -57,20 +74,47 @@ public:
     /// @brief 构造函数
     /// @param entries 批量操作条目列表
     /// @param name 操作描述名称
-    BatchNoteAction(std::vector<Entry> entries,
-                    std::string        name = "Batch Note Action")
-        : m_entries(std::move(entries)), m_name(std::move(name))
+    /// @param mutationFlags 动作对协作谱面造成的精确变更类别。
+    BatchNoteAction(std::vector<Entry>          entries,
+                    std::string                 name = "Batch Note Action",
+                    ::MMM::BeatmapMutationFlags mutationFlags =
+                        ::MMM::BeatmapMutationFlags::Objects)
+        : m_entries(std::move(entries))
+        , m_name(std::move(name))
+        , m_mutationFlags(mutationFlags)
     {
+        for ( auto& entry : m_entries ) {
+            if ( entry.before || !entry.after ) continue;
+            entry.after->m_collaborationId.clear();
+            for ( auto& subNote : entry.after->m_subNotes ) {
+                subNote.collaborationId.clear();
+            }
+        }
     }
 
     void        execute(SessionContext& ctx) override;
     void        undo(SessionContext& ctx) override;
     void        redo(SessionContext& ctx) override;
     std::string getName() const override;
+    /// @brief 返回该批量动作声明的精确谱面变更类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        const bool hasFormalNote = std::any_of(
+            m_entries.begin(), m_entries.end(), [](const Entry& entry) {
+                return (entry.before && !entry.before->m_isDraft) ||
+                       (entry.after && !entry.after->m_isDraft);
+            });
+        if ( !hasFormalNote ) return ::MMM::BeatmapMutationFlags::None;
+        return m_mutationFlags;
+    }
 
 private:
     std::vector<Entry> m_entries;  ///< 条目列表
     std::string        m_name;     ///< 操作名称
+    /// @brief 该动作对协作同步声明的精确变更类别。
+    ::MMM::BeatmapMutationFlags m_mutationFlags{
+        ::MMM::BeatmapMutationFlags::Objects
+    };
 };
 
 }  // namespace MMM::Logic

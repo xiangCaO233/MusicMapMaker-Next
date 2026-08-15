@@ -36,6 +36,9 @@ constexpr std::string_view AUDIO_RESOURCES_FILE_NAME = "audio_resources.json";
 /// @brief 谱面入口文件名。
 constexpr std::string_view BEATMAPS_FILE_NAME = "beatmaps.json";
 
+/// @brief 项目级草稿轨数据文件名。
+constexpr std::string_view DRAFT_LANES_FILE_NAME = "draft_lanes.json";
+
 /// @brief 一般项目工作区文件名。
 constexpr std::string_view WORKSPACE_FILE_NAME = "workspace.json";
 
@@ -108,6 +111,7 @@ nlohmann::json assembleProjectJson(const nlohmann::json& projectJson,
                                    nlohmann::json        settingsJson,
                                    const nlohmann::json& audioResourcesJson,
                                    const nlohmann::json& beatmapsJson,
+                                   const nlohmann::json& draftLanesJson,
                                    nlohmann::json        workspaceJson,
                                    const nlohmann::json& audioToolJson)
 {
@@ -129,6 +133,8 @@ nlohmann::json assembleProjectJson(const nlohmann::json& projectJson,
         { "m_settings", std::move(settingsJson) },
         { "m_audioResources", audioResourcesJson.at("m_audioResources") },
         { "m_beatmaps", beatmapsJson.at("m_beatmaps") },
+        { "m_draftLaneGroups",
+          draftLanesJson.value("m_draftLaneGroups", nlohmann::json::array()) },
         { "m_excludedBeatmapPaths",
           projectJson.value("m_excludedBeatmapPaths",
                             std::vector<std::string>{}) },
@@ -210,6 +216,9 @@ ProjectStorage::LoadResult ProjectStorage::loadSplit(
     nlohmann::json settingsJson;
     nlohmann::json audioResourcesJson;
     nlohmann::json beatmapsJson;
+    nlohmann::json draftLanesJson{
+        { "m_draftLaneGroups", nlohmann::json::array() },
+    };
     nlohmann::json workspaceJson;
     nlohmann::json audioToolJson;
     if ( !readJsonObject(directory / MANIFEST_FILE_NAME,
@@ -236,6 +245,15 @@ ProjectStorage::LoadResult ProjectStorage::loadSplit(
         return result;
     }
 
+    const auto      draftLanesPath = directory / DRAFT_LANES_FILE_NAME;
+    std::error_code draftLanesError;
+    if ( std::filesystem::is_regular_file(draftLanesPath, draftLanesError) &&
+         !draftLanesError &&
+         !readJsonObject(
+             draftLanesPath, draftLanesJson, result.m_errorMessage) ) {
+        return result;
+    }
+
     if ( manifestJson.value("format_version", 0) !=
              SPLIT_STORAGE_FORMAT_VERSION ||
          !projectJson.contains("m_metadata") ||
@@ -251,6 +269,7 @@ ProjectStorage::LoadResult ProjectStorage::loadSplit(
                                                      std::move(settingsJson),
                                                      audioResourcesJson,
                                                      beatmapsJson,
+                                                     draftLanesJson,
                                                      std::move(workspaceJson),
                                                      audioToolJson);
     result.m_project           = result.m_serializedProject.get<Project>();
@@ -323,6 +342,9 @@ bool ProjectStorage::save(const Project&               project,
     const nlohmann::json beatmapsJson{
         { "m_beatmaps", project.m_beatmaps },
     };
+    const nlohmann::json draftLanesJson{
+        { "m_draftLaneGroups", project.m_draftLaneGroups },
+    };
     const nlohmann::json audioToolJson{
         { "m_projectAudioToolSelectedResourceId",
           audioTool.m_projectAudioToolSelectedResourceId },
@@ -344,6 +366,8 @@ bool ProjectStorage::save(const Project&               project,
                               errorMessage) ||
          !writeJsonAtomically(
              directory / BEATMAPS_FILE_NAME, beatmapsJson, errorMessage) ||
+         !writeJsonAtomically(
+             directory / DRAFT_LANES_FILE_NAME, draftLanesJson, errorMessage) ||
          !writeJsonAtomically(
              directory / WORKSPACE_FILE_NAME, workspaceJson, errorMessage) ||
          !writeJsonAtomically(

@@ -53,6 +53,9 @@ struct NoteComponent {
     /// @brief 是否为折线内部子物件（如果是，则在标准渲染流程中跳过）
     bool m_isSubNote{ false };
 
+    /// @brief 是否属于项目级草稿轨而非当前正式谱面。
+    bool m_isDraft{ false };
+
     /// @brief 如果是子物件，指向所属的 Polyline 父实体
     entt::entity m_parentPolyline{ entt::null };
 
@@ -61,6 +64,9 @@ struct NoteComponent {
 
     /// @brief 原始元数据备份 (用于导出时保持结构一致性)
     ::MMM::NoteMetadata m_metadata;
+
+    /// @brief 整个玩家物件的编辑器注释。
+    std::string m_annotation;
 
     /// @brief 物件命中时触发的可选采样绑定；为空时使用内置打击音效。
     std::optional<::MMM::AudioSampleBinding> m_sampleBinding;
@@ -76,12 +82,19 @@ struct NoteComponent {
         int                 trackIndex;
         int                 dtrack;
         ::MMM::NoteMetadata metadata;
+        /// @brief 当前折线子物件的独立编辑器注释。
+        std::string annotation;
         /// @brief 子物件命中时触发的可选采样绑定。
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
         /// @brief 子物件自定义颜色缓存；为空时继承皮肤默认色。
         NoteColorOverrides customColors;
+        /// @brief 协作会话内稳定的子物件逻辑标识。
+        std::string collaborationId;
     };
     std::vector<SubNote> m_subNotes;
+
+    /// @brief 协作会话内稳定的逻辑物件标识。
+    std::string m_collaborationId;
 };
 
 }  // namespace MMM::Logic

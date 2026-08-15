@@ -65,6 +65,9 @@ public:
 
     void update(UIManager* sourceManager) override;
 
+    /// @brief 在新皮肤已生效后刷新工具栏中依赖皮肤的调色盘。
+    void refreshPaletteAfterSkinChange();
+
     void* getActualInstance() override { return this; }
 
     /// @brief 是否需要重载
@@ -193,6 +196,8 @@ public:
     bool m_showCollaborationProjectOpenBlockedModal{ false };
     /// @brief 是否在下一帧显示离线房间谱面只读提示。
     bool m_showCollaborationOfflineEditBlockedModal{ false };
+    /// @brief 是否在下一帧显示协作细分权限编辑拦截提示。
+    bool m_showCollaborationPermissionEditBlockedModal{ false };
 };
 
 }  // namespace MMM::UI

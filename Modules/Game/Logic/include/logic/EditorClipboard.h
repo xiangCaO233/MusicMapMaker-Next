@@ -1,6 +1,7 @@
 #pragma once
 
 #include "logic/session/ClipboardTypes.h"
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -59,17 +60,22 @@ public:
     void setTimelines(std::vector<TimelineClipboardItem> items,
                       const SessionContext* sourceContext, bool isCut);
 
-    /// @brief 获取编辑器级剪贴板内容副本。
+    /// @brief 获取目标 Session 可访问的编辑器级剪贴板内容副本。
+    /// @param targetContext 正在执行粘贴的 Session 上下文。
     /// @return 当前剪贴板条目列表副本。
-    std::vector<ClipboardItem> get() const;
+    std::vector<ClipboardItem> get(const SessionContext* targetContext) const;
 
-    /// @brief 获取编辑器级自动采样剪贴板内容副本。
+    /// @brief 获取目标 Session 可访问的自动采样剪贴板内容副本。
+    /// @param targetContext 正在执行粘贴的 Session 上下文。
     /// @return 当前自动采样剪贴板条目列表副本。
-    std::vector<SampleClipboardItem> getSamples() const;
+    std::vector<SampleClipboardItem> getSamples(
+        const SessionContext* targetContext) const;
 
-    /// @brief 获取编辑器级 Timeline 剪贴板内容副本。
+    /// @brief 获取目标 Session 可访问的 Timeline 剪贴板内容副本。
+    /// @param targetContext 正在执行粘贴的 Session 上下文。
     /// @return 当前 Timeline 剪贴板条目列表副本。
-    std::vector<TimelineClipboardItem> getTimelines() const;
+    std::vector<TimelineClipboardItem> getTimelines(
+        const SessionContext* targetContext) const;
 
     /// @brief 判断当前剪贴板是否是指定 Session 的剪切内容。
     /// @param context 待比较的 Session 上下文。
@@ -95,7 +101,17 @@ public:
     /// @return 文本属于 MMM 剪贴板协议时返回 true。
     bool importSystemText(std::string_view text);
 
+    /// @brief 清除由指定 Session 写入的剪贴板内容。
+    /// @param context 即将退出协作隔离范围的 Session 上下文。
+    void clearForContext(const SessionContext* context);
+
 private:
+    /// @brief 判断当前内容是否允许目标 Session 读取。
+    /// @param targetContext 正在执行粘贴的 Session 上下文。
+    /// @return 隔离范围与目标一致，或双方均不处于隔离状态时返回 true。
+    /// @warning 调用者必须持有 m_mutex。
+    [[nodiscard]] bool canReadFrom(const SessionContext* targetContext) const;
+
     /// @brief 保护剪贴板内容、来源 Session 和剪切状态的互斥量。
     mutable std::mutex m_mutex;
 
@@ -113,6 +129,12 @@ private:
 
     /// @brief 剪切来源 Session 上下文，仅用于身份比较，不拥有生命周期。
     const SessionContext* m_sourceContext{ nullptr };
+
+    /// @brief 当前内容是否只能在来源协作 Session 内使用。
+    bool m_sessionOnly{ false };
+
+    /// @brief 当前内容所属协作绑定的唯一范围标识。
+    std::uint64_t m_sessionScopeId{ 0 };
 
     /// @brief 等待 UI 线程发布到系统剪贴板的文本。
     std::optional<std::string> m_pendingSystemText;

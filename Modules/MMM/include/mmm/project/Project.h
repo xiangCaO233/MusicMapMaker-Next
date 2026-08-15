@@ -1,6 +1,7 @@
 #pragma once
 #include "AudioResource.h"
 #include "ProjectSettings.h"
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -23,6 +24,38 @@ struct ProjectMetadata {
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(ProjectMetadata, m_title, m_artist, m_mapper,
                                    m_version)
+};
+
+/// @brief 按主音频资源共享的一组项目级草稿轨物件。
+struct ProjectDraftLaneGroup {
+    /// @brief 作为共享范围键的主音频资源稳定 ID。
+    std::string m_mainAudioResourceId;
+
+    /// @brief 使用编辑器音符协议保存的草稿物件载荷。
+    std::string m_notePayload;
+
+    /// @brief 进程内变更版本，仅用于打开会话之间的增量刷新。
+    std::uint64_t m_runtimeRevision{ 0U };
+
+    /// @brief 序列化草稿轨组，不写出进程内版本。
+    friend void to_json(nlohmann::json&              json,
+                        const ProjectDraftLaneGroup& group)
+    {
+        json = nlohmann::json{
+            { "m_mainAudioResourceId", group.m_mainAudioResourceId },
+            { "m_notePayload", group.m_notePayload },
+        };
+    }
+
+    /// @brief 反序列化草稿轨组并重置进程内版本。
+    friend void from_json(const nlohmann::json&  json,
+                          ProjectDraftLaneGroup& group)
+    {
+        group.m_mainAudioResourceId =
+            json.value("m_mainAudioResourceId", std::string{});
+        group.m_notePayload     = json.value("m_notePayload", std::string{});
+        group.m_runtimeRevision = 0U;
+    }
 };
 
 /// @brief 核心项目容器：管理多个谱面实例、多个音频资源、以及特定偏好设置
@@ -79,6 +112,9 @@ public:
     /// @brief 项目内包含的所有谱面入口列表
     std::vector<BeatmapEntry> m_beatmaps;
 
+    /// @brief 按主音频资源 ID 共享的项目级草稿轨数据。
+    std::vector<ProjectDraftLaneGroup> m_draftLaneGroups;
+
     /// @brief 手动从项目中移除并排除自动同步的谱面相对路径列表。
     std::vector<std::string> m_excludedBeatmapPaths;
 
@@ -104,6 +140,7 @@ public:
             { "m_settings", p.m_settings },
             { "m_audioResources", p.m_audioResources },
             { "m_beatmaps", p.m_beatmaps },
+            { "m_draftLaneGroups", p.m_draftLaneGroups },
             { "m_excludedBeatmapPaths", p.m_excludedBeatmapPaths },
             { "m_excludedAudioPaths", p.m_excludedAudioPaths }
         };
@@ -116,6 +153,8 @@ public:
         j.at("m_settings").get_to(p.m_settings);
         j.at("m_audioResources").get_to(p.m_audioResources);
         j.at("m_beatmaps").get_to(p.m_beatmaps);
+        p.m_draftLaneGroups =
+            j.value("m_draftLaneGroups", std::vector<ProjectDraftLaneGroup>{});
         p.m_excludedBeatmapPaths =
             j.value("m_excludedBeatmapPaths", std::vector<std::string>{});
         p.m_excludedAudioPaths =

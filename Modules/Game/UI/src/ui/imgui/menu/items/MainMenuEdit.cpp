@@ -66,6 +66,12 @@ MainMenuEdit::MainMenuEdit()
         "Ctrl+A",
         createSelectAllAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_SELECT_ALL,
+        "ui.edit.select_all_objects",
+        MainMenuItemTextKind::TranslationKey,
+        "Ctrl+Shift+A",
+        createSelectAllObjectsAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_COG,
         "ui.edit.note_metadata",
         MainMenuItemTextKind::TranslationKey,
@@ -77,6 +83,12 @@ MainMenuEdit::MainMenuEdit()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createEditSelectedObjectVolumeAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COMMENT,
+        "ui.edit.add_selected_annotation",
+        MainMenuItemTextKind::TranslationKey,
+        "Ctrl+R",
+        createAddSelectedObjectAnnotationAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.bms_editing",

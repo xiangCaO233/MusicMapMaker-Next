@@ -1,5 +1,8 @@
 #include "network/collaboration/CollaborationResourceSync.h"
 
+#include "CollaborationResourceCipher.h"
+
+#include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
@@ -311,7 +314,7 @@ bool verifyInitialBundle(const CollaborationResourceBundle& bundle,
     return actualCover && *actualCover == coverBytes;
 }
 
-/// @brief 覆盖完整传输、缓存复用、单资源变更和损坏缓存重取。
+/// @brief 覆盖完整传输、加密落盘、会话隔离和资源变更后的重新同步。
 bool testRoundTripCacheAndIncrementalChanges()
 {
     ScopedResourceDirectory directory;
@@ -375,8 +378,7 @@ bool testRoundTripCacheAndIncrementalChanges()
 
     CollaborationResourceSync firstGuest;
     firstGuest.startGuest(cacheRoot);
-    const auto first =
-        transferResources(host, firstGuest, *stableManifest, false);
+    auto first = transferResources(host, firstGuest, *stableManifest, false);
     if ( !first.success || first.error || first.requestedFiles.size() != 3U ||
          !verifyInitialBundle(
              first.bundle, project, mainBytes, effectBytes, coverBytes) ) {
@@ -390,14 +392,46 @@ bool testRoundTripCacheAndIncrementalChanges()
         return false;
     }
 
+    const auto firstSessionRoot =
+        first.bundle.project->m_projectRoot.parent_path();
+    const auto effectRemap = first.bundle.pathRemap.find("audio/effect.wav");
+    if ( effectRemap == first.bundle.pathRemap.end() ||
+         firstSessionRoot.parent_path() != cacheRoot ||
+         !firstSessionRoot.filename().string().starts_with("session-") ) {
+        return false;
+    }
+    const auto encryptedEffect =
+        firstSessionRoot / "encrypted" /
+        MMM::Config::utf8ToPath(effectRemap->second + ".mmrsc");
+    const auto encryptedBytes = readBytes(encryptedEffect);
+    if ( !encryptedBytes || encryptedBytes->size() <= effectBytes.size() ||
+         std::search(encryptedBytes->begin(),
+                     encryptedBytes->end(),
+                     effectBytes.begin(),
+                     effectBytes.end()) != encryptedBytes->end() ) {
+        return false;
+    }
+    firstGuest.reset();
+    std::error_code lifetimeError;
+    if ( !std::filesystem::exists(firstSessionRoot, lifetimeError) ||
+         lifetimeError ) {
+        return false;
+    }
+    first.bundle.project.reset();
+    if ( std::filesystem::exists(firstSessionRoot, lifetimeError) ||
+         lifetimeError ) {
+        return false;
+    }
+
     CollaborationResourceSync cachedGuest;
     cachedGuest.startGuest(cacheRoot);
     const auto cached =
         transferResources(host, cachedGuest, *stableManifest, false);
     const auto cachedProgress = cachedGuest.progress();
-    if ( !cached.success || cached.requestCount != 0U ||
-         cachedProgress.cachedFiles != 3U ||
-         cachedProgress.transferredBytes != 0U ) {
+    if ( !cached.success || cached.requestedFiles.size() != 3U ||
+         cachedProgress.cachedFiles != 0U ||
+         cachedProgress.transferredBytes !=
+             mainBytes.size() + effectBytes.size() + coverBytes.size() ) {
         return false;
     }
 
@@ -414,29 +448,15 @@ bool testRoundTripCacheAndIncrementalChanges()
     const auto changed =
         transferResources(host, changedGuest, *changedManifest, false);
     const auto changedProgress = changedGuest.progress();
-    if ( !changed.success || changed.requestedFiles.size() != 1U ||
-         changedProgress.cachedFiles != 2U ||
-         changedProgress.transferredBytes != mainBytes.size() ||
+    if ( !changed.success || changed.requestedFiles.size() != 3U ||
+         changedProgress.cachedFiles != 0U ||
+         changedProgress.transferredBytes !=
+             mainBytes.size() + effectBytes.size() + coverBytes.size() ||
          !verifyInitialBundle(
              changed.bundle, project, mainBytes, effectBytes, coverBytes) ) {
         return false;
     }
-
-    const auto effectRemap = changed.bundle.pathRemap.find("audio/effect.wav");
-    if ( effectRemap == changed.bundle.pathRemap.end() ||
-         !writeBytes(cacheRoot / effectRemap->second,
-                     patternedBytes(effectBytes.size(), 0xE1U)) ) {
-        return false;
-    }
-    CollaborationResourceSync repairedGuest;
-    repairedGuest.startGuest(cacheRoot);
-    const auto repaired =
-        transferResources(host, repairedGuest, *changedManifest, false);
-    const auto repairedProgress = repairedGuest.progress();
-    return repaired.success && repaired.requestedFiles.size() == 1U &&
-           repairedProgress.cachedFiles == 2U &&
-           verifyInitialBundle(
-               repaired.bundle, project, mainBytes, effectBytes, coverBytes);
+    return true;
 }
 
 /// @brief 覆盖清单篡改、代次错配和分块篡改的拒绝路径。
@@ -495,10 +515,9 @@ bool testTamperRejection()
         return false;
     }
     std::error_code error;
-    const auto      filesRoot = chunkCache / "files";
-    if ( !std::filesystem::exists(filesRoot, error) || error ) return false;
+    if ( !std::filesystem::exists(chunkCache, error) || error ) return false;
     for ( const auto& entry :
-          std::filesystem::directory_iterator(filesRoot, error) ) {
+          std::filesystem::recursive_directory_iterator(chunkCache, error) ) {
         if ( error || entry.path().filename().string().contains(".part-") ) {
             return false;
         }
@@ -536,6 +555,53 @@ bool testHostProjectBoundary()
            event.type == CollaborationResourceSyncEvent::Type::Error &&
            event.detail == "host_resource_missing:outside-id";
 }
+
+/// @brief 验证资源容器可认证解密，并拒绝被篡改的 GCM 密文。
+bool testEncryptedContainerAuthentication()
+{
+    ScopedResourceDirectory directory;
+    if ( directory.path().empty() ) return false;
+    const auto plainBytes = patternedBytes(80U * 1024U, 0x29U);
+    const auto source     = directory.path() / "source.bin";
+    const auto encrypted  = directory.path() / "source.mmrsc";
+    const auto restored   = directory.path() / "restored.bin";
+    const auto rejected   = directory.path() / "rejected.bin";
+    if ( !writeBytes(source, plainBytes) ) return false;
+
+    namespace Detail = MMM::Network::Collaboration::Detail;
+    Detail::CollaborationResourceKey key{};
+    if ( !Detail::generateCollaborationResourceKey(key) ) return false;
+    const auto digest =
+        Detail::encryptCollaborationResourceFile(source, encrypted, key, {});
+    if ( !digest || digest->size != plainBytes.size() ||
+         !Detail::materializeCollaborationResourceFile(
+             encrypted, restored, key, digest->size) ||
+         readBytes(restored) != std::optional<ByteBuffer>(plainBytes) ) {
+        Detail::clearCollaborationResourceKey(key);
+        return false;
+    }
+
+    auto encryptedBytes = readBytes(encrypted);
+    if ( !encryptedBytes || encryptedBytes->empty() ) {
+        Detail::clearCollaborationResourceKey(key);
+        return false;
+    }
+    encryptedBytes->back() ^= 0x80U;
+    if ( !writeBytes(encrypted, *encryptedBytes) ) {
+        Detail::clearCollaborationResourceKey(key);
+        return false;
+    }
+    const bool rejectedTamper =
+        !Detail::materializeCollaborationResourceFile(
+            encrypted, rejected, key, digest->size) &&
+        !std::filesystem::exists(rejected) &&
+        !std::filesystem::exists(rejected.string() + ".part-materialize");
+    Detail::clearCollaborationResourceKey(key);
+    return rejectedTamper &&
+           std::all_of(key.begin(), key.end(), [](std::uint8_t byte) {
+               return byte == 0U;
+           });
+}
 }  // namespace
 
 /// @brief 运行协作资源清单、分块、缓存与完整性回归测试。
@@ -551,6 +617,8 @@ int main()
         result = 2;
     } else if ( !testHostProjectBoundary() ) {
         result = 3;
+    } else if ( !testEncryptedContainerAuthentication() ) {
+        result = 4;
     }
 
     appThreadPool.shutdown();

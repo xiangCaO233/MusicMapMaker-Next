@@ -9,6 +9,7 @@
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
+#include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
 #include <cstdint>
@@ -68,6 +69,15 @@ struct SessionContext {
     /// @brief 自动采样已选实体索引，避免框选热路径扫描完整 Registry。
     std::unordered_set<entt::entity> selectedSampleEntities;
 
+    /// @brief 当前谱面解析到的主音频草稿共享组 ID。
+    std::string m_draftLaneGroupId;
+
+    /// @brief 当前会话已载入的草稿共享组进程内版本。
+    std::uint64_t m_draftLaneGroupRevision{ 0U };
+
+    /// @brief 当前会话上次同步完成时的草稿组载荷，用于三方合并。
+    std::string m_draftLaneBasePayload;
+
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
     double animateTime{ 0.0 };  ///< 当前动画渲染时间，已包含视觉偏移。
     /// @brief 当前暂停态滚动动画的目标渲染时间，单位秒。
@@ -81,6 +91,8 @@ struct SessionContext {
     /// @brief 时间线缩放动画是否仍需继续推进。
     bool animatedTimelineZoomAnimationActive{ false };
     bool isPlaying{ false };  ///< 是否正在播放
+    /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
+    bool isSeekScrubbing{ false };
     /// @brief 当前会话是否拥有全局音频时间线的控制权。
     bool isActiveSession{ false };
     /// @brief 是否作为同复合时间线后台跟随者读取全局 transport。
@@ -94,6 +106,10 @@ struct SessionContext {
     std::shared_ptr<MMM::Project> collaborationProject;
     /// @brief 房主谱面资源路径到本机内容缓存相对路径的映射。
     std::unordered_map<std::string, std::string> collaborationPathRemap;
+    /// @brief 协作期间是否仅允许当前 Session 使用进程内谱面剪贴板。
+    bool collaborationClipboardIsolated{ false };
+    /// @brief 当前协作剪贴板隔离范围，用于阻止跨房间复用残留内容。
+    std::uint64_t        collaborationClipboardScopeId{ 0 };
     Config::EditorConfig lastConfig;  ///< 最近一次同步的编辑器配置
     std::unordered_map<std::string, CameraInfo>
               cameras;               ///< 当前所有活跃视口的信息
@@ -164,6 +180,10 @@ struct SessionContext {
     bool isSampleOrderDirty{ true };
     /// @brief 自动采样排序缓存是否只需剔除失效实体。
     bool isSamplePruneDirty{ false };
+    /// @brief 批注时间戳分组缓存是否需要重建。
+    bool isAnnotationRenderCacheDirty{ true };
+    /// @brief 已解析物件当前位置并按时间排序的批注标记缓存。
+    std::vector<AnnotationRenderMarker> annotationRenderCache;
     /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
     std::vector<double> previewDensityObjectTimes;
     /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。
@@ -175,10 +195,14 @@ struct SessionContext {
     double lastSnapshotTime{ 0.0 };
 
     // --- 交互与工具状态 ---
-    EditTool     currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
-    std::string  mouseCameraId;                  ///< 鼠标当前所在的视口 ID
-    glm::vec2    lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
-    entt::entity hoveredEntity{ entt::null };    ///< 当前悬停的实体 ID
+    EditTool    currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
+    std::string mouseCameraId;                  ///< 鼠标当前所在的视口 ID
+    glm::vec2   lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
+    /// @brief 鼠标最后一次悬停的主画布 ID，用于菜单触发的分区全选。
+    std::string lastMainCanvasCameraId;
+    /// @brief 鼠标最后一次悬停主画布时的局部坐标。
+    glm::vec2    lastMainCanvasMousePos{ 0.0f, 0.0f };
+    entt::entity hoveredEntity{ entt::null };  ///< 当前悬停的实体 ID
     /// @brief 当前悬停实体所在的独立 ECS 注册表。
     ChartObjectKind hoveredObjectKind{ ChartObjectKind::PlayerNote };
     int32_t         hoveredPart{ 0 };          ///< 悬停的音符部位 (HoverPart)
@@ -246,6 +270,9 @@ struct SessionContext {
         /// @brief 当前玩家物件创建或恢复手势锁定的采样绑定。
         std::optional<::MMM::AudioSampleBinding> activeSampleBinding;
 
+        /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
+        bool replacesExistingObject{ false };
+
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brushState;
@@ -260,7 +287,9 @@ struct SessionContext {
     } eraserState;
 
     // --- 同步脏标记 ---
-    bool m_needsNotesSync{ false };    ///< 音响实体有变更，需同步到 BeatMap
+    bool m_needsNotesSync{ false };  ///< 音响实体有变更，需同步到 BeatMap
+    /// @brief 项目级草稿物件有变更，需要同步到项目数据。
+    bool m_needsDraftNotesSync{ false };
     bool m_needsSamplesSync{ false };  ///< 自动采样实体有变更，需同步到 BeatMap
     bool m_needsTimingsSync{ false };  ///< 时间线实体有变更，需同步到 BeatMap
 

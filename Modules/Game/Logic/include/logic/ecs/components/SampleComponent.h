@@ -28,6 +28,9 @@ struct SampleComponent {
     /// @brief 来源格式无法映射到通用字段的元数据。
     ::MMM::SampleMetadata m_metadata;
 
+    /// @brief 采样物件在保存与协作同步间保持稳定的逻辑标识。
+    std::string m_collaborationId;
+
     /// @brief 获取应用偏移后的实际播放时间。
     /// @return 实际播放时间，单位秒。
     [[nodiscard]] double effectiveTime() const
@@ -48,6 +51,7 @@ struct SampleComponent {
             .m_audioResourceId = sample.m_audioResourceId,
             .m_volume          = sample.m_volume,
             .m_metadata        = sample.m_metadata,
+            .m_collaborationId = sample.m_collaborationId,
         };
     }
 
@@ -62,6 +66,7 @@ struct SampleComponent {
             .m_audioResourceId = m_audioResourceId,
             .m_volume          = m_volume,
             .m_metadata        = m_metadata,
+            .m_collaborationId = m_collaborationId,
         };
     }
 };

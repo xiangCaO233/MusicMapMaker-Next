@@ -5,13 +5,14 @@ namespace MMM::Event
 {
 
 enum class SettingsTab {
-    Software,  // 软件配置
-    Visual,    // 视觉配置
-    Project,   // 项目配置
-    Beatmap,   // 谱面配置
-    Editor,    // 编辑器配置
-    Shortcut,  // 快捷键配置
-    Debug      // 调试配置
+    Software,       ///< 软件配置。
+    Collaboration,  ///< 多人协作配置。
+    Visual,         ///< 视觉配置。
+    Project,        ///< 项目配置。
+    Beatmap,        ///< 谱面配置。
+    Editor,         ///< 编辑器配置。
+    Shortcut,       ///< 快捷键配置。
+    Debug           ///< 调试配置。
 };
 
 struct UISettingsTabEvent : public UIEvent {

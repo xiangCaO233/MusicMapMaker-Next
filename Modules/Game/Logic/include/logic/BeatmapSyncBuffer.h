@@ -9,6 +9,7 @@
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/AnnotationRenderData.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <algorithm>
 #include <array>
@@ -381,6 +382,9 @@ struct RenderSnapshot {
     /// @brief 当前快照中需要覆盖显示的重叠遮罩。
     std::vector<OverlapMask> overlapMasks;
 
+    /// @brief 主画布当前可见时间范围内的批注标记。
+    std::vector<AnnotationRenderMarker> annotationMarkers;
+
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
@@ -447,7 +451,9 @@ struct RenderSnapshot {
     double backgroundVideoStartTime{ 0.0 };
 
     // 播放状态
-    bool   isPlaying{ false };
+    bool isPlaying{ false };
+    /// @brief 本地是否正在预览连续 Seek；为 true 时联机视口暂缓发送。
+    bool   isSeekScrubbing{ false };
     double currentTime{ 0.0 };
     /// @brief 当前主画布内容相对基础轨道布局的横向逻辑像素偏移。
     float canvasHorizontalOffsetX{ 0.0F };
@@ -533,7 +539,9 @@ struct RenderSnapshot {
     /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
     int32_t bgmTrackCount{ 0 };
     /// @brief 当前快照是否显示并允许交互 BGM 轨道区。
-    bool   bmsEditingEnabled{ true };
+    bool bmsEditingEnabled{ true };
+    /// @brief 当前快照是否发布项目级草稿轨道区。
+    bool   draftLanesEnabled{ false };
     float  renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
@@ -675,6 +683,7 @@ struct RenderSnapshot {
         interactionHitboxScaleX = 1.0F;
         interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();
+        annotationMarkers.clear();
         timelineElements.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
@@ -689,6 +698,7 @@ struct RenderSnapshot {
         backgroundIsVideo            = false;
         backgroundVideoStartTime     = 0.0;
         isPlaying                    = false;
+        isSeekScrubbing              = false;
         currentTime                  = 0.0;
         canvasHorizontalOffsetX      = 0.0F;
         playbackTime                 = 0.0;
@@ -747,6 +757,7 @@ struct RenderSnapshot {
         maxCombo           = 0;
         bgmTrackCount      = 0;
         bmsEditingEnabled  = true;
+        draftLanesEnabled  = false;
     }
 };
 

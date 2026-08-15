@@ -57,6 +57,10 @@ inline void applyDynamicVertexYOffset(Logic::RenderSnapshot* snapshot,
     for ( auto& element : snapshot->timelineElements ) {
         element.y += yOffset;
     }
+
+    for ( auto& marker : snapshot->annotationMarkers ) {
+        marker.canvasY += yOffset;
+    }
 }
 
 /// @brief 拉取并准备画布渲染快照。

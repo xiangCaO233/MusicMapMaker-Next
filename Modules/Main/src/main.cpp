@@ -15,6 +15,7 @@
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/RtcDiagnosticLogging.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -546,6 +547,10 @@ int main(int argc, char* argv[])
 
     auto& appThreadPool = Runtime::AppThreadPool::instance();
     appThreadPool.init();
+    if ( !Network::Collaboration::
+             startCollaborationBuildFingerprintInitialization() ) {
+        XERROR("Failed to schedule collaboration client build fingerprint");
+    }
 
     // 先加载不依赖资源包的全局配置，供窗口缩放与呈现模式使用。
     AppConfig::instance().load();

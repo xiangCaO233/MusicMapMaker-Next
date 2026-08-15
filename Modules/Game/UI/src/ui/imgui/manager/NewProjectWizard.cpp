@@ -706,8 +706,8 @@ void NewProjectWizard::reset()
     m_suppressFooterActionFrames = 0;
     m_pendingParentFolderPicker  = false;
 
-    m_colorPaletteSchemeName.clear();
-    m_initialSideBarTab = SideBarTab::FileExplorer;
+    m_colorPaletteSchemeName = Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+    m_initialSideBarTab      = SideBarTab::FileExplorer;
 
     if ( !settings.lastFilePickerPath.empty() ) {
         m_parentDirectory = Config::utf8ToPath(settings.lastFilePickerPath);

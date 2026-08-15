@@ -27,16 +27,16 @@ namespace MMM::UI::DesktopPathUtils
 namespace
 {
 #if !defined(_WIN32)
-/// @brief 通过双重 fork 启动桌面命令，避免 UI 进程遗留僵尸子进程。
+/// @brief 通过双重 fork 启动单参数桌面命令。
 /// @param command 桌面环境命令。
 /// @param option 可选命令参数；为空时不传递。
-/// @param path 传递给命令的 UTF-8 路径。
+/// @param argument 传递给命令的 UTF-8 参数。
 /// @return 成功创建脱离 UI 进程的子进程时返回 true。
-bool launchDetached(const char* command, const char* option,
-                    const std::filesystem::path& path)
+bool launchDetachedArgument(const char* command, const char* option,
+                            std::string_view argument)
 {
-    const std::string pathText = Config::pathToUtf8(path);
-    const pid_t       child    = fork();
+    const std::string argumentText(argument);
+    const pid_t       child = fork();
     if ( child < 0 ) {
         return false;
     }
@@ -54,12 +54,12 @@ bool launchDetached(const char* command, const char* option,
             execlp(command,
                    command,
                    option,
-                   pathText.c_str(),
+                   argumentText.c_str(),
                    static_cast<char*>(nullptr));
         } else {
             execlp(command,
                    command,
-                   pathText.c_str(),
+                   argumentText.c_str(),
                    static_cast<char*>(nullptr));
         }
         _exit(127);
@@ -71,6 +71,18 @@ bool launchDetached(const char* command, const char* option,
         waitResult = waitpid(child, &status, 0);
     } while ( waitResult < 0 && errno == EINTR );
     return waitResult == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/// @brief 通过双重 fork 启动桌面命令，避免 UI 进程遗留僵尸子进程。
+/// @param command 桌面环境命令。
+/// @param option 可选命令参数；为空时不传递。
+/// @param path 传递给命令的 UTF-8 路径。
+/// @return 成功创建脱离 UI 进程的子进程时返回 true。
+bool launchDetached(const char* command, const char* option,
+                    const std::filesystem::path& path)
+{
+    const std::string pathText = Config::pathToUtf8(path);
+    return launchDetachedArgument(command, option, pathText);
 }
 
 #    if !defined(__APPLE__)
@@ -193,6 +205,21 @@ bool showItemWithXdgDesktopInterfaces(const std::filesystem::path& path)
 }
 #    endif
 #endif
+
+/// @brief 判断 URL 是否可安全交给系统浏览器。
+/// @param url 待校验的外部链接。
+/// @return 仅 HTTP(S) 且不含空白、控制字符或 NUL 时返回 true。
+bool isSafeExternalUrl(std::string_view url)
+{
+    if ( !(url.starts_with("https://") || url.starts_with("http://")) ||
+         url.size() > 8192U ) {
+        return false;
+    }
+    for ( const unsigned char byte : url ) {
+        if ( byte <= 0x20U || byte == 0x7FU ) return false;
+    }
+    return true;
+}
 }  // namespace
 
 bool openInFileManager(const std::filesystem::path& path, bool selectItem)
@@ -239,6 +266,22 @@ bool openInFileManager(const std::filesystem::path& path, bool selectItem)
         isDirectory ? path : path.parent_path();
     return !directoryToOpen.empty() &&
            launchDetached("xdg-open", nullptr, directoryToOpen);
+#endif
+}
+
+bool openUrlInBrowser(std::string_view url)
+{
+    if ( !isSafeExternalUrl(url) ) return false;
+    const std::string urlText(url);
+
+#if defined(_WIN32)
+    const HINSTANCE result = ShellExecuteA(
+        nullptr, "open", urlText.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(result) > 32;
+#elif defined(__APPLE__)
+    return launchDetachedArgument("open", nullptr, urlText);
+#else
+    return launchDetachedArgument("xdg-open", nullptr, urlText);
 #endif
 }
 

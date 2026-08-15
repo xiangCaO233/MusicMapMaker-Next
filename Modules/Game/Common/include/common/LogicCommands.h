@@ -1,10 +1,13 @@
 #pragma once
 
+#include "common/AutoSaveTypes.h"
+
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "mmm/Metadata.h"
+#include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
@@ -461,10 +464,19 @@ struct CmdMirrorSelected {
 struct CmdAlignSelectedToCommonBeats {
 };
 
-/**
- * @brief 全选指令
- */
+/// @brief 全选命令的轨道区范围。
+enum class SelectAllScope : std::uint8_t {
+    /// @brief 只选中鼠标最后所在轨道区的可编辑物件。
+    CurrentTrackArea,
+
+    /// @brief 选中所有轨道区的可编辑物件。
+    AllTrackAreas,
+};
+
+/// @brief 全选指令。
 struct CmdSelectAll {
+    /// @brief 本次全选覆盖的轨道区范围。
+    SelectAllScope scope{ SelectAllScope::CurrentTrackArea };
 };
 
 /**
@@ -473,6 +485,9 @@ struct CmdSelectAll {
 struct CmdSaveBeatmap {
     /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
     bool allowExternallyModifiedOverwrite{ false };
+
+    /// @brief 保存来源，用于选择自动保存调度和 UI 反馈策略。
+    BeatmapSaveKind kind{ BeatmapSaveKind::Manual };
 };
 
 /**
@@ -638,10 +653,57 @@ struct CmdReplaceBeatmapTimings {
     bool keepNonBpmTimings{ false };
 };
 
+/// @brief 修改一个玩家物件或折线子物件的编辑器注释。
+struct CmdSetNoteAnnotation {
+    /// @brief 根玩家物件实体；折线子物件也通过父折线实体寻址。
+    entt::entity entity{ entt::null };
+
+    /// @brief -1 表示整个物件，非负值表示折线子物件索引。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 待保存的 UTF-8 注释；空字符串表示清除。
+    std::string annotation;
+};
+
+/// @brief 新建或修改一条谱面批注。
+struct CmdUpsertBeatmapAnnotation {
+    /// @brief 空字符串表示新建；非空表示修改已有批注正文。
+    std::string annotationId;
+
+    /// @brief 新建批注所依附的位置类型；修改时保留原目标。
+    ::MMM::BeatmapAnnotationTargetKind targetKind{
+        ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP
+    };
+
+    /// @brief 物件目标所在的独立 Registry；时间戳批注忽略。
+    ChartObjectKind objectKind{ ChartObjectKind::PlayerNote };
+
+    /// @brief 物件目标实体；时间戳批注忽略。
+    entt::entity entity{ entt::null };
+
+    /// @brief Polyline 子物件索引；负值表示玩家物件本体。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 新建独立时间戳批注的位置，单位秒。
+    double timestamp{ 0.0 };
+
+    /// @brief 新建批注时记录的规范化 Creator；修改时保留原作者。
+    std::string author;
+
+    /// @brief Markdown 正文。
+    std::string content;
+};
+
+/// @brief 删除一条谱面批注。
+struct CmdRemoveBeatmapAnnotation {
+    /// @brief 待删除批注的稳定标识。
+    std::string annotationId;
+};
+
 /// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
 struct CmdReplaceBeatmapData {
     /// @brief 数据来源谱面。
-    std::shared_ptr<const MMM::BeatMap> sourceBeatmap;
+    std::shared_ptr<MMM::BeatMap> sourceBeatmap;
 
     /// @brief 是否替换物件数据。
     bool replaceObjects{ false };
@@ -655,12 +717,34 @@ struct CmdReplaceBeatmapData {
     /// @brief 是否替换自动采样对象。
     bool replaceAudioSamples{ false };
 
+    /// @brief 是否按稳定物件标识替换注释。
+    bool replaceAnnotations{ false };
+
     /// @brief 是否把本次替换继续发布给外部谱面变化观察者。
     bool notifyMutationObserver{ true };
 
     /// @brief 是否为房主排序后下发的远端权威状态。
     /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
     bool authoritativeRemote{ false };
+
+    /// @brief 该权威状态已经包含的本机变化序号。
+    /// 逻辑线程只允许覆盖不新于此序号的本地编辑，0 表示没有待确认本地变化。
+    std::uint64_t includedLocalMutationSequence{ 0 };
+
+    /// @brief 后台算出的根物件增删改稳定标识；空 optional 表示完整替换。
+    std::optional<std::vector<std::string>> objectDeltaIdentities;
+
+    /// @brief 后台物件编码基线对应的权威文档修订号。
+    std::uint64_t authoritativeRevision{ 0 };
+
+    /// @brief 是否可在应用后以常量时间安装对应的后台物件编码基线。
+    bool objectEncodingBaselinePrepared{ false };
+};
+
+/// @brief 确认协作权威文档已经接纳指定本地谱面变化。
+struct CmdAcknowledgeCollaborationMutation {
+    /// @brief 已由房主提交的本地变化序号。
+    std::uint64_t sequence{ 0 };
 };
 
 /// @brief 将已经完整校验的协作资源绑定到当前访客会话。
@@ -676,6 +760,15 @@ struct CmdSetCollaborationResources {
 struct CmdSetCollaborationOfflineReadOnly {
     /// @brief 为 true 时取消未完成交互并只允许查看类命令。
     bool readOnly{ false };
+};
+
+/// @brief 切换协作会话的进程内剪贴板隔离范围。
+struct CmdSetCollaborationClipboardIsolation {
+    /// @brief 为 true 时禁止与系统剪贴板及其他 Session 交换谱面内容。
+    bool isolated{ false };
+
+    /// @brief 本次协作绑定的唯一范围标识；非隔离状态为零。
+    std::uint64_t scopeId{ 0 };
 };
 
 /**
@@ -798,12 +891,15 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdReplaceBeatmapData,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
+    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
     CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdSaveTemporaryProject>;
 
@@ -843,8 +939,10 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdCopy> || std::is_same_v<T, CmdSelectAll> ||
                 std::is_same_v<T, CmdScroll> ||
                 std::is_same_v<T, CmdPanCanvas> ||
+                std::is_same_v<T, CmdAcknowledgeCollaborationMutation> ||
                 std::is_same_v<T, CmdSetCollaborationResources> ||
-                std::is_same_v<T, CmdSetCollaborationOfflineReadOnly>;
+                std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
+                std::is_same_v<T, CmdSetCollaborationClipboardIsolation>;
             return !readOnlyCommand;
         },
         command);

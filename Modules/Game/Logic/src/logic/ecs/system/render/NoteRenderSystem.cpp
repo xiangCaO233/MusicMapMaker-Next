@@ -432,8 +432,36 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
-            const float visibleLeft = std::max(0.0F, laneProjection.bgmLeftX);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
+            const float visibleDraftLeft =
+                std::max(0.0F, laneProjection.draftLeftX);
+            const float visibleDraftRight =
+                std::min(viewportWidth, laneProjection.draftRightX);
+            if ( visibleDraftRight > visibleDraftLeft ) {
+                batcher.setScissor(visibleDraftLeft,
+                                   topY,
+                                   visibleDraftRight - visibleDraftLeft,
+                                   bottomY - topY);
+                NoteRenderSystem::drawBeatLines(
+                    batcher,
+                    viewportHeight,
+                    judgmentLineY,
+                    config,
+                    bpmEvents,
+                    renderTime,
+                    cache,
+                    visibleDraftLeft,
+                    topY,
+                    bottomY,
+                    visibleDraftRight - visibleDraftLeft,
+                    renderScaleY,
+                    revealBeatLinesNearCursor,
+                    0.42F,
+                    false);
+            }
+            const float visibleLeft =
+                std::max(0.0F, laneProjection.annotationLeftX);
             const float visibleRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
             if ( visibleRight > visibleLeft ) {
@@ -474,9 +502,9 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
-        float noteRenderRightX = rightX;
-        if ( isMainCanvas &&
-             hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
+        float noteRenderClipLeftX = leftX;
+        float noteRenderRightX    = rightX;
+        if ( isMainCanvas ) {
             const auto laneProjection =
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
@@ -485,8 +513,12 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
-            noteRenderRightX = laneProjection.bgmRightX;
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
+            noteRenderClipLeftX = laneProjection.draftLeftX;
+            if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
+                noteRenderRightX = laneProjection.bgmRightX;
+            }
             batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
         } else {
             batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
@@ -500,6 +532,7 @@ void NoteRenderSystem::generateSnapshot(
                                       config,
                                       batcher,
                                       leftX,
+                                      noteRenderClipLeftX,
                                       noteRenderRightX,
                                       topY,
                                       bottomY,
@@ -514,7 +547,8 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
             SampleRenderSystem::renderSamples(sampleRegistry,
                                               sortedSampleEntities,
                                               sortedSampleMaxEndPrefix,
@@ -537,11 +571,29 @@ void NoteRenderSystem::generateSnapshot(
             float by =
                 viewportHeight - config.visual.previewConfig.margin.bottom;
             batcher.setScissor(lx, ty, rx - lx, by - ty);
+        } else if ( isMainCanvas ) {
+            const auto laneProjection =
+                calculateCanvasLaneProjection(viewportWidth,
+                                              trackCount,
+                                              bgmTrackCount,
+                                              config.visual.trackLayout.left,
+                                              config.visual.trackLayout.right,
+                                              snapshot->canvasHorizontalOffsetX,
+                                              true,
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
+            const float clipLeft = std::max(0.0F, laneProjection.draftLeftX);
+            const float clipRight =
+                std::min(viewportWidth, laneProjection.bgmRightX);
+            batcher.setScissor(clipLeft,
+                               -viewportHeight * 0.5F,
+                               std::max(0.0F, clipRight - clipLeft),
+                               viewportHeight * 2.0F);
         } else {
             batcher.setScissor(leftX,
-                               -viewportHeight * 0.5f,
+                               -viewportHeight * 0.5F,
                                trackAreaW,
-                               viewportHeight * 2.0f);
+                               viewportHeight * 2.0F);
         }
         if ( isMainCanvas && config.visual.debugDrawHitboxes ) {
             NoteRenderSystem::debugRenderHitboxes(batcher, snapshot);
@@ -1202,7 +1254,45 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           config.visual.trackLayout.right,
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
-                                          config.settings.enableBmsEditing);
+                                          config.settings.enableBmsEditing,
+                                          config.settings.enableDraftLanes);
+        const float visibleDraftLeft =
+            std::max(0.0F, laneProjection.draftLeftX);
+        const float visibleDraftRight =
+            std::min(viewportWidth, laneProjection.draftRightX);
+        if ( visibleDraftRight > visibleDraftLeft ) {
+            batcher.setScissor(visibleDraftLeft,
+                               topY,
+                               visibleDraftRight - visibleDraftLeft,
+                               bottomY - topY);
+            NoteRenderSystem::drawTrackBackground(batcher,
+                                                  trackCount,
+                                                  laneProjection.draftLeftX,
+                                                  topY,
+                                                  bottomY,
+                                                  singleTrackW);
+            batcher.setTexture(TextureID::None);
+            batcher.pushQuad(
+                laneProjection.draftLeftX,
+                bottomY,
+                laneProjection.draftRightX - laneProjection.draftLeftX,
+                bottomY - topY,
+                { 0.08F, 0.12F, 0.18F, 0.48F });
+            batcher.pushStrokeRect(laneProjection.draftLeftX,
+                                   topY,
+                                   laneProjection.draftRightX,
+                                   bottomY,
+                                   config.visual.trackBoxLineWidth,
+                                   { 0.35F, 0.55F, 0.75F, 1.0F });
+            NoteRenderSystem::drawJudgmentArea(
+                batcher,
+                trackCount,
+                laneProjection.draftLeftX,
+                judgmentLineY,
+                singleTrackW,
+                laneProjection.draftRightX - laneProjection.draftLeftX,
+                config);
+        }
         SampleRenderSystem::renderLaneLayout(batcher,
                                              laneProjection,
                                              bgmTrackCount,

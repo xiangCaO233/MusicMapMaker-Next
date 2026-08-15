@@ -40,6 +40,9 @@ inline std::optional<int32_t> parseRMInt32(std::string_view text)
 /// @brief 将谱面保存为 RM/IMD 二进制格式。
 inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
+    /// @brief RM/IMD 隐式音频零点允许的最大时间误差，单位为毫秒。
+    static constexpr double IMPLICIT_AUDIO_ZERO_TOLERANCE_MS = 1.0;
+
     /// @brief 判断任意玩家物件是否绑定了 RM/IMD 导出器无法表达的采样。
     const auto hasUnsupportedNoteSampleBinding = [&beatMap]() {
         const auto containsBinding = [](const auto& notes) {
@@ -71,18 +74,6 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         return false;
     }
 
-    const int representableBgmTrackCount =
-        beatMap.m_audioSamples.empty() ? 0 : 1;
-    if ( beatMap.m_baseMapMetadata.bgm_track_count !=
-         representableBgmTrackCount ) {
-        XERROR(
-            "RM/IMD 导出失败：格式只能由单音频隐式表达 {} 条 BGM "
-            "轨，当前谱面显式保存了 {} 条",
-            representableBgmTrackCount,
-            beatMap.m_baseMapMetadata.bgm_track_count);
-        return false;
-    }
-
     const AudioSampleEvent* legacyAudioSample = nullptr;
     if ( beatMap.m_audioSamples.size() > 1 ) {
         XERROR(
@@ -95,18 +86,28 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         legacyAudioSample            = &beatMap.m_audioSamples.front();
         const uint32_t firstBgmTrack = static_cast<uint32_t>(
             std::max(0, beatMap.m_baseMapMetadata.track_count));
+        const uint64_t declaredBgmTrackEnd =
+            static_cast<uint64_t>(firstBgmTrack) +
+            static_cast<uint64_t>(
+                std::max(0, beatMap.m_baseMapMetadata.bgm_track_count));
         if ( legacyAudioSample->m_audioResourceId.empty() ||
              !std::isfinite(legacyAudioSample->m_timestamp) ||
-             std::abs(legacyAudioSample->m_timestamp) > 1e-6 ||
+             std::abs(legacyAudioSample->m_timestamp) >
+                 IMPLICIT_AUDIO_ZERO_TOLERANCE_MS ||
              legacyAudioSample->m_offsetMs != 0 ||
-             legacyAudioSample->m_track != firstBgmTrack ||
+             legacyAudioSample->m_track < firstBgmTrack ||
+             static_cast<uint64_t>(legacyAudioSample->m_track) >=
+                 declaredBgmTrackEnd ||
              !std::isfinite(legacyAudioSample->m_volume) ||
              std::abs(legacyAudioSample->m_volume - 1.0F) > 1e-6F ) {
             XERROR(
-                "RM/IMD 导出失败：自动采样必须是 timestamp=0、offset=0、"
-                "track={}、volume=1 且音频引用非空；当前为 "
+                "RM/IMD 导出失败：自动采样必须是 |timestamp|<=1 ms、"
+                "offset=0、"
+                "track 位于已声明 BGM 轨范围 [{}, {})、volume=1 "
+                "且音频引用非空；当前为 "
                 "timestamp={}、offset={}、track={}、volume={}、ref='{}'",
                 firstBgmTrack,
+                declaredBgmTrackEnd,
                 legacyAudioSample->m_timestamp,
                 legacyAudioSample->m_offsetMs,
                 legacyAudioSample->m_track,

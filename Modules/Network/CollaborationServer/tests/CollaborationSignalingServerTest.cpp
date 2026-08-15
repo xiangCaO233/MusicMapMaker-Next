@@ -23,6 +23,9 @@ using MMM::Network::CollaborationServer::CollaborationSignalingServerConfig;
 
 /// @brief 本机目录与信令集成测试允许的最长等待时间。
 constexpr auto TEST_TIMEOUT = std::chrono::seconds(10);
+/// @brief 测试访客提交的固定 SHA-256 构建指纹。
+constexpr std::string_view TEST_BUILD_FINGERPRINT =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// @brief 测试 WebSocket 的跨回调线程收件箱。
 struct TestSocket {
@@ -204,6 +207,49 @@ bool testDirectoryAndSignalingRelay()
         return fail("room_created_and_listed");
     }
     const std::string roomId = created["roomId"].get<std::string>();
+    if ( roomList["rooms"][0].value("hasCoverImage", false) ||
+         !sendJson(*host,
+                   { { "type", "set_room_cover" },
+                     { "version", 1 },
+                     { "chunkIndex", 0 },
+                     { "chunkCount", 2 },
+                     { "coverChunk", "SGVs" } }) ||
+         !sendJson(*host,
+                   { { "type", "set_room_cover" },
+                     { "version", 1 },
+                     { "chunkIndex", 1 },
+                     { "chunkCount", 2 },
+                     { "coverChunk", "bG8=" } }) ) {
+        return fail("room_cover_upload");
+    }
+    bool receivedCoveredRoomList = false;
+    if ( !pumpUntil(server,
+                    [&]() {
+                        if ( takeMessage(*directory, "room_list", roomList) &&
+                             roomList.contains("rooms") &&
+                             roomList["rooms"].is_array() &&
+                             roomList["rooms"].size() == 1U &&
+                             roomList["rooms"][0].value("hasCoverImage",
+                                                        false) ) {
+                            receivedCoveredRoomList = true;
+                        }
+                        return receivedCoveredRoomList;
+                    }) ||
+         !sendJson(*directory,
+                   { { "type", "get_room_cover" },
+                     { "version", 1 },
+                     { "roomId", roomId } }) ) {
+        return fail("room_cover_request");
+    }
+    nlohmann::json roomCover;
+    if ( !pumpUntil(server,
+                    [&]() {
+                        return takeMessage(*directory, "room_cover", roomCover);
+                    }) ||
+         roomCover.value("roomId", "") != roomId ||
+         roomCover.value("coverImage", "") != "SGVsbG8=" ) {
+        return fail("room_cover_response");
+    }
 
     auto guest = connectSocket(server.listeningPort());
     if ( !guest ||
@@ -233,7 +279,8 @@ bool testDirectoryAndSignalingRelay()
         return fail("join_notifications");
     }
     const std::string requestId = requested.value("requestId", "");
-    if ( requestId.empty() || requestId != pending.value("requestId", "") ) {
+    if ( requestId.empty() || requestId != pending.value("requestId", "") ||
+         requested.contains("guestBuildFingerprint") ) {
         return fail("join_request_identity");
     }
 
@@ -322,7 +369,8 @@ bool testDirectoryAndSignalingRelay()
                    { { "type", "join_room" },
                      { "version", 1 },
                      { "roomId", roomId },
-                     { "creator", "Rejected Creator" } }) ) {
+                     { "creator", "Rejected Creator" },
+                     { "buildFingerprint", TEST_BUILD_FINGERPRINT } }) ) {
         return fail("rejected_guest_join_send");
     }
     nlohmann::json rejectedPending;
@@ -343,12 +391,15 @@ bool testDirectoryAndSignalingRelay()
     const std::string rejectedRequestId =
         rejectedRequested.value("requestId", "");
     if ( rejectedRequestId.empty() ||
+         rejectedRequested.value("guestBuildFingerprint", "") !=
+             TEST_BUILD_FINGERPRINT ||
          !sendJson(*host,
                    { { "type", "reject_join" },
                      { "version", 1 },
                      { "roomId", roomId },
                      { "requestId", rejectedRequestId },
-                     { "ownerToken", "0123456789abcdef0123456789abcdef" } }) ) {
+                     { "ownerToken", "0123456789abcdef0123456789abcdef" },
+                     { "reason", "build_fingerprint_mismatch" } }) ) {
         return fail("host_reject_send");
     }
     nlohmann::json rejectedMessage;
@@ -357,7 +408,7 @@ bool testDirectoryAndSignalingRelay()
                         return takeMessage(
                             *rejectedGuest, "error", rejectedMessage);
                     }) ||
-         rejectedMessage.value("reason", "") != "host_rejected" ) {
+         rejectedMessage.value("reason", "") != "build_fingerprint_mismatch" ) {
         return fail("host_reject_delivery");
     }
     return true;

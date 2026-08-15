@@ -4,6 +4,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -11,6 +12,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SelectionState.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
@@ -90,30 +92,36 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.sortedNoteMaxEndPrefix.clear();
     ctx.sortedSampleEntities.clear();
     ctx.sortedSampleMaxEndPrefix.clear();
+    ctx.annotationRenderCache.clear();
     ctx.previewDensityObjectTimes.clear();
     ctx.previewDensityCache.clear();
     ctx.lastCameraSnapshotTimes.clear();
-    ctx.isNoteOrderDirty      = true;
-    ctx.isNotePruneDirty      = false;
-    ctx.isNoteStatsDirty      = true;
-    ctx.isPreviewDensityDirty = true;
-    ctx.isSampleOrderDirty    = true;
-    ctx.isSamplePruneDirty    = false;
-    ctx.hoveredEntity         = entt::null;
-    ctx.hoveredObjectKind     = ChartObjectKind::PlayerNote;
-    ctx.hoveredPart           = static_cast<std::int32_t>(HoverPart::None);
-    ctx.hoveredSubIndex       = -1;
-    ctx.draggedEntity         = entt::null;
-    ctx.draggedObjectKind     = ChartObjectKind::PlayerNote;
-    ctx.draggedPart           = HoverPart::None;
-    ctx.draggedSubIndex       = -1;
+    ctx.isNoteOrderDirty             = true;
+    ctx.isNotePruneDirty             = false;
+    ctx.isNoteStatsDirty             = true;
+    ctx.isPreviewDensityDirty        = true;
+    ctx.isSampleOrderDirty           = true;
+    ctx.isSamplePruneDirty           = false;
+    ctx.isAnnotationRenderCacheDirty = true;
+    ctx.hoveredEntity                = entt::null;
+    ctx.hoveredObjectKind            = ChartObjectKind::PlayerNote;
+    ctx.hoveredPart       = static_cast<std::int32_t>(HoverPart::None);
+    ctx.hoveredSubIndex   = -1;
+    ctx.draggedEntity     = entt::null;
+    ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+    ctx.draggedPart       = HoverPart::None;
+    ctx.draggedSubIndex   = -1;
     ctx.dragInitialNote.reset();
     ctx.dragInitialSample.reset();
     ctx.isDragging = false;
     ctx.eraserState.targetEntities.clear();
-    ctx.eraserState.isActive                     = false;
-    ctx.eraserState.targetObjectKind             = ChartObjectKind::PlayerNote;
-    ctx.audioTimelineDescriptor                  = {};
+    ctx.eraserState.isActive         = false;
+    ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+    ctx.audioTimelineDescriptor      = {};
+    ctx.m_draftLaneGroupId.clear();
+    ctx.m_draftLaneGroupRevision = 0U;
+    ctx.m_draftLaneBasePayload.clear();
+    ctx.m_needsDraftNotesSync                    = false;
     ctx.audioTimelineTotalTime                   = 0.0;
     ctx.missingAudioTimelineClipCount            = 0U;
     ctx.isAudioTimelineDescriptorDirty           = true;
@@ -121,6 +129,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isAudioTimelineFingerprintPublishPending = true;
 
     ctx.isPlaying                         = false;
+    ctx.isSeekScrubbing                   = false;
     ctx.isAudioTimelineSyncFollower       = false;
     ctx.restartPlaybackAfterFinishPending = false;
     ctx.currentTime                       = 0.0;
@@ -150,6 +159,67 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.trackCount = beatmap->m_baseMapMetadata.track_count;
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值
     ctx.bgmTrackCount = std::max(0, beatmap->m_baseMapMetadata.bgm_track_count);
+
+    // 协作逻辑标识只存在于运行时模型中；载入普通谱面时在构建 ECS 前补齐，
+    // 保证房主首次发布的快照与本地操作栈引用同一逻辑物件。
+    for ( auto& note : beatmap->m_noteData.notes ) {
+        ensureNoteCollaborationIdentity(note);
+    }
+    for ( auto& hold : beatmap->m_noteData.holds ) {
+        ensureNoteCollaborationIdentity(hold);
+    }
+    for ( auto& flick : beatmap->m_noteData.flicks ) {
+        ensureNoteCollaborationIdentity(flick);
+    }
+    for ( auto& polyline : beatmap->m_noteData.polylines ) {
+        ensureNoteCollaborationIdentity(polyline);
+        for ( auto& subNote : polyline.m_subNotes ) {
+            ensureNoteCollaborationIdentity(subNote.get());
+        }
+    }
+    for ( auto& sample : beatmap->m_audioSamples ) {
+        ensureSampleCollaborationIdentity(sample);
+    }
+
+    // 旧版 MMM 把单段纯文本直接挂在玩家物件上；首次进入会话时迁移为
+    // 可多条共存的新批注记录，并保留旧字段以兼容尚未升级的导出链路。
+    std::unordered_set<std::string> migratedLegacyAnnotationKeys;
+    for ( const auto& annotation : beatmap->m_annotations ) {
+        if ( annotation.m_targetKind ==
+             ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            migratedLegacyAnnotationKeys.insert(annotation.m_targetId + "\n" +
+                                                annotation.m_content);
+        }
+    }
+    auto migrateLegacyAnnotation = [&](const ::MMM::Note& note) {
+        if ( note.m_annotation.empty() || note.m_collaborationId.empty() ||
+             beatmap->m_annotations.size() >=
+                 ::MMM::MAX_BEATMAP_ANNOTATION_COUNT ) {
+            return;
+        }
+        const std::string key =
+            note.m_collaborationId + "\n" + note.m_annotation;
+        if ( !migratedLegacyAnnotationKeys.insert(key).second ) return;
+        beatmap->m_annotations.push_back(
+            { .m_id         = makeNoteCollaborationId(),
+              .m_targetKind = ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+              .m_targetId   = note.m_collaborationId,
+              .m_timestamp  = note.m_timestamp,
+              .m_author     = {},
+              .m_content    = note.m_annotation });
+    };
+    for ( const auto& note : beatmap->m_noteData.notes ) {
+        migrateLegacyAnnotation(note);
+    }
+    for ( const auto& hold : beatmap->m_noteData.holds ) {
+        migrateLegacyAnnotation(hold);
+    }
+    for ( const auto& flick : beatmap->m_noteData.flicks ) {
+        migrateLegacyAnnotation(flick);
+    }
+    for ( const auto& polyline : beatmap->m_noteData.polylines ) {
+        migrateLegacyAnnotation(polyline);
+    }
 
     // 清空缓存上下文，以确保重新构建
     if ( auto* cache =
@@ -185,8 +255,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             note.m_timestamp / 1000.0,  // 毫秒转秒
             0.0,
             track);
-        nc.m_metadata      = note.m_metadata;
-        nc.m_sampleBinding = note.getSampleBinding();
+        nc.m_metadata        = note.m_metadata;
+        nc.m_annotation      = note.m_annotation;
+        nc.m_sampleBinding   = note.getSampleBinding();
+        nc.m_collaborationId = note.m_collaborationId;
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -208,8 +280,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             hold.m_timestamp / 1000.0,  // 毫秒转秒
             hold.m_duration / 1000.0,   // 毫秒转秒
             track);
-        nc.m_metadata      = hold.m_metadata;
-        nc.m_sampleBinding = hold.getSampleBinding();
+        nc.m_metadata        = hold.m_metadata;
+        nc.m_annotation      = hold.m_annotation;
+        nc.m_sampleBinding   = hold.getSampleBinding();
+        nc.m_collaborationId = hold.m_collaborationId;
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -232,8 +306,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                                     0.0,
                                                     track,
                                                     flick.m_dtrack);
-        nc.m_metadata      = flick.m_metadata;
-        nc.m_sampleBinding = flick.getSampleBinding();
+        nc.m_metadata        = flick.m_metadata;
+        nc.m_annotation      = flick.m_annotation;
+        nc.m_sampleBinding   = flick.getSampleBinding();
+        nc.m_collaborationId = flick.m_collaborationId;
         loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
@@ -250,8 +326,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
         auto& comp = ctx.noteRegistry.emplace<NoteComponent>(
             entity, polyline.m_type, polyline.m_timestamp / 1000.0, 0.0, track);
-        comp.m_metadata      = polyline.m_metadata;
-        comp.m_sampleBinding = polyline.getSampleBinding();
+        comp.m_metadata        = polyline.m_metadata;
+        comp.m_annotation      = polyline.m_annotation;
+        comp.m_sampleBinding   = polyline.getSampleBinding();
+        comp.m_collaborationId = polyline.m_collaborationId;
         loadNoteColorOverridesFromMetadata(comp);
 
         // 填充子物件并标记它们为 SubNote
@@ -281,8 +359,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 const auto& f = static_cast<const ::MMM::Flick&>(subNote);
                 sn.dtrack     = f.m_dtrack;
             }
-            sn.metadata      = subNote.m_metadata;
-            sn.sampleBinding = subNote.getSampleBinding();
+            sn.metadata        = subNote.m_metadata;
+            sn.annotation      = subNote.m_annotation;
+            sn.sampleBinding   = subNote.getSampleBinding();
+            sn.collaborationId = subNote.m_collaborationId;
             loadNoteColorOverridesFromMetadata(sn);
             comp.m_subNotes.push_back(sn);
         }
@@ -417,6 +497,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         beatmap->m_timings.size(),
         beatmap->m_audioSamples.size());
 
+    ProjectDraftLaneService::load(ctx, project);
+
     ctx.m_needsTimingsSync = false;
     ctx.m_needsNotesSync   = false;
     ctx.m_needsSamplesSync = false;
@@ -425,6 +507,73 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isNoteStatsDirty   = true;
     ctx.isSampleOrderDirty = true;
     ctx.isSamplePruneDirty = false;
+}
+
+bool SessionUtils::syncCreatedNoteToBeatmap(SessionContext&      ctx,
+                                            const NoteComponent& note)
+{
+    if ( !ctx.currentBeatmap || note.m_isDraft || note.m_isSubNote ||
+         note.m_collaborationId.empty() ||
+         (note.m_type != ::MMM::NoteType::NOTE &&
+          note.m_type != ::MMM::NoteType::HOLD &&
+          note.m_type != ::MMM::NoteType::FLICK) ) {
+        return false;
+    }
+
+    NoteComponent synchronized = note;
+    if ( hasAnyNoteColorOverride(synchronized.m_customColors) ) {
+        writeNoteColorOverridesToMetadata(synchronized);
+    }
+
+    auto& mutex = EditorEngine::instance().getSessionMutex();
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    ::MMM::Note*                          appended = nullptr;
+    if ( synchronized.m_type == ::MMM::NoteType::NOTE ) {
+        auto& target      = ctx.currentBeatmap->m_noteData.notes;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::NOTE;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    } else if ( synchronized.m_type == ::MMM::NoteType::HOLD ) {
+        auto& target      = ctx.currentBeatmap->m_noteData.holds;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::HOLD;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_duration        = synchronized.m_duration * 1000.0;
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    } else {
+        auto& target      = ctx.currentBeatmap->m_noteData.flicks;
+        auto& value       = target.emplace_back();
+        value.m_type      = ::MMM::NoteType::FLICK;
+        value.m_timestamp = synchronized.m_timestamp * 1000.0;
+        value.m_track  = static_cast<std::uint32_t>(synchronized.m_trackIndex);
+        value.m_dtrack = synchronized.m_dtrack;
+        value.m_metadata        = synchronized.m_metadata;
+        value.m_annotation      = synchronized.m_annotation;
+        value.m_sampleBinding   = synchronized.m_sampleBinding;
+        value.m_collaborationId = synchronized.m_collaborationId;
+        appended                = &value;
+    }
+
+    const auto insertion = std::upper_bound(
+        ctx.currentBeatmap->m_allNotes.begin(),
+        ctx.currentBeatmap->m_allNotes.end(),
+        appended->m_timestamp,
+        [](double timestamp, const std::reference_wrapper<::MMM::Note>& value) {
+            return timestamp < value.get().m_timestamp;
+        });
+    ctx.currentBeatmap->m_allNotes.insert(insertion, *appended);
+    return true;
 }
 
 
@@ -482,7 +631,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
         for ( auto entity : noteView ) {
             const auto& nc = noteView.get<NoteComponent>(entity);
-            if ( nc.m_isSubNote ) continue;
+            if ( nc.m_isSubNote || nc.m_isDraft ) continue;
             if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
 
             NoteComponent syncedNote = nc;
@@ -492,31 +641,37 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
             if ( nc.m_type == ::MMM::NoteType::NOTE ) {
                 Note n;
-                n.m_type      = ::MMM::NoteType::NOTE;
-                n.m_timestamp = syncedNote.m_timestamp * 1000.0;
-                n.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                n.m_metadata  = syncedNote.m_metadata;
-                n.m_sampleBinding = syncedNote.m_sampleBinding;
+                n.m_type       = ::MMM::NoteType::NOTE;
+                n.m_timestamp  = syncedNote.m_timestamp * 1000.0;
+                n.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                n.m_metadata   = syncedNote.m_metadata;
+                n.m_annotation = syncedNote.m_annotation;
+                n.m_sampleBinding   = syncedNote.m_sampleBinding;
+                n.m_collaborationId = syncedNote.m_collaborationId;
                 newNoteData.notes.push_back(std::move(n));
                 newAllNotes.push_back(newNoteData.notes.back());
             } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
                 Hold h;
-                h.m_type      = ::MMM::NoteType::HOLD;
-                h.m_timestamp = syncedNote.m_timestamp * 1000.0;
-                h.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                h.m_duration  = syncedNote.m_duration * 1000.0;
-                h.m_metadata  = syncedNote.m_metadata;
-                h.m_sampleBinding = syncedNote.m_sampleBinding;
+                h.m_type       = ::MMM::NoteType::HOLD;
+                h.m_timestamp  = syncedNote.m_timestamp * 1000.0;
+                h.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                h.m_duration   = syncedNote.m_duration * 1000.0;
+                h.m_metadata   = syncedNote.m_metadata;
+                h.m_annotation = syncedNote.m_annotation;
+                h.m_sampleBinding   = syncedNote.m_sampleBinding;
+                h.m_collaborationId = syncedNote.m_collaborationId;
                 newNoteData.holds.push_back(std::move(h));
                 newAllNotes.push_back(newNoteData.holds.back());
             } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
                 Flick f;
-                f.m_type      = ::MMM::NoteType::FLICK;
-                f.m_timestamp = syncedNote.m_timestamp * 1000.0;
-                f.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
-                f.m_dtrack    = syncedNote.m_dtrack;
-                f.m_metadata  = syncedNote.m_metadata;
-                f.m_sampleBinding = syncedNote.m_sampleBinding;
+                f.m_type       = ::MMM::NoteType::FLICK;
+                f.m_timestamp  = syncedNote.m_timestamp * 1000.0;
+                f.m_track      = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                f.m_dtrack     = syncedNote.m_dtrack;
+                f.m_metadata   = syncedNote.m_metadata;
+                f.m_annotation = syncedNote.m_annotation;
+                f.m_sampleBinding   = syncedNote.m_sampleBinding;
+                f.m_collaborationId = syncedNote.m_collaborationId;
                 newNoteData.flicks.push_back(std::move(f));
                 newAllNotes.push_back(newNoteData.flicks.back());
             }
@@ -524,7 +679,9 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
         for ( auto entity : noteView ) {
             const auto& nc = noteView.get<NoteComponent>(entity);
-            if ( nc.m_type != ::MMM::NoteType::POLYLINE ) continue;
+            if ( nc.m_isDraft || nc.m_type != ::MMM::NoteType::POLYLINE ) {
+                continue;
+            }
 
             NoteComponent syncedPolyline = nc;
             if ( hasAnyNoteColorOverride(syncedPolyline.m_customColors) ) {
@@ -532,11 +689,13 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             }
 
             Polyline p;
-            p.m_type      = ::MMM::NoteType::POLYLINE;
-            p.m_timestamp = syncedPolyline.m_timestamp * 1000.0;
-            p.m_track     = static_cast<uint32_t>(syncedPolyline.m_trackIndex);
-            p.m_metadata  = syncedPolyline.m_metadata;
-            p.m_sampleBinding = syncedPolyline.m_sampleBinding;
+            p.m_type       = ::MMM::NoteType::POLYLINE;
+            p.m_timestamp  = syncedPolyline.m_timestamp * 1000.0;
+            p.m_track      = static_cast<uint32_t>(syncedPolyline.m_trackIndex);
+            p.m_metadata   = syncedPolyline.m_metadata;
+            p.m_annotation = syncedPolyline.m_annotation;
+            p.m_sampleBinding   = syncedPolyline.m_sampleBinding;
+            p.m_collaborationId = syncedPolyline.m_collaborationId;
 
             for ( const auto& sub_note : syncedPolyline.m_subNotes ) {
                 NoteComponent::SubNote syncedSubNote = sub_note;
@@ -549,9 +708,11 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     n.m_type      = ::MMM::NoteType::NOTE;
                     n.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     n.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    n.m_isSubNote     = true;
-                    n.m_metadata      = syncedSubNote.metadata;
-                    n.m_sampleBinding = syncedSubNote.sampleBinding;
+                    n.m_isSubNote       = true;
+                    n.m_metadata        = syncedSubNote.metadata;
+                    n.m_annotation      = syncedSubNote.annotation;
+                    n.m_sampleBinding   = syncedSubNote.sampleBinding;
+                    n.m_collaborationId = syncedSubNote.collaborationId;
                     newNoteData.notes.push_back(std::move(n));
                     auto& ref = newNoteData.notes.back();
                     p.m_subNotes.push_back(ref);
@@ -561,10 +722,12 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     h.m_type      = ::MMM::NoteType::HOLD;
                     h.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     h.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    h.m_duration      = syncedSubNote.duration * 1000.0;
-                    h.m_isSubNote     = true;
-                    h.m_metadata      = syncedSubNote.metadata;
-                    h.m_sampleBinding = syncedSubNote.sampleBinding;
+                    h.m_duration        = syncedSubNote.duration * 1000.0;
+                    h.m_isSubNote       = true;
+                    h.m_metadata        = syncedSubNote.metadata;
+                    h.m_annotation      = syncedSubNote.annotation;
+                    h.m_sampleBinding   = syncedSubNote.sampleBinding;
+                    h.m_collaborationId = syncedSubNote.collaborationId;
                     newNoteData.holds.push_back(std::move(h));
                     auto& ref = newNoteData.holds.back();
                     p.m_subNotes.push_back(ref);
@@ -575,10 +738,12 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     f.m_type      = ::MMM::NoteType::FLICK;
                     f.m_timestamp = syncedSubNote.timestamp * 1000.0;
                     f.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
-                    f.m_dtrack        = syncedSubNote.dtrack;
-                    f.m_isSubNote     = true;
-                    f.m_metadata      = syncedSubNote.metadata;
-                    f.m_sampleBinding = syncedSubNote.sampleBinding;
+                    f.m_dtrack          = syncedSubNote.dtrack;
+                    f.m_isSubNote       = true;
+                    f.m_metadata        = syncedSubNote.metadata;
+                    f.m_annotation      = syncedSubNote.annotation;
+                    f.m_sampleBinding   = syncedSubNote.sampleBinding;
+                    f.m_collaborationId = syncedSubNote.collaborationId;
                     newNoteData.flicks.push_back(std::move(f));
                     auto& ref = newNoteData.flicks.back();
                     p.m_subNotes.push_back(ref);

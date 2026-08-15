@@ -15,6 +15,10 @@ createTimelineWindowToggleAction();
 std::unique_ptr<IMainMenuToggleItemActionHandler>
 createPreviewWindowToggleAction();
 
+/// @brief 创建主画布批注详情显示开关处理器。
+std::unique_ptr<IMainMenuToggleItemActionHandler>
+createAnnotationDetailsToggleAction();
+
 /// @brief 创建工具按钮文本显示开关处理器。
 std::unique_ptr<IMainMenuToggleItemActionHandler>
 createToolLabelsToggleAction();

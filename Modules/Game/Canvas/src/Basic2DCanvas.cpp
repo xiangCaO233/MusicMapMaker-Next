@@ -1,6 +1,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CanvasTabTitle.h"
+#include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -138,26 +139,6 @@ float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
            static_cast<float>((targetAbsY - currentAbsY) * scale);
 }
 
-/// @brief 根据 PeerId 选择稳定且醒目的覆盖层颜色。
-/// @param peerId 远端参与者标识。
-/// @param alpha 输出透明度。
-/// @return ImGui 使用的 RGBA 颜色。
-ImU32 collaborationPeerColor(Network::Collaboration::PeerId peerId,
-                             std::uint8_t                   alpha)
-{
-    constexpr std::array<ImVec4, 7> COLORS{
-        ImVec4{ 0.20F, 0.72F, 1.00F, 1.00F },
-        ImVec4{ 1.00F, 0.38F, 0.42F, 1.00F },
-        ImVec4{ 0.42F, 0.90F, 0.45F, 1.00F },
-        ImVec4{ 1.00F, 0.72F, 0.22F, 1.00F },
-        ImVec4{ 0.75F, 0.46F, 1.00F, 1.00F },
-        ImVec4{ 0.16F, 0.88F, 0.78F, 1.00F },
-        ImVec4{ 1.00F, 0.46F, 0.82F, 1.00F },
-    };
-    ImVec4 color = COLORS[peerId % COLORS.size()];
-    color.w      = static_cast<float>(alpha) / 255.0F;
-    return ImGui::ColorConvertFloat4ToU32(color);
-}
 }  // namespace
 
 Basic2DCanvas::Basic2DCanvas(
@@ -213,11 +194,13 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    bool    showClose = false;
-    int32_t myIndex   = findSessionIndex();
+    bool    showClose         = false;
+    bool    isLogoPlaceholder = false;
+    int32_t myIndex           = findSessionIndex();
     if ( myIndex != -1 ) {
         const auto* entry = engine.getSessionEntry(myIndex);
-        showClose         = entry && !entry->isLogoPlaceholder;
+        isLogoPlaceholder = entry && entry->isLogoPlaceholder;
+        showClose         = entry && !isLogoPlaceholder;
     }
 
     auto* collaborationRoom =
@@ -226,10 +209,14 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         collaborationRoom &&
         collaborationRoom->state() !=
             Network::Collaboration::CollaborationRoomState::Idle;
-    if ( roomLifecycleActive && !m_wasCollaborationRoomLifecycleActive &&
-         myIndex == engine.getActiveSessionIndex() ) {
-        m_isCollaborationCanvas = true;
-    }
+    m_isCollaborationCanvas = resolveCollaborationCanvasState(
+        m_isCollaborationCanvas,
+        isLogoPlaceholder,
+        m_wasLogoPlaceholder,
+        roomLifecycleActive,
+        m_wasCollaborationRoomLifecycleActive,
+        myIndex == engine.getActiveSessionIndex());
+    m_wasLogoPlaceholder                  = isLogoPlaceholder;
     m_wasCollaborationRoomLifecycleActive = roomLifecycleActive;
 
     std::string_view collaborationStatusLabel;
@@ -470,7 +457,8 @@ void Basic2DCanvas::updateCollaborationViewports(
     localViewport.horizontalOffsetRatio =
         static_cast<double>(m_currentSnapshot->canvasHorizontalOffsetX) /
         static_cast<double>(canvasSize.x);
-    room->publishLocalViewport(localViewport);
+    room->publishLocalViewport(localViewport,
+                               m_currentSnapshot->isSeekScrubbing);
 
     const auto followedPeerId = room->followedPeerId();
     if ( followedPeerId != m_lastFollowedPeerId ) {
@@ -512,7 +500,7 @@ void Basic2DCanvas::updateCollaborationViewports(
         }
     }
 
-    const auto&  creators     = room->participants();
+    const auto&  participants = room->participants();
     const auto   localId      = room->localPeerId();
     const double localMinimum = std::min(m_currentSnapshot->visibleTimeStart,
                                          m_currentSnapshot->visibleTimeEnd);
@@ -528,7 +516,8 @@ void Basic2DCanvas::updateCollaborationViewports(
         layout.right,
         m_currentSnapshot->canvasHorizontalOffsetX,
         true,
-        m_currentSnapshot->bmsEditingEnabled);
+        m_currentSnapshot->bmsEditingEnabled,
+        m_currentSnapshot->draftLanesEnabled);
     if ( !localLaneProjection.valid ) return;
     const auto horizontalRange = projectCollaborationViewportHorizontalRange(
         localLaneProjection.player.leftX,
@@ -539,9 +528,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     /// @brief 判断远端视口是否需要绘制上方或下方离屏提示。
     /// @return 上方提示返回 true，下方提示返回 false，不需要提示则返回空值。
     const auto classifyOffscreenIndicator =
-        [&viewports, &creators, localId, localMinimum, localMaximum, this](
+        [&viewports, &participants, localId, localMinimum, localMaximum, this](
             Network::Collaboration::PeerId peerId) -> std::optional<bool> {
-        if ( peerId == localId || !creators.contains(peerId) ) {
+        if ( peerId == localId || !participants.contains(peerId) ) {
             return std::nullopt;
         }
         const auto viewportIt = viewports.find(peerId);
@@ -578,8 +567,8 @@ void Basic2DCanvas::updateCollaborationViewports(
 
     for ( const auto& [peerId, viewport] : viewports ) {
         if ( peerId == localId ) continue;
-        const auto creator = creators.find(peerId);
-        if ( creator == creators.end() ) continue;
+        const auto participant = participants.find(peerId);
+        if ( participant == participants.end() ) continue;
 
         const double remoteMinimum =
             std::min(viewport.visibleTimeStart, viewport.visibleTimeEnd);
@@ -589,11 +578,12 @@ void Basic2DCanvas::updateCollaborationViewports(
             continue;
         }
 
-        const float leftX     = horizontalRange->leftX;
-        const float rightX    = horizontalRange->rightX;
-        const float centerX   = (leftX + rightX) * 0.5F;
-        const ImU32 color     = collaborationPeerColor(peerId, 255);
-        const bool  following = followedPeerId == peerId;
+        const float leftX   = horizontalRange->leftX;
+        const float rightX  = horizontalRange->rightX;
+        const float centerX = (leftX + rightX) * 0.5F;
+        const ImU32 color =
+            collaborationPeerColor(participant->second.participantId, 255);
+        const bool following = followedPeerId == peerId;
 
         if ( remoteMaximum >= localMinimum && remoteMinimum <= localMaximum ) {
             float firstY = collaborationTimeToCanvasY(
@@ -616,9 +606,11 @@ void Basic2DCanvas::updateCollaborationViewports(
             const float outlineThickness = following ? 3.0F : 2.0F;
             if ( viewportRenderMode ==
                  Config::CollaborationViewportRenderMode::Filled ) {
-                drawList->AddRectFilled(rectangleMinimum,
-                                        rectangleMaximum,
-                                        collaborationPeerColor(peerId, 24));
+                drawList->AddRectFilled(
+                    rectangleMinimum,
+                    rectangleMaximum,
+                    collaborationPeerColor(participant->second.participantId,
+                                           24));
             }
             if ( viewportRenderMode ==
                  Config::CollaborationViewportRenderMode::TrackEdge ) {
@@ -647,7 +639,7 @@ void Basic2DCanvas::updateCollaborationViewports(
             }
 
             const ImVec2 textSize =
-                ImGui::CalcTextSize(creator->second.c_str());
+                ImGui::CalcTextSize(participant->second.creator.c_str());
             const float labelHeight = textSize.y + 6.0F;
             float       labelY      = rectangleMinimum.y - labelHeight;
             if ( labelY < canvasScreenPosition.y ) {
@@ -661,13 +653,14 @@ void Basic2DCanvas::updateCollaborationViewports(
             const ImVec2 labelMinimum{ labelX, labelY };
             const ImVec2 labelMaximum{ labelX + textSize.x + 10.0F,
                                        labelY + labelHeight };
-            drawList->AddRectFilled(labelMinimum,
-                                    labelMaximum,
-                                    collaborationPeerColor(peerId, 220),
-                                    3.0F);
+            drawList->AddRectFilled(
+                labelMinimum,
+                labelMaximum,
+                collaborationPeerColor(participant->second.participantId, 220),
+                3.0F);
             drawList->AddText({ labelX + 5.0F, labelY + 3.0F },
                               IM_COL32(255, 255, 255, 255),
-                              creator->second.c_str());
+                              participant->second.creator.c_str());
             continue;
         }
 
@@ -699,15 +692,17 @@ void Basic2DCanvas::updateCollaborationViewports(
                                     { arrowX - 8.0F, baseY },
                                     { arrowX + 8.0F, baseY },
                                     color);
-        const ImVec2 textSize = ImGui::CalcTextSize(creator->second.c_str());
-        const float  textX =
+        const ImVec2 textSize =
+            ImGui::CalcTextSize(participant->second.creator.c_str());
+        const float textX =
             std::clamp(arrowX - textSize.x * 0.5F,
                        canvasScreenPosition.x + 2.0F,
                        std::max(canvasScreenPosition.x + 2.0F,
                                 canvasMaximum.x - textSize.x - 2.0F));
         const float textY =
             remoteAhead ? baseY + 2.0F : baseY - textSize.y - 2.0F;
-        drawList->AddText({ textX, textY }, color, creator->second.c_str());
+        drawList->AddText(
+            { textX, textY }, color, participant->second.creator.c_str());
 
         const ImVec2 savedCursorPosition = ImGui::GetCursorScreenPos();
         const ImVec2 hitMinimum{
@@ -723,7 +718,7 @@ void Basic2DCanvas::updateCollaborationViewports(
                      std::max({ tipY, baseY, textY + textSize.y }) + 4.0F),
         };
         if ( hitMaximum.x > hitMinimum.x && hitMaximum.y > hitMinimum.y ) {
-            ImGui::PushID(static_cast<int>(peerId));
+            ImGui::PushID(participant->second.participantId.c_str());
             ImGui::SetCursorScreenPos(hitMinimum);
             if ( ImGui::InvisibleButton("##CollaborationViewportJump",
                                         { hitMaximum.x - hitMinimum.x,

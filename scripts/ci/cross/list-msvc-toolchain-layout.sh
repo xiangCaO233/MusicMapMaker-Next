@@ -17,7 +17,6 @@ Environment overrides:
   MSVC_BASE             Default: ${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231
   WINSDK_BASE           Default: ${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10
   WINSDK_VER            Default: 10.0.26100.0
-  VCPKG_ROOT            Default: ${WINDOWS_CROSS_ROOT}/vcpkg
   VULKAN_SDK            Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
 EOF
 }
@@ -61,7 +60,6 @@ WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231}"
 WINSDK_BASE="${WINSDK_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10}"
 WINSDK_VER="${WINSDK_VER:-10.0.26100.0}"
-VCPKG_ROOT="${VCPKG_ROOT:-${WINDOWS_CROSS_ROOT}/vcpkg}"
 VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
 printHeader() {
@@ -115,7 +113,6 @@ printf "WINDOWS_CROSS_ROOT=%s\n" "${WINDOWS_CROSS_ROOT}"
 printf "MSVC_BASE=%s\n" "${MSVC_BASE}"
 printf "WINSDK_BASE=%s\n" "${WINSDK_BASE}"
 printf "WINSDK_VER=%s\n" "${WINSDK_VER}"
-printf "VCPKG_ROOT=%s\n" "${VCPKG_ROOT}"
 printf "VULKAN_SDK=%s\n" "${VULKAN_SDK}"
 
 listDir "Windows cross root" "${WINDOWS_CROSS_ROOT}"
@@ -144,12 +141,6 @@ listDir "Vulkan SDK root" "${VULKAN_SDK}"
 listDir "Vulkan SDK include" "${VULKAN_SDK}/Include"
 listDir "Vulkan SDK vulkan include" "${VULKAN_SDK}/Include/vulkan"
 listDir "Vulkan SDK lib" "${VULKAN_SDK}/Lib"
-
-listDir "vcpkg root" "${VCPKG_ROOT}"
-listDir "vcpkg installed" "${VCPKG_ROOT}/installed"
-listDir "vcpkg x64-windows-static include" "${VCPKG_ROOT}/installed/x64-windows-static/include"
-listDir "vcpkg x64-windows-static lib" "${VCPKG_ROOT}/installed/x64-windows-static/lib"
-listDir "vcpkg x64-windows-static debug lib" "${VCPKG_ROOT}/installed/x64-windows-static/debug/lib"
 
 printHeader "Critical file probes"
 checkFile "MSVC STL vector" "${MSVC_BASE}/include/vector"

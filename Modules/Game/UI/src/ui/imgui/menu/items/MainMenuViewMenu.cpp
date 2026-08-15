@@ -21,6 +21,10 @@ MainMenuViewMenu::MainMenuViewMenu()
         "ui.view.preview",
         MainMenuItemTextKind::TranslationKey,
         createPreviewWindowToggleAction()));
+    registerItem(std::make_unique<MainMenuToggleItem>(
+        "ui.view.annotation_details",
+        MainMenuItemTextKind::TranslationKey,
+        createAnnotationDetailsToggleAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.view.show_tool_labels",

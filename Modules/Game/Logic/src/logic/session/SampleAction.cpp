@@ -4,6 +4,8 @@
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -33,8 +35,9 @@ void ensureSampleAuxiliaryComponents(entt::registry& registry,
 /// @param ctx 会话上下文。
 void markSampleOrderDirty(SessionContext& ctx)
 {
-    ctx.isSampleOrderDirty = true;
-    ctx.isSamplePruneDirty = false;
+    ctx.isSampleOrderDirty           = true;
+    ctx.isSamplePruneDirty           = false;
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 标记自动采样排序索引只需剔除失效实体。
@@ -44,6 +47,7 @@ void markSamplePruneDirty(SessionContext& ctx)
     if ( !ctx.isSampleOrderDirty ) {
         ctx.isSamplePruneDirty = true;
     }
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 计算容纳指定自动采样绝对轨道所需的持久化 BGM 轨道数。
@@ -79,6 +83,7 @@ void SampleAction::execute(SessionContext& ctx)
 
     auto& registry = ctx.sampleRegistry;
     if ( m_type == Type::Create && m_after ) {
+        ensureSampleCollaborationIdentity(*m_after);
         if ( !registry.valid(m_entity) ) {
             m_entity = registry.create(m_entity);
         }
@@ -228,6 +233,17 @@ std::string BatchSampleAction::getName() const
 void TrackCountAction::apply(SessionContext& ctx, std::int32_t trackCount,
                              bool useAfterTrack)
 {
+    const std::int32_t previousTrackCount = ctx.trackCount;
+    auto               noteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( const auto entity : noteView ) {
+        auto& note = noteView.get<NoteComponent>(entity);
+        if ( !note.m_isDraft ) continue;
+        note.m_trackIndex = note.m_trackIndex + previousTrackCount - trackCount;
+        for ( auto& subNote : note.m_subNotes ) {
+            subNote.trackIndex =
+                subNote.trackIndex + previousTrackCount - trackCount;
+        }
+    }
     ctx.trackCount = trackCount;
     if ( ctx.currentBeatmap ) {
         ctx.currentBeatmap->m_baseMapMetadata.track_count = trackCount;
@@ -240,8 +256,10 @@ void TrackCountAction::apply(SessionContext& ctx, std::int32_t trackCount,
         auto& sample   = ctx.sampleRegistry.get<SampleComponent>(change.entity);
         sample.m_track = useAfterTrack ? change.afterTrack : change.beforeTrack;
     }
-    ctx.isTransformDirty   = true;
-    ctx.m_needsSamplesSync = true;
+    ctx.isTransformDirty      = true;
+    ctx.isNoteOrderDirty      = true;
+    ctx.m_needsDraftNotesSync = true;
+    ctx.m_needsSamplesSync    = true;
 }
 
 void TrackCountAction::execute(SessionContext& ctx)

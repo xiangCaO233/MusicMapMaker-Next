@@ -85,7 +85,7 @@ add_test(NAME Test_MMM_Consistency_Collision
 # 背景元数据兼容测试使用程序化谱面，覆盖 osu! 视频事件与 MMM 新旧格式往返。
 mmm_add_test_executable(MMM MetadataCompatibilityTest
                         tests/MetadataCompatibilityTest.cpp)
-target_link_libraries(MetadataCompatibilityTest PRIVATE MMM Log)
+target_link_libraries(MetadataCompatibilityTest PRIVATE MMM Config Log)
 add_test(NAME Test_Metadata_Compatibility
          COMMAND MetadataCompatibilityTest
                  "${TEST_OUTPUT_DIR}/metadata_compatibility")

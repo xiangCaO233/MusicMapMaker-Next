@@ -288,6 +288,64 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         return false;
     };
 
+    /// @brief 判断自动采样是否引用 meta.song.file 指定的主音频。
+    /// @param node 待判断的 Malody note 节点。
+    /// @return sound 字段与主音频路径或文件名一致时返回 true。
+    auto isMainSongSample = [&](const json& node) {
+        const auto sound = node.find("sound");
+        if ( sound == node.end() || !sound->is_string() ||
+             basemeta.song_file_hint.empty() ) {
+            return false;
+        }
+        const std::string& resourceId = sound->get_ref<const std::string&>();
+        const std::string  songFileValue =
+            Config::pathToUtf8(basemeta.song_file_hint);
+        if ( resourceId == songFileValue ) return true;
+        return Config::utf8ToPath(resourceId).filename() ==
+               basemeta.song_file_hint.filename();
+    };
+
+    /// @brief 与首红线 delay 成对编码歌曲相位的主 SOUND 节点。
+    const json* wrappedMainSoundNode = nullptr;
+    /// @brief 首红线相对主音频零点的规范化相位，单位为毫秒。
+    double wrappedFirstTimingPhaseMs = 0.0;
+    if ( !bpmEvents.empty() && fileData.contains("note") ) {
+        const auto&  firstBpmEvent = bpmEvents.front();
+        const double firstBpm =
+            firstBpmEvent.bpm > 0.0 ? firstBpmEvent.bpm : 120.0;
+        const double firstBeatLengthMs = 60000.0 / firstBpm;
+        if ( firstBpmEvent.delayMs >= -1e-6 ) {
+            for ( const auto& node : fileData["note"] ) {
+                if ( !isSoundNote(node) || !isMainSongSample(node) ||
+                     !node.contains("beat") ) {
+                    continue;
+                }
+                const double sampleBeat = beatToDouble(node["beat"]);
+                const double sampleOffset =
+                    readMalodyJsonDouble(node, "offset", 0.0);
+                // Malody 自动测速把“音频零点减首拍相位”按首拍长回卷到
+                // 非负区间，并把结果同时写入 time.delay 与主 SOUND.offset。
+                // 两个字段成对且资源匹配时才可按歌曲相位逆变换。
+                if ( std::abs(sampleBeat - firstBpmEvent.beat) <= 1e-6 &&
+                     sampleOffset >= -1e-6 &&
+                     std::abs(sampleOffset - firstBpmEvent.delayMs) <= 0.51 ) {
+                    wrappedMainSoundNode = &node;
+                    wrappedFirstTimingPhaseMs =
+                        std::fmod(-firstBpmEvent.delayMs, firstBeatLengthMs);
+                    if ( wrappedFirstTimingPhaseMs < 0.0 ) {
+                        wrappedFirstTimingPhaseMs += firstBeatLengthMs;
+                    }
+                    if ( std::abs(wrappedFirstTimingPhaseMs) <= 1e-6 ||
+                         std::abs(wrappedFirstTimingPhaseMs -
+                                  firstBeatLengthMs) <= 1e-6 ) {
+                        wrappedFirstTimingPhaseMs = 0.0;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     // 2.5 预扫描：通过统计学特征自动识别轨道数 (针对 Mode 7 / 坐标模式)
     std::map<int, int> xFreq;
     int                maxColumnField    = -1;
@@ -414,7 +472,22 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     double              anchorBeat = 0.0;
     double              anchorTime = 0.0;
     double              anchorBpm  = getInitialBpm();
-    for ( auto& ev : bpmEvents ) {
+    for ( std::size_t index = 0; index < bpmEvents.size(); ++index ) {
+        auto& ev = bpmEvents[index];
+        if ( index == 0 ) {
+            const double firstBpm   = ev.bpm > 0.0 ? ev.bpm : getInitialBpm();
+            const double beatLength = 60000.0 / firstBpm;
+            if ( wrappedMainSoundNode != nullptr ) {
+                ev.timestamp = ev.beat * beatLength + wrappedFirstTimingPhaseMs;
+            } else {
+                ev.timestamp = ev.beat * beatLength + ev.delayMs;
+            }
+            bpmTimestampsBySourceOrder[ev.sourceOrder] = ev.timestamp;
+            anchorBeat                                 = ev.beat;
+            anchorTime                                 = ev.timestamp;
+            anchorBpm                                  = ev.bpm;
+            continue;
+        }
         ev.timestamp = anchorTime +
                        (ev.beat - anchorBeat) * (60000.0 / anchorBpm) +
                        ev.delayMs;
@@ -424,8 +497,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         anchorBpm                                  = ev.bpm;
     }
 
+    /// @brief 正相位回卷时 note[] 内容在 Malody 拍轴上的整拍补偿。
+    const double malodyNoteBeatShift =
+        wrappedMainSoundNode != nullptr && !bpmEvents.empty() &&
+                bpmEvents.front().timestamp > 1e-6 &&
+                wrappedFirstTimingPhaseMs > 1e-6
+            ? 1.0
+            : 0.0;
+
     auto getBpmAtBeat = [&](double beat) {
-        double curBpm = getInitialBpm();
+        double curBpm =
+            bpmEvents.empty() ? getInitialBpm() : bpmEvents.front().bpm;
         for ( const auto& ev : bpmEvents ) {
             if ( ev.beat > beat + 1e-9 ) break;
             curBpm = ev.bpm;
@@ -439,7 +521,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             relative = &ev;
         }
         if ( relative == nullptr ) {
-            return beat * (60000.0 / getInitialBpm());
+            if ( bpmEvents.empty() ) {
+                return beat * (60000.0 / getInitialBpm());
+            }
+            const auto& first = bpmEvents.front();
+            return first.timestamp +
+                   (beat - first.beat) * (60000.0 / first.bpm);
         }
         return relative->timestamp +
                (beat - relative->beat) * (60000.0 / relative->bpm);
@@ -448,19 +535,11 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
 
-    /// @brief 统计被钳制到第 0 拍供运行时使用的 Malody 特效事件数量。
-    std::size_t clampedNegativeEffectCount = 0;
-
     for ( auto& ev : rawEvents ) {
         Timing timing;
-        double runtimeBeat = ev.beat;
-        if ( !ev.isBpm && runtimeBeat < 0.0 ) {
-            runtimeBeat = 0.0;
-            ++clampedNegativeEffectCount;
-        }
         timing.m_timestamp = ev.isBpm
                                  ? bpmTimestampsBySourceOrder[ev.bpmSourceOrder]
-                                 : getAbsTime(runtimeBeat);
+                                 : getAbsTime(ev.beat);
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -469,7 +548,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            currentBpm                     = getBpmAtBeat(runtimeBeat);
+            currentBpm                     = getBpmAtBeat(ev.beat);
             timing.m_timingEffect          = ev.effect;
             timing.m_bpm                   = currentBpm;
             timing.m_timingEffectParameter = ev.value;
@@ -493,11 +572,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
         }
         beatMap.m_timings.push_back(timing);
-    }
-
-    if ( clampedNegativeEffectCount > 0 ) {
-        XINFO("已将 {} 个负 beat Malody effect 运行时位置收束到 beat 0",
-              clampedNegativeEffectCount);
     }
 
     if ( beatMap.m_timings.empty() ) {
@@ -535,10 +609,16 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         for ( const auto& n : fileData["note"] ) {
             if ( !n.contains("beat") ) continue;
 
+            const bool isAutomaticSample = isSoundNote(n);
+            const bool isWrappedMainSample =
+                isAutomaticSample && &n == wrappedMainSoundNode;
             double startBeat = beatToDouble(n["beat"]);
+            if ( !isWrappedMainSample ) {
+                startBeat -= malodyNoteBeatShift;
+            }
             double startTime = getAbsTime(startBeat);
 
-            if ( isSoundNote(n) ) {
+            if ( isAutomaticSample ) {
                 const auto soundIt = n.find("sound");
                 if ( soundIt == n.end() || !soundIt->is_string() ||
                      soundIt->get_ref<const std::string&>().empty() ) {
@@ -547,8 +627,15 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                 AudioSampleEvent& sample =
                     beatMap.m_audioSamples.emplace_back();
-                sample.m_timestamp = startTime;
-                sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
+                if ( isWrappedMainSample ) {
+                    // 成对字段只描述歌曲相位；MMM 内部将主音频物化在
+                    // 时间零点，避免把 Malody 的相位编码误当成局部 offset。
+                    sample.m_timestamp = 0.0;
+                    sample.m_offsetMs  = 0;
+                } else {
+                    sample.m_timestamp = startTime;
+                    sample.m_offsetMs  = readMalodyJsonInt64(n, "offset", 0);
+                }
                 sample.m_audioResourceId =
                     soundIt->get_ref<const std::string&>();
                 sample.m_volume = Internal::malodyGainPercentToVolume(
@@ -647,7 +734,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
             if ( n.contains("seg") ) {
                 auto   segs         = n["seg"];
-                double rootBeatRaw  = beatToDouble(n["beat"]);
+                double rootBeatRaw  = startBeat;
                 double firstSegBeat = rootBeatRaw + beatToDouble(segs[0].value(
                                                         "beat", json::array()));
                 double firstTime    = getAbsTime(firstSegBeat);
@@ -745,7 +832,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
             } else if ( n.contains("endbeat") ) {
                 // 处理长条 Hold
-                double endBeat   = beatToDouble(n["endbeat"]);
+                double endBeat =
+                    beatToDouble(n["endbeat"]) - malodyNoteBeatShift;
                 double endTime   = getAbsTime(endBeat);
                 Hold&  hold      = beatMap.m_noteData.holds.emplace_back();
                 hold.m_type      = NoteType::HOLD;
@@ -755,28 +843,34 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
                 int trackCount = basemeta.track_count;
-                int x_w =
-                    (trackCount == 4)
-                        ? 64
-                        : (trackCount == 5
-                               ? 51
-                               : (trackCount == 6 ? 43
-                                                  : static_cast<int>(std::round(
-                                                        256.0 / trackCount))));
-                int w_w =
-                    (trackCount == 4)
-                        ? 60
-                        : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
+                int flickWidthBase =
+                    trackCount == 4   ? 60
+                    : trackCount == 5 ? 50
+                    : trackCount == 6 ? 40
+                    : trackCount == 7 ? 30
+                    : trackCount == 8
+                        ? 20
+                        : static_cast<int>(std::round(256.0 / trackCount));
 
-                // 处理滑键 Flick (dtrack = (w - w_w) / x_w，方向由 dir 决定)
+                // Flick 的 w
+                // 个位表示跨轨数；十位基数同时落在皮肤的键数识别区间。
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();
                 flick.m_type      = NoteType::FLICK;
                 flick.m_timestamp = startTime;
                 flick.m_track     = track;
 
-                int wVal            = n.value("w", w_w);
-                int distance_pixels = wVal - w_w;
-                int distance        = distance_pixels;
+                int wVal = n.value("w", flickWidthBase);
+                int distance;
+                if ( trackCount == 7 && wVal >= 37 ) {
+                    // 兼容旧写出器使用 37 作为 7K Flick 基数的文件。
+                    distance = wVal - 37;
+                } else if ( trackCount == 8 && wVal >= 32 ) {
+                    // 兼容旧写出器使用 32 作为 8K Flick 基数的文件。
+                    distance = wVal - 32;
+                } else {
+                    distance = wVal - flickWidthBase;
+                }
+                distance = std::max(0, distance);
 
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)

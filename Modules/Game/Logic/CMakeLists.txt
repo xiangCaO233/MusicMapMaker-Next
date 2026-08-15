@@ -11,6 +11,7 @@ add_library(
   src/logic/session/BeatmapSession_Rendering.cpp
   src/logic/session/SessionUtils.cpp
   src/logic/session/ActionController.cpp
+  src/logic/session/NoteIdentity.cpp
   src/logic/session/EditorAction.cpp
   src/logic/session/SampleAction.cpp
   src/logic/session/tool/GrabTool.cpp
@@ -24,6 +25,7 @@ add_library(
   src/logic/ProjectDirectoryScanner.cpp
   src/logic/ProjectDirectoryWatcher.cpp
   src/logic/ProjectStorage.cpp
+  src/logic/ProjectDraftLaneService.cpp
   src/logic/ProjectResourceService.cpp
   src/logic/MalodyPackageCompatibility.cpp
   src/logic/ProjectCommandService.cpp
@@ -87,10 +89,22 @@ mmm_add_test_executable(Logic ObjectPlacementSnapTest
 target_link_libraries(ObjectPlacementSnapTest PRIVATE Logic Log)
 add_test(NAME ObjectPlacementSnapTest COMMAND ObjectPlacementSnapTest)
 
+# 拍号累计测试覆盖短 BPM 段与整拍边界。
+mmm_add_test_executable(Logic BeatIndexTest tests/BeatIndexTest.cpp)
+target_link_libraries(BeatIndexTest PRIVATE Logic Log)
+add_test(NAME BeatIndexTest COMMAND BeatIndexTest)
+
 # 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。
 mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
 target_link_libraries(ProjectStorageTest PRIVATE Logic Log)
 add_test(NAME ProjectStorageTest COMMAND ProjectStorageTest)
+
+# 临时谱面包测试覆盖旧编码文件名通过 Info-ZIP Unicode Path 恢复为 UTF-8。
+mmm_add_test_executable(Logic TemporaryPackageUnicodePathTest
+                        tests/TemporaryPackageUnicodePathTest.cpp)
+target_link_libraries(TemporaryPackageUnicodePathTest PRIVATE Logic Log)
+add_test(NAME TemporaryPackageUnicodePathTest
+         COMMAND TemporaryPackageUnicodePathTest "${MMM_TEST_RESOURCE_DIR}")
 
 mmm_add_test_executable(Logic ProjectAudioReferenceTest
                         tests/ProjectAudioReferenceTest.cpp)
@@ -116,6 +130,12 @@ add_test(NAME ProjectDirectoryWatcherTest COMMAND ProjectDirectoryWatcherTest)
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
 add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
+
+# Unlimited 空闲门控测试确保暂停时不争抢 Session 锁，实时工作仍保持无限更新。
+mmm_add_test_executable(Logic UnlimitedIdleUpdateGateTest
+                        tests/UnlimitedIdleUpdateGateTest.cpp)
+target_link_libraries(UnlimitedIdleUpdateGateTest PRIVATE Logic Log)
+add_test(NAME UnlimitedIdleUpdateGateTest COMMAND UnlimitedIdleUpdateGateTest)
 
 # 连续播放时钟测试覆盖 block 内推演、校准、暂停、Seek、循环与 UI 补间。
 mmm_add_test_executable(Logic PlaybackVisualClockTest

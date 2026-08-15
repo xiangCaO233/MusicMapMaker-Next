@@ -15,6 +15,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -171,6 +172,13 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     settings.selectedSkinDirectory = skinDirectoryName;
     m_layoutMetricsCache.valid     = false;
     m_hasPreparedLayoutMetrics     = false;
+
+    if ( m_sourceManager ) {
+        if ( auto* mainDock = m_sourceManager->getView<MainDockSpaceUI>(
+                 "MainDockSpaceUI") ) {
+            mainDock->refreshPaletteAfterSkinChange();
+        }
+    }
 
     auto& audio = Audio::AudioManager::instance();
     audio.clearSoundEffects();
@@ -1224,6 +1232,99 @@ void SettingsView::drawSoftwareSettings()
                 (int)Config::SaveFormatPreference::ForceMMM } },
             (int&)settings.saveFormatPreference,
             changed);
+
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.software.auto_save.mode").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.software.auto_save.mode.disabled").data(),
+                (int)Config::AutoSaveMode::Disabled },
+              { TR_CACHE("ui.settings.software.auto_save.mode.timed").data(),
+                (int)Config::AutoSaveMode::Timed },
+              { TR_CACHE("ui.settings.software.auto_save.mode.event").data(),
+                (int)Config::AutoSaveMode::EventTriggered } },
+            (int&)settings.autoSave.mode,
+            changed);
+
+        if ( settings.autoSave.mode == Config::AutoSaveMode::Timed ) {
+            addRadioSetting(
+                *sec,
+                rowIndex,
+                sectionIndex,
+                TR_CACHE("ui.settings.software.auto_save.interval_unit").data(),
+                maxLabelW,
+                { { TR_CACHE(
+                        "ui.settings.software.auto_save.interval_unit.seconds")
+                        .data(),
+                    (int)Config::AutoSaveIntervalUnit::Seconds },
+                  { TR_CACHE(
+                        "ui.settings.software.auto_save.interval_unit.minutes")
+                        .data(),
+                    (int)Config::AutoSaveIntervalUnit::Minutes } },
+                (int&)settings.autoSave.intervalUnit,
+                changed);
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_save.interval").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    ImGui::SetNextItemWidth(r.width);
+                    changed |= ::MMM::UI::FeedbackSliderInt(
+                        "##AutoSaveInterval",
+                        &settings.autoSave.intervalValue,
+                        5,
+                        60);
+                });
+        } else if ( settings.autoSave.mode ==
+                    Config::AutoSaveMode::EventTriggered ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_save.on_object_modified")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoSaveObjectModified",
+                        &settings.autoSave.onObjectModified);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_save.on_beatmap_switch")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoSaveBeatmapSwitch",
+                        &settings.autoSave.onBeatmapSwitch);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_save.on_imgui_focus_lost")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoSaveImGuiFocusLost",
+                        &settings.autoSave.onImGuiWindowFocusLost);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_save.on_native_focus_lost")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoSaveNativeFocusLost",
+                        &settings.autoSave.onNativeWindowFocusLost);
+                });
+        }
 
         addSettingItem(
             *sec,

@@ -1,3 +1,4 @@
+#include "canvas/CanvasContentVisibility.h"
 #include "canvas/TimeFormatUtils.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -204,7 +205,8 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         }
         if ( syncBuffer ) {
             auto snapshot = syncBuffer->getReadingSnapshot();
-            if ( snapshot ) {
+            if ( snapshot &&
+                 Canvas::shouldShowBeatmapDetails(snapshot->hasBeatmap) ) {
                 // 判定线时间 (常驻)
                 const double displayedTime =
                     resolveStatusBarAnimateTime(*snapshot);

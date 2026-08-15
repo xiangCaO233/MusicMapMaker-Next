@@ -86,6 +86,18 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdReplaceBeatmapTimings& cmd);
 
+    /// @brief 处理玩家物件或折线子物件注释修改命令。
+    /// @param cmd 注释目标与内容。
+    void handleCommand(const CmdSetNoteAnnotation& cmd);
+
+    /// @brief 处理谱面多批注的新建或正文修改命令。
+    /// @param cmd 批注目标、作者与 Markdown 正文。
+    void handleCommand(const CmdUpsertBeatmapAnnotation& cmd);
+
+    /// @brief 处理谱面多批注删除命令。
+    /// @param cmd 待删除批注的稳定标识。
+    void handleCommand(const CmdRemoveBeatmapAnnotation& cmd);
+
     /// @brief 处理从其他谱面替换当前谱面数据的命令。
     /// @param cmd 命令数据。
     void handleCommand(const CmdReplaceBeatmapData& cmd);

@@ -86,6 +86,9 @@ struct AudioSampleEvent {
     /// @brief 采样对象附加元数据。
     SampleMetadata m_metadata;
 
+    /// @brief 采样物件在保存与协作同步间保持稳定的逻辑标识。
+    std::string m_collaborationId;
+
     /// @brief 获取应用有符号偏移后的实际播放时间。
     /// @return 实际播放时间，单位为毫秒。
     [[nodiscard]] double effectiveTimestamp() const

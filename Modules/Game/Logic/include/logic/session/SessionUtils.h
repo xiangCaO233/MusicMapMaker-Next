@@ -5,6 +5,7 @@
 #include "logic/session/context/SessionContext.h"
 #include <entt/entt.hpp>
 #include <filesystem>
+#include <span>
 #include <string_view>
 
 namespace MMM
@@ -14,6 +15,34 @@ class Project;
 
 namespace MMM::Logic::SessionUtils
 {
+
+/// @brief 一次音符变更对增量缓存维护暴露的前后状态。
+struct NoteCacheMutationView {
+    /// @brief 变更对应的 ECS 实体。
+    entt::entity entity{ entt::null };
+    /// @brief 变更前的音符组件；创建时为空。
+    const NoteComponent* before{ nullptr };
+    /// @brief 变更后的音符组件；删除时为空。
+    const NoteComponent* after{ nullptr };
+};
+
+/// @brief 直接把少量音符变更合并进排序、统计、密度与打击事件缓存。
+/// @param ctx 当前会话上下文。
+/// @param mutations 已完成 ECS 写入的音符变更集合。
+/// @return 现有缓存可安全增量维护时返回 true；需要调用方回退全量脏标记时
+/// 返回 false。
+/// @warning 逻辑编辑热路径：单次放置和联机差量落地时调用；只允许按变更数
+/// 排序，并从最早受影响位置修补前缀，禁止完整 ECS 遍历或完整全谱排序。
+bool applyNoteCacheMutationsIncrementally(
+    SessionContext& ctx, std::span<const NoteCacheMutationView> mutations);
+
+/// @brief 将一个新建的普通正式音符直接追加到当前领域谱面。
+/// @param ctx 当前会话上下文。
+/// @param note 已写入 ECS 且具有稳定协作标识的音符组件。
+/// @return 普通 Note、Hold 或 Flick 成功增量写回时返回 true。
+/// @warning 逻辑编辑热路径：单次放置调用；只允许追加一个领域对象并在引用索引
+/// 中二分插入，禁止完整 ECS 遍历或整谱重建。
+bool syncCreatedNoteToBeatmap(SessionContext& ctx, const NoteComponent& note);
 
 /// @brief 判断音符是否允许在当前折线编辑模式下响应编辑操作。
 /// @param note 待判断的音符组件。

@@ -151,7 +151,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
-    const bool isContinuingScrub = cmd.isScrubbing && m_isSeekScrubbing;
+    const bool isContinuingScrub = cmd.isScrubbing && m_ctx.isSeekScrubbing;
     m_ctx.restartPlaybackAfterFinishPending = false;
     m_ctx.isAudioTimelineSyncFollower       = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
@@ -195,7 +195,7 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
                                              m_ctx.isPlaying);
         }
     }
-    m_isSeekScrubbing = cmd.isScrubbing;
+    m_ctx.isSeekScrubbing = cmd.isScrubbing;
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
     restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);

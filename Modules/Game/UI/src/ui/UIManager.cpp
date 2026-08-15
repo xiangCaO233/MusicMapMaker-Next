@@ -9,6 +9,7 @@
 #include "event/input/translators/ImGuiTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
 #include "event/project/ProjectEvents.h"
+#include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
 #include "event/ui/iwindow/UIWindowMouseEvent.h"
 #include "event/ui/menu/ProjectLoadedEvent.h"
@@ -395,6 +396,16 @@ UIManager::UIManager()
                     Config::utf8ToPath(event.m_savedProjectPath);
                 m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
             });
+    m_nativeWindowFocusSubId = eventBus.subscribe<Event::GLFWNativeEvent>(
+        [](const Event::GLFWNativeEvent& event) {
+            if ( event.type !=
+                     Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED ||
+                 !event.hasStateChange || event.isFocused ) {
+                return;
+            }
+            Logic::EditorEngine::instance().requestAutoSaveForActiveSession(
+                Logic::AutoSaveTrigger::NativeWindowFocusLost);
+        });
 }
 
 UIManager::~UIManager()
@@ -421,6 +432,9 @@ UIManager::~UIManager()
     if ( m_temporaryProjectSaveResultSubId != 0 ) {
         eventBus.unsubscribe<Event::TemporaryProjectSaveResultEvent>(
             m_temporaryProjectSaveResultSubId);
+    }
+    if ( m_nativeWindowFocusSubId != 0 ) {
+        eventBus.unsubscribe<Event::GLFWNativeEvent>(m_nativeWindowFocusSubId);
     }
 }
 
@@ -1232,7 +1246,30 @@ void UIManager::onUpdateUI()
         sideBarManager->restoreDockResizeMouseAfterDockSpace();
     }
 
+    trackImGuiFocusForAutoSave();
     syncNativeWindowDragAreas();
+}
+
+/// @brief 检测 ImGui 根窗口焦点转移并提交低频自动保存事件。
+void UIManager::trackImGuiFocusForAutoSave()
+{
+    ImGuiID focusedRootId = 0;
+    if ( ImGuiWindow* focused = ImGui::GetCurrentContext()->NavWindow ) {
+        ImGuiWindow* root = focused->RootWindow;
+        if ( root ) focusedRootId = root->ID;
+    }
+
+    if ( !m_imGuiFocusTrackingInitialized ) {
+        m_lastFocusedImGuiRootId        = focusedRootId;
+        m_imGuiFocusTrackingInitialized = true;
+        return;
+    }
+    if ( m_lastFocusedImGuiRootId != 0 &&
+         focusedRootId != m_lastFocusedImGuiRootId ) {
+        Logic::EditorEngine::instance().requestAutoSaveForActiveSession(
+            Logic::AutoSaveTrigger::ImGuiWindowFocusLost);
+    }
+    m_lastFocusedImGuiRootId = focusedRootId;
 }
 
 /// @brief 录制所有离屏渲染指令

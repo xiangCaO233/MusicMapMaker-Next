@@ -5,11 +5,13 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include "imgui.h"
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 namespace MMM::UI
@@ -20,13 +22,14 @@ namespace MMM::UI
 /// @param target 当前控件对应的录制目标。
 /// @param id ImGui 控件 ID 后缀。
 /// @param width 控件可用宽度。
+/// @param conflicted 当前绑定是否与其他快捷键冲突。
 /// @param changed 发生修改时写入 true。
 /// @warning UI 热路径：设置窗口打开且当前页为快捷键页时每帧执行；
 /// 只查询当前帧键盘状态并更新配置。
 void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
                                               ShortcutRecordTarget     target,
                                               const char* id, float width,
-                                              bool& changed)
+                                              bool conflicted, bool& changed)
 {
     ImGui::PushID(id);
 
@@ -73,8 +76,16 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     std::string clearButtonId =
         std::string(clearLabel) + "###ShortcutClear_" + id;
 
-    if ( ::MMM::UI::FeedbackButton(displayButtonId.c_str(),
-                                   ImVec2(displayW, 0.0f)) ) {
+    if ( conflicted ) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              Utils::UIThemeUtils::getDangerColor());
+    }
+    const bool displayClicked = ::MMM::UI::FeedbackButton(
+        displayButtonId.c_str(), ImVec2(displayW, 0.0f));
+    if ( conflicted ) {
+        ImGui::PopStyleColor();
+    }
+    if ( displayClicked ) {
         m_recordingShortcutTarget = target;
         ShortcutUtils::setShortcutRecordingActive(true);
     }
@@ -125,6 +136,40 @@ void SettingsView::drawShortcutSettings()
     m_contentVBox.addLayout(
         "ShortcutSection", shortcutSection, Sizing::Grow(), Sizing::Fit());
 
+    auto& shortcutConfig = settings.shortcutConfig;
+    const std::array<const Config::ShortcutBinding*, 20> shortcutBindings{
+        &shortcutConfig.toolMove,
+        &shortcutConfig.toolMarquee,
+        &shortcutConfig.toolDraw,
+        &shortcutConfig.toolColorBrush,
+        &shortcutConfig.toolColorEraser,
+        &shortcutConfig.mirror,
+        &shortcutConfig.mirrorPaste,
+        &shortcutConfig.editSelectedVolume,
+        &shortcutConfig.addSelectedAnnotation,
+        &shortcutConfig.deleteSelected,
+        &shortcutConfig.togglePlayback,
+        &shortcutConfig.toggleReverseScroll,
+        &shortcutConfig.toggleScrollSnap,
+        &shortcutConfig.toggleSnapFloor,
+        &shortcutConfig.toggleScrollTimingMapping,
+        &shortcutConfig.toggleBeatLines,
+        &shortcutConfig.toggleStopPlaybackOnScroll,
+        &shortcutConfig.toggleHitSfx,
+        &shortcutConfig.toggleHitEffects,
+        &shortcutConfig.toggleSyncSameMainAudio,
+    };
+    auto hasConflict =
+        [&shortcutBindings](const Config::ShortcutBinding& binding) {
+            return std::any_of(shortcutBindings.begin(),
+                               shortcutBindings.end(),
+                               [&binding](const auto* candidate) {
+                                   return candidate != &binding &&
+                                          Config::shortcutBindingsConflict(
+                                              binding, *candidate);
+                               });
+        };
+
     auto addShortcutRow = [&](CLayVBox&                sec,
                               const char*              label,
                               Config::ShortcutBinding& binding,
@@ -133,21 +178,23 @@ void SettingsView::drawShortcutSettings()
         Config::ShortcutBinding* bindingPtr  = &binding;
         ShortcutRecordTarget     targetValue = target;
         std::string              idValue     = id ? id : "";
-        addSettingItem(sec,
-                       rowIndex,
-                       label,
-                       maxLabelW,
-                       [this, bindingPtr, targetValue, idValue, &changed](
-                           Clay_BoundingBox r, bool) {
-                           drawShortcutBindingControl(*bindingPtr,
-                                                      targetValue,
-                                                      idValue.c_str(),
-                                                      r.width,
-                                                      changed);
-                       });
+        const bool               conflicted  = hasConflict(binding);
+        addSettingItem(
+            sec,
+            rowIndex,
+            label,
+            maxLabelW,
+            [this, bindingPtr, targetValue, idValue, conflicted, &changed](
+                Clay_BoundingBox r, bool) {
+                drawShortcutBindingControl(*bindingPtr,
+                                           targetValue,
+                                           idValue.c_str(),
+                                           r.width,
+                                           conflicted,
+                                           changed);
+            },
+            conflicted);
     };
-
-    auto& shortcutConfig = settings.shortcutConfig;
 
     addShortcutRow(shortcutSection,
                    TR_CACHE("ui.settings.shortcut.tool_move").data(),
@@ -190,11 +237,22 @@ void SettingsView::drawShortcutSettings()
                    shortcutConfig.editSelectedVolume,
                    ShortcutRecordTarget::EditSelectedVolume,
                    "EditSelectedVolume");
+    addShortcutRow(
+        shortcutSection,
+        TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
+        shortcutConfig.addSelectedAnnotation,
+        ShortcutRecordTarget::AddSelectedAnnotation,
+        "AddSelectedAnnotation");
     addShortcutRow(shortcutSection,
                    TR_CACHE("ui.settings.shortcut.delete_selected").data(),
                    shortcutConfig.deleteSelected,
                    ShortcutRecordTarget::DeleteSelected,
                    "DeleteSelected");
+    addShortcutRow(shortcutSection,
+                   TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
+                   shortcutConfig.togglePlayback,
+                   ShortcutRecordTarget::TogglePlayback,
+                   "TogglePlayback");
 
     addShortcutRow(
         shortcutSection,

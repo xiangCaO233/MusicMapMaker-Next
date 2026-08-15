@@ -5,6 +5,8 @@
 #include "common/ChartObjectKind.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "event/core/EventBus.h"
+#include "mmm/annotation/BeatmapAnnotation.h"
+#include <array>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
@@ -139,6 +141,23 @@ private:
         const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
         float canvasScreenY, float targetWidth, float targetHeight,
         float pointerX, float pointerY);
+    /// @brief 绘制批注标记区、悬浮详情和时间戳批注编辑弹窗。
+    /// @param currentSnapshot 当前主画布渲染快照。
+    /// @param canvasScreenX 画布左上角屏幕横坐标。
+    /// @param canvasScreenY 画布左上角屏幕纵坐标。
+    /// @param targetWidth 画布宽度。
+    /// @param targetHeight 画布高度。
+    /// @param pointerX 指针相对画布左侧的横坐标。
+    /// @param pointerY 指针相对画布顶部的纵坐标。
+    /// @param canvasHovered 指针是否位于当前画布。
+    /// @return 批注标记区或弹窗正在取得画布交互所有权时返回 true。
+    /// @warning UI 热路径：只遍历当前快照已裁剪的可见批注标记；不访问 ECS、
+    /// 文件系统或完整谱面。
+    bool renderAnnotationGutter(const Logic::RenderSnapshot& currentSnapshot,
+                                float canvasScreenX, float canvasScreenY,
+                                float targetWidth, float targetHeight,
+                                float pointerX, float pointerY,
+                                bool canvasHovered);
     /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
@@ -226,6 +245,31 @@ private:
 
     /// @brief 允许指针从物件移动到按钮而不使按钮消失的试听覆盖层状态。
     AudioPreviewOverlayState m_audioPreviewOverlay;
+    /// @brief 批注编辑弹窗的跨帧状态。
+    struct AnnotationEditorState {
+        /// @brief 下一帧需要打开弹窗。
+        bool requestOpen{ false };
+        /// @brief 空字符串表示新建独立时间戳批注。
+        std::string annotationId;
+        /// @brief 编辑既有批注时显示的原批注人。
+        std::string author;
+        /// @brief 新建批注的时间戳，单位秒。
+        double timestamp{ 0.0 };
+        /// @brief Markdown 正文编辑缓冲区。
+        std::array<char, ::MMM::MAX_BEATMAP_ANNOTATION_CONTENT_BYTES + 1U>
+            content{};
+    };
+
+    /// @brief 当前批注编辑弹窗状态。
+    AnnotationEditorState m_annotationEditor;
+    /// @brief 当前悬浮标记的首条批注 ID，用于检测标记变化。
+    std::string m_annotationHoverMarkerId;
+    /// @brief 当前悬浮标记中由滚轮选择的详细批注索引。
+    std::size_t m_annotationHoverDetailIndex{ 0U };
+    /// @brief 当前保留正文滚动位置的连线卡片批注 ID。
+    std::string m_annotationDetailScrollItemId;
+    /// @brief 当前连线卡片 Markdown 正文的纵向滚动偏移。
+    float m_annotationDetailScrollY{ 0.0F };
     /// @brief 上一次发送给逻辑线程的鼠标状态。
     LastMouseCommand m_lastMouseCommand;
     /// @brief 上一次发送给逻辑线程的悬浮实体。

@@ -145,6 +145,10 @@ private:
     /// @brief Timeline Timing 选择使用的屏幕空间矩形。
     struct TimingSelectionRect;
 
+    /// @brief 提交总时间轴最近一次连续 Seek，并结束联机视口延迟发布状态。
+    /// @warning UI 热路径：仅在拖动结束或窗口中断交互时发布一条命令。
+    void commitAudioTimeSliderScrub();
+
     // 渲染编辑器弹窗
     void renderEventEditorPopup();
 

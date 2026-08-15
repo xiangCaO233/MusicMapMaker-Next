@@ -1,27 +1,90 @@
 #include "network/collaboration/CollaborationRoom.h"
 
+#include "network/collaboration/CollaborationBuildFingerprint.h"
+
 #include "config/CreatorIdentity.h"
+#include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
+
+#include <concurrentqueue.h>
+#include <ice/thread/ThreadPool.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <utility>
+#include <vector>
 
 namespace MMM::Network::Collaboration
 {
+namespace
+{
+/// @brief 判断权限集合是否覆盖一次谱面分类变更。
+[[nodiscard]] bool permissionsAllowMutation(
+    CollaborationPermissionMask permissions, ::MMM::BeatmapMutationFlags flags)
+{
+    if ( !hasCollaborationPermission(permissions,
+                                     CollaborationPermission::Edit) ) {
+        return false;
+    }
+    const auto allows = [permissions,
+                         flags](::MMM::BeatmapMutationFlags flag,
+                                CollaborationPermission     permission) {
+        return !hasBeatmapMutationFlag(flags, flag) ||
+               hasCollaborationPermission(permissions, permission);
+    };
+    return allows(::MMM::BeatmapMutationFlags::Objects,
+                  CollaborationPermission::Objects) &&
+           allows(::MMM::BeatmapMutationFlags::Timelines,
+                  CollaborationPermission::Timelines) &&
+           allows(::MMM::BeatmapMutationFlags::AudioSamples,
+                  CollaborationPermission::AudioSamples) &&
+           allows(::MMM::BeatmapMutationFlags::Metadata,
+                  CollaborationPermission::Metadata) &&
+           allows(::MMM::BeatmapMutationFlags::Annotations,
+                  CollaborationPermission::Annotations);
+}
+}  // namespace
+
 namespace
 {
 /// @brief 房主使用的固定内部 PeerId。
 constexpr PeerId DEFAULT_HOST_ID = 1;
 /// @brief 每个房间最多保留的日志条数。
 constexpr std::size_t MAX_COLLABORATION_LOG_ENTRIES = 1000;
+/// @brief 当前联机会话在内存中保留的最大聊天记录数。
+constexpr std::size_t MAX_COLLABORATION_CHAT_ENTRIES = 200;
 /// @brief 每帧最多消费的传输生命周期事件数。
 constexpr std::size_t MAX_TRANSPORT_EVENTS_PER_UPDATE = 256;
+
+/// @brief 返回只用于本地诊断的构建指纹短前缀。
+/// @param fingerprint 完整的 SHA-256 构建指纹。
+/// @return 最多前 12 个十六进制字符。
+[[nodiscard]] std::string_view fingerprintPrefix(std::string_view fingerprint)
+{
+    return fingerprint.substr(0,
+                              std::min<std::size_t>(12U, fingerprint.size()));
+}
 /// @brief 每帧最多向权威 Peer 提交的本地谱面操作数。
 constexpr std::size_t MAX_LOCAL_OPERATIONS_PER_UPDATE = 256;
+/// @brief 每帧最多向逻辑线程发布的后台谱面合并结果数。
+constexpr std::size_t MAX_REMOTE_RESULTS_PER_UPDATE = 4;
+/// @brief 每帧最多追加的后台操作日志数。
+constexpr std::size_t MAX_REMOTE_LOG_RESULTS_PER_UPDATE = 256;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
+/// @brief 房主完整重同步快照的最短刷新间隔；普通操作增量不受此限制。
+constexpr auto HOST_SNAPSHOT_REFRESH_INTERVAL = std::chrono::seconds(1);
+
+/// @brief 获取 steady_clock 当前时间的纳秒整数，供跨线程非阻塞截止时间比较。
+std::int64_t steadyNowNanoseconds()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 /// @brief 目录连接失败后的重试间隔。
 constexpr auto DIRECTORY_RECONNECT_INTERVAL = std::chrono::seconds(5);
@@ -51,11 +114,91 @@ constexpr std::uint32_t MAX_VIEWPORT_PUBLISH_RATE_HZ = 60;
 }
 }  // namespace
 
+/// @brief 隔离协作文档后台流水线的队列和任务生命周期实现。
+class CollaborationRoom::RemoteOperationPipeline
+{
+public:
+    /// @brief 后台协作文档流水线接收的一条权威提交。
+    struct Task {
+        /// @brief 房主已经排序的提交内容。
+        CommittedOperation operation;
+        /// @brief 提交者当前对应的 PeerId。
+        PeerId peerId{ 0 };
+        /// @brief 提交者显示身份。
+        std::string creator;
+        /// @brief 当前实例是否为房主，用于生成最新重同步快照。
+        bool host{ false };
+        /// @brief 本地待确认操作是否需要在权威文档上重放。
+        bool reapplyLocalState{ false };
+        /// @brief 本次提交是否由当前进程发起。
+        bool originatedLocally{ false };
+        /// @brief 本次权威提交已经确认的本地变化序号。
+        std::uint64_t committedLocalMutationSequence{ 0 };
+    };
+
+    /// @brief 后台协作文档流水线交还 UI 线程的有界结果。
+    struct Result {
+        /// @brief 是否把该结果记录为一条独立提交日志。
+        bool logOperation{ true };
+        /// @brief 提交者当前对应的 PeerId。
+        PeerId peerId{ 0 };
+        /// @brief 提交者稳定协作标识。
+        ParticipantId participantId;
+        /// @brief 提交者显示身份。
+        std::string creator;
+        /// @brief 提交修订号。
+        std::uint64_t revision{ 0 };
+        /// @brief 后台合并成功后需要替换的谱面类别。
+        ::MMM::BeatmapMutationFlags flags{ ::MMM::BeatmapMutationFlags::None };
+        /// @brief 已重放本地待确认操作的可见谱面。
+        std::shared_ptr<::MMM::BeatMap> beatmap;
+        /// @brief 当前可见谱面相对上次交付发生变化的根物件稳定标识。
+        std::optional<std::vector<std::string>> objectDeltaIdentities;
+        /// @brief 后台已经完成扫描和编码的玩家物件基线。
+        std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline>
+            objectEncodingBaseline;
+        /// @brief 可见谱面已经包含的最新本地变化序号。
+        std::uint64_t includedLocalMutationSequence{ 0 };
+        /// @brief 房主用于后续访客重同步的最新快照。
+        std::optional<ByteBuffer> hostSnapshot;
+        /// @brief 后台处理失败时写入协作日志的错误标识。
+        std::string error;
+    };
+
+    /// @brief UI 线程向后台文档消费者投递的无锁权威提交队列。
+    moodycamel::ConcurrentQueue<Task> tasks;
+    /// @brief 后台文档消费者向 UI 线程发布的无锁结果队列。
+    moodycamel::ConcurrentQueue<Result> results;
+    /// @brief 不得阻塞最新谱面交付的独立操作日志队列。
+    moodycamel::ConcurrentQueue<Result> operationLogs;
+    /// @brief 后台消费者状态：0 为空闲、1 为运行、2 为运行且收到新唤醒。
+    /// @warning UI 线程在提交任务后使用 acq_rel 更新，后台消费者在排空边界
+    /// 使用 acq_rel 交接；只协调唯一消费者，不承载文档数据同步。
+    std::atomic_uint8_t workerState{ 0U };
+    /// @brief 权威文档是否存在尚未压缩进房主重同步快照的修订。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；仅用于低频任务调度，
+    /// 使用 acquire/release，不能承载文档数据或替代唯一消费者所有权。
+    std::atomic_bool hostSnapshotDirty{ false };
+    /// @brief 等待写入下一份房主重同步快照的最新权威修订号。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；只用于给快照标记修订。
+    std::atomic_uint64_t pendingHostSnapshotRevision{ 0U };
+    /// @brief 下次允许压缩完整房主快照的 steady_clock 纳秒时间。
+    /// @warning 后台文档消费者写入，UI 网络循环读取；每帧只做一次 relaxed
+    /// 整数比较，避免完整 JSON 压缩随每条物件操作重复执行。
+    std::atomic_int64_t nextHostSnapshotBuildNanoseconds{ 0 };
+    /// @brief 已提交后台消费者任务，用于房间销毁前完成全部生命周期握手。
+    std::vector<std::future<void>> workerFutures;
+    /// @brief 上一次交付给逻辑线程的可见规范文档，仅由唯一后台消费者访问。
+    std::unique_ptr<BeatmapDocumentCodec> visibleDocument;
+};
+
 CollaborationRoom::CollaborationRoom()
     : m_nextDirectoryReconnect(std::chrono::steady_clock::now())
     , m_startedAt(std::chrono::steady_clock::now())
     , m_nextViewportPublish(std::chrono::steady_clock::now())
 {
+    m_remoteOperationPipeline = std::make_unique<RemoteOperationPipeline>();
+    m_remoteOperationPipeline->workerFutures.reserve(4U);
 }
 
 CollaborationRoom::~CollaborationRoom()
@@ -64,6 +207,7 @@ CollaborationRoom::~CollaborationRoom()
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
+    resetRemoteOperationPipeline();
 }
 
 bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
@@ -71,7 +215,14 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
     config.creator = Config::normalizeCreatorIdentity(config.creator);
-    if ( config.creator.empty() || config.roomName.empty() ||
+    config.participantId =
+        Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.buildFingerprint.empty() ) {
+        config.buildFingerprint = collaborationBuildFingerprint();
+    }
+    if ( config.creator.empty() || config.participantId.empty() ||
+         config.roomName.empty() ||
+         !isValidCollaborationBuildFingerprint(config.buildFingerprint) ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_host_configuration");
         return false;
@@ -80,10 +231,16 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
 
     auto             transport = std::make_unique<WebRtcTransport>();
     WebRtcHostConfig transportConfig;
-    transportConfig.endpoint = config.endpoint;
-    transportConfig.roomName = config.roomName;
-    transportConfig.creator  = config.creator;
-    transportConfig.hostId   = DEFAULT_HOST_ID;
+    transportConfig.endpoint         = config.endpoint;
+    transportConfig.roomName         = config.roomName;
+    transportConfig.creator          = config.creator;
+    transportConfig.roomCoverImage   = std::move(config.roomCoverImage);
+    transportConfig.participantId    = config.participantId;
+    transportConfig.sessionId        = Config::makeCollaborationStableId();
+    transportConfig.hostId           = DEFAULT_HOST_ID;
+    transportConfig.buildFingerprint = config.buildFingerprint;
+    transportConfig.requireMatchingBuildFingerprint =
+        config.requireMatchingBuildFingerprint;
     if ( !transport->startHost(transportConfig) ) {
         fail("host_signaling_start_failed");
         return false;
@@ -92,20 +249,29 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_state  = CollaborationRoomState::Hosting;
     m_isHost = true;
     m_roomId.clear();
-    m_roomName       = std::move(config.roomName);
-    m_serverEndpoint = std::move(config.endpoint);
-    m_creator        = std::move(config.creator);
+    m_roomName                        = std::move(config.roomName);
+    m_serverEndpoint                  = std::move(config.endpoint);
+    m_creator                         = std::move(config.creator);
+    m_participantId                   = std::move(config.participantId);
+    m_operationSessionId              = std::move(transportConfig.sessionId);
+    m_buildFingerprint                = std::move(config.buildFingerprint);
+    m_requireMatchingBuildFingerprint = config.requireMatchingBuildFingerprint;
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_nextViewportPublish = std::chrono::steady_clock::now();
-    m_followedPeerId      = 0;
+    m_localViewportPublishDeferred = false;
+    m_nextViewportPublish          = std::chrono::steady_clock::now();
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
-    m_documentCodec.reset();
+    resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(COLLABORATION_PERMISSION_ALL,
+                             std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(true, std::memory_order_relaxed);
     m_acceptLocalMutations.store(true, std::memory_order_release);
@@ -114,17 +280,22 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         m_localMutationCodec.reset();
         m_localOperationQueue.clear();
         m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked = false;
-        m_localStateNeedsRebase       = false;
+        m_localOperationSubmitBlocked          = false;
+        m_localStateNeedsRebase                = false;
+        m_remoteStateApplyPending              = false;
+        m_nextLocalMutationSequence            = 1;
+        m_latestCommittedLocalMutationSequence = 0;
     }
 
     m_transport = transport.get();
     CollaborationPeerConfig peerConfig;
-    peerConfig.clientId = DEFAULT_HOST_ID;
-    peerConfig.hostId   = DEFAULT_HOST_ID;
-    peerConfig.creator  = m_creator;
-    peerConfig.isHost   = true;
-    m_peer              = std::make_unique<CollaborationPeer>(
+    peerConfig.peerId        = DEFAULT_HOST_ID;
+    peerConfig.hostPeerId    = DEFAULT_HOST_ID;
+    peerConfig.participantId = m_participantId;
+    peerConfig.sessionId     = m_operationSessionId;
+    peerConfig.creator       = m_creator;
+    peerConfig.isHost        = true;
+    m_peer                   = std::make_unique<CollaborationPeer>(
         std::move(peerConfig),
         std::move(transport),
         [this](const CommittedOperation& operation) {
@@ -132,6 +303,12 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
             handleResourceMessage(senderId, message);
+        },
+        [this](const CollaborationChatMessage& message) {
+            handleChatMessage(message);
+        },
+        [this](PeerId peerId, std::span<const std::uint8_t> payload) {
+            return authorizeParticipantEdit(peerId, payload);
         });
     if ( !m_peer->isValid() ) {
         fail("host_peer_create_failed");
@@ -152,7 +329,14 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     if ( m_state != CollaborationRoomState::Idle ) return false;
 
     config.creator = Config::normalizeCreatorIdentity(config.creator);
-    if ( config.creator.empty() || config.roomId.empty() ||
+    config.participantId =
+        Config::normalizeCollaborationStableId(config.participantId);
+    if ( config.buildFingerprint.empty() ) {
+        config.buildFingerprint = collaborationBuildFingerprint();
+    }
+    if ( config.creator.empty() || config.participantId.empty() ||
+         config.roomId.empty() ||
+         !isValidCollaborationBuildFingerprint(config.buildFingerprint) ||
          makeCollaborationSignalingUrl(config.endpoint).empty() ) {
         fail("invalid_join_configuration");
         return false;
@@ -161,32 +345,43 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
 
     auto              transport = std::make_unique<WebRtcTransport>();
     WebRtcGuestConfig transportConfig;
-    transportConfig.endpoint = config.endpoint;
-    transportConfig.roomId   = config.roomId;
-    transportConfig.creator  = config.creator;
-    transportConfig.hostId   = DEFAULT_HOST_ID;
+    transportConfig.endpoint         = config.endpoint;
+    transportConfig.roomId           = config.roomId;
+    transportConfig.creator          = config.creator;
+    transportConfig.participantId    = config.participantId;
+    transportConfig.sessionId        = Config::makeCollaborationStableId();
+    transportConfig.hostId           = DEFAULT_HOST_ID;
+    transportConfig.buildFingerprint = config.buildFingerprint;
     if ( !transport->connectToHost(transportConfig) ) {
         fail("signaling_connect_start_failed");
         return false;
     }
 
-    m_state          = CollaborationRoomState::Joining;
-    m_isHost         = false;
-    m_roomId         = std::move(config.roomId);
-    m_roomName       = std::move(config.roomName);
-    m_serverEndpoint = std::move(config.endpoint);
-    m_creator        = std::move(config.creator);
+    m_state                           = CollaborationRoomState::Joining;
+    m_isHost                          = false;
+    m_roomId                          = std::move(config.roomId);
+    m_roomName                        = std::move(config.roomName);
+    m_serverEndpoint                  = std::move(config.endpoint);
+    m_creator                         = std::move(config.creator);
+    m_participantId                   = std::move(config.participantId);
+    m_operationSessionId              = std::move(transportConfig.sessionId);
+    m_buildFingerprint                = std::move(config.buildFingerprint);
+    m_requireMatchingBuildFingerprint = true;
     m_lastError.clear();
     m_startedAt       = std::chrono::steady_clock::now();
     m_nextLogSequence = 1;
     m_logs.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_nextViewportPublish = std::chrono::steady_clock::now();
-    m_followedPeerId      = 0;
+    m_localViewportPublishDeferred = false;
+    m_nextViewportPublish          = std::chrono::steady_clock::now();
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
-    m_documentCodec.reset();
+    resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(0U, std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
     m_hostRoleForObserver.store(false, std::memory_order_relaxed);
     m_acceptLocalMutations.store(true, std::memory_order_release);
@@ -198,8 +393,11 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
         m_localMutationCodec.reset();
         m_localOperationQueue.clear();
         m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked = false;
-        m_localStateNeedsRebase       = false;
+        m_localOperationSubmitBlocked          = false;
+        m_localStateNeedsRebase                = false;
+        m_remoteStateApplyPending              = false;
+        m_nextLocalMutationSequence            = 1;
+        m_latestCommittedLocalMutationSequence = 0;
     }
     m_transport        = transport.get();
     m_pendingTransport = std::move(transport);
@@ -261,6 +459,12 @@ bool CollaborationRoom::removeParticipant(PeerId peerId)
     return m_transport->disconnectPeer(peerId, "removed_by_host");
 }
 
+bool CollaborationRoom::setParticipantPermissions(
+    PeerId peerId, CollaborationPermissionMask permissions)
+{
+    return m_peer && m_peer->setParticipantPermissions(peerId, permissions);
+}
+
 bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
 {
     if ( isActive() || makeCollaborationSignalingUrl(endpoint).empty() ) {
@@ -284,6 +488,12 @@ void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
     m_applyBeatmapCallback = std::move(callback);
 }
 
+void CollaborationRoom::setLocalMutationAcknowledgedCallback(
+    LocalMutationAcknowledgedCallback callback)
+{
+    m_localMutationAcknowledgedCallback = std::move(callback);
+}
+
 void CollaborationRoom::setResourceBundleCallback(
     ResourceBundleCallback callback)
 {
@@ -298,30 +508,34 @@ void CollaborationRoom::prepareHostResources(const ::MMM::Project& project,
     m_resourceSync.startHost(project, beatmap);
 }
 
-void CollaborationRoom::onBeatmapMutated(const ::MMM::BeatMap&       beatmap,
-                                         ::MMM::BeatmapMutationFlags flags)
+std::uint64_t CollaborationRoom::onBeatmapMutated(
+    const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags)
 {
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
+    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return 0;
 
     const bool host = m_hostRoleForObserver.load(std::memory_order_relaxed);
     if ( !host && !m_hasDocument.load(std::memory_order_acquire) ) {
-        return;
+        return 0;
     }
 
     std::lock_guard lock(m_localOperationMutex);
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
+    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return 0;
     if ( m_localOperationQueue.size() >= MAX_QUEUED_LOCAL_OPERATIONS ) {
-        return;
+        return 0;
     }
     const bool snapshot =
         host && !m_initialSnapshotQueued.load(std::memory_order_relaxed);
     auto payload = m_localMutationCodec.encode(beatmap, flags, snapshot);
-    if ( !payload.has_value() ) return;
+    if ( !payload.has_value() ) return 0;
 
-    m_localOperationQueue.push_back(std::move(payload.value()));
+    const std::uint64_t sequence = m_nextLocalMutationSequence++;
+    m_localOperationQueue.push_back(
+        LocalOperation{ std::move(payload.value()), sequence });
+    if ( m_remoteStateApplyPending ) m_localStateNeedsRebase = true;
     if ( snapshot ) {
         m_initialSnapshotQueued.store(true, std::memory_order_relaxed);
     }
+    return sequence;
 }
 
 void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
@@ -330,6 +544,36 @@ void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
     std::lock_guard lock(m_localOperationMutex);
     if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
     m_localMutationCodec.synchronizeEncodingBaseline(beatmap);
+    m_pendingObjectEncodingBaselines.clear();
+    m_remoteStateApplyPending = false;
+    if ( !m_localOperationQueue.empty() ||
+         !m_inFlightLocalOperations.empty() ) {
+        m_localStateNeedsRebase = true;
+    }
+}
+
+void CollaborationRoom::onAuthoritativeBeatmapApplied(
+    std::uint64_t revision, std::uint64_t includedLocalMutationSequence)
+{
+    std::lock_guard lock(m_localOperationMutex);
+    const auto      baseline =
+        std::find_if(m_pendingObjectEncodingBaselines.begin(),
+                     m_pendingObjectEncodingBaselines.end(),
+                     [revision](const PendingObjectEncodingBaseline& pending) {
+                         return pending.revision == revision;
+                     });
+    if ( baseline != m_pendingObjectEncodingBaselines.end() &&
+         baseline->includedLocalMutationSequence ==
+             includedLocalMutationSequence &&
+         m_nextLocalMutationSequence - 1U <= includedLocalMutationSequence ) {
+        m_localMutationCodec.synchronizeObjectEncodingBaseline(
+            std::move(baseline->baseline));
+    }
+    std::erase_if(m_pendingObjectEncodingBaselines,
+                  [revision](const PendingObjectEncodingBaseline& pending) {
+                      return pending.revision <= revision;
+                  });
+    m_remoteStateApplyPending = false;
     if ( !m_localOperationQueue.empty() ||
          !m_inFlightLocalOperations.empty() ) {
         m_localStateNeedsRebase = true;
@@ -338,13 +582,19 @@ void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
 
 void CollaborationRoom::disconnect()
 {
-    stopAcceptingLocalMutations();
     if ( m_state != CollaborationRoomState::Idle ) {
         appendLog(CollaborationLogEventType::Disconnected,
                   localPeerId(),
                   m_creator,
                   "local_disconnect");
     }
+    resetOnlineSessionState();
+    m_lastError.clear();
+}
+
+void CollaborationRoom::resetOnlineSessionState()
+{
+    stopAcceptingLocalMutations();
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
@@ -353,22 +603,38 @@ void CollaborationRoom::disconnect()
     m_roomId.clear();
     m_roomName.clear();
     m_creator.clear();
-    m_lastError.clear();
-    m_documentCodec.reset();
+    m_participantId.clear();
+    m_operationSessionId.clear();
+    resetRemoteOperationPipeline();
     m_resourceSync.reset();
     m_resourceManifest.reset();
     m_resourceManifestRecipients.clear();
+    m_nextChatSequence = 1;
+    m_chatMessages.clear();
     m_pendingLocalViewport.reset();
     m_lastPublishedLocalViewport.reset();
-    m_followedPeerId = 0;
+    m_localViewportPublishDeferred = false;
+    m_followedParticipantId.clear();
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
+    m_localPermissions.store(0U, std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
+    m_hostRoleForObserver.store(false, std::memory_order_relaxed);
 }
 
 void CollaborationRoom::update()
 {
     updateDirectory();
+    if ( m_isHost &&
+         m_remoteOperationPipeline->hostSnapshotDirty.load(
+             std::memory_order_acquire) &&
+         steadyNowNanoseconds() >=
+             m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.load(
+                 std::memory_order_relaxed) ) {
+        scheduleRemoteOperationWorker();
+    }
+    processRemoteOperationResults();
+    processPendingPeerConnections();
     if ( !m_transport ) return;
 
     ensureGuestPeer();
@@ -377,16 +643,36 @@ void CollaborationRoom::update()
         WebRtcTransportEvent event;
         if ( !m_transport->receiveEvent(event) ) break;
         handleTransportEvent(event);
+        if ( !m_transport ) break;
     }
     ensureGuestPeer();
     if ( m_peer ) {
-        submitQueuedLocalOperations();
+        const auto previousPermissions =
+            m_localPermissions.load(std::memory_order_acquire);
         m_peer->update();
-        flushLocalViewport();
-        if ( m_followedPeerId != 0 &&
-             !m_peer->participantCreators().contains(m_followedPeerId) ) {
-            m_followedPeerId = 0;
+        const auto permission =
+            m_peer->participantPermissions().find(m_peer->localPeerId());
+        const auto currentPermissions =
+            permission == m_peer->participantPermissions().end()
+                ? (m_isHost ? COLLABORATION_PERMISSION_ALL : 0U)
+                : permission->second;
+        m_localPermissions.store(currentPermissions, std::memory_order_release);
+        if ( !m_isHost && previousPermissions != currentPermissions ) {
+            std::lock_guard lock(m_localOperationMutex);
+            const auto      unauthorized =
+                [currentPermissions](const LocalOperation& operation) {
+                    const auto patch =
+                        BeatmapDocumentCodec::inspect(operation.payload);
+                    return !patch || !permissionsAllowMutation(
+                                         currentPermissions, patch->flags);
+                };
+            // 权限收紧时只丢弃已经失去授权的传输增量；不触碰逻辑线程当前
+            // BeatMap、未结束手势或选择状态，仍获授权的其它类别继续排队。
+            std::erase_if(m_inFlightLocalOperations, unauthorized);
+            std::erase_if(m_localOperationQueue, unauthorized);
         }
+        submitQueuedLocalOperations();
+        flushLocalViewport();
     }
     processResourceEvents();
 }
@@ -398,16 +684,29 @@ SubmitOperationResult CollaborationRoom::submitOperation(
     return m_peer->submitOperation(payload);
 }
 
-void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport)
+SubmitChatMessageResult CollaborationRoom::sendChatMessage(std::string text)
 {
-    if ( !m_peer || !std::isfinite(viewport.playbackTime) ||
+    if ( !m_peer ) return SubmitChatMessageResult::InvalidPeer;
+    return m_peer->submitChatMessage(std::move(text));
+}
+
+void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport,
+                                             bool deferUntilCommitted)
+{
+    if ( !std::isfinite(viewport.playbackTime) ||
          !std::isfinite(viewport.visualTime) ||
          !std::isfinite(viewport.visibleTimeStart) ||
          !std::isfinite(viewport.visibleTimeEnd) ||
          !std::isfinite(viewport.horizontalOffsetRatio) ) {
         return;
     }
-    viewport.clientId      = 0;
+    const bool wasDeferred         = m_localViewportPublishDeferred;
+    m_localViewportPublishDeferred = deferUntilCommitted;
+    if ( wasDeferred && !deferUntilCommitted ) {
+        m_nextViewportPublish = std::chrono::steady_clock::now();
+    }
+    if ( !m_peer ) return;
+    viewport.peerId        = 0;
     viewport.sequence      = 0;
     m_pendingLocalViewport = viewport;
 }
@@ -422,14 +721,15 @@ void CollaborationRoom::setViewportPublishRateHz(std::uint32_t rateHz)
 bool CollaborationRoom::setFollowedPeer(PeerId peerId)
 {
     if ( peerId == 0 ) {
-        m_followedPeerId = 0;
+        m_followedParticipantId.clear();
         return true;
     }
     if ( !m_peer || peerId == m_peer->localPeerId() ||
-         !m_peer->participantCreators().contains(peerId) ) {
+         !m_peer->participantIdentities().contains(peerId) ) {
         return false;
     }
-    m_followedPeerId = peerId;
+    m_followedParticipantId =
+        m_peer->participantIdentities().at(peerId).participantId;
     return true;
 }
 
@@ -474,6 +774,17 @@ CollaborationRoom::directoryRooms() const
     return m_directory.rooms();
 }
 
+bool CollaborationRoom::requestDirectoryRoomCover(std::string_view roomId)
+{
+    return m_directory.requestRoomCover(roomId);
+}
+
+std::string_view CollaborationRoom::directoryRoomCover(
+    std::string_view roomId) const
+{
+    return m_directory.roomCover(roomId);
+}
+
 const std::string& CollaborationRoom::directoryError() const
 {
     return m_directoryError;
@@ -485,10 +796,61 @@ PeerId CollaborationRoom::localPeerId() const
     return m_transport ? m_transport->localPeerId() : 0;
 }
 
-const std::unordered_map<PeerId, std::string>&
+const std::unordered_map<PeerId, ParticipantIdentity>&
 CollaborationRoom::participants() const
 {
-    return m_peer ? m_peer->participantCreators() : m_emptyParticipants;
+    return m_peer ? m_peer->participantIdentities() : m_emptyParticipants;
+}
+
+const std::unordered_map<PeerId, CollaborationPermissionMask>&
+CollaborationRoom::participantPermissions() const
+{
+    return m_peer ? m_peer->participantPermissions() : m_emptyPermissions;
+}
+
+CollaborationPermissionMask CollaborationRoom::localPermissions() const
+{
+    return m_localPermissions.load(std::memory_order_acquire);
+}
+
+::MMM::BeatmapMutationFlags CollaborationRoom::localAllowedMutationFlags() const
+{
+    const auto permissions = localPermissions();
+    if ( !hasCollaborationPermission(permissions,
+                                     CollaborationPermission::Edit) ) {
+        return ::MMM::BeatmapMutationFlags::None;
+    }
+    auto flags = ::MMM::BeatmapMutationFlags::None;
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Objects) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Objects;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Timelines) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Timelines;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::AudioSamples) ) {
+        flags |= ::MMM::BeatmapMutationFlags::AudioSamples;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Metadata) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Metadata;
+    }
+    if ( hasCollaborationPermission(permissions,
+                                    CollaborationPermission::Annotations) ) {
+        flags |= ::MMM::BeatmapMutationFlags::Annotations;
+    }
+    return flags;
+}
+
+bool CollaborationRoom::canLocalAnnotate() const
+{
+    const auto permissions = localPermissions();
+    return hasCollaborationPermission(permissions,
+                                      CollaborationPermission::Edit) &&
+           hasCollaborationPermission(permissions,
+                                      CollaborationPermission::Annotations);
 }
 
 const std::vector<CollaborationPendingJoinRequest>&
@@ -505,7 +867,13 @@ CollaborationRoom::participantViewports() const
 
 PeerId CollaborationRoom::followedPeerId() const
 {
-    return m_followedPeerId;
+    if ( !m_peer || m_followedParticipantId.empty() ) return 0;
+    const auto& identities  = m_peer->participantIdentities();
+    const auto  participant = std::find_if(
+        identities.begin(), identities.end(), [this](const auto& entry) {
+            return entry.second.participantId == m_followedParticipantId;
+        });
+    return participant == identities.end() ? 0 : participant->first;
 }
 
 std::uint32_t CollaborationRoom::viewportPublishRateHz() const
@@ -516,6 +884,12 @@ std::uint32_t CollaborationRoom::viewportPublishRateHz() const
 const std::vector<CollaborationLogEntry>& CollaborationRoom::logs() const
 {
     return m_logs;
+}
+
+const std::vector<CollaborationChatEntry>&
+CollaborationRoom::chatMessages() const
+{
+    return m_chatMessages;
 }
 
 const std::string& CollaborationRoom::lastError() const
@@ -556,8 +930,17 @@ void CollaborationRoom::updateDirectory()
 }
 
 void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
-                                  std::string creator, std::string detail)
+                                  std::string creator, std::string detail,
+                                  ParticipantId participantId)
 {
+    if ( participantId.empty() ) {
+        const auto participant = participants().find(peerId);
+        if ( participant != participants().end() ) {
+            participantId = participant->second.participantId;
+        } else if ( peerId != 0 && peerId == localPeerId() ) {
+            participantId = m_participantId;
+        }
+    }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_startedAt);
     m_logs.push_back({ m_nextLogSequence++,
@@ -565,6 +948,7 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
                            std::max<std::int64_t>(0, elapsed.count())),
                        type,
                        peerId,
+                       std::move(participantId),
                        std::move(creator),
                        std::move(detail) });
     if ( m_logs.size() > MAX_COLLABORATION_LOG_ENTRIES ) {
@@ -572,6 +956,30 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
                      m_logs.begin() +
                          static_cast<std::ptrdiff_t>(
                              m_logs.size() - MAX_COLLABORATION_LOG_ENTRIES));
+    }
+}
+
+void CollaborationRoom::handleChatMessage(
+    const CollaborationChatMessage& message)
+{
+    const auto participant = participants().find(message.peerId);
+    if ( participant == participants().end() ) return;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - m_startedAt);
+    m_chatMessages.push_back({ m_nextChatSequence++,
+                               static_cast<std::uint64_t>(
+                                   std::max<std::int64_t>(0, elapsed.count())),
+                               message.peerId,
+                               participant->second.participantId,
+                               participant->second.creator,
+                               message.text });
+    if ( m_chatMessages.size() > MAX_COLLABORATION_CHAT_ENTRIES ) {
+        m_chatMessages.erase(
+            m_chatMessages.begin(),
+            m_chatMessages.begin() +
+                static_cast<std::ptrdiff_t>(m_chatMessages.size() -
+                                            MAX_COLLABORATION_CHAT_ENTRIES));
     }
 }
 
@@ -602,6 +1010,24 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::JoinRequested:
         if ( m_isHost && !event.requestId.empty() ) {
+            if ( m_requireMatchingBuildFingerprint &&
+                 event.buildFingerprint != m_buildFingerprint ) {
+                XWARN(
+                    "Rejecting collaboration guest because build "
+                    "fingerprints differ: host={} guest={}",
+                    fingerprintPrefix(m_buildFingerprint),
+                    fingerprintPrefix(event.buildFingerprint));
+                static_cast<void>(m_transport->rejectJoinRequest(
+                    event.requestId, "build_fingerprint_mismatch"));
+                const std::string detail =
+                    "build_fingerprint_mismatch host=" +
+                    std::string(fingerprintPrefix(m_buildFingerprint)) +
+                    " guest=" +
+                    std::string(fingerprintPrefix(event.buildFingerprint));
+                appendLog(
+                    CollaborationLogEventType::Error, 0, event.creator, detail);
+                break;
+            }
             const bool known = std::any_of(
                 m_pendingJoinRequests.begin(),
                 m_pendingJoinRequests.end(),
@@ -610,7 +1036,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
                 });
             if ( !known ) {
                 m_pendingJoinRequests.push_back(
-                    { event.requestId, event.creator });
+                    { event.requestId, event.creator, event.buildFingerprint });
                 appendLog(CollaborationLogEventType::SignalingConnected,
                           0,
                           event.creator,
@@ -633,12 +1059,31 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         break;
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
-            if ( !m_peer ||
-                 !m_peer->addParticipant(event.peerId, event.creator) ) {
+            if ( m_peer &&
+                 m_publishedDocumentRevision < m_peer->appliedRevision() ) {
+                const bool alreadyPending =
+                    std::any_of(m_pendingPeerConnections.begin(),
+                                m_pendingPeerConnections.end(),
+                                [&event](const WebRtcTransportEvent& pending) {
+                                    return pending.peerId == event.peerId;
+                                });
+                if ( !alreadyPending ) {
+                    m_pendingPeerConnections.push_back(event);
+                }
+                break;
+            }
+            if ( !m_peer || !m_peer->addParticipant(event.peerId,
+                                                    event.participantId,
+                                                    event.sessionId,
+                                                    event.creator) ) {
                 appendLog(CollaborationLogEventType::Error,
                           event.peerId,
                           event.creator,
                           "participant_registration_failed");
+                if ( m_transport ) {
+                    static_cast<void>(m_transport->disconnectPeer(
+                        event.peerId, "participant_registration_failed"));
+                }
                 break;
             }
             sendResourceManifest(event.peerId);
@@ -648,21 +1093,32 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         appendLog(CollaborationLogEventType::ParticipantJoined,
                   event.peerId,
                   event.creator,
-                  event.detail);
+                  event.detail,
+                  event.participantId);
         break;
     case WebRtcTransportEventType::PeerDisconnected:
         if ( m_isHost && m_peer ) {
+            std::erase_if(m_pendingPeerConnections,
+                          [&event](const WebRtcTransportEvent& pending) {
+                              return pending.peerId == event.peerId;
+                          });
             m_peer->removeParticipant(event.peerId);
             m_resourceManifestRecipients.erase(event.peerId);
         } else if ( !m_isHost ) {
-            m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
-            stopAcceptingLocalMutations();
+            appendLog(CollaborationLogEventType::HostDisconnected,
+                      event.peerId,
+                      event.creator,
+                      event.detail,
+                      event.participantId);
+            resetOnlineSessionState();
+            break;
         }
         appendLog(CollaborationLogEventType::ParticipantLeft,
                   event.peerId,
                   event.creator,
-                  event.detail);
+                  event.detail,
+                  event.participantId);
         break;
     case WebRtcTransportEventType::Rejected:
         appendLog(CollaborationLogEventType::Error,
@@ -692,16 +1148,18 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
 void CollaborationRoom::ensureGuestPeer()
 {
     if ( m_isHost || m_peer || !m_pendingTransport ) return;
-    const PeerId clientId = m_pendingTransport->localPeerId();
-    if ( clientId == 0 ) return;
+    const PeerId peerId = m_pendingTransport->localPeerId();
+    if ( peerId == 0 ) return;
 
     CollaborationPeerConfig peerConfig;
-    peerConfig.clientId = clientId;
-    peerConfig.hostId   = DEFAULT_HOST_ID;
-    peerConfig.creator  = m_creator;
-    peerConfig.isHost   = false;
-    m_transport         = m_pendingTransport.get();
-    m_peer              = std::make_unique<CollaborationPeer>(
+    peerConfig.peerId        = peerId;
+    peerConfig.hostPeerId    = DEFAULT_HOST_ID;
+    peerConfig.participantId = m_participantId;
+    peerConfig.sessionId     = m_operationSessionId;
+    peerConfig.creator       = m_creator;
+    peerConfig.isHost        = false;
+    m_transport              = m_pendingTransport.get();
+    m_peer                   = std::make_unique<CollaborationPeer>(
         std::move(peerConfig),
         std::move(m_pendingTransport),
         [this](const CommittedOperation& operation) {
@@ -709,6 +1167,12 @@ void CollaborationRoom::ensureGuestPeer()
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
             handleResourceMessage(senderId, message);
+        },
+        [this](const CollaborationChatMessage& message) {
+            handleChatMessage(message);
+        },
+        [this](PeerId peerId, std::span<const std::uint8_t> payload) {
+            return authorizeParticipantEdit(peerId, payload);
         });
     if ( !m_peer->isValid() ) {
         fail("guest_peer_create_failed");
@@ -720,58 +1184,438 @@ void CollaborationRoom::ensureGuestPeer()
 void CollaborationRoom::handleCommittedOperation(
     const CommittedOperation& operation)
 {
-    const auto        participant = participants().find(operation.clientId);
-    const std::string creator     = participant == participants().end()
-                                        ? std::string{}
-                                        : participant->second;
-    appendLog(CollaborationLogEventType::OperationCommitted,
-              operation.clientId,
-              creator,
-              std::to_string(operation.revision));
-
-    auto patch = m_documentCodec.apply(operation.payload);
-    if ( !patch.has_value() ) {
-        appendLog(CollaborationLogEventType::Error,
-                  operation.clientId,
-                  creator,
-                  "invalid_beatmap_operation");
-        return;
-    }
-    m_hasDocument.store(true, std::memory_order_release);
-    const bool originatedLocally = operation.clientId == localPeerId();
+    const auto participant = std::find_if(
+        participants().begin(),
+        participants().end(),
+        [&operation](const auto& entry) {
+            return entry.second.participantId == operation.participantId;
+        });
+    const PeerId peerId =
+        participant == participants().end() ? 0 : participant->first;
+    const std::string creator    = participant == participants().end()
+                                       ? std::string{}
+                                       : participant->second.creator;
+    const bool originatedLocally = operation.participantId == m_participantId &&
+                                   operation.sessionId == m_operationSessionId;
     bool       reapplyLocalState = false;
-    if ( originatedLocally ) {
+    std::uint64_t committedLocalMutationSequence = 0;
+    {
         std::lock_guard lock(m_localOperationMutex);
-        const auto      matching = std::find(m_inFlightLocalOperations.begin(),
-                                             m_inFlightLocalOperations.end(),
-                                             operation.payload);
-        if ( matching != m_inFlightLocalOperations.end() ) {
-            m_inFlightLocalOperations.erase(matching);
+        if ( !originatedLocally ) {
+            m_remoteStateApplyPending = true;
+            if ( !m_localOperationQueue.empty() ||
+                 !m_inFlightLocalOperations.empty() ) {
+                m_localStateNeedsRebase = true;
+            }
         }
-        reapplyLocalState       = m_localStateNeedsRebase;
-        m_localStateNeedsRebase = false;
-    }
-    if ( m_isHost && m_peer ) {
-        auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-        if ( snapshot.has_value() ) {
-            static_cast<void>(
-                m_peer->setStateSnapshot(std::move(snapshot.value())));
+        if ( originatedLocally ) {
+            const auto matching =
+                std::find_if(m_inFlightLocalOperations.begin(),
+                             m_inFlightLocalOperations.end(),
+                             [&operation](const LocalOperation& pending) {
+                                 return pending.payload == operation.payload;
+                             });
+            if ( matching != m_inFlightLocalOperations.end() ) {
+                committedLocalMutationSequence = matching->sequence;
+                m_latestCommittedLocalMutationSequence =
+                    std::max(m_latestCommittedLocalMutationSequence,
+                             committedLocalMutationSequence);
+                m_inFlightLocalOperations.erase(matching);
+            }
+            reapplyLocalState       = m_localStateNeedsRebase;
+            m_localStateNeedsRebase = false;
         }
     }
-    if ( m_applyBeatmapCallback && (!originatedLocally || reapplyLocalState) ) {
-        auto beatmap = materializeRebasedLocalBeatmap();
-        if ( !beatmap ) {
-            appendLog(CollaborationLogEventType::Error,
-                      operation.clientId,
-                      creator,
-                      "invalid_beatmap_document");
+    RemoteOperationPipeline::Task task;
+    task.operation                      = operation;
+    task.peerId                         = peerId;
+    task.creator                        = creator;
+    task.host                           = m_isHost;
+    task.reapplyLocalState              = reapplyLocalState;
+    task.originatedLocally              = originatedLocally;
+    task.committedLocalMutationSequence = committedLocalMutationSequence;
+    m_remoteOperationPipeline->tasks.enqueue(std::move(task));
+    scheduleRemoteOperationWorker();
+}
+
+bool CollaborationRoom::authorizeParticipantEdit(
+    PeerId peerId, std::span<const std::uint8_t> payload) const
+{
+    if ( !m_isHost || !m_peer || peerId == 0 ||
+         peerId == m_peer->localPeerId() ) {
+        return false;
+    }
+    const auto permission = m_peer->participantPermissions().find(peerId);
+    if ( permission == m_peer->participantPermissions().end() ) return false;
+
+    const auto patch = BeatmapDocumentCodec::inspect(payload);
+    return patch.has_value() && !patch->isSnapshot &&
+           permissionsAllowMutation(permission->second, patch->flags);
+}
+
+void CollaborationRoom::scheduleRemoteOperationWorker()
+{
+    while ( true ) {
+        std::uint8_t state = m_remoteOperationPipeline->workerState.load(
+            std::memory_order_acquire);
+        if ( state == 0U ) {
+            if ( m_remoteOperationPipeline->workerState.compare_exchange_weak(
+                     state,
+                     1U,
+                     std::memory_order_acq_rel,
+                     std::memory_order_acquire) ) {
+                break;
+            }
+            continue;
+        }
+        if ( state == 2U ||
+             m_remoteOperationPipeline->workerState.compare_exchange_weak(
+                 state,
+                 2U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
             return;
         }
-        m_applyBeatmapCallback(std::move(beatmap),
-                               reapplyLocalState
-                                   ? ::MMM::BeatmapMutationFlags::All
-                                   : patch->flags);
     }
+
+    auto* threadPool = Runtime::AppThreadPool::instance().get();
+    if ( !threadPool ) {
+        XERROR("Collaboration document worker requires AppThreadPool");
+        processRemoteOperations();
+        return;
+    }
+    std::erase_if(m_remoteOperationPipeline->workerFutures,
+                  [](std::future<void>& task) {
+                      return task.wait_for(std::chrono::seconds(0)) ==
+                             std::future_status::ready;
+                  });
+    m_remoteOperationPipeline->workerFutures.push_back(
+        threadPool->enqueue([this]() { processRemoteOperations(); }));
+}
+
+void CollaborationRoom::processRemoteOperations()
+{
+    std::vector<RemoteOperationPipeline::Result> batchResults;
+    ::MMM::BeatmapMutationFlags                  batchVisibleFlags =
+        ::MMM::BeatmapMutationFlags::None;
+    std::uint64_t              batchCommittedLocalMutationSequence = 0;
+    bool                       batchNeedsMaterialization           = false;
+    bool                       batchHost                           = false;
+    std::optional<std::size_t> lastSuccessfulResult;
+    const auto                 buildHostSnapshotIfDue =
+        [this](RemoteOperationPipeline::Result& delivery) {
+            if ( !m_remoteOperationPipeline->hostSnapshotDirty.load(
+                     std::memory_order_acquire) ) {
+                return;
+            }
+            const auto now = steadyNowNanoseconds();
+            const auto deadline =
+                m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds
+                    .load(std::memory_order_relaxed);
+            if ( now < deadline ) return;
+
+            m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
+                now + std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          HOST_SNAPSHOT_REFRESH_INTERVAL)
+                          .count(),
+                std::memory_order_relaxed);
+            auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+            if ( !snapshot.has_value() ) return;
+
+            delivery.revision =
+                m_remoteOperationPipeline->pendingHostSnapshotRevision.load(
+                    std::memory_order_acquire);
+            delivery.hostSnapshot.emplace(std::move(snapshot.value()));
+            m_remoteOperationPipeline->hostSnapshotDirty.store(
+                false, std::memory_order_release);
+        };
+    while ( true ) {
+        RemoteOperationPipeline::Task task;
+        while ( m_remoteOperationPipeline->tasks.try_dequeue(task) ) {
+            RemoteOperationPipeline::Result result;
+            result.peerId        = task.peerId;
+            result.participantId = task.operation.participantId;
+            result.creator       = std::move(task.creator);
+            result.revision      = task.operation.revision;
+
+            auto patch = m_documentCodec.apply(task.operation.payload);
+            if ( !patch.has_value() ) {
+                result.error = "invalid_beatmap_operation";
+                batchResults.push_back(std::move(result));
+                continue;
+            }
+            m_hasDocument.store(true, std::memory_order_release);
+            result.flags = patch->flags;
+            batchHost    = task.host;
+            batchCommittedLocalMutationSequence =
+                std::max(batchCommittedLocalMutationSequence,
+                         task.committedLocalMutationSequence);
+            if ( !task.originatedLocally || task.reapplyLocalState ) {
+                batchNeedsMaterialization = true;
+                batchVisibleFlags |= patch->flags;
+            } else if ( !batchNeedsMaterialization ) {
+                // 本机提交已经存在于 ECS；在尚未混入待回灌远端提交时，直接把
+                // 权威文档记为可见基线，避免下一名协作者编辑时重复回灌本机
+                // 此前写入的全部物件。若本批已含远端提交则保留旧基线，确保
+                // 远端差量不会被后续本机回执提前吞掉。
+                m_remoteOperationPipeline->visibleDocument =
+                    m_documentCodec.cloneDocument();
+            }
+            lastSuccessfulResult = batchResults.size();
+            batchResults.push_back(std::move(result));
+        }
+
+        std::uint8_t expected = 2U;
+        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
+                 expected,
+                 1U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
+            // 有新任务在本轮排空期间到达时继续合并，不为即将过时的中间
+            // revision 重复物化整张 BeatMap 或压缩房主快照。
+            continue;
+        }
+
+        if ( lastSuccessfulResult ) {
+            const auto& latest = batchResults[*lastSuccessfulResult];
+            RemoteOperationPipeline::Result delivery;
+            delivery.logOperation  = false;
+            delivery.peerId        = latest.peerId;
+            delivery.participantId = latest.participantId;
+            delivery.creator       = latest.creator;
+            delivery.revision      = latest.revision;
+            delivery.flags         = batchVisibleFlags;
+            delivery.includedLocalMutationSequence =
+                batchCommittedLocalMutationSequence;
+            if ( batchNeedsMaterialization ) {
+                auto rebased = materializeRebasedLocalBeatmap(
+                    batchCommittedLocalMutationSequence);
+                if ( !rebased ) {
+                    delivery.error = "invalid_beatmap_document";
+                } else {
+                    const bool onlyObjects =
+                        batchVisibleFlags ==
+                        ::MMM::BeatmapMutationFlags::Objects;
+                    if ( onlyObjects &&
+                         m_remoteOperationPipeline->visibleDocument ) {
+                        delivery.objectDeltaIdentities =
+                            rebased->document
+                                ->changedObjectIdentitiesComparedTo(
+                                    *m_remoteOperationPipeline
+                                         ->visibleDocument);
+                        if ( delivery.objectDeltaIdentities ) {
+                            delivery.objectEncodingBaseline =
+                                BeatmapDocumentCodec::
+                                    prepareObjectEncodingBaseline(
+                                        *rebased->beatmap);
+                            if ( !delivery.objectEncodingBaseline ) {
+                                delivery.objectDeltaIdentities.reset();
+                            }
+                        }
+                    }
+                    m_remoteOperationPipeline->visibleDocument =
+                        std::move(rebased->document);
+                    delivery.beatmap = std::move(rebased->beatmap);
+                    delivery.includedLocalMutationSequence =
+                        rebased->includedLocalMutationSequence;
+                }
+            }
+            if ( batchHost && delivery.error.empty() ) {
+                m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
+                    delivery.revision, std::memory_order_release);
+                m_remoteOperationPipeline->hostSnapshotDirty.store(
+                    true, std::memory_order_release);
+            }
+            buildHostSnapshotIfDue(delivery);
+            m_remoteOperationPipeline->results.enqueue(std::move(delivery));
+        } else if ( m_remoteOperationPipeline->hostSnapshotDirty.load(
+                        std::memory_order_acquire) ) {
+            RemoteOperationPipeline::Result snapshotDelivery;
+            snapshotDelivery.logOperation = false;
+            buildHostSnapshotIfDue(snapshotDelivery);
+            if ( snapshotDelivery.hostSnapshot ) {
+                m_remoteOperationPipeline->results.enqueue(
+                    std::move(snapshotDelivery));
+            }
+        }
+        for ( auto& result : batchResults ) {
+            m_remoteOperationPipeline->operationLogs.enqueue(std::move(result));
+        }
+        batchResults.clear();
+        batchVisibleFlags                   = ::MMM::BeatmapMutationFlags::None;
+        batchCommittedLocalMutationSequence = 0;
+        batchNeedsMaterialization           = false;
+        batchHost                           = false;
+        lastSuccessfulResult.reset();
+
+        expected = 1U;
+        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
+                 expected,
+                 0U,
+                 std::memory_order_acq_rel,
+                 std::memory_order_acquire) ) {
+            return;
+        }
+    }
+}
+
+void CollaborationRoom::processRemoteOperationResults()
+{
+    std::shared_ptr<::MMM::BeatMap>         mergedBeatmap;
+    std::optional<std::vector<std::string>> mergedObjectDeltaIdentities;
+    std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline>
+                                mergedObjectEncodingBaseline;
+    ::MMM::BeatmapMutationFlags mergedFlags = ::MMM::BeatmapMutationFlags::None;
+    std::uint64_t               mergedLocalMutationSequence       = 0;
+    std::uint64_t               acknowledgedLocalMutationSequence = 0;
+    std::uint64_t               mergedRevision                    = 0;
+    const auto consumeResult = [&](RemoteOperationPipeline::Result result) {
+        if ( result.logOperation ) {
+            appendLog(CollaborationLogEventType::OperationCommitted,
+                      result.peerId,
+                      result.creator,
+                      std::to_string(result.revision),
+                      result.participantId);
+        }
+        if ( !result.error.empty() ) {
+            appendLog(CollaborationLogEventType::Error,
+                      result.peerId,
+                      std::move(result.creator),
+                      std::move(result.error),
+                      std::move(result.participantId));
+            return;
+        }
+        if ( result.hostSnapshot && m_isHost && m_peer ) {
+            if ( m_peer->setStateSnapshot(result.revision,
+                                          std::move(*result.hostSnapshot)) ) {
+                m_publishedDocumentRevision = result.revision;
+            }
+        }
+        if ( result.beatmap ) {
+            if ( hasBeatmapMutationFlag(
+                     result.flags, ::MMM::BeatmapMutationFlags::Objects) ) {
+                if ( !mergedBeatmap ) {
+                    mergedObjectDeltaIdentities =
+                        std::move(result.objectDeltaIdentities);
+                } else if ( mergedObjectDeltaIdentities &&
+                            result.objectDeltaIdentities ) {
+                    auto& merged = *mergedObjectDeltaIdentities;
+                    merged.insert(merged.end(),
+                                  std::make_move_iterator(
+                                      result.objectDeltaIdentities->begin()),
+                                  std::make_move_iterator(
+                                      result.objectDeltaIdentities->end()));
+                    std::sort(merged.begin(), merged.end());
+                    merged.erase(std::unique(merged.begin(), merged.end()),
+                                 merged.end());
+                } else {
+                    mergedObjectDeltaIdentities.reset();
+                }
+            }
+            mergedFlags |= result.flags;
+            mergedBeatmap = std::move(result.beatmap);
+            mergedObjectEncodingBaseline =
+                std::move(result.objectEncodingBaseline);
+            mergedRevision = result.revision;
+            mergedLocalMutationSequence =
+                std::max(mergedLocalMutationSequence,
+                         result.includedLocalMutationSequence);
+        } else {
+            acknowledgedLocalMutationSequence =
+                std::max(acknowledgedLocalMutationSequence,
+                         result.includedLocalMutationSequence);
+        }
+    };
+    for ( std::size_t index = 0; index < MAX_REMOTE_RESULTS_PER_UPDATE;
+          ++index ) {
+        RemoteOperationPipeline::Result result;
+        if ( !m_remoteOperationPipeline->results.try_dequeue(result) ) break;
+        consumeResult(std::move(result));
+    }
+    for ( std::size_t index = 0; index < MAX_REMOTE_LOG_RESULTS_PER_UPDATE;
+          ++index ) {
+        RemoteOperationPipeline::Result result;
+        if ( !m_remoteOperationPipeline->operationLogs.try_dequeue(result) ) {
+            break;
+        }
+        consumeResult(std::move(result));
+    }
+    if ( mergedBeatmap && m_applyBeatmapCallback ) {
+        if ( mergedFlags != ::MMM::BeatmapMutationFlags::Objects ||
+             !mergedObjectEncodingBaseline ) {
+            mergedObjectDeltaIdentities.reset();
+        }
+        // 同帧完成的连续修订只回灌最新领域快照，并合并其真实变更类别，避免
+        // 逻辑线程为中间状态重复扫描 ECS。实际应用仍由逻辑命令队列串行完成，
+        // 因而本地手势、交互状态和未确认增量不会交给后台线程。
+        if ( mergedObjectEncodingBaseline && mergedObjectDeltaIdentities ) {
+            std::lock_guard lock(m_localOperationMutex);
+            m_pendingObjectEncodingBaselines.push_back(
+                PendingObjectEncodingBaseline{
+                    .revision = mergedRevision,
+                    .includedLocalMutationSequence =
+                        mergedLocalMutationSequence,
+                    .baseline = std::move(mergedObjectEncodingBaseline),
+                });
+            constexpr std::size_t MAX_PENDING_OBJECT_BASELINES = 16U;
+            while ( m_pendingObjectEncodingBaselines.size() >
+                    MAX_PENDING_OBJECT_BASELINES ) {
+                m_pendingObjectEncodingBaselines.pop_front();
+            }
+        }
+        m_applyBeatmapCallback(std::move(mergedBeatmap),
+                               mergedFlags,
+                               mergedLocalMutationSequence,
+                               mergedRevision,
+                               std::move(mergedObjectDeltaIdentities));
+    }
+    if ( acknowledgedLocalMutationSequence != 0 &&
+         m_localMutationAcknowledgedCallback ) {
+        m_localMutationAcknowledgedCallback(acknowledgedLocalMutationSequence);
+    }
+}
+
+void CollaborationRoom::processPendingPeerConnections()
+{
+    if ( m_pendingPeerConnections.empty() || !m_peer ||
+         m_publishedDocumentRevision < m_peer->appliedRevision() ) {
+        return;
+    }
+
+    auto pending = std::move(m_pendingPeerConnections);
+    m_pendingPeerConnections.clear();
+    for ( const auto& event : pending ) {
+        handleTransportEvent(event);
+    }
+}
+
+void CollaborationRoom::resetRemoteOperationPipeline()
+{
+    for ( auto& task : m_remoteOperationPipeline->workerFutures ) {
+        if ( task.valid() ) task.wait();
+    }
+    m_remoteOperationPipeline->workerFutures.clear();
+    RemoteOperationPipeline::Task pendingTask;
+    while ( m_remoteOperationPipeline->tasks.try_dequeue(pendingTask) ) {}
+    RemoteOperationPipeline::Result pendingResult;
+    while ( m_remoteOperationPipeline->results.try_dequeue(pendingResult) ) {}
+    while (
+        m_remoteOperationPipeline->operationLogs.try_dequeue(pendingResult) ) {}
+    m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
+    m_remoteOperationPipeline->visibleDocument.reset();
+    m_remoteOperationPipeline->hostSnapshotDirty.store(
+        false, std::memory_order_release);
+    m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
+        0U, std::memory_order_release);
+    m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
+        0, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(m_localOperationMutex);
+        m_pendingObjectEncodingBaselines.clear();
+    }
+    m_pendingPeerConnections.clear();
+    m_publishedDocumentRevision = 0;
+    m_documentCodec.reset();
 }
 
 void CollaborationRoom::submitQueuedLocalOperations()
@@ -781,17 +1625,26 @@ void CollaborationRoom::submitQueuedLocalOperations()
     }
     for ( std::size_t index = 0; index < MAX_LOCAL_OPERATIONS_PER_UPDATE;
           ++index ) {
-        ByteBuffer payload;
+        LocalOperation operation;
         {
             std::lock_guard lock(m_localOperationMutex);
             if ( m_localOperationQueue.empty() ) return;
-            payload = m_localOperationQueue.front();
+            operation = m_localOperationQueue.front();
         }
-        const auto result = m_peer->submitOperation(payload);
+        const auto patch = BeatmapDocumentCodec::inspect(operation.payload);
+        if ( !patch || !permissionsAllowMutation(
+                           m_localPermissions.load(std::memory_order_acquire),
+                           patch->flags) ) {
+            // 权限收紧时保留已经完成的本地编辑及其规范增量，不清空、不覆盖；
+            // 房主重新授权后仍按原顺序提交。
+            return;
+        }
+        const auto result = m_peer->submitOperation(operation.payload);
         if ( result == SubmitOperationResult::Accepted ) {
             std::lock_guard lock(m_localOperationMutex);
             if ( !m_localOperationQueue.empty() &&
-                 m_localOperationQueue.front() == payload ) {
+                 m_localOperationQueue.front().sequence == operation.sequence &&
+                 m_localOperationQueue.front().payload == operation.payload ) {
                 m_inFlightLocalOperations.push_back(
                     std::move(m_localOperationQueue.front()));
                 m_localOperationQueue.pop_front();
@@ -811,15 +1664,18 @@ void CollaborationRoom::submitQueuedLocalOperations()
     }
 }
 
-std::shared_ptr<::MMM::BeatMap>
-CollaborationRoom::materializeRebasedLocalBeatmap()
+std::optional<CollaborationRoom::RebasedLocalBeatmap>
+CollaborationRoom::materializeRebasedLocalBeatmap(
+    std::uint64_t committedLocalMutationSequence)
 {
-    auto snapshot = m_documentCodec.encodeCurrentSnapshot();
-    if ( !snapshot.has_value() ) return nullptr;
-
-    std::vector<ByteBuffer> pending;
+    std::vector<LocalOperation> pending;
+    std::uint64_t               includedLocalMutationSequence =
+        committedLocalMutationSequence;
     {
         std::lock_guard lock(m_localOperationMutex);
+        includedLocalMutationSequence =
+            std::max(includedLocalMutationSequence,
+                     m_latestCommittedLocalMutationSequence);
         pending.reserve(m_inFlightLocalOperations.size() +
                         m_localOperationQueue.size());
         pending.insert(pending.end(),
@@ -830,12 +1686,34 @@ CollaborationRoom::materializeRebasedLocalBeatmap()
                        m_localOperationQueue.end());
     }
 
-    BeatmapDocumentCodec localView;
-    if ( !localView.apply(*snapshot).has_value() ) return nullptr;
-    for ( const auto& payload : pending ) {
-        if ( !localView.apply(payload).has_value() ) return nullptr;
+    if ( pending.empty() ) {
+        auto document = m_documentCodec.cloneDocument();
+        if ( !document ) return std::nullopt;
+        auto beatmap = document->materialize();
+        if ( !beatmap ) return std::nullopt;
+        return RebasedLocalBeatmap{
+            .beatmap                       = std::move(beatmap),
+            .document                      = std::move(document),
+            .includedLocalMutationSequence = includedLocalMutationSequence,
+        };
     }
-    return localView.materialize();
+
+    auto localView = m_documentCodec.cloneDocument();
+    if ( !localView ) return std::nullopt;
+    for ( const auto& operation : pending ) {
+        if ( !localView->apply(operation.payload).has_value() ) {
+            return std::nullopt;
+        }
+        includedLocalMutationSequence =
+            std::max(includedLocalMutationSequence, operation.sequence);
+    }
+    auto beatmap = localView->materialize();
+    if ( !beatmap ) return std::nullopt;
+    return RebasedLocalBeatmap{
+        .beatmap                       = std::move(beatmap),
+        .document                      = std::move(localView),
+        .includedLocalMutationSequence = includedLocalMutationSequence,
+    };
 }
 
 void CollaborationRoom::stopAcceptingLocalMutations()
@@ -844,13 +1722,19 @@ void CollaborationRoom::stopAcceptingLocalMutations()
     std::lock_guard lock(m_localOperationMutex);
     m_localOperationQueue.clear();
     m_inFlightLocalOperations.clear();
-    m_localOperationSubmitBlocked = false;
-    m_localStateNeedsRebase       = false;
+    m_localOperationSubmitBlocked          = false;
+    m_localStateNeedsRebase                = false;
+    m_remoteStateApplyPending              = false;
+    m_nextLocalMutationSequence            = 1;
+    m_latestCommittedLocalMutationSequence = 0;
 }
 
 void CollaborationRoom::flushLocalViewport()
 {
-    if ( !m_peer || !m_pendingLocalViewport ) return;
+    if ( !m_peer || !m_pendingLocalViewport ||
+         m_localViewportPublishDeferred ) {
+        return;
+    }
     if ( m_lastPublishedLocalViewport &&
          !viewportChanged(*m_lastPublishedLocalViewport,
                           *m_pendingLocalViewport) ) {

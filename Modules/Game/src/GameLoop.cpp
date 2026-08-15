@@ -34,6 +34,7 @@
 #include <chrono>
 #include <nfd.h>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #    include <shellapi.h>
@@ -116,6 +117,15 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
             TR("title.beatmap_manager").toString()));
     auto collaborationRoom =
         std::make_shared<Network::Collaboration::CollaborationRoom>();
+    const auto& collaborationServer =
+        Config::AppConfig::instance().getEditorSettings().collaborationServer;
+    Network::Collaboration::CollaborationServerEndpoint endpoint;
+    endpoint.address       = collaborationServer.address;
+    endpoint.signalingPort = collaborationServer.signalingPort;
+    endpoint.useTls        = collaborationServer.useTls;
+    if ( !collaborationRoom->setServerEndpoint(std::move(endpoint)) ) {
+        XERROR("Invalid persisted collaboration server endpoint");
+    }
     m_uiManager.setCollaborationRoom(collaborationRoom.get());
     sidebar_manager->registerSubView(
         TR("title.collaboration_manager").toString(),

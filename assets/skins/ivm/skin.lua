@@ -59,6 +59,16 @@ return {
 			text = { 0.90, 0.96, 1.0, 0.96 },
 		},
 
+		-- 批注时间戳标记区配色
+		annotations = {
+			gutter_background = { 0.030, 0.030, 0.035, 0.96 },
+			gutter_border = { 0.92, 0.08, 0.08, 0.78 },
+			marker = { 0.92, 0.26, 0.30, 0.98 },
+			marker_hover = { 1.0, 0.58, 0.60, 1.0 },
+			marker_text = { 0.08, 0.02, 0.02, 1.0 },
+			connector = { 0.92, 0.26, 0.30, 0.88 },
+		},
+
 		beat_lines = {
 			beat_1 = beat_head_red,
 			beat_2 = beat_line_gray,

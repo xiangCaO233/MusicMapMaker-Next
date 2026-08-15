@@ -1,4 +1,5 @@
 #include "canvas/PreviewCanvas.h"
+#include "canvas/CollaborationPeerColor.h"
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
 #include "canvas/TimeFormatUtils.h"
@@ -17,6 +18,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
 #include <algorithm>
@@ -114,11 +116,14 @@ PreviewCanvas::PreviewCanvas(
 /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
 /// @param dpiScale 当前窗口 DPI 缩放。
 /// @param seekPreviewTime 当前拖动预览时间；无交互时使用快照播放时间。
-/// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
-/// 遍历、排序、文件访问或共享指针复制。
-void PreviewCanvas::drawDensityOverview(
-    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
-    float dpiScale, std::optional<double> seekPreviewTime) const
+/// @param sourceManager UI 管理器观察指针，用于读取应用级协作房间。
+/// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本和 8 个协作者
+/// 标记；禁止 ECS 遍历、排序、文件访问或共享指针复制。
+void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
+                                        const ImVec2& canvasSize,
+                                        float reservedWidth, float dpiScale,
+                                        std::optional<double> seekPreviewTime,
+                                        UI::UIManager* sourceManager) const
 {
     const auto layout = calculatePreviewDensityRailLayout(
         canvasPos, canvasSize, reservedWidth, dpiScale);
@@ -146,17 +151,12 @@ void PreviewCanvas::drawDensityOverview(
         return;
     }
     const auto& density = m_currentSnapshot->previewDensity;
-    if ( density.counts.empty() || !std::isfinite(density.duration) ||
-         density.duration <= 0.0 || density.maxCount == 0 ) {
+    if ( !std::isfinite(density.duration) || density.duration <= 0.0 ) {
         return;
     }
 
-    const float innerWidth  = layout.innerMax.x - layout.innerMin.x;
-    const float innerHeight = layout.innerMax.y - layout.innerMin.y;
-
-    const std::size_t displayRowCount = std::min<std::size_t>(
-        density.counts.size(),
-        static_cast<std::size_t>(std::max(1.0f, std::floor(innerHeight))));
+    const float  innerWidth  = layout.innerMax.x - layout.innerMin.x;
+    const float  innerHeight = layout.innerMax.y - layout.innerMin.y;
     const double currentTime =
         seekPreviewTime && std::isfinite(*seekPreviewTime)
             ? *seekPreviewTime
@@ -165,13 +165,16 @@ void PreviewCanvas::drawDensityOverview(
                    : 0.0);
     const double progress =
         std::clamp(currentTime / density.duration, 0.0, 1.0);
-    const std::size_t currentBin =
-        std::min(density.counts.size() - 1,
-                 static_cast<std::size_t>(
-                     progress * static_cast<double>(density.counts.size())));
-    const float currentNormalized =
-        static_cast<float>(density.counts[currentBin]) /
-        static_cast<float>(density.maxCount);
+    std::size_t currentBin        = 0;
+    float       currentNormalized = 0.0F;
+    if ( !density.counts.empty() && density.maxCount > 0 ) {
+        currentBin = std::min(
+            density.counts.size() - 1,
+            static_cast<std::size_t>(
+                progress * static_cast<double>(density.counts.size())));
+        currentNormalized = static_cast<float>(density.counts[currentBin]) /
+                            static_cast<float>(density.maxCount);
+    }
     const auto  currentDensityColor = previewDensityColorAt(currentNormalized);
     ImVec4      activeBackground{ currentDensityColor.r,
                                   currentDensityColor.g,
@@ -179,6 +182,12 @@ void PreviewCanvas::drawDensityOverview(
                                   0.20f };
     const ImU32 activeBackgroundColor = ImGui::GetColorU32(activeBackground);
 
+    const std::size_t displayRowCount =
+        density.maxCount > 0
+            ? std::min<std::size_t>(density.counts.size(),
+                                    static_cast<std::size_t>(std::max(
+                                        1.0f, std::floor(innerHeight))))
+            : 0;
     for ( std::size_t row = 0; row < displayRowCount; ++row ) {
         const std::size_t binBegin =
             row * density.counts.size() / displayRowCount;
@@ -225,21 +234,87 @@ void PreviewCanvas::drawDensityOverview(
             barColor);
     }
 
-    const float currentY =
-        layout.innerMax.y - static_cast<float>(progress) * innerHeight;
+    const auto currentY = previewDensityYAtTime(
+        currentTime, layout.innerMin.y, layout.innerMax.y, density.duration);
+    if ( !currentY ) {
+        return;
+    }
     const ImU32 currentLineColor =
         ImGui::GetColorU32(ImVec4(currentDensityColor.r,
                                   currentDensityColor.g,
                                   currentDensityColor.b,
                                   1.0f));
-    drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
-                      ImVec2(layout.innerMax.x, currentY),
+    drawList->AddLine(ImVec2(layout.innerMin.x, static_cast<float>(*currentY)),
+                      ImVec2(layout.innerMax.x, static_cast<float>(*currentY)),
                       ImGui::GetColorU32(ImGuiCol_Border),
                       std::max(3.0f, std::floor(3.0f * dpiScale)));
-    drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
-                      ImVec2(layout.innerMax.x, currentY),
+    drawList->AddLine(ImVec2(layout.innerMin.x, static_cast<float>(*currentY)),
+                      ImVec2(layout.innerMax.x, static_cast<float>(*currentY)),
                       currentLineColor,
                       std::max(1.0f, std::floor(2.0f * dpiScale)));
+
+    auto* room =
+        sourceManager ? sourceManager->getCollaborationRoom() : nullptr;
+    if ( !room || !room->isActive() || room->localPeerId() == 0 ) {
+        return;
+    }
+
+    const auto& viewports     = room->participantViewports();
+    const auto& participants  = room->participants();
+    const auto  localId       = room->localPeerId();
+    const float markerMaximum = std::max(1.0F, innerWidth * 0.35F);
+    const float markerSize =
+        std::clamp(std::floor(5.0F * dpiScale), 1.0F, markerMaximum);
+    const float markerHalfHeight = std::max(2.0F, markerSize * 0.65F);
+    const float lineThickness    = std::max(1.0F, std::floor(2.0F * dpiScale));
+    const ImU32 markerOutlineColor = ImGui::GetColorU32(ImGuiCol_Border);
+    drawList->PushClipRect(layout.railMin, layout.railMax, true);
+    for ( const auto& [peerId, viewport] : viewports ) {
+        const auto participant = participants.find(peerId);
+        if ( peerId == localId || participant == participants.end() ) {
+            continue;
+        }
+        const auto markerY = previewDensityYAtTime(viewport.visualTime,
+                                                   layout.innerMin.y,
+                                                   layout.innerMax.y,
+                                                   density.duration);
+        if ( !markerY ) {
+            continue;
+        }
+
+        const float y = static_cast<float>(*markerY);
+        const ImU32 color =
+            collaborationPeerColor(participant->second.participantId, 255);
+        const float tipX = layout.innerMax.x - markerSize;
+        drawList->AddLine({ layout.innerMin.x, y },
+                          { tipX, y },
+                          markerOutlineColor,
+                          lineThickness + 2.0F);
+        drawList->AddLine(
+            { layout.innerMin.x, y }, { tipX, y }, color, lineThickness);
+        drawList->AddTriangleFilled(
+            { tipX - 1.0F, y },
+            { layout.innerMax.x, y - markerHalfHeight - 1.0F },
+            { layout.innerMax.x, y + markerHalfHeight + 1.0F },
+            markerOutlineColor);
+        drawList->AddTriangleFilled({ tipX, y },
+                                    { layout.innerMax.x, y - markerHalfHeight },
+                                    { layout.innerMax.x, y + markerHalfHeight },
+                                    color);
+    }
+    drawList->PopClipRect();
+}
+
+/// @brief 提交密度栏最近一次连续 Seek。
+/// @warning UI 热路径：仅在拖动结束或窗口中断交互时发布一条命令。
+void PreviewCanvas::commitDensitySeekScrub()
+{
+    if ( !m_wasDensitySeekActive ) return;
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{
+        .time        = m_lastDensitySeekCommandTime,
+        .isScrubbing = false,
+    }));
+    m_wasDensitySeekActive = false;
 }
 
 /// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
@@ -249,7 +324,7 @@ void PreviewCanvas::drawDensityOverview(
 /// @param dpiScale 当前窗口 DPI 缩放。
 /// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
 /// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
-/// 仅在目标时间变化时发布 Seek。
+/// 拖动变化时发布本地预览 Seek，松手时固定发布一次最终提交。
 std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
     float dpiScale)
@@ -257,7 +332,7 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const auto layout = calculatePreviewDensityRailLayout(
         canvasPos, canvasSize, reservedWidth, dpiScale);
     if ( !layout.valid ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
@@ -273,37 +348,47 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     ImGui::SetCursorScreenPos(previousCursor);
 
     if ( !m_currentSnapshot ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
     const double duration = m_currentSnapshot->previewDensity.duration;
     const ImVec2 mousePos = ImGui::GetMousePos();
     if ( !std::isfinite(duration) || duration <= 0.0 ||
          !ImGui::IsMousePosValid(&mousePos) || !std::isfinite(mousePos.y) ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
     const auto targetTime = previewDensityTimeAtY(
         mousePos.y, layout.innerMin.y, layout.innerMax.y, duration);
     if ( !targetTime ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return std::nullopt;
     }
 
-    const bool interactionEnded = deactivated && m_wasDensitySeekActive;
-    const bool interactionFrame = isActive || interactionEnded;
-    if ( interactionFrame &&
-         (!m_wasDensitySeekActive ||
-          std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6) ) {
-        const double visualOffset = Config::AppConfig::instance()
-                                        .getVisualConfig()
-                                        .getEffectiveVisualOffset();
+    const bool targetChanged =
+        std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6;
+    const auto dispatch = resolvePreviewDensitySeekDispatch(
+        isActive, deactivated, m_wasDensitySeekActive, targetChanged);
+    const bool interactionFrame =
+        dispatch != PreviewDensitySeekDispatch::None || isActive;
+    const double visualOffset = Config::AppConfig::instance()
+                                    .getVisualConfig()
+                                    .getEffectiveVisualOffset();
+    const double commandTime  = *targetTime - visualOffset;
+    if ( dispatch == PreviewDensitySeekDispatch::Preview ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdSeek{ *targetTime - visualOffset }));
-        m_lastDensitySeekTime = *targetTime;
+            Logic::CmdSeek{ .time = commandTime, .isScrubbing = true }));
+        m_lastDensitySeekTime        = *targetTime;
+        m_lastDensitySeekCommandTime = commandTime;
+    } else if ( dispatch == PreviewDensitySeekDispatch::Commit ) {
+        m_lastDensitySeekTime        = *targetTime;
+        m_lastDensitySeekCommandTime = commandTime;
+        commitDensitySeekScrub();
     }
-    m_wasDensitySeekActive = isActive;
+    if ( dispatch != PreviewDensitySeekDispatch::Commit ) {
+        m_wasDensitySeekActive = isActive;
+    }
 
     if ( isHovered || interactionFrame ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
@@ -325,7 +410,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showPreviewWindow ) {
-        m_wasDensitySeekActive = false;
+        commitDensitySeekScrub();
         return;
     }
 
@@ -336,7 +421,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
-        m_wasDensitySeekActive           = false;
+        commitDensitySeekScrub();
         editorSettings.showPreviewWindow = false;
         appConfig.save();
         return;
@@ -389,7 +474,8 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
                         contentSize,
                         rctx.getReservedRightWidth(),
                         dpiScale,
-                        densitySeekPreview);
+                        densitySeekPreview,
+                        sourceManager);
 
     float viewportWidth  = contentSize.x;
     float viewportHeight = contentSize.y;

@@ -36,6 +36,8 @@ struct CollaborationDirectoryRoom {
     std::string roomName;
     /// @brief 房主 Creator 展示身份。
     std::string hostCreator;
+    /// @brief 房主是否为目录卡片发布了封面缩略图。
+    bool hasCoverImage = false;
     /// @brief 当前已建立 P2P 连接的成员数量。
     std::size_t participants = 0;
     /// @brief 房间允许的总成员数量。
@@ -83,10 +85,19 @@ public:
     /// @return WebSocket 已连接且消息发送成功时返回 true。
     [[nodiscard]] bool refresh();
 
+    /// @brief 按需请求指定房间的封面缩略图。
+    /// @param roomId 当前目录快照中的公开房间标识。
+    /// @return 请求首次成功发送或封面已缓存时返回 true。
+    [[nodiscard]] bool requestRoomCover(std::string_view roomId);
+
     /// @brief 返回当前目录状态。
     [[nodiscard]] CollaborationDirectoryState state() const;
     /// @brief 返回最近一次有效的房间列表快照。
     [[nodiscard]] const std::vector<CollaborationDirectoryRoom>& rooms() const;
+    /// @brief 返回已经按需取得的房间封面 Base64 JPEG 数据。
+    /// @param roomId 当前目录快照中的公开房间标识。
+    /// @return 尚未取得、房间无封面或房间已消失时返回空视图。
+    [[nodiscard]] std::string_view roomCover(std::string_view roomId) const;
     /// @brief 返回最近连接或协议错误。
     [[nodiscard]] const std::string& lastError() const;
     /// @brief 返回当前中心服务器配置。

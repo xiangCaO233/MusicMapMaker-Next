@@ -55,7 +55,8 @@ bool isPlaceableNote(const NoteComponent& note)
 /// @return 悬停对象属于玩家物件域且实体有效时返回 true。
 bool isHoveredPlayerNote(const SessionContext& ctx)
 {
-    if ( ctx.hoveredObjectKind != ChartObjectKind::PlayerNote ||
+    if ( (ctx.hoveredObjectKind != ChartObjectKind::PlayerNote &&
+          ctx.hoveredObjectKind != ChartObjectKind::DraftNote) ||
          ctx.hoveredEntity == entt::null ||
          !ctx.noteRegistry.valid(ctx.hoveredEntity) ||
          !ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
@@ -84,55 +85,12 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.polylineSegments.clear();
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
-    ctx.brushState.holdStartTime      = -1.0;
-    ctx.brushState.duration           = 0.0;
-    ctx.brushState.dtrack             = 0;
-    ctx.brushState.createsAudioSample = false;
-    ctx.brushState.isActive           = false;
-}
-
-/// @brief 将当前绘制手势切换到鼠标所在的统一画布轨道区域。
-/// @param ctx 会话上下文。
-/// @param lane 当前鼠标命中的统一轨道地址。
-/// @param time 当前鼠标对应的逻辑时间。
-/// @param mouseY 当前鼠标纵坐标。
-/// @param isShiftDown 是否正在进行 Shift 拖绘。
-/// @warning 绘制更新热路径：只重置当前笔刷的小型状态，不得访问文件系统或遍历
-/// ECS。
-void retargetBrushToLane(SessionContext& ctx, CanvasLaneAddress lane,
-                         double time, float mouseY, bool isShiftDown)
-{
-    const bool createsAudioSample     = lane.kind == CanvasLaneKind::Bgm;
-    ctx.brushState.createsAudioSample = createsAudioSample;
-    ctx.brushState.time               = time;
-    ctx.brushState.track              = static_cast<int>(lane.absoluteTrack(
-        static_cast<std::uint32_t>(std::max(0, ctx.trackCount))));
-    ctx.brushState.type               = ::MMM::NoteType::NOTE;
-    ctx.brushState.duration           = 0.0;
-    ctx.brushState.dtrack             = 0;
-    ctx.brushState.holdStartTime      = -1.0;
-    ctx.brushState.startTrack         = ctx.brushState.track;
-    ctx.brushState.startMouseY        = mouseY;
-    ctx.brushState.segmentStartMouseY = mouseY;
-    ctx.brushState.polylineSegments.clear();
-    ctx.brushState.activeAudioResourceId.clear();
-    ctx.brushState.activeSampleBinding.reset();
-
-    if ( createsAudioSample ) {
-        ctx.brushState.activeAudioResourceId =
-            ctx.brushState.selectedAudioResourceId;
-        return;
-    }
-
-    if ( !ctx.brushState.selectedAudioResourceId.empty() ) {
-        ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
-            ctx.brushState.selectedAudioResourceId,
-            ctx.brushState.selectedAudioVolume,
-        };
-    }
-    if ( isShiftDown ) {
-        ctx.brushState.holdStartTime = time;
-    }
+    ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.holdStartTime          = -1.0;
+    ctx.brushState.duration               = 0.0;
+    ctx.brushState.dtrack                 = 0;
+    ctx.brushState.createsAudioSample     = false;
+    ctx.brushState.isActive               = false;
 }
 
 /// @brief 判断批量操作条目中是否已经包含指定实体。
@@ -239,7 +197,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             ctx.lastConfig.visual.trackLayout.right,
             itCamera->second.horizontalOffsetX,
             true,
-            ctx.lastConfig.settings.enableBmsEditing);
+            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.enableDraftLanes);
         targetLane = laneProjection.laneAt(cmd.mouseX);
     }
 
@@ -263,6 +222,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         createsAudioSample ? ctx.brushState.selectedAudioResourceId
                            : std::string{};
     ctx.brushState.activeSampleBinding.reset();
+    ctx.brushState.replacesExistingObject = false;
     if ( !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() ) {
         ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
@@ -412,9 +372,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                                        ctx);
 
                         // 设置拖拽状态
-                        ctx.isDragging   = true;
-                        ctx.dragCameraId = cmd.cameraId;
-                        isResuming       = true;
+                        ctx.brushState.replacesExistingObject = true;
+                        ctx.isDragging                        = true;
+                        ctx.dragCameraId                      = cmd.cameraId;
+                        isResuming                            = true;
                         XINFO("Resuming Polyline edit for entity {}",
                               static_cast<uint32_t>(targetEntity));
                     }
@@ -466,9 +427,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                     std::move(deleteEntries), "Convert Note to Polyline");
                 ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
 
-                ctx.isDragging   = true;
-                ctx.dragCameraId = cmd.cameraId;
-                isResuming       = true;
+                ctx.brushState.replacesExistingObject = true;
+                ctx.isDragging                        = true;
+                ctx.dragCameraId                      = cmd.cameraId;
+                isResuming                            = true;
                 XINFO(
                     "Converting ordinary note (type {}) to Polyline and "
                     "resuming edit for entity {}",
@@ -562,23 +524,17 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             ctx.lastConfig.visual.trackLayout.right,
             itCamera->second.horizontalOffsetX,
             true,
-            ctx.lastConfig.settings.enableBmsEditing);
+            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.enableDraftLanes);
         currentLane = laneProjection.laneAt(cmd.mouseX);
         if ( !currentLane ) return;
 
-        const bool targetCreatesAudioSample =
-            currentLane->kind == CanvasLaneKind::Bgm;
-        if ( targetCreatesAudioSample != ctx.brushState.createsAudioSample ) {
-            if ( !targetCreatesAudioSample &&
-                 !ctx.brushState.selectedAudioResourceId.empty() &&
-                 ctx.brushState.selectedAudioTrackType ==
-                     ::MMM::AudioTrackType::Main ) {
-                resetBrushState(ctx);
-                ctx.lastActionMessage = "主音轨不能绑定到玩家物件";
-                return;
-            }
-            retargetBrushToLane(
-                ctx, *currentLane, currentPosTime, cmd.mouseY, cmd.isShiftDown);
+        const CanvasLaneKind brushLaneKind =
+            ctx.brushState.createsAudioSample
+                ? CanvasLaneKind::Bgm
+                : (ctx.brushState.track < 0 ? CanvasLaneKind::Draft
+                                            : CanvasLaneKind::Player);
+        if ( currentLane->kind != brushLaneKind ) {
             return;
         }
     }
@@ -609,9 +565,13 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-            ? static_cast<int>(currentLane->index)
+            ? currentLane->absoluteTrack(
+                  static_cast<std::uint32_t>(ctx.trackCount))
             : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
-    currentTrack = std::clamp(currentTrack, 0, ctx.trackCount - 1);
+    const bool editsDraft   = ctx.brushState.track < 0;
+    const int  minimumTrack = editsDraft ? -ctx.trackCount : 0;
+    const int  maximumTrack = editsDraft ? -1 : ctx.trackCount - 1;
+    currentTrack = std::clamp(currentTrack, minimumTrack, maximumTrack);
 
     if ( cmd.isShiftDown && !ctx.lastConfig.settings.enablePolylineEditing ) {
         const float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
@@ -653,11 +613,25 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             bool  timeChanged =
                 std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
 
-            // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
-            if ( !timeChanged && diffY <= 5.0f ) {
+            const bool extendsEstablishedFlick =
+                ctx.brushState.type == ::MMM::NoteType::FLICK &&
+                ctx.brushState.dtrack != 0 &&
+                currentTrack != ctx.brushState.startTrack &&
+                (timeChanged || diffY > 5.0F);
+
+            // 已经明确横移成 Flick 后再纵向延伸时，必须保留横向优先顺序；
+            // 否则重新分类会先改成 Hold，导致 L 形折线反转为钩子。
+            if ( extendsEstablishedFlick ) {
+                ctx.brushState.type = ::MMM::NoteType::FLICK;
+                ctx.brushState.dtrack =
+                    currentTrack - ctx.brushState.startTrack;
+                ctx.brushState.duration = 0.0;
+            } else if ( !timeChanged && diffY <= 5.0f ) {
+                // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
                 int dtrack = currentTrack - ctx.brushState.startTrack;
-                if ( dtrack != 0 && (ctx.brushState.startTrack + dtrack >= 0) &&
-                     (ctx.brushState.startTrack + dtrack < ctx.trackCount) ) {
+                if ( dtrack != 0 &&
+                     ctx.brushState.startTrack + dtrack >= minimumTrack &&
+                     ctx.brushState.startTrack + dtrack <= maximumTrack ) {
                     ctx.brushState.type   = ::MMM::NoteType::FLICK;
                     ctx.brushState.dtrack = dtrack;
                 } else {
@@ -854,6 +828,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_trackIndex    = ctx.brushState.track;
     note.m_dtrack        = ctx.brushState.dtrack;
     note.m_type          = ctx.brushState.type;
+    note.m_isDraft       = note.m_trackIndex < 0;
     note.m_sampleBinding = ctx.brushState.activeSampleBinding;
     applyNoteColorOverrides(note, ctx.brushState.customColors);
 
@@ -1297,6 +1272,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             const auto&   s     = note.m_subNotes[i];
             NoteComponent subNC = makeNoteComponentFromSubNote(
                 s, true, parentEnt, static_cast<int>(i));
+            subNC.m_isDraft = note.m_isDraft;
 
             entt::entity subEnt = ctx.noteRegistry.create();
             mergeDeleteEntries.push_back({ subEnt, std::nullopt, subNC });
@@ -1330,7 +1306,7 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
     ctx.eraserState.isShiftDown = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        ctx.eraserState.targetObjectKind = ctx.hoveredObjectKind;
         entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
@@ -1356,7 +1332,7 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
     // 每帧只标记当前鼠标正下方的物件，移开就取消
     ctx.eraserState.targetEntities.clear();
     if ( isHoveredPlayerNote(ctx) ) {
-        ctx.eraserState.targetObjectKind = ChartObjectKind::PlayerNote;
+        ctx.eraserState.targetObjectKind = ctx.hoveredObjectKind;
         entt::entity target              = ctx.hoveredEntity;
         // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
         if ( cmd.isShiftDown ) {
@@ -1515,6 +1491,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
+                                        nextNC.m_isDraft = nc.m_isDraft;
                                         if ( !nextNC.m_sampleBinding &&
                                              inheritsParentSound ) {
                                             nextNC.m_sampleBinding =
@@ -1552,6 +1529,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_customColors =
                                             nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
+                                        nextNC.m_isDraft        = nc.m_isDraft;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
                                         nextNC.m_subNotes       = part;
@@ -1571,6 +1549,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                                     true,
                                                     parentEnt,
                                                     static_cast<int>(i));
+                                            subNC.m_isDraft = nc.m_isDraft;
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();
@@ -1639,6 +1618,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         NoteComponent nextNC =
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
+                                        nextNC.m_isDraft = nc.m_isDraft;
                                         if ( !nextNC.m_sampleBinding &&
                                              inheritsParentSound ) {
                                             nextNC.m_sampleBinding =
@@ -1676,6 +1656,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         nextNC.m_customColors =
                                             nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
+                                        nextNC.m_isDraft        = nc.m_isDraft;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
                                         nextNC.m_subNotes       = part;
@@ -1695,6 +1676,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                                     true,
                                                     parentEnt,
                                                     static_cast<int>(i));
+                                            subNC.m_isDraft = nc.m_isDraft;
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();

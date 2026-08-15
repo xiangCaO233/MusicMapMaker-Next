@@ -1,11 +1,17 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 
 #include "audio/AudioManager.h"
+#include "canvas/AnnotationDetailLayout.h"
+#include "canvas/AnnotationTargetHint.h"
+#include "canvas/CanvasBlockedGesture.h"
+#include "canvas/CanvasContentVisibility.h"
+#include "canvas/HoverLayerSelection.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
@@ -24,6 +30,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
+#include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -34,6 +41,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -46,6 +54,70 @@ constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 
 /// @brief 画布悬浮信息相对鼠标的屏幕偏移。
 constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
+
+/// @brief 画布悬浮信息窗口背景透明度。
+constexpr float CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA = 0.70F;
+
+/// @brief 画布悬浮信息窗口的内边距。
+constexpr float CANVAS_HOVER_OVERLAY_PADDING = 12.0F;
+
+/// @brief 画布悬浮信息窗口的横向元素间距。
+constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
+
+/// @brief 画布悬浮信息窗口的纵向元素间距。
+constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
+
+/// @brief 绘制当前悬浮批注所指向物件的高对比几何提示。
+/// @param bounds 批注目标在画布局部坐标中的提示边界。
+/// @param canvasPosition 画布左上角屏幕坐标。
+/// @param canvasWidth 画布可见宽度。
+/// @param canvasHeight 画布可见高度。
+/// @warning UI 热路径：悬浮批注详情卡片时每帧调用一次，只追加固定数量 ImGui
+/// 几何。
+void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
+                                ImVec2 canvasPosition, float canvasWidth,
+                                float canvasHeight)
+{
+    const ImVec2 minimum{ canvasPosition.x + bounds.left,
+                          canvasPosition.y + bounds.top };
+    const ImVec2 maximum{ canvasPosition.x + bounds.right,
+                          canvasPosition.y + bounds.bottom };
+
+    auto& skin        = Config::SkinManager::instance();
+    auto  accentColor = skin.getColor("preview.judgeline");
+    if ( accentColor.r == 1.0F && accentColor.g == 0.0F &&
+         accentColor.b == 1.0F ) {
+        const ImVec4 fallback = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        accentColor = { fallback.x, fallback.y, fallback.z, fallback.w };
+    }
+
+    const ImU32 accent = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 1.0F });
+    const ImU32 fill = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 0.16F });
+    constexpr ImU32 SHADOW   = IM_COL32(0, 0, 0, 230);
+    constexpr float ROUNDING = 4.0F;
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        canvasPosition,
+        { canvasPosition.x + canvasWidth, canvasPosition.y + canvasHeight },
+        true);
+    drawList->AddRectFilled(minimum, maximum, fill, ROUNDING);
+    drawList->AddRect(minimum, maximum, SHADOW, ROUNDING, 0, 6.0F);
+    drawList->AddRect(minimum, maximum, accent, ROUNDING, 0, 2.5F);
+
+    const float markerX = (minimum.x + maximum.x) * 0.5F;
+    drawList->AddTriangleFilled({ markerX - 5.0F, minimum.y - 7.0F },
+                                { markerX + 5.0F, minimum.y - 7.0F },
+                                { markerX, minimum.y - 1.0F },
+                                SHADOW);
+    drawList->AddTriangleFilled({ markerX - 3.5F, minimum.y - 5.5F },
+                                { markerX + 3.5F, minimum.y - 5.5F },
+                                { markerX, minimum.y - 1.5F },
+                                accent);
+    drawList->PopClipRect();
+}
 
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
@@ -607,7 +679,7 @@ bool beginCanvasHoverOverlay(const ImVec2& mousePos)
     ImGui::SetNextWindowPos(ImVec2(mousePos.x + xOffset, mousePos.y + yOffset),
                             ImGuiCond_Always,
                             pivot);
-    ImGui::SetNextWindowBgAlpha(0.7f);
+    ImGui::SetNextWindowBgAlpha(CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA);
 
     constexpr ImGuiWindowFlags overlayFlags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
@@ -615,6 +687,375 @@ bool beginCanvasHoverOverlay(const ImVec2& mousePos)
         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoDocking;
     return ImGui::Begin("##CanvasHoverInspectOverlay", nullptr, overlayFlags);
+}
+
+/// @brief 读取批注 UI 皮肤颜色并在缺失时回退。
+/// @param key 颜色键。
+/// @param fallback 缺失颜色。
+/// @return 可直接交给 ImDrawList 的颜色。
+ImU32 annotationUiColor(std::string_view key, const ImVec4& fallback)
+{
+    const auto color =
+        Config::SkinManager::instance().getColor(std::string(key));
+    const bool missing = color.r == 1.0F && color.g == 0.0F &&
+                         color.b == 1.0F && color.a == 1.0F;
+    return ImGui::ColorConvertFloat4ToU32(
+        missing ? fallback : ImVec4(color.r, color.g, color.b, color.a));
+}
+
+/// @brief 批注详情卡片单帧绘制数量上限。
+constexpr std::size_t MAX_VISIBLE_ANNOTATION_DETAIL_CARDS = 48U;
+
+/// @brief 单张详情卡片对应的只读批注数据。
+struct AnnotationDetailCardEntry {
+    /// @brief 卡片所在的时间戳分组。
+    const Logic::AnnotationRenderMarker* marker{ nullptr };
+    /// @brief 卡片展示的具体批注。
+    const Logic::AnnotationRenderItem* item{ nullptr };
+    /// @brief 批注在时间戳分组内的索引。
+    std::size_t itemIndex{ 0U };
+    /// @brief Markdown 正文完整排版高度。
+    float contentHeight{ 0.0F };
+};
+
+/// @brief 批注详情卡片悬浮命中结果。
+struct AnnotationDetailCardHit {
+    /// @brief 被命中的时间戳分组。
+    const Logic::AnnotationRenderMarker* marker{ nullptr };
+    /// @brief 被命中的分组内批注索引。
+    std::size_t itemIndex{ 0U };
+    /// @brief 指针是否命中了卡片正文中的链接。
+    bool linkHovered{ false };
+    /// @brief 卡片是否消费了本帧滚轮输入。
+    bool wheelConsumed{ false };
+};
+
+/// @brief 获取批注目标类型的翻译键。
+const char* annotationTargetLabelKey(
+    ::MMM::BeatmapAnnotationTargetKind targetKind)
+{
+    if ( targetKind == ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+        return "ui.annotation.target.player_object";
+    }
+    if ( targetKind == ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+        return "ui.annotation.target.audio_sample";
+    }
+    return "ui.annotation.target.timestamp";
+}
+
+/// @brief 计算一条物件批注连线在轨道区中的起点横坐标。
+/// @param item 批注展示数据。
+/// @param projection 当前画布横向投影。
+/// @param fallbackX 无有效物件轨道时使用的批注栏中心。
+/// @return 对应玩家物件、自动采样或批注栏中心的横坐标。
+/// @warning UI 热路径：每张可见详情卡片调用一次，只执行常量级投影查询。
+float annotationConnectorSourceX(const Logic::AnnotationRenderItem& item,
+                                 const Logic::CanvasLaneProjection& projection,
+                                 float                              fallbackX)
+{
+    if ( item.track < 0 ) return fallbackX;
+
+    std::optional<Logic::CanvasLaneBounds> bounds;
+    const auto track = static_cast<std::uint32_t>(item.track);
+    if ( item.targetKind ==
+         ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+        bounds = projection.bounds({ Logic::CanvasLaneKind::Player, track });
+    } else if ( item.targetKind ==
+                ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+        if ( track < projection.playerLaneCount ) {
+            bounds =
+                projection.bounds({ Logic::CanvasLaneKind::Player, track });
+        } else {
+            bounds = projection.bounds({ Logic::CanvasLaneKind::Bgm,
+                                         track - projection.playerLaneCount });
+        }
+    }
+    return bounds ? (bounds->leftX + bounds->rightX) * 0.5F : fallbackX;
+}
+
+/// @brief 绘制当前可见批注的避让卡片与物件连线。
+/// @param markers 当前主画布已裁剪的批注时间戳分组。
+/// @param projection 当前画布横向投影。
+/// @param canvasScreenX 画布左上角屏幕横坐标。
+/// @param canvasScreenY 画布左上角屏幕纵坐标。
+/// @param targetWidth 画布宽度。
+/// @param topY 轨道区顶部局部坐标。
+/// @param bottomY 轨道区底部局部坐标。
+/// @param pointerX 指针相对画布左侧的横坐标。
+/// @param pointerY 指针相对画布顶部的纵坐标。
+/// @param canvasHovered 指针是否位于画布窗口。
+/// @param scrollItemId 当前保留滚动状态的批注 ID。
+/// @param scrollY 当前批注卡片正文的纵向滚动偏移。
+/// @return 指针命中的详情卡片及其分组内索引。
+/// @warning UI 热路径：只线性遍历当前快照最多 48 条可见批注，不排序、不访问
+/// ECS 或文件系统。
+AnnotationDetailCardHit renderConnectedAnnotationDetails(
+    const std::vector<Logic::AnnotationRenderMarker>& markers,
+    const Logic::CanvasLaneProjection& projection, float canvasScreenX,
+    float canvasScreenY, float targetWidth, float topY, float bottomY,
+    float pointerX, float pointerY, bool canvasHovered,
+    std::string& scrollItemId, float& scrollY)
+{
+    AnnotationDetailCardHit result;
+    if ( markers.empty() || bottomY <= topY ) return result;
+
+    constexpr float CARD_MARGIN     = 10.0F;
+    constexpr float CARD_MIN_WIDTH  = 170.0F;
+    constexpr float CARD_MAX_WIDTH  = 340.0F;
+    constexpr float CARD_GAP        = 5.0F;
+    constexpr float CARD_PADDING    = CANVAS_HOVER_OVERLAY_PADDING;
+    constexpr float SCROLLBAR_SPACE = 7.0F;
+    constexpr float CONNECTOR_ELBOW = 9.0F;
+    const float     rightAvailable =
+        targetWidth - projection.annotationRightX - CARD_MARGIN * 2.0F;
+    const float leftAvailable = projection.annotationLeftX - CARD_MARGIN * 2.0F;
+    const bool  placeRight =
+        rightAvailable >= CARD_MIN_WIDTH || rightAvailable >= leftAvailable;
+    const float available = placeRight ? rightAvailable : leftAvailable;
+    if ( available < CARD_MIN_WIDTH ) return result;
+
+    const float cardWidth = std::min(CARD_MAX_WIDTH, available);
+    const float cardLeftX =
+        placeRight ? projection.annotationRightX + CARD_MARGIN
+                   : projection.annotationLeftX - CARD_MARGIN - cardWidth;
+    const float cardRightX = cardLeftX + cardWidth;
+    const float markerCenterX =
+        (projection.annotationLeftX + projection.annotationRightX) * 0.5F;
+    const float fontSize = ImGui::GetFontSize();
+    const float contentWidth =
+        std::max(1.0F, cardWidth - CARD_PADDING * 2.0F - SCROLLBAR_SPACE);
+
+    const ImU32 connectorColor = annotationUiColor(
+        "annotations.connector", ImVec4(0.42F, 0.72F, 0.96F, 0.86F));
+    const auto& imguiStyle      = ImGui::GetStyle();
+    ImVec4      background      = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    background.w                = CANVAS_HOVER_OVERLAY_BACKGROUND_ALPHA;
+    const ImU32 backgroundColor = ImGui::ColorConvertFloat4ToU32(background);
+    const ImU32 borderColor     = ImGui::GetColorU32(ImGuiCol_Border);
+    const ImU32 headerColor     = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 mutedColor      = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImU32 scrollbarBackgroundColor =
+        ImGui::GetColorU32(ImGuiCol_ScrollbarBg);
+    const ImU32 scrollbarColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrab);
+    const ImU32 scrollbarHoverColor =
+        ImGui::GetColorU32(ImGuiCol_ScrollbarGrabHovered);
+    const UI::MarkdownStyle         markdownStyle = UI::defaultMarkdownStyle();
+    const UI::MarkdownRenderOptions markdownOptions{
+        .wrapWidth        = contentWidth,
+        .compact          = true,
+        .interactiveLinks = true,
+        .style            = &markdownStyle,
+    };
+
+    std::array<AnnotationDetailCardEntry, MAX_VISIBLE_ANNOTATION_DETAIL_CARDS>
+        entries{};
+    std::array<AnnotationDetailCardPlacement,
+               MAX_VISIBLE_ANNOTATION_DETAIL_CARDS>
+                placements{};
+    std::size_t cardCount = 0U;
+
+    auto appendMarker = [&](const Logic::AnnotationRenderMarker& marker) {
+        if ( marker.canvasY < topY - 10.0F ||
+             marker.canvasY > bottomY + 10.0F ) {
+            return;
+        }
+        for ( std::size_t index = 0U; index < marker.items.size(); ++index ) {
+            if ( cardCount >= entries.size() ) return;
+            const auto& item = marker.items[index];
+            const auto  contentLayout =
+                UI::measureMarkdown(item.content, markdownOptions);
+            const float visibleContentHeight =
+                std::clamp(contentLayout.size.y, fontSize, fontSize * 5.0F);
+            entries[cardCount] = {
+                &marker,
+                &item,
+                index,
+                std::max(fontSize, contentLayout.size.y),
+            };
+            placements[cardCount] = {
+                marker.canvasY,
+                CARD_PADDING * 2.0F +
+                    CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
+                    fontSize * 2.0F + visibleContentHeight,
+                0.0F,
+            };
+            ++cardCount;
+        }
+    };
+
+    const bool ascending = markers.size() < 2U ||
+                           markers.front().canvasY <= markers.back().canvasY;
+    if ( ascending ) {
+        for ( const auto& marker : markers ) appendMarker(marker);
+    } else {
+        for ( auto marker = markers.rbegin(); marker != markers.rend();
+              ++marker ) {
+            appendMarker(*marker);
+        }
+    }
+    if ( cardCount == 0U ) return result;
+
+    layoutAnnotationDetailCards(
+        std::span<AnnotationDetailCardPlacement>(placements.data(), cardCount),
+        topY + 4.0F,
+        bottomY - 4.0F,
+        CARD_GAP);
+
+    auto* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        { canvasScreenX, canvasScreenY + topY },
+        { canvasScreenX + targetWidth, canvasScreenY + bottomY },
+        true);
+    for ( std::size_t index = 0U; index < cardCount; ++index ) {
+        const auto& entry     = entries[index];
+        const auto& placement = placements[index];
+        if ( !entry.marker || !entry.item ) continue;
+
+        const float cardTopY    = placement.topY;
+        const float cardBottomY = cardTopY + placement.height;
+        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
+                              pointerX <= cardRightX && pointerY >= cardTopY &&
+                              pointerY <= cardBottomY;
+        if ( hovered && !result.marker ) {
+            result.marker    = entry.marker;
+            result.itemIndex = entry.itemIndex;
+        }
+
+        const float sourceX =
+            annotationConnectorSourceX(*entry.item, projection, markerCenterX);
+        const float cardEdgeX   = placeRight ? cardLeftX : cardRightX;
+        const float elbowX      = placeRight ? cardEdgeX - CONNECTOR_ELBOW
+                                             : cardEdgeX + CONNECTOR_ELBOW;
+        const float cardCenterY = (cardTopY + cardBottomY) * 0.5F;
+        const std::array<ImVec2, 4> connector{
+            ImVec2{ canvasScreenX + sourceX,
+                    canvasScreenY + entry.marker->canvasY },
+            ImVec2{ canvasScreenX + markerCenterX,
+                    canvasScreenY + entry.marker->canvasY },
+            ImVec2{ canvasScreenX + elbowX, canvasScreenY + cardCenterY },
+            ImVec2{ canvasScreenX + cardEdgeX, canvasScreenY + cardCenterY },
+        };
+        drawList->AddPolyline(connector.data(),
+                              static_cast<int>(connector.size()),
+                              connectorColor,
+                              ImDrawFlags_None,
+                              hovered ? 2.5F : 1.5F);
+        drawList->AddCircleFilled(
+            connector.front(), hovered ? 4.0F : 3.0F, connectorColor);
+
+        const ImVec2 cardMin{ canvasScreenX + cardLeftX,
+                              canvasScreenY + cardTopY };
+        const ImVec2 cardMax{ canvasScreenX + cardRightX,
+                              canvasScreenY + cardBottomY };
+        drawList->AddRectFilled(
+            cardMin, cardMax, backgroundColor, imguiStyle.WindowRounding);
+        if ( imguiStyle.WindowBorderSize > 0.0F ) {
+            drawList->AddRect(cardMin,
+                              cardMax,
+                              borderColor,
+                              imguiStyle.WindowRounding,
+                              ImDrawFlags_None,
+                              imguiStyle.WindowBorderSize);
+        }
+
+        const std::string_view author =
+            entry.item->author.empty()
+                ? TR("ui.annotation.unknown_author").view()
+                : std::string_view(entry.item->author);
+        drawList->AddText(
+            { cardMin.x + CARD_PADDING, cardMin.y + CARD_PADDING },
+            headerColor,
+            author.data(),
+            author.data() + author.size());
+
+        char       metadata[512]{};
+        const auto target =
+            TR(annotationTargetLabelKey(entry.item->targetKind));
+        if ( entry.item->track >= 0 ) {
+            std::snprintf(metadata,
+                          sizeof(metadata),
+                          "%.3f s · %s #%d%s",
+                          entry.marker->timestamp,
+                          target.data(),
+                          entry.item->track + 1,
+                          entry.item->targetMissing ? " !" : "");
+        } else {
+            std::snprintf(metadata,
+                          sizeof(metadata),
+                          "%.3f s · %s%s",
+                          entry.marker->timestamp,
+                          target.data(),
+                          entry.item->targetMissing ? " !" : "");
+        }
+        const ImVec2 metadataPos{ cardMin.x + CARD_PADDING,
+                                  cardMin.y + CARD_PADDING + fontSize +
+                                      CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y };
+        drawList->AddText(metadataPos, mutedColor, metadata);
+
+        const ImVec2 contentMin{ cardMin.x + CARD_PADDING,
+                                 metadataPos.y + fontSize +
+                                     CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y };
+        const ImVec2 contentMax{ cardMax.x - CARD_PADDING - SCROLLBAR_SPACE,
+                                 cardMax.y - CARD_PADDING };
+        const float  visibleContentHeight =
+            std::max(1.0F, contentMax.y - contentMin.y);
+        const float maxScrollY =
+            std::max(0.0F, entry.contentHeight - visibleContentHeight);
+        float cardScrollY = entry.item->id == scrollItemId
+                                ? std::clamp(scrollY, 0.0F, maxScrollY)
+                                : 0.0F;
+        if ( hovered ) {
+            if ( scrollItemId != entry.item->id ) {
+                scrollItemId = entry.item->id;
+                scrollY      = 0.0F;
+            }
+            const auto wheelResult =
+                updateAnnotationDetailWheel(ImGui::GetIO().MouseWheel,
+                                            scrollY,
+                                            maxScrollY,
+                                            fontSize * 3.0F);
+            scrollY              = wheelResult.scrollY;
+            cardScrollY          = scrollY;
+            result.wheelConsumed = wheelResult.consumed;
+        }
+
+        auto renderOptions           = markdownOptions;
+        renderOptions.maxHeight      = visibleContentHeight;
+        renderOptions.verticalOffset = cardScrollY;
+        const auto markdownResult =
+            UI::renderMarkdownToDrawList(*drawList,
+                                         contentMin,
+                                         contentMax,
+                                         entry.item->content,
+                                         renderOptions);
+        if ( hovered && markdownResult.linkHovered ) result.linkHovered = true;
+
+        if ( maxScrollY > 0.01F ) {
+            constexpr float SCROLLBAR_WIDTH = 3.0F;
+            const float     trackTop        = contentMin.y;
+            const float     trackBottom     = contentMax.y;
+            const float trackHeight = std::max(1.0F, trackBottom - trackTop);
+            const float thumbHeight = std::clamp(
+                trackHeight * visibleContentHeight / entry.contentHeight,
+                12.0F,
+                trackHeight);
+            const float thumbTravel = std::max(0.0F, trackHeight - thumbHeight);
+            const float thumbTop =
+                trackTop + thumbTravel * (cardScrollY / maxScrollY);
+            const float scrollbarX = cardMax.x - CARD_PADDING * 0.5F;
+            drawList->AddRectFilled({ scrollbarX - SCROLLBAR_WIDTH, trackTop },
+                                    { scrollbarX, trackBottom },
+                                    scrollbarBackgroundColor,
+                                    2.0F);
+            drawList->AddRectFilled(
+                { scrollbarX - SCROLLBAR_WIDTH, thumbTop },
+                { scrollbarX, thumbTop + thumbHeight },
+                hovered ? scrollbarHoverColor : scrollbarColor,
+                2.0F);
+        }
+    }
+    drawList->PopClipRect();
+    return result;
 }
 }  // namespace
 
@@ -2252,6 +2693,355 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     drawList->PopClipRect();
 }
 
+bool Basic2DCanvasInteraction::renderAnnotationGutter(
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+    float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
+    float pointerY, bool canvasHovered)
+{
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout =
+        visual.trackLayoutForKeyCount(currentSnapshot.trackCount);
+    const auto projection = Logic::calculateCanvasLaneProjection(
+        targetWidth,
+        currentSnapshot.trackCount,
+        currentSnapshot.bgmTrackCount,
+        layout.left,
+        layout.right,
+        currentSnapshot.canvasHorizontalOffsetX,
+        true,
+        currentSnapshot.bmsEditingEnabled,
+        currentSnapshot.draftLanesEnabled);
+    const float topY          = layout.top * targetHeight;
+    const float bottomY       = layout.bottom * targetHeight;
+    const bool  gutterHovered = projection.valid && canvasHovered &&
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
+
+    const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
+    std::optional<std::size_t>           hoveredDetailIndex;
+    bool                                 detailCardHovered   = false;
+    bool                                 detailLinkHovered   = false;
+    bool                                 detailWheelConsumed = false;
+    if ( projection.valid && currentSnapshot.hasBeatmap ) {
+        auto* drawList = ImGui::GetWindowDrawList();
+        drawList->PushClipRect(
+            { canvasScreenX, canvasScreenY + topY },
+            { canvasScreenX + targetWidth, canvasScreenY + bottomY },
+            true);
+        const float centerX =
+            (projection.annotationLeftX + projection.annotationRightX) * 0.5F;
+        const ImU32 markerColor = annotationUiColor(
+            "annotations.marker", ImVec4(0.42F, 0.72F, 0.96F, 0.98F));
+        const ImU32 hoverColor = annotationUiColor(
+            "annotations.marker_hover", ImVec4(0.68F, 0.86F, 1.0F, 1.0F));
+        const ImU32 textColor = annotationUiColor(
+            "annotations.marker_text", ImVec4(0.04F, 0.08F, 0.12F, 1.0F));
+
+        if ( Config::AppConfig::instance()
+                 .getEditorSettings()
+                 .showAnnotationDetails ) {
+            const auto detailHit = renderConnectedAnnotationDetails(
+                currentSnapshot.annotationMarkers,
+                projection,
+                canvasScreenX,
+                canvasScreenY,
+                targetWidth,
+                topY,
+                bottomY,
+                pointerX,
+                pointerY,
+                canvasHovered,
+                m_annotationDetailScrollItemId,
+                m_annotationDetailScrollY);
+            if ( detailHit.marker ) {
+                hoveredMarker       = detailHit.marker;
+                hoveredDetailIndex  = detailHit.itemIndex;
+                detailCardHovered   = true;
+                detailLinkHovered   = detailHit.linkHovered;
+                detailWheelConsumed = detailHit.wheelConsumed;
+                if ( detailHit.itemIndex < detailHit.marker->items.size() ) {
+                    const auto targetBounds = findAnnotationTargetHintBounds(
+                        detailHit.marker->items[detailHit.itemIndex],
+                        currentSnapshot.hitboxes);
+                    if ( targetBounds ) {
+                        renderAnnotationTargetHint(
+                            *targetBounds,
+                            { canvasScreenX, canvasScreenY },
+                            targetWidth,
+                            targetHeight);
+                    }
+                }
+            }
+        }
+
+        for ( const auto& marker : currentSnapshot.annotationMarkers ) {
+            const float markerY = marker.canvasY;
+            if ( markerY < topY - 10.0F || markerY > bottomY + 10.0F ) {
+                continue;
+            }
+            const bool markerHovered =
+                gutterHovered && std::abs(pointerY - markerY) <= 10.0F;
+            if ( markerHovered && !hoveredMarker ) hoveredMarker = &marker;
+
+            const ImVec2 bubbleMin{ canvasScreenX + centerX - 8.0F,
+                                    canvasScreenY + markerY - 6.5F };
+            const ImVec2 bubbleMax{ canvasScreenX + centerX + 8.0F,
+                                    canvasScreenY + markerY + 6.5F };
+            drawList->AddRectFilled(bubbleMin,
+                                    bubbleMax,
+                                    markerHovered ? hoverColor : markerColor,
+                                    3.0F);
+            const std::array<ImVec2, 3> tail{
+                ImVec2{ canvasScreenX + centerX - 3.0F,
+                        canvasScreenY + markerY + 6.0F },
+                ImVec2{ canvasScreenX + centerX + 1.0F,
+                        canvasScreenY + markerY + 10.0F },
+                ImVec2{ canvasScreenX + centerX + 3.0F,
+                        canvasScreenY + markerY + 6.0F },
+            };
+            drawList->AddTriangleFilled(
+                tail[0],
+                tail[1],
+                tail[2],
+                markerHovered ? hoverColor : markerColor);
+            if ( marker.items.size() > 1U ) {
+                const std::string count = std::to_string(marker.items.size());
+                const ImVec2      textSize = ImGui::CalcTextSize(count.c_str());
+                drawList->AddText(
+                    { canvasScreenX + centerX - textSize.x * 0.5F,
+                      canvasScreenY + markerY - textSize.y * 0.5F },
+                    textColor,
+                    count.c_str());
+            }
+        }
+        drawList->PopClipRect();
+    }
+
+    if ( hoveredMarker && !hoveredMarker->items.empty() ) {
+        const std::string& markerId = hoveredMarker->items.front().id;
+        bool               detailSelectionChanged = false;
+        if ( markerId != m_annotationHoverMarkerId ) {
+            m_annotationHoverMarkerId    = markerId;
+            m_annotationHoverDetailIndex = hoveredDetailIndex.value_or(0U);
+            detailSelectionChanged       = true;
+        } else if ( hoveredDetailIndex ) {
+            detailSelectionChanged =
+                m_annotationHoverDetailIndex != *hoveredDetailIndex;
+            m_annotationHoverDetailIndex = *hoveredDetailIndex;
+        }
+        m_annotationHoverDetailIndex = std::min(
+            m_annotationHoverDetailIndex, hoveredMarker->items.size() - 1U);
+
+        ImGui::SetNextWindowSizeConstraints(ImVec2(360.0F, 0.0F),
+                                            ImVec2(620.0F, 720.0F));
+        ImGui::BeginTooltip();
+        if ( detailSelectionChanged ) ImGui::SetScrollY(0.0F);
+        const float tooltipMaxScrollY = ImGui::GetScrollMaxY();
+        const float wheel             = ImGui::GetIO().MouseWheel;
+        if ( !detailWheelConsumed && std::abs(wheel) > 0.01F ) {
+            const auto wheelResult =
+                updateAnnotationDetailWheel(wheel,
+                                            ImGui::GetScrollY(),
+                                            tooltipMaxScrollY,
+                                            ImGui::GetFontSize() * 4.0F);
+            if ( wheelResult.consumed ) {
+                ImGui::SetScrollY(wheelResult.scrollY);
+            }
+        }
+        if ( !detailCardHovered && hoveredMarker->items.size() > 1U &&
+             !ImGui::GetIO().WantTextInput ) {
+            int direction = 0;
+            if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+                direction = -1;
+            } else if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+                direction = 1;
+            }
+            if ( direction != 0 ) {
+                m_annotationHoverDetailIndex =
+                    stepAnnotationDetailItem(hoveredMarker->items.size(),
+                                             m_annotationHoverDetailIndex,
+                                             direction);
+                ImGui::SetScrollY(0.0F);
+            }
+        }
+        const auto timeText =
+            formatCanvasTime(hoveredMarker->timestamp, &currentSnapshot);
+        ImGui::Text("%s · %s · %zu",
+                    TR("ui.annotation.marker_title").data(),
+                    timeText.c_str(),
+                    hoveredMarker->items.size());
+        ImGui::Separator();
+        for ( std::size_t index = 0U; index < hoveredMarker->items.size();
+              ++index ) {
+            const auto&            item = hoveredMarker->items[index];
+            const std::string_view author =
+                item.author.empty() ? TR("ui.annotation.unknown_author").view()
+                                    : std::string_view(item.author);
+            const ImVec4 color = index == m_annotationHoverDetailIndex
+                                     ? ImVec4(0.45F, 0.78F, 1.0F, 1.0F)
+                                     : ImVec4(0.72F, 0.74F, 0.78F, 1.0F);
+            ImGui::TextColored(color,
+                               "%zu. %.*s",
+                               index + 1U,
+                               static_cast<int>(author.size()),
+                               author.data());
+            const auto             firstLineEnd = item.content.find('\n');
+            const std::string_view firstLine(item.content.data(),
+                                             firstLineEnd == std::string::npos
+                                                 ? item.content.size()
+                                                 : firstLineEnd);
+            ImGui::SameLine();
+            ImGui::TextWrapped(
+                "— %.*s", static_cast<int>(firstLine.size()), firstLine.data());
+        }
+        if ( hoveredMarker->items.size() > 1U ) {
+            ImGui::TextDisabled("%s", TR("ui.annotation.wheel_hint").data());
+        } else if ( tooltipMaxScrollY > 0.01F ) {
+            ImGui::TextDisabled("%s", TR("ui.annotation.scroll_hint").data());
+        }
+        ImGui::Separator();
+        const auto& detail = hoveredMarker->items[m_annotationHoverDetailIndex];
+        const char* targetLabel = annotationTargetLabelKey(detail.targetKind);
+        ImGui::Text("%s: %s",
+                    TR("ui.annotation.target").data(),
+                    TR(targetLabel).data());
+        if ( detail.track >= 0 ) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%d", detail.track + 1);
+        }
+        if ( detail.targetMissing ) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                               "%s",
+                               TR("ui.annotation.target_missing").data());
+        }
+        ImGui::Text("%s: %s",
+                    TR("ui.annotation.author").data(),
+                    detail.author.empty()
+                        ? TR("ui.annotation.unknown_author").data()
+                        : detail.author.c_str());
+        ImGui::Separator();
+        UI::renderMarkdown(detail.content);
+        ImGui::EndTooltip();
+
+        if ( !currentSnapshot.isPlaying &&
+             currentSnapshot.acceptsInteraction ) {
+            if ( !detailLinkHovered &&
+                 ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+                const auto& selected =
+                    hoveredMarker->items[m_annotationHoverDetailIndex];
+                m_annotationEditor.annotationId = selected.id;
+                m_annotationEditor.author       = selected.author;
+                m_annotationEditor.timestamp    = hoveredMarker->timestamp;
+                m_annotationEditor.content.fill('\0');
+                const auto& content = selected.content;
+                std::copy_n(content.data(),
+                            std::min(content.size(),
+                                     m_annotationEditor.content.size() - 1U),
+                            m_annotationEditor.content.data());
+                m_annotationEditor.requestOpen = true;
+            } else if ( !detailLinkHovered &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+                m_annotationEditor.annotationId.clear();
+                m_annotationEditor.author.clear();
+                m_annotationEditor.timestamp = hoveredMarker->timestamp;
+                m_annotationEditor.content.fill('\0');
+                m_annotationEditor.requestOpen = true;
+            }
+        }
+    } else if ( gutterHovered && !currentSnapshot.isPlaying &&
+                currentSnapshot.acceptsInteraction &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+        m_annotationEditor.annotationId.clear();
+        m_annotationEditor.author.clear();
+        const double hoveredTime     = currentSnapshot.isSnapped
+                                           ? currentSnapshot.snappedTime
+                                           : currentSnapshot.hoveredTime;
+        m_annotationEditor.timestamp = std::max(0.0, hoveredTime);
+        m_annotationEditor.content.fill('\0');
+        m_annotationEditor.requestOpen = true;
+    } else if ( gutterHovered && !hoveredMarker ) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(TR("ui.annotation.gutter_hint").data());
+        ImGui::EndTooltip();
+    }
+
+    std::string popupLabel(TR("ui.annotation.editor_title").view());
+    popupLabel += "###BeatmapAnnotationEditor";
+    if ( m_annotationEditor.requestOpen ) {
+        ImGui::OpenPopup(popupLabel.c_str());
+        m_annotationEditor.requestOpen = false;
+    }
+    if ( ImGui::BeginPopupModal(
+             popupLabel.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        const bool editingExisting = !m_annotationEditor.annotationId.empty();
+        const auto creator         = Config::normalizeCreatorIdentity(
+            Config::AppConfig::instance().getEditorSettings().defaultCreator);
+        const auto timeText =
+            formatCanvasTime(m_annotationEditor.timestamp, &currentSnapshot);
+        ImGui::Text(
+            "%s: %s", TR("ui.annotation.timestamp").data(), timeText.c_str());
+        ImGui::Text(
+            "%s: %s",
+            TR("ui.annotation.author").data(),
+            editingExisting
+                ? (m_annotationEditor.author.empty()
+                       ? TR("ui.annotation.unknown_author").data()
+                       : m_annotationEditor.author.c_str())
+                : (creator.empty() ? TR("ui.annotation.unknown_author").data()
+                                   : creator.c_str()));
+        if ( !editingExisting && creator.empty() ) {
+            ImGui::TextColored(ImVec4(1.0F, 0.34F, 0.25F, 1.0F),
+                               "%s",
+                               TR("ui.annotation.creator_required").data());
+        }
+        ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
+        ImGui::InputTextMultiline("##BeatmapAnnotationMarkdown",
+                                  m_annotationEditor.content.data(),
+                                  m_annotationEditor.content.size(),
+                                  ImVec2(520.0F, 220.0F));
+
+        const bool canSave = m_annotationEditor.content.front() != '\0' &&
+                             (editingExisting || !creator.empty());
+        ImGui::BeginDisabled(!canSave);
+        if ( ::MMM::UI::FeedbackButton(editingExisting
+                                           ? TR("ui.annotation.save").data()
+                                           : TR("ui.annotation.add").data()) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpsertBeatmapAnnotation{
+                    .annotationId = m_annotationEditor.annotationId,
+                    .targetKind = ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+                    .timestamp  = m_annotationEditor.timestamp,
+                    .author     = creator,
+                    .content    = m_annotationEditor.content.data(),
+                }));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if ( editingExisting ) {
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.annotation.delete").data()) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdRemoveBeatmapAnnotation{
+                        m_annotationEditor.annotationId }));
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackButton(TR("ui.annotation.cancel").data()) ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    return gutterHovered || detailCardHovered ||
+           ImGui::IsPopupOpen(popupLabel.c_str());
+}
+
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
@@ -2305,7 +3095,8 @@ void Basic2DCanvasInteraction::handleInteractions(
             layout.right,
             currentSnapshot->canvasHorizontalOffsetX,
             true,
-            currentSnapshot->bmsEditingEnabled);
+            currentSnapshot->bmsEditingEnabled,
+            currentSnapshot->draftLanesEnabled);
         const float dropLeft =
             std::clamp(projection.bgmLeftX, 0.0F, targetWidth);
         const float dropRight =
@@ -2353,22 +3144,18 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     }
 
-    const float trackLeftX =
-        targetWidth * layout.left + currentSnapshot->canvasHorizontalOffsetX;
-    const auto runtimeBgmTrackCount =
-        currentSnapshot->bmsEditingEnabled
-            ? std::min<std::int64_t>(static_cast<std::int64_t>(std::max(
-                                         0, currentSnapshot->bgmTrackCount)) +
-                                         1,
-                                     std::numeric_limits<std::int32_t>::max())
-            : std::int64_t{ 0 };
-    const float trackRightX =
-        targetWidth * layout.right + currentSnapshot->canvasHorizontalOffsetX +
-        (currentSnapshot->trackCount > 0
-             ? (targetWidth * (layout.right - layout.left) /
-                static_cast<float>(currentSnapshot->trackCount)) *
-                   static_cast<float>(runtimeBgmTrackCount)
-             : 0.0F);
+    const auto laneProjection = Logic::calculateCanvasLaneProjection(
+        targetWidth,
+        currentSnapshot->trackCount,
+        currentSnapshot->bgmTrackCount,
+        layout.left,
+        layout.right,
+        currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        currentSnapshot->bmsEditingEnabled,
+        currentSnapshot->draftLanesEnabled);
+    const float trackLeftX  = laneProjection.draftLeftX;
+    const float trackRightX = laneProjection.bgmRightX;
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
@@ -2510,6 +3297,69 @@ void Basic2DCanvasInteraction::handleInteractions(
         return;
     }
 
+    const bool annotationGutterBlocksCanvas =
+        renderAnnotationGutter(*currentSnapshot,
+                               windowPos.x,
+                               windowPos.y,
+                               targetWidth,
+                               targetHeight,
+                               localMousePos.x,
+                               localMousePos.y,
+                               isHovered);
+    if ( annotationGutterBlocksCanvas ) {
+        if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
+             m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
+            m_hasLastHovered        = true;
+            m_lastHoveredEntity     = entt::null;
+            m_lastHoveredObjectKind = Logic::ChartObjectKind::PlayerNote;
+            m_lastHoveredPart       = 0;
+            m_lastHoveredSubIndex   = -1;
+        }
+
+        const auto completion = resolveBlockedCanvasGestureCompletion(
+            currentSnapshot->currentTool,
+            ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+            ImGui::IsMouseReleased(ImGuiMouseButton_Right),
+            m_leftPressStartedOnCanvas,
+            m_leftPressStartedObjectDrag,
+            m_rightEraseActive);
+        switch ( completion.leftEnd ) {
+        case BlockedCanvasLeftGestureEnd::Marquee:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            break;
+        case BlockedCanvasLeftGestureEnd::Brush:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+            break;
+        case BlockedCanvasLeftGestureEnd::ObjectDrag:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            break;
+        case BlockedCanvasLeftGestureEnd::None: break;
+        }
+        if ( completion.endErase ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = false;
+        }
+        if ( completion.clearLeftState ) {
+            m_leftPressStartedOnCanvas      = false;
+            m_leftPressStartedInTrackLayout = false;
+            m_leftPressStartedOnEntity      = false;
+            m_leftPressStartedObjectDrag    = false;
+            m_leftPressDragged              = false;
+            m_colorStrokeEntities.clear();
+            m_lastMarqueeUpdateCommand.valid = false;
+            m_lastBrushUpdateCommand.valid   = false;
+            m_lastMoveUpdateCommand.valid    = false;
+        }
+        return;
+    }
+
     const bool audioPreviewOverlayBlocksCanvas =
         renderObjectAudioPreviewControls(*currentSnapshot,
                                          windowPos.x,
@@ -2520,8 +3370,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                          localMousePos.y);
 
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( !audioPreviewOverlayBlocksCanvas && isHovered &&
-         currentSnapshot->isHoveringCanvas && !currentSnapshot->isPlaying ) {
+    if ( shouldShowCanvasHoverInspection(currentSnapshot->hasBeatmap,
+                                         audioPreviewOverlayBlocksCanvas,
+                                         isHovered,
+                                         currentSnapshot->isHoveringCanvas,
+                                         currentSnapshot->isPlaying) ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
@@ -2530,8 +3383,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( currentSnapshot->isSnapped || isEditTool ||
                  currentSnapshot->hoverInspect.show ) {
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                    ImVec2(12, 12));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+                                    ImVec2(CANVAS_HOVER_OVERLAY_PADDING,
+                                           CANVAS_HOVER_OVERLAY_PADDING));
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_ItemSpacing,
+                    ImVec2(CANVAS_HOVER_OVERLAY_ITEM_SPACING_X,
+                           CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y));
 
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
@@ -2797,15 +3654,8 @@ void Basic2DCanvasInteraction::handleInteractions(
     uint8_t hoveredPart     = 0;
     int     hoveredSubIndex = -1;
 
-    struct HoverCandidate {
-        entt::entity           entity{ entt::null };
-        Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
-        Logic::HoverPart       part{ Logic::HoverPart::None };
-        int                    subIndex{ -1 };
-    };
-
-    std::vector<HoverCandidate> candidates;
-    std::string                 layerSignature;
+    std::vector<HoverLayerCandidate> candidates;
+    std::string                      layerSignature;
     if ( isHovered ) {
         for ( auto it = currentSnapshot->hitboxes.rbegin();
               it != currentSnapshot->hitboxes.rend();
@@ -2818,10 +3668,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                  localMousePos.x <= hitbox.x + hitbox.w &&
                  localMousePos.y >= hitbox.y &&
                  localMousePos.y <= hitbox.y + hitbox.h ) {
-                candidates.push_back({ hitbox.entity,
-                                       hitbox.kind,
-                                       hitbox.part,
-                                       hitbox.subIndex });
+                const bool appended = appendHoverLayerCandidate(
+                    candidates,
+                    { hitbox.entity,
+                      hitbox.kind,
+                      static_cast<std::uint8_t>(hitbox.part),
+                      hitbox.subIndex });
+                if ( !appended ) continue;
                 layerSignature +=
                     std::to_string(static_cast<uint32_t>(
                         entt::to_integral(hitbox.entity))) +
@@ -2861,7 +3714,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         const auto& candidate = candidates[m_hoverLayerIndex];
         hoveredEntity         = candidate.entity;
         hoveredObjectKind     = candidate.kind;
-        hoveredPart           = static_cast<uint8_t>(candidate.part);
+        hoveredPart           = candidate.part;
         hoveredSubIndex       = candidate.subIndex;
     }
 
@@ -2885,7 +3738,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     auto processColorToolTarget = [&](Logic::EditTool tool) {
         if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ||
-             hoveredObjectKind != Logic::ChartObjectKind::PlayerNote ) {
+             (hoveredObjectKind != Logic::ChartObjectKind::PlayerNote &&
+              hoveredObjectKind != Logic::ChartObjectKind::DraftNote) ) {
             return;
         }
         if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;

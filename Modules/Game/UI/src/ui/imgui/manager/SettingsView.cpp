@@ -27,6 +27,8 @@ const char* getCategoryShortLabel(Event::SettingsTab tab)
     switch ( tab ) {
     case Event::SettingsTab::Software:
         return TR_CACHE("ui.settings.software.short").data();
+    case Event::SettingsTab::Collaboration:
+        return TR_CACHE("ui.settings.collaboration.short").data();
     case Event::SettingsTab::Visual:
         return TR_CACHE("ui.settings.visual.short").data();
     case Event::SettingsTab::Project:
@@ -85,7 +87,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 31> labels{
+        const std::array<const char*, 38> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.default_creator").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
@@ -112,12 +114,31 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
                 .data(),
             TR_CACHE("ui.settings.software.picker_style").data(),
             TR_CACHE("ui.settings.software.save_format").data(),
+            TR_CACHE("ui.settings.software.auto_save.mode").data(),
+            TR_CACHE("ui.settings.software.auto_save.interval_unit").data(),
+            TR_CACHE("ui.settings.software.auto_save.interval").data(),
+            TR_CACHE("ui.settings.software.auto_save.on_object_modified")
+                .data(),
+            TR_CACHE("ui.settings.software.auto_save.on_beatmap_switch").data(),
+            TR_CACHE("ui.settings.software.auto_save.on_imgui_focus_lost")
+                .data(),
+            TR_CACHE("ui.settings.software.auto_save.on_native_focus_lost")
+                .data(),
             TR_CACHE("ui.settings.software.time_format").data(),
             TR_CACHE("ui.settings.software.recent_limit").data(),
             TR_CACHE("ui.settings.software.sync_mode").data(),
             TR_CACHE("ui.settings.software.sync_factor").data(),
             TR_CACHE("ui.settings.software.sync_buffer").data(),
             TR_CACHE("ui.settings.software.sync_interval").data()
+        };
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
+    }
+    case Event::SettingsTab::Collaboration: {
+        const std::array<const char*, 4> labels{
+            TR_CACHE("ui.collaboration.server_address").data(),
+            TR_CACHE("ui.collaboration.signaling_port").data(),
+            TR_CACHE("ui.collaboration.use_tls").data(),
+            TR_CACHE("ui.collaboration.directory.status").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
@@ -201,7 +222,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Shortcut: {
-        const std::array<const char*, 17> labels{
+        const std::array<const char*, 20> labels{
             TR_CACHE("ui.settings.shortcut.tool_move").data(),
             TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
             TR_CACHE("ui.settings.shortcut.tool_draw").data(),
@@ -209,7 +230,10 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.shortcut.tool_color_eraser").data(),
             TR_CACHE("ui.settings.shortcut.mirror").data(),
             TR_CACHE("ui.settings.shortcut.mirror_paste").data(),
+            TR_CACHE("ui.settings.shortcut.edit_selected_volume").data(),
+            TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
             TR_CACHE("ui.settings.shortcut.delete_selected").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
             TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),
             TR_CACHE("ui.settings.shortcut.toggle_scroll_snap").data(),
             TR_CACHE("ui.settings.shortcut.toggle_snap_floor").data(),
@@ -268,6 +292,14 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.software.framelimit.8x").data(),
             TR_CACHE("ui.settings.software.framelimit.unlimited").data(),
             TR_CACHE("ui.settings.software.font.default").data() });
+        break;
+    }
+    case Event::SettingsTab::Collaboration: {
+        minWidth =
+            std::max(minWidth,
+                     measureSettingsText(
+                         "collaboration.example.com", font, snapshot.fontSize) +
+                         framePad + std::floor(48.0f * scale));
         break;
     }
     case Event::SettingsTab::Visual: {
@@ -440,8 +472,9 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
         parseLayoutFloat(cache.sidebarWidthConfig, 40.0f);
     const float btnSize = std::floor(sidebarBaseW * scale);
 
-    const std::array<const char*, 7> labels{
+    const std::array<const char*, 8> labels{
         getCategoryShortLabel(Event::SettingsTab::Software),
+        getCategoryShortLabel(Event::SettingsTab::Collaboration),
         getCategoryShortLabel(Event::SettingsTab::Visual),
         getCategoryShortLabel(Event::SettingsTab::Project),
         getCategoryShortLabel(Event::SettingsTab::Beatmap),
@@ -461,7 +494,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 7.0f + categorySpacing * 6.0f;
+                                  categorySize * 8.0f + categorySpacing * 7.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -551,6 +584,23 @@ void SettingsView::refreshDefaultCreatorInputBuffer()
         creator.begin(), creator.end(), m_defaultCreatorInputBuffer.begin());
 }
 
+/// @brief 从持久化设置刷新协作服务器输入缓冲区。
+void SettingsView::refreshCollaborationServerInputBuffer()
+{
+    const auto& server =
+        Config::AppConfig::instance().getEditorSettings().collaborationServer;
+    m_collaborationServerAddressInputBuffer.fill('\0');
+    const auto copyLength =
+        std::min(server.address.size(),
+                 m_collaborationServerAddressInputBuffer.size() - 1U);
+    std::copy_n(server.address.begin(),
+                copyLength,
+                m_collaborationServerAddressInputBuffer.begin());
+    m_collaborationSignalingPortInput = server.signalingPort;
+    m_collaborationUseTlsInput        = server.useTls;
+    m_collaborationServerApplyState   = CollaborationServerApplyState::None;
+}
+
 /// @brief 打开设置窗口并切换到指定设置页。
 /// @param tab 需要激活的设置页。
 void SettingsView::open(Event::SettingsTab tab)
@@ -561,6 +611,9 @@ void SettingsView::open(Event::SettingsTab tab)
     m_dockToCenterNextFrame         = true;
     m_availableSkinDirectoriesDirty = true;
     refreshDefaultCreatorInputBuffer();
+    if ( tab == Event::SettingsTab::Collaboration ) {
+        refreshCollaborationServerInputBuffer();
+    }
     if ( tab != Event::SettingsTab::Shortcut ) {
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -749,6 +802,17 @@ void SettingsView::drawContent()
                                 rect);
                         });
 
+        vbox.addElement("CollaborationTab",
+                        Sizing::Grow(),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryButton(
+                                Event::SettingsTab::Collaboration,
+                                ICON_MMM_USERS,
+                                TR_CACHE("ui.settings.collaboration").data(),
+                                rect);
+                        });
+
         vbox.addElement("VisualTab",
                         Sizing::Grow(),
                         Sizing::Fixed(btnSize),
@@ -851,6 +915,9 @@ void SettingsView::drawContent()
 
             switch ( m_currentTab ) {
             case Event::SettingsTab::Software: drawSoftwareSettings(); break;
+            case Event::SettingsTab::Collaboration:
+                drawCollaborationSettings();
+                break;
             case Event::SettingsTab::Visual: drawVisualSettings(); break;
             case Event::SettingsTab::Project: drawProjectSettings(); break;
             case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;

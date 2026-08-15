@@ -73,6 +73,16 @@ local Skin = {
 			text = { 0.90, 0.96, 1.0, 0.96 },
 		},
 
+		-- 批注时间戳标记区配色
+		annotations = {
+			gutter_background = { 0.025, 0.035, 0.050, 0.94 },
+			gutter_border = { 0.28, 0.78, 0.94, 0.75 },
+			marker = { 0.42, 0.72, 0.96, 0.98 },
+			marker_hover = { 0.68, 0.86, 1.0, 1.0 },
+			marker_text = { 0.04, 0.08, 0.12, 1.0 },
+			connector = { 0.42, 0.72, 0.96, 0.86 },
+		},
+
 		-- 拍线配色与线宽配置
 		beat_lines = {
 			beat_1 = c_head,

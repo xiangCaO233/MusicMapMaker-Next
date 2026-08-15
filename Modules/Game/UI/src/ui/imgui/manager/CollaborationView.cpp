@@ -3,38 +3,61 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/CreatorIdentity.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/ui/UISettingsTabEvent.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 #include "ui/imgui/manager/CollaborationLogWindow.h"
+#include "ui/imgui/manager/CollaborationRoomCoverImage.h"
 #include "ui/utils/UIWidgetUtils.h"
 
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <nfd.h>
 #include <string>
+#include <system_error>
 
 namespace MMM::UI
 {
+/// @brief 等待后台构建指纹完成的房主开房请求。
+struct CollaborationView::PendingHostStart {
+    /// @brief 用户点击时冻结的房主配置。
+    Network::Collaboration::CollaborationHostRoomConfig config;
+};
+
 struct CollaborationView::PendingGuestJoin {
     /// @brief 已冻结的访客连接配置，避免等待关闭期间读取变化中的 UI 输入。
     Network::Collaboration::CollaborationJoinRoomConfig config;
+    /// @brief 是否已经在构建指纹就绪后请求关闭本机项目状态。
+    bool closeRequested = false;
     /// @brief 开始请求关闭本机状态的单调时间点。
     std::chrono::steady_clock::time_point closeRequestedAt;
 };
 
 namespace
 {
+/// @brief 开房预览在纹理缓存中的固定键。
+constexpr std::string_view HOST_ROOM_COVER_TEXTURE_KEY = "##HostRoomCover";
+/// @brief 统一文件选择器的固定窗口 ID。
+constexpr const char* ROOM_COVER_FILE_DIALOG_ID =
+    "CollaborationRoomCoverPicker";
+
 /// @brief 判断编辑器是否仍存在非欢迎页谱面会话。
 /// @warning UI 低频协作入口路径：最多遍历当前少量 Session 快照。
 [[nodiscard]] bool hasNonLogoBeatmapSession()
@@ -43,6 +66,55 @@ namespace
     return std::any_of(entries.begin(), entries.end(), [](const auto& entry) {
         return !entry.isLogoPlaceholder;
     });
+}
+
+/// @brief 把较长说明收进悬停帮助提示。
+/// @param text 需要按段落换行展示的本地化说明。
+/// @warning UI 热路径：仅绘制一个短标签，悬停时才创建 tooltip。
+void drawHelpMarker(const char* text)
+{
+    ImGui::TextDisabled("(?)");
+    if ( !ImGui::IsItemHovered() ) return;
+    ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0F);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
+/// @brief 解析当前谱面的默认房卡封面绝对路径。
+/// @param metadata 当前谱面基础元数据。
+/// @param project 当前本机项目；为空时以谱面文件目录为根。
+/// @return 优先使用 cover_path，其次使用图片类型的 main_cover_path。
+std::filesystem::path resolveDefaultRoomCoverPath(
+    const MMM::BaseMapMeta& metadata, const MMM::Project* project)
+{
+    std::filesystem::path relativePath = metadata.cover_path;
+    if ( relativePath.empty() &&
+         metadata.cover_type == MMM::CoverType::IMAGE ) {
+        relativePath = metadata.main_cover_path;
+    }
+    if ( relativePath.empty() || relativePath.is_absolute() ) {
+        return relativePath;
+    }
+    return project ? project->m_projectRoot / relativePath
+                   : metadata.map_path.parent_path() / relativePath;
+}
+
+/// @brief 返回封面生成错误对应的本地化键。
+const char* roomCoverErrorTranslationKey(CollaborationRoomCoverImageError error)
+{
+    switch ( error ) {
+    case CollaborationRoomCoverImageError::FileUnavailable:
+        return "ui.collaboration.cover_error_unavailable";
+    case CollaborationRoomCoverImageError::PayloadTooLarge:
+        return "ui.collaboration.cover_error_too_large";
+    case CollaborationRoomCoverImageError::DecodeFailed:
+    case CollaborationRoomCoverImageError::EncodeFailed:
+        return "ui.collaboration.cover_error_invalid";
+    case CollaborationRoomCoverImageError::None:
+    default: return "";
+    }
 }
 /// @brief 将固定字符串写入零结尾输入缓冲区。
 template<std::size_t Size>
@@ -69,22 +141,6 @@ const char* roomStateText(Network::Collaboration::CollaborationRoomState state)
         return TR("ui.collaboration.state.error").data();
     case Network::Collaboration::CollaborationRoomState::Idle:
     default: return TR("ui.collaboration.state.idle").data();
-    }
-}
-
-/// @brief 返回公网目录连接状态对应的本地化文本。
-const char* directoryStateText(
-    Network::Collaboration::CollaborationDirectoryState state)
-{
-    using State = Network::Collaboration::CollaborationDirectoryState;
-    switch ( state ) {
-    case State::Connecting:
-        return TR("ui.collaboration.directory.connecting").data();
-    case State::Connected:
-        return TR("ui.collaboration.directory.connected").data();
-    case State::Error: return TR("ui.collaboration.directory.error").data();
-    case State::Idle:
-    default: return TR("ui.collaboration.directory.idle").data();
     }
 }
 
@@ -122,26 +178,70 @@ void drawRoomInfoLabel(const char* label)
     ImGui::TableSetColumnIndex(1);
 }
 
+/// @brief 绘制当前访客从房主收到的只读权限明细。
+/// @param room 当前协作房间。
+/// @warning UI 热路径：固定绘制六个内存权限位，不执行网络发送。
+void drawLocalPermissionSummary(
+    const Network::Collaboration::CollaborationRoom& room)
+{
+    const auto permissions = room.localPermissions();
+    const auto drawPermission =
+        [permissions](
+            const char*                                     label,
+            Network::Collaboration::CollaborationPermission permission) {
+            const bool enabled =
+                Network::Collaboration::hasCollaborationPermission(permissions,
+                                                                   permission);
+            ImGui::TextDisabled("%s  %s", enabled ? "[+]" : "[-]", label);
+        };
+    drawPermission(TR("ui.collaboration.permissions.edit").data(),
+                   Network::Collaboration::CollaborationPermission::Edit);
+    drawPermission(TR("ui.collaboration.permissions.objects").data(),
+                   Network::Collaboration::CollaborationPermission::Objects);
+    drawPermission(TR("ui.collaboration.permissions.timelines").data(),
+                   Network::Collaboration::CollaborationPermission::Timelines);
+    drawPermission(TR("ui.collaboration.permissions.metadata").data(),
+                   Network::Collaboration::CollaborationPermission::Metadata);
+    drawPermission(
+        TR("ui.collaboration.permissions.audio_samples").data(),
+        Network::Collaboration::CollaborationPermission::AudioSamples);
+    drawPermission(
+        TR("ui.collaboration.permissions.annotations").data(),
+        Network::Collaboration::CollaborationPermission::Annotations);
+}
+
 /// @brief 绘制一名协作成员的表格行和可选跟随按钮。
 /// @param room 当前协作房间。
 /// @param peerId 成员 PeerId。
 /// @param creator 成员 Creator 展示名。
 /// @warning UI 热路径：成员表可见时每帧最多调用 8 次；只绘制内存状态，
 /// 不执行网络发送或文件系统访问。
-void drawParticipantRow(Network::Collaboration::CollaborationRoom& room,
-                        Network::Collaboration::PeerId             peerId,
-                        const std::string&                         creator)
+void drawParticipantRow(
+    Network::Collaboration::CollaborationRoom&         room,
+    Network::Collaboration::PeerId                     peerId,
+    const Network::Collaboration::ParticipantIdentity& identity)
 {
     const bool local     = peerId == room.localPeerId();
     const bool following = room.followedPeerId() == peerId;
 
-    ImGui::PushID(static_cast<int>(peerId));
+    ImGui::PushID(identity.participantId.c_str());
     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight());
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(creator.c_str());
+    ImGui::TextUnformatted(identity.creator.c_str());
     ImGui::SameLine();
-    ImGui::TextDisabled("(#%llu)", static_cast<unsigned long long>(peerId));
+    ImGui::TextDisabled("(%.*s)", 8, identity.participantId.c_str());
+    const auto permission = room.participantPermissions().find(peerId);
+    const auto permissionMask =
+        permission == room.participantPermissions().end() ? 0U
+                                                          : permission->second;
+    if ( !Network::Collaboration::hasCollaborationPermission(
+             permissionMask,
+             Network::Collaboration::CollaborationPermission::Edit) ) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "%s", TR("ui.collaboration.permissions.read_only").data());
+    }
 
     ImGui::TableSetColumnIndex(1);
     if ( local ) {
@@ -155,6 +255,71 @@ void drawParticipantRow(Network::Collaboration::CollaborationRoom& room,
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
         }
         if ( room.isHost() ) {
+            ImGui::SameLine();
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.permissions.manage").data()) ) {
+                FeedbackOpenPopup("CollaborationPermissionsPopup");
+            }
+            if ( ImGui::BeginPopup("CollaborationPermissionsPopup") ) {
+                ImGui::TextUnformatted(identity.creator.c_str());
+                ImGui::Separator();
+
+                auto       updatedPermissions = permissionMask;
+                bool       permissionsChanged = false;
+                const auto drawPermission =
+                    [&](const char* label,
+                        Network::Collaboration::CollaborationPermission
+                            target) {
+                        bool enabled =
+                            Network::Collaboration::hasCollaborationPermission(
+                                updatedPermissions, target);
+                        if ( FeedbackCheckbox(label, &enabled) ) {
+                            const auto bit =
+                                static_cast<Network::Collaboration::
+                                                CollaborationPermissionMask>(
+                                    target);
+                            if ( enabled ) {
+                                updatedPermissions |= bit;
+                            } else {
+                                updatedPermissions &= ~bit;
+                            }
+                            permissionsChanged = true;
+                        }
+                    };
+
+                drawPermission(
+                    TR("ui.collaboration.permissions.edit").data(),
+                    Network::Collaboration::CollaborationPermission::Edit);
+                const bool mayEdit =
+                    Network::Collaboration::hasCollaborationPermission(
+                        updatedPermissions,
+                        Network::Collaboration::CollaborationPermission::Edit);
+                ImGui::BeginDisabled(!mayEdit);
+                drawPermission(
+                    TR("ui.collaboration.permissions.objects").data(),
+                    Network::Collaboration::CollaborationPermission::Objects);
+                drawPermission(
+                    TR("ui.collaboration.permissions.timelines").data(),
+                    Network::Collaboration::CollaborationPermission::Timelines);
+                drawPermission(
+                    TR("ui.collaboration.permissions.metadata").data(),
+                    Network::Collaboration::CollaborationPermission::Metadata);
+                drawPermission(
+                    TR("ui.collaboration.permissions.audio_samples").data(),
+                    Network::Collaboration::CollaborationPermission::
+                        AudioSamples);
+                drawPermission(
+                    TR("ui.collaboration.permissions.annotations").data(),
+                    Network::Collaboration::CollaborationPermission::
+                        Annotations);
+                ImGui::EndDisabled();
+
+                if ( permissionsChanged ) {
+                    static_cast<void>(room.setParticipantPermissions(
+                        peerId, updatedPermissions));
+                }
+                ImGui::EndPopup();
+            }
             ImGui::SameLine();
             if ( FeedbackSmallButton(
                      TR("ui.collaboration.remove_participant").data()) ) {
@@ -172,14 +337,8 @@ CollaborationView::CollaborationView(
     : ISubView(subViewName), m_room(std::move(room))
 {
     if ( m_room ) {
-        const auto& endpoint = m_room->serverEndpoint();
-        setInputBuffer(m_serverAddress, endpoint.address);
-        m_signalingPort = endpoint.signalingPort;
-        m_useTls        = endpoint.useTls;
         m_viewportPublishRateHz =
             static_cast<int>(m_room->viewportPublishRateHz());
-    } else {
-        setInputBuffer(m_serverAddress, "xiang233.top");
     }
 }
 
@@ -198,10 +357,13 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
         return;
     }
 
+    advancePendingHostStart();
     advancePendingGuestJoin(sourceManager);
 
     if ( m_room->isActive() ) {
-        drawActiveRoom(sourceManager);
+        drawActiveRoom();
+        if ( m_room->isActive() ) drawChatSection();
+        drawLogSection(sourceManager);
         return;
     }
 
@@ -210,12 +372,230 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     ImGui::Separator();
     ImGui::Spacing();
     drawOfflineFlow(sourceManager, creatorValid);
+    renderRoomCoverFilePicker();
+    drawLogSection(sourceManager);
 }
 
 ImVec2 CollaborationView::getMinContentSize(float dpiScale) const
 {
     const float scale = std::max(1.0f, dpiScale);
     return ImVec2(std::ceil(340.0f * scale), std::ceil(420.0f * scale));
+}
+
+bool CollaborationView::needsTextureReload() const
+{
+    return !m_pendingRoomCoverTextures.empty() ||
+           !m_roomCoverTextureRemovals.empty();
+}
+
+void CollaborationView::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                       vk::Device&         logicalDevice,
+                                       vk::CommandPool&    commandPool,
+                                       vk::Queue&          queue)
+{
+    for ( const auto& key : m_roomCoverTextureRemovals ) {
+        m_roomCoverTextures.erase(key);
+        m_failedRoomCoverTextures.erase(key);
+    }
+    m_roomCoverTextureRemovals.clear();
+
+    auto pending = std::move(m_pendingRoomCoverTextures);
+    m_pendingRoomCoverTextures.clear();
+    for ( auto& [key, base64] : pending ) {
+        auto decoded = decodeCollaborationRoomCoverImage(base64);
+        if ( !decoded ) {
+            m_failedRoomCoverTextures.insert(std::move(key));
+            continue;
+        }
+
+        auto texture =
+            std::make_unique<Graphic::VKTexture>(decoded.pixels.data(),
+                                                 decoded.width,
+                                                 decoded.height,
+                                                 physicalDevice,
+                                                 logicalDevice,
+                                                 commandPool,
+                                                 queue);
+        if ( !texture->isValid() ) {
+            m_failedRoomCoverTextures.insert(std::move(key));
+            continue;
+        }
+        static_cast<void>(texture->getImTextureID());
+        m_failedRoomCoverTextures.erase(key);
+        m_roomCoverTextures.insert_or_assign(std::move(key),
+                                             std::move(texture));
+    }
+}
+
+void CollaborationView::openRoomCoverFilePicker()
+{
+    auto&                 app              = Config::AppConfig::instance();
+    auto&                 settings         = app.getEditorSettings();
+    std::filesystem::path defaultDirectory = m_roomCoverPath.parent_path();
+    if ( defaultDirectory.empty() && !m_defaultRoomCoverPath.empty() ) {
+        defaultDirectory = m_defaultRoomCoverPath.parent_path();
+    }
+    if ( defaultDirectory.empty() && !settings.lastFilePickerPath.empty() ) {
+        defaultDirectory = Config::utf8ToPath(settings.lastFilePickerPath);
+    }
+    const std::string defaultPath = defaultDirectory.empty()
+                                        ? std::string(".")
+                                        : Config::pathToUtf8(defaultDirectory);
+
+    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        PlayPopupOpenFeedback();
+        nfdu8char_t*      selectedPath = nullptr;
+        nfdu8filteritem_t filters[1]   = { { "Image Files",
+                                             "png,jpg,jpeg,bmp,tga" } };
+        const nfdresult_t result =
+            NFD_OpenDialogU8(&selectedPath, filters, 1, defaultPath.c_str());
+        if ( result == NFD_OKAY && selectedPath ) {
+            const auto path = Config::utf8ToPath(selectedPath);
+            NFD_FreePathU8(selectedPath);
+            setRoomCoverPath(path, true);
+            if ( !path.parent_path().empty() ) {
+                settings.lastFilePickerPath =
+                    Config::pathToUtf8(path.parent_path());
+                app.save();
+            }
+        } else if ( result == NFD_ERROR ) {
+            XERROR("Failed to open collaboration room cover picker: {}",
+                   NFD_GetError() ? NFD_GetError() : "Unknown NFD error");
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig dialogConfig;
+    dialogConfig.path              = defaultPath;
+    dialogConfig.countSelectionMax = 1;
+    dialogConfig.flags             = ImGuiFileDialogFlags_Modal |
+                                     ImGuiFileDialogFlags_HideColumnType |
+                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened(ROOM_COVER_FILE_DIALOG_ID);
+    ImGuiFileDialog::Instance()->OpenDialog(
+        ROOM_COVER_FILE_DIALOG_ID,
+        TR("ui.collaboration.cover_picker_title").data(),
+        ".png,.jpg,.jpeg,.bmp,.tga",
+        dialogConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened(ROOM_COVER_FILE_DIALOG_ID) ) {
+        PlayPopupOpenFeedback();
+    }
+}
+
+void CollaborationView::renderRoomCoverFilePicker()
+{
+    if ( !ImGuiFileDialog::Instance()->IsOpened(ROOM_COVER_FILE_DIALOG_ID) ) {
+        return;
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             ROOM_COVER_FILE_DIALOG_ID,
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings,
+             { 600.0F, 400.0F }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            const auto path = Config::utf8ToPath(
+                ImGuiFileDialog::Instance()->GetFilePathName());
+            setRoomCoverPath(path, true);
+            if ( !path.parent_path().empty() ) {
+                auto& app = Config::AppConfig::instance();
+                app.getEditorSettings().lastFilePickerPath =
+                    Config::pathToUtf8(path.parent_path());
+                app.save();
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
+void CollaborationView::setRoomCoverPath(const std::filesystem::path& path,
+                                         bool customized)
+{
+    m_roomCoverErrorKey.clear();
+    if ( path.empty() ) {
+        m_roomCoverPath.clear();
+        m_roomCoverImage.clear();
+        m_roomCoverDefaultMode = customized ? CollaborationDefaultMode::Custom
+                                            : CollaborationDefaultMode::Follow;
+        if ( const auto pending =
+                 m_pendingRoomCoverTextures.find(HOST_ROOM_COVER_TEXTURE_KEY);
+             pending != m_pendingRoomCoverTextures.end() ) {
+            m_pendingRoomCoverTextures.erase(pending);
+        }
+        m_roomCoverTextureRemovals.emplace(HOST_ROOM_COVER_TEXTURE_KEY);
+        return;
+    }
+
+    const auto result = encodeCollaborationRoomCoverImage(path);
+    if ( result.error != CollaborationRoomCoverImageError::None ) {
+        m_roomCoverErrorKey = roomCoverErrorTranslationKey(result.error);
+        if ( !customized ) {
+            m_roomCoverPath.clear();
+            m_roomCoverImage.clear();
+            if ( const auto pending = m_pendingRoomCoverTextures.find(
+                     HOST_ROOM_COVER_TEXTURE_KEY);
+                 pending != m_pendingRoomCoverTextures.end() ) {
+                m_pendingRoomCoverTextures.erase(pending);
+            }
+            m_roomCoverTextureRemovals.emplace(HOST_ROOM_COVER_TEXTURE_KEY);
+        }
+        return;
+    }
+
+    m_roomCoverPath        = path;
+    m_roomCoverImage       = result.base64;
+    m_roomCoverDefaultMode = customized ? CollaborationDefaultMode::Custom
+                                        : CollaborationDefaultMode::Follow;
+    if ( const auto removal =
+             m_roomCoverTextureRemovals.find(HOST_ROOM_COVER_TEXTURE_KEY);
+         removal != m_roomCoverTextureRemovals.end() ) {
+        m_roomCoverTextureRemovals.erase(removal);
+    }
+    if ( const auto failed =
+             m_failedRoomCoverTextures.find(HOST_ROOM_COVER_TEXTURE_KEY);
+         failed != m_failedRoomCoverTextures.end() ) {
+        m_failedRoomCoverTextures.erase(failed);
+    }
+    m_pendingRoomCoverTextures.insert_or_assign(
+        std::string(HOST_ROOM_COVER_TEXTURE_KEY), result.base64);
+}
+
+void CollaborationView::queueRoomCoverTexture(std::string      key,
+                                              std::string_view base64)
+{
+    if ( key.empty() || base64.empty() || m_roomCoverTextures.contains(key) ||
+         m_pendingRoomCoverTextures.contains(key) ||
+         m_failedRoomCoverTextures.contains(key) ) {
+        return;
+    }
+    m_pendingRoomCoverTextures.emplace(std::move(key), base64);
+}
+
+void CollaborationView::drawRoomCover(std::string_view textureKey, ImVec2 size)
+{
+    size.x = std::max(size.x, 1.0F);
+    size.y = std::max(size.y, 1.0F);
+    ImGui::InvisibleButton("##RoomCoverImage", size);
+    const ImVec2 minimum  = ImGui::GetItemRectMin();
+    const ImVec2 maximum  = ImGui::GetItemRectMax();
+    auto*        drawList = ImGui::GetWindowDrawList();
+    const float  rounding = ImGui::GetStyle().FrameRounding;
+
+    const auto texture = m_roomCoverTextures.find(textureKey);
+    if ( texture != m_roomCoverTextures.end() && texture->second ) {
+        drawList->AddImage(texture->second->getImTextureID(), minimum, maximum);
+    } else {
+        drawList->AddRectFilled(
+            minimum, maximum, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+        const char*  placeholder = "MMM";
+        const ImVec2 textSize    = ImGui::CalcTextSize(placeholder);
+        drawList->AddText(ImVec2((minimum.x + maximum.x - textSize.x) * 0.5F,
+                                 (minimum.y + maximum.y - textSize.y) * 0.5F),
+                          ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                          placeholder);
+    }
+    drawList->AddRect(
+        minimum, maximum, ImGui::GetColorU32(ImGuiCol_Border), rounding);
 }
 
 bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
@@ -254,113 +634,155 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         sourceManager && sourceManager->hasActiveProjectUiState() && project;
     const bool hostReady = hasProject && activeSession &&
                            activeSession->getContext().currentBeatmap;
-    if ( hostReady && !m_roomNameInitialized ) {
+    const bool fingerprintFailed =
+        Network::Collaboration::collaborationBuildFingerprintState() ==
+        Network::Collaboration::CollaborationBuildFingerprintState::Failed;
+    if ( !m_room->lastError().empty() ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "%s",
+                           TR("ui.collaboration.previous_room_ended").data());
+        ImGui::TextWrapped("%s: %s",
+                           TR("ui.collaboration.error").data(),
+                           m_room->lastError().c_str());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+    if ( hostReady ) {
         const auto& metadata =
             activeSession->getContext().currentBeatmap->m_baseMapMetadata;
-        const std::string_view roomName = !metadata.title.empty()
-                                              ? std::string_view(metadata.title)
-                                              : std::string_view(metadata.name);
-        if ( !roomName.empty() ) setInputBuffer(m_roomName, roomName);
-        m_roomNameInitialized = true;
+        const std::string_view defaultRoomName =
+            !metadata.title.empty() ? std::string_view(metadata.title)
+                                    : std::string_view(metadata.name);
+        if ( defaultRoomName != m_defaultRoomName ) {
+            m_defaultRoomName.assign(defaultRoomName);
+            if ( shouldFollowCollaborationDefault(m_roomNameDefaultMode) ) {
+                setInputBuffer(m_roomName, m_defaultRoomName);
+            }
+        }
+
+        const auto defaultCover =
+            resolveDefaultRoomCoverPath(metadata, project);
+        if ( defaultCover != m_defaultRoomCoverPath ) {
+            m_defaultRoomCoverPath = defaultCover;
+            if ( shouldFollowCollaborationDefault(m_roomCoverDefaultMode) ) {
+                setRoomCoverPath(defaultCover, false);
+            }
+        }
+    }
+    if ( fingerprintFailed ) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+            "%s",
+            TR("ui.collaboration.build_fingerprint_failed").data());
     }
 
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
-    if ( FeedbackCollapsingHeader(TR("ui.collaboration.server").data(),
-                                  headerFlags) ) {
-        const float labelWidth =
-            std::max(
-                { ImGui::CalcTextSize(
-                      TR("ui.collaboration.server_address").data())
-                      .x,
-                  ImGui::CalcTextSize(
-                      TR("ui.collaboration.signaling_port").data())
-                      .x,
-                  ImGui::CalcTextSize(TR("ui.collaboration.use_tls").data()).x,
-                  ImGui::CalcTextSize(
-                      TR("ui.collaboration.directory.status").data())
-                      .x }) +
-            ImGui::GetStyle().ItemSpacing.x;
-        if ( ImGui::BeginTable("CollaborationServerSettingsTable",
-                               2,
-                               ImGuiTableFlags_SizingStretchProp) ) {
-            ImGui::TableSetupColumn("##ServerSettingLabel",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    labelWidth);
-            ImGui::TableSetupColumn("##ServerSettingControl",
-                                    ImGuiTableColumnFlags_WidthStretch);
-
-            drawRoomInfoLabel(TR("ui.collaboration.server_address").data());
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputTextWithHint(
-                "##CollaborationServerAddress",
-                TR("ui.collaboration.server_address_hint").data(),
-                m_serverAddress.data(),
-                m_serverAddress.size());
-
-            drawRoomInfoLabel(TR("ui.collaboration.signaling_port").data());
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputInt(
-                "##CollaborationSignalingPort", &m_signalingPort, 0, 0);
-            m_signalingPort = std::clamp(m_signalingPort, 1, 65535);
-
-            drawRoomInfoLabel(TR("ui.collaboration.use_tls").data());
-            FeedbackCheckbox("##CollaborationUseTls", &m_useTls);
-
-            drawRoomInfoLabel(TR("ui.collaboration.directory.status").data());
-            ImGui::TextUnformatted(
-                directoryStateText(m_room->directoryState()));
-            ImGui::EndTable();
-        }
-        if ( FeedbackButton(TR("ui.collaboration.apply_server").data(),
-                            ImVec2(-1.0F, 0.0F)) ) {
-            static_cast<void>(applyServerEndpoint());
-        }
-        if ( !m_room->directoryError().empty() ) {
-            ImGui::TextWrapped("%s", m_room->directoryError().c_str());
-        }
-    }
-
-    ImGui::Spacing();
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.host_room").data(),
                                   headerFlags) ) {
-        ImGui::TextWrapped("%s", TR("ui.collaboration.host_desc").data());
+        ImGui::TextDisabled("%s", TR("ui.collaboration.room_cover").data());
+        ImGui::SameLine();
+        drawHelpMarker(TR("ui.collaboration.host_desc").data());
         if ( !hasProject ) {
-            ImGui::TextWrapped("%s",
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                               "%s",
                                TR("ui.collaboration.project_required").data());
         }
-        if ( ImGui::BeginTable("CollaborationHostSettingsTable",
-                               2,
-                               ImGuiTableFlags_SizingStretchProp) ) {
-            ImGui::TableSetupColumn(
-                "##HostSettingLabel",
-                ImGuiTableColumnFlags_WidthFixed,
-                ImGui::CalcTextSize(TR("ui.collaboration.room_name").data()).x +
-                    ImGui::GetStyle().ItemSpacing.x);
-            ImGui::TableSetupColumn("##HostSettingControl",
-                                    ImGuiTableColumnFlags_WidthStretch);
-            drawRoomInfoLabel(TR("ui.collaboration.room_name").data());
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputTextWithHint(
-                "##CollaborationRoomName",
-                TR("ui.collaboration.room_name_hint").data(),
-                m_roomName.data(),
-                m_roomName.size());
+
+        ImGui::PushID("HostRoomCoverPreview");
+        const float coverWidth = ImGui::GetContentRegionAvail().x;
+        drawRoomCover(HOST_ROOM_COVER_TEXTURE_KEY,
+                      ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
+        if ( ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(Config::pathToUtf8(m_roomCoverPath).c_str());
+            ImGui::EndTooltip();
+        }
+        ImGui::PopID();
+
+        if ( ImGui::BeginTable("CollaborationRoomCoverActions",
+                               3,
+                               ImGuiTableFlags_SizingStretchSame) ) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.cover_choose").data()) ) {
+                openRoomCoverFilePicker();
+            }
+            ImGui::TableSetColumnIndex(1);
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.cover_use_beatmap").data()) ) {
+                m_roomCoverDefaultMode = CollaborationDefaultMode::Follow;
+                setRoomCoverPath(m_defaultRoomCoverPath, false);
+            }
+            ImGui::TableSetColumnIndex(2);
+            ImGui::BeginDisabled(m_roomCoverImage.empty());
+            if ( FeedbackSmallButton(
+                     TR("ui.collaboration.cover_clear").data()) ) {
+                setRoomCoverPath({}, true);
+            }
+            ImGui::EndDisabled();
             ImGui::EndTable();
         }
+        if ( !m_roomCoverErrorKey.empty() ) {
+            ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                               "%s",
+                               TR(m_roomCoverErrorKey.c_str()).data());
+        }
+
+        ImGui::TextDisabled("%s", TR("ui.collaboration.room_name").data());
+        ImGui::SameLine();
+        if ( FeedbackSmallButton(
+                 TR("ui.collaboration.room_name_follow_beatmap").data()) ) {
+            m_roomNameDefaultMode = CollaborationDefaultMode::Follow;
+            setInputBuffer(m_roomName, m_defaultRoomName);
+        }
+        ImGui::SetNextItemWidth(-1.0F);
+        if ( ImGui::InputTextWithHint(
+                 "##CollaborationRoomName",
+                 TR("ui.collaboration.room_name_hint").data(),
+                 m_roomName.data(),
+                 m_roomName.size()) ) {
+            m_roomNameDefaultMode = resolveCollaborationTextDefaultMode(
+                std::string_view(m_roomName.data()), m_defaultRoomName);
+        }
+        FeedbackCheckbox(TR("ui.collaboration.require_matching_build").data(),
+                         &m_requireMatchingBuildFingerprint);
+        ImGui::SameLine();
+        drawHelpMarker(
+            TR("ui.collaboration.require_matching_build_desc").data());
+        if ( m_pendingHostStart ) {
+            ImGui::TextColored(
+                ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
+                "%s",
+                TR("ui.collaboration.build_fingerprint_calculating").data());
+        }
         ImGui::BeginDisabled(
-            m_pendingGuestJoin || !creatorValid || m_roomName[0] == '\0' ||
+            m_pendingHostStart || m_pendingGuestJoin || !creatorValid ||
+            fingerprintFailed || m_roomName[0] == '\0' ||
             !isCollaborationProjectRequirementSatisfied(true, hostReady));
         if ( FeedbackButton(TR("ui.collaboration.start_room").data(),
                             ImVec2(-1.0F, 0.0F)) ) {
-            if ( applyServerEndpoint() ) {
-                Network::Collaboration::CollaborationHostRoomConfig config;
-                config.creator  = Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .defaultCreator;
-                config.roomName = m_roomName.data();
-                config.endpoint = m_room->serverEndpoint();
+            Network::Collaboration::CollaborationHostRoomConfig config;
+            config.creator = Config::AppConfig::instance()
+                                 .getEditorSettings()
+                                 .defaultCreator;
+            config.participantId =
+                Config::AppConfig::instance().getCollaborationParticipantId();
+            config.roomName       = m_roomName.data();
+            config.roomCoverImage = m_roomCoverImage;
+            config.endpoint       = m_room->serverEndpoint();
+            config.requireMatchingBuildFingerprint =
+                m_requireMatchingBuildFingerprint;
+            config.buildFingerprint =
+                Network::Collaboration::collaborationBuildFingerprint();
+            if ( config.buildFingerprint.empty() ) {
+                auto pending       = std::make_unique<PendingHostStart>();
+                pending->config    = std::move(config);
+                m_pendingHostStart = std::move(pending);
+            } else {
                 static_cast<void>(m_room->startHost(std::move(config)));
-                showLogWindow(sourceManager);
             }
         }
         ImGui::EndDisabled();
@@ -369,20 +791,25 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     ImGui::Spacing();
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.online_rooms").data(),
                                   headerFlags) ) {
-        ImGui::TextWrapped("%s", TR("ui.collaboration.join_desc").data());
+        drawHelpMarker(TR("ui.collaboration.join_desc").data());
+        ImGui::SameLine();
+        if ( FeedbackSmallButton(
+                 TR("ui.collaboration.refresh_rooms").data()) ) {
+            static_cast<void>(m_room->refreshDirectory());
+        }
         if ( m_pendingGuestJoin ) {
             ImGui::TextColored(
                 ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
                 "%s",
-                TR("ui.collaboration.closing_local_state").data());
+                !m_pendingGuestJoin->closeRequested
+                    ? TR("ui.collaboration.build_fingerprint_calculating")
+                          .data()
+                    : TR("ui.collaboration.closing_local_state").data());
         } else if ( m_guestJoinPreparationCancelled ) {
             ImGui::TextColored(
                 ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
                 "%s",
                 TR("ui.collaboration.local_close_cancelled").data());
-        }
-        if ( FeedbackButton(TR("ui.collaboration.refresh_rooms").data()) ) {
-            static_cast<void>(m_room->refreshDirectory());
         }
         const auto& rooms = m_room->directoryRooms();
         if ( rooms.empty() ) {
@@ -390,58 +817,68 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
             return;
         }
 
-        const ImGuiTableFlags tableFlags =
-            ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-        if ( ImGui::BeginTable(
-                 "CollaborationOnlineRoomsTable", 3, tableFlags) ) {
-            const float actionWidth =
-                std::max(
-                    ImGui::CalcTextSize(TR("ui.collaboration.join_now").data())
-                        .x,
-                    ImGui::CalcTextSize(TR("ui.collaboration.room_full").data())
-                        .x) +
-                ImGui::GetStyle().FramePadding.x * 2.0F;
-            ImGui::TableSetupColumn(TR("ui.collaboration.room_name").data(),
-                                    ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn(TR("ui.collaboration.online").data(),
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    ImGui::CalcTextSize("00/00").x +
-                                        ImGui::GetStyle().CellPadding.x * 2.0F);
-            ImGui::TableSetupColumn(TR("ui.collaboration.action").data(),
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    actionWidth);
-            ImGui::TableHeadersRow();
-
-            for ( const auto& room : rooms ) {
+        const float dpiScale = std::max(
+            1.0F, Config::AppConfig::instance().getWindowContentScale());
+        const float      cardHeight = 92.0F * dpiScale;
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(rooms.size()),
+                      cardHeight + ImGui::GetStyle().ItemSpacing.y);
+        while ( clipper.Step() ) {
+            for ( int index = clipper.DisplayStart; index < clipper.DisplayEnd;
+                  ++index ) {
+                const auto& room = rooms[static_cast<std::size_t>(index)];
                 ImGui::PushID(room.roomId.c_str());
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,
-                                    ImGui::GetFrameHeight());
-                ImGui::TableSetColumnIndex(0);
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextUnformatted(room.roomName.c_str());
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::BeginTooltip();
-                    ImGui::Text("%s: %s",
-                                TR("ui.collaboration.role.host").data(),
-                                room.hostCreator.c_str());
-                    ImGui::EndTooltip();
-                }
-                ImGui::TableSetColumnIndex(1);
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("%u/%u",
-                            static_cast<unsigned int>(room.participants),
-                            static_cast<unsigned int>(room.capacity));
-                ImGui::TableSetColumnIndex(2);
-                const bool full = room.participants >= room.capacity;
-                ImGui::BeginDisabled(
-                    m_pendingGuestJoin || !creatorValid || full ||
-                    !isCollaborationProjectRequirementSatisfied(false,
-                                                                hasProject));
-                if ( FeedbackSmallButton(
-                         full ? TR("ui.collaboration.room_full").data()
-                              : TR("ui.collaboration.join_now").data()) ) {
-                    if ( applyServerEndpoint() ) {
+                const bool cardVisible =
+                    ImGui::BeginChild("##RoomCard",
+                                      ImVec2(0.0F, cardHeight),
+                                      ImGuiChildFlags_Borders,
+                                      ImGuiWindowFlags_NoScrollbar |
+                                          ImGuiWindowFlags_NoScrollWithMouse);
+                if ( cardVisible &&
+                     ImGui::BeginTable("##RoomCardLayout",
+                                       2,
+                                       ImGuiTableFlags_SizingStretchProp) ) {
+                    const float coverWidth =
+                        std::min(112.0F * dpiScale,
+                                 ImGui::GetContentRegionAvail().x * 0.38F);
+                    ImGui::TableSetupColumn("##RoomCover",
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            coverWidth);
+                    ImGui::TableSetupColumn("##RoomDetails",
+                                            ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    if ( room.hasCoverImage ) {
+                        const auto cover =
+                            m_room->directoryRoomCover(room.roomId);
+                        if ( cover.empty() ) {
+                            static_cast<void>(
+                                m_room->requestDirectoryRoomCover(room.roomId));
+                        } else {
+                            queueRoomCoverTexture(room.roomId, cover);
+                        }
+                    }
+                    drawRoomCover(
+                        room.roomId,
+                        ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextWrapped("%s", room.roomName.c_str());
+                    ImGui::TextDisabled(
+                        "%s  ·  %u/%u",
+                        room.hostCreator.c_str(),
+                        static_cast<unsigned int>(room.participants),
+                        static_cast<unsigned int>(room.capacity));
+                    const bool full = room.participants >= room.capacity;
+                    ImGui::BeginDisabled(
+                        m_pendingHostStart || m_pendingGuestJoin ||
+                        fingerprintFailed || !creatorValid || full ||
+                        !isCollaborationProjectRequirementSatisfied(
+                            false, hasProject));
+                    if ( FeedbackButton(
+                             full ? TR("ui.collaboration.room_full").data()
+                                  : TR("ui.collaboration.join_now").data(),
+                             ImVec2(-1.0F, 0.0F)) ) {
                         beginGuestJoin(Config::AppConfig::instance()
                                            .getEditorSettings()
                                            .defaultCreator,
@@ -449,11 +886,12 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                        room.roomName,
                                        sourceManager);
                     }
+                    ImGui::EndDisabled();
+                    ImGui::EndTable();
                 }
-                ImGui::EndDisabled();
+                ImGui::EndChild();
                 ImGui::PopID();
             }
-            ImGui::EndTable();
         }
     }
 }
@@ -462,33 +900,45 @@ void CollaborationView::beginGuestJoin(std::string creator, std::string roomId,
                                        std::string roomName,
                                        UIManager*  sourceManager)
 {
-    if ( !m_room || m_pendingGuestJoin || m_room->isActive() ) return;
+    if ( !m_room || m_pendingHostStart || m_pendingGuestJoin ||
+         m_room->isActive() ) {
+        return;
+    }
 
-    auto pending             = std::make_unique<PendingGuestJoin>();
-    pending->config.creator  = std::move(creator);
+    auto pending            = std::make_unique<PendingGuestJoin>();
+    pending->config.creator = std::move(creator);
+    pending->config.participantId =
+        Config::AppConfig::instance().getCollaborationParticipantId();
     pending->config.roomId   = std::move(roomId);
     pending->config.roomName = std::move(roomName);
     pending->config.endpoint = m_room->serverEndpoint();
     pending->config.resourceCacheRoot =
         Config::AppPaths::configRootPath() / "collaboration-cache";
-    pending->closeRequestedAt       = std::chrono::steady_clock::now();
     m_pendingGuestJoin              = std::move(pending);
     m_guestJoinPreparationCancelled = false;
 
-    auto& projectController = Logic::ProjectController::instance();
-    projectController.setLocalProjectOpeningBlockedByCollaboration(true);
-    const bool hasProject       = projectController.currentProject() != nullptr;
-    const bool hasBeatmapCanvas = hasNonLogoBeatmapSession();
-    if ( needsLocalStateCloseBeforeGuestJoin(hasProject, hasBeatmapCanvas) ) {
-        projectController.requestCloseProject();
-        return;
-    }
+    Logic::ProjectController::instance()
+        .setLocalProjectOpeningBlockedByCollaboration(true);
     advancePendingGuestJoin(sourceManager);
 }
 
 void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
 {
     if ( !m_pendingGuestJoin || !m_room ) return;
+
+    const auto fingerprint =
+        Network::Collaboration::collaborationBuildFingerprint();
+    if ( fingerprint.empty() ) {
+        if ( Network::Collaboration::collaborationBuildFingerprintState() ==
+             Network::Collaboration::CollaborationBuildFingerprintState::
+                 Failed ) {
+            m_pendingGuestJoin.reset();
+            Logic::ProjectController::instance()
+                .setLocalProjectOpeningBlockedByCollaboration(false);
+        }
+        return;
+    }
+    m_pendingGuestJoin->config.buildFingerprint = fingerprint;
 
     auto&      projectController = Logic::ProjectController::instance();
     const bool hasProject       = projectController.currentProject() != nullptr;
@@ -498,11 +948,17 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
         auto config = std::move(m_pendingGuestJoin->config);
         m_pendingGuestJoin.reset();
         if ( m_room->join(std::move(config)) ) {
-            showLogWindow(sourceManager);
             return;
         }
         m_room->disconnect();
         projectController.setLocalProjectOpeningBlockedByCollaboration(false);
+        return;
+    }
+
+    if ( !m_pendingGuestJoin->closeRequested ) {
+        m_pendingGuestJoin->closeRequested   = true;
+        m_pendingGuestJoin->closeRequestedAt = std::chrono::steady_clock::now();
+        projectController.requestCloseProject();
         return;
     }
 
@@ -523,9 +979,37 @@ void CollaborationView::advancePendingGuestJoin(UIManager* sourceManager)
     projectController.setLocalProjectOpeningBlockedByCollaboration(false);
 }
 
-void CollaborationView::drawActiveRoom(UIManager* sourceManager)
+void CollaborationView::advancePendingHostStart()
 {
-    const auto&              endpoint    = m_room->serverEndpoint();
+    if ( !m_pendingHostStart || !m_room ) return;
+
+    auto&       engine        = Logic::EditorEngine::instance();
+    auto        activeSession = engine.getActiveNonLogoSession();
+    const auto* project       = engine.getCurrentProject();
+    if ( !project || !activeSession ||
+         !activeSession->getContext().currentBeatmap ) {
+        m_pendingHostStart.reset();
+        return;
+    }
+
+    auto fingerprint = Network::Collaboration::collaborationBuildFingerprint();
+    if ( fingerprint.empty() ) {
+        if ( Network::Collaboration::collaborationBuildFingerprintState() ==
+             Network::Collaboration::CollaborationBuildFingerprintState::
+                 Failed ) {
+            m_pendingHostStart.reset();
+        }
+        return;
+    }
+
+    auto config             = std::move(m_pendingHostStart->config);
+    config.buildFingerprint = std::move(fingerprint);
+    m_pendingHostStart.reset();
+    static_cast<void>(m_room->startHost(std::move(config)));
+}
+
+void CollaborationView::drawActiveRoom()
+{
     const auto&              style       = ImGui::GetStyle();
     const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_DefaultOpen;
 
@@ -535,7 +1019,7 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                                2,
                                ImGuiTableFlags_SizingStretchProp) ) {
             const float labelWidth = std::max(
-                ImGui::CalcTextSize(TR("ui.collaboration.server").data()).x,
+                ImGui::CalcTextSize(TR("ui.collaboration.status").data()).x,
                 ImGui::CalcTextSize(TR("ui.collaboration.room_name").data()).x);
             ImGui::TableSetupColumn("##RoomDetailLabel",
                                     ImGuiTableColumnFlags_WidthFixed,
@@ -557,11 +1041,6 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                 drawRoomInfoLabel(TR("ui.collaboration.room_id").data());
                 ImGui::TextWrapped("%s", m_room->roomId().c_str());
             }
-            drawRoomInfoLabel(TR("ui.collaboration.server").data());
-            ImGui::TextWrapped(
-                "%s:%u",
-                endpoint.address.c_str(),
-                static_cast<unsigned int>(endpoint.signalingPort));
             ImGui::EndTable();
         }
         if ( !m_room->lastError().empty() ) {
@@ -734,15 +1213,8 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     }
 
     ImGui::Spacing();
-    const float actionWidth = std::max(
-        1.0F, (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5F);
-    if ( FeedbackButton(TR("ui.collaboration.show_log").data(),
-                        ImVec2(actionWidth, 0.0F)) ) {
-        showLogWindow(sourceManager);
-    }
-    ImGui::SameLine();
     if ( FeedbackButton(TR("ui.collaboration.disconnect").data(),
-                        ImVec2(actionWidth, 0.0F)) ) {
+                        ImVec2(-1.0F, 0.0F)) ) {
         m_room->disconnect();
         return;
     }
@@ -763,7 +1235,11 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                 style.FramePadding.x * 2.0F +
                 (m_room->isHost()
                      ? ImGui::CalcTextSize(
-                           TR("ui.collaboration.remove_participant").data())
+                           TR("ui.collaboration.permissions.manage").data())
+                               .x +
+                           style.FramePadding.x * 2.0F + style.ItemSpacing.x +
+                           ImGui::CalcTextSize(
+                               TR("ui.collaboration.remove_participant").data())
                                .x +
                            style.FramePadding.x * 2.0F + style.ItemSpacing.x
                      : 0.0F);
@@ -779,35 +1255,115 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                 drawParticipantRow(
                     *m_room, localPeer->first, localPeer->second);
             }
-            for ( const auto& [peerId, creator] : participants ) {
+            for ( const auto& [peerId, identity] : participants ) {
                 if ( peerId != m_room->localPeerId() ) {
-                    drawParticipantRow(*m_room, peerId, creator);
+                    drawParticipantRow(*m_room, peerId, identity);
                 }
             }
             ImGui::EndTable();
         }
+        if ( !m_room->isHost() ) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted(
+                TR("ui.collaboration.permissions.mine").data());
+            drawLocalPermissionSummary(*m_room);
+        }
     }
 }
 
-bool CollaborationView::applyServerEndpoint()
+void CollaborationView::drawChatSection()
 {
-    if ( !m_room || m_serverAddress[0] == '\0' || m_signalingPort <= 0 ||
-         m_signalingPort > 65535 ) {
-        return false;
+    static_assert(CHAT_INPUT_BUFFER_BYTES ==
+                  Network::Collaboration::MAX_COLLABORATION_CHAT_MESSAGE_BYTES +
+                      1U);
+    ImGui::Spacing();
+    if ( !FeedbackCollapsingHeader(TR("ui.collaboration.chat").data(),
+                                   ImGuiTreeNodeFlags_DefaultOpen) ) {
+        return;
     }
-    Network::Collaboration::CollaborationServerEndpoint endpoint;
-    endpoint.address       = m_serverAddress.data();
-    endpoint.signalingPort = static_cast<std::uint16_t>(m_signalingPort);
-    endpoint.useTls        = m_useTls;
-    return m_room->setServerEndpoint(std::move(endpoint));
+
+    const auto& messages      = m_room->chatMessages();
+    const float historyHeight = ImGui::GetTextLineHeightWithSpacing() * 8.0F;
+    if ( ImGui::BeginChild("CollaborationChatHistory",
+                           ImVec2(0.0F, historyHeight),
+                           ImGuiChildFlags_Borders) ) {
+        if ( messages.empty() ) {
+            ImGui::TextDisabled("%s", TR("ui.collaboration.chat.empty").data());
+        } else {
+            for ( const auto& message : messages ) {
+                const auto totalSeconds = message.elapsedMilliseconds / 1000U;
+                const auto minutes      = totalSeconds / 60U;
+                const auto seconds      = totalSeconds % 60U;
+                ImGui::PushID(static_cast<int>(message.sequence & 0x7FFFFFFFU));
+                ImGui::TextDisabled("[%02llu:%02llu]",
+                                    static_cast<unsigned long long>(minutes),
+                                    static_cast<unsigned long long>(seconds));
+                ImGui::SameLine();
+                ImGui::TextColored(
+                    ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg),
+                    "%s:",
+                    message.creator.c_str());
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", message.text.c_str());
+                ImGui::PopID();
+            }
+            if ( messages.back().sequence != m_lastRenderedChatSequence ) {
+                ImGui::SetScrollHereY(1.0F);
+                m_lastRenderedChatSequence = messages.back().sequence;
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    const float sendButtonWidth =
+        ImGui::CalcTextSize(TR("ui.collaboration.chat.send").data()).x +
+        ImGui::GetStyle().FramePadding.x * 2.0F;
+    const float inputWidth =
+        std::max(1.0F,
+                 ImGui::GetContentRegionAvail().x - sendButtonWidth -
+                     ImGui::GetStyle().ItemSpacing.x);
+    const bool canSend = m_room->localPeerId() != 0;
+    ImGui::BeginDisabled(!canSend);
+    ImGui::SetNextItemWidth(inputWidth);
+    const bool enterPressed =
+        ImGui::InputTextWithHint("##CollaborationChatInput",
+                                 TR("ui.collaboration.chat.hint").data(),
+                                 m_chatInput.data(),
+                                 m_chatInput.size(),
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    const bool buttonPressed = FeedbackButton(
+        TR("ui.collaboration.chat.send").data(), ImVec2(sendButtonWidth, 0.0F));
+    ImGui::EndDisabled();
+
+    if ( canSend && (enterPressed || buttonPressed) ) {
+        const auto result = m_room->sendChatMessage(m_chatInput.data());
+        m_chatSendFailed =
+            result != Network::Collaboration::SubmitChatMessageResult::Accepted;
+        if ( !m_chatSendFailed ) {
+            m_chatInput.fill('\0');
+        }
+    }
+    if ( m_chatSendFailed ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "%s",
+                           TR("ui.collaboration.chat.send_failed").data());
+    }
 }
 
-void CollaborationView::showLogWindow(UIManager* sourceManager) const
+void CollaborationView::drawLogSection(UIManager* sourceManager) const
 {
-    if ( !sourceManager ) return;
+    if ( !sourceManager || !m_room || m_room->logs().empty() ) return;
+
+    ImGui::Spacing();
+    if ( !FeedbackCollapsingHeader(TR("title.collaboration_log").data(),
+                                   ImGuiTreeNodeFlags_DefaultOpen) ) {
+        return;
+    }
+
     if ( auto* logWindow = sourceManager->getView<CollaborationLogWindow>(
              "CollaborationLogWindow") ) {
-        logWindow->show();
+        logWindow->renderInline();
     }
 }
 }  // namespace MMM::UI

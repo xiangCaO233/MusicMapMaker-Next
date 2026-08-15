@@ -2,8 +2,10 @@
 add_library(
   NetworkCollaboration STATIC
   src/BeatmapDocumentCodec.cpp
+  src/CollaborationBuildFingerprint.cpp
   src/CollaborationPeer.cpp
   src/CollaborationDirectoryClient.cpp
+  src/CollaborationResourceCipher.cpp
   src/CollaborationResourceSync.cpp
   src/CollaborationProtocol.cpp
   src/CollaborationRoom.cpp
@@ -15,8 +17,16 @@ target_include_directories(NetworkCollaboration
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(NetworkCollaboration PUBLIC MMM)
 target_link_libraries(
-  NetworkCollaboration PRIVATE 3rd_libdatachannel 3rd_nlohmann_json 3rd_miniz
-                               Config Log Runtime)
+  NetworkCollaboration
+  PRIVATE 3rd_concurrentqueue
+          3rd_libdatachannel
+          3rd_mbedtls
+          3rd_nlohmann_json
+          3rd_miniz
+          Config
+          Log
+          Network
+          Runtime)
 
 # RTC 诊断测试覆盖配置持久化以及 TURN 长期凭据脱敏。
 mmm_add_test_executable(Collaboration RtcDiagnosticLoggingTest
@@ -26,6 +36,14 @@ target_include_directories(RtcDiagnosticLoggingTest
 target_link_libraries(RtcDiagnosticLoggingTest PRIVATE NetworkCollaboration
                                                        Config)
 add_test(NAME RtcDiagnosticLoggingTest COMMAND RtcDiagnosticLoggingTest)
+
+# 构建指纹测试覆盖后台任务投递、非阻塞状态查询和最终 SHA-256 格式。
+mmm_add_test_executable(Collaboration CollaborationBuildFingerprintTest
+                        tests/CollaborationBuildFingerprintTest.cpp)
+target_link_libraries(CollaborationBuildFingerprintTest
+                      PRIVATE NetworkCollaboration Runtime)
+add_test(NAME CollaborationBuildFingerprintTest
+         COMMAND CollaborationBuildFingerprintTest)
 
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest
@@ -50,6 +68,8 @@ add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
 # 资源状态机测试覆盖清单完整性、分块重组、缓存复用和单文件增量更新。
 mmm_add_test_executable(Collaboration CollaborationResourceSyncTest
                         tests/CollaborationResourceSyncTest.cpp)
+target_include_directories(CollaborationResourceSyncTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(CollaborationResourceSyncTest
                       PRIVATE NetworkCollaboration 3rd_nlohmann_json Runtime)
 add_test(NAME CollaborationResourceSyncTest
@@ -58,8 +78,9 @@ add_test(NAME CollaborationResourceSyncTest
 # 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
 mmm_add_test_executable(Collaboration CollaborationRoomTest
                         tests/CollaborationRoomTest.cpp)
-target_link_libraries(CollaborationRoomTest PRIVATE NetworkCollaboration
-                                                    NetworkCollaborationServer)
+target_link_libraries(
+  CollaborationRoomTest PRIVATE NetworkCollaboration NetworkCollaborationServer
+                                Runtime)
 # 同进程混用 libdatachannel 服务端与 WebRTC 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external`
 # 链路保留为手动部署探针。 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
 

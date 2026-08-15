@@ -6,7 +6,10 @@
 #include <atomic>
 #include <cctype>
 #include <deque>
+#include <iterator>
+#include <map>
 #include <mutex>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -22,6 +25,8 @@ constexpr int MAX_DIRECTORY_MESSAGE_BYTES = 256 * 1024;
 constexpr std::size_t MAX_DIRECTORY_EVENTS = 1024;
 /// @brief 单次列表允许接收的房间数量。
 constexpr std::size_t MAX_DIRECTORY_ROOMS = 256;
+/// @brief 单间房卡封面 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
 
 /// @brief 校验服务器地址未混入协议、端口或路径。
 bool isValidServerAddress(std::string_view value)
@@ -74,6 +79,7 @@ public:
     /// 预编译库无法建立系统信任链，因此 WSS 暂时只提供传输加密。
     bool connect(CollaborationServerEndpoint endpoint)
     {
+        std::scoped_lock  rtcLock(m_rtcApiMutex);
         const std::string signalingUrl =
             makeCollaborationSignalingUrl(endpoint);
         if ( signalingUrl.empty() || m_websocketId >= 0 ) {
@@ -83,6 +89,8 @@ public:
         m_signalingUrl = signalingUrl;
         m_lastError.clear();
         m_rooms.clear();
+        m_roomCovers.clear();
+        m_requestedRoomCovers.clear();
         m_state = CollaborationDirectoryState::Connecting;
         m_openHandled.store(false, std::memory_order_release);
         m_acceptCallbacks.store(true, std::memory_order_release);
@@ -114,9 +122,16 @@ public:
     /// @brief 关闭目录连接并清空状态。
     void disconnect()
     {
-        m_acceptCallbacks.store(false, std::memory_order_release);
-        const int websocketId = std::exchange(m_websocketId, -1);
-        if ( websocketId >= 0 ) rtcDeleteWebSocket(websocketId);
+        int websocketId = -1;
+        {
+            std::scoped_lock rtcLock(m_rtcApiMutex);
+            m_acceptCallbacks.store(false, std::memory_order_release);
+            websocketId = std::exchange(m_websocketId, -1);
+            if ( websocketId >= 0 ) {
+                detachWebSocketCallbacks(websocketId);
+                rtcDeleteWebSocket(websocketId);
+            }
+        }
         {
             std::scoped_lock lock(m_eventMutex);
             m_events.clear();
@@ -161,6 +176,36 @@ public:
                sendListRequest();
     }
 
+    /// @brief 为仍在目录中的房间按需请求一次封面。
+    bool requestRoomCover(std::string_view roomId)
+    {
+        const auto room = std::find_if(
+            m_rooms.begin(), m_rooms.end(), [roomId](const auto& candidate) {
+                return candidate.roomId == roomId;
+            });
+        if ( room == m_rooms.end() || !room->hasCoverImage ) return false;
+        if ( m_roomCovers.contains(roomId) ||
+             m_requestedRoomCovers.contains(roomId) ) {
+            return true;
+        }
+
+        const nlohmann::json request = {
+            { "type", "get_room_cover" },
+            { "version", DIRECTORY_PROTOCOL_VERSION },
+            { "roomId", roomId },
+        };
+        const std::string payload = request.dump();
+        std::scoped_lock  rtcLock(m_rtcApiMutex);
+        if ( !m_acceptCallbacks.load(std::memory_order_acquire) ||
+             m_websocketId < 0 || !rtcIsOpen(m_websocketId) ||
+             rtcSendMessage(m_websocketId, payload.c_str(), -1) !=
+                 RTC_ERR_SUCCESS ) {
+            return false;
+        }
+        m_requestedRoomCovers.emplace(roomId);
+        return true;
+    }
+
     /// @brief 返回目录状态。
     CollaborationDirectoryState state() const { return m_state; }
 
@@ -170,6 +215,15 @@ public:
         return m_rooms;
     }
 
+    /// @brief 返回一份已经取得的房间封面。
+    std::string_view roomCover(std::string_view roomId) const
+    {
+        const auto iterator = m_roomCovers.find(roomId);
+        return iterator == m_roomCovers.end()
+                   ? std::string_view{}
+                   : std::string_view(iterator->second);
+    }
+
     /// @brief 返回最近错误。
     const std::string& lastError() const { return m_lastError; }
 
@@ -177,10 +231,24 @@ public:
     const CollaborationServerEndpoint& endpoint() const { return m_endpoint; }
 
 private:
+    /// @brief 在删除 WebSocket 前切断全部回调和用户指针。
+    static void detachWebSocketCallbacks(int websocketId)
+    {
+        rtcSetOpenCallback(websocketId, nullptr);
+        rtcSetMessageCallback(websocketId, nullptr);
+        rtcSetClosedCallback(websocketId, nullptr);
+        rtcSetErrorCallback(websocketId, nullptr);
+        rtcSetUserPointer(websocketId, nullptr);
+    }
+
     /// @brief 发送房间列表订阅请求。
     bool sendListRequest() const
     {
-        if ( m_websocketId < 0 || !rtcIsOpen(m_websocketId) ) return false;
+        std::scoped_lock rtcLock(m_rtcApiMutex);
+        if ( !m_acceptCallbacks.load(std::memory_order_acquire) ||
+             m_websocketId < 0 || !rtcIsOpen(m_websocketId) ) {
+            return false;
+        }
         const nlohmann::json request = {
             { "type", "list_rooms" },
             { "version", DIRECTORY_PROTOCOL_VERSION },
@@ -194,12 +262,28 @@ private:
     void processMessage(std::string_view payload)
     {
         const auto message = nlohmann::json::parse(payload, nullptr, false);
-        if ( !message.is_object() || message.value("type", "") != "room_list" ||
+        if ( !message.is_object() ||
              message.value("version", std::uint64_t{ 0 }) !=
                  DIRECTORY_PROTOCOL_VERSION ) {
             fail("invalid_directory_message");
             return;
         }
+        const std::string type = message.value("type", "");
+        if ( type == "room_cover" ) {
+            processRoomCover(message);
+            return;
+        }
+        if ( type != "room_list" ) {
+            fail("invalid_directory_message");
+            return;
+        }
+
+        processRoomList(message);
+    }
+
+    /// @brief 校验并替换一份服务端房间列表。
+    void processRoomList(const nlohmann::json& message)
+    {
         const auto roomsIterator = message.find("rooms");
         if ( roomsIterator == message.end() || !roomsIterator->is_array() ||
              roomsIterator->size() > MAX_DIRECTORY_ROOMS ) {
@@ -225,6 +309,14 @@ private:
             }
             room.participants = participants->get<std::size_t>();
             room.capacity     = capacity->get<std::size_t>();
+            if ( const auto cover = item.find("hasCoverImage");
+                 cover != item.end() ) {
+                if ( !cover->is_boolean() ) {
+                    fail("invalid_room_entry");
+                    return;
+                }
+                room.hasCoverImage = cover->get<bool>();
+            }
             if ( room.roomId.empty() || room.roomName.empty() ||
                  room.hostCreator.empty() || room.capacity < 2U ||
                  room.capacity > 8U || room.participants == 0U ||
@@ -235,8 +327,62 @@ private:
             rooms.push_back(std::move(room));
         }
         m_rooms = std::move(rooms);
+        for ( auto iterator = m_roomCovers.begin();
+              iterator != m_roomCovers.end(); ) {
+            const auto room = std::find_if(
+                m_rooms.begin(), m_rooms.end(), [&](const auto& candidate) {
+                    return candidate.roomId == iterator->first &&
+                           candidate.hasCoverImage;
+                });
+            if ( room == m_rooms.end() ) {
+                m_requestedRoomCovers.erase(iterator->first);
+                iterator = m_roomCovers.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for ( auto iterator = m_requestedRoomCovers.begin();
+              iterator != m_requestedRoomCovers.end(); ) {
+            const auto room = std::find_if(
+                m_rooms.begin(), m_rooms.end(), [&](const auto& candidate) {
+                    return candidate.roomId == *iterator &&
+                           candidate.hasCoverImage;
+                });
+            iterator = room == m_rooms.end()
+                           ? m_requestedRoomCovers.erase(iterator)
+                           : std::next(iterator);
+        }
         m_state = CollaborationDirectoryState::Connected;
         m_lastError.clear();
+    }
+
+    /// @brief 校验并缓存一份按需返回的房间封面。
+    void processRoomCover(const nlohmann::json& message)
+    {
+        std::string roomId;
+        std::string coverImage;
+        if ( !readString(message, "roomId", roomId) ||
+             !readString(message, "coverImage", coverImage) || roomId.empty() ||
+             roomId.size() > 32U ||
+             coverImage.size() > MAX_ROOM_COVER_BASE64_BYTES ) {
+            fail("invalid_room_cover");
+            return;
+        }
+
+        const auto room = std::find_if(
+            m_rooms.begin(), m_rooms.end(), [&](const auto& candidate) {
+                return candidate.roomId == roomId;
+            });
+        if ( room == m_rooms.end() ) {
+            m_requestedRoomCovers.erase(roomId);
+            return;
+        }
+        if ( coverImage.empty() ) {
+            m_requestedRoomCovers.erase(roomId);
+            return;
+        }
+        m_requestedRoomCovers.erase(roomId);
+        m_roomCovers.insert_or_assign(std::move(roomId), std::move(coverImage));
     }
 
     /// @brief 切换到错误状态并保留诊断文本。
@@ -293,6 +439,8 @@ private:
 
     /// @brief 当前 WebSocket 句柄。
     int m_websocketId = -1;
+    /// @brief 串行化目录句柄的发送、退役与删除前解绑。
+    mutable std::recursive_mutex m_rtcApiMutex;
     /// @brief 是否仍接受第三方线程回调。
     std::atomic_bool m_acceptCallbacks{ false };
     /// @brief 防止打开回调与注册后的状态补检重复发送目录请求。
@@ -307,6 +455,10 @@ private:
     std::string m_lastError;
     /// @brief 最近一次有效房间快照。
     std::vector<CollaborationDirectoryRoom> m_rooms;
+    /// @brief 已经按需取得的房间封面，随目录房间消失而清理。
+    std::map<std::string, std::string, std::less<>> m_roomCovers;
+    /// @brief 已发送但尚未收到响应的房间封面请求。
+    std::set<std::string, std::less<>> m_requestedRoomCovers;
     /// @brief 保护回调事件队列。
     std::mutex m_eventMutex;
     /// @brief 等待 UI 线程消费的事件。
@@ -356,6 +508,11 @@ bool CollaborationDirectoryClient::refresh()
     return m_impl->refresh();
 }
 
+bool CollaborationDirectoryClient::requestRoomCover(std::string_view roomId)
+{
+    return m_impl->requestRoomCover(roomId);
+}
+
 CollaborationDirectoryState CollaborationDirectoryClient::state() const
 {
     return m_impl->state();
@@ -365,6 +522,12 @@ const std::vector<CollaborationDirectoryRoom>&
 CollaborationDirectoryClient::rooms() const
 {
     return m_impl->rooms();
+}
+
+std::string_view CollaborationDirectoryClient::roomCover(
+    std::string_view roomId) const
+{
+    return m_impl->roomCover(roomId);
 }
 
 const std::string& CollaborationDirectoryClient::lastError() const

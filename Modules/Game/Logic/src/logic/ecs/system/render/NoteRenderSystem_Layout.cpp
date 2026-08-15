@@ -289,7 +289,8 @@ void NoteRenderSystem::drawBeatLines(
     const bool usesCommonBeatDivisors = commonBeatDivisorMask != 0U;
     const bool hasSubdivisionPreview =
         allowHoverSubdivisionPreview && subdivisionPreview.show &&
-        batcher.snapshot->trackCount > 0 && subdivisionPreview.track >= 0 &&
+        batcher.snapshot->trackCount > 0 &&
+        subdivisionPreview.track >= -batcher.snapshot->trackCount &&
         subdivisionPreview.track < batcher.snapshot->trackCount &&
         (usesCommonBeatDivisors || subdivisionPreview.denominator > 1) &&
         subdivisionPreview.denominator <= 128 &&

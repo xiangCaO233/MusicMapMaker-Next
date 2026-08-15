@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/PlaybackController.h"
@@ -338,6 +339,42 @@ bool testEditorConfigSynchronizesGlobalKeySoundControls()
     return true;
 }
 
+/// @brief 验证工具栏配置回写不会覆盖由 AppConfig 直接维护的协作视野模式。
+/// @return 调整分拍数后引擎与全局配置仍保留协作视野模式时返回 true。
+bool testBeatDivisorUpdatePreservesCollaborationViewportRenderMode()
+{
+    auto&      engine               = MMM::Logic::EditorEngine::instance();
+    auto&      appConfig            = MMM::Config::AppConfig::instance();
+    const auto originalEngineConfig = engine.getEditorConfig();
+    const auto originalGlobalMode =
+        appConfig.getEditorSettings().collaborationViewportRenderMode;
+
+    appConfig.getEditorSettings().collaborationViewportRenderMode =
+        MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+    auto toolbarConfig = originalEngineConfig;
+    toolbarConfig.settings.beatDivisor =
+        toolbarConfig.settings.beatDivisor == 64
+            ? 63
+            : toolbarConfig.settings.beatDivisor + 1;
+    engine.setEditorConfig(toolbarConfig);
+
+    const auto updatedEngineConfig = engine.getEditorConfig();
+    const bool preserved =
+        updatedEngineConfig.settings.collaborationViewportRenderMode ==
+            MMM::Config::CollaborationViewportRenderMode::TrackEdge &&
+        appConfig.getEditorSettings().collaborationViewportRenderMode ==
+            MMM::Config::CollaborationViewportRenderMode::TrackEdge;
+
+    appConfig.getEditorSettings().collaborationViewportRenderMode =
+        originalGlobalMode;
+    engine.setEditorConfig(originalEngineConfig);
+    if ( !preserved ) {
+        XERROR("Beat divisor update reset collaboration viewport render mode");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证手动跳转取消自然结束后的自动回到开头。
 bool testSeekCancelsPendingRestart()
 {
@@ -350,6 +387,37 @@ bool testSeekCancelsPendingRestart()
     if ( context.restartPlaybackAfterFinishPending ||
          !near(context.currentTime, 8.0) ) {
         XERROR("Manual seek did not cancel pending playback restart");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证连续 Seek 仅在拖动期间保持联机视口延迟发布状态。
+/// @return 预览命令置位且最终提交命令清除状态时返回 true。
+bool testSeekScrubStateEndsOnCommit()
+{
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.audioTimelineDescriptor.m_chartEndSeconds = 20.0;
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 6.0, .isScrubbing = true });
+    if ( !context.isSeekScrubbing || !near(context.currentTime, 6.0) ) {
+        XERROR("Continuous seek did not enter local preview state");
+        return false;
+    }
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 9.0, .isScrubbing = true });
+    if ( !context.isSeekScrubbing || !near(context.currentTime, 9.0) ) {
+        XERROR("Continuous seek did not update its local preview target");
+        return false;
+    }
+
+    controller.handleCommand(
+        MMM::Logic::CmdSeek{ .time = 9.0, .isScrubbing = false });
+    if ( context.isSeekScrubbing || !near(context.currentTime, 9.0) ) {
+        XERROR("Committed seek did not release viewport synchronization");
         return false;
     }
     return true;
@@ -370,7 +438,9 @@ int main()
                    testBackgroundSessionCannotControlTransport() &&
                    testBackgroundSessionCannotControlKeySoundGain() &&
                    testEditorConfigSynchronizesGlobalKeySoundControls() &&
-                   testSeekCancelsPendingRestart()
+                   testBeatDivisorUpdatePreservesCollaborationViewportRenderMode() &&
+                   testSeekCancelsPendingRestart() &&
+                   testSeekScrubStateEndsOnCommit()
                ? 0
                : 1;
 }

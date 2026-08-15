@@ -44,6 +44,24 @@
 
 namespace
 {
+/// @brief 将逻辑保存来源映射为 UI 反馈策略。
+/// @param kind 谱面保存请求来源。
+/// @return 保存成功时应采用的界面反馈形式。
+[[nodiscard]] MMM::Event::BeatmapSavePresentation savePresentationFor(
+    MMM::Logic::BeatmapSaveKind kind)
+{
+    switch ( kind ) {
+    case MMM::Logic::BeatmapSaveKind::TimedAutoSave:
+        return MMM::Event::BeatmapSavePresentation::TimedAutoSaveStatus;
+    case MMM::Logic::BeatmapSaveKind::TriggeredAutoSave:
+        return MMM::Event::BeatmapSavePresentation::TriggeredAutoSaveStatus;
+    case MMM::Logic::BeatmapSaveKind::Internal:
+        return MMM::Event::BeatmapSavePresentation::Silent;
+    case MMM::Logic::BeatmapSaveKind::Manual:
+    default: return MMM::Event::BeatmapSavePresentation::Transient;
+    }
+}
+
 /// @brief 在存在当前项目时，将元数据路径解析为项目内路径。
 std::filesystem::path resolveCurrentProjectPath(
     const std::filesystem::path& path)
@@ -1179,33 +1197,163 @@ bool BeatmapSession::processCommands()
         ::MMM::BeatmapMutationFlags::None;
     const auto publishPendingMutation = [this, &mutationFlags]() {
         if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
+        if ( autoSave.mode == Config::AutoSaveMode::EventTriggered &&
+             autoSave.onObjectModified ) {
+            m_triggeredAutoSavePending = true;
+        }
         auto observer = std::atomic_load_explicit(&m_mutationObserver,
                                                   std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
             SessionUtils::syncBeatmap(*m_ctx);
-            observer->onBeatmapMutated(*m_ctx->currentBeatmap, mutationFlags);
+            const auto sequence = observer->onBeatmapMutated(
+                *m_ctx->currentBeatmap, mutationFlags);
+            if ( sequence != 0 &&
+                 mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
+                const auto activeObserver = std::atomic_load_explicit(
+                    &m_mutationObserver, std::memory_order_acquire);
+                if ( activeObserver == observer ) {
+                    m_latestAcceptedLocalObjectMutationSequence.store(
+                        sequence, std::memory_order_release);
+                }
+            }
         }
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
     };
+    const auto localGestureActive = [this]() {
+        return m_ctx->isDragging || m_ctx->isSelecting ||
+               m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
+    };
+    const auto replacementHasCategories =
+        [](const CmdReplaceBeatmapData& value) {
+            return value.replaceObjects || value.replaceTimelines ||
+                   value.replaceMetadata || value.replaceAudioSamples ||
+                   value.replaceAnnotations;
+        };
     while ( m_commandQueue.try_dequeue(cmd) ) {
-        if ( blockCollaborationOfflineEdit(cmd) ) continue;
-        const bool authoritativeSynchronization = std::visit(
-            [](const auto& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr ( std::is_same_v<T, CmdReplaceBeatmapData> ) {
-                    return arg.authoritativeRemote;
-                }
-                return false;
-            },
-            cmd);
-        const bool localGestureActive =
-            m_ctx->isDragging || m_ctx->isSelecting ||
-            m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
-        if ( authoritativeSynchronization && localGestureActive ) {
-            m_commandQueue.enqueue(std::move(cmd));
-            break;
+        if ( blockCollaborationOfflineEdit(cmd) ||
+             blockCollaborationUnauthorizedEdit(cmd, true) ) {
+            continue;
         }
+        if ( const auto* acknowledgement =
+                 std::get_if<CmdAcknowledgeCollaborationMutation>(&cmd) ) {
+            const auto latestLocalObjectMutationSequence =
+                m_latestAcceptedLocalObjectMutationSequence.load(
+                    std::memory_order_acquire);
+            if ( acknowledgement->sequence >=
+                 latestLocalObjectMutationSequence ) {
+                m_latestAcceptedLocalObjectMutationSequence.store(
+                    acknowledgement->sequence, std::memory_order_release);
+            }
+            if ( m_deferredAuthoritativeReplacement &&
+                 m_deferredAuthoritativeReplacement->replaceObjects &&
+                 m_deferredAuthoritativeReplacement
+                         ->includedLocalMutationSequence <
+                     acknowledgement->sequence ) {
+                // 本地提交回执不能让早于该提交的权威快照重新覆盖物件；其他
+                // 数据类别仍可继续应用，物件会由随后已重放本地增量的结果更新。
+                m_deferredAuthoritativeReplacement->replaceObjects = false;
+                if ( !replacementHasCategories(
+                         *m_deferredAuthoritativeReplacement) ) {
+                    m_deferredAuthoritativeReplacement.reset();
+                }
+            }
+            processed = true;
+            continue;
+        }
+        auto* authoritativeReplacement =
+            std::get_if<CmdReplaceBeatmapData>(&cmd);
+        const bool authoritativeSynchronization =
+            authoritativeReplacement &&
+            authoritativeReplacement->authoritativeRemote;
+        if ( authoritativeSynchronization &&
+             m_deferredAuthoritativeReplacement ) {
+            const auto& deferred = *m_deferredAuthoritativeReplacement;
+            if ( deferred.replaceObjects ) {
+                if ( !authoritativeReplacement->replaceObjects ) {
+                    authoritativeReplacement->objectDeltaIdentities =
+                        deferred.objectDeltaIdentities;
+                } else if ( authoritativeReplacement->objectDeltaIdentities &&
+                            deferred.objectDeltaIdentities ) {
+                    auto& identities =
+                        *authoritativeReplacement->objectDeltaIdentities;
+                    identities.insert(identities.end(),
+                                      deferred.objectDeltaIdentities->begin(),
+                                      deferred.objectDeltaIdentities->end());
+                    std::sort(identities.begin(), identities.end());
+                    identities.erase(
+                        std::unique(identities.begin(), identities.end()),
+                        identities.end());
+                } else {
+                    authoritativeReplacement->objectDeltaIdentities.reset();
+                }
+            }
+            if ( deferred.replaceObjects &&
+                 !authoritativeReplacement->replaceObjects ) {
+                authoritativeReplacement->objectEncodingBaselinePrepared =
+                    false;
+            }
+            authoritativeReplacement->replaceObjects |= deferred.replaceObjects;
+            authoritativeReplacement->replaceTimelines |=
+                deferred.replaceTimelines;
+            authoritativeReplacement->replaceMetadata |=
+                deferred.replaceMetadata;
+            authoritativeReplacement->replaceAudioSamples |=
+                deferred.replaceAudioSamples;
+            authoritativeReplacement->replaceAnnotations |=
+                deferred.replaceAnnotations;
+        }
+        const bool preservesActiveBrush =
+            authoritativeSynchronization &&
+            authoritativeReplacement->replaceObjects &&
+            !authoritativeReplacement->replaceTimelines &&
+            !authoritativeReplacement->replaceMetadata &&
+            !authoritativeReplacement->replaceAudioSamples &&
+            m_ctx->brushState.isActive && !m_ctx->isSelecting &&
+            !m_ctx->brushState.replacesExistingObject &&
+            !m_ctx->eraserState.isActive &&
+            m_ctx->draggedEntity == entt::null && !m_ctx->dragInitialNote &&
+            !m_ctx->dragInitialSample;
         if ( authoritativeSynchronization ) publishPendingMutation();
+        const auto latestLocalObjectMutationSequence =
+            m_latestAcceptedLocalObjectMutationSequence.load(
+                std::memory_order_acquire);
+        const bool waitsForLocalMutation =
+            authoritativeSynchronization &&
+            authoritativeReplacement->replaceObjects &&
+            authoritativeReplacement->includedLocalMutationSequence <
+                latestLocalObjectMutationSequence;
+        if ( authoritativeSynchronization &&
+             ((localGestureActive() && !preservesActiveBrush) ||
+              waitsForLocalMutation) ) {
+            // 活跃手势期间把最新权威状态留在命令队列外；旧实现重新入队后会让
+            // Unlimited 逻辑线程持续执行完整 Session 更新。若本地变化尚未包含
+            // 在该状态中，也必须等待带确认序号的新结果，避免画布先回退再恢复。
+            m_deferredAuthoritativeReplacement = *authoritativeReplacement;
+            processed                          = true;
+            continue;
+        }
+        if ( authoritativeSynchronization ) {
+            if ( authoritativeReplacement->replaceObjects &&
+                 authoritativeReplacement->includedLocalMutationSequence >=
+                     latestLocalObjectMutationSequence ) {
+                m_latestAcceptedLocalObjectMutationSequence.store(
+                    authoritativeReplacement->includedLocalMutationSequence,
+                    std::memory_order_release);
+            }
+            m_deferredAuthoritativeReplacement.reset();
+        }
+
+        std::optional<SessionContext::BrushState> preservedBrushState;
+        bool        preservedBrushDragging = false;
+        std::string preservedBrushDragCameraId;
+        if ( preservesActiveBrush ) {
+            // 纯物件权威替换会重置交互缓存；先保存画笔草稿，使远端物件成为
+            // 当前基线后仍可继续原手势并在松键时提交。
+            preservedBrushState.emplace(m_ctx->brushState);
+            preservedBrushDragging     = m_ctx->isDragging;
+            preservedBrushDragCameraId = m_ctx->dragCameraId;
+        }
 
         // 交互命令执行期间临时物化当前 Key 数的坐标布局，结束后恢复配置模板。
         // 这样既能让放置、拖动使用正确坐标，也允许同批命令切换轨道数后重新选择
@@ -1226,6 +1374,11 @@ bool BeatmapSession::processCommands()
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
                     replacedEditorConfig = true;
                 }
+                if constexpr ( std::is_same_v<T, CmdLoadBeatmap> ) {
+                    m_deferredAuthoritativeReplacement.reset();
+                    m_latestAcceptedLocalObjectMutationSequence.store(
+                        0, std::memory_order_release);
+                }
                 if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
@@ -1242,6 +1395,9 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
                                std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                               std::is_same_v<T, CmdSetNoteAnnotation> ||
+                               std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                               std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                                std::is_same_v<T, CmdReplaceBeatmapData> ) {
                     m_ctx->isTransformDirty = true;
                 }
@@ -1285,12 +1441,18 @@ bool BeatmapSession::processCommands()
                                         TR("ui.status.category.beatmap"),
                                         TR("ui.status.beatmap.no_load"));
                     }
-                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ||
-                                      std::is_same_v<T, CmdSaveBeatmapAs> ) {
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmapAs> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}",
                                     TR("ui.status.category.beatmap"),
                                     TR("ui.status.beatmap.saved"));
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ) {
+                    if ( arg.kind == BeatmapSaveKind::Manual ) {
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {}",
+                                        TR("ui.status.category.beatmap"),
+                                        TR("ui.status.beatmap.saved"));
+                    }
                 } else if constexpr ( std::is_same_v<T, CmdMirrorSelected> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}",
@@ -1332,10 +1494,13 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.project.bgm_track_count"),
                                     arg.bgmTrackCount);
                 } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
-                    m_ctx->lastActionMessage =
-                        fmt::format("{} {}",
-                                    TR("ui.status.category.selection"),
-                                    TR("ui.status.selection.all_selected"));
+                    m_ctx->lastActionMessage = fmt::format(
+                        "{} {}",
+                        TR("ui.status.category.selection"),
+                        TR(arg.scope == SelectAllScope::AllTrackAreas
+                               ? "ui.status.selection.all_selected"
+                               : "ui.status.selection."
+                                 "current_track_area_selected"));
                 }
 
                 // --- Session 自己处理的命令 ---
@@ -1345,6 +1510,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdLoadBeatmap> ||
                     std::is_same_v<T, CmdSetCollaborationResources> ||
                     std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
+                    std::is_same_v<T, CmdSetCollaborationClipboardIsolation> ||
                     std::is_same_v<T, CmdSaveBeatmap> ||
                     std::is_same_v<T, CmdSaveBeatmapAs> ||
                     std::is_same_v<T, CmdPackBeatmap> ||
@@ -1411,6 +1577,9 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                    std::is_same_v<T, CmdSetNoteAnnotation> ||
+                    std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                    std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                     std::is_same_v<T, CmdReplaceBeatmapData> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
@@ -1424,6 +1593,11 @@ bool BeatmapSession::processCommands()
                 }
             },
             cmd);
+        if ( preservedBrushState ) {
+            m_ctx->brushState   = std::move(*preservedBrushState);
+            m_ctx->isDragging   = preservedBrushDragging;
+            m_ctx->dragCameraId = std::move(preservedBrushDragCameraId);
+        }
         if ( !replacedEditorConfig ) {
             visual.trackLayout   = baseTrackLayout;
             visual.judgeline_pos = baseJudgmentLinePosition;
@@ -1455,6 +1629,9 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                    std::is_same_v<T, CmdSetNoteAnnotation> ||
+                    std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                    std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                     std::is_same_v<T, CmdReplaceBeatmapData> ||
                     std::is_same_v<T, CmdEndBrush> ||
                     std::is_same_v<T, CmdEndErase> ||
@@ -1473,7 +1650,10 @@ bool BeatmapSession::processCommands()
                 }
 
                 mutationFlags |= actionMutationFlags;
-                if ( m_ctx->m_needsNotesSync ) {
+                if ( m_ctx->m_needsNotesSync &&
+                     !hasBeatmapMutationFlag(
+                         actionMutationFlags,
+                         ::MMM::BeatmapMutationFlags::Annotations) ) {
                     mutationFlags |= ::MMM::BeatmapMutationFlags::Objects;
                 }
                 if ( m_ctx->m_needsTimingsSync ) {
@@ -1497,20 +1677,44 @@ bool BeatmapSession::processCommands()
                         mutationFlags |=
                             ::MMM::BeatmapMutationFlags::AudioSamples;
                     }
+                    if ( arg.replaceAnnotations ) {
+                        mutationFlags |=
+                            ::MMM::BeatmapMutationFlags::Annotations;
+                    }
                 }
             },
             cmd);
         if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
-            SessionUtils::syncBeatmap(*m_ctx);
             auto observer = std::atomic_load_explicit(
                 &m_mutationObserver, std::memory_order_acquire);
             if ( observer ) {
-                observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+                if ( authoritativeReplacement
+                         ->objectEncodingBaselinePrepared ) {
+                    observer->onAuthoritativeBeatmapApplied(
+                        authoritativeReplacement->authoritativeRevision,
+                        authoritativeReplacement
+                            ->includedLocalMutationSequence);
+                } else {
+                    SessionUtils::syncBeatmap(*m_ctx);
+                    observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
+                }
             }
         }
     }
 
     publishPendingMutation();
+    const auto deferredCoversLocalObjects =
+        m_deferredAuthoritativeReplacement &&
+        (!m_deferredAuthoritativeReplacement->replaceObjects ||
+         m_deferredAuthoritativeReplacement->includedLocalMutationSequence >=
+             m_latestAcceptedLocalObjectMutationSequence.load(
+                 std::memory_order_acquire));
+    if ( m_deferredAuthoritativeReplacement && !localGestureActive() &&
+         deferredCoversLocalObjects ) {
+        m_commandQueue.enqueue(
+            LogicCommand(std::move(*m_deferredAuthoritativeReplacement)));
+        m_deferredAuthoritativeReplacement.reset();
+    }
     return processed;
 }
 
@@ -1568,9 +1772,47 @@ void BeatmapSession::handleCommand(
     m_ctx->eraserState.targetEntities.clear();
 }
 
+void BeatmapSession::handleCommand(
+    const CmdSetCollaborationClipboardIsolation& cmd)
+{
+    if ( !cmd.isolated ) {
+        EditorEngine::instance().clearClipboardForContext(m_ctx.get());
+        m_ctx->clipboard.clear();
+        m_ctx->sampleClipboard.clear();
+    }
+    m_ctx->collaborationClipboardIsolated = cmd.isolated;
+    m_ctx->collaborationClipboardScopeId  = cmd.isolated ? cmd.scopeId : 0U;
+}
+
 void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 {
-    if ( !cmd.project || !m_ctx->currentBeatmap ) return;
+    if ( !cmd.project ) {
+        if ( m_ctx->collaborationProject ) {
+            for ( const auto& resource :
+                  m_ctx->collaborationProject->m_audioResources ) {
+                if ( resource.m_type != ::MMM::AudioTrackType::Effect ) {
+                    continue;
+                }
+                Audio::AudioManager::instance().unloadSoundEffect(
+                    resource.m_id);
+            }
+        }
+        m_ctx->collaborationProject.reset();
+        m_ctx->collaborationPathRemap.clear();
+        m_ctx->isAudioTimelineDescriptorDirty           = true;
+        m_ctx->isAudioTimelineActivationPending         = true;
+        m_ctx->isAudioTimelineFingerprintPublishPending = true;
+        EditorEngine::instance().registerCurrentProjectEffectSoundEffects();
+
+        if ( m_ctx->currentBeatmap ) {
+            SessionUtils::updateBackgroundSize(
+                *m_ctx,
+                m_ctx->currentBeatmap->m_baseMapMetadata,
+                EditorEngine::instance().getCurrentProject());
+        }
+        return;
+    }
+    if ( !m_ctx->currentBeatmap ) return;
     m_ctx->collaborationProject                     = cmd.project;
     m_ctx->collaborationPathRemap                   = cmd.pathRemap;
     m_ctx->isAudioTimelineDescriptorDirty           = true;
@@ -1624,7 +1866,8 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             m_ctx->selectedNoteEntities.erase(entity);
         }
 
-        if ( m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote &&
+        if ( (m_ctx->hoveredObjectKind == ChartObjectKind::PlayerNote ||
+              m_ctx->hoveredObjectKind == ChartObjectKind::DraftNote) &&
              m_ctx->hoveredEntity != entt::null &&
              m_ctx->noteRegistry.valid(m_ctx->hoveredEntity) &&
              m_ctx->noteRegistry.all_of<NoteComponent>(m_ctx->hoveredEntity) &&
@@ -1747,17 +1990,19 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             XERROR("SaveBeatmap: failed to save to {}",
                    Config::pathToUtf8(savePath));
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-                .path     = Config::pathToUtf8(savePath),
-                .success  = false,
-                .isExport = false,
+                .path         = Config::pathToUtf8(savePath),
+                .success      = false,
+                .isExport     = false,
+                .presentation = savePresentationFor(cmd.kind),
             });
             restorePendingMetadataAutoSave();
             return;
         }
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-            .path     = Config::pathToUtf8(savePath),
-            .success  = true,
-            .isExport = false,
+            .path         = Config::pathToUtf8(savePath),
+            .success      = true,
+            .isExport     = false,
+            .presentation = savePresentationFor(cmd.kind),
         });
         auto storedSavePath = makeCurrentProjectRelativePath(savePath);
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
@@ -1769,10 +2014,9 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         } else {
             EditorEngine::instance().syncProjectWithFile(savePath);
         }
-        if ( syncSavedMetadataToProjectEntry(
-                 m_ctx->currentBeatmap->m_baseMapMetadata) ) {
-            EditorEngine::instance().saveProject();
-        }
+        static_cast<void>(syncSavedMetadataToProjectEntry(
+            m_ctx->currentBeatmap->m_baseMapMetadata));
+        EditorEngine::instance().saveProject();
     }
 }
 

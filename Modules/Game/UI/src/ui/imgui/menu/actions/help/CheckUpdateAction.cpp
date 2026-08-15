@@ -3,6 +3,7 @@
 #include "config/skin/SkinConfig.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
+#include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
@@ -300,14 +301,14 @@ private:
 
             {
                 Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
                 ImGui::BeginChild("ChangelogScroll",
                                   ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
                                   ImGuiChildFlags_Borders);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                    ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
-                ImGui::TextWrapped("%s", info.changelog.c_str());
-                ImGui::PopStyleVar();
+                renderMarkdown(info.changelog);
                 ImGui::EndChild();
+                ImGui::PopStyleVar();
             }
         }
 

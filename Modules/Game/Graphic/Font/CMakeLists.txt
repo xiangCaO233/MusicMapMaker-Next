@@ -20,7 +20,7 @@ add_test(
     AsciiFontRasterizerTest
     "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/0xProtoNerdFontPropo-Regular.ttf"
     "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMonoCJKsc-Regular.otf"
-)
+    "${CMAKE_BINARY_DIR}/test_output")
 
 # 启动期系统字体解析仅链接当前平台的原生字体查询依赖。
 if(WIN32)

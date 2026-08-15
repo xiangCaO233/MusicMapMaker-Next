@@ -29,6 +29,14 @@ constexpr std::uint64_t DIRECTORY_PROTOCOL_VERSION = 1;
 constexpr std::string_view SIGNALING_PATH = "/mmm-collaboration";
 /// @brief 单条信令消息上限。
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
+/// @brief 单间房卡封面 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
+/// @brief 单条封面上传消息携带的 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_CHUNK_BYTES = 8U * 1024U;
+/// @brief 单次封面上传允许的最大分块数量。
+constexpr std::size_t MAX_ROOM_COVER_CHUNKS =
+    (MAX_ROOM_COVER_BASE64_BYTES + MAX_ROOM_COVER_CHUNK_BYTES - 1U) /
+    MAX_ROOM_COVER_CHUNK_BYTES;
 /// @brief 回调线程允许积压的事件上限。
 constexpr std::size_t MAX_CALLBACK_EVENTS = 8192;
 /// @brief 未声明身份的连接保留时间。
@@ -84,6 +92,36 @@ bool isValidDisplayText(std::string_view value, std::size_t maxBytes)
     });
 }
 
+/// @brief 校验可安全保存在目录内的 Base64 图片文本。
+/// @param value 不含 data URI 前缀的 Base64 数据。
+/// @return 空值或长度、字符集与填充均合法时返回 true。
+bool isValidRoomCoverImage(std::string_view value)
+{
+    if ( value.empty() ) return true;
+    if ( value.size() > MAX_ROOM_COVER_BASE64_BYTES ||
+         value.size() % 4U != 0U ) {
+        return false;
+    }
+
+    std::size_t padding = 0U;
+    for ( std::size_t index = value.size();
+          index > 0U && value[index - 1U] == '=';
+          --index ) {
+        ++padding;
+    }
+    if ( padding > 2U ) return false;
+
+    const std::size_t payloadLength = value.size() - padding;
+    return std::all_of(
+        value.begin(),
+        value.begin() + static_cast<std::ptrdiff_t>(payloadLength),
+        [](char character) {
+            const auto byte = static_cast<unsigned char>(character);
+            return std::isalnum(byte) != 0 || character == '+' ||
+                   character == '/';
+        });
+}
+
 /// @brief 校验只用于房主控制连接的高熵令牌格式。
 /// @param value 输入令牌。
 /// @return 长度和字符集满足约束时返回 true。
@@ -94,6 +132,27 @@ bool isValidOwnerToken(std::string_view value)
         const auto byte = static_cast<unsigned char>(character);
         return std::isalnum(byte) != 0 || character == '-' || character == '_';
     });
+}
+
+/// @brief 校验客户端主程序 SHA-256 构建指纹。
+bool isValidBuildFingerprint(std::string_view value)
+{
+    return value.size() == 64U &&
+           std::all_of(value.begin(), value.end(), [](char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+/// @brief 校验可安全回传给访客的稳定拒绝原因码。
+bool isValidReasonCode(std::string_view value)
+{
+    return !value.empty() && value.size() <= 64U &&
+           std::all_of(value.begin(), value.end(), [](char character) {
+               return (character >= 'a' && character <= 'z') ||
+                      (character >= '0' && character <= '9') ||
+                      character == '_';
+           });
 }
 }  // namespace
 
@@ -169,6 +228,14 @@ public:
         std::string roomName;
         /// @brief 房主展示身份。
         std::string hostCreator;
+        /// @brief 按需下发给目录客户端的 Base64 JPEG 封面缩略图。
+        std::string coverImage;
+        /// @brief 尚未接收完整的 Base64 JPEG 封面缩略图。
+        std::string pendingCoverImage;
+        /// @brief 当前封面上传等待的下一分块序号。
+        std::size_t nextCoverChunkIndex = 0;
+        /// @brief 当前封面上传声明的总分块数。
+        std::size_t expectedCoverChunks = 0;
         /// @brief 仅房主知道的控制令牌。
         std::string ownerToken;
         /// @brief 房主控制 WebSocket。
@@ -191,6 +258,8 @@ public:
         int guestWebSocketId = -1;
         /// @brief 访客展示身份。
         std::string creator;
+        /// @brief 访客主程序二进制的 SHA-256 构建指纹；旧客户端未提交时为空。
+        std::string buildFingerprint;
         /// @brief 请求创建时间。
         std::chrono::steady_clock::time_point createdAt =
             std::chrono::steady_clock::now();
@@ -533,9 +602,15 @@ private:
         if ( type == "list_rooms" ) {
             client.role = ClientRole::Directory;
             sendRoomList(websocketId);
+        } else if ( type == "get_room_cover" &&
+                    client.role == ClientRole::Directory ) {
+            handleGetRoomCover(websocketId, message);
         } else if ( type == "update_room" &&
                     client.role == ClientRole::HostControl ) {
             handleUpdateRoom(websocketId, message);
+        } else if ( type == "set_room_cover" &&
+                    client.role == ClientRole::HostControl ) {
+            handleSetRoomCover(websocketId, message);
         } else if ( type == "create_room" &&
                     client.role == ClientRole::Unknown ) {
             handleCreateRoom(websocketId, message);
@@ -581,6 +656,81 @@ private:
         }
     }
 
+    /// @brief 拒绝可选封面上传但保留已经发布的房间控制连接。
+    void rejectRoomCoverUpload(int websocketId, Room& room,
+                               std::string_view reason)
+    {
+        room.pendingCoverImage.clear();
+        room.nextCoverChunkIndex = 0;
+        room.expectedCoverChunks = 0;
+        XWARN("Collaboration room cover from client {} rejected: {}",
+              websocketId,
+              reason);
+        const nlohmann::json response = {
+            { "type", "room_cover_rejected" },
+            { "version", DIRECTORY_PROTOCOL_VERSION },
+            { "reason", reason },
+        };
+        static_cast<void>(sendJson(websocketId, response));
+    }
+
+    /// @brief 接收房主在房间注册完成后分块提交的可选封面。
+    void handleSetRoomCover(int websocketId, const nlohmann::json& message)
+    {
+        const auto clientIterator = m_clients.find(websocketId);
+        if ( clientIterator == m_clients.end() ) return;
+        const auto roomIterator = m_rooms.find(clientIterator->second.roomId);
+        if ( roomIterator == m_rooms.end() ) return;
+
+        Room&         room = roomIterator->second;
+        std::string   coverChunk;
+        std::uint64_t chunkIndex = 0;
+        std::uint64_t chunkCount = 0;
+        if ( !readStringField(message, "coverChunk", coverChunk) ||
+             !readUnsignedField(message, "chunkIndex", chunkIndex) ||
+             !readUnsignedField(message, "chunkCount", chunkCount) ||
+             coverChunk.empty() ||
+             coverChunk.size() > MAX_ROOM_COVER_CHUNK_BYTES ||
+             chunkCount == 0 || chunkCount > MAX_ROOM_COVER_CHUNKS ||
+             chunkIndex >= chunkCount ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_chunk");
+            return;
+        }
+
+        if ( chunkIndex == 0 ) {
+            room.pendingCoverImage.clear();
+            room.pendingCoverImage.reserve(
+                std::min(MAX_ROOM_COVER_BASE64_BYTES,
+                         static_cast<std::size_t>(chunkCount) *
+                             MAX_ROOM_COVER_CHUNK_BYTES));
+            room.nextCoverChunkIndex = 0;
+            room.expectedCoverChunks = static_cast<std::size_t>(chunkCount);
+        }
+        if ( room.expectedCoverChunks != chunkCount ||
+             room.nextCoverChunkIndex != chunkIndex ||
+             room.pendingCoverImage.size() + coverChunk.size() >
+                 MAX_ROOM_COVER_BASE64_BYTES ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_sequence");
+            return;
+        }
+
+        room.pendingCoverImage.append(coverChunk);
+        ++room.nextCoverChunkIndex;
+        if ( room.nextCoverChunkIndex != room.expectedCoverChunks ) return;
+        if ( !isValidRoomCoverImage(room.pendingCoverImage) ) {
+            rejectRoomCoverUpload(
+                websocketId, room, "invalid_room_cover_image");
+            return;
+        }
+
+        room.coverImage          = std::move(room.pendingCoverImage);
+        room.nextCoverChunkIndex = 0;
+        room.expectedCoverChunks = 0;
+        m_directoryDirty         = true;
+    }
+
     /// @brief 注册一个公开房间和房主控制连接。
     void handleCreateRoom(int websocketId, const nlohmann::json& message)
     {
@@ -592,13 +742,23 @@ private:
         std::string   roomName;
         std::string   creator;
         std::string   ownerToken;
-        std::uint64_t capacity = 0;
+        std::string   coverImage;
+        std::uint64_t capacity      = 0;
+        const auto    coverIterator = message.find("coverImage");
+        if ( coverIterator != message.end() ) {
+            if ( !coverIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_room");
+                return;
+            }
+            coverImage = coverIterator->get_ref<const std::string&>();
+        }
         if ( !readStringField(message, "roomName", roomName) ||
              !readStringField(message, "creator", creator) ||
              !readStringField(message, "ownerToken", ownerToken) ||
              !readUnsignedField(message, "capacity", capacity) ||
              !isValidDisplayText(roomName, 128) ||
              !isValidDisplayText(creator, 64) ||
+             !isValidRoomCoverImage(coverImage) ||
              !isValidOwnerToken(ownerToken) || capacity < 2 || capacity > 8 ) {
             rejectClient(websocketId, "invalid_room");
             return;
@@ -614,6 +774,7 @@ private:
         room.roomId             = roomId;
         room.roomName           = std::move(roomName);
         room.hostCreator        = std::move(creator);
+        room.coverImage         = std::move(coverImage);
         room.ownerToken         = std::move(ownerToken);
         room.controlWebSocketId = websocketId;
         room.capacity           = static_cast<std::size_t>(capacity);
@@ -639,16 +800,53 @@ private:
               m_rooms.at(roomId).hostCreator);
     }
 
+    /// @brief 向目录订阅者按需返回一间房的封面缩略图。
+    void handleGetRoomCover(int websocketId, const nlohmann::json& message)
+    {
+        std::string roomId;
+        if ( !readStringField(message, "roomId", roomId) || roomId.empty() ||
+             roomId.size() > 32U ) {
+            rejectClient(websocketId, "invalid_room_cover_request");
+            return;
+        }
+
+        nlohmann::json response;
+        response["type"]    = "room_cover";
+        response["version"] = DIRECTORY_PROTOCOL_VERSION;
+        response["roomId"]  = roomId;
+        if ( const auto iterator = m_rooms.find(roomId);
+             iterator != m_rooms.end() ) {
+            response["coverImage"] = iterator->second.coverImage;
+        } else {
+            response["coverImage"] = "";
+        }
+        static_cast<void>(sendJson(websocketId, response));
+    }
+
     /// @brief 记录访客加入请求并通知房主建立专用信令通道。
     void handleJoinRoom(int websocketId, const nlohmann::json& message)
     {
         std::string roomId;
         std::string creator;
+        std::string buildFingerprint;
         if ( !readStringField(message, "roomId", roomId) ||
              !readStringField(message, "creator", creator) ||
              !isValidDisplayText(creator, 64) ) {
             rejectClient(websocketId, "invalid_join");
             return;
+        }
+        const auto fingerprintIterator = message.find("buildFingerprint");
+        if ( fingerprintIterator != message.end() ) {
+            if ( !fingerprintIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_join");
+                return;
+            }
+            buildFingerprint =
+                fingerprintIterator->get_ref<const std::string&>();
+            if ( !isValidBuildFingerprint(buildFingerprint) ) {
+                rejectClient(websocketId, "invalid_join");
+                return;
+            }
         }
         const auto roomIterator = m_rooms.find(roomId);
         if ( roomIterator == m_rooms.end() ) {
@@ -678,6 +876,7 @@ private:
         pending.roomId           = roomId;
         pending.guestWebSocketId = websocketId;
         pending.creator          = creator;
+        pending.buildFingerprint = buildFingerprint;
         m_pendingJoins.emplace(requestId, std::move(pending));
 
         Client& client   = m_clients.at(websocketId);
@@ -698,6 +897,9 @@ private:
         requested["roomId"]       = roomId;
         requested["requestId"]    = requestId;
         requested["guestCreator"] = creator;
+        if ( !buildFingerprint.empty() ) {
+            requested["guestBuildFingerprint"] = buildFingerprint;
+        }
         if ( !sendJson(roomIterator->second.controlWebSocketId, requested) ) {
             m_pendingJoins.erase(requestId);
             rejectClient(websocketId, "host_unavailable");
@@ -716,7 +918,6 @@ private:
             rejectClient(websocketId, "invalid_accept");
             return;
         }
-
         const auto roomIterator    = m_rooms.find(roomId);
         const auto pendingIterator = m_pendingJoins.find(requestId);
         if ( roomIterator == m_rooms.end() ||
@@ -765,9 +966,22 @@ private:
         std::string roomId;
         std::string requestId;
         std::string ownerToken;
+        std::string reason = "host_rejected";
         if ( !readStringField(message, "roomId", roomId) ||
              !readStringField(message, "requestId", requestId) ||
              !readStringField(message, "ownerToken", ownerToken) ) {
+            rejectClient(websocketId, "invalid_reject");
+            return;
+        }
+        if ( const auto reasonIterator = message.find("reason");
+             reasonIterator != message.end() ) {
+            if ( !reasonIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_reject");
+                return;
+            }
+            reason = reasonIterator->get_ref<const std::string&>();
+        }
+        if ( !isValidReasonCode(reason) ) {
             rejectClient(websocketId, "invalid_reject");
             return;
         }
@@ -792,7 +1006,7 @@ private:
         nlohmann::json rejected;
         rejected["type"]    = "error";
         rejected["version"] = DIRECTORY_PROTOCOL_VERSION;
-        rejected["reason"]  = "host_rejected";
+        rejected["reason"]  = reason;
         static_cast<void>(sendJson(guestWebSocketId, rejected));
         closeClient(guestWebSocketId);
     }
@@ -901,11 +1115,12 @@ private:
         nlohmann::json rooms = nlohmann::json::array();
         for ( const Room* room : orderedRooms ) {
             nlohmann::json item;
-            item["roomId"]       = room->roomId;
-            item["roomName"]     = room->roomName;
-            item["hostCreator"]  = room->hostCreator;
-            item["participants"] = room->participants;
-            item["capacity"]     = room->capacity;
+            item["roomId"]        = room->roomId;
+            item["roomName"]      = room->roomName;
+            item["hostCreator"]   = room->hostCreator;
+            item["hasCoverImage"] = !room->coverImage.empty();
+            item["participants"]  = room->participants;
+            item["capacity"]      = room->capacity;
             rooms.push_back(std::move(item));
         }
 

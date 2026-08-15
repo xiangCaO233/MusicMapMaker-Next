@@ -7,6 +7,7 @@
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "ui/Icons.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 
 #include <concurrentqueue.h>
 #include <filesystem>
@@ -28,6 +29,11 @@ struct SaveResultPayload {
 
     /// @brief 是否来自另存为或导出流程。
     bool isExport = false;
+
+    /// @brief 保存成功时应采用的界面反馈形式。
+    Event::BeatmapSavePresentation presentation{
+        Event::BeatmapSavePresentation::Transient
+    };
 };
 
 /// @brief 根据保存结果构建用户可见的反馈文本。
@@ -64,9 +70,10 @@ struct SaveResultFeedback::Impl {
                   .subscribe<Event::BeatmapSaveResultEvent>(
                       [this](const Event::BeatmapSaveResultEvent& event) {
                           queue.enqueue(SaveResultPayload{
-                              .path     = event.path,
-                              .success  = event.success,
-                              .isExport = event.isExport,
+                              .path         = event.path,
+                              .success      = event.success,
+                              .isExport     = event.isExport,
+                              .presentation = event.presentation,
                           });
                       }))
     {
@@ -96,11 +103,32 @@ SaveResultFeedback::~SaveResultFeedback() = default;
 
 /// @brief 消费保存结果并更新反馈气泡计时器。
 /// @param deltaSeconds 自上一帧以来经过的秒数。
+/// @param statusMessageSink 自动保存成功时使用的状态栏消息入口。
 /// @warning UI 热路径：每帧仅消费少量事件并更新常量规模状态。
-void SaveResultFeedback::update(float deltaSeconds)
+void SaveResultFeedback::update(float               deltaSeconds,
+                                IStatusMessageSink& statusMessageSink)
 {
     SaveResultPayload payload;
     while ( m_impl->queue.try_dequeue(payload) ) {
+        if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TimedAutoSaveStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.timed_auto_save_success").data(), 2.0f);
+            continue;
+        }
+        if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TriggeredAutoSaveStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.triggered_auto_save_success").data(),
+                2.0f);
+            continue;
+        }
+        if ( payload.success &&
+             payload.presentation == Event::BeatmapSavePresentation::Silent ) {
+            continue;
+        }
         m_impl->displayText =
             std::string(ICON_MMM_SAVE) + "  " + buildSaveResultMessage(payload);
         m_impl->success          = payload.success;

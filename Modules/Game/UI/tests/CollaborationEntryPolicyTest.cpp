@@ -41,11 +41,36 @@ namespace
     }
     return true;
 }
+
+/// @brief 验证会话从访客切换为房主时一定解除遗留的离线只读状态。
+/// @return 只有断线访客只读且房主始终可编辑时返回 true。
+[[nodiscard]] bool testSessionReadOnlyPolicy()
+{
+    using MMM::UI::shouldCollaborationSessionBeReadOnly;
+
+    const bool disconnectedGuest =
+        shouldCollaborationSessionBeReadOnly(true, false);
+    const bool connectedGuest =
+        shouldCollaborationSessionBeReadOnly(true, true);
+    const bool disconnectedHost =
+        shouldCollaborationSessionBeReadOnly(false, false);
+    const bool connectedHost =
+        shouldCollaborationSessionBeReadOnly(false, true);
+    if ( !disconnectedGuest || connectedGuest || disconnectedHost ||
+         connectedHost ) {
+        XERROR("Collaboration session read-only policy was incorrect");
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 运行协作入口项目要求回归测试。
 /// @return 全部断言通过时返回 0。
 int main()
 {
-    return testProjectRequirement() && testGuestSessionIsolation() ? 0 : 1;
+    return testProjectRequirement() && testGuestSessionIsolation() &&
+                   testSessionReadOnlyPolicy()
+               ? 0
+               : 1;
 }

@@ -234,6 +234,26 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证草稿轨发布门禁不会暴露到用户配置。
+/// @return 开关不被序列化且外部配置无法启用时返回 true。
+bool testDraftLaneReleaseGateIsInternal()
+{
+    MMM::Config::EditorSettings source;
+    source.enableDraftLanes = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           external = nlohmann::json{
+        { "enableDraftLanes", true }
+    }.get<MMM::Config::EditorSettings>();
+    if ( encoded.contains("enableDraftLanes") || restored.enableDraftLanes ||
+         external.enableDraftLanes ) {
+        XERROR("Draft lane release gate leaked into user config");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证禁止垂直移动设置可持久化且旧配置保持自由拖动。
 /// @return 开启状态往返不变且缺失字段默认关闭时返回 true。
 bool testVerticalObjectDragConfigRoundTrip()
@@ -309,6 +329,103 @@ bool testSelectedVolumeShortcutRoundTrip()
          !binding.shift || binding.alt || binding.super ||
          legacyBinding.enabled || !legacyBinding.key.empty() ) {
         XERROR("Selected volume shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证添加选中物件批注快捷键可持久化并迁移旧默认组合键。
+/// @return 自定义组合键往返无损且缺失或旧默认字段恢复为 Ctrl+R 时返回 true。
+bool testSelectedAnnotationShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.addSelectedAnnotation =
+        MMM::Config::ShortcutBinding{ true, "N", true, true, false, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    nlohmann::json oldDefaultJson;
+    oldDefaultJson["shortcutConfig"]["addSelectedAnnotation"] =
+        MMM::Config::ShortcutBinding{ true, "A", true, false, true, false };
+    const auto  migrated = oldDefaultJson.get<MMM::Config::EditorSettings>();
+    const auto& binding  = restored.shortcutConfig.addSelectedAnnotation;
+    const auto& legacyBinding   = legacy.shortcutConfig.addSelectedAnnotation;
+    const auto& migratedBinding = migrated.shortcutConfig.addSelectedAnnotation;
+    if ( !binding.enabled || binding.key != "N" || !binding.ctrl ||
+         !binding.shift || binding.alt || binding.super ||
+         !legacyBinding.enabled || legacyBinding.key != "R" ||
+         !legacyBinding.ctrl || legacyBinding.shift || legacyBinding.alt ||
+         legacyBinding.super || !migratedBinding.enabled ||
+         migratedBinding.key != "R" || !migratedBinding.ctrl ||
+         migratedBinding.shift || migratedBinding.alt ||
+         migratedBinding.super ) {
+        XERROR("Selected annotation shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证批注详情显示开关可持久化且旧配置默认关闭。
+/// @return 开关往返无损且缺失字段保持关闭时返回 true。
+bool testAnnotationDetailVisibilityRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.showAnnotationDetails = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( !restored.showAnnotationDetails || legacy.showAnnotationDetails ) {
+        XERROR("Annotation detail visibility did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证播放切换快捷键可持久化且旧配置保持空格默认值。
+/// @return 自定义组合键往返无损且缺失字段恢复为空格时返回 true。
+bool testPlaybackShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.togglePlayback =
+        MMM::Config::ShortcutBinding{ true, "P", true, false, true, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding       = restored.shortcutConfig.togglePlayback;
+    const auto& legacyBinding = legacy.shortcutConfig.togglePlayback;
+    if ( !binding.enabled || binding.key != "P" || !binding.ctrl ||
+         binding.shift || !binding.alt || binding.super ||
+         !legacyBinding.enabled || legacyBinding.key != "Space" ||
+         legacyBinding.ctrl || legacyBinding.shift || legacyBinding.alt ||
+         legacyBinding.super ) {
+        XERROR("Playback shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证快捷键冲突仅匹配完全相同的有效按键组合。
+/// @return 相同组合冲突，禁用、空键位和不同修饰键均不冲突时返回 true。
+bool testShortcutConflictDetection()
+{
+    using MMM::Config::ShortcutBinding;
+    const ShortcutBinding base{ true, "P", true, false, false, false };
+    const ShortcutBinding same{ true, "P", true, false, false, false };
+    const ShortcutBinding shifted{ true, "P", true, true, false, false };
+    const ShortcutBinding disabled{ false, "P", true, false, false, false };
+    const ShortcutBinding empty{ true, "", true, false, false, false };
+
+    if ( !MMM::Config::shortcutBindingsConflict(base, same) ||
+         MMM::Config::shortcutBindingsConflict(base, shifted) ||
+         MMM::Config::shortcutBindingsConflict(base, disabled) ||
+         MMM::Config::shortcutBindingsConflict(base, empty) ) {
+        XERROR("Shortcut conflict detection did not match exact bindings");
         return false;
     }
     return true;
@@ -565,9 +682,14 @@ int main()
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
+                   testDraftLaneReleaseGateIsInternal() &&
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
+                   testSelectedAnnotationShortcutRoundTrip() &&
+                   testAnnotationDetailVisibilityRoundTrip() &&
+                   testPlaybackShortcutRoundTrip() &&
+                   testShortcutConflictDetection() &&
                    testRenderingDefaultsReset() &&
                    testBackgroundSpectrumRoundTrip() &&
                    testLegacyBackgroundSpectrumMigration() &&

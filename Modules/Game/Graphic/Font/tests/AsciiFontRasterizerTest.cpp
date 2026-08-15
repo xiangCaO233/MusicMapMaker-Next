@@ -5,7 +5,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
+#include <string>
 
 namespace
 {
@@ -37,20 +39,57 @@ bool hasTimeGlyphBitmaps(const MMM::Graphic::RasterizedAsciiFont& font)
     return true;
 }
 
+/// @brief 在测试结束时清理精确的字体路径回归目录。
+struct TestDirectoryCleanup {
+    /// @brief 待清理目录。
+    std::filesystem::path path;
+
+    /// @brief 删除本测试创建的目录。
+    ~TestDirectoryCleanup()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+};
+
 }  // namespace
 
 /// @brief 使用默认皮肤 ASCII 字体验证全部提示字号的独立 FreeType 栅格化结果。
 /// @param argc 参数数量。
-/// @param argv 第一个参数为字体文件 UTF-8 路径。
+/// @param argv 依次提供 ASCII 字体、CJK 字体和测试输出目录的 UTF-8 路径。
 /// @return 全部字体度量、时间字形位图和小字号选择有效时返回 0。
 int main(int argc, char** argv)
 {
-    if ( argc != 3 || !argv[1] || !argv[2] ) {
+    if ( argc != 4 || !argv[1] || !argv[2] || !argv[3] ) {
         return 1;
     }
 
+    const auto unicodePathRoot = MMM::Config::utf8ToPath(argv[3]) /
+                                 MMM::Config::utf8ToPath("字体栅格化测试") /
+                                 MMM::Config::utf8ToPath("中文用户目录");
+    TestDirectoryCleanup cleanup{ unicodePathRoot.parent_path() };
+    std::error_code      fileError;
+    std::filesystem::create_directories(unicodePathRoot, fileError);
+    if ( fileError ) return 8;
+
+    const auto fontPath =
+        unicodePathRoot / MMM::Config::utf8ToPath("ASCII字体.ttf");
+    const auto unicodeFontPath =
+        unicodePathRoot / MMM::Config::utf8ToPath("中文字体.otf");
+    std::filesystem::copy_file(
+        MMM::Config::utf8ToPath(argv[1]),
+        fontPath,
+        std::filesystem::copy_options::overwrite_existing,
+        fileError);
+    if ( fileError ) return 9;
+    std::filesystem::copy_file(
+        MMM::Config::utf8ToPath(argv[2]),
+        unicodeFontPath,
+        std::filesystem::copy_options::overwrite_existing,
+        fileError);
+    if ( fileError ) return 10;
+
     MMM::Common::AsciiFontAtlasMetrics atlas;
-    const auto fontPath = MMM::Config::utf8ToPath(argv[1]);
     for ( std::size_t tierIndex = 0U;
           tierIndex < MMM::Common::ASCII_FONT_RASTER_TIER_COUNT;
           ++tierIndex ) {
@@ -87,8 +126,7 @@ int main(int argc, char** argv)
     };
     const auto unicodeFont =
         MMM::Graphic::AsciiFontRasterizer::rasterizeUnicode(
-            MMM::Config::utf8ToPath(argv[2]),
-            std::span<const std::uint32_t>(cjkCodepoints));
+            unicodeFontPath, std::span<const std::uint32_t>(cjkCodepoints));
     if ( !unicodeFont || !unicodeFont->metrics.valid ||
          unicodeFont->metrics.glyphs.size() != cjkCodepoints.size() ||
          unicodeFont->glyphs.size() != cjkCodepoints.size() ) {

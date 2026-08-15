@@ -433,7 +433,9 @@ struct ProjectSettings {
     std::string m_lastOpenedBeatmap;
 
     /// @brief 项目打开时应用的调色方案；空字符串表示继承软件默认。
-    std::string m_colorPaletteSchemeName;
+    std::string m_colorPaletteSchemeName{
+        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+    };
 
     /// @brief 项目级工作区状态。
     ProjectWorkspaceState m_workspace;
@@ -484,7 +486,8 @@ struct ProjectSettings {
         settings.m_lastOpenedBeatmap =
             j.value("m_lastOpenedBeatmap", std::string{});
         settings.m_colorPaletteSchemeName =
-            j.value("m_colorPaletteSchemeName", std::string{});
+            j.value("m_colorPaletteSchemeName",
+                    std::string(Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
         settings.m_workspace = j.value("m_workspace", ProjectWorkspaceState{});
     }
 };

@@ -261,7 +261,9 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "mirror", config.mirror },
         { "mirrorPaste", config.mirrorPaste },
         { "editSelectedVolume", config.editSelectedVolume },
+        { "addSelectedAnnotation", config.addSelectedAnnotation },
         { "deleteSelected", config.deleteSelected },
+        { "togglePlayback", config.togglePlayback },
         { "toggleReverseScroll", config.toggleReverseScroll },
         { "toggleScrollSnap", config.toggleScrollSnap },
         { "toggleSnapFloor", config.toggleSnapFloor },
@@ -288,8 +290,18 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
     config.mirrorPaste = json.value("mirrorPaste", defaults.mirrorPaste);
     config.editSelectedVolume =
         json.value("editSelectedVolume", defaults.editSelectedVolume);
+    config.addSelectedAnnotation =
+        json.value("addSelectedAnnotation", defaults.addSelectedAnnotation);
+    const ShortcutBinding legacyAnnotationShortcut{ true,  "A",  true,
+                                                    false, true, false };
+    if ( shortcutBindingsConflict(config.addSelectedAnnotation,
+                                  legacyAnnotationShortcut) ) {
+        config.addSelectedAnnotation = defaults.addSelectedAnnotation;
+    }
     config.deleteSelected =
         json.value("deleteSelected", defaults.deleteSelected);
+    config.togglePlayback =
+        json.value("togglePlayback", defaults.togglePlayback);
     config.toggleReverseScroll =
         json.value("toggleReverseScroll", defaults.toggleReverseScroll);
     config.toggleScrollSnap =
@@ -411,6 +423,68 @@ void from_json(const nlohmann::json& json, SaveFormatPreference& preference)
     }
 }
 
+void to_json(nlohmann::json& json, const AutoSaveMode& mode)
+{
+    switch ( mode ) {
+    case AutoSaveMode::Timed: json = "Timed"; break;
+    case AutoSaveMode::EventTriggered: json = "EventTriggered"; break;
+    case AutoSaveMode::Disabled:
+    default: json = "Disabled"; break;
+    }
+}
+
+void from_json(const nlohmann::json& json, AutoSaveMode& mode)
+{
+    mode = AutoSaveMode::Disabled;
+    if ( !json.is_string() ) return;
+
+    const auto value = json.get<std::string>();
+    if ( value == "Timed" ) {
+        mode = AutoSaveMode::Timed;
+    } else if ( value == "EventTriggered" ) {
+        mode = AutoSaveMode::EventTriggered;
+    }
+}
+
+void to_json(nlohmann::json& json, const AutoSaveIntervalUnit& unit)
+{
+    json = unit == AutoSaveIntervalUnit::Minutes ? "Minutes" : "Seconds";
+}
+
+void from_json(const nlohmann::json& json, AutoSaveIntervalUnit& unit)
+{
+    unit = AutoSaveIntervalUnit::Seconds;
+    if ( json.is_string() && json.get<std::string>() == "Minutes" ) {
+        unit = AutoSaveIntervalUnit::Minutes;
+    }
+}
+
+void to_json(nlohmann::json& json, const AutoSaveConfig& config)
+{
+    json = nlohmann::json{
+        { "mode", config.mode },
+        { "intervalUnit", config.intervalUnit },
+        { "intervalValue", std::clamp(config.intervalValue, 5, 60) },
+        { "onObjectModified", config.onObjectModified },
+        { "onBeatmapSwitch", config.onBeatmapSwitch },
+        { "onImGuiWindowFocusLost", config.onImGuiWindowFocusLost },
+        { "onNativeWindowFocusLost", config.onNativeWindowFocusLost },
+    };
+}
+
+void from_json(const nlohmann::json& json, AutoSaveConfig& config)
+{
+    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.intervalUnit =
+        json.value("intervalUnit", AutoSaveIntervalUnit::Seconds);
+    config.intervalValue = std::clamp(json.value("intervalValue", 30), 5, 60);
+    config.onObjectModified       = json.value("onObjectModified", true);
+    config.onBeatmapSwitch        = json.value("onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+    config.onNativeWindowFocusLost =
+        json.value("onNativeWindowFocusLost", true);
+}
+
 void to_json(nlohmann::json& json, const TimeFormatPreference& preference)
 {
     json = "Clock";
@@ -508,6 +582,39 @@ void from_json(const nlohmann::json&            json,
     }
 }
 
+void to_json(nlohmann::json& json, const CollaborationServerSettings& settings)
+{
+    json = nlohmann::json{ { "address", settings.address },
+                           { "signalingPort", settings.signalingPort },
+                           { "useTls", settings.useTls } };
+}
+
+void from_json(const nlohmann::json&        json,
+               CollaborationServerSettings& settings)
+{
+    settings = CollaborationServerSettings{};
+    if ( !json.is_object() ) return;
+
+    if ( const auto address = json.find("address");
+         address != json.end() && address->is_string() ) {
+        const auto value = address->get<std::string>();
+        if ( !value.empty() && value.size() <= 255U ) {
+            settings.address = value;
+        }
+    }
+    if ( const auto port = json.find("signalingPort");
+         port != json.end() && port->is_number_unsigned() ) {
+        const auto value = port->get<std::uint64_t>();
+        if ( value > 0U && value <= 65535U ) {
+            settings.signalingPort = static_cast<std::uint16_t>(value);
+        }
+    }
+    if ( const auto useTls = json.find("useTls");
+         useTls != json.end() && useTls->is_boolean() ) {
+        settings.useTls = useTls->get<bool>();
+    }
+}
+
 void to_json(nlohmann::json& json, const EditorSettings& settings)
 {
     json = nlohmann::json{
@@ -537,6 +644,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
         { "collaborationViewportRenderMode",
           settings.collaborationViewportRenderMode },
+        { "collaborationServer", settings.collaborationServer },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
           settings.pgoProfileUploadConsentAsked },
@@ -555,6 +663,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "marqueeThickness", settings.marqueeThickness },
         { "marqueeRounding", settings.marqueeRounding },
         { "saveFormatPreference", settings.saveFormatPreference },
+        { "autoSave", settings.autoSave },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", settings.timeFormatPreference },
@@ -579,6 +688,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "showTimelineWindow", settings.showTimelineWindow },
         { "timelineProfessionalMode", settings.timelineProfessionalMode },
         { "showPreviewWindow", settings.showPreviewWindow },
+        { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
         { "fixedToolWindow", settings.fixedToolWindow },
         { "showManagerLabels", settings.showManagerLabels },
@@ -646,6 +756,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.collaborationViewportRenderMode =
         json.value("collaborationViewportRenderMode",
                    CollaborationViewportRenderMode::Filled);
+    settings.collaborationServer =
+        json.value("collaborationServer", CollaborationServerSettings{});
     settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
     settings.pgoProfileUploadConsentAsked = json.value(
         "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));
@@ -667,6 +779,7 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.marqueeRounding  = json.value("marqueeRounding", 0.0f);
     settings.saveFormatPreference =
         json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);
     settings.timeFormatPreference =
@@ -701,11 +814,12 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.showTimelineWindow   = json.value("showTimelineWindow", true);
     settings.timelineProfessionalMode =
         json.value("timelineProfessionalMode", false);
-    settings.showPreviewWindow = json.value("showPreviewWindow", true);
-    settings.showToolLabels    = json.value("showToolLabels", false);
-    settings.fixedToolWindow   = json.value("fixedToolWindow", true);
-    settings.showManagerLabels = json.value("showManagerLabels", true);
-    settings.aesthetics        = json.value("aesthetics", UIAestheticsConfig());
+    settings.showPreviewWindow     = json.value("showPreviewWindow", true);
+    settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
+    settings.showToolLabels        = json.value("showToolLabels", false);
+    settings.fixedToolWindow       = json.value("fixedToolWindow", true);
+    settings.showManagerLabels     = json.value("showManagerLabels", true);
+    settings.aesthetics    = json.value("aesthetics", UIAestheticsConfig());
     settings.colorPalettes = json.value("colorPalettes", ColorPaletteConfig());
     settings.defaultColorPaletteSchemeName =
         json.value("defaultColorPaletteSchemeName",

@@ -165,6 +165,27 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
         }
     };
 
+    /// @brief 从 MMM 玩家物件对象加载有界编辑器注释。
+    auto loadNoteAnnotation = [](Note& note, const json& noteJson) {
+        auto annotationIt = noteJson.find("annotation");
+        if ( annotationIt == noteJson.end() || !annotationIt->is_string() ) {
+            return;
+        }
+        const auto& annotation = annotationIt->get_ref<const std::string&>();
+        if ( annotation.size() <= MAX_NOTE_ANNOTATION_BYTES ) {
+            note.m_annotation = annotation;
+        }
+    };
+
+    /// @brief 从 MMM 物件对象加载可选稳定协作标识。
+    auto loadNoteCollaborationIdentity = [](Note& note, const json& noteJson) {
+        const std::string identity =
+            readMMMString(noteJson, "collaboration_id");
+        if ( identity.size() <= MAX_BEATMAP_ANNOTATION_ID_BYTES ) {
+            note.m_collaborationId = identity;
+        }
+    };
+
     /// @brief 从 MMM 玩家物件对象读取可选命中采样绑定。
     auto readNoteSampleBinding =
         [](const json& noteJson) -> std::optional<AudioSampleBinding> {
@@ -361,6 +382,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 audioReferenceIt->get_ref<const std::string&>();
 
             AudioSampleEvent& sample = beatMap.m_audioSamples.emplace_back();
+            const std::string sampleIdentity =
+                readMMMString(sampleJson, "collaboration_id");
+            if ( sampleIdentity.size() <= MAX_BEATMAP_ANNOTATION_ID_BYTES ) {
+                sample.m_collaborationId = sampleIdentity;
+            }
             sample.m_timestamp = readMMMDouble(sampleJson, "timestamp", 0.0);
             sample.m_offsetMs  = readMMMInt64(
                 sampleJson, "offset_ms", readMMMInt64(sampleJson, "offset", 0));
@@ -470,6 +496,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 loadNoteSampleBinding(poly, nJson);
 
                 loadNoteMetadata(poly, nJson);
+                loadNoteAnnotation(poly, nJson);
+                loadNoteCollaborationIdentity(poly, nJson);
 
                 struct TempSub {
                     NoteType type;
@@ -479,11 +507,30 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     int      dtrack;
                     /// @brief 子物件的可选命中采样绑定。
                     std::optional<AudioSampleBinding> sampleBinding;
+                    /// @brief 子物件的独立编辑器注释。
+                    std::string annotation;
+                    /// @brief 子物件的稳定协作标识。
+                    std::string collaborationId;
                 };
                 std::vector<TempSub> tempSubs;
+                bool preserveAnnotatedStructure = !poly.m_annotation.empty();
 
                 auto subNotesIt = nJson.find("sub_notes");
                 if ( subNotesIt != nJson.end() && subNotesIt->is_array() ) {
+                    preserveAnnotatedStructure =
+                        preserveAnnotatedStructure ||
+                        std::any_of(
+                            subNotesIt->begin(),
+                            subNotesIt->end(),
+                            [](const json& subNoteJson) {
+                                const auto annotationIt =
+                                    subNoteJson.find("annotation");
+                                return annotationIt != subNoteJson.end() &&
+                                       annotationIt->is_string() &&
+                                       !annotationIt
+                                            ->get_ref<const std::string&>()
+                                            .empty();
+                            });
                     for ( const auto& snJson : *subNotesIt ) {
                         if ( !snJson.is_object() ) continue;
                         std::string stype =
@@ -494,11 +541,27 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         sn.duration  = 0.0;
                         sn.dtrack    = 0;
                         sn.sampleBinding = readNoteSampleBinding(snJson);
-
+                        const std::string annotation =
+                            readMMMString(snJson, "annotation");
+                        if ( annotation.size() <= MAX_NOTE_ANNOTATION_BYTES ) {
+                            sn.annotation = annotation;
+                        }
+                        sn.collaborationId =
+                            readMMMString(snJson, "collaboration_id");
+                        if ( sn.collaborationId.size() >
+                             MAX_BEATMAP_ANNOTATION_ID_BYTES ) {
+                            sn.collaborationId.clear();
+                        }
+                        preserveAnnotatedStructure =
+                            preserveAnnotatedStructure ||
+                            !sn.collaborationId.empty();
                         if ( stype == "hold" ) {
                             sn.duration =
                                 readMMMDouble(snJson, "duration", 0.0);
-                            if ( sn.duration < 1e-4 ) continue;
+                            if ( sn.duration < 1e-4 &&
+                                 !preserveAnnotatedStructure ) {
+                                continue;
+                            }
                             sn.type = NoteType::HOLD;
                         } else if ( stype == "flick" ) {
                             sn.type   = NoteType::FLICK;
@@ -510,7 +573,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     }
 
                     // 迭代清洗逻辑
-                    bool changed = true;
+                    bool changed = !preserveAnnotatedStructure;
                     while ( changed ) {
                         changed = false;
 
@@ -565,17 +628,20 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 }
 
                 // 根据清洗后的结果决定最终去向
-                if ( tempSubs.empty() ) {
+                if ( tempSubs.empty() && !preserveAnnotatedStructure ) {
                     // 彻底退化为普通 Note
                     Note& n       = beatMap.m_noteData.notes.emplace_back();
                     n.m_type      = NoteType::NOTE;
                     n.m_timestamp = poly.m_timestamp;
                     n.m_track     = poly.m_track;
                     applyNoteSampleBinding(n, poly.getSampleBinding());
-                    n.m_metadata = poly.m_metadata;
+                    n.m_metadata        = poly.m_metadata;
+                    n.m_annotation      = poly.m_annotation;
+                    n.m_collaborationId = poly.m_collaborationId;
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
-                } else if ( tempSubs.size() == 1 ) {
+                } else if ( tempSubs.size() == 1 &&
+                            !preserveAnnotatedStructure ) {
                     // 退化为单一物件
                     const auto& s = tempSubs[0];
                     if ( s.type == NoteType::HOLD ) {
@@ -588,7 +654,9 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        h.m_metadata = poly.m_metadata;
+                        h.m_metadata        = poly.m_metadata;
+                        h.m_annotation      = poly.m_annotation;
+                        h.m_collaborationId = poly.m_collaborationId;
                     } else if ( s.type == NoteType::FLICK ) {
                         Flick& f = beatMap.m_noteData.flicks.emplace_back();
                         f.m_type = NoteType::FLICK;
@@ -599,7 +667,9 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        f.m_metadata = poly.m_metadata;
+                        f.m_metadata        = poly.m_metadata;
+                        f.m_annotation      = poly.m_annotation;
+                        f.m_collaborationId = poly.m_collaborationId;
                     } else {
                         Note& n       = beatMap.m_noteData.notes.emplace_back();
                         n.m_type      = NoteType::NOTE;
@@ -609,7 +679,9 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                                s.sampleBinding
                                                    ? s.sampleBinding
                                                    : poly.getSampleBinding());
-                        n.m_metadata = poly.m_metadata;
+                        n.m_metadata        = poly.m_metadata;
+                        n.m_annotation      = poly.m_annotation;
+                        n.m_collaborationId = poly.m_collaborationId;
                     }
                     beatMap.m_noteData.polylines
                         .pop_back();  // 移除预先创建的空壳
@@ -619,23 +691,37 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         if ( s.type == NoteType::HOLD ) {
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
-                            h.m_timestamp = s.timestamp;
-                            h.m_track     = s.track;
-                            h.m_duration  = s.duration;
-                            h.m_isSubNote = true;
+                            h.m_timestamp       = s.timestamp;
+                            h.m_track           = s.track;
+                            h.m_duration        = s.duration;
+                            h.m_isSubNote       = true;
+                            h.m_annotation      = s.annotation;
+                            h.m_collaborationId = s.collaborationId;
                             applyNoteSampleBinding(h, s.sampleBinding);
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
                         } else if ( s.type == NoteType::FLICK ) {
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
-                            f.m_timestamp = s.timestamp;
-                            f.m_track     = s.track;
-                            f.m_dtrack    = s.dtrack;
-                            f.m_isSubNote = true;
+                            f.m_timestamp       = s.timestamp;
+                            f.m_track           = s.track;
+                            f.m_dtrack          = s.dtrack;
+                            f.m_isSubNote       = true;
+                            f.m_annotation      = s.annotation;
+                            f.m_collaborationId = s.collaborationId;
                             applyNoteSampleBinding(f, s.sampleBinding);
                             poly.m_subNotes.push_back(f);
                             poly.m_subFlicks.push_back(f);
+                        } else {
+                            Note& n  = beatMap.m_noteData.notes.emplace_back();
+                            n.m_type = NoteType::NOTE;
+                            n.m_timestamp       = s.timestamp;
+                            n.m_track           = s.track;
+                            n.m_isSubNote       = true;
+                            n.m_annotation      = s.annotation;
+                            n.m_collaborationId = s.collaborationId;
+                            applyNoteSampleBinding(n, s.sampleBinding);
+                            poly.m_subNotes.push_back(n);
                         }
                     }
                     // 更新 Polyline 的锚点信息为第一个子物件
@@ -657,6 +743,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 h.m_duration  = readMMMDouble(nJson, "duration", 0.0);
                 loadNoteSampleBinding(h, nJson);
                 loadNoteMetadata(h, nJson);
+                loadNoteAnnotation(h, nJson);
+                loadNoteCollaborationIdentity(h, nJson);
             } else if ( type == "flick" ) {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
                 if ( subNoteKeys.count({ readMMMDouble(nJson, "timestamp", 0.0),
@@ -670,6 +758,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 f.m_dtrack    = readMMMInt(nJson, "dtrack", 0);
                 loadNoteSampleBinding(f, nJson);
                 loadNoteMetadata(f, nJson);
+                loadNoteAnnotation(f, nJson);
+                loadNoteCollaborationIdentity(f, nJson);
             } else {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
                 if ( subNoteKeys.count({ readMMMDouble(nJson, "timestamp", 0.0),
@@ -682,7 +772,57 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 n.m_track     = readMMMU32(nJson, "track", 0);
                 loadNoteSampleBinding(n, nJson);
                 loadNoteMetadata(n, nJson);
+                loadNoteAnnotation(n, nJson);
+                loadNoteCollaborationIdentity(n, nJson);
             }
+        }
+    }
+
+    // 5. 多批注。无效或重复记录被忽略，避免损坏文件阻断谱面载入。
+    auto annotationIt = root.find("annotations");
+    if ( annotationIt != root.end() && annotationIt->is_array() ) {
+        std::set<std::string> annotationIds;
+        for ( const auto& annotationJson : *annotationIt ) {
+            if ( beatMap.m_annotations.size() >= MAX_BEATMAP_ANNOTATION_COUNT ||
+                 !annotationJson.is_object() ) {
+                break;
+            }
+            BeatmapAnnotation annotation;
+            annotation.m_id       = readMMMString(annotationJson, "id");
+            annotation.m_targetId = readMMMString(annotationJson, "target_id");
+            annotation.m_timestamp =
+                readMMMDouble(annotationJson, "timestamp", 0.0);
+            annotation.m_author  = readMMMString(annotationJson, "author");
+            annotation.m_content = readMMMString(annotationJson, "content");
+
+            const std::string targetKind =
+                readMMMString(annotationJson, "target_kind", "timestamp");
+            if ( targetKind == "player_object" ) {
+                annotation.m_targetKind =
+                    BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+            } else if ( targetKind == "audio_sample" ) {
+                annotation.m_targetKind =
+                    BeatmapAnnotationTargetKind::AUDIO_SAMPLE;
+            } else if ( targetKind != "timestamp" ) {
+                continue;
+            }
+
+            if ( annotation.m_id.empty() ||
+                 annotation.m_id.size() > MAX_BEATMAP_ANNOTATION_ID_BYTES ||
+                 annotation.m_targetId.size() >
+                     MAX_BEATMAP_ANNOTATION_ID_BYTES ||
+                 annotation.m_author.size() >
+                     MAX_BEATMAP_ANNOTATION_AUTHOR_BYTES ||
+                 annotation.m_content.empty() ||
+                 annotation.m_content.size() >
+                     MAX_BEATMAP_ANNOTATION_CONTENT_BYTES ||
+                 !annotationIds.insert(annotation.m_id).second ||
+                 (annotation.m_targetKind !=
+                      BeatmapAnnotationTargetKind::TIMESTAMP &&
+                  annotation.m_targetId.empty()) ) {
+                continue;
+            }
+            beatMap.m_annotations.push_back(std::move(annotation));
         }
     }
 

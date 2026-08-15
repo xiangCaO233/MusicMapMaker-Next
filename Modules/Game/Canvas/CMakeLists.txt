@@ -62,6 +62,21 @@ target_include_directories(CanvasTabTitleTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
 
+# 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。
+mmm_add_test_executable(Canvas CanvasContentVisibilityTest
+                        tests/CanvasContentVisibilityTest.cpp)
+target_include_directories(CanvasContentVisibilityTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CanvasContentVisibilityTest COMMAND CanvasContentVisibilityTest)
+
+# 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。
+mmm_add_test_executable(Canvas CanvasBlockedGestureTest
+                        tests/CanvasBlockedGestureTest.cpp)
+target_include_directories(CanvasBlockedGestureTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CanvasBlockedGestureTest PRIVATE Common)
+add_test(NAME CanvasBlockedGestureTest COMMAND CanvasBlockedGestureTest)
+
 # Timeline Timing 悬浮提示使用纯映射，独立覆盖界面术语与数值单位。
 mmm_add_test_executable(Canvas TimelineTimingTooltipTest
                         tests/TimelineTimingTooltipTest.cpp)
@@ -69,3 +84,26 @@ target_include_directories(TimelineTimingTooltipTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(TimelineTimingTooltipTest PRIVATE MMM)
 add_test(NAME TimelineTimingTooltipTest COMMAND TimelineTimingTooltipTest)
+
+# 主画布悬浮层选择使用纯候选去重，覆盖同一物件的多个相交命中框。
+mmm_add_test_executable(Canvas HoverLayerSelectionTest
+                        tests/HoverLayerSelectionTest.cpp)
+target_include_directories(HoverLayerSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(HoverLayerSelectionTest PRIVATE Common 3rd_entt)
+add_test(NAME HoverLayerSelectionTest COMMAND HoverLayerSelectionTest)
+
+# 批注目标提示只在详情卡片悬浮时解析，覆盖时间戳、折线子物件与自动采样。
+mmm_add_test_executable(Canvas AnnotationTargetHintTest
+                        tests/AnnotationTargetHintTest.cpp)
+target_include_directories(AnnotationTargetHintTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AnnotationTargetHintTest PRIVATE Logic Common 3rd_entt)
+add_test(NAME AnnotationTargetHintTest COMMAND AnnotationTargetHintTest)
+
+# 批注详情卡片布局是无图形依赖的纯计算，覆盖拥挤标记的避让与边界约束。
+mmm_add_test_executable(Canvas AnnotationDetailLayoutTest
+                        tests/AnnotationDetailLayoutTest.cpp)
+target_include_directories(AnnotationDetailLayoutTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AnnotationDetailLayoutTest COMMAND AnnotationDetailLayoutTest)

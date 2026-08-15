@@ -6,13 +6,15 @@
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
 namespace MMM::Config
 {
+struct AutoSaveConfig;
 struct EditorConfig;
-}
+}  // namespace MMM::Config
 namespace MMM::Logic
 {
 
@@ -50,6 +52,27 @@ public:
     /// @return 离线只读时返回 true。
     [[nodiscard]] bool isCollaborationOfflineReadOnly() const;
 
+    /// @brief 设置谱面剪贴板是否限制在当前协作 Session 内。
+    /// @param isolated 加入协作房间时为 true，退出房间时为 false。
+    /// @warning UI/逻辑跨线程低频调用；原子状态用于在系统剪贴板导入前即时
+    /// 拦截，具体范围切换仍由逻辑命令按序完成。
+    void setCollaborationClipboardIsolated(bool isolated);
+
+    /// @brief 查询当前会话是否启用了协作剪贴板隔离。
+    /// @return 禁止系统剪贴板交换时返回 true。
+    [[nodiscard]] bool isCollaborationClipboardIsolated() const;
+
+    /// @brief 设置当前协作身份可修改的谱面数据类别。
+    /// @param allowedFlags 房主下发权限映射得到的类别位；离线会话传 All。
+    /// @warning UI/逻辑跨线程低频调用；命令入队热路径读取单个原子字节，权限
+    /// 收紧时额外排队一次交互取消命令。
+    void setCollaborationAllowedMutationFlags(
+        ::MMM::BeatmapMutationFlags allowedFlags);
+
+    /// @brief 查询当前协作身份可修改的谱面数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags
+    collaborationAllowedMutationFlags() const;
+
     /// @brief 设置低频谱面领域变化观察者。
     /// @param observer 新观察者；为空时恢复纯离线会话。
     /// @param publishCurrentSnapshot 是否在下一次逻辑更新发布当前完整谱面；
@@ -85,6 +108,27 @@ public:
     /// @warning 逻辑热路径：每个 Session update
     /// 调度前调用；只读取会话热状态和队列近似长度。
     bool needsRealtimeUpdate() const;
+
+    /// @brief 判断会话是否需要在 Unlimited 模式下逐逻辑轮次推进。
+    /// @return 播放时钟或同音轨播放跟随正在推进时返回 true。
+    /// @warning 逻辑热路径：持有 SessionRegistry 锁时调用；只读取播放状态。
+    /// 交互命令由无锁命令队列立即唤醒，视觉动画按既有维护间隔推进，不得在此
+    /// 扩大为全部 needsRealtimeUpdate 状态以免重新引入 UI 锁饥饿。
+    bool needsUnlimitedPolling() const;
+
+    /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
+    /// @param trigger 触发自动保存的编辑器事件。
+    /// @warning UI 线程或 Session 切换路径低频写入，逻辑线程每次 update
+    /// 只交换一个原子位掩码；用于避免在 UI/GLFW 回调中执行文件 I/O。
+    void requestAutoSave(AutoSaveTrigger trigger);
+
+    /// @brief 判断后台会话是否仍需轮询自动保存期限或事件请求。
+    /// @param config 当前软件全局自动保存配置。
+    /// @return 存在事件请求，或定时模式下谱面未保存时返回 true。
+    /// @warning 逻辑调度热路径：仅读取原子位、布尔状态和撤销栈脏标记，
+    /// 不访问文件系统或遍历 ECS。
+    [[nodiscard]] bool needsAutoSavePolling(
+        const Config::AutoSaveConfig& config) const;
 
     /// @brief 判断会话是否仍需低频轮询元数据尾随保存。
     /// @return 存在等待空闲期的元数据保存时返回 true。
@@ -125,10 +169,20 @@ private:
     void flushDeferredMetadataAutoSave(double currentSysTime,
                                        bool   isEditingBusy);
 
+    /// @brief 消费全局配置允许的事件请求并推进定时/事件自动保存。
+    /// @param currentSysTime 当前单调系统时间（秒）。
+    /// @param isEditingBusy 当前会话是否仍处于连续交互或命令堆积状态。
+    /// @param config 当前软件全局自动保存配置。
+    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅到期且存在未保存
+    /// 修改的低频分支允许同步谱面并访问文件系统。
+    void flushConfiguredAutoSave(double currentSysTime, bool isEditingBusy,
+                                 const Config::AutoSaveConfig& config);
+
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
     /// @warning 逻辑热路径：每个 Session update 调用；普通帧只检查空队列，
-    /// 仅低频元数据命令允许同步自动采样领域数据。
+    /// 仅低频元数据命令允许同步自动采样领域数据，纯物件协作同步期间可复制一次
+    /// 活跃画笔草稿以保持未结束手势。
     bool processCommands();
 
     /// @brief 在入队与消费边界统一拦截离线房间谱面的编辑命令。
@@ -137,6 +191,14 @@ private:
     /// @warning 命令热路径：只读取原子门闩、执行 variant 类型分派，并在每个
     /// 离线周期首次拦截时发布一次事件。
     [[nodiscard]] bool blockCollaborationOfflineEdit(const LogicCommand& cmd);
+
+    /// @brief 在入队与消费边界按房主权限拦截本地谱面变更命令。
+    /// @param cmd 待检查命令。
+    /// @return 命令需要至少一个未授权数据类别时返回 true。
+    /// @warning 命令热路径：只读取一个原子字节并执行 variant 类型分派；每个
+    /// 连续拒绝周期最多发布一次提示事件。
+    [[nodiscard]] bool blockCollaborationUnauthorizedEdit(
+        const LogicCommand& cmd, bool inspectSessionState = false);
 
     /// @brief 发布跨线程请求的完整谱面快照。
     /// @warning 逻辑热路径：每 update 仅检查一个 relaxed 原子标志；只有新观察者
@@ -182,6 +244,7 @@ private:
     void handleCommand(const CmdLoadBeatmap& cmd);
     void handleCommand(const CmdSetCollaborationResources& cmd);
     void handleCommand(const CmdSetCollaborationOfflineReadOnly& cmd);
+    void handleCommand(const CmdSetCollaborationClipboardIsolation& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
@@ -211,10 +274,41 @@ private:
     /// 即可，因为观察者指针自身通过 acquire/release 原子传递。
     std::atomic_bool m_mutationSnapshotRequested{ false };
 
+    /// @brief 当前观察者成功排队且尚需权威结果覆盖的最新本地物件变化序号。
+    /// @warning UI 线程仅在观察者切换时清零，逻辑线程在低频 mutation 回调后
+    /// 写入；权威命令消费路径读取，用于阻止旧快照覆盖未确认编辑。
+    std::atomic_uint64_t m_latestAcceptedLocalObjectMutationSequence{ 0 };
+
+    /// @brief 活跃手势或本地确认屏障外等待的最新远端权威替换。
+    /// 仅由逻辑线程访问，并在新权威状态到达时直接覆盖旧状态，避免命令队列
+    /// 自旋重试和中间快照造成视觉回退。
+    std::optional<CmdReplaceBeatmapData> m_deferredAuthoritativeReplacement;
+
     /// @brief 协作访客谱面断线后的入队级只读门闩。
     /// @warning UI 线程写、所有命令生产线程读；只在协作连接状态变化时写入，
     /// 入队热路径使用 acquire 读取以确保及时拦截编辑命令。
     std::atomic_bool m_collaborationOfflineReadOnly{ false };
+
+    /// @brief 系统剪贴板桥接读取的协作隔离门闩。
+    /// @warning UI 线程低频写、UI 剪贴板路径读；使用 acquire/release 保证房间
+    /// 状态切换后不再导入系统剪贴板。
+    std::atomic_bool m_collaborationClipboardIsolated{ false };
+
+    /// @brief 最近分配给该 Session 的协作剪贴板范围标识。
+    /// @warning UI 线程仅在协作绑定切换时更新，逻辑线程通过排队命令接收副本。
+    std::atomic_uint64_t m_collaborationClipboardScopeId{ 0 };
+
+    /// @brief 当前协作身份允许修改的谱面类别位。
+    /// @warning UI 线程低频写、所有命令生产线程和逻辑线程读；使用单字节原子
+    /// 避免在输入热路径复制网络层权限状态。
+    std::atomic_uint8_t m_collaborationAllowedMutationFlags{
+        static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All)
+    };
+
+    /// @brief UI 与谱面切换路径提交、逻辑线程消费的自动保存事件位。
+    /// @warning 多个低频生产者执行 relaxed fetch_or，逻辑线程每 update
+    /// 执行一次 relaxed exchange；事件仅用于唤醒保存调度，不承载其它数据。
+    std::atomic_uint8_t m_requestedAutoSaveTriggers{ 0U };
 
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
@@ -234,6 +328,15 @@ private:
 
     /// @brief 最近一次元数据编辑后的自动保存计时点（秒）。
     double m_lastMetadataUpdateTime{ 0.0 };
+
+    /// @brief 是否有已启用的编辑器事件正在等待会话空闲后自动保存。
+    bool m_triggeredAutoSavePending{ false };
+
+    /// @brief 当前定时自动保存周期的下一次截止时间（单调秒）。
+    double m_timedAutoSaveDeadline{ 0.0 };
+
+    /// @brief 最近一次用于生成截止时间的定时间隔秒数。
+    double m_timedAutoSaveIntervalSeconds{ 0.0 };
 
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
     /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给

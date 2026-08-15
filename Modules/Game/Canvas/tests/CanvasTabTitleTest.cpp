@@ -53,6 +53,36 @@ bool testCollaborationStatusPrecedesBeatmapName()
                "* (离线) Offline Map";
 }
 
+/// @brief 验证协作画布在欢迎页复用、断线和关闭过程中的标记生命周期。
+/// @return 远端谱面正确标记、断线保留且回到欢迎页后清除时返回 true。
+bool testCollaborationCanvasStateLifecycle()
+{
+    const bool offlinePlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, true, false, false, false, true);
+    const bool joiningPlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, true, true, true, false, true);
+    const bool joinedThroughReusedPlaceholder =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, false, true, true, true, true);
+    const bool joinedDirectly = MMM::Canvas::resolveCollaborationCanvasState(
+        false, false, false, true, false, true);
+    const bool disconnectedBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, false, false, false, true, true);
+    const bool inactiveOfflineBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            true, false, false, false, true, false);
+    const bool additionalLocalBeatmap =
+        MMM::Canvas::resolveCollaborationCanvasState(
+            false, false, false, false, false, true);
+    return !offlinePlaceholder && !joiningPlaceholder &&
+           joinedThroughReusedPlaceholder && joinedDirectly &&
+           disconnectedBeatmap && inactiveOfflineBeatmap &&
+           !additionalLocalBeatmap;
+}
+
 }  // namespace
 
 /// @brief 覆盖主画布标签的标题和脏标志布局规则。
@@ -63,7 +93,8 @@ int main()
                    testCleanTitleHasNoMarker() &&
                    testDirtyUnnamedBeatmapKeepsMarker() &&
                    testPlaceholderIgnoresDirtyState() &&
-                   testCollaborationStatusPrecedesBeatmapName()
+                   testCollaborationStatusPrecedesBeatmapName() &&
+                   testCollaborationCanvasStateLifecycle()
                ? 0
                : 1;
 }

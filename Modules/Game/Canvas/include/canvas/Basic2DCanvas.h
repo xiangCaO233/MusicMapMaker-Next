@@ -356,11 +356,13 @@ private:
     /// @brief 已经应用到逻辑相机的远端视口状态序号。
     std::uint64_t m_lastFollowedViewportSequence{ 0 };
 
-    /// @brief 当前主画布是否曾在房间生命周期开始时绑定到协作会话。
+    /// @brief 当前主画布是否已经绑定过协作谱面会话。
     bool m_isCollaborationCanvas{ false };
 
-    /// @brief 上一帧是否观察到非 Idle
-    /// 的房间生命周期，用于只标记启动时的活动画布。
+    /// @brief 上一帧当前 Session 是否为欢迎占位页，用于识别远端谱面原地复用。
+    bool m_wasLogoPlaceholder{ false };
+
+    /// @brief 上一帧是否观察到非 Idle 的房间生命周期，用于识别启动边沿。
     bool m_wasCollaborationRoomLifecycleActive{ false };
 
 private:

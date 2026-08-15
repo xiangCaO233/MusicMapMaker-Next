@@ -1,5 +1,6 @@
 #include "logic/EditorClipboardProtocol.h"
 #include "mmm/SafeParse.h"
+#include "mmm/note/Note.h"
 
 #include <fmt/format.h>
 
@@ -26,6 +27,9 @@ constexpr std::string_view KIND_CHART_OBJECTS = "C";
 
 /// @brief 时间线剪贴板条目的载荷类型码。
 constexpr std::string_view KIND_TIMELINES = "T";
+
+/// @brief 剪贴板载荷允许携带的单个协作逻辑标识最大字节数。
+constexpr std::size_t MAX_COLLABORATION_ID_BYTES = 128U;
 
 /// @brief 追加一个制表符分隔符。
 void appendSeparator(std::string& text)
@@ -624,9 +628,26 @@ void appendBeatLine(std::string& text, const ClipboardItem& item)
 }
 
 /// @brief 追加一个复制音符及其辅助数据行。
-void appendClipboardItem(std::string& text, const ClipboardItem& item)
+/// @param text 目标文本。
+/// @param item 待序列化条目。
+/// @param preserveCollaborationIdentity 是否写出协作稳定身份。
+void appendClipboardItem(std::string& text, const ClipboardItem& item,
+                         bool preserveCollaborationIdentity)
 {
     appendMainNoteLine(text, item.note);
+    if ( preserveCollaborationIdentity &&
+         !item.note.m_collaborationId.empty() ) {
+        text.append("NI");
+        appendSeparator(text);
+        appendEscapedField(text, item.note.m_collaborationId);
+        appendLineBreak(text);
+    }
+    if ( !item.note.m_annotation.empty() ) {
+        text.append("NA");
+        appendSeparator(text);
+        appendEscapedField(text, item.note.m_annotation);
+        appendLineBreak(text);
+    }
     if ( item.note.m_sampleBinding &&
          !item.note.m_sampleBinding->m_audioResourceId.empty() ) {
         text.append("NS");
@@ -642,6 +663,19 @@ void appendClipboardItem(std::string& text, const ClipboardItem& item)
 
     for ( const auto& subNote : item.note.m_subNotes ) {
         appendSubNoteLine(text, subNote);
+        if ( preserveCollaborationIdentity &&
+             !subNote.collaborationId.empty() ) {
+            text.append("SI");
+            appendSeparator(text);
+            appendEscapedField(text, subNote.collaborationId);
+            appendLineBreak(text);
+        }
+        if ( !subNote.annotation.empty() ) {
+            text.append("SA");
+            appendSeparator(text);
+            appendEscapedField(text, subNote.annotation);
+            appendLineBreak(text);
+        }
         if ( subNote.sampleBinding &&
              !subNote.sampleBinding->m_audioResourceId.empty() ) {
             text.append("SS");
@@ -683,6 +717,7 @@ std::optional<NoteComponent> parseMainNoteLine(
     note.m_trackIndex     = *track;
     note.m_dtrack         = *dtrack;
     note.m_isSubNote      = *isSubNote;
+    note.m_isDraft        = note.m_trackIndex < 0;
     note.m_parentPolyline = entt::null;
     note.m_subIndex       = *subIndex;
     return note;
@@ -902,7 +937,8 @@ std::optional<::MMM::AudioSampleBinding> parseSampleBindingLine(
 }
 
 /// @brief 解析音符或混合谱面物件载荷行。
-ParsedClipboard parseChartObjectPayload(std::string_view text)
+ParsedClipboard parseChartObjectPayload(std::string_view text,
+                                        bool preserveCollaborationIdentity)
 {
     ParsedClipboard      parsed;
     ClipboardItem*       currentItem       = nullptr;
@@ -944,6 +980,19 @@ ParsedClipboard parseChartObjectPayload(std::string_view text)
                                     currentSampleItem->sample.m_metadata);
         } else if ( fields[0] == "NB" && currentItem ) {
             parseBeatLine(fields, *currentItem);
+        } else if ( fields[0] == "NI" && preserveCollaborationIdentity &&
+                    currentItem && fields.size() == 2U ) {
+            if ( auto identity = decodeEscapedField(fields[1]);
+                 identity && !identity->empty() &&
+                 identity->size() <= MAX_COLLABORATION_ID_BYTES ) {
+                currentItem->note.m_collaborationId = std::move(*identity);
+            }
+        } else if ( fields[0] == "NA" && currentItem && fields.size() == 2U ) {
+            if ( auto annotation = decodeEscapedField(fields[1]);
+                 annotation &&
+                 annotation->size() <= ::MMM::MAX_NOTE_ANNOTATION_BYTES ) {
+                currentItem->note.m_annotation = std::move(*annotation);
+            }
         } else if ( fields[0] == "NS" && currentItem ) {
             if ( auto binding = parseSampleBindingLine(fields) ) {
                 currentItem->note.m_sampleBinding = std::move(*binding);
@@ -959,11 +1008,29 @@ ParsedClipboard parseChartObjectPayload(std::string_view text)
             if ( auto subNote = parseSubNoteLine(fields) ) {
                 currentItem->note.m_subNotes.push_back(std::move(*subNote));
             }
+        } else if ( fields[0] == "SI" && preserveCollaborationIdentity &&
+                    currentItem && !currentItem->note.m_subNotes.empty() &&
+                    fields.size() == 2U ) {
+            if ( auto identity = decodeEscapedField(fields[1]);
+                 identity && !identity->empty() &&
+                 identity->size() <= MAX_COLLABORATION_ID_BYTES ) {
+                currentItem->note.m_subNotes.back().collaborationId =
+                    std::move(*identity);
+            }
         } else if ( fields[0] == "SS" && currentItem &&
                     !currentItem->note.m_subNotes.empty() ) {
             if ( auto binding = parseSampleBindingLine(fields) ) {
                 currentItem->note.m_subNotes.back().sampleBinding =
                     std::move(*binding);
+            }
+        } else if ( fields[0] == "SA" && currentItem &&
+                    !currentItem->note.m_subNotes.empty() &&
+                    fields.size() == 2U ) {
+            if ( auto annotation = decodeEscapedField(fields[1]);
+                 annotation &&
+                 annotation->size() <= ::MMM::MAX_NOTE_ANNOTATION_BYTES ) {
+                currentItem->note.m_subNotes.back().annotation =
+                    std::move(*annotation);
             }
         } else if ( fields[0] == "SC" && currentItem &&
                     !currentItem->note.m_subNotes.empty() ) {
@@ -1015,12 +1082,13 @@ ParsedClipboard parseTimelinePayload(std::string_view text)
 }
 }  // namespace
 
-std::string serializeNotes(const std::vector<ClipboardItem>& items)
+std::string serializeNotes(const std::vector<ClipboardItem>& items,
+                           bool preserveCollaborationIdentity)
 {
     std::string text;
     appendHeader(text, KIND_NOTES);
     for ( const auto& item : items ) {
-        appendClipboardItem(text, item);
+        appendClipboardItem(text, item, preserveCollaborationIdentity);
     }
     return text;
 }
@@ -1032,7 +1100,7 @@ std::string serializeChartObjects(
     std::string text;
     appendHeader(text, KIND_CHART_OBJECTS);
     for ( const auto& item : notes ) {
-        appendClipboardItem(text, item);
+        appendClipboardItem(text, item, false);
     }
     for ( const auto& item : samples ) {
         appendSampleItem(text, item);
@@ -1050,7 +1118,8 @@ std::string serializeTimelines(const std::vector<TimelineClipboardItem>& items)
     return text;
 }
 
-std::optional<ParsedClipboard> parse(std::string_view text)
+std::optional<ParsedClipboard> parse(std::string_view text,
+                                     bool preserveCollaborationIdentity)
 {
     const auto kind = parseHeader(text);
     if ( !kind ) {
@@ -1058,7 +1127,7 @@ std::optional<ParsedClipboard> parse(std::string_view text)
     }
 
     if ( *kind == KIND_NOTES || *kind == KIND_CHART_OBJECTS ) {
-        return parseChartObjectPayload(text);
+        return parseChartObjectPayload(text, preserveCollaborationIdentity);
     }
     return parseTimelinePayload(text);
 }

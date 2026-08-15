@@ -846,7 +846,8 @@ bool copyTimingTableSelectionToClipboard(
         entry.hasBeatPosition = true;
     }
 
-    engine.setTimelineClipboard(std::move(clipboard), nullptr, false);
+    engine.setTimelineClipboard(
+        std::move(clipboard), &session->getContext(), false);
     return true;
 }
 

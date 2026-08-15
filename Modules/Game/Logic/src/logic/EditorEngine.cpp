@@ -14,6 +14,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/UnlimitedIdleUpdateGate.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/EditorAction.h"
@@ -322,7 +323,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
 /// @param activeIndex 当前活跃 Session 的注册表索引。
 /// @return 当前活跃 Session 的烟雾寿命覆盖值；无活跃 Session 时返回 -1。
 /// @warning 逻辑热路径：每 update 执行；只遍历当前打开的 Session
-/// 快照，不访问注册表锁。
+/// 快照，调用者必须持有 SessionRegistry 锁以同步 SessionContext 读取。
 float resolveActiveCursorSmokeLifeOverride(
     const std::vector<SessionSnapshotEntry>& sessions, int32_t activeIndex)
 {
@@ -856,6 +857,7 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;
+    target.settings.enableDraftLanes = source.settings.enableDraftLanes;
     target.settings.disableVerticalObjectDrag =
         source.settings.disableVerticalObjectDrag;
     target.settings.autoUploadPgoProfiles =
@@ -863,7 +865,10 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
-    target.settings.shortcutConfig       = source.settings.shortcutConfig;
+    target.settings.autoSave             = source.settings.autoSave;
+    target.settings.collaborationViewportRenderMode =
+        source.settings.collaborationViewportRenderMode;
+    target.settings.shortcutConfig = source.settings.shortcutConfig;
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
 }
@@ -1672,21 +1677,24 @@ void EditorEngine::setTimelineClipboard(
 }
 
 /// @brief 获取编辑器级剪贴板副本。
-std::vector<ClipboardItem> EditorEngine::getClipboard() const
+std::vector<ClipboardItem> EditorEngine::getClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.get();
+    return m_clipboard.get(targetContext);
 }
 
 /// @brief 获取编辑器级自动采样剪贴板副本。
-std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard() const
+std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.getSamples();
+    return m_clipboard.getSamples(targetContext);
 }
 
 /// @brief 获取编辑器级 Timeline 剪贴板副本。
-std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard() const
+std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard(
+    const SessionContext* targetContext) const
 {
-    return m_clipboard.getTimelines();
+    return m_clipboard.getTimelines(targetContext);
 }
 
 /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
@@ -1834,7 +1842,16 @@ std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
 /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
 bool EditorEngine::importSystemClipboardText(std::string_view text)
 {
+    auto activeSession = getActiveSession();
+    if ( activeSession && activeSession->isCollaborationClipboardIsolated() ) {
+        return false;
+    }
     return m_clipboard.importSystemText(text);
+}
+
+void EditorEngine::clearClipboardForContext(const SessionContext* context)
+{
+    m_clipboard.clearForContext(context);
 }
 
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。
@@ -2189,6 +2206,24 @@ bool EditorEngine::isPlaybackPlaying() const
     return false;
 }
 
+/// @brief 判断当前活跃 Session 是否存在已选谱面物件。
+/// @return 玩家物件或自动采样至少有一个被选中时返回 true。
+/// @warning UI 热路径：菜单状态每帧读取；会短暂锁定 SessionRegistry，
+/// 只检查常量级选择索引，不遍历 ECS，也不复制 shared_ptr 所有权。
+bool EditorEngine::hasActiveChartObjectSelection() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
+         sessions[idx].session ) {
+        const auto& ctx = sessions[idx].session->getContext();
+        return !ctx.selectedNoteEntities.empty() ||
+               !ctx.selectedSampleEntities.empty();
+    }
+    return false;
+}
+
 /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
 /// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
 /// 的常量状态， 且不复制 shared_ptr 所有权。
@@ -2333,7 +2368,7 @@ void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
 
 /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
 /// @warning 逻辑热路径/原子：每次 Session update 后可能执行；开关读取使用
-/// relaxed，后续只遍历已打开 Session 列表。
+/// relaxed，后续短暂持有 SessionRegistry 递归锁并遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvases()
 {
     syncSameMainAudioCanvasesFromIndex(m_sessionRegistry.activeIndex());
@@ -2341,7 +2376,7 @@ void EditorEngine::syncSameMainAudioCanvases()
 
 /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
 /// @warning 逻辑热路径/原子：每次 Session update 后可能执行；开关读取使用
-/// relaxed，后续只遍历已打开 Session 列表。
+/// relaxed，并短暂持有 SessionRegistry 递归锁以串行化 SessionContext 访问。
 void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 {
     const auto editorConfig = getEditorConfig();
@@ -2353,6 +2388,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
     }
 
     {
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            m_sessionRegistry.mutex());
         const auto  publishedSnapshot = m_sessionRegistry.publishedSnapshot();
         const auto& sessions          = publishedSnapshot->sessions;
         const auto  sourceEntry =
@@ -2731,6 +2768,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     if ( previousIndex >= 0 &&
          previousIndex < static_cast<int32_t>(sessions.size()) &&
          sessions[previousIndex].session ) {
+        if ( previousIndex != index ) {
+            sessions[previousIndex].session->requestAutoSave(
+                AutoSaveTrigger::BeatmapSwitch);
+        }
         auto& previousCtx =
             sessions[previousIndex].session->getContextMutable();
         previousFingerprint = sessions[previousIndex].audioTimelineFingerprint;
@@ -2819,6 +2860,21 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         activeSession->pushCommand(
             CmdUpdateViewport{ cameraId, size.x, size.y });
     }
+}
+
+/// @brief 为当前活动谱面提交一次跨线程自动保存事件。
+void EditorEngine::requestAutoSaveForActiveSession(AutoSaveTrigger trigger)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    auto&         sessions    = m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[static_cast<size_t>(activeIndex)].session ) {
+        return;
+    }
+    sessions[static_cast<size_t>(activeIndex)].session->requestAutoSave(
+        trigger);
 }
 
 /// @brief 请求 UI 线程将指定 Session 对应的画布窗口聚焦到前台。
@@ -2969,15 +3025,20 @@ bool EditorEngine::saveDirtyBeatmapsForPackaging()
 }
 
 /// @brief 逻辑线程的主循环。
-/// @warning 逻辑热路径：按配置 UPS 频率执行；禁止每 update 文件系统操作、完整
-/// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+/// @warning 逻辑热路径：按配置 UPS 频率执行；每个实际 Session update 会持有
+/// SessionRegistry 递归锁，以与 UI 的低频 SessionContext/ECS 读取串行化；锁内
+/// 普通路径禁止等待、文件系统操作、额外完整 entt 遍历、完整排序、try/catch
+/// 和可避免的 shared_ptr 拷贝。Unlimited 无播放命令的视觉维护轮次必须在锁
+/// 外合并，播放时钟和待处理命令不得受门控限制。元数据尾随保存仅允许在既有
+/// 低频超时分支阻塞。
 void EditorEngine::loop()
 {
-    auto   lastTime     = FrameLimitClock::now();
-    auto   nextDeadline = lastTime;
-    double lastTargetDt = 0.0;
-    m_lastUpsTime       = lastTime;
-    m_logicUpdateCount  = 0;
+    auto                    lastTime     = FrameLimitClock::now();
+    auto                    nextDeadline = lastTime;
+    double                  lastTargetDt = 0.0;
+    UnlimitedIdleUpdateGate unlimitedIdleUpdateGate;
+    m_lastUpsTime      = lastTime;
+    m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
     /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
     auto& projectController = ProjectController::instance();
@@ -3027,6 +3088,7 @@ void EditorEngine::loop()
         std::chrono::duration<double> passed = currentTime - lastTime;
         lastTime                             = currentTime;
         double dt                            = passed.count();
+        unlimitedIdleUpdateGate.accumulateElapsedSeconds(dt);
 
         // 统计逻辑线程实时刷新率 (UPS)
         m_logicUpdateCount++;
@@ -3066,119 +3128,160 @@ void EditorEngine::loop()
                                           editorConfigSnapshotRevision);
 
         // 多 Session 轮询更新
-        /// @brief 当前已发布的 Session 快照读取句柄，避免每 update
-        /// 获取注册表锁。
+        /// @brief 当前已发布的 Session 快照读取句柄，避免为复制 SessionEntry
+        /// 列表额外获取注册表锁。
         /// @warning 逻辑热路径/原子：每轮只做一次 acquire shared_ptr
-        /// 读取，以保证 UI 替换快照后本轮会话生命周期仍然有效。
+        /// 读取，以保证 UI 替换快照后本轮会话生命周期仍然有效；具体
+        /// SessionContext 更新仍须使用注册表锁串行化。
         const auto publishedSessionUpdateSnapshot =
             m_sessionRegistry.publishedSnapshot();
         const auto& sessionUpdateSnapshot =
             publishedSessionUpdateSnapshot->sessions;
 
         if ( !sessionUpdateSnapshot.empty() ) {
-            int32_t activeIndex     = m_sessionRegistry.activeIndex();
-            int32_t maxSessionIndex = -1;
-            for ( const auto& entry : sessionUpdateSnapshot ) {
-                maxSessionIndex = std::max(maxSessionIndex, entry.index);
-            }
-            if ( maxSessionIndex >= 0 &&
-                 m_backgroundSessionUpdateTimes.size() <=
-                     static_cast<size_t>(maxSessionIndex) ) {
-                m_backgroundSessionUpdateTimes.resize(
-                    static_cast<size_t>(maxSessionIndex) + 1);
-            }
+            const bool hasPendingSessionCommands = std::any_of(
+                sessionUpdateSnapshot.begin(),
+                sessionUpdateSnapshot.end(),
+                [](const SessionSnapshotEntry& entry) {
+                    return entry.session && entry.session->hasPendingCommands();
+                });
+            const bool shouldPollSessions =
+                frameLimit != Config::FrameLimitPreference::Unlimited ||
+                unlimitedIdleUpdateGate.shouldPoll(currentTime,
+                                                   hasPendingSessionCommands);
 
-            const auto backgroundInterval =
-                backgroundSessionUpdateInterval(refreshRate);
-            /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
-            int32_t commandSyncSourceIndex = -1;
-            for ( const auto& entry : sessionUpdateSnapshot ) {
-                const bool isActiveSession = entry.index == activeIndex;
-                const bool isVisibleSession =
-                    isActiveSession || entry.isCanvasVisible;
-                const bool hadPendingCommands =
-                    entry.session->hasPendingCommands();
-                const bool hasPendingMetadataAutoSave =
-                    entry.session->hasPendingMetadataAutoSave();
-                bool shouldUpdateSession = isActiveSession;
-                if ( !shouldUpdateSession ) {
-                    const bool needsRealtimeUpdate =
-                        entry.session->needsRealtimeUpdate();
-                    if ( isVisibleSession && needsRealtimeUpdate ) {
-                        shouldUpdateSession = true;
-                    } else if ( hadPendingCommands ) {
-                        shouldUpdateSession = true;
-                    } else if ( !isVisibleSession &&
-                                !hasPendingMetadataAutoSave ) {
-                        shouldUpdateSession = false;
-                    } else {
-                        auto& lastBackgroundUpdate =
+            if ( shouldPollSessions ) {
+                const double sessionDt =
+                    unlimitedIdleUpdateGate.consumeElapsedSeconds();
+                int32_t activeIndex     = m_sessionRegistry.activeIndex();
+                int32_t maxSessionIndex = -1;
+                for ( const auto& entry : sessionUpdateSnapshot ) {
+                    maxSessionIndex = std::max(maxSessionIndex, entry.index);
+                }
+                if ( maxSessionIndex >= 0 &&
+                     m_backgroundSessionUpdateTimes.size() <=
+                         static_cast<size_t>(maxSessionIndex) ) {
+                    m_backgroundSessionUpdateTimes.resize(
+                        static_cast<size_t>(maxSessionIndex) + 1);
+                }
+
+                const auto backgroundInterval =
+                    backgroundSessionUpdateInterval(refreshRate);
+                /// @brief 本轮由指令驱动发生时间变化的
+                /// Session，用于同主音轨同步。
+                int32_t commandSyncSourceIndex = -1;
+                /// @brief 本轮结束后是否仍有播放时钟需逐 update 推进。
+                bool hasUnlimitedSessionWork = false;
+                for ( const auto& entry : sessionUpdateSnapshot ) {
+                    std::lock_guard<std::recursive_mutex> sessionLock(
+                        m_sessionRegistry.mutex());
+                    const bool isActiveSession = entry.index == activeIndex;
+                    const bool isVisibleSession =
+                        isActiveSession || entry.isCanvasVisible;
+                    const bool hadPendingCommands =
+                        entry.session->hasPendingCommands();
+                    const bool hasPendingMetadataAutoSave =
+                        entry.session->hasPendingMetadataAutoSave();
+                    const bool needsAutoSavePolling =
+                        entry.session->needsAutoSavePolling(
+                            editorConfigSnapshot.settings.autoSave);
+                    bool shouldUpdateSession = isActiveSession;
+                    if ( !shouldUpdateSession ) {
+                        const bool needsRealtimeUpdate =
+                            entry.session->needsRealtimeUpdate();
+                        if ( isVisibleSession && needsRealtimeUpdate ) {
+                            shouldUpdateSession = true;
+                        } else if ( hadPendingCommands ) {
+                            shouldUpdateSession = true;
+                        } else if ( !isVisibleSession &&
+                                    !hasPendingMetadataAutoSave &&
+                                    !needsAutoSavePolling ) {
+                            shouldUpdateSession = false;
+                        } else {
+                            const auto& lastBackgroundUpdate =
+                                m_backgroundSessionUpdateTimes
+                                    [static_cast<size_t>(entry.index)];
+                            shouldUpdateSession =
+                                lastBackgroundUpdate ==
+                                    FrameLimitClock::time_point{} ||
+                                currentTime - lastBackgroundUpdate >=
+                                    backgroundInterval;
+                        }
+                    }
+
+                    if ( shouldUpdateSession ) {
+                        const double previousCurrentTime =
+                            entry.session->getContext().currentTime;
+                        entry.session->update(
+                            sessionDt, editorConfigSnapshot, isActiveSession);
+                        if ( isActiveSession && hadPendingCommands &&
+                             std::abs(entry.session->getContext().currentTime -
+                                      previousCurrentTime) >
+                                 MAIN_AUDIO_SYNC_TIME_EPSILON ) {
+                            commandSyncSourceIndex = entry.index;
+                        }
+                        if ( entry.index != activeIndex ) {
                             m_backgroundSessionUpdateTimes[static_cast<size_t>(
-                                entry.index)];
-                        shouldUpdateSession =
-                            lastBackgroundUpdate ==
-                                FrameLimitClock::time_point{} ||
-                            currentTime - lastBackgroundUpdate >=
-                                backgroundInterval;
+                                entry.index)] = currentTime;
+                        }
                     }
                 }
-
-                if ( !shouldUpdateSession ) {
-                    continue;
+                if ( m_pendingWorkspaceActiveIndex >= 0 ) {
+                    int32_t requestedActiveIndex =
+                        m_pendingWorkspaceActiveIndex;
+                    m_pendingWorkspaceActiveIndex = -1;
+                    setActiveSessionIndex(requestedActiveIndex);
+                    activeIndex = m_sessionRegistry.activeIndex();
                 }
 
-                const double previousCurrentTime =
-                    entry.session->getContext().currentTime;
-                entry.session->update(
-                    dt, editorConfigSnapshot, isActiveSession);
-                if ( isActiveSession && hadPendingCommands &&
-                     std::abs(entry.session->getContext().currentTime -
-                              previousCurrentTime) >
-                         MAIN_AUDIO_SYNC_TIME_EPSILON ) {
-                    commandSyncSourceIndex = entry.index;
-                }
-                if ( entry.index != activeIndex ) {
-                    m_backgroundSessionUpdateTimes[static_cast<size_t>(
-                        entry.index)] = currentTime;
-                }
-            }
-            if ( m_pendingWorkspaceActiveIndex >= 0 ) {
-                int32_t requestedActiveIndex  = m_pendingWorkspaceActiveIndex;
-                m_pendingWorkspaceActiveIndex = -1;
-                setActiveSessionIndex(requestedActiveIndex);
-                activeIndex = m_sessionRegistry.activeIndex();
-            }
-
-            if ( commandSyncSourceIndex >= 0 ) {
-                syncSameMainAudioCanvasesFromIndex(commandSyncSourceIndex);
-            }
-
-            bool shouldSyncMainAudioCanvases = false;
-            for ( const auto& entry : sessionUpdateSnapshot ) {
-                if ( entry.index != activeIndex || !entry.session ) {
-                    continue;
+                if ( commandSyncSourceIndex >= 0 ) {
+                    syncSameMainAudioCanvasesFromIndex(commandSyncSourceIndex);
                 }
 
-                const auto& activeCtx = entry.session->getContext();
-                shouldSyncMainAudioCanvases =
-                    activeCtx.isPlaying ||
-                    activeIndex != m_lastMainAudioSyncActiveIndex ||
-                    std::abs(activeCtx.currentTime - m_lastMainAudioSyncTime) >
-                        MAIN_AUDIO_SYNC_TIME_EPSILON;
+                bool  shouldSyncMainAudioCanvases = false;
+                float cursorSmokeLifeOverride     = -1.0F;
+                {
+                    std::lock_guard<std::recursive_mutex> sessionLock(
+                        m_sessionRegistry.mutex());
+                    for ( const auto& entry : sessionUpdateSnapshot ) {
+                        if ( !entry.session ) {
+                            continue;
+                        }
+                        hasUnlimitedSessionWork =
+                            hasUnlimitedSessionWork ||
+                            entry.session->needsUnlimitedPolling();
+                        if ( entry.index != activeIndex ) {
+                            continue;
+                        }
+
+                        const auto& activeCtx = entry.session->getContext();
+                        shouldSyncMainAudioCanvases =
+                            activeCtx.isPlaying ||
+                            activeIndex != m_lastMainAudioSyncActiveIndex ||
+                            std::abs(activeCtx.currentTime -
+                                     m_lastMainAudioSyncTime) >
+                                MAIN_AUDIO_SYNC_TIME_EPSILON;
+                        if ( shouldSyncMainAudioCanvases ) {
+                            m_lastMainAudioSyncActiveIndex = activeIndex;
+                            m_lastMainAudioSyncTime = activeCtx.currentTime;
+                        }
+                    }
+                    cursorSmokeLifeOverride =
+                        resolveActiveCursorSmokeLifeOverride(
+                            sessionUpdateSnapshot,
+                            m_sessionRegistry.activeIndex());
+                }
                 if ( shouldSyncMainAudioCanvases ) {
-                    m_lastMainAudioSyncActiveIndex = activeIndex;
-                    m_lastMainAudioSyncTime        = activeCtx.currentTime;
+                    syncSameMainAudioCanvases();
                 }
-                break;
+                m_cursorSmokeLifeOverride.store(cursorSmokeLifeOverride,
+                                                std::memory_order_relaxed);
+                unlimitedIdleUpdateGate.completePoll(FrameLimitClock::now(),
+                                                     hasUnlimitedSessionWork);
             }
-            if ( shouldSyncMainAudioCanvases ) {
-                syncSameMainAudioCanvases();
-            }
-            m_cursorSmokeLifeOverride.store(
-                resolveActiveCursorSmokeLifeOverride(
-                    sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
-                std::memory_order_relaxed);
         } else {
+            unlimitedIdleUpdateGate.requestPoll();
+            unlimitedIdleUpdateGate.discardElapsedSeconds();
             m_cursorSmokeLifeOverride.store(-1.0f, std::memory_order_relaxed);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

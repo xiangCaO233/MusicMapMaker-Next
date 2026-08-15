@@ -13,6 +13,7 @@
 #include "logic/session/SamplePropertyEdit.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Note.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/core.h>
@@ -2146,6 +2147,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                     view.get<const Logic::InteractionComponent>(e);
                 if ( interaction.isSelected ) {
                     const auto& nc = view.get<const Logic::NoteComponent>(e);
+                    if ( nc.m_isSubNote ) continue;
                     selectedNotes.push_back({ e, nc.m_timestamp });
                 }
             }

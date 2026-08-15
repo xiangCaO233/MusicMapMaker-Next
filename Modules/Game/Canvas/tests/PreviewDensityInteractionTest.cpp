@@ -17,6 +17,28 @@ bool near(const std::optional<double>& value, double expected)
     return value && std::abs(*value - expected) < 1e-9;
 }
 
+/// @brief 验证全谱时间到密度栏坐标的正向投影。
+/// @return 谱面开头、中央和末尾均落在正确位置时返回 true。
+bool testTimeProjection()
+{
+    return near(MMM::Canvas::previewDensityYAtTime(0.0, 10.0, 110.0, 200.0),
+                110.0) &&
+           near(MMM::Canvas::previewDensityYAtTime(100.0, 10.0, 110.0, 200.0),
+                60.0) &&
+           near(MMM::Canvas::previewDensityYAtTime(200.0, 10.0, 110.0, 200.0),
+                10.0);
+}
+
+/// @brief 验证协作者时间超出谱面范围时标记仍限制在密度栏端点。
+/// @return 上下越界输入均正确限制时返回 true。
+bool testTimeProjectionClamp()
+{
+    return near(MMM::Canvas::previewDensityYAtTime(-20.0, 10.0, 110.0, 200.0),
+                110.0) &&
+           near(MMM::Canvas::previewDensityYAtTime(240.0, 10.0, 110.0, 200.0),
+                10.0);
+}
+
 /// @brief 使用小容差比较密度颜色分量。
 /// @param value 待检查颜色分量。
 /// @param expected 期望颜色分量。
@@ -67,12 +89,35 @@ bool testOutOfBoundsClamp()
 bool testInvalidInputs()
 {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    return !MMM::Canvas::previewDensityTimeAtY(nan, 10.0, 110.0, 200.0) &&
+    return !MMM::Canvas::previewDensityYAtTime(nan, 10.0, 110.0, 200.0) &&
+           !MMM::Canvas::previewDensityYAtTime(60.0, nan, 110.0, 200.0) &&
+           !MMM::Canvas::previewDensityYAtTime(60.0, 110.0, 10.0, 200.0) &&
+           !MMM::Canvas::previewDensityYAtTime(60.0, 10.0, 110.0, 0.0) &&
+           !MMM::Canvas::previewDensityYAtTime(60.0, 10.0, 110.0, nan) &&
+           !MMM::Canvas::previewDensityTimeAtY(nan, 10.0, 110.0, 200.0) &&
            !MMM::Canvas::previewDensityTimeAtY(60.0, nan, 110.0, 200.0) &&
            !MMM::Canvas::previewDensityTimeAtY(60.0, 110.0, 10.0, 200.0) &&
            !MMM::Canvas::previewDensityTimeAtY(60.0, 10.0, 110.0, 0.0) &&
            !MMM::Canvas::previewDensityTimeAtY(60.0, 10.0, 110.0, -1.0) &&
            !MMM::Canvas::previewDensityTimeAtY(60.0, 10.0, 110.0, nan);
+}
+
+/// @brief 验证密度栏仅在拖动变化时预览，并在松手时固定提交一次。
+/// @return 按下、静止、移动和松手帧均得到正确发布类型时返回 true。
+bool testSeekDispatchLifecycle()
+{
+    using MMM::Canvas::PreviewDensitySeekDispatch;
+    using MMM::Canvas::resolvePreviewDensitySeekDispatch;
+    return resolvePreviewDensitySeekDispatch(true, false, false, false) ==
+               PreviewDensitySeekDispatch::Preview &&
+           resolvePreviewDensitySeekDispatch(true, false, true, false) ==
+               PreviewDensitySeekDispatch::None &&
+           resolvePreviewDensitySeekDispatch(true, false, true, true) ==
+               PreviewDensitySeekDispatch::Preview &&
+           resolvePreviewDensitySeekDispatch(false, true, true, false) ==
+               PreviewDensitySeekDispatch::Commit &&
+           resolvePreviewDensitySeekDispatch(false, true, false, true) ==
+               PreviewDensitySeekDispatch::None;
 }
 
 }  // namespace
@@ -81,8 +126,10 @@ bool testInvalidInputs()
 /// @return 所有检查通过时返回 0。
 int main()
 {
-    return testVerticalAxisMapping() && testOutOfBoundsClamp() &&
-                   testInvalidInputs() && testDensityColorGradient()
+    return testTimeProjection() && testTimeProjectionClamp() &&
+                   testVerticalAxisMapping() && testOutOfBoundsClamp() &&
+                   testInvalidInputs() && testDensityColorGradient() &&
+                   testSeekDispatchLifecycle()
                ? 0
                : 1;
 }

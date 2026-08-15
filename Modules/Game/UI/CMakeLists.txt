@@ -17,7 +17,9 @@ add_library(
   src/ui/imgui/menu/MainMenuView.cpp
   src/ui/imgui/menu/MainMenuNavigationController.cpp
   src/ui/imgui/menu/MainMenuRegistry.cpp
+  src/ui/imgui/markdown/MarkdownRenderer.cpp
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
+  src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp
   src/ui/imgui/menu/actions/edit/CopyAction.cpp
   src/ui/imgui/menu/actions/edit/CutAction.cpp
   src/ui/imgui/menu/actions/edit/EditSelectedObjectVolumeAction.cpp
@@ -55,6 +57,7 @@ add_library(
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp
+  src/ui/imgui/menu/actions/view/AnnotationDetailsToggleAction.cpp
   src/ui/imgui/menu/actions/view/FixedToolWindowToggleAction.cpp
   src/ui/imgui/menu/actions/view/ManagerLabelsToggleAction.cpp
   src/ui/imgui/menu/actions/view/PreviewWindowToggleAction.cpp
@@ -84,11 +87,13 @@ add_library(
   src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/CollaborationLogWindow.cpp
+  src/ui/imgui/manager/CollaborationRoomCoverImage.cpp
   src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
   src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+  src/ui/imgui/manager/SettingsView_CollaborationTab.cpp
   src/ui/imgui/manager/SettingsView_DebugTab.cpp
   src/ui/imgui/manager/SettingsView_EditorTab.cpp
   src/ui/imgui/manager/SettingsView_ProjectTab.cpp
@@ -150,12 +155,27 @@ target_include_directories(BpmPlaybackRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
 
-# 空格播放路由测试覆盖主画布与时间线的活动拖拽交互。
+# 空格播放路由测试覆盖活动拖拽交互和控件导航激活隔离。
 mmm_add_test_executable(UI PlaybackShortcutRoutingTest
                         tests/PlaybackShortcutRoutingTest.cpp)
 target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(PlaybackShortcutRoutingTest PRIVATE 3rd_imgui)
 add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
+
+# Markdown 解析器为批注与更新日志共享，覆盖块级和行内语法的稳定拆分。
+mmm_add_test_executable(UI MarkdownParserTest tests/MarkdownParserTest.cpp)
+target_include_directories(MarkdownParserTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME MarkdownParserTest COMMAND MarkdownParserTest)
+
+# Markdown 绘制测试创建最小 ImGui 帧，覆盖测量、流式绘制与矩形裁剪入口。
+mmm_add_test_executable(UI MarkdownRendererTest tests/MarkdownRendererTest.cpp
+                        src/ui/imgui/markdown/MarkdownRenderer.cpp)
+target_include_directories(MarkdownRendererTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
+add_test(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。
 mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
@@ -202,6 +222,16 @@ target_include_directories(CollaborationEntryPolicyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
 add_test(NAME CollaborationEntryPolicyTest COMMAND CollaborationEntryPolicyTest)
+
+# 协作房卡封面测试覆盖真实图片居中缩略、Base64 往返和无效输入拒绝。
+mmm_add_test_executable(UI CollaborationRoomCoverImageTest
+                        tests/CollaborationRoomCoverImageTest.cpp)
+target_include_directories(CollaborationRoomCoverImageTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationRoomCoverImageTest PRIVATE UI)
+add_test(NAME CollaborationRoomCoverImageTest
+         COMMAND CollaborationRoomCoverImageTest
+                 "${MMM_TEST_RESOURCE_DIR}/ma/Hai Yorokonde/cover.jpg")
 
 # 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
 mmm_add_test_executable(UI ProjectAudioToolLayoutTest
