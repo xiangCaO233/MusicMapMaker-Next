@@ -93,51 +93,6 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.isActive               = false;
 }
 
-/// @brief 将当前绘制手势切换到鼠标所在的统一画布轨道区域。
-/// @param ctx 会话上下文。
-/// @param lane 当前鼠标命中的统一轨道地址。
-/// @param time 当前鼠标对应的逻辑时间。
-/// @param mouseY 当前鼠标纵坐标。
-/// @param isShiftDown 是否正在进行 Shift 拖绘。
-/// @warning 绘制更新热路径：只重置当前笔刷的小型状态，不得访问文件系统或遍历
-/// ECS。
-void retargetBrushToLane(SessionContext& ctx, CanvasLaneAddress lane,
-                         double time, float mouseY, bool isShiftDown)
-{
-    const bool createsAudioSample     = lane.kind == CanvasLaneKind::Bgm;
-    ctx.brushState.createsAudioSample = createsAudioSample;
-    ctx.brushState.time               = time;
-    ctx.brushState.track              = static_cast<int>(lane.absoluteTrack(
-        static_cast<std::uint32_t>(std::max(0, ctx.trackCount))));
-    ctx.brushState.type               = ::MMM::NoteType::NOTE;
-    ctx.brushState.duration           = 0.0;
-    ctx.brushState.dtrack             = 0;
-    ctx.brushState.holdStartTime      = -1.0;
-    ctx.brushState.startTrack         = ctx.brushState.track;
-    ctx.brushState.startMouseY        = mouseY;
-    ctx.brushState.segmentStartMouseY = mouseY;
-    ctx.brushState.polylineSegments.clear();
-    ctx.brushState.activeAudioResourceId.clear();
-    ctx.brushState.activeSampleBinding.reset();
-    ctx.brushState.replacesExistingObject = false;
-
-    if ( createsAudioSample ) {
-        ctx.brushState.activeAudioResourceId =
-            ctx.brushState.selectedAudioResourceId;
-        return;
-    }
-
-    if ( !ctx.brushState.selectedAudioResourceId.empty() ) {
-        ctx.brushState.activeSampleBinding = ::MMM::AudioSampleBinding{
-            ctx.brushState.selectedAudioResourceId,
-            ctx.brushState.selectedAudioVolume,
-        };
-    }
-    if ( isShiftDown ) {
-        ctx.brushState.holdStartTime = time;
-    }
-}
-
 /// @brief 判断批量操作条目中是否已经包含指定实体。
 bool hasBatchEntryForEntity(const std::vector<BatchNoteAction::Entry>& entries,
                             entt::entity                               entity)
@@ -572,24 +527,12 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         currentLane = laneProjection.laneAt(cmd.mouseX);
         if ( !currentLane ) return;
 
-        const bool targetCreatesAudioSample =
-            currentLane->kind == CanvasLaneKind::Bgm;
-        const bool changesNoteDomain =
-            !targetCreatesAudioSample && !ctx.brushState.createsAudioSample &&
-            ((currentLane->kind == CanvasLaneKind::Draft) !=
-             (ctx.brushState.track < 0));
-        if ( targetCreatesAudioSample != ctx.brushState.createsAudioSample ||
-             changesNoteDomain ) {
-            if ( !targetCreatesAudioSample &&
-                 !ctx.brushState.selectedAudioResourceId.empty() &&
-                 ctx.brushState.selectedAudioTrackType ==
-                     ::MMM::AudioTrackType::Main ) {
-                resetBrushState(ctx);
-                ctx.lastActionMessage = "主音轨不能绑定到玩家物件";
-                return;
-            }
-            retargetBrushToLane(
-                ctx, *currentLane, currentPosTime, cmd.mouseY, cmd.isShiftDown);
+        const CanvasLaneKind brushLaneKind =
+            ctx.brushState.createsAudioSample
+                ? CanvasLaneKind::Bgm
+                : (ctx.brushState.track < 0 ? CanvasLaneKind::Draft
+                                            : CanvasLaneKind::Player);
+        if ( currentLane->kind != brushLaneKind ) {
             return;
         }
     }

@@ -565,96 +565,221 @@ bool testSampleBrushFollowsPointerBeforeCommit()
     return sample.m_track == 5 && near(sample.m_timestamp, draggedTime);
 }
 
-/// @brief 验证绘制工具按住左键跨区时会按当前落点切换 Note 与自动采样。
-/// @return 玩家区到 BGM 区及反向拖绘均生成正确物件时返回 true。
-bool testBrushCrossesPlayerAndBgmLanes()
+/// @brief 验证单次绘制手势锁定起笔所在的轨道类型。
+/// @return 玩家、BGM 与草稿画笔越区时均保留原类型和最后有效状态时返回 true。
+bool testBrushStaysInStartingLaneKind()
 {
-    MMM::Logic::SessionContext context;
-    configureObjectEditingCanvas(context);
-    MMM::Logic::InteractionController controller(context);
-    MMM::Logic::DrawTool              drawTool;
-    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+    MMM::Logic::SessionContext playerContext;
+    configureObjectEditingCanvas(playerContext);
+    playerContext.lastConfig.settings.enablePolylineEditing = true;
+    MMM::Logic::InteractionController playerController(playerContext);
+    MMM::Logic::DrawTool              playerDrawTool;
+    playerController.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
         .audioResourceId = "effect.wav",
         .audioTrackType  = MMM::AudioTrackType::Effect,
         .volume          = 0.6F,
     });
 
-    drawTool.handleStartBrush(context,
-                              MMM::Logic::CmdStartBrush{
-                                  .cameraId = "Basic2DCanvas",
-                                  .mouseX   = 150.0F,
-                                  .mouseY   = 300.0F,
-                              });
-    drawTool.handleUpdateBrush(context,
-                               MMM::Logic::CmdUpdateBrush{
-                                   .cameraId   = "Basic2DCanvas",
-                                   .mouseX     = 550.0F,
-                                   .mouseY     = 300.0F,
-                                   .isCtrlDown = true,
-                               });
-    if ( !context.brushState.isActive ||
-         !context.brushState.createsAudioSample ||
-         context.brushState.track != 4 ||
-         context.brushState.activeAudioResourceId != "effect.wav" ||
-         context.brushState.activeSampleBinding ) {
-        XERROR("Player-to-BGM brush did not switch its preview to a sample");
+    playerDrawTool.handleStartBrush(playerContext,
+                                    MMM::Logic::CmdStartBrush{
+                                        .cameraId    = "Basic2DCanvas",
+                                        .mouseX      = 150.0F,
+                                        .mouseY      = 300.0F,
+                                        .isShiftDown = true,
+                                        .isCtrlDown  = true,
+                                    });
+    playerDrawTool.handleUpdateBrush(playerContext,
+                                     MMM::Logic::CmdUpdateBrush{
+                                         .cameraId    = "Basic2DCanvas",
+                                         .mouseX      = 150.0F,
+                                         .mouseY      = 200.0F,
+                                         .isShiftDown = true,
+                                         .isCtrlDown  = true,
+                                     });
+    playerDrawTool.handleUpdateBrush(playerContext,
+                                     MMM::Logic::CmdUpdateBrush{
+                                         .cameraId    = "Basic2DCanvas",
+                                         .mouseX      = 350.0F,
+                                         .mouseY      = 200.0F,
+                                         .isShiftDown = true,
+                                         .isCtrlDown  = true,
+                                     });
+    if ( playerContext.brushState.type != MMM::NoteType::POLYLINE ||
+         playerContext.brushState.polylineSegments.size() != 2U ) {
+        XERROR("Player brush did not establish a complex Polyline");
         return false;
     }
-    drawTool.handleEndBrush(
-        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    const auto preservedSegments = playerContext.brushState.polylineSegments;
+    const auto preservedTime     = playerContext.brushState.time;
+    const auto preservedTrack    = playerContext.brushState.track;
+    const auto preservedDuration = playerContext.brushState.duration;
+    const auto preservedDtrack   = playerContext.brushState.dtrack;
 
-    const auto samples =
-        context.sampleRegistry.view<MMM::Logic::SampleComponent>();
-    if ( samples.size() != 1 ||
-         context.noteRegistry.view<MMM::Logic::NoteComponent>().size() != 0 ) {
-        XERROR("Player-to-BGM brush committed the wrong object kind");
-        return false;
-    }
-    const auto& sample =
-        samples.get<MMM::Logic::SampleComponent>(*samples.begin());
-    if ( sample.m_track != 4 || sample.m_audioResourceId != "effect.wav" ||
-         !near(sample.m_volume, 0.6) ) {
-        XERROR("Player-to-BGM brush committed the wrong sample properties");
+    playerDrawTool.handleUpdateBrush(playerContext,
+                                     MMM::Logic::CmdUpdateBrush{
+                                         .cameraId    = "Basic2DCanvas",
+                                         .mouseX      = 550.0F,
+                                         .mouseY      = 100.0F,
+                                         .isShiftDown = true,
+                                         .isCtrlDown  = true,
+                                     });
+    const auto& crossedPlayerBrush = playerContext.brushState;
+    if ( !crossedPlayerBrush.isActive ||
+         crossedPlayerBrush.createsAudioSample ||
+         crossedPlayerBrush.type != MMM::NoteType::POLYLINE ||
+         crossedPlayerBrush.polylineSegments.size() !=
+             preservedSegments.size() ||
+         !near(crossedPlayerBrush.time, preservedTime) ||
+         crossedPlayerBrush.track != preservedTrack ||
+         !near(crossedPlayerBrush.duration, preservedDuration) ||
+         crossedPlayerBrush.dtrack != preservedDtrack ||
+         crossedPlayerBrush.polylineSegments.back().type !=
+             preservedSegments.back().type ||
+         crossedPlayerBrush.polylineSegments.back().trackIndex !=
+             preservedSegments.back().trackIndex ||
+         crossedPlayerBrush.polylineSegments.back().dtrack !=
+             preservedSegments.back().dtrack ||
+         !crossedPlayerBrush.activeSampleBinding ||
+         crossedPlayerBrush.activeSampleBinding->m_audioResourceId !=
+             "effect.wav" ) {
+        XERROR("Player brush changed after crossing into the BGM lanes");
         return false;
     }
 
-    drawTool.handleStartBrush(context,
-                              MMM::Logic::CmdStartBrush{
-                                  .cameraId = "Basic2DCanvas",
-                                  .mouseX   = 550.0F,
-                                  .mouseY   = 300.0F,
-                              });
-    drawTool.handleUpdateBrush(context,
-                               MMM::Logic::CmdUpdateBrush{
-                                   .cameraId   = "Basic2DCanvas",
-                                   .mouseX     = 250.0F,
-                                   .mouseY     = 300.0F,
-                                   .isCtrlDown = true,
-                               });
-    if ( !context.brushState.isActive ||
-         context.brushState.createsAudioSample ||
-         context.brushState.track != 1 ||
-         context.brushState.activeAudioResourceId.size() != 0 ||
-         !context.brushState.activeSampleBinding ||
-         context.brushState.activeSampleBinding->m_audioResourceId !=
-             "effect.wav" ||
-         !near(context.brushState.activeSampleBinding->m_volume, 0.6) ) {
-        XERROR("BGM-to-player brush did not switch its preview to a Note");
+    playerDrawTool.handleUpdateBrush(playerContext,
+                                     MMM::Logic::CmdUpdateBrush{
+                                         .cameraId    = "Basic2DCanvas",
+                                         .mouseX      = 450.0F,
+                                         .mouseY      = 100.0F,
+                                         .isShiftDown = true,
+                                         .isCtrlDown  = true,
+                                     });
+    if ( playerContext.brushState.type != MMM::NoteType::POLYLINE ||
+         playerContext.brushState.polylineSegments.size() != 2U ||
+         playerContext.brushState.polylineSegments.back().dtrack != 3 ) {
+        XERROR("Player brush did not resume after returning to player lanes");
         return false;
     }
-    drawTool.handleEndBrush(
-        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
 
-    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
-    if ( notes.size() != 1 ) {
-        XERROR("BGM-to-player brush did not commit one Note");
+    playerDrawTool.handleEndBrush(
+        playerContext, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    if ( !playerContext.sampleRegistry.view<MMM::Logic::SampleComponent>()
+              .empty() ) {
+        XERROR("Player brush crossing created an automatic sample");
         return false;
     }
-    const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
-    return note.m_type == MMM::NoteType::NOTE && note.m_trackIndex == 1 &&
-           note.m_sampleBinding &&
-           note.m_sampleBinding->m_audioResourceId == "effect.wav" &&
-           near(note.m_sampleBinding->m_volume, 0.6);
+    const auto playerNotes =
+        playerContext.noteRegistry.view<MMM::Logic::NoteComponent>();
+    bool foundPlayerPolyline = false;
+    for ( const auto entity : playerNotes ) {
+        const auto& note = playerNotes.get<MMM::Logic::NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+        foundPlayerPolyline =
+            note.m_type == MMM::NoteType::POLYLINE &&
+            std::ranges::all_of(note.m_subNotes, [&](const auto& subNote) {
+                const int endTrack = subNote.trackIndex + subNote.dtrack;
+                return subNote.trackIndex >= 0 &&
+                       subNote.trackIndex < playerContext.trackCount &&
+                       endTrack >= 0 && endTrack < playerContext.trackCount;
+            });
+    }
+    if ( !foundPlayerPolyline ) {
+        XERROR("Player brush crossing did not retain its Polyline");
+        return false;
+    }
+
+    MMM::Logic::SessionContext bgmContext;
+    configureObjectEditingCanvas(bgmContext);
+    MMM::Logic::DrawTool bgmDrawTool;
+    bgmDrawTool.handleStartBrush(bgmContext,
+                                 MMM::Logic::CmdStartBrush{
+                                     .cameraId = "Basic2DCanvas",
+                                     .mouseX   = 550.0F,
+                                     .mouseY   = 300.0F,
+                                 });
+    const double bgmStartTime = bgmContext.brushState.time;
+    bgmDrawTool.handleUpdateBrush(bgmContext,
+                                  MMM::Logic::CmdUpdateBrush{
+                                      .cameraId   = "Basic2DCanvas",
+                                      .mouseX     = 250.0F,
+                                      .mouseY     = 200.0F,
+                                      .isCtrlDown = true,
+                                  });
+    if ( !bgmContext.brushState.isActive ||
+         !bgmContext.brushState.createsAudioSample ||
+         bgmContext.brushState.track != 4 ||
+         !near(bgmContext.brushState.time, bgmStartTime) ) {
+        XERROR("BGM brush changed after crossing into the player lanes");
+        return false;
+    }
+    bgmDrawTool.handleUpdateBrush(bgmContext,
+                                  MMM::Logic::CmdUpdateBrush{
+                                      .cameraId   = "Basic2DCanvas",
+                                      .mouseX     = 650.0F,
+                                      .mouseY     = 200.0F,
+                                      .isCtrlDown = true,
+                                  });
+    if ( bgmContext.brushState.track != 5 ||
+         near(bgmContext.brushState.time, bgmStartTime) ) {
+        XERROR("BGM brush did not resume after returning to BGM lanes");
+        return false;
+    }
+    bgmDrawTool.handleEndBrush(
+        bgmContext, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    const auto bgmSamples =
+        bgmContext.sampleRegistry.view<MMM::Logic::SampleComponent>();
+    if ( bgmSamples.size() != 1U ||
+         bgmSamples.get<MMM::Logic::SampleComponent>(*bgmSamples.begin())
+                 .m_track != 5 ) {
+        XERROR("BGM brush committed outside its starting lane kind");
+        return false;
+    }
+
+    MMM::Logic::SessionContext draftContext;
+    configureObjectEditingCanvas(draftContext);
+    draftContext.cameras["Basic2DCanvas"].horizontalOffsetX = 400.0F;
+    MMM::Logic::DrawTool draftDrawTool;
+    draftDrawTool.handleStartBrush(draftContext,
+                                   MMM::Logic::CmdStartBrush{
+                                       .cameraId = "Basic2DCanvas",
+                                       .mouseX   = 150.0F,
+                                       .mouseY   = 300.0F,
+                                   });
+    const double draftStartTime = draftContext.brushState.time;
+    draftDrawTool.handleUpdateBrush(draftContext,
+                                    MMM::Logic::CmdUpdateBrush{
+                                        .cameraId   = "Basic2DCanvas",
+                                        .mouseX     = 550.0F,
+                                        .mouseY     = 200.0F,
+                                        .isCtrlDown = true,
+                                    });
+    if ( !draftContext.brushState.isActive ||
+         draftContext.brushState.createsAudioSample ||
+         draftContext.brushState.track != -4 ||
+         !near(draftContext.brushState.time, draftStartTime) ) {
+        XERROR("Draft brush changed after crossing into the player lanes");
+        return false;
+    }
+    draftDrawTool.handleUpdateBrush(draftContext,
+                                    MMM::Logic::CmdUpdateBrush{
+                                        .cameraId   = "Basic2DCanvas",
+                                        .mouseX     = 250.0F,
+                                        .mouseY     = 200.0F,
+                                        .isCtrlDown = true,
+                                    });
+    if ( draftContext.brushState.track != -3 ||
+         near(draftContext.brushState.time, draftStartTime) ) {
+        XERROR("Draft brush did not resume after returning to draft lanes");
+        return false;
+    }
+    draftDrawTool.handleEndBrush(
+        draftContext, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    const auto draftNotes =
+        draftContext.noteRegistry.view<MMM::Logic::NoteComponent>();
+    if ( draftNotes.size() != 1U ) return false;
+    const auto& draftNote =
+        draftNotes.get<MMM::Logic::NoteComponent>(*draftNotes.begin());
+    return draftNote.m_isDraft && draftNote.m_trackIndex == -3;
 }
 
 /// @brief 验证画笔在横向平移后可直接创建并更新负轨草稿物件。
@@ -3877,7 +4002,7 @@ int main()
                    testBmsEditingHidesBgmLanes() &&
                    testBrushAudioResourcePlacementRules() &&
                    testSampleBrushFollowsPointerBeforeCommit() &&
-                   testBrushCrossesPlayerAndBgmLanes() &&
+                   testBrushStaysInStartingLaneKind() &&
                    testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
