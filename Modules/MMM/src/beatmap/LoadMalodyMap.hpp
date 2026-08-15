@@ -497,6 +497,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         anchorBpm                                  = ev.bpm;
     }
 
+    /// @brief 正相位回卷时 note[] 内容在 Malody 拍轴上的整拍补偿。
+    const double malodyNoteBeatShift =
+        wrappedMainSoundNode != nullptr && !bpmEvents.empty() &&
+                bpmEvents.front().timestamp > 1e-6 &&
+                wrappedFirstTimingPhaseMs > 1e-6
+            ? 1.0
+            : 0.0;
+
     auto getBpmAtBeat = [&](double beat) {
         double curBpm =
             bpmEvents.empty() ? getInitialBpm() : bpmEvents.front().bpm;
@@ -601,10 +609,16 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         for ( const auto& n : fileData["note"] ) {
             if ( !n.contains("beat") ) continue;
 
+            const bool isAutomaticSample = isSoundNote(n);
+            const bool isWrappedMainSample =
+                isAutomaticSample && &n == wrappedMainSoundNode;
             double startBeat = beatToDouble(n["beat"]);
+            if ( !isWrappedMainSample ) {
+                startBeat -= malodyNoteBeatShift;
+            }
             double startTime = getAbsTime(startBeat);
 
-            if ( isSoundNote(n) ) {
+            if ( isAutomaticSample ) {
                 const auto soundIt = n.find("sound");
                 if ( soundIt == n.end() || !soundIt->is_string() ||
                      soundIt->get_ref<const std::string&>().empty() ) {
@@ -613,7 +627,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                 AudioSampleEvent& sample =
                     beatMap.m_audioSamples.emplace_back();
-                if ( &n == wrappedMainSoundNode ) {
+                if ( isWrappedMainSample ) {
                     // 成对字段只描述歌曲相位；MMM 内部将主音频物化在
                     // 时间零点，避免把 Malody 的相位编码误当成局部 offset。
                     sample.m_timestamp = 0.0;
@@ -720,7 +734,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
             if ( n.contains("seg") ) {
                 auto   segs         = n["seg"];
-                double rootBeatRaw  = beatToDouble(n["beat"]);
+                double rootBeatRaw  = startBeat;
                 double firstSegBeat = rootBeatRaw + beatToDouble(segs[0].value(
                                                         "beat", json::array()));
                 double firstTime    = getAbsTime(firstSegBeat);
@@ -818,7 +832,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
             } else if ( n.contains("endbeat") ) {
                 // 处理长条 Hold
-                double endBeat   = beatToDouble(n["endbeat"]);
+                double endBeat =
+                    beatToDouble(n["endbeat"]) - malodyNoteBeatShift;
                 double endTime   = getAbsTime(endBeat);
                 Hold&  hold      = beatMap.m_noteData.holds.emplace_back();
                 hold.m_type      = NoteType::HOLD;

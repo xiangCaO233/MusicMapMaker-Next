@@ -442,6 +442,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     double firstBpmOriginBeat = 0.0;
     /// @brief 首 BPM 的非负回卷 delay。
     double firstBpmDelayMs = 0.0;
+    /// @brief 正相位回卷时 note[] 内容在 Malody 拍轴上的整拍补偿。
+    int malodyNoteBeatShift = 0;
     if ( !bpmTimings.empty() ) {
         const Timing& firstBpm = *bpmTimings.front();
         const double  firstBpmValue =
@@ -480,6 +482,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             // 共同使用的 beat 承担，确保编辑后仍可无损导回 MMM。
             firstBpmOriginBeat = std::round(
                 (firstBpm.m_timestamp - timingPhase) / firstBeatLength);
+            const double exportedFirstTimingTimestamp =
+                firstBpmOriginBeat * firstBeatLength + timingPhase;
+            if ( exportedFirstTimingTimestamp > 1e-6 && timingPhase > 1e-6 ) {
+                malodyNoteBeatShift = 1;
+            }
         } else {
             double wholeBeat =
                 std::floor(firstBpm.m_timestamp / firstBeatLength);
@@ -553,6 +560,17 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         int n   = static_cast<int>(std::round(fraction * 1920));
         int gcd = std::gcd(n, 1920);
         return json::array({ integerBeat, n / gcd, 1920 / gcd });
+    };
+
+    /// @brief 将普通 note[] 内容转换到带首拍相位补偿的 Malody 拍轴。
+    /// @param time 物件绝对时间，单位为毫秒。
+    /// @return 已应用整拍补偿的 Malody beat 三元数组。
+    auto timeToMalodyNoteBeat = [&](double time) {
+        json beat = timeToBeat(time);
+        if ( malodyNoteBeatShift != 0 ) {
+            beat[0] = beat[0].get<int>() + malodyNoteBeatShift;
+        }
+        return beat;
     };
 
     // 计时与效果数据
@@ -679,7 +697,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     auto serializeToMalody = [&](const Note& note) {
         json nj;
-        nj["beat"] = timeToBeat(note.m_timestamp);
+        nj["beat"] = timeToMalodyNoteBeat(note.m_timestamp);
 
         if ( saveAsSlideMode ) {
             nj["x"] = columnToX((int)note.m_track);
@@ -697,7 +715,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             double rootBeatVal =
                 rootBeatArr[0].get<double>() +
                 (rootBeatArr[1].get<double>() / rootBeatArr[2].get<double>());
-            auto   relBeatArr = timeToBeat(targetTime);
+            auto   relBeatArr = timeToMalodyNoteBeat(targetTime);
             double relBeatVal =
                 relBeatArr[0].get<double>() +
                 (relBeatArr[1].get<double>() / relBeatArr[2].get<double>()) -
@@ -747,7 +765,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
                 nj["seg"].push_back(sj);
             } else {
-                nj["endbeat"] = timeToBeat(h.m_timestamp + h.m_duration);
+                nj["endbeat"] =
+                    timeToMalodyNoteBeat(h.m_timestamp + h.m_duration);
             }
         } else if ( note.m_type == NoteType::FLICK ) {
             const auto& f = static_cast<const Flick&>(note);
@@ -975,7 +994,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     sample.m_timestamp <
                         generatedFirstBpmOrigin->m_timestamp - 1e-4 ) {
             sampleJson["beat"] =
-                timeToBeat(generatedFirstBpmOrigin->m_timestamp);
+                timeToMalodyNoteBeat(generatedFirstBpmOrigin->m_timestamp);
             const long double adjustedOffset =
                 static_cast<long double>(sample.m_offsetMs) +
                 static_cast<long double>(sample.m_timestamp) -
@@ -993,7 +1012,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     static_cast<std::int64_t>(std::llround(adjustedOffset));
             }
         } else {
-            sampleJson["beat"] = timeToBeat(sample.m_timestamp);
+            sampleJson["beat"] = timeToMalodyNoteBeat(sample.m_timestamp);
         }
 
         // Malody Slide 游戏逻辑只识别字符串 SOUND；Key 模式保留数值 1，

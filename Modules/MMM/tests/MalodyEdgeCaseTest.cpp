@@ -1098,7 +1098,7 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
 /// @brief 验证非 Malody 谱面的前导时间导出为拍轴 delay 和采样补偿。
 void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
 {
-    XINFO("=== Test: Non-Malody lead-in exports without shifting notes ===");
+    XINFO("=== Test: Non-Malody lead-in exports paired note phase ===");
 
     constexpr double LEAD_IN_MS = 237.0;
     for ( const int mode : { 0, 7 } ) {
@@ -1145,8 +1145,9 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
                          [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(noteIt != exported["note"].end(),
                     "lead-in export should keep the playable note");
-        TEST_ASSERT((*noteIt)["beat"] == json::array({ 0, 0, 1 }),
-                    "playable note should follow the paired timing beat");
+        TEST_ASSERT((*noteIt)["beat"] == json::array({ 1, 0, 1 }),
+                    "positive paired phase should move playable note one "
+                    "Malody beat forward");
 
         MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
         reloaded.sync();
@@ -1198,7 +1199,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
                                        { "bpm", BPM },
                                        { "delay", WRAPPED_DELAY_MS } } });
     fileData["note"] = json::array(
-        { { { "beat", json::array({ 0, 0, 1 }) }, { "x", 31 }, { "w", 60 } },
+        { { { "beat", json::array({ 1, 0, 1 }) }, { "x", 31 }, { "w", 60 } },
           { { "beat", json::array({ 0, 0, 1 }) },
             { "type", 1 },
             { "sound", "music.ogg" },
@@ -1219,7 +1220,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
     TEST_ASSERT(loaded.m_noteData.notes.size() == 1 &&
                     std::abs(loaded.m_noteData.notes.front().m_timestamp -
                              EXPECTED_TIME_MS) < 1e-6,
-                "playable beat zero should use the unwrapped timing anchor");
+                "shifted playable beat should use the unwrapped timing anchor");
     TEST_ASSERT(
         loaded.m_audioSamples.size() == 1 &&
             std::abs(loaded.m_audioSamples.front().m_timestamp - 0.0) < 1e-6,
@@ -1248,6 +1249,13 @@ void test_first_timing_delay_unwraps_with_its_bpm()
         (*exportedSample)["beat"] == json::array({ 0, 0, 1 }) &&
             exportedSample->value("offset", 0) == 237,
         "wrapped main sample should keep beat zero and positive offset");
+    const auto exportedPlayable = std::find_if(
+        exported["note"].begin(), exported["note"].end(), [](const json& node) {
+            return !isSoundNode(node);
+        });
+    TEST_ASSERT(exportedPlayable != exported["note"].end() &&
+                    (*exportedPlayable)["beat"] == json::array({ 1, 0, 1 }),
+                "wrapped playable note should retain its one-beat phase shift");
 
     json positiveOffsetData                = fileData;
     positiveOffsetData["time"][0]["delay"] = 100.0;
@@ -1491,6 +1499,52 @@ void test_first_timing_delay_unwraps_with_its_bpm()
             legacyShapeSample->value("offset", 0) == 237,
         "legacy anchor-plus-offset shape should retain paired compatibility");
 
+    constexpr double LEGACY_ZERO_BOUNDARY_MS = -0.1;
+    const double     legacyNearBeatDelayMs =
+        BEAT_LENGTH_MS + LEGACY_ZERO_BOUNDARY_MS;
+    MMM::BeatMap legacyZeroBoundary = MMM::BeatMap::loadFromFile(sourcePath);
+    legacyZeroBoundary.m_timings.front().m_timestamp = LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.m_timings.front()
+        .m_metadata
+        .timing_properties[MMM::TimingMetadataType::MALODY]["delay"] =
+        json(legacyNearBeatDelayMs).dump();
+    legacyZeroBoundary.m_audioSamples.front().m_timestamp =
+        LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.m_audioSamples.front().m_offsetMs = 0;
+    legacyZeroBoundary.m_noteData.notes.front().m_timestamp =
+        LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.sync();
+    const fs::path legacyZeroBoundaryPath =
+        std::filesystem::temp_directory_path() /
+        "edge_legacy_wrapped_zero_boundary.mc";
+    TEST_ASSERT(legacyZeroBoundary.saveToFile(legacyZeroBoundaryPath),
+                "legacy near-zero wrapped shape should export");
+    std::ifstream legacyZeroBoundaryFile(legacyZeroBoundaryPath);
+    json          legacyZeroBoundaryJson;
+    legacyZeroBoundaryFile >> legacyZeroBoundaryJson;
+    const auto legacyZeroBoundaryPlayable =
+        std::find_if(legacyZeroBoundaryJson["note"].begin(),
+                     legacyZeroBoundaryJson["note"].end(),
+                     [](const json& node) { return !isSoundNode(node); });
+    TEST_ASSERT(
+        legacyZeroBoundaryPlayable != legacyZeroBoundaryJson["note"].end() &&
+            (*legacyZeroBoundaryPlayable)["beat"] == json::array({ 1, 0, 1 }),
+        "legacy near-zero phase should use the exported timing position when "
+        "shifting note-array beats");
+    MMM::BeatMap legacyZeroBoundaryReloaded =
+        MMM::BeatMap::loadFromFile(legacyZeroBoundaryPath);
+    legacyZeroBoundaryReloaded.sync();
+    TEST_ASSERT(
+        legacyZeroBoundaryReloaded.m_timings.size() == 1 &&
+            legacyZeroBoundaryReloaded.m_noteData.notes.size() == 1 &&
+            legacyZeroBoundaryReloaded.m_timings.front().m_timestamp > 0.0 &&
+            std::abs(legacyZeroBoundaryReloaded.m_noteData.notes.front()
+                         .m_timestamp -
+                     legacyZeroBoundaryReloaded.m_timings.front().m_timestamp) <
+                1e-6,
+        "legacy near-zero phase must keep note and timing aligned after "
+        "canonicalization");
+
     for ( const int wholeBeatDelta : { -1, 1 } ) {
         MMM::BeatMap legacyWholeBeat = MMM::BeatMap::loadFromFile(sourcePath);
         legacyWholeBeat.m_timings.front().m_timestamp =
@@ -1560,6 +1614,18 @@ void test_first_timing_delay_unwraps_with_its_bpm()
         note.m_type      = MMM::NoteType::NOTE;
         note.m_timestamp = EXPECTED_TIME_MS;
         note.m_track     = 0;
+
+        MMM::Hold& hold  = generated.m_noteData.holds.emplace_back();
+        hold.m_type      = MMM::NoteType::HOLD;
+        hold.m_timestamp = EXPECTED_TIME_MS + BEAT_LENGTH_MS;
+        hold.m_duration  = BEAT_LENGTH_MS;
+        hold.m_track     = 1;
+
+        MMM::AudioSampleEvent& ordinarySample =
+            generated.m_audioSamples.emplace_back();
+        ordinarySample.m_timestamp       = EXPECTED_TIME_MS;
+        ordinarySample.m_track           = 5;
+        ordinarySample.m_audioResourceId = "effect.ogg";
         generated.sync();
 
         const fs::path generatedPath =
@@ -1587,6 +1653,48 @@ void test_first_timing_delay_unwraps_with_its_bpm()
                 (*generatedSample)["beat"] == json::array({ 0, 0, 1 }) &&
                 generatedSample->value("offset", 0) == 237,
             "main SOUND and first timing should share the wrapped value");
+        const auto generatedPlayable =
+            std::find_if(generatedJson["note"].begin(),
+                         generatedJson["note"].end(),
+                         [](const json& node) { return !isSoundNode(node); });
+        TEST_ASSERT(
+            generatedPlayable != generatedJson["note"].end() &&
+                (*generatedPlayable)["beat"] == json::array({ 1, 0, 1 }),
+            "positive paired phase should shift generated playable note");
+        const auto generatedHold =
+            std::find_if(generatedJson["note"].begin(),
+                         generatedJson["note"].end(),
+                         [&](const json& node) {
+                             return !isSoundNode(node) &&
+                                    (mode == 0 ? node.contains("endbeat")
+                                               : node.contains("seg"));
+                         });
+        TEST_ASSERT(generatedHold != generatedJson["note"].end() &&
+                        (*generatedHold)["beat"] == json::array({ 2, 0, 1 }),
+                    "positive paired phase should shift Hold root beat");
+        if ( mode == 0 ) {
+            TEST_ASSERT(
+                (*generatedHold)["endbeat"] == json::array({ 3, 0, 1 }),
+                "Key Hold endbeat should receive the same absolute shift");
+        } else {
+            TEST_ASSERT(
+                (*generatedHold)["seg"].size() == 1 &&
+                    (*generatedHold)["seg"][0]["beat"] ==
+                        json::array({ 1, 0, 1 }),
+                "Slide Hold relative segment beat should remain unchanged");
+        }
+        const auto generatedOrdinarySample = std::find_if(
+            generatedJson["note"].begin(),
+            generatedJson["note"].end(),
+            [](const json& node) {
+                return isSoundNode(node) &&
+                       node.value("sound", std::string{}) == "effect.ogg";
+            });
+        TEST_ASSERT(
+            generatedOrdinarySample != generatedJson["note"].end() &&
+                (*generatedOrdinarySample)["beat"] == json::array({ 1, 0, 1 }),
+            "ordinary automatic sample should receive the note-array phase "
+            "shift");
         TEST_ASSERT(
             !generatedJson["effect"].empty() &&
                 generatedJson["effect"][0]["beat"] == json::array({ 0, 0, 1 }),
@@ -1610,15 +1718,40 @@ void test_first_timing_delay_unwraps_with_its_bpm()
                 std::abs(
                     generatedReloaded.m_noteData.notes.front().m_timestamp -
                     EXPECTED_TIME_MS) < 1e-6,
-            "generated playable note should round trip at beat zero");
+            "generated playable note should remove the phase shift on import");
         TEST_ASSERT(
-            generatedReloaded.m_audioSamples.size() == 1 &&
-                std::abs(generatedReloaded.m_audioSamples.front().m_timestamp) <
-                    1e-6 &&
-                generatedReloaded.m_audioSamples.front().m_offsetMs == 0 &&
-                std::abs(generatedReloaded.m_audioSamples.front()
-                             .effectiveTimestamp()) < 0.51,
-            "generated main sample should normalize and play at time zero");
+            generatedReloaded.m_noteData.holds.size() == 1 &&
+                std::abs(
+                    generatedReloaded.m_noteData.holds.front().m_timestamp -
+                    (EXPECTED_TIME_MS + BEAT_LENGTH_MS)) < 1e-6 &&
+                std::abs(generatedReloaded.m_noteData.holds.front().m_duration -
+                         BEAT_LENGTH_MS) < 1e-6,
+            "generated Hold absolute beats should round trip");
+        TEST_ASSERT(
+            generatedReloaded.m_audioSamples.size() == 2,
+            "generated samples should keep main and ordinary automatic audio");
+        const auto generatedReloadedMain =
+            std::find_if(generatedReloaded.m_audioSamples.begin(),
+                         generatedReloaded.m_audioSamples.end(),
+                         [](const MMM::AudioSampleEvent& sample) {
+                             return sample.m_audioResourceId == "music.ogg";
+                         });
+        const auto generatedReloadedOrdinary =
+            std::find_if(generatedReloaded.m_audioSamples.begin(),
+                         generatedReloaded.m_audioSamples.end(),
+                         [](const MMM::AudioSampleEvent& sample) {
+                             return sample.m_audioResourceId == "effect.ogg";
+                         });
+        TEST_ASSERT(
+            generatedReloadedMain != generatedReloaded.m_audioSamples.end() &&
+                std::abs(generatedReloadedMain->m_timestamp) < 1e-6 &&
+                generatedReloadedMain->m_offsetMs == 0 &&
+                generatedReloadedOrdinary !=
+                    generatedReloaded.m_audioSamples.end() &&
+                std::abs(generatedReloadedOrdinary->m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+            "automatic samples should remove the note-array phase shift on "
+            "import");
     }
 
     auto  displacedMain                     = makeMinimalBeatMap(7, 4);
@@ -1649,6 +1782,72 @@ void test_first_timing_delay_unwraps_with_its_bpm()
                 "main sample away from time zero must not use paired wrapping");
 
     XINFO("PASS: First timing delay unwraps with first BPM");
+}
+
+/// @brief 验证 note[] 拍号补偿只用于音频零点之后的非零首拍相位。
+void test_malody_note_phase_shift_boundaries()
+{
+    XINFO("=== Test: Playable note phase shift boundaries ===");
+
+    constexpr double BPM            = 120.0;
+    constexpr double BEAT_LENGTH_MS = 60000.0 / BPM;
+    struct TestCase {
+        double      firstTimingMs;
+        int         expectedBeat;
+        const char* tag;
+    };
+    const std::array<TestCase, 2> cases{ {
+        { -100.0, -1, "negative_timing" },
+        { BEAT_LENGTH_MS, 1, "zero_phase" },
+    } };
+
+    for ( const auto& testCase : cases ) {
+        for ( const int mode : { 0, 7 } ) {
+            auto  beatMap                       = makeMinimalBeatMap(mode, 4);
+            auto& firstTiming                   = beatMap.m_timings.front();
+            firstTiming.m_timestamp             = testCase.firstTimingMs;
+            firstTiming.m_bpm                   = BPM;
+            firstTiming.m_beat_length           = BEAT_LENGTH_MS;
+            firstTiming.m_timingEffectParameter = BPM;
+            beatMap.m_audioSamples.front().m_timestamp = 0.0;
+            beatMap.m_audioSamples.front().m_offsetMs  = 0;
+
+            MMM::Note& note  = beatMap.m_noteData.notes.emplace_back();
+            note.m_type      = MMM::NoteType::NOTE;
+            note.m_timestamp = testCase.firstTimingMs;
+            note.m_track     = 0;
+            beatMap.sync();
+
+            const fs::path outputPath =
+                std::filesystem::temp_directory_path() /
+                (std::string("edge_playable_phase_boundary_") + testCase.tag +
+                 (mode == 0 ? "_key.mc" : "_slide.mc"));
+            TEST_ASSERT(beatMap.saveToFile(outputPath),
+                        "phase boundary map should export");
+            std::ifstream outputFile(outputPath);
+            json          exported;
+            outputFile >> exported;
+            const auto exportedPlayable = std::find_if(
+                exported["note"].begin(),
+                exported["note"].end(),
+                [](const json& node) { return !isSoundNode(node); });
+            TEST_ASSERT(
+                exportedPlayable != exported["note"].end() &&
+                    (*exportedPlayable)["beat"] ==
+                        json::array({ testCase.expectedBeat, 0, 1 }),
+                "negative timing and zero phase must not shift playable beat");
+
+            MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
+            reloaded.sync();
+            TEST_ASSERT(
+                reloaded.m_noteData.notes.size() == 1 &&
+                    std::abs(reloaded.m_noteData.notes.front().m_timestamp -
+                             testCase.firstTimingMs) < 1e-6,
+                "phase boundary playable note should round trip");
+        }
+    }
+
+    XINFO("PASS: Playable note phase shift boundaries");
 }
 
 /// @brief 验证成对首拍相位在多 BPM 时间线中只影响首项 delay。
@@ -1747,10 +1946,10 @@ void test_paired_first_delay_round_trips_variable_bpm()
                          [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(
             exportedPlayable != exported["note"].end() &&
-                (*exportedPlayable)["beat"] == json::array({ 100, 0, 1 }) &&
+                (*exportedPlayable)["beat"] == json::array({ 101, 0, 1 }) &&
                 exported["effect"].size() == 1 &&
                 exported["effect"][0]["beat"] == json::array({ 110, 0, 1 }),
-            "playable note and effect should use the variable BPM grid");
+            "only playable note should receive the positive phase shift");
 
         MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
         reloaded.sync();
@@ -1796,7 +1995,7 @@ void test_paired_first_delay_round_trips_variable_bpm()
                          [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(
             editedPlayable != editedExported["note"].end() &&
-                (*editedPlayable)["beat"] == json::array({ 101, 0, 1 }) &&
+                (*editedPlayable)["beat"] == json::array({ 102, 0, 1 }) &&
                 editedExported["effect"].size() == 1 &&
                 editedExported["effect"][0]["beat"] ==
                     json::array({ 111, 0, 1 }),
@@ -2338,6 +2537,7 @@ int main()
     test_timing_delay_and_sample_offset_round_trip_independently();
     test_non_malody_lead_in_exports_timing_origin_and_audio_compensation();
     test_first_timing_delay_unwraps_with_its_bpm();
+    test_malody_note_phase_shift_boundaries();
     test_paired_first_delay_round_trips_variable_bpm();
     test_legacy_samples_without_x_use_pro_editor_tracks();
     test_invalid_sample_track_and_song_hint_conflict();
