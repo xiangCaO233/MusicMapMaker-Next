@@ -32,6 +32,8 @@ constexpr std::uint64_t P2P_SIGNALING_PROTOCOL_VERSION = 2;
 constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";
 /// @brief 单条信令消息大小上限。
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
+/// @brief 房间目录封面 Base64 文本上限，预留 JSON 与信令字段空间。
+constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
 /// @brief WebRTC 协商的数据通道消息上限。
 constexpr int MAX_DATA_CHANNEL_MESSAGE_BYTES = 2 * 1024 * 1024;
 /// @brief 回调线程允许积压的完整 DataChannel 消息数。
@@ -197,6 +199,7 @@ public:
                                            : config.buildFingerprint;
         if ( creator.empty() || roomName.empty() || config.hostId == 0 ||
              participantId.empty() || sessionId.empty() ||
+             config.roomCoverImage.size() > MAX_ROOM_COVER_BASE64_BYTES ||
              !isValidCollaborationBuildFingerprint(buildFingerprint) ||
              makeCollaborationSignalingUrl(config.endpoint).empty() ) {
             return false;
@@ -219,7 +222,8 @@ public:
                 m_buildFingerprint = buildFingerprint;
                 m_requireMatchingBuildFingerprint =
                     config.requireMatchingBuildFingerprint;
-                m_roomName     = roomName;
+                m_roomName       = roomName;
+                m_roomCoverImage = config.roomCoverImage;
                 m_signalingUrl = makeCollaborationSignalingUrl(config.endpoint);
                 m_ownerToken   = generateOwnerToken();
                 m_localPeerId  = config.hostId;
@@ -449,6 +453,7 @@ public:
         m_buildFingerprint.clear();
         m_roomId.clear();
         m_roomName.clear();
+        m_roomCoverImage.clear();
         m_ownerToken.clear();
         m_iceServers.clear();
     }
@@ -1248,9 +1253,12 @@ private:
         nlohmann::json message;
         message["version"] = BROKER_PROTOCOL_VERSION;
         if ( connection->role == ConnectionRole::HostControl ) {
-            message["type"]       = "create_room";
-            message["roomName"]   = owner.m_roomName;
-            message["creator"]    = owner.m_creator;
+            message["type"]     = "create_room";
+            message["roomName"] = owner.m_roomName;
+            message["creator"]  = owner.m_creator;
+            if ( !owner.m_roomCoverImage.empty() ) {
+                message["coverImage"] = owner.m_roomCoverImage;
+            }
             message["ownerToken"] = owner.m_ownerToken;
             message["capacity"]   = owner.m_maxParticipants;
         } else if ( owner.m_isHost ) {
@@ -1528,6 +1536,8 @@ private:
     bool m_requireMatchingBuildFingerprint = true;
     /// @brief 公网目录展示名称。
     std::string m_roomName;
+    /// @brief 仅随开房控制消息提交给目录服务的 Base64 JPEG 缩略图。
+    std::string m_roomCoverImage;
     /// @brief 中心服务分配的公开房间标识。
     std::string m_roomId;
     /// @brief 中心信令 URL。

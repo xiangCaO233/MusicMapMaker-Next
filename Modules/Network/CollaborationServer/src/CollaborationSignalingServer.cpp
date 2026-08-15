@@ -29,6 +29,8 @@ constexpr std::uint64_t DIRECTORY_PROTOCOL_VERSION = 1;
 constexpr std::string_view SIGNALING_PATH = "/mmm-collaboration";
 /// @brief 单条信令消息上限。
 constexpr int MAX_SIGNALING_MESSAGE_BYTES = 256 * 1024;
+/// @brief 单间房卡封面 Base64 文本上限。
+constexpr std::size_t MAX_ROOM_COVER_BASE64_BYTES = 96U * 1024U;
 /// @brief 回调线程允许积压的事件上限。
 constexpr std::size_t MAX_CALLBACK_EVENTS = 8192;
 /// @brief 未声明身份的连接保留时间。
@@ -82,6 +84,36 @@ bool isValidDisplayText(std::string_view value, std::size_t maxBytes)
         const auto byte = static_cast<unsigned char>(character);
         return byte < 0x20U || byte == 0x7FU;
     });
+}
+
+/// @brief 校验可安全保存在目录内的 Base64 图片文本。
+/// @param value 不含 data URI 前缀的 Base64 数据。
+/// @return 空值或长度、字符集与填充均合法时返回 true。
+bool isValidRoomCoverImage(std::string_view value)
+{
+    if ( value.empty() ) return true;
+    if ( value.size() > MAX_ROOM_COVER_BASE64_BYTES ||
+         value.size() % 4U != 0U ) {
+        return false;
+    }
+
+    std::size_t padding = 0U;
+    for ( std::size_t index = value.size();
+          index > 0U && value[index - 1U] == '=';
+          --index ) {
+        ++padding;
+    }
+    if ( padding > 2U ) return false;
+
+    const std::size_t payloadLength = value.size() - padding;
+    return std::all_of(
+        value.begin(),
+        value.begin() + static_cast<std::ptrdiff_t>(payloadLength),
+        [](char character) {
+            const auto byte = static_cast<unsigned char>(character);
+            return std::isalnum(byte) != 0 || character == '+' ||
+                   character == '/';
+        });
 }
 
 /// @brief 校验只用于房主控制连接的高熵令牌格式。
@@ -190,6 +222,8 @@ public:
         std::string roomName;
         /// @brief 房主展示身份。
         std::string hostCreator;
+        /// @brief 按需下发给目录客户端的 Base64 JPEG 封面缩略图。
+        std::string coverImage;
         /// @brief 仅房主知道的控制令牌。
         std::string ownerToken;
         /// @brief 房主控制 WebSocket。
@@ -556,6 +590,9 @@ private:
         if ( type == "list_rooms" ) {
             client.role = ClientRole::Directory;
             sendRoomList(websocketId);
+        } else if ( type == "get_room_cover" &&
+                    client.role == ClientRole::Directory ) {
+            handleGetRoomCover(websocketId, message);
         } else if ( type == "update_room" &&
                     client.role == ClientRole::HostControl ) {
             handleUpdateRoom(websocketId, message);
@@ -615,13 +652,23 @@ private:
         std::string   roomName;
         std::string   creator;
         std::string   ownerToken;
-        std::uint64_t capacity = 0;
+        std::string   coverImage;
+        std::uint64_t capacity      = 0;
+        const auto    coverIterator = message.find("coverImage");
+        if ( coverIterator != message.end() ) {
+            if ( !coverIterator->is_string() ) {
+                rejectClient(websocketId, "invalid_room");
+                return;
+            }
+            coverImage = coverIterator->get_ref<const std::string&>();
+        }
         if ( !readStringField(message, "roomName", roomName) ||
              !readStringField(message, "creator", creator) ||
              !readStringField(message, "ownerToken", ownerToken) ||
              !readUnsignedField(message, "capacity", capacity) ||
              !isValidDisplayText(roomName, 128) ||
              !isValidDisplayText(creator, 64) ||
+             !isValidRoomCoverImage(coverImage) ||
              !isValidOwnerToken(ownerToken) || capacity < 2 || capacity > 8 ) {
             rejectClient(websocketId, "invalid_room");
             return;
@@ -637,6 +684,7 @@ private:
         room.roomId             = roomId;
         room.roomName           = std::move(roomName);
         room.hostCreator        = std::move(creator);
+        room.coverImage         = std::move(coverImage);
         room.ownerToken         = std::move(ownerToken);
         room.controlWebSocketId = websocketId;
         room.capacity           = static_cast<std::size_t>(capacity);
@@ -660,6 +708,29 @@ private:
         XINFO("Collaboration room {} created by {}",
               roomId,
               m_rooms.at(roomId).hostCreator);
+    }
+
+    /// @brief 向目录订阅者按需返回一间房的封面缩略图。
+    void handleGetRoomCover(int websocketId, const nlohmann::json& message)
+    {
+        std::string roomId;
+        if ( !readStringField(message, "roomId", roomId) || roomId.empty() ||
+             roomId.size() > 32U ) {
+            rejectClient(websocketId, "invalid_room_cover_request");
+            return;
+        }
+
+        nlohmann::json response;
+        response["type"]    = "room_cover";
+        response["version"] = DIRECTORY_PROTOCOL_VERSION;
+        response["roomId"]  = roomId;
+        if ( const auto iterator = m_rooms.find(roomId);
+             iterator != m_rooms.end() ) {
+            response["coverImage"] = iterator->second.coverImage;
+        } else {
+            response["coverImage"] = "";
+        }
+        static_cast<void>(sendJson(websocketId, response));
     }
 
     /// @brief 记录访客加入请求并通知房主建立专用信令通道。
@@ -954,11 +1025,12 @@ private:
         nlohmann::json rooms = nlohmann::json::array();
         for ( const Room* room : orderedRooms ) {
             nlohmann::json item;
-            item["roomId"]       = room->roomId;
-            item["roomName"]     = room->roomName;
-            item["hostCreator"]  = room->hostCreator;
-            item["participants"] = room->participants;
-            item["capacity"]     = room->capacity;
+            item["roomId"]        = room->roomId;
+            item["roomName"]      = room->roomName;
+            item["hostCreator"]   = room->hostCreator;
+            item["hasCoverImage"] = !room->coverImage.empty();
+            item["participants"]  = room->participants;
+            item["capacity"]      = room->capacity;
             rooms.push_back(std::move(item));
         }
 

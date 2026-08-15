@@ -234,6 +234,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     transportConfig.endpoint         = config.endpoint;
     transportConfig.roomName         = config.roomName;
     transportConfig.creator          = config.creator;
+    transportConfig.roomCoverImage   = std::move(config.roomCoverImage);
     transportConfig.participantId    = config.participantId;
     transportConfig.sessionId        = Config::makeCollaborationStableId();
     transportConfig.hostId           = DEFAULT_HOST_ID;
@@ -771,6 +772,17 @@ const std::vector<CollaborationDirectoryRoom>&
 CollaborationRoom::directoryRooms() const
 {
     return m_directory.rooms();
+}
+
+bool CollaborationRoom::requestDirectoryRoomCover(std::string_view roomId)
+{
+    return m_directory.requestRoomCover(roomId);
+}
+
+std::string_view CollaborationRoom::directoryRoomCover(
+    std::string_view roomId) const
+{
+    return m_directory.roomCover(roomId);
 }
 
 const std::string& CollaborationRoom::directoryError() const

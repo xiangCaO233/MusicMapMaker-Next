@@ -3,6 +3,15 @@
 #include "imgui.h"
 #include "ui/IParallelUiPreparable.h"
 #include <string>
+
+namespace vk
+{
+class PhysicalDevice;
+class Device;
+class CommandPool;
+class Queue;
+}  // namespace vk
+
 namespace MMM::UI
 {
 class UIManager;
@@ -31,6 +40,24 @@ public:
     /// @brief 安全转换为可并行准备 UI 数据的接口。
     /// @return 默认子视图不提供并行准备接口。
     virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }
+
+    /// @brief 查询子视图是否有等待 GPU 上传的纹理资源。
+    /// @return 默认子视图不加载纹理。
+    /// @warning UI 资源准备热路径：只能读取内存脏位。
+    virtual bool needsTextureReload() const { return false; }
+
+    /// @brief 在所属纹理视图的资源准备阶段上传子视图纹理。
+    /// @warning GPU 资源准备低频路径：仅在 needsTextureReload 返回 true
+    /// 后调用。
+    virtual void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                vk::Device&         logicalDevice,
+                                vk::CommandPool& commandPool, vk::Queue& queue)
+    {
+        (void)physicalDevice;
+        (void)logicalDevice;
+        (void)commandPool;
+        (void)queue;
+    }
 
     /// @brief 获取子视图名称
     inline const std::string& getSubViewName() const { return m_subViewName; }

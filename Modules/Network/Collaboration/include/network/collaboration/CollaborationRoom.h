@@ -89,6 +89,8 @@ struct CollaborationHostRoomConfig {
     ParticipantId participantId;
     /// @brief 公网目录展示的房间名称。
     std::string roomName;
+    /// @brief 公网目录卡片按需下发的 Base64 JPEG 封面缩略图。
+    std::string roomCoverImage;
     /// @brief 中心服务器地址、信令端口与 TLS 配置。
     CollaborationServerEndpoint endpoint;
     /// @brief 是否拒绝主程序二进制 SHA-256 与房主不同的访客。
@@ -287,6 +289,15 @@ public:
     /// @brief 获取最近一次在线房间列表。
     [[nodiscard]] const std::vector<CollaborationDirectoryRoom>&
     directoryRooms() const;
+    /// @brief 按需请求目录中指定房间的封面缩略图。
+    /// @param roomId 当前目录快照中的公开房间标识。
+    /// @return 请求首次成功发送或封面已缓存时返回 true。
+    [[nodiscard]] bool requestDirectoryRoomCover(std::string_view roomId);
+    /// @brief 返回已经取得的目录房间封面 Base64 JPEG 数据。
+    /// @param roomId 当前目录快照中的公开房间标识。
+    /// @return 尚未取得、房间无封面或房间已消失时返回空视图。
+    [[nodiscard]] std::string_view directoryRoomCover(
+        std::string_view roomId) const;
     /// @brief 获取最近目录连接错误。
     [[nodiscard]] const std::string& directoryError() const;
     /// @brief 获取当前客户端 PeerId。

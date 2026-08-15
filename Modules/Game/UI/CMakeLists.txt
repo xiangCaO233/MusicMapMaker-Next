@@ -84,6 +84,7 @@ add_library(
   src/ui/imgui/manager/ProjectAudioToolView.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/CollaborationLogWindow.cpp
+  src/ui/imgui/manager/CollaborationRoomCoverImage.cpp
   src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
@@ -204,6 +205,16 @@ target_include_directories(CollaborationEntryPolicyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
 add_test(NAME CollaborationEntryPolicyTest COMMAND CollaborationEntryPolicyTest)
+
+# 协作房卡封面测试覆盖真实图片居中缩略、Base64 往返和无效输入拒绝。
+mmm_add_test_executable(UI CollaborationRoomCoverImageTest
+                        tests/CollaborationRoomCoverImageTest.cpp)
+target_include_directories(CollaborationRoomCoverImageTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CollaborationRoomCoverImageTest PRIVATE UI)
+add_test(NAME CollaborationRoomCoverImageTest
+         COMMAND CollaborationRoomCoverImageTest
+                 "${MMM_TEST_RESOURCE_DIR}/ma/Hai Yorokonde/cover.jpg")
 
 # 项目音频工具布局测试覆盖边缘/中心吸附、滞回和叠层可见比例。
 mmm_add_test_executable(UI ProjectAudioToolLayoutTest

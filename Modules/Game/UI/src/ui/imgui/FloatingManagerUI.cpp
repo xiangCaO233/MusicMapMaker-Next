@@ -1513,16 +1513,24 @@ void FloatingManagerUI::update(UIManager* sourceManager)
 /// @brief 是否需要重载
 bool FloatingManagerUI::needReload()
 {
-    // 仅加载一次
-    return std::exchange(m_needReload, false);
+    if ( std::exchange(m_needReload, false) ) return true;
+    const auto iterator = m_subViews.find(m_currentSubViewId);
+    return iterator != m_subViews.end() &&
+           iterator->second->needsTextureReload();
 }
 
-/// @brief 重载纹理 (当前无 ISubView 同时继承 ITextureLoader,预留接口)
-void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& /*physicalDevice*/,
-                                       vk::Device& /*logicalDevice*/,
-                                       vk::CommandPool& /*cmdPool*/,
-                                       vk::Queue& /*queue*/)
+/// @brief 重载当前子视图请求的纹理。
+void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                       vk::Device&         logicalDevice,
+                                       vk::CommandPool&    cmdPool,
+                                       vk::Queue&          queue)
 {
+    const auto iterator = m_subViews.find(m_currentSubViewId);
+    if ( iterator != m_subViews.end() &&
+         iterator->second->needsTextureReload() ) {
+        iterator->second->reloadTextures(
+            physicalDevice, logicalDevice, cmdPool, queue);
+    }
 }
 
 }  // namespace MMM::UI

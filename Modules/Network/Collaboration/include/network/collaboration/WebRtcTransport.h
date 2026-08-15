@@ -52,6 +52,8 @@ struct WebRtcHostConfig {
     std::string roomName;
     /// @brief 房主 Creator 展示身份。
     std::string creator;
+    /// @brief 公网目录卡片按需下发的 Base64 JPEG 封面缩略图。
+    std::string roomCoverImage;
     /// @brief 房主持久化的稳定协作者标识。
     ParticipantId participantId;
     /// @brief 房主本次房间生命周期的操作会话标识。

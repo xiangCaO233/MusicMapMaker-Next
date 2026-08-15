@@ -92,6 +92,7 @@ bool testPublishedRoomAppearsInDirectory()
     hostConfig.endpoint         = endpoint;
     hostConfig.roomName         = "Directory Test Room";
     hostConfig.creator          = "Directory Host";
+    hostConfig.roomCoverImage   = "SGVsbG8=";
     hostConfig.buildFingerprint = std::string(64U, 'a');
     hostConfig.participantId    = "a0000000000000000000000000000001";
     hostConfig.sessionId        = "b0000000000000000000000000000001";
@@ -129,9 +130,16 @@ bool testPublishedRoomAppearsInDirectory()
     if ( room.roomId != transport.roomId() ||
          room.roomName != "Directory Test Room" ||
          room.hostCreator != "Directory Host" || room.participants != 1U ||
-         room.capacity != 8U || !directory.refresh() ) {
+         room.capacity != 8U || !room.hasCoverImage ||
+         !directory.requestRoomCover(room.roomId) ) {
         return fail("room_snapshot");
     }
+    if ( !pumpUntil(server, directory, [&]() {
+             return directory.roomCover(room.roomId) == "SGVsbG8=";
+         }) ) {
+        return fail("room_cover");
+    }
+    if ( !directory.refresh() ) return fail("directory_refresh_request");
     if ( !pumpUntil(server, directory, [&]() {
              return directory.state() ==
                         CollaborationDirectoryState::Connected &&

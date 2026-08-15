@@ -179,6 +179,7 @@ bool testDirectoryAndSignalingRelay()
                      { "version", 1 },
                      { "roomName", "Public Test Room" },
                      { "creator", "Host Creator" },
+                     { "coverImage", "SGVsbG8=" },
                      { "ownerToken", "0123456789abcdef0123456789abcdef" },
                      { "capacity", 8 } }) ) {
         return fail("room_requests_send");
@@ -207,6 +208,22 @@ bool testDirectoryAndSignalingRelay()
         return fail("room_created_and_listed");
     }
     const std::string roomId = created["roomId"].get<std::string>();
+    if ( !roomList["rooms"][0].value("hasCoverImage", false) ||
+         !sendJson(*directory,
+                   { { "type", "get_room_cover" },
+                     { "version", 1 },
+                     { "roomId", roomId } }) ) {
+        return fail("room_cover_request");
+    }
+    nlohmann::json roomCover;
+    if ( !pumpUntil(server,
+                    [&]() {
+                        return takeMessage(*directory, "room_cover", roomCover);
+                    }) ||
+         roomCover.value("roomId", "") != roomId ||
+         roomCover.value("coverImage", "") != "SGVsbG8=" ) {
+        return fail("room_cover_response");
+    }
 
     auto guest = connectSocket(server.listeningPort());
     if ( !guest ||

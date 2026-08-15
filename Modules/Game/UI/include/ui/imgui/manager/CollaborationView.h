@@ -5,12 +5,20 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 namespace MMM::Network::Collaboration
 {
 class CollaborationRoom;
+}
+
+namespace MMM::Graphic
+{
+class VKTexture;
 }
 
 namespace MMM::UI
@@ -38,6 +46,14 @@ public:
     /// @copydoc ISubView::getMinContentSize
     /// @warning UI 热路径：每帧可能查询多次，只允许常量尺寸计算。
     ImVec2 getMinContentSize(float dpiScale) const override;
+
+    /// @copydoc ISubView::needsTextureReload
+    bool needsTextureReload() const override;
+
+    /// @copydoc ISubView::reloadTextures
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& commandPool,
+                        vk::Queue& queue) override;
 
 private:
     /// @brief 绘制 Creator 身份和前置条件。
@@ -68,6 +84,26 @@ private:
     /// @warning UI 热路径低频分支：每帧只读取原子状态并移动至多一份小型配置，
     /// 同时复查当前项目与谱面快照；不读取文件或等待后台任务。
     void advancePendingHostStart();
+    /// @brief 打开房卡封面图片选择器。
+    /// @warning 用户低频入口：原生模式会同步打开系统文件选择器。
+    void openRoomCoverFilePicker();
+    /// @brief 绘制统一文件选择器并消费选择结果。
+    /// @warning UI 热路径：仅在对话框打开期间绘制 ImGuiFileDialog。
+    void renderRoomCoverFilePicker();
+    /// @brief 读取图片并更新待发布房卡封面。
+    /// @param path 用户选择或当前谱面引用的图片绝对路径。
+    /// @param customized 是否由用户显式选择。
+    /// @warning 用户低频路径：会同步读取并生成一张 320x180 JPEG 缩略图。
+    void setRoomCoverPath(const std::filesystem::path& path, bool customized);
+    /// @brief 将一份 Base64 封面排入下一次 GPU 资源准备。
+    void queueRoomCoverTexture(std::string key, std::string_view base64);
+    /// @brief 绘制固定比例封面或主题色占位图。
+    /// @param textureKey 纹理缓存键。
+    /// @param fallbackSeed 无纹理时用于生成稳定主题色的字符串。
+    /// @param size 绘制尺寸。
+    /// @warning UI 热路径：仅提交一个 hit zone 与少量 ImDrawList 命令。
+    void drawRoomCover(std::string_view textureKey,
+                       std::string_view fallbackSeed, ImVec2 size);
 
     struct PendingHostStart;
     struct PendingGuestJoin;
@@ -78,6 +114,27 @@ private:
     std::array<char, 160> m_roomName{};
     /// @brief 是否已经从当前谱面初始化房间名称。
     bool m_roomNameInitialized = false;
+    /// @brief 当前谱面默认封面解析到的绝对路径。
+    std::filesystem::path m_defaultRoomCoverPath;
+    /// @brief 当前准备发布的房卡封面源文件。
+    std::filesystem::path m_roomCoverPath;
+    /// @brief 当前准备发布的固定尺寸 Base64 JPEG 缩略图。
+    std::string m_roomCoverImage;
+    /// @brief 当前封面生成错误对应的翻译键；为空表示没有错误。
+    std::string m_roomCoverErrorKey;
+    /// @brief 当前封面是否由用户显式选择，而非跟随谱面默认值。
+    bool m_roomCoverCustomized = false;
+    /// @brief 上次初始化封面的谱面路径键，用于切谱后恢复默认封面。
+    std::filesystem::path m_roomCoverBeatmapKey;
+    /// @brief 等待 GPU 资源准备阶段解码上传的 Base64 图片。
+    std::map<std::string, std::string, std::less<>> m_pendingRoomCoverTextures;
+    /// @brief 已上传的房卡封面纹理。
+    std::map<std::string, std::unique_ptr<Graphic::VKTexture>, std::less<>>
+        m_roomCoverTextures;
+    /// @brief 等待在 GPU 资源准备阶段移除的纹理键。
+    std::set<std::string, std::less<>> m_roomCoverTextureRemovals;
+    /// @brief 已确认无法解码的远端封面，避免每帧重复上传。
+    std::set<std::string, std::less<>> m_failedRoomCoverTextures;
     /// @brief 开房时是否只允许主程序构建指纹与房主一致的访客。
     bool m_requireMatchingBuildFingerprint = true;
     /// @brief 当前客户端向 P2P 房间发布主画布状态的频率。
