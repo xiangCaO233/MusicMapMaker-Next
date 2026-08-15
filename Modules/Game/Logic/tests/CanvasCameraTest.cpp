@@ -125,7 +125,9 @@ bool testKeyModeInteractionRestriction()
     const auto polylineEntity = createNote(MMM::NoteType::POLYLINE);
 
     MMM::Logic::InteractionController controller(context);
-    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    controller.handleCommand(MMM::Logic::CmdSelectAll{
+        .scope = MMM::Logic::SelectAllScope::AllTrackAreas,
+    });
     const auto isSelected = [&](entt::entity entity) {
         const auto* interaction =
             context.noteRegistry.try_get<MMM::Logic::InteractionComponent>(
@@ -154,6 +156,101 @@ bool testKeyModeInteractionRestriction()
         -1,
     });
     return context.hoveredEntity == holdEntity;
+}
+
+/// @brief 验证分区全选只保留鼠标所在轨道区的物件。
+/// @return Ctrl+A 分别隔离草稿、玩家与 BGM 区，且全局全选覆盖三区时返回 true。
+bool testSelectAllRespectsPointerTrackArea()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.cameras.at("Basic2DCanvas").horizontalOffsetX = 400.0F;
+
+    const auto playerEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        playerEntity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    const auto draftEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draftEntity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -1,
+            .m_isDraft    = true,
+        });
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 1.0,
+            .m_track           = 4,
+            .m_audioResourceId = "main.ogg",
+        });
+
+    MMM::Logic::InteractionController controller(context);
+    const auto setMainCanvasMouseX = [&](float mouseX, bool isHovering = true) {
+        controller.handleCommand(MMM::Logic::CmdSetMousePosition{
+            .cameraId       = "Basic2DCanvas",
+            .mouseX         = mouseX,
+            .mouseY         = 300.0F,
+            .viewportWidth  = 1000.0F,
+            .viewportHeight = 600.0F,
+            .isHovering     = isHovering,
+        });
+    };
+    const auto isNoteSelected = [&](entt::entity entity) {
+        const auto* interaction =
+            context.noteRegistry.try_get<MMM::Logic::InteractionComponent>(
+                entity);
+        return interaction && interaction->isSelected;
+    };
+    const auto isSampleSelected = [&] {
+        const auto* interaction =
+            context.sampleRegistry.try_get<MMM::Logic::InteractionComponent>(
+                sampleEntity);
+        return interaction && interaction->isSelected;
+    };
+
+    setMainCanvasMouseX(550.0F);
+    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    if ( !isNoteSelected(playerEntity) || isNoteSelected(draftEntity) ||
+         isSampleSelected() ) {
+        XERROR("Player-area select-all included draft or BGM objects");
+        return false;
+    }
+
+    setMainCanvasMouseX(150.0F);
+    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    if ( isNoteSelected(playerEntity) || !isNoteSelected(draftEntity) ||
+         isSampleSelected() ) {
+        XERROR("Draft-area select-all included player or BGM objects");
+        return false;
+    }
+
+    setMainCanvasMouseX(950.0F);
+    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    if ( isNoteSelected(playerEntity) || isNoteSelected(draftEntity) ||
+         !isSampleSelected() ) {
+        XERROR("BGM-area select-all included note objects");
+        return false;
+    }
+
+    setMainCanvasMouseX(950.0F, false);
+    controller.handleCommand(MMM::Logic::CmdSelectAll{
+        .scope = MMM::Logic::SelectAllScope::AllTrackAreas,
+    });
+    if ( !isNoteSelected(playerEntity) || !isNoteSelected(draftEntity) ||
+         !isSampleSelected() ) {
+        XERROR("All-object select-all omitted a track area");
+        return false;
+    }
+
+    controller.handleCommand(MMM::Logic::CmdSelectAll{});
+    return !isNoteSelected(playerEntity) && !isNoteSelected(draftEntity) &&
+           isSampleSelected();
 }
 
 /// @brief 验证关闭折线编辑后 Shift 拖绘只创建普通 Hold。
@@ -3763,6 +3860,7 @@ bool testMixedChartObjectLocalCut()
 int main()
 {
     return testKeyModeInteractionRestriction() &&
+                   testSelectAllRespectsPointerTrackArea() &&
                    testKeyModeBrushCreatesOnlyHold() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&
                    testBmsEditingHidesBgmLanes() &&

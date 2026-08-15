@@ -190,10 +190,14 @@ struct SessionContext {
     double lastSnapshotTime{ 0.0 };
 
     // --- 交互与工具状态 ---
-    EditTool     currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
-    std::string  mouseCameraId;                  ///< 鼠标当前所在的视口 ID
-    glm::vec2    lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
-    entt::entity hoveredEntity{ entt::null };    ///< 当前悬停的实体 ID
+    EditTool    currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
+    std::string mouseCameraId;                  ///< 鼠标当前所在的视口 ID
+    glm::vec2   lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
+    /// @brief 鼠标最后一次悬停的主画布 ID，用于菜单触发的分区全选。
+    std::string lastMainCanvasCameraId;
+    /// @brief 鼠标最后一次悬停主画布时的局部坐标。
+    glm::vec2    lastMainCanvasMousePos{ 0.0f, 0.0f };
+    entt::entity hoveredEntity{ entt::null };  ///< 当前悬停的实体 ID
     /// @brief 当前悬停实体所在的独立 ECS 注册表。
     ChartObjectKind hoveredObjectKind{ ChartObjectKind::PlayerNote };
     int32_t         hoveredPart{ 0 };          ///< 悬停的音符部位 (HoverPart)

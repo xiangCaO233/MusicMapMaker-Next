@@ -174,6 +174,31 @@ void detachMarqueeSelection(SessionContext& ctx)
     ctx.marqueeBoxes.clear();
 }
 
+/// @brief 解析分区全选应使用的轨道区。
+/// @param ctx 当前会话与最后主画布鼠标位置。
+/// @return 最后主画布坐标位于有效轨道区时返回其类型。
+/// @warning Ctrl+A 低频路径：只执行一次相机查找和常量级投影。
+[[nodiscard]] std::optional<CanvasLaneKind> selectAllLaneKind(
+    const SessionContext& ctx)
+{
+    if ( ctx.lastMainCanvasCameraId.empty() ) return std::nullopt;
+
+    const auto camera = ctx.cameras.find(ctx.lastMainCanvasCameraId);
+    if ( camera == ctx.cameras.end() ) return std::nullopt;
+
+    const auto projection =
+        calculateCanvasLaneProjection(camera->second.viewportWidth,
+                                      ctx.trackCount,
+                                      ctx.bgmTrackCount,
+                                      ctx.lastConfig.visual.trackLayout.left,
+                                      ctx.lastConfig.visual.trackLayout.right,
+                                      camera->second.horizontalOffsetX,
+                                      true,
+                                      ctx.lastConfig.settings.enableBmsEditing);
+    const auto lane = projection.laneAt(ctx.lastMainCanvasMousePos.x);
+    return lane ? std::optional<CanvasLaneKind>{ lane->kind } : std::nullopt;
+}
+
 /// @brief 清空已经存在的实体选中标记。
 /// @param ctx 会话上下文。
 /// @warning 逻辑热路径：框选重算时只遍历已创建 InteractionComponent 的实体，
@@ -1109,28 +1134,46 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
     setChartObjectSelected(m_ctx, cmd.kind, cmd.entity, true);
 }
 
+/// @brief 按命令范围替换当前物件选择。
+/// @param cmd 当前轨道区或所有轨道区的全选命令。
+/// @warning 用户触发的低频路径：可遍历可编辑物件 Registry，不得从每帧更新调用。
 void InteractionController::handleCommand(const CmdSelectAll& cmd)
 {
-    detachMarqueeSelection(m_ctx);
+    const auto laneKind = cmd.scope == SelectAllScope::CurrentTrackArea
+                              ? selectAllLaneKind(m_ctx)
+                              : std::nullopt;
+    if ( cmd.scope == SelectAllScope::CurrentTrackArea && !laneKind ) return;
 
-    auto view = m_ctx.noteRegistry.view<NoteComponent>();
-    for ( auto entity : view ) {
-        const auto& note = view.get<NoteComponent>(entity);
-        if ( !SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ||
-             note.m_isSubNote ) {
-            continue;
+    clearSelection(m_ctx);
+
+    if ( cmd.scope == SelectAllScope::AllTrackAreas ||
+         *laneKind != CanvasLaneKind::Bgm ) {
+        auto view = m_ctx.noteRegistry.view<NoteComponent>();
+        for ( auto entity : view ) {
+            const auto& note = view.get<NoteComponent>(entity);
+            if ( !SessionUtils::isNoteEditable(note,
+                                               m_ctx.lastConfig.settings) ||
+                 note.m_isSubNote ||
+                 (cmd.scope == SelectAllScope::CurrentTrackArea &&
+                  note.m_isDraft != (*laneKind == CanvasLaneKind::Draft)) ) {
+                continue;
+            }
+
+            setChartObjectSelected(m_ctx,
+                                   note.m_isDraft ? ChartObjectKind::DraftNote
+                                                  : ChartObjectKind::PlayerNote,
+                                   entity,
+                                   true);
         }
-
-        setChartObjectSelected(m_ctx,
-                               note.m_isDraft ? ChartObjectKind::DraftNote
-                                              : ChartObjectKind::PlayerNote,
-                               entity,
-                               true);
     }
-    auto sampleView = m_ctx.sampleRegistry.view<SampleComponent>();
-    for ( auto entity : sampleView ) {
-        setChartObjectSelected(
-            m_ctx, ChartObjectKind::AudioSample, entity, true);
+
+    if ( cmd.scope == SelectAllScope::AllTrackAreas ||
+         *laneKind == CanvasLaneKind::Bgm ) {
+        auto sampleView = m_ctx.sampleRegistry.view<SampleComponent>();
+        for ( auto entity : sampleView ) {
+            setChartObjectSelected(
+                m_ctx, ChartObjectKind::AudioSample, entity, true);
+        }
     }
 }
 
@@ -1510,6 +1553,10 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
 
     if ( canUpdate ) {
         m_ctx.lastMousePos = { cmd.mouseX, cmd.mouseY };
+        if ( isHovering && SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
+            m_ctx.lastMainCanvasCameraId = cmd.cameraId;
+            m_ctx.lastMainCanvasMousePos = m_ctx.lastMousePos;
+        }
 
         // 如果命令携带了直接的时间戳，优先使用它（用于音频视图等非空间映射视口）
         if ( cmd.hoverTime >= 0.0 && std::isfinite(cmd.hoverTime) ) {

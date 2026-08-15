@@ -66,6 +66,12 @@ MainMenuEdit::MainMenuEdit()
         "Ctrl+A",
         createSelectAllAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_SELECT_ALL,
+        "ui.edit.select_all_objects",
+        MainMenuItemTextKind::TranslationKey,
+        "Ctrl+Shift+A",
+        createSelectAllObjectsAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_COG,
         "ui.edit.note_metadata",
         MainMenuItemTextKind::TranslationKey,

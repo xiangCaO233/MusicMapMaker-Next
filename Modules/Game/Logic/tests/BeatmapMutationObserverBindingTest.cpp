@@ -472,7 +472,9 @@ private:
     session.pushCommand(MMM::Logic::LogicCommand{
         MMM::Logic::CmdChangeTool{ .tool = MMM::Logic::EditTool::Marquee },
     });
-    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSelectAll{} });
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSelectAll{
+        .scope = MMM::Logic::SelectAllScope::AllTrackAreas,
+    } });
     session.update(0.0, config, false);
 
     auto observer = std::make_shared<CountingMutationObserver>();

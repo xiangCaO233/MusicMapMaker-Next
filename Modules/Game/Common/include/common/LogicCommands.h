@@ -463,10 +463,19 @@ struct CmdMirrorSelected {
 struct CmdAlignSelectedToCommonBeats {
 };
 
-/**
- * @brief 全选指令
- */
+/// @brief 全选命令的轨道区范围。
+enum class SelectAllScope : std::uint8_t {
+    /// @brief 只选中鼠标最后所在轨道区的可编辑物件。
+    CurrentTrackArea,
+
+    /// @brief 选中所有轨道区的可编辑物件。
+    AllTrackAreas,
+};
+
+/// @brief 全选指令。
 struct CmdSelectAll {
+    /// @brief 本次全选覆盖的轨道区范围。
+    SelectAllScope scope{ SelectAllScope::CurrentTrackArea };
 };
 
 /**

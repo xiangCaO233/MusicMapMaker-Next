@@ -29,8 +29,11 @@ std::unique_ptr<IMainMenuItemActionHandler> createMirrorPasteAction();
 /// @brief 创建镜像选中音符动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createMirrorAction();
 
-/// @brief 创建全选动作处理器。
+/// @brief 创建当前轨道区全选动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createSelectAllAction();
+
+/// @brief 创建所有轨道区全选动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createSelectAllObjectsAction();
 
 /// @brief 创建折线编辑开关处理器。
 std::unique_ptr<IMainMenuToggleItemActionHandler>

@@ -1492,10 +1492,13 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.project.bgm_track_count"),
                                     arg.bgmTrackCount);
                 } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
-                    m_ctx->lastActionMessage =
-                        fmt::format("{} {}",
-                                    TR("ui.status.category.selection"),
-                                    TR("ui.status.selection.all_selected"));
+                    m_ctx->lastActionMessage = fmt::format(
+                        "{} {}",
+                        TR("ui.status.category.selection"),
+                        TR(arg.scope == SelectAllScope::AllTrackAreas
+                               ? "ui.status.selection.all_selected"
+                               : "ui.status.selection."
+                                 "current_track_area_selected"));
                 }
 
                 // --- Session 自己处理的命令 ---
