@@ -39,6 +39,7 @@ enum class CollaborationLogEventType {
     SignalingConnected,
     ParticipantJoined,
     ParticipantLeft,
+    HostDisconnected,
     OperationCommitted,
     ResourceManifest,
     ResourceCompleted,
@@ -367,6 +368,10 @@ private:
                    ParticipantId participantId = {});
     /// @brief 处理传输层生命周期事件。
     void handleTransportEvent(const WebRtcTransportEvent& event);
+    /// @brief 释放当前房间的在线状态，保留日志和最近错误供离线界面说明。
+    /// @warning 房间生命周期低频阻塞点：仅在主动断开或房主链路终止时调用，
+    /// 可能等待正在执行的纯内存后台任务结束。
+    void resetOnlineSessionState();
     /// @brief 在访客取得 PeerId 后创建协作状态机。
     void ensureGuestPeer();
     /// @brief 将一条房主已排序的规范化谱面操作排入后台文档流水线。

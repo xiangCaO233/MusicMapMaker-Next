@@ -705,9 +705,36 @@ bool testPublicDirectoryWebRtcRoom()
         return false;
     }
 
-    for ( auto& guest : guests ) guest->disconnect();
+    const PeerId hostPeerId = host.localPeerId();
+    host.publishLocalViewport({
+        .playbackTime          = 1.25,
+        .visualTime            = 1.5,
+        .visibleTimeStart      = 0.0,
+        .visibleTimeEnd        = 4.0,
+        .horizontalOffsetRatio = 0.2,
+    });
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return std::all_of(
+                 guests.begin(), guests.end(), [hostPeerId](const auto& guest) {
+                     return guest->participantViewports().contains(hostPeerId);
+                 });
+         }) ) {
+        XERROR("Guests did not receive the host viewport before disconnect");
+        return false;
+    }
+
+    host.disconnect();
     return pumpUntil(server, host, guests, [&]() {
-        return host.participants().size() == 1U;
+        return std::all_of(guests.begin(), guests.end(), [](const auto& guest) {
+            return guest->state() == CollaborationRoomState::Idle &&
+                   !guest->isActive() && guest->localPeerId() == 0 &&
+                   guest->participants().empty() &&
+                   guest->participantViewports().empty() &&
+                   guest->localPermissions() == 0U &&
+                   !guest->lastError().empty() &&
+                   countLogs(*guest,
+                             CollaborationLogEventType::HostDisconnected) == 1U;
+        });
     });
 }
 
@@ -828,7 +855,15 @@ bool testHostAdmissionControl()
     }
     if ( !pumpUntil(server, host, guests, [&]() {
              return host.participants().size() == 1U &&
-                    guests.back()->state() == CollaborationRoomState::Error;
+                    guests.back()->state() == CollaborationRoomState::Idle &&
+                    !guests.back()->isActive() &&
+                    guests.back()->participants().empty() &&
+                    guests.back()->participantViewports().empty() &&
+                    guests.back()->localPermissions() == 0U &&
+                    !guests.back()->lastError().empty() &&
+                    countLogs(*guests.back(),
+                              CollaborationLogEventType::HostDisconnected) ==
+                        1U;
          }) ) {
         return failAdmission("remove_complete");
     }

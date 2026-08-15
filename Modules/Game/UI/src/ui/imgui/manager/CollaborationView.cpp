@@ -357,6 +357,17 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     const bool fingerprintFailed =
         Network::Collaboration::collaborationBuildFingerprintState() ==
         Network::Collaboration::CollaborationBuildFingerprintState::Failed;
+    if ( !m_room->lastError().empty() ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "%s",
+                           TR("ui.collaboration.previous_room_ended").data());
+        ImGui::TextWrapped("%s: %s",
+                           TR("ui.collaboration.error").data(),
+                           m_room->lastError().c_str());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
     if ( hostReady && !m_roomNameInitialized ) {
         const auto& metadata =
             activeSession->getContext().currentBeatmap->m_baseMapMetadata;

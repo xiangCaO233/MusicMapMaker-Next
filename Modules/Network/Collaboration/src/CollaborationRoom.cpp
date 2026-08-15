@@ -581,13 +581,19 @@ void CollaborationRoom::onAuthoritativeBeatmapApplied(
 
 void CollaborationRoom::disconnect()
 {
-    stopAcceptingLocalMutations();
     if ( m_state != CollaborationRoomState::Idle ) {
         appendLog(CollaborationLogEventType::Disconnected,
                   localPeerId(),
                   m_creator,
                   "local_disconnect");
     }
+    resetOnlineSessionState();
+    m_lastError.clear();
+}
+
+void CollaborationRoom::resetOnlineSessionState()
+{
+    stopAcceptingLocalMutations();
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
@@ -598,7 +604,6 @@ void CollaborationRoom::disconnect()
     m_creator.clear();
     m_participantId.clear();
     m_operationSessionId.clear();
-    m_lastError.clear();
     resetRemoteOperationPipeline();
     m_resourceSync.reset();
     m_resourceManifest.reset();
@@ -613,6 +618,7 @@ void CollaborationRoom::disconnect()
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_localPermissions.store(0U, std::memory_order_release);
     m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
+    m_hostRoleForObserver.store(false, std::memory_order_relaxed);
 }
 
 void CollaborationRoom::update()
@@ -636,6 +642,7 @@ void CollaborationRoom::update()
         WebRtcTransportEvent event;
         if ( !m_transport->receiveEvent(event) ) break;
         handleTransportEvent(event);
+        if ( !m_transport ) break;
     }
     ensureGuestPeer();
     if ( m_peer ) {
@@ -1086,9 +1093,14 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
             m_peer->removeParticipant(event.peerId);
             m_resourceManifestRecipients.erase(event.peerId);
         } else if ( !m_isHost ) {
-            m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
-            stopAcceptingLocalMutations();
+            appendLog(CollaborationLogEventType::HostDisconnected,
+                      event.peerId,
+                      event.creator,
+                      event.detail,
+                      event.participantId);
+            resetOnlineSessionState();
+            break;
         }
         appendLog(CollaborationLogEventType::ParticipantLeft,
                   event.peerId,

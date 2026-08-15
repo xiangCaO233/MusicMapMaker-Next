@@ -326,6 +326,9 @@ std::string CollaborationLogWindow::formatEntry(
     case Network::Collaboration::CollaborationLogEventType::ParticipantLeft:
         formatKey = "ui.collaboration.log.left_fmt";
         break;
+    case Network::Collaboration::CollaborationLogEventType::HostDisconnected:
+        formatKey = "ui.collaboration.log.host_disconnected_fmt";
+        break;
     case Network::Collaboration::CollaborationLogEventType::OperationCommitted:
         formatKey = "ui.collaboration.log.operation_fmt";
         break;
