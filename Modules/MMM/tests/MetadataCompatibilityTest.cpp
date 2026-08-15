@@ -737,6 +737,39 @@ bool testSingleAudioExporterCompatibility(
                     !std::filesystem::exists(timedIMDPath),
                 "rejected timed exports should not leave partial files");
 
+    MMM::BeatMap nearZeroSource;
+    nearZeroSource.m_baseMapMetadata.track_count     = 4;
+    nearZeroSource.m_baseMapMetadata.bgm_track_count = 1;
+    MMM::AudioSampleEvent nearZeroSample;
+    nearZeroSample.m_timestamp       = 0.32700178886724274;
+    nearZeroSample.m_track           = 4;
+    nearZeroSample.m_audioResourceId = "NearZero.ogg";
+    nearZeroSource.m_audioSamples.push_back(nearZeroSample);
+
+    const auto nearZeroIMDPath = outputDirectory / "NearZero_4k_Test.imd";
+    removeError.clear();
+    std::filesystem::remove(nearZeroIMDPath, removeError);
+    ok &= check(nearZeroSource.saveToFile(nearZeroIMDPath),
+                "RM/IMD should accept a sub-millisecond audio timestamp");
+
+    nearZeroSource.m_audioSamples.front().m_timestamp       = 1.0;
+    nearZeroSource.m_audioSamples.front().m_audioResourceId = "Boundary.ogg";
+    const auto boundaryIMDPath = outputDirectory / "Boundary_4k_Test.imd";
+    removeError.clear();
+    std::filesystem::remove(boundaryIMDPath, removeError);
+    ok &= check(nearZeroSource.saveToFile(boundaryIMDPath),
+                "RM/IMD should accept the one-millisecond audio boundary");
+
+    nearZeroSource.m_audioSamples.front().m_timestamp       = 1.000001;
+    nearZeroSource.m_audioSamples.front().m_audioResourceId = "Outside.ogg";
+    const auto outsideIMDPath = outputDirectory / "Outside_4k_Test.imd";
+    removeError.clear();
+    std::filesystem::remove(outsideIMDPath, removeError);
+    ok &= check(!nearZeroSource.saveToFile(outsideIMDPath),
+                "RM/IMD should reject audio beyond one millisecond");
+    ok &= check(!std::filesystem::exists(outsideIMDPath),
+                "rejected near-zero audio should not leave a partial file");
+
     MMM::BeatMap layeredSource;
     layeredSource.m_baseMapMetadata.track_count     = 4;
     layeredSource.m_baseMapMetadata.bgm_track_count = 1;
