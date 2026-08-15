@@ -234,6 +234,26 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证草稿轨发布门禁不会暴露到用户配置。
+/// @return 开关不被序列化且外部配置无法启用时返回 true。
+bool testDraftLaneReleaseGateIsInternal()
+{
+    MMM::Config::EditorSettings source;
+    source.enableDraftLanes = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           external = nlohmann::json{
+        { "enableDraftLanes", true }
+    }.get<MMM::Config::EditorSettings>();
+    if ( encoded.contains("enableDraftLanes") || restored.enableDraftLanes ||
+         external.enableDraftLanes ) {
+        XERROR("Draft lane release gate leaked into user config");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证禁止垂直移动设置可持久化且旧配置保持自由拖动。
 /// @return 开启状态往返不变且缺失字段默认关闭时返回 true。
 bool testVerticalObjectDragConfigRoundTrip()
@@ -662,6 +682,7 @@ int main()
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
+                   testDraftLaneReleaseGateIsInternal() &&
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&

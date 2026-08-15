@@ -86,7 +86,8 @@ constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
                                       ctx.lastConfig.visual.trackLayout.right,
                                       camera->second.horizontalOffsetX,
                                       true,
-                                      ctx.lastConfig.settings.enableBmsEditing);
+                                      ctx.lastConfig.settings.enableBmsEditing,
+                                      ctx.lastConfig.settings.enableDraftLanes);
     const auto lane = lanes.laneAt(mouseX);
     return lane && lane->kind == CanvasLaneKind::Bgm
                ? ::MMM::BeatmapMutationFlags::AudioSamples

@@ -539,7 +539,9 @@ struct RenderSnapshot {
     /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
     int32_t bgmTrackCount{ 0 };
     /// @brief 当前快照是否显示并允许交互 BGM 轨道区。
-    bool   bmsEditingEnabled{ true };
+    bool bmsEditingEnabled{ true };
+    /// @brief 当前快照是否发布项目级草稿轨道区。
+    bool   draftLanesEnabled{ false };
     float  renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
@@ -755,6 +757,7 @@ struct RenderSnapshot {
         maxCombo           = 0;
         bgmTrackCount      = 0;
         bmsEditingEnabled  = true;
+        draftLanesEnabled  = false;
     }
 };
 

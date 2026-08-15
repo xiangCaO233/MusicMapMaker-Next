@@ -982,6 +982,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
         snapshot->bmsEditingEnabled =
             m_ctx->lastConfig.settings.enableBmsEditing;
+        snapshot->draftLanesEnabled =
+            m_ctx->lastConfig.settings.enableDraftLanes;
         snapshot->isHoveringCanvas = isActiveSession &&
                                      m_ctx->isMouseInCanvas &&
                                      (m_ctx->mouseCameraId == cameraId);
@@ -1066,7 +1068,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         config.visual.trackLayout.right,
                         camera.horizontalOffsetX,
                         true,
-                        config.settings.enableBmsEditing);
+                        config.settings.enableBmsEditing,
+                        config.settings.enableDraftLanes);
                     trackProjection = laneProjection.player;
                     const auto lane =
                         laneProjection.laneAt(m_ctx->lastMousePos.x);

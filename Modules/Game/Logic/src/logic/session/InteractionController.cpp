@@ -194,7 +194,8 @@ void detachMarqueeSelection(SessionContext& ctx)
                                       ctx.lastConfig.visual.trackLayout.right,
                                       camera->second.horizontalOffsetX,
                                       true,
-                                      ctx.lastConfig.settings.enableBmsEditing);
+                                      ctx.lastConfig.settings.enableBmsEditing,
+                                      ctx.lastConfig.settings.enableDraftLanes);
     const auto lane = projection.laneAt(ctx.lastMainCanvasMousePos.x);
     return lane ? std::optional<CanvasLaneKind>{ lane->kind } : std::nullopt;
 }
@@ -1154,6 +1155,8 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
             if ( !SessionUtils::isNoteEditable(note,
                                                m_ctx.lastConfig.settings) ||
                  note.m_isSubNote ||
+                 (note.m_isDraft &&
+                  !m_ctx.lastConfig.settings.enableDraftLanes) ||
                  (cmd.scope == SelectAllScope::CurrentTrackArea &&
                   note.m_isDraft != (*laneKind == CanvasLaneKind::Draft)) ) {
                 continue;
@@ -1246,7 +1249,8 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         m_ctx.lastConfig.visual.trackLayout.right,
         camera.horizontalOffsetX,
         true,
-        m_ctx.lastConfig.settings.enableBmsEditing);
+        m_ctx.lastConfig.settings.enableBmsEditing,
+        m_ctx.lastConfig.settings.enableDraftLanes);
     const auto lane = projection.laneAt(cmd.mouseX);
     if ( !lane || lane->kind != CanvasLaneKind::Bgm ) {
         m_ctx.lastActionMessage = "音频资源只能放置到 BGM 轨道区";

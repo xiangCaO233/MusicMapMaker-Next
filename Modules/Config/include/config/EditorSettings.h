@@ -727,6 +727,11 @@ struct EditorSettings {
     /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
     bool enableBmsEditing{ true };
 
+    /// @brief 当前构建是否发布项目级草稿轨功能。
+    /// @details
+    /// 内部发布门禁，不序列化也不向设置界面开放；底层草稿数据继续保留。
+    bool enableDraftLanes{ false };
+
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 

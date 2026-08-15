@@ -300,13 +300,14 @@ struct CanvasLaneProjection {
 /// @param horizontalOffsetX 相机产生的内容横向逻辑像素偏移。
 /// @param includeAppendLane 是否在持久轨道后显示一条运行时追加轨。
 /// @param includeBgmLanes 是否显示并允许访问 BGM 轨道区。
+/// @param includeDraftLanes 是否显示并允许访问项目级草稿轨道区。
 /// @return 可供渲染、拾取、框选和拖动共用的统一投影。
 /// @warning 逻辑与渲染热路径可能每帧调用；只允许常量级数值运算。
 [[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
     float viewportWidth, std::int32_t playerTrackCount,
     std::int32_t persistentBgmTrackCount, float layoutLeft, float layoutRight,
     float horizontalOffsetX, bool includeAppendLane = true,
-    bool includeBgmLanes = true)
+    bool includeBgmLanes = true, bool includeDraftLanes = false)
 {
     CanvasLaneProjection result;
     result.player = calculatePlayerTrackProjection(viewportWidth,
@@ -317,8 +318,9 @@ struct CanvasLaneProjection {
     if ( !result.player.valid ) return result;
 
     result.playerLaneCount = static_cast<std::uint32_t>(playerTrackCount);
-    result.draftLaneCount  = result.playerLaneCount;
-    result.draftRightX     = result.player.leftX;
+    result.draftLaneCount =
+        includeDraftLanes ? result.playerLaneCount : std::uint32_t{ 0 };
+    result.draftRightX = result.player.leftX;
     result.draftLeftX =
         result.draftRightX - static_cast<float>(result.draftLaneCount) *
                                  result.player.singleTrackWidth;

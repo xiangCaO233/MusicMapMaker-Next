@@ -516,7 +516,8 @@ void Basic2DCanvas::updateCollaborationViewports(
         layout.right,
         m_currentSnapshot->canvasHorizontalOffsetX,
         true,
-        m_currentSnapshot->bmsEditingEnabled);
+        m_currentSnapshot->bmsEditingEnabled,
+        m_currentSnapshot->draftLanesEnabled);
     if ( !localLaneProjection.valid ) return;
     const auto horizontalRange = projectCollaborationViewportHorizontalRange(
         localLaneProjection.player.leftX,

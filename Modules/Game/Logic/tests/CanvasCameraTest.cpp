@@ -82,6 +82,7 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
     context.lastConfig.visual.trackLayout.left            = 0.1F;
     context.lastConfig.visual.trackLayout.right           = 0.5F;
     context.lastConfig.visual.judgeline_pos               = 0.5F;
+    context.lastConfig.settings.enableDraftLanes          = true;
     context.cameras.emplace("Basic2DCanvas",
                             MMM::Logic::CameraInfo{
                                 "Basic2DCanvas",
@@ -840,7 +841,7 @@ bool testTrackProjectionUsesCameraOffset()
 bool testUnifiedLaneProjection()
 {
     const auto projection = MMM::Logic::calculateCanvasLaneProjection(
-        1000.0F, 4, 2, 0.1F, 0.5F, 0.0F);
+        1000.0F, 4, 2, 0.1F, 0.5F, 0.0F, true, true, true);
     const auto firstDraft = projection.laneAt(-300.0F);
     const auto lastDraft  = projection.laneAt(99.0F);
     const auto playerLane = projection.laneAt(499.0F);
@@ -877,6 +878,61 @@ bool testUnifiedLaneProjection()
                                             2 } ||
          outside || !visible || visible->first != 0 || visible->second != 2 ) {
         XERROR("Unified canvas lane projection did not map all lane areas");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证未发布草稿轨时不会绘制可访问投影、创建草稿或全选草稿物件。
+/// @return 默认投影隐藏草稿区且编辑入口不会命中草稿数据时返回 true。
+bool testDraftLaneReleaseGateHidesDraftArea()
+{
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 1, 0.1F, 0.5F, 0.0F);
+    if ( !projection.valid || projection.draftLaneCount != 0U ||
+         !near(projection.draftLeftX, projection.player.leftX) ||
+         !near(projection.draftRightX, projection.player.leftX) ||
+         projection.laneAt(50.0F).has_value() ||
+         projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, 0U })
+             .has_value() ) {
+        XERROR("Draft lane release gate still exposed a canvas projection");
+        return false;
+    }
+
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enableDraftLanes = false;
+    const auto draftEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draftEntity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -1,
+            .m_isDraft    = true,
+        });
+
+    MMM::Logic::InteractionController interaction(context);
+    interaction.handleCommand(MMM::Logic::CmdSelectAll{
+        .scope = MMM::Logic::SelectAllScope::AllTrackAreas,
+    });
+    const auto* selected =
+        context.noteRegistry.try_get<MMM::Logic::InteractionComponent>(
+            draftEntity);
+    if ( selected && selected->isSelected ) {
+        XERROR("Hidden draft object was included by global select-all");
+        return false;
+    }
+
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 50.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    if ( context.brushState.isActive ) {
+        XERROR("Hidden draft lane accepted a brush gesture");
         return false;
     }
     return true;
@@ -4114,6 +4170,7 @@ int main()
                    testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
+                   testDraftLaneReleaseGateHidesDraftArea() &&
                    testProjectDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
                    testResizePreservesNormalizedOffset() &&

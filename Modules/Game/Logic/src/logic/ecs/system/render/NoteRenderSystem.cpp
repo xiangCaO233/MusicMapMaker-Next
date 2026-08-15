@@ -432,7 +432,8 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
             const float visibleDraftLeft =
                 std::max(0.0F, laneProjection.draftLeftX);
             const float visibleDraftRight =
@@ -512,7 +513,8 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
             noteRenderClipLeftX = laneProjection.draftLeftX;
             if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
                 noteRenderRightX = laneProjection.bgmRightX;
@@ -545,7 +547,8 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
             SampleRenderSystem::renderSamples(sampleRegistry,
                                               sortedSampleEntities,
                                               sortedSampleMaxEndPrefix,
@@ -577,7 +580,8 @@ void NoteRenderSystem::generateSnapshot(
                                               config.visual.trackLayout.right,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
-                                              config.settings.enableBmsEditing);
+                                              config.settings.enableBmsEditing,
+                                              config.settings.enableDraftLanes);
             const float clipLeft = std::max(0.0F, laneProjection.draftLeftX);
             const float clipRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
@@ -1250,7 +1254,8 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           config.visual.trackLayout.right,
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
-                                          config.settings.enableBmsEditing);
+                                          config.settings.enableBmsEditing,
+                                          config.settings.enableDraftLanes);
         const float visibleDraftLeft =
             std::max(0.0F, laneProjection.draftLeftX);
         const float visibleDraftRight =

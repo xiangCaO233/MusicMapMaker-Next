@@ -192,6 +192,13 @@ void NoteRenderSystem::renderNotes(
         noteEntities,
         noteSeen);
 
+    if ( !config.settings.enableDraftLanes ) {
+        std::erase_if(noteEntities, [&registry](entt::entity entity) {
+            const auto* note = registry.try_get<const NoteComponent>(entity);
+            return note && note->m_isDraft;
+        });
+    }
+
     // 布局模式即使正在播放也需要逐物件边界，供 UI 直接调整渲染比例。
     const bool shouldGenerateHitboxes =
         (!snapshot->isPlaying || snapshot->currentTool == EditTool::Layout) &&
