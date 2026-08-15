@@ -48,6 +48,8 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
     struct ObjectPosition {
         double       timestamp{ 0.0 };
         std::int32_t track{ -1 };
+        entt::entity entity{ entt::null };
+        std::int32_t subIndex{ -1 };
     };
     std::unordered_map<std::string, ObjectPosition> playerObjects;
     const auto noteView = ctx.noteRegistry.view<const NoteComponent>();
@@ -55,18 +57,28 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
     for ( const auto entity : noteView ) {
         const auto& note = noteView.get<const NoteComponent>(entity);
         if ( !note.m_collaborationId.empty() ) {
+            const bool isSubNote =
+                note.m_isSubNote && note.m_parentPolyline != entt::null;
             playerObjects.try_emplace(
                 note.m_collaborationId,
-                ObjectPosition{ note.m_timestamp, note.m_trackIndex });
+                ObjectPosition{ note.m_timestamp,
+                                note.m_trackIndex,
+                                isSubNote ? note.m_parentPolyline : entity,
+                                isSubNote ? note.m_subIndex : -1 });
         }
         if ( note.m_type != ::MMM::NoteType::POLYLINE || note.m_isSubNote ) {
             continue;
         }
-        for ( const auto& subNote : note.m_subNotes ) {
+        for ( std::size_t index = 0U; index < note.m_subNotes.size();
+              ++index ) {
+            const auto& subNote = note.m_subNotes[index];
             if ( !subNote.collaborationId.empty() ) {
                 playerObjects.try_emplace(
                     subNote.collaborationId,
-                    ObjectPosition{ subNote.timestamp, subNote.trackIndex });
+                    ObjectPosition{ subNote.timestamp,
+                                    subNote.trackIndex,
+                                    entity,
+                                    static_cast<std::int32_t>(index) });
             }
         }
     }
@@ -80,7 +92,9 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
             audioSamples.try_emplace(
                 sample.m_collaborationId,
                 ObjectPosition{ sample.effectiveTime(),
-                                static_cast<std::int32_t>(sample.m_track) });
+                                static_cast<std::int32_t>(sample.m_track),
+                                entity,
+                                -1 });
         }
     }
 
@@ -102,16 +116,19 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
             const auto target = playerObjects.find(annotation.m_targetId);
             entry.item.targetMissing = target == playerObjects.end();
             if ( target != playerObjects.end() ) {
-                entry.timestamp  = target->second.timestamp;
-                entry.item.track = target->second.track;
+                entry.timestamp           = target->second.timestamp;
+                entry.item.track          = target->second.track;
+                entry.item.targetEntity   = target->second.entity;
+                entry.item.targetSubIndex = target->second.subIndex;
             }
         } else if ( annotation.m_targetKind ==
                     ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
             const auto target        = audioSamples.find(annotation.m_targetId);
             entry.item.targetMissing = target == audioSamples.end();
             if ( target != audioSamples.end() ) {
-                entry.timestamp  = target->second.timestamp;
-                entry.item.track = target->second.track;
+                entry.timestamp         = target->second.timestamp;
+                entry.item.track        = target->second.track;
+                entry.item.targetEntity = target->second.entity;
             }
         }
         if ( std::isfinite(entry.timestamp) ) {

@@ -2,6 +2,7 @@
 
 #include "audio/AudioManager.h"
 #include "canvas/AnnotationDetailLayout.h"
+#include "canvas/AnnotationTargetHint.h"
 #include "canvas/CanvasBlockedGesture.h"
 #include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
@@ -66,17 +67,17 @@ constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
 /// @brief 画布悬浮信息窗口的纵向元素间距。
 constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
 
-/// @brief 绘制当前悬浮物件的高对比几何提示。
-/// @param candidate 当前方向键悬浮层选中的候选。
+/// @brief 绘制当前悬浮批注所指向物件的高对比几何提示。
+/// @param bounds 批注目标在画布局部坐标中的提示边界。
 /// @param canvasPosition 画布左上角屏幕坐标。
 /// @param canvasWidth 画布可见宽度。
 /// @param canvasHeight 画布可见高度。
-/// @warning UI 热路径：悬浮物件时每帧调用一次，只追加固定数量 ImGui 几何。
-void renderObjectHoverHint(const HoverLayerCandidate& candidate,
-                           ImVec2 canvasPosition, float canvasWidth,
-                           float canvasHeight)
+/// @warning UI 热路径：悬浮批注详情卡片时每帧调用一次，只追加固定数量 ImGui
+/// 几何。
+void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
+                                ImVec2 canvasPosition, float canvasWidth,
+                                float canvasHeight)
 {
-    const auto   bounds = calculateHoverHintBounds(candidate);
     const ImVec2 minimum{ canvasPosition.x + bounds.left,
                           canvasPosition.y + bounds.top };
     const ImVec2 maximum{ canvasPosition.x + bounds.right,
@@ -2759,6 +2760,18 @@ bool Basic2DCanvasInteraction::renderAnnotationGutter(
                 detailCardHovered   = true;
                 detailLinkHovered   = detailHit.linkHovered;
                 detailWheelConsumed = detailHit.wheelConsumed;
+                if ( detailHit.itemIndex < detailHit.marker->items.size() ) {
+                    const auto targetBounds = findAnnotationTargetHintBounds(
+                        detailHit.marker->items[detailHit.itemIndex],
+                        currentSnapshot.hitboxes);
+                    if ( targetBounds ) {
+                        renderAnnotationTargetHint(
+                            *targetBounds,
+                            { canvasScreenX, canvasScreenY },
+                            targetWidth,
+                            targetHeight);
+                    }
+                }
             }
         }
 
@@ -3660,11 +3673,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     { hitbox.entity,
                       hitbox.kind,
                       static_cast<std::uint8_t>(hitbox.part),
-                      hitbox.subIndex,
-                      it->x,
-                      it->y,
-                      it->w,
-                      it->h });
+                      hitbox.subIndex });
                 if ( !appended ) continue;
                 layerSignature +=
                     std::to_string(static_cast<uint32_t>(
@@ -3707,7 +3716,6 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredObjectKind     = candidate.kind;
         hoveredPart           = candidate.part;
         hoveredSubIndex       = candidate.subIndex;
-        renderObjectHoverHint(candidate, windowPos, targetWidth, targetHeight);
     }
 
     bool shouldSendHover = !m_hasLastHovered ||

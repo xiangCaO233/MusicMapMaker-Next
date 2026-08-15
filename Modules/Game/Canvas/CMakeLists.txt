@@ -93,6 +93,14 @@ target_include_directories(HoverLayerSelectionTest
 target_link_libraries(HoverLayerSelectionTest PRIVATE Common 3rd_entt)
 add_test(NAME HoverLayerSelectionTest COMMAND HoverLayerSelectionTest)
 
+# 批注目标提示只在详情卡片悬浮时解析，覆盖时间戳、折线子物件与自动采样。
+mmm_add_test_executable(Canvas AnnotationTargetHintTest
+                        tests/AnnotationTargetHintTest.cpp)
+target_include_directories(AnnotationTargetHintTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AnnotationTargetHintTest PRIVATE Logic Common 3rd_entt)
+add_test(NAME AnnotationTargetHintTest COMMAND AnnotationTargetHintTest)
+
 # 批注详情卡片布局是无图形依赖的纯计算，覆盖拥挤标记的避让与边界约束。
 mmm_add_test_executable(Canvas AnnotationDetailLayoutTest
                         tests/AnnotationDetailLayoutTest.cpp)

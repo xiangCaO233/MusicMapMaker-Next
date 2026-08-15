@@ -2,7 +2,6 @@
 
 #include "common/ChartObjectKind.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <vector>
@@ -20,55 +19,7 @@ struct HoverLayerCandidate {
     std::uint8_t part{ 0 };
     /// @brief Polyline 等复合物件的子部位索引。
     int subIndex{ -1 };
-    /// @brief 候选物件实际渲染几何的左边界。
-    float x{ 0.0F };
-    /// @brief 候选物件实际渲染几何的上边界。
-    float y{ 0.0F };
-    /// @brief 候选物件实际渲染几何的宽度。
-    float width{ 0.0F };
-    /// @brief 候选物件实际渲染几何的高度。
-    float height{ 0.0F };
 };
-
-/// @brief 悬浮提示框在画布局部坐标中的边界。
-struct HoverHintBounds {
-    /// @brief 左边界。
-    float left{ 0.0F };
-    /// @brief 上边界。
-    float top{ 0.0F };
-    /// @brief 右边界。
-    float right{ 0.0F };
-    /// @brief 下边界。
-    float bottom{ 0.0F };
-};
-
-/// @brief 按真实几何中心扩展悬浮提示框，并保证小物件仍清晰可见。
-/// @param candidate 当前悬浮层候选。
-/// @param padding 真实几何四周追加的视觉留白。
-/// @param minimumExtent 提示框横纵方向允许的最小尺寸。
-/// @return 保持物件中心不变的悬浮提示框边界。
-/// @warning UI 热路径：每帧至多调用一次，只执行常量级算术。
-[[nodiscard]] inline HoverHintBounds calculateHoverHintBounds(
-    const HoverLayerCandidate& candidate, float padding = 5.0F,
-    float minimumExtent = 32.0F)
-{
-    const float safePadding       = std::max(0.0F, padding);
-    const float safeMinimumExtent = std::max(0.0F, minimumExtent);
-    const float sourceWidth       = std::max(0.0F, candidate.width);
-    const float sourceHeight      = std::max(0.0F, candidate.height);
-    const float centerX           = candidate.x + sourceWidth * 0.5F;
-    const float centerY           = candidate.y + sourceHeight * 0.5F;
-    const float hintWidth =
-        std::max(sourceWidth + safePadding * 2.0F, safeMinimumExtent);
-    const float hintHeight =
-        std::max(sourceHeight + safePadding * 2.0F, safeMinimumExtent);
-    return {
-        centerX - hintWidth * 0.5F,
-        centerY - hintHeight * 0.5F,
-        centerX + hintWidth * 0.5F,
-        centerY + hintHeight * 0.5F,
-    };
-}
 
 /// @brief 追加悬浮物件候选，并合并同一自动采样的主体与偏移句柄。
 /// @param candidates 已按渲染顶层优先级排列的候选列表。

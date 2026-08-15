@@ -3,6 +3,7 @@
 #include "mmm/annotation/BeatmapAnnotation.h"
 
 #include <cstdint>
+#include <entt/entity/entity.hpp>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,12 @@ struct AnnotationRenderItem {
 
     /// @brief 目标物件轨道；独立时间戳或目标丢失时为 -1。
     std::int32_t track{ -1 };
+
+    /// @brief 目标物件在当前逻辑会话中的实体；独立时间戳或目标丢失时为空。
+    entt::entity targetEntity{ entt::null };
+
+    /// @brief Polyline 子物件索引；负值表示整个玩家物件或自动采样。
+    std::int32_t targetSubIndex{ -1 };
 
     /// @brief 目标物件是否已经不存在。
     bool targetMissing{ false };
