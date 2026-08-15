@@ -69,6 +69,14 @@ target_include_directories(CanvasContentVisibilityTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME CanvasContentVisibilityTest COMMAND CanvasContentVisibilityTest)
 
+# 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。
+mmm_add_test_executable(Canvas CanvasBlockedGestureTest
+                        tests/CanvasBlockedGestureTest.cpp)
+target_include_directories(CanvasBlockedGestureTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CanvasBlockedGestureTest PRIVATE Common)
+add_test(NAME CanvasBlockedGestureTest COMMAND CanvasBlockedGestureTest)
+
 # Timeline Timing 悬浮提示使用纯映射，独立覆盖界面术语与数值单位。
 mmm_add_test_executable(Canvas TimelineTimingTooltipTest
                         tests/TimelineTimingTooltipTest.cpp)

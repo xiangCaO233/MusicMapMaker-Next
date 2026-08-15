@@ -2,6 +2,7 @@
 
 #include "audio/AudioManager.h"
 #include "canvas/AnnotationDetailLayout.h"
+#include "canvas/CanvasBlockedGesture.h"
 #include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
 #include "canvas/TimeFormatUtils.h"
@@ -3303,13 +3304,46 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_lastHoveredPart       = 0;
             m_lastHoveredSubIndex   = -1;
         }
-        m_leftPressStartedOnCanvas      = false;
-        m_leftPressStartedInTrackLayout = false;
-        m_leftPressStartedOnEntity      = false;
-        m_leftPressStartedObjectDrag    = false;
-        m_leftPressDragged              = false;
-        m_colorStrokeEntities.clear();
-        resetContinuousEditCommands();
+
+        const auto completion = resolveBlockedCanvasGestureCompletion(
+            currentSnapshot->currentTool,
+            ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+            ImGui::IsMouseReleased(ImGuiMouseButton_Right),
+            m_leftPressStartedOnCanvas,
+            m_leftPressStartedObjectDrag,
+            m_rightEraseActive);
+        switch ( completion.leftEnd ) {
+        case BlockedCanvasLeftGestureEnd::Marquee:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            break;
+        case BlockedCanvasLeftGestureEnd::Brush:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+            break;
+        case BlockedCanvasLeftGestureEnd::ObjectDrag:
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            break;
+        case BlockedCanvasLeftGestureEnd::None: break;
+        }
+        if ( completion.endErase ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = false;
+        }
+        if ( completion.clearLeftState ) {
+            m_leftPressStartedOnCanvas      = false;
+            m_leftPressStartedInTrackLayout = false;
+            m_leftPressStartedOnEntity      = false;
+            m_leftPressStartedObjectDrag    = false;
+            m_leftPressDragged              = false;
+            m_colorStrokeEntities.clear();
+            m_lastMarqueeUpdateCommand.valid = false;
+            m_lastBrushUpdateCommand.valid   = false;
+            m_lastMoveUpdateCommand.valid    = false;
+        }
         return;
     }
 
