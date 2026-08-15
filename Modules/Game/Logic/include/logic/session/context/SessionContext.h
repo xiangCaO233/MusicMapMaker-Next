@@ -9,6 +9,7 @@
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
+#include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
 #include <cstdint>
@@ -179,6 +180,10 @@ struct SessionContext {
     bool isSampleOrderDirty{ true };
     /// @brief 自动采样排序缓存是否只需剔除失效实体。
     bool isSamplePruneDirty{ false };
+    /// @brief 批注时间戳分组缓存是否需要重建。
+    bool isAnnotationRenderCacheDirty{ true };
+    /// @brief 已解析物件当前位置并按时间排序的批注标记缓存。
+    std::vector<AnnotationRenderMarker> annotationRenderCache;
     /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
     std::vector<double> previewDensityObjectTimes;
     /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。

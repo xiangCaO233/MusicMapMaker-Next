@@ -92,23 +92,25 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.sortedNoteMaxEndPrefix.clear();
     ctx.sortedSampleEntities.clear();
     ctx.sortedSampleMaxEndPrefix.clear();
+    ctx.annotationRenderCache.clear();
     ctx.previewDensityObjectTimes.clear();
     ctx.previewDensityCache.clear();
     ctx.lastCameraSnapshotTimes.clear();
-    ctx.isNoteOrderDirty      = true;
-    ctx.isNotePruneDirty      = false;
-    ctx.isNoteStatsDirty      = true;
-    ctx.isPreviewDensityDirty = true;
-    ctx.isSampleOrderDirty    = true;
-    ctx.isSamplePruneDirty    = false;
-    ctx.hoveredEntity         = entt::null;
-    ctx.hoveredObjectKind     = ChartObjectKind::PlayerNote;
-    ctx.hoveredPart           = static_cast<std::int32_t>(HoverPart::None);
-    ctx.hoveredSubIndex       = -1;
-    ctx.draggedEntity         = entt::null;
-    ctx.draggedObjectKind     = ChartObjectKind::PlayerNote;
-    ctx.draggedPart           = HoverPart::None;
-    ctx.draggedSubIndex       = -1;
+    ctx.isNoteOrderDirty             = true;
+    ctx.isNotePruneDirty             = false;
+    ctx.isNoteStatsDirty             = true;
+    ctx.isPreviewDensityDirty        = true;
+    ctx.isSampleOrderDirty           = true;
+    ctx.isSamplePruneDirty           = false;
+    ctx.isAnnotationRenderCacheDirty = true;
+    ctx.hoveredEntity                = entt::null;
+    ctx.hoveredObjectKind            = ChartObjectKind::PlayerNote;
+    ctx.hoveredPart       = static_cast<std::int32_t>(HoverPart::None);
+    ctx.hoveredSubIndex   = -1;
+    ctx.draggedEntity     = entt::null;
+    ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+    ctx.draggedPart       = HoverPart::None;
+    ctx.draggedSubIndex   = -1;
     ctx.dragInitialNote.reset();
     ctx.dragInitialSample.reset();
     ctx.isDragging = false;
@@ -174,6 +176,49 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         for ( auto& subNote : polyline.m_subNotes ) {
             ensureNoteCollaborationIdentity(subNote.get());
         }
+    }
+    for ( auto& sample : beatmap->m_audioSamples ) {
+        ensureSampleCollaborationIdentity(sample);
+    }
+
+    // 旧版 MMM 把单段纯文本直接挂在玩家物件上；首次进入会话时迁移为
+    // 可多条共存的新批注记录，并保留旧字段以兼容尚未升级的导出链路。
+    std::unordered_set<std::string> migratedLegacyAnnotationKeys;
+    for ( const auto& annotation : beatmap->m_annotations ) {
+        if ( annotation.m_targetKind ==
+             ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            migratedLegacyAnnotationKeys.insert(annotation.m_targetId + "\n" +
+                                                annotation.m_content);
+        }
+    }
+    auto migrateLegacyAnnotation = [&](const ::MMM::Note& note) {
+        if ( note.m_annotation.empty() || note.m_collaborationId.empty() ||
+             beatmap->m_annotations.size() >=
+                 ::MMM::MAX_BEATMAP_ANNOTATION_COUNT ) {
+            return;
+        }
+        const std::string key =
+            note.m_collaborationId + "\n" + note.m_annotation;
+        if ( !migratedLegacyAnnotationKeys.insert(key).second ) return;
+        beatmap->m_annotations.push_back(
+            { .m_id         = makeNoteCollaborationId(),
+              .m_targetKind = ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+              .m_targetId   = note.m_collaborationId,
+              .m_timestamp  = note.m_timestamp,
+              .m_author     = {},
+              .m_content    = note.m_annotation });
+    };
+    for ( const auto& note : beatmap->m_noteData.notes ) {
+        migrateLegacyAnnotation(note);
+    }
+    for ( const auto& hold : beatmap->m_noteData.holds ) {
+        migrateLegacyAnnotation(hold);
+    }
+    for ( const auto& flick : beatmap->m_noteData.flicks ) {
+        migrateLegacyAnnotation(flick);
+    }
+    for ( const auto& polyline : beatmap->m_noteData.polylines ) {
+        migrateLegacyAnnotation(polyline);
     }
 
     // 清空缓存上下文，以确保重新构建

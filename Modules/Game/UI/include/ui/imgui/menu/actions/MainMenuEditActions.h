@@ -51,6 +51,10 @@ std::unique_ptr<IMainMenuItemActionHandler> createOpenNoteMetadataAction();
 std::unique_ptr<IMainMenuItemActionHandler>
 createEditSelectedObjectVolumeAction();
 
+/// @brief 创建为选中物件添加批注的动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler>
+createAddSelectedObjectAnnotationAction();
+
 /// @brief 创建播放暂停切换动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createTogglePlaybackAction();
 

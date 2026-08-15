@@ -127,10 +127,38 @@ void SampleRenderSystem::renderLaneLayout(
     std::int32_t persistentBgmTrackCount, float viewportWidth, float topY,
     float bottomY)
 {
-    if ( !projection.valid || projection.bgmLaneCount == 0 ||
-         bottomY <= topY ) {
+    if ( !projection.valid || bottomY <= topY ) {
         return;
     }
+    const float gutterLeft = std::max(0.0F, projection.annotationLeftX);
+    const float gutterRight =
+        std::min(viewportWidth, projection.annotationRightX);
+    if ( gutterRight > gutterLeft ) {
+        const auto gutterBackground = bgmColor(
+            "annotations.gutter_background", { 0.025F, 0.035F, 0.05F, 0.94F });
+        const auto gutterBorder = bgmColor("annotations.gutter_border",
+                                           { 0.28F, 0.78F, 0.94F, 0.75F });
+        batcher.setTexture(TextureID::None);
+        batcher.setScissor(
+            gutterLeft, topY, gutterRight - gutterLeft, bottomY - topY);
+        batcher.pushQuad(gutterLeft,
+                         bottomY,
+                         gutterRight - gutterLeft,
+                         bottomY - topY,
+                         gutterBackground);
+        batcher.pushQuad(projection.annotationLeftX,
+                         bottomY,
+                         1.5F,
+                         bottomY - topY,
+                         gutterBorder);
+        batcher.pushQuad(projection.annotationRightX - 1.5F,
+                         bottomY,
+                         1.5F,
+                         bottomY - topY,
+                         gutterBorder);
+    }
+
+    if ( projection.bgmLaneCount == 0 ) return;
     const auto visibleRange = projection.visibleBgmRange(0.0F, viewportWidth);
     if ( !visibleRange ) return;
 

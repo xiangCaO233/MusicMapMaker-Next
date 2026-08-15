@@ -844,10 +844,11 @@ bool testUnifiedLaneProjection()
     const auto firstDraft = projection.laneAt(-300.0F);
     const auto lastDraft  = projection.laneAt(99.0F);
     const auto playerLane = projection.laneAt(499.0F);
-    const auto firstBgm   = projection.laneAt(500.0F);
-    const auto appendBgm  = projection.laneAt(700.0F);
-    const auto outside    = projection.laneAt(800.0F);
-    const auto visible    = projection.visibleBgmRange(550.0F, 650.0F);
+    const auto annotation = projection.laneAt(510.0F);
+    const auto firstBgm   = projection.laneAt(526.0F);
+    const auto appendBgm  = projection.laneAt(726.0F);
+    const auto outside    = projection.laneAt(826.0F);
+    const auto visible    = projection.visibleBgmRange(576.0F, 676.0F);
     const auto firstDraftBounds =
         projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, 0U });
     if ( !projection.valid || projection.draftLaneCount != 4 ||
@@ -868,7 +869,9 @@ bool testUnifiedLaneProjection()
          *playerLane !=
              MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Player,
                                             3 } ||
-         !firstBgm || firstBgm->absoluteTrack(4) != 4 || !appendBgm ||
+         annotation || !near(projection.annotationLeftX, 500.0) ||
+         !near(projection.annotationRightX, 526.0) || !firstBgm ||
+         firstBgm->absoluteTrack(4) != 4 || !appendBgm ||
          *appendBgm !=
              MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Bgm,
                                             2 } ||
@@ -3989,6 +3992,111 @@ bool testMixedChartObjectLocalCut()
                 3.0);
 }
 
+/// @brief 验证批注标记与音符共用完整滚动投影，且批注栏参与分拍吸附。
+/// @return 非移动工具下标记对齐音符中心，批注栏悬停仍给出精确拍线时返回 true。
+bool testAnnotationMarkerProjectionAndGutterSnap()
+{
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 4;
+    beatmap->m_baseMapMetadata.preference_bpm = 120.0;
+
+    MMM::Timing bpm;
+    bpm.m_timestamp             = 0.0;
+    bpm.m_bpm                   = 120.0;
+    bpm.m_beat_length           = 500.0;
+    bpm.m_timingEffect          = MMM::TimingEffect::BPM;
+    bpm.m_timingEffectParameter = 120.0;
+    beatmap->m_timings.push_back(bpm);
+
+    MMM::Timing scroll;
+    scroll.m_timestamp             = 0.0;
+    scroll.m_beat_length           = 1.8;
+    scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    scroll.m_timingEffectParameter = 1.8;
+    beatmap->m_timings.push_back(scroll);
+
+    MMM::Note note;
+    note.m_timestamp = 500.0;
+    note.m_track     = 2;
+    beatmap->m_noteData.notes.push_back(note);
+    beatmap->m_annotations.emplace_back(MMM::BeatmapAnnotation{
+        .m_id         = "annotation-projection",
+        .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+        .m_timestamp  = 500.0,
+        .m_author     = "Creator",
+        .m_content    = "projection",
+    });
+    beatmap->sync();
+
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    MMM::Logic::SessionUtils::loadBeatmap(context, beatmap);
+    configureObjectEditingCanvas(context);
+    context.currentTime = context.animateTime = 0.25;
+    context.currentTool                       = MMM::Logic::EditTool::Draw;
+    context.lastConfig.settings.objectPlacementSnap = true;
+    context.mouseCameraId                           = "Basic2DCanvas";
+    context.isMouseInCanvas                         = true;
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F,
+        context.trackCount,
+        context.bgmTrackCount,
+        context.lastConfig.visual.trackLayout.left,
+        context.lastConfig.visual.trackLayout.right,
+        0.0F,
+        true,
+        context.lastConfig.settings.enableBmsEditing);
+    auto* cache =
+        context.timelineRegistry.ctx().find<MMM::Logic::System::ScrollCache>();
+    if ( !projection.valid || !cache ) return false;
+    const float judgmentLineY =
+        600.0F * context.lastConfig.visual.judgeline_pos;
+    const double currentAbsY = cache->getVisualAnchorAbsY(context.animateTime);
+    const float  beatLineY =
+        judgmentLineY -
+        static_cast<float>(cache->getDisplayDelta(0.5, currentAbsY, 0.5));
+    context.lastMousePos = {
+        (projection.annotationLeftX + projection.annotationRightX) * 0.5F,
+        beatLineY,
+    };
+
+    const auto config = context.lastConfig;
+    session.update(0.0, config, true);
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Annotation projection did not publish a canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->annotationMarkers.size() != 1U ||
+         !snapshot->scrollSegments.empty() || !snapshot->isSnapped ||
+         !near(snapshot->snappedTime, 0.5) ) {
+        XERROR(
+            "Annotation gutter did not reuse the canvas beat snap: "
+            "snapshot={}, markers={}, segments={}, snapped={}, time={:.6f}",
+            snapshot != nullptr,
+            snapshot ? snapshot->annotationMarkers.size() : 0U,
+            snapshot ? snapshot->scrollSegments.size() : 0U,
+            snapshot ? snapshot->isSnapped : false,
+            snapshot ? snapshot->snappedTime : -1.0);
+        return false;
+    }
+
+    const float expectedMarkerY =
+        judgmentLineY -
+        static_cast<float>(cache->getDisplayDelta(0.5, currentAbsY, 0.5));
+    const float simplifiedMarkerY =
+        judgmentLineY - static_cast<float>((0.5 - context.animateTime) * 500.0 *
+                                           config.visual.timelineZoom);
+    if ( !near(snapshot->annotationMarkers.front().canvasY, expectedMarkerY) ||
+         near(expectedMarkerY, simplifiedMarkerY) ) {
+        XERROR("Annotation marker diverged from the note render projection");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行主画布二维相机换算测试。
@@ -4049,7 +4157,8 @@ int main()
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
                    testMixedChartObjectClipboardAcrossSessions() &&
-                   testMixedChartObjectLocalCut()
+                   testMixedChartObjectLocalCut() &&
+                   testAnnotationMarkerProjectionAndGutterSnap()
                ? 0
                : 1;
 }

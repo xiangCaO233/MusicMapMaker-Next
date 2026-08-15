@@ -137,7 +137,7 @@ void SettingsView::drawShortcutSettings()
         "ShortcutSection", shortcutSection, Sizing::Grow(), Sizing::Fit());
 
     auto& shortcutConfig = settings.shortcutConfig;
-    const std::array<const Config::ShortcutBinding*, 19> shortcutBindings{
+    const std::array<const Config::ShortcutBinding*, 20> shortcutBindings{
         &shortcutConfig.toolMove,
         &shortcutConfig.toolMarquee,
         &shortcutConfig.toolDraw,
@@ -146,6 +146,7 @@ void SettingsView::drawShortcutSettings()
         &shortcutConfig.mirror,
         &shortcutConfig.mirrorPaste,
         &shortcutConfig.editSelectedVolume,
+        &shortcutConfig.addSelectedAnnotation,
         &shortcutConfig.deleteSelected,
         &shortcutConfig.togglePlayback,
         &shortcutConfig.toggleReverseScroll,
@@ -236,6 +237,12 @@ void SettingsView::drawShortcutSettings()
                    shortcutConfig.editSelectedVolume,
                    ShortcutRecordTarget::EditSelectedVolume,
                    "EditSelectedVolume");
+    addShortcutRow(
+        shortcutSection,
+        TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
+        shortcutConfig.addSelectedAnnotation,
+        ShortcutRecordTarget::AddSelectedAnnotation,
+        "AddSelectedAnnotation");
     addShortcutRow(shortcutSection,
                    TR_CACHE("ui.settings.shortcut.delete_selected").data(),
                    shortcutConfig.deleteSelected,

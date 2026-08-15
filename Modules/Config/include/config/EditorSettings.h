@@ -274,6 +274,11 @@ struct ShortcutConfig {
     /// @brief 打开选中物件批量音量编辑器。
     ShortcutBinding editSelectedVolume{ false, "", false, false, false, false };
 
+    /// @brief 为当前选中的单个物件添加批注。
+    ShortcutBinding addSelectedAnnotation{
+        true, "A", true, false, true, false
+    };
+
     /// @brief 删除当前选中物件。
     ShortcutBinding deleteSelected{
         true, "Delete", false, false, false, false

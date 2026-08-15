@@ -459,7 +459,8 @@ void NoteRenderSystem::generateSnapshot(
                     0.42F,
                     false);
             }
-            const float visibleLeft = std::max(0.0F, laneProjection.bgmLeftX);
+            const float visibleLeft =
+                std::max(0.0F, laneProjection.annotationLeftX);
             const float visibleRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
             if ( visibleRight > visibleLeft ) {

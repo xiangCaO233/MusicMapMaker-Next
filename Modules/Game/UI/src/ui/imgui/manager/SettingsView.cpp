@@ -222,7 +222,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Shortcut: {
-        const std::array<const char*, 19> labels{
+        const std::array<const char*, 20> labels{
             TR_CACHE("ui.settings.shortcut.tool_move").data(),
             TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
             TR_CACHE("ui.settings.shortcut.tool_draw").data(),
@@ -231,6 +231,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.shortcut.mirror").data(),
             TR_CACHE("ui.settings.shortcut.mirror_paste").data(),
             TR_CACHE("ui.settings.shortcut.edit_selected_volume").data(),
+            TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
             TR_CACHE("ui.settings.shortcut.delete_selected").data(),
             TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
             TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),

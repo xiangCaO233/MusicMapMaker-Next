@@ -261,6 +261,7 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "mirror", config.mirror },
         { "mirrorPaste", config.mirrorPaste },
         { "editSelectedVolume", config.editSelectedVolume },
+        { "addSelectedAnnotation", config.addSelectedAnnotation },
         { "deleteSelected", config.deleteSelected },
         { "togglePlayback", config.togglePlayback },
         { "toggleReverseScroll", config.toggleReverseScroll },
@@ -289,6 +290,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
     config.mirrorPaste = json.value("mirrorPaste", defaults.mirrorPaste);
     config.editSelectedVolume =
         json.value("editSelectedVolume", defaults.editSelectedVolume);
+    config.addSelectedAnnotation =
+        json.value("addSelectedAnnotation", defaults.addSelectedAnnotation);
     config.deleteSelected =
         json.value("deleteSelected", defaults.deleteSelected);
     config.togglePlayback =

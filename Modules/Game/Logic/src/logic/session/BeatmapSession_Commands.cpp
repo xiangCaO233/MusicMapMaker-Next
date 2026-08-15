@@ -1396,6 +1396,8 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
                                std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                                std::is_same_v<T, CmdSetNoteAnnotation> ||
+                               std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                               std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                                std::is_same_v<T, CmdReplaceBeatmapData> ) {
                     m_ctx->isTransformDirty = true;
                 }
@@ -1576,6 +1578,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                     std::is_same_v<T, CmdSetNoteAnnotation> ||
+                    std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                    std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                     std::is_same_v<T, CmdReplaceBeatmapData> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
@@ -1626,6 +1630,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                     std::is_same_v<T, CmdSetNoteAnnotation> ||
+                    std::is_same_v<T, CmdUpsertBeatmapAnnotation> ||
+                    std::is_same_v<T, CmdRemoveBeatmapAnnotation> ||
                     std::is_same_v<T, CmdReplaceBeatmapData> ||
                     std::is_same_v<T, CmdEndBrush> ||
                     std::is_same_v<T, CmdEndErase> ||

@@ -103,6 +103,7 @@ private:
         Mirror,
         MirrorPaste,
         EditSelectedVolume,
+        AddSelectedAnnotation,
         DeleteSelected,
         TogglePlayback,
         ToggleReverseScroll,

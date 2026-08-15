@@ -9,6 +9,7 @@
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/AnnotationRenderData.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <algorithm>
 #include <array>
@@ -381,6 +382,9 @@ struct RenderSnapshot {
     /// @brief 当前快照中需要覆盖显示的重叠遮罩。
     std::vector<OverlapMask> overlapMasks;
 
+    /// @brief 主画布当前可见时间范围内的批注标记。
+    std::vector<AnnotationRenderMarker> annotationMarkers;
+
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
@@ -677,6 +681,7 @@ struct RenderSnapshot {
         interactionHitboxScaleX = 1.0F;
         interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();
+        annotationMarkers.clear();
         timelineElements.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();

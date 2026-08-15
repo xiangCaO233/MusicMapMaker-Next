@@ -18,6 +18,7 @@ add_library(
   src/ui/imgui/menu/MainMenuNavigationController.cpp
   src/ui/imgui/menu/MainMenuRegistry.cpp
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
+  src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp
   src/ui/imgui/menu/actions/edit/CopyAction.cpp
   src/ui/imgui/menu/actions/edit/CutAction.cpp
   src/ui/imgui/menu/actions/edit/EditSelectedObjectVolumeAction.cpp

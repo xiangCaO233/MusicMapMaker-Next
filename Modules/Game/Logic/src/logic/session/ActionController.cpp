@@ -36,15 +36,17 @@ void ensureNoteAuxiliaryComponents(entt::registry& reg, entt::entity entity)
 /// @brief 标记音符创建/更新后需要完整重建排序缓存。
 void markNoteOrderDirty(SessionContext& ctx)
 {
-    ctx.isNoteOrderDirty = true;
-    ctx.isNoteStatsDirty = true;
+    ctx.isNoteOrderDirty             = true;
+    ctx.isNoteStatsDirty             = true;
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 标记音符删除后只需从排序缓存中剔除失效实体。
 void markNotePruneDirty(SessionContext& ctx)
 {
-    ctx.isNotePruneDirty = true;
-    ctx.isNoteStatsDirty = true;
+    ctx.isNotePruneDirty             = true;
+    ctx.isNoteStatsDirty             = true;
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 尝试把单个音符动作直接合并进已构建缓存。

@@ -1,3 +1,4 @@
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -11,6 +12,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SampleAction.h"
 #include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
@@ -26,6 +28,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -322,10 +325,11 @@ void markReplacementNoteOrderDirty(SessionContext& ctx)
     ctx.sortedNoteEntities.clear();
     ctx.sortedNoteMaxEndPrefix.clear();
     ctx.previewDensityObjectTimes.clear();
-    ctx.isNoteOrderDirty      = true;
-    ctx.isNotePruneDirty      = false;
-    ctx.isNoteStatsDirty      = true;
-    ctx.isPreviewDensityDirty = true;
+    ctx.isNoteOrderDirty             = true;
+    ctx.isNotePruneDirty             = false;
+    ctx.isNoteStatsDirty             = true;
+    ctx.isPreviewDensityDirty        = true;
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 将折线子物件点击目标解析到父折线实体。
@@ -735,37 +739,6 @@ std::vector<NoteComponent> makeChangedNoteComponentsFromBeatMap(
         notes.push_back(std::move(component));
     }
     return notes;
-}
-
-/// @brief 按稳定协作标识把来源谱面的注释覆盖到当前物件快照。
-/// @param notes 当前会话根物件快照；未出现在来源中的注释会被清除。
-/// @param source 来源谱面。
-void mergeNoteAnnotationsFromBeatMap(std::vector<NoteComponent>& notes,
-                                     const ::MMM::BeatMap&       source)
-{
-    const auto sourceNotes = makeNoteComponentsFromBeatMap(source);
-    std::unordered_map<std::string, std::string> annotations;
-    for ( const auto& note : sourceNotes ) {
-        if ( !note.m_collaborationId.empty() ) {
-            annotations[note.m_collaborationId] = note.m_annotation;
-        }
-        for ( const auto& subNote : note.m_subNotes ) {
-            if ( !subNote.collaborationId.empty() ) {
-                annotations[subNote.collaborationId] = subNote.annotation;
-            }
-        }
-    }
-
-    for ( auto& note : notes ) {
-        const auto root = annotations.find(note.m_collaborationId);
-        note.m_annotation =
-            root == annotations.end() ? std::string{} : root->second;
-        for ( auto& subNote : note.m_subNotes ) {
-            const auto child = annotations.find(subNote.collaborationId);
-            subNote.annotation =
-                child == annotations.end() ? std::string{} : child->second;
-        }
-    }
 }
 
 /// @brief 从谱面 Timing 构建可替换到当前会话的 Timeline 组件。
@@ -1241,6 +1214,7 @@ void replaceSampleComponents(SessionContext&                     ctx,
     ctx.dragInitialSample.reset();
     ctx.isSampleOrderDirty               = true;
     ctx.isSamplePruneDirty               = false;
+    ctx.isAnnotationRenderCacheDirty     = true;
     ctx.m_needsSamplesSync               = true;
     ctx.isPreviewDensityDirty            = true;
     ctx.isAudioTimelineDescriptorDirty   = true;
@@ -1355,6 +1329,8 @@ public:
         std::vector<TimelineComponent>                   afterTimelines,
         std::vector<SampleComponent>                     beforeSamples,
         std::vector<SampleComponent>                     afterSamples,
+        std::vector<::MMM::BeatmapAnnotation>            beforeAnnotations,
+        std::vector<::MMM::BeatmapAnnotation>            afterAnnotations,
         BeatmapMetadataSnapshot                          beforeMetadata,
         BeatmapMetadataSnapshot                          afterMetadata,
         std::vector<TrackCountAction::SampleTrackChange> sampleTrackChanges,
@@ -1371,6 +1347,8 @@ public:
         , m_afterTimelines(std::move(afterTimelines))
         , m_beforeSamples(std::move(beforeSamples))
         , m_afterSamples(std::move(afterSamples))
+        , m_beforeAnnotations(std::move(beforeAnnotations))
+        , m_afterAnnotations(std::move(afterAnnotations))
         , m_beforeMetadata(std::move(beforeMetadata))
         , m_afterMetadata(std::move(afterMetadata))
         , m_sampleTrackChanges(std::move(sampleTrackChanges))
@@ -1420,7 +1398,7 @@ private:
     /// @param forward 是否应用替换后的快照。
     void apply(SessionContext& ctx, bool forward)
     {
-        if ( m_replaceObjects || m_replaceAnnotations ) {
+        if ( m_replaceObjects ) {
             replaceNoteComponents(ctx,
                                   forward ? m_afterNotes : m_beforeNotes,
                                   m_preserveInteraction);
@@ -1436,6 +1414,11 @@ private:
         if ( m_replaceAudioSamples ) {
             replaceSampleComponents(ctx,
                                     forward ? m_afterSamples : m_beforeSamples);
+        }
+        if ( m_replaceAnnotations && ctx.currentBeatmap ) {
+            ctx.currentBeatmap->m_annotations =
+                forward ? m_afterAnnotations : m_beforeAnnotations;
+            ctx.isAnnotationRenderCacheDirty = true;
         }
         if ( m_replaceMetadata ) {
             applyMetadataSnapshot(ctx,
@@ -1489,6 +1472,12 @@ private:
     /// @brief 替换后自动采样组件。
     std::vector<SampleComponent> m_afterSamples;
 
+    /// @brief 替换前批注。
+    std::vector<::MMM::BeatmapAnnotation> m_beforeAnnotations;
+
+    /// @brief 替换后批注。
+    std::vector<::MMM::BeatmapAnnotation> m_afterAnnotations;
+
     /// @brief 替换前元数据。
     BeatmapMetadataSnapshot m_beforeMetadata;
 
@@ -1503,6 +1492,84 @@ private:
 
     /// @brief 替换后首选 BPM。
     double m_afterPreferenceBpm{ 120.0 };
+};
+
+/// @brief 按稳定 ID 增删改单条谱面批注的可撤销动作。
+class BeatmapAnnotationAction : public IEditorAction
+{
+public:
+    /// @brief 构造按稳定 ID 定位的单条批注动作。
+    /// @param before 修改前批注；新增时为空。
+    /// @param after 修改后批注；删除时为空。
+    /// @param name 动作名称。
+    BeatmapAnnotationAction(std::optional<::MMM::BeatmapAnnotation> before,
+                            std::optional<::MMM::BeatmapAnnotation> after,
+                            std::string                             name)
+        : m_before(std::move(before))
+        , m_after(std::move(after))
+        , m_name(std::move(name))
+    {
+        m_annotationId =
+            m_after ? m_after->m_id : (m_before ? m_before->m_id : "");
+    }
+
+    /// @brief 应用修改后的批注列表。
+    /// @param ctx 当前会话上下文。
+    void execute(SessionContext& ctx) override { apply(ctx, m_after); }
+
+    /// @brief 恢复修改前的批注列表。
+    /// @param ctx 当前会话上下文。
+    void undo(SessionContext& ctx) override { apply(ctx, m_before); }
+
+    /// @brief 重新应用修改后的批注列表。
+    /// @param ctx 当前会话上下文。
+    void redo(SessionContext& ctx) override { execute(ctx); }
+
+    /// @brief 返回动作名称。
+    std::string getName() const override { return m_name; }
+
+    /// @brief 返回批注数据类别。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::Annotations;
+    }
+
+private:
+    /// @brief 按稳定 ID 写回或删除单条批注。
+    /// @param ctx 当前会话上下文。
+    /// @param annotation 待应用批注；空值表示删除。
+    void apply(SessionContext&                                ctx,
+               const std::optional<::MMM::BeatmapAnnotation>& annotation)
+    {
+        if ( !ctx.currentBeatmap ) return;
+        auto&      annotations = ctx.currentBeatmap->m_annotations;
+        const auto found       = std::find_if(
+            annotations.begin(), annotations.end(), [&](auto& item) {
+                return item.m_id == m_annotationId;
+            });
+        if ( annotation ) {
+            if ( found == annotations.end() ) {
+                annotations.push_back(*annotation);
+            } else {
+                *found = *annotation;
+            }
+        } else if ( found != annotations.end() ) {
+            annotations.erase(found);
+        }
+        ctx.isAnnotationRenderCacheDirty = true;
+    }
+
+    /// @brief 本动作唯一影响的批注稳定 ID。
+    std::string m_annotationId;
+
+    /// @brief 修改前单条批注。
+    std::optional<::MMM::BeatmapAnnotation> m_before;
+
+    /// @brief 修改后单条批注。
+    std::optional<::MMM::BeatmapAnnotation> m_after;
+
+    /// @brief 动作名称。
+    std::string m_name;
 };
 
 /// @brief 批量替换 Timeline 的可撤销动作。
@@ -2493,6 +2560,143 @@ void ActionController::handleCommand(const CmdSetNoteAnnotation& cmd)
     m_ctx.lastActionMessage = "已更新物件注释";
 }
 
+void ActionController::handleCommand(const CmdUpsertBeatmapAnnotation& cmd)
+{
+    if ( !m_ctx.currentBeatmap || cmd.content.empty() ||
+         cmd.content.size() > ::MMM::MAX_BEATMAP_ANNOTATION_CONTENT_BYTES ) {
+        m_ctx.lastActionMessage = "批注正文不能为空且不能超过 8192 字节";
+        return;
+    }
+
+    std::optional<::MMM::BeatmapAnnotation> before;
+    std::optional<::MMM::BeatmapAnnotation> after;
+    if ( !cmd.annotationId.empty() ) {
+        const auto found =
+            std::find_if(m_ctx.currentBeatmap->m_annotations.begin(),
+                         m_ctx.currentBeatmap->m_annotations.end(),
+                         [&](const auto& annotation) {
+                             return annotation.m_id == cmd.annotationId;
+                         });
+        if ( found == m_ctx.currentBeatmap->m_annotations.end() ) {
+            m_ctx.lastActionMessage = "要修改的批注已经不存在";
+            return;
+        }
+        if ( found->m_content == cmd.content ) return;
+        before           = *found;
+        after            = *found;
+        after->m_content = cmd.content;
+    } else {
+        const std::string author = Config::normalizeCreatorIdentity(cmd.author);
+        if ( author.empty() ) {
+            m_ctx.lastActionMessage = "未设置默认 Creator，无法添加批注";
+            return;
+        }
+        if ( m_ctx.currentBeatmap->m_annotations.size() >=
+             ::MMM::MAX_BEATMAP_ANNOTATION_COUNT ) {
+            m_ctx.lastActionMessage = "当前谱面批注数量已达到上限";
+            return;
+        }
+
+        ::MMM::BeatmapAnnotation annotation;
+        annotation.m_id         = makeNoteCollaborationId();
+        annotation.m_targetKind = cmd.targetKind;
+        annotation.m_author     = author;
+        annotation.m_content    = cmd.content;
+
+        if ( cmd.targetKind == ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP ) {
+            if ( !std::isfinite(cmd.timestamp) || cmd.timestamp < 0.0 ) {
+                m_ctx.lastActionMessage = "批注时间戳无效";
+                return;
+            }
+            annotation.m_timestamp = cmd.timestamp * 1000.0;
+        } else if ( cmd.targetKind ==
+                    ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+            if ( cmd.objectKind != ChartObjectKind::AudioSample ||
+                 cmd.entity == entt::null ||
+                 !m_ctx.sampleRegistry.valid(cmd.entity) ||
+                 !m_ctx.sampleRegistry.all_of<SampleComponent>(cmd.entity) ) {
+                m_ctx.lastActionMessage = "自动采样批注目标已经失效";
+                return;
+            }
+            auto& sample =
+                m_ctx.sampleRegistry.get<SampleComponent>(cmd.entity);
+            ensureSampleCollaborationIdentity(sample);
+            annotation.m_targetId    = sample.m_collaborationId;
+            annotation.m_timestamp   = sample.effectiveTime() * 1000.0;
+            m_ctx.m_needsSamplesSync = true;
+        } else if ( cmd.targetKind ==
+                    ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            if ( cmd.objectKind != ChartObjectKind::PlayerNote ||
+                 cmd.entity == entt::null ||
+                 !m_ctx.noteRegistry.valid(cmd.entity) ||
+                 !m_ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+                m_ctx.lastActionMessage = "玩家物件批注目标已经失效";
+                return;
+            }
+
+            entt::entity rootEntity = cmd.entity;
+            std::int32_t subIndex   = cmd.subIndex;
+            const auto&  requested =
+                m_ctx.noteRegistry.get<const NoteComponent>(cmd.entity);
+            if ( requested.m_isSubNote ) {
+                rootEntity = requested.m_parentPolyline;
+                if ( subIndex < 0 ) subIndex = requested.m_subIndex;
+            }
+            if ( rootEntity == entt::null ||
+                 !m_ctx.noteRegistry.valid(rootEntity) ||
+                 !m_ctx.noteRegistry.all_of<NoteComponent>(rootEntity) ) {
+                m_ctx.lastActionMessage = "玩家物件批注目标已经失效";
+                return;
+            }
+            auto& root = m_ctx.noteRegistry.get<NoteComponent>(rootEntity);
+            ensureNoteCollaborationIdentity(root);
+            if ( subIndex >= 0 ) {
+                const auto index = static_cast<std::size_t>(subIndex);
+                if ( root.m_type != ::MMM::NoteType::POLYLINE ||
+                     index >= root.m_subNotes.size() ) {
+                    m_ctx.lastActionMessage = "折线子物件批注目标已经失效";
+                    return;
+                }
+                const auto& sub        = root.m_subNotes[index];
+                annotation.m_targetId  = sub.collaborationId;
+                annotation.m_timestamp = sub.timestamp * 1000.0;
+            } else {
+                annotation.m_targetId  = root.m_collaborationId;
+                annotation.m_timestamp = root.m_timestamp * 1000.0;
+            }
+            m_ctx.m_needsNotesSync = true;
+        } else {
+            m_ctx.lastActionMessage = "批注目标类型无效";
+            return;
+        }
+        after = std::move(annotation);
+    }
+
+    auto action = std::make_unique<BeatmapAnnotationAction>(
+        std::move(before), std::move(after), "Edit Beatmap Annotation");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "已保存谱面批注";
+}
+
+void ActionController::handleCommand(const CmdRemoveBeatmapAnnotation& cmd)
+{
+    if ( !m_ctx.currentBeatmap || cmd.annotationId.empty() ) return;
+    const auto found =
+        std::find_if(m_ctx.currentBeatmap->m_annotations.begin(),
+                     m_ctx.currentBeatmap->m_annotations.end(),
+                     [&](const auto& annotation) {
+                         return annotation.m_id == cmd.annotationId;
+                     });
+    if ( found == m_ctx.currentBeatmap->m_annotations.end() ) {
+        m_ctx.lastActionMessage = "要删除的批注已经不存在";
+        return;
+    }
+    auto action = std::make_unique<BeatmapAnnotationAction>(
+        *found, std::nullopt, "Remove Beatmap Annotation");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "已删除谱面批注";
+}
+
 void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
 {
     // 元数据编辑窗口仍会在 UI 线程同步读取 ECS；整体替换必须与该读取共用
@@ -2536,14 +2740,9 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
 
     std::vector<NoteComponent> beforeNotes;
     std::vector<NoteComponent> afterNotes;
-    if ( cmd.replaceObjects || cmd.replaceAnnotations ) {
+    if ( cmd.replaceObjects ) {
         beforeNotes = collectEditableNoteComponents(m_ctx);
-        if ( cmd.replaceObjects ) {
-            afterNotes = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
-        } else {
-            afterNotes = beforeNotes;
-            mergeNoteAnnotationsFromBeatMap(afterNotes, *cmd.sourceBeatmap);
-        }
+        afterNotes  = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
     }
 
     std::vector<TimelineComponent> beforeTimelines;
@@ -2558,6 +2757,13 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
     if ( cmd.replaceAudioSamples ) {
         beforeSamples = collectSampleComponents(m_ctx);
         afterSamples  = makeSampleComponentsFromBeatMap(*cmd.sourceBeatmap);
+    }
+
+    std::vector<::MMM::BeatmapAnnotation> beforeAnnotations;
+    std::vector<::MMM::BeatmapAnnotation> afterAnnotations;
+    if ( cmd.replaceAnnotations ) {
+        beforeAnnotations = m_ctx.currentBeatmap->m_annotations;
+        afterAnnotations  = cmd.sourceBeatmap->m_annotations;
     }
 
     BeatmapMetadataSnapshot beforeMetadata =
@@ -2622,6 +2828,8 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         std::move(afterTimelines),
         std::move(beforeSamples),
         std::move(afterSamples),
+        std::move(beforeAnnotations),
+        std::move(afterAnnotations),
         std::move(beforeMetadata),
         std::move(afterMetadata),
         std::move(sampleTrackChanges),

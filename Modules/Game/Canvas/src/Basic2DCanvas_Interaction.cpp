@@ -8,6 +8,7 @@
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
@@ -36,6 +37,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -617,6 +619,83 @@ bool beginCanvasHoverOverlay(const ImVec2& mousePos)
         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoDocking;
     return ImGui::Begin("##CanvasHoverInspectOverlay", nullptr, overlayFlags);
+}
+
+/// @brief 读取批注 UI 皮肤颜色并在缺失时回退。
+/// @param key 颜色键。
+/// @param fallback 缺失颜色。
+/// @return 可直接交给 ImDrawList 的颜色。
+ImU32 annotationUiColor(std::string_view key, const ImVec4& fallback)
+{
+    const auto color =
+        Config::SkinManager::instance().getColor(std::string(key));
+    const bool missing = color.r == 1.0F && color.g == 0.0F &&
+                         color.b == 1.0F && color.a == 1.0F;
+    return ImGui::ColorConvertFloat4ToU32(
+        missing ? fallback : ImVec4(color.r, color.g, color.b, color.a));
+}
+
+/// @brief 绘制安全的 Markdown 文本子集。
+/// @param markdown UTF-8 Markdown 正文。
+/// @warning UI 热路径仅在批注 Tooltip 或编辑弹窗可见时调用；逐行读取现有文本，
+/// 不执行 HTML、脚本、网络请求或文件访问。
+void renderAnnotationMarkdown(std::string_view markdown)
+{
+    bool        codeBlock = false;
+    std::size_t offset    = 0U;
+    while ( offset <= markdown.size() ) {
+        const auto       lineEnd = markdown.find('\n', offset);
+        std::string_view line    = markdown.substr(
+            offset,
+            lineEnd == std::string_view::npos ? std::string_view::npos
+                                              : lineEnd - offset);
+        if ( line.ends_with('\r') ) line.remove_suffix(1U);
+        if ( line.starts_with("```") ) {
+            codeBlock = !codeBlock;
+        } else if ( line.empty() ) {
+            ImGui::Spacing();
+        } else if ( codeBlock ) {
+            ImGui::TextColored(ImVec4(0.78F, 0.86F, 0.94F, 1.0F),
+                               "%.*s",
+                               static_cast<int>(line.size()),
+                               line.data());
+        } else if ( line.starts_with("### ") ) {
+            line.remove_prefix(4U);
+            ImGui::TextColored(ImVec4(0.68F, 0.86F, 1.0F, 1.0F),
+                               "%.*s",
+                               static_cast<int>(line.size()),
+                               line.data());
+        } else if ( line.starts_with("## ") ) {
+            line.remove_prefix(3U);
+            ImGui::TextColored(ImVec4(0.58F, 0.82F, 1.0F, 1.0F),
+                               "%.*s",
+                               static_cast<int>(line.size()),
+                               line.data());
+        } else if ( line.starts_with("# ") ) {
+            line.remove_prefix(2U);
+            ImGui::TextColored(ImVec4(0.48F, 0.78F, 1.0F, 1.0F),
+                               "%.*s",
+                               static_cast<int>(line.size()),
+                               line.data());
+        } else if ( line.starts_with("- ") || line.starts_with("* ") ) {
+            line.remove_prefix(2U);
+            ImGui::Bullet();
+            ImGui::SameLine();
+            ImGui::TextWrapped(
+                "%.*s", static_cast<int>(line.size()), line.data());
+        } else if ( line.starts_with("> ") ) {
+            line.remove_prefix(2U);
+            ImGui::TextColored(ImVec4(0.68F, 0.72F, 0.78F, 1.0F),
+                               "> %.*s",
+                               static_cast<int>(line.size()),
+                               line.data());
+        } else {
+            ImGui::TextWrapped(
+                "%.*s", static_cast<int>(line.size()), line.data());
+        }
+        if ( lineEnd == std::string_view::npos ) break;
+        offset = lineEnd + 1U;
+    }
 }
 }  // namespace
 
@@ -2254,6 +2333,289 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     drawList->PopClipRect();
 }
 
+bool Basic2DCanvasInteraction::renderAnnotationGutter(
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+    float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
+    float pointerY, bool canvasHovered)
+{
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout =
+        visual.trackLayoutForKeyCount(currentSnapshot.trackCount);
+    const auto projection = Logic::calculateCanvasLaneProjection(
+        targetWidth,
+        currentSnapshot.trackCount,
+        currentSnapshot.bgmTrackCount,
+        layout.left,
+        layout.right,
+        currentSnapshot.canvasHorizontalOffsetX,
+        true,
+        currentSnapshot.bmsEditingEnabled);
+    const float topY          = layout.top * targetHeight;
+    const float bottomY       = layout.bottom * targetHeight;
+    const bool  gutterHovered = projection.valid && canvasHovered &&
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
+
+    const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
+    if ( projection.valid && currentSnapshot.hasBeatmap ) {
+        auto* drawList = ImGui::GetWindowDrawList();
+        drawList->PushClipRect(
+            { canvasScreenX, canvasScreenY + topY },
+            { canvasScreenX + targetWidth, canvasScreenY + bottomY },
+            true);
+        const float centerX =
+            (projection.annotationLeftX + projection.annotationRightX) * 0.5F;
+        const ImU32 markerColor = annotationUiColor(
+            "annotations.marker", ImVec4(0.42F, 0.72F, 0.96F, 0.98F));
+        const ImU32 hoverColor = annotationUiColor(
+            "annotations.marker_hover", ImVec4(0.68F, 0.86F, 1.0F, 1.0F));
+        const ImU32 textColor = annotationUiColor(
+            "annotations.marker_text", ImVec4(0.04F, 0.08F, 0.12F, 1.0F));
+
+        for ( const auto& marker : currentSnapshot.annotationMarkers ) {
+            const float markerY = marker.canvasY;
+            if ( markerY < topY - 10.0F || markerY > bottomY + 10.0F ) {
+                continue;
+            }
+            const bool markerHovered =
+                gutterHovered && std::abs(pointerY - markerY) <= 10.0F;
+            if ( markerHovered && !hoveredMarker ) hoveredMarker = &marker;
+
+            const ImVec2 bubbleMin{ canvasScreenX + centerX - 8.0F,
+                                    canvasScreenY + markerY - 6.5F };
+            const ImVec2 bubbleMax{ canvasScreenX + centerX + 8.0F,
+                                    canvasScreenY + markerY + 6.5F };
+            drawList->AddRectFilled(bubbleMin,
+                                    bubbleMax,
+                                    markerHovered ? hoverColor : markerColor,
+                                    3.0F);
+            const std::array<ImVec2, 3> tail{
+                ImVec2{ canvasScreenX + centerX - 3.0F,
+                        canvasScreenY + markerY + 6.0F },
+                ImVec2{ canvasScreenX + centerX + 1.0F,
+                        canvasScreenY + markerY + 10.0F },
+                ImVec2{ canvasScreenX + centerX + 3.0F,
+                        canvasScreenY + markerY + 6.0F },
+            };
+            drawList->AddTriangleFilled(
+                tail[0],
+                tail[1],
+                tail[2],
+                markerHovered ? hoverColor : markerColor);
+            if ( marker.items.size() > 1U ) {
+                const std::string count = std::to_string(marker.items.size());
+                const ImVec2      textSize = ImGui::CalcTextSize(count.c_str());
+                drawList->AddText(
+                    { canvasScreenX + centerX - textSize.x * 0.5F,
+                      canvasScreenY + markerY - textSize.y * 0.5F },
+                    textColor,
+                    count.c_str());
+            }
+        }
+        drawList->PopClipRect();
+    }
+
+    if ( hoveredMarker && !hoveredMarker->items.empty() ) {
+        const std::string& markerId = hoveredMarker->items.front().id;
+        if ( markerId != m_annotationHoverMarkerId ) {
+            m_annotationHoverMarkerId    = markerId;
+            m_annotationHoverDetailIndex = 0U;
+        }
+        const float wheel = ImGui::GetIO().MouseWheel;
+        if ( std::abs(wheel) > 0.01F && hoveredMarker->items.size() > 1U ) {
+            const auto count = hoveredMarker->items.size();
+            if ( wheel > 0.0F ) {
+                m_annotationHoverDetailIndex =
+                    (m_annotationHoverDetailIndex + count - 1U) % count;
+            } else {
+                m_annotationHoverDetailIndex =
+                    (m_annotationHoverDetailIndex + 1U) % count;
+            }
+        }
+        m_annotationHoverDetailIndex = std::min(
+            m_annotationHoverDetailIndex, hoveredMarker->items.size() - 1U);
+
+        ImGui::SetNextWindowSizeConstraints(ImVec2(360.0F, 0.0F),
+                                            ImVec2(620.0F, 720.0F));
+        ImGui::BeginTooltip();
+        const auto timeText =
+            formatCanvasTime(hoveredMarker->timestamp, &currentSnapshot);
+        ImGui::Text("%s · %s · %zu",
+                    TR("ui.annotation.marker_title").data(),
+                    timeText.c_str(),
+                    hoveredMarker->items.size());
+        ImGui::Separator();
+        for ( std::size_t index = 0U; index < hoveredMarker->items.size();
+              ++index ) {
+            const auto&            item = hoveredMarker->items[index];
+            const std::string_view author =
+                item.author.empty() ? TR("ui.annotation.unknown_author").view()
+                                    : std::string_view(item.author);
+            const ImVec4 color = index == m_annotationHoverDetailIndex
+                                     ? ImVec4(0.45F, 0.78F, 1.0F, 1.0F)
+                                     : ImVec4(0.72F, 0.74F, 0.78F, 1.0F);
+            ImGui::TextColored(color,
+                               "%zu. %.*s",
+                               index + 1U,
+                               static_cast<int>(author.size()),
+                               author.data());
+            const auto             firstLineEnd = item.content.find('\n');
+            const std::string_view firstLine(item.content.data(),
+                                             firstLineEnd == std::string::npos
+                                                 ? item.content.size()
+                                                 : firstLineEnd);
+            ImGui::SameLine();
+            ImGui::TextWrapped(
+                "— %.*s", static_cast<int>(firstLine.size()), firstLine.data());
+        }
+        if ( hoveredMarker->items.size() > 1U ) {
+            ImGui::TextDisabled("%s", TR("ui.annotation.wheel_hint").data());
+        }
+        ImGui::Separator();
+        const auto& detail = hoveredMarker->items[m_annotationHoverDetailIndex];
+        const char* targetLabel = "ui.annotation.target.timestamp";
+        if ( detail.targetKind ==
+             ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            targetLabel = "ui.annotation.target.player_object";
+        } else if ( detail.targetKind ==
+                    ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+            targetLabel = "ui.annotation.target.audio_sample";
+        }
+        ImGui::Text("%s: %s",
+                    TR("ui.annotation.target").data(),
+                    TR(targetLabel).data());
+        if ( detail.track >= 0 ) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%d", detail.track + 1);
+        }
+        if ( detail.targetMissing ) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                               "%s",
+                               TR("ui.annotation.target_missing").data());
+        }
+        ImGui::Text("%s: %s",
+                    TR("ui.annotation.author").data(),
+                    detail.author.empty()
+                        ? TR("ui.annotation.unknown_author").data()
+                        : detail.author.c_str());
+        ImGui::Separator();
+        renderAnnotationMarkdown(detail.content);
+        ImGui::EndTooltip();
+
+        if ( !currentSnapshot.isPlaying &&
+             currentSnapshot.acceptsInteraction ) {
+            if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+                const auto& selected =
+                    hoveredMarker->items[m_annotationHoverDetailIndex];
+                m_annotationEditor.annotationId = selected.id;
+                m_annotationEditor.author       = selected.author;
+                m_annotationEditor.timestamp    = hoveredMarker->timestamp;
+                m_annotationEditor.content.fill('\0');
+                const auto& content = selected.content;
+                std::copy_n(content.data(),
+                            std::min(content.size(),
+                                     m_annotationEditor.content.size() - 1U),
+                            m_annotationEditor.content.data());
+                m_annotationEditor.requestOpen = true;
+            } else if ( ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+                m_annotationEditor.annotationId.clear();
+                m_annotationEditor.author.clear();
+                m_annotationEditor.timestamp = hoveredMarker->timestamp;
+                m_annotationEditor.content.fill('\0');
+                m_annotationEditor.requestOpen = true;
+            }
+        }
+    } else if ( gutterHovered && !currentSnapshot.isPlaying &&
+                currentSnapshot.acceptsInteraction &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+        m_annotationEditor.annotationId.clear();
+        m_annotationEditor.author.clear();
+        const double hoveredTime     = currentSnapshot.isSnapped
+                                           ? currentSnapshot.snappedTime
+                                           : currentSnapshot.hoveredTime;
+        m_annotationEditor.timestamp = std::max(0.0, hoveredTime);
+        m_annotationEditor.content.fill('\0');
+        m_annotationEditor.requestOpen = true;
+    } else if ( gutterHovered && !hoveredMarker ) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(TR("ui.annotation.gutter_hint").data());
+        ImGui::EndTooltip();
+    }
+
+    std::string popupLabel(TR("ui.annotation.editor_title").view());
+    popupLabel += "###BeatmapAnnotationEditor";
+    if ( m_annotationEditor.requestOpen ) {
+        ImGui::OpenPopup(popupLabel.c_str());
+        m_annotationEditor.requestOpen = false;
+    }
+    if ( ImGui::BeginPopupModal(
+             popupLabel.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        const bool editingExisting = !m_annotationEditor.annotationId.empty();
+        const auto creator         = Config::normalizeCreatorIdentity(
+            Config::AppConfig::instance().getEditorSettings().defaultCreator);
+        const auto timeText =
+            formatCanvasTime(m_annotationEditor.timestamp, &currentSnapshot);
+        ImGui::Text(
+            "%s: %s", TR("ui.annotation.timestamp").data(), timeText.c_str());
+        ImGui::Text(
+            "%s: %s",
+            TR("ui.annotation.author").data(),
+            editingExisting
+                ? (m_annotationEditor.author.empty()
+                       ? TR("ui.annotation.unknown_author").data()
+                       : m_annotationEditor.author.c_str())
+                : (creator.empty() ? TR("ui.annotation.unknown_author").data()
+                                   : creator.c_str()));
+        if ( !editingExisting && creator.empty() ) {
+            ImGui::TextColored(ImVec4(1.0F, 0.34F, 0.25F, 1.0F),
+                               "%s",
+                               TR("ui.annotation.creator_required").data());
+        }
+        ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
+        ImGui::InputTextMultiline("##BeatmapAnnotationMarkdown",
+                                  m_annotationEditor.content.data(),
+                                  m_annotationEditor.content.size(),
+                                  ImVec2(520.0F, 220.0F));
+
+        const bool canSave = m_annotationEditor.content.front() != '\0' &&
+                             (editingExisting || !creator.empty());
+        ImGui::BeginDisabled(!canSave);
+        if ( ::MMM::UI::FeedbackButton(editingExisting
+                                           ? TR("ui.annotation.save").data()
+                                           : TR("ui.annotation.add").data()) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpsertBeatmapAnnotation{
+                    .annotationId = m_annotationEditor.annotationId,
+                    .targetKind = ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+                    .timestamp  = m_annotationEditor.timestamp,
+                    .author     = creator,
+                    .content    = m_annotationEditor.content.data(),
+                }));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if ( editingExisting ) {
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.annotation.delete").data()) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdRemoveBeatmapAnnotation{
+                        m_annotationEditor.annotationId }));
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackButton(TR("ui.annotation.cancel").data()) ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    return gutterHovered || ImGui::IsPopupOpen(popupLabel.c_str());
+}
+
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
@@ -2504,6 +2866,36 @@ void Basic2DCanvasInteraction::handleInteractions(
                             targetHeight,
                             isHovered,
                             *currentSnapshot);
+        return;
+    }
+
+    const bool annotationGutterBlocksCanvas =
+        renderAnnotationGutter(*currentSnapshot,
+                               windowPos.x,
+                               windowPos.y,
+                               targetWidth,
+                               targetHeight,
+                               localMousePos.x,
+                               localMousePos.y,
+                               isHovered);
+    if ( annotationGutterBlocksCanvas ) {
+        if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
+             m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
+            m_hasLastHovered        = true;
+            m_lastHoveredEntity     = entt::null;
+            m_lastHoveredObjectKind = Logic::ChartObjectKind::PlayerNote;
+            m_lastHoveredPart       = 0;
+            m_lastHoveredSubIndex   = -1;
+        }
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressStartedObjectDrag    = false;
+        m_leftPressDragged              = false;
+        m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
         return;
     }
 

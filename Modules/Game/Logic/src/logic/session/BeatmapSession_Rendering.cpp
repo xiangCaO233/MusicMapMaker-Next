@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Logic
@@ -31,6 +32,110 @@ namespace MMM::Logic
 
 namespace
 {
+/// @brief 在批注或目标物件变化后重建时间戳分组缓存。
+/// @param ctx 当前会话上下文。
+/// @warning 逻辑热路径中的脏分支：仅在编辑或载入后完整扫描一次物件 Registry，
+/// 禁止改为每个 update 无条件执行。
+void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
+{
+    if ( !ctx.isAnnotationRenderCacheDirty ) return;
+    ctx.annotationRenderCache.clear();
+    ctx.isAnnotationRenderCacheDirty = false;
+    if ( !ctx.currentBeatmap || ctx.currentBeatmap->m_annotations.empty() ) {
+        return;
+    }
+
+    struct ObjectPosition {
+        double       timestamp{ 0.0 };
+        std::int32_t track{ -1 };
+    };
+    std::unordered_map<std::string, ObjectPosition> playerObjects;
+    const auto noteView = ctx.noteRegistry.view<const NoteComponent>();
+    playerObjects.reserve(noteView.size());
+    for ( const auto entity : noteView ) {
+        const auto& note = noteView.get<const NoteComponent>(entity);
+        if ( !note.m_collaborationId.empty() ) {
+            playerObjects.try_emplace(
+                note.m_collaborationId,
+                ObjectPosition{ note.m_timestamp, note.m_trackIndex });
+        }
+        if ( note.m_type != ::MMM::NoteType::POLYLINE || note.m_isSubNote ) {
+            continue;
+        }
+        for ( const auto& subNote : note.m_subNotes ) {
+            if ( !subNote.collaborationId.empty() ) {
+                playerObjects.try_emplace(
+                    subNote.collaborationId,
+                    ObjectPosition{ subNote.timestamp, subNote.trackIndex });
+            }
+        }
+    }
+
+    std::unordered_map<std::string, ObjectPosition> audioSamples;
+    const auto sampleView = ctx.sampleRegistry.view<const SampleComponent>();
+    audioSamples.reserve(sampleView.size());
+    for ( const auto entity : sampleView ) {
+        const auto& sample = sampleView.get<const SampleComponent>(entity);
+        if ( !sample.m_collaborationId.empty() ) {
+            audioSamples.try_emplace(
+                sample.m_collaborationId,
+                ObjectPosition{ sample.effectiveTime(),
+                                static_cast<std::int32_t>(sample.m_track) });
+        }
+    }
+
+    struct ResolvedAnnotation {
+        double               timestamp{ 0.0 };
+        AnnotationRenderItem item;
+    };
+    std::vector<ResolvedAnnotation> resolved;
+    resolved.reserve(ctx.currentBeatmap->m_annotations.size());
+    for ( const auto& annotation : ctx.currentBeatmap->m_annotations ) {
+        ResolvedAnnotation entry;
+        entry.timestamp       = annotation.m_timestamp / 1000.0;
+        entry.item.id         = annotation.m_id;
+        entry.item.targetKind = annotation.m_targetKind;
+        entry.item.author     = annotation.m_author;
+        entry.item.content    = annotation.m_content;
+        if ( annotation.m_targetKind ==
+             ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            const auto target = playerObjects.find(annotation.m_targetId);
+            entry.item.targetMissing = target == playerObjects.end();
+            if ( target != playerObjects.end() ) {
+                entry.timestamp  = target->second.timestamp;
+                entry.item.track = target->second.track;
+            }
+        } else if ( annotation.m_targetKind ==
+                    ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+            const auto target        = audioSamples.find(annotation.m_targetId);
+            entry.item.targetMissing = target == audioSamples.end();
+            if ( target != audioSamples.end() ) {
+                entry.timestamp  = target->second.timestamp;
+                entry.item.track = target->second.track;
+            }
+        }
+        if ( std::isfinite(entry.timestamp) ) {
+            resolved.push_back(std::move(entry));
+        }
+    }
+    std::stable_sort(
+        resolved.begin(), resolved.end(), [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.timestamp - rhs.timestamp) > 1e-7 ) {
+                return lhs.timestamp < rhs.timestamp;
+            }
+            return lhs.item.id < rhs.item.id;
+        });
+    for ( auto& entry : resolved ) {
+        if ( ctx.annotationRenderCache.empty() ||
+             std::abs(ctx.annotationRenderCache.back().timestamp -
+                      entry.timestamp) > 1e-6 ) {
+            ctx.annotationRenderCache.push_back(
+                { .timestamp = entry.timestamp, .items = {} });
+        }
+        ctx.annotationRenderCache.back().items.push_back(std::move(entry.item));
+    }
+}
+
 /// @brief 谱面状态栏统计缓存。
 struct BeatmapStatusStats {
     /// @brief 当前谱面的可计数物件数量。
@@ -633,6 +738,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         m_ctx->isSamplePruneDirty = false;
     }
 
+    rebuildAnnotationRenderCacheIfNeeded(*m_ctx);
+
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
@@ -843,6 +950,28 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->visibleTimeEnd =
                 cache->getTime(currentAbsY + judgmentLineY / scale);
         }
+        if ( SessionUtils::isMainCanvasCameraId(cameraId) &&
+             !m_ctx->annotationRenderCache.empty() ) {
+            const double visibleStart =
+                std::min(snapshot->visibleTimeStart, snapshot->visibleTimeEnd) -
+                0.25;
+            const double visibleEnd =
+                std::max(snapshot->visibleTimeStart, snapshot->visibleTimeEnd) +
+                0.25;
+            const auto first = std::lower_bound(
+                m_ctx->annotationRenderCache.begin(),
+                m_ctx->annotationRenderCache.end(),
+                visibleStart,
+                [](const AnnotationRenderMarker& marker, double timestamp) {
+                    return marker.timestamp < timestamp;
+                });
+            for ( auto marker = first;
+                  marker != m_ctx->annotationRenderCache.end() &&
+                  marker->timestamp <= visibleEnd;
+                  ++marker ) {
+                snapshot->annotationMarkers.push_back(*marker);
+            }
+        }
 
         // --- 注入交互状态 ---
         snapshot->currentTool        = m_ctx->currentTool;
@@ -944,6 +1073,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( lane ) {
                         snapshot->hoveredTrack =
                             lane->absoluteTrack(laneProjection.playerLaneCount);
+                        isInsideTrack = true;
+                    } else if ( m_ctx->lastMousePos.x >=
+                                    laneProjection.annotationLeftX &&
+                                m_ctx->lastMousePos.x <
+                                    laneProjection.annotationRightX ) {
+                        // 批注栏与物件轨道共用同一时间吸附预览，但不映射为轨道号。
                         isInsideTrack = true;
                     }
                 }
@@ -1510,6 +1645,18 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             config,
             finalMainHeight,
             &m_ctx->hitFXSystem);
+
+        if ( SessionUtils::isMainCanvasCameraId(cameraId) && cache ) {
+            const double currentAbsY =
+                cache->getVisualAnchorAbsY(m_ctx->animateTime);
+            for ( auto& marker : snapshot->annotationMarkers ) {
+                marker.canvasY =
+                    judgmentLineY -
+                    static_cast<float>(cache->getDisplayDelta(
+                        marker.timestamp, currentAbsY, marker.timestamp)) *
+                        snapshot->renderScaleY;
+            }
+        }
 
         // 5. 提交专属快照
         syncBuffer->pushWorkingSnapshot();

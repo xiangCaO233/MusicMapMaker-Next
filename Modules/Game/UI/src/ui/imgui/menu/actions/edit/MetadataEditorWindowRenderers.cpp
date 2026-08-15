@@ -118,21 +118,6 @@ struct SamplePropertyEditorState {
     float volume{ 1.0F };
 };
 
-/// @brief 单个玩家物件注释编辑器的跨帧状态。
-struct NoteAnnotationEditorState {
-    /// @brief 当前编辑的根玩家物件实体。
-    entt::entity entity{ entt::null };
-
-    /// @brief -1 表示整个物件，非负值表示折线子物件。
-    std::int32_t subIndex{ -1 };
-
-    /// @brief 表单是否已经从 ECS 注释加载。
-    bool initialized{ false };
-
-    /// @brief 固定上限的 UTF-8 多行编辑缓冲区。
-    std::array<char, ::MMM::MAX_NOTE_ANNOTATION_BYTES + 1U> buffer{};
-};
-
 /// @brief 获取元数据 JSON 编辑器的持久状态。
 /// @warning UI 每帧绘制路径：仅保存少量弹窗状态，不进行文件系统操作。
 MetadataJsonEditorState& metadataJsonEditorState()
@@ -154,14 +139,6 @@ OsuMetadataTextEditorState& osuMetadataTextEditorState()
 SamplePropertyEditorState& samplePropertyEditorState()
 {
     static SamplePropertyEditorState state;
-    return state;
-}
-
-/// @brief 获取玩家物件注释编辑器的跨帧状态。
-/// @warning UI 每帧绘制路径：仅保存一个物件的有界文本缓冲区。
-NoteAnnotationEditorState& noteAnnotationEditorState()
-{
-    static NoteAnnotationEditorState state;
     return state;
 }
 
@@ -2088,138 +2065,6 @@ void renderSelectedSampleProperties(
     ImGui::Spacing();
 }
 
-/// @brief 把当前目标注释装入固定大小编辑缓冲区。
-/// @param state 注释编辑器状态。
-/// @param note 根物件组件。
-void loadNoteAnnotationBuffer(NoteAnnotationEditorState&  state,
-                              const Logic::NoteComponent& note)
-{
-    const std::string* annotation = &note.m_annotation;
-    if ( state.subIndex >= 0 &&
-         static_cast<std::size_t>(state.subIndex) < note.m_subNotes.size() ) {
-        annotation = &note.m_subNotes[static_cast<std::size_t>(state.subIndex)]
-                          .annotation;
-    }
-    state.buffer.fill('\0');
-    const auto count = std::min(annotation->size(), state.buffer.size() - 1U);
-    std::copy_n(annotation->data(), count, state.buffer.data());
-    state.initialized = true;
-}
-
-/// @brief 渲染单个选中玩家物件的整物件或折线子物件注释编辑器。
-/// @param session 当前谱面会话。
-/// @param engine 编辑器命令入口。
-/// @param selectedEntities 当前选中的根玩家物件。
-/// @param dpiScale 当前 DPI 缩放。
-/// @warning UI 每帧路径：只读取一个 ECS 组件并维护有界缓冲区，不访问文件系统。
-void renderNoteAnnotationEditor(
-    Logic::BeatmapSession& session, Logic::EditorEngine& engine,
-    const std::vector<entt::entity>& selectedEntities, float dpiScale)
-{
-    if ( selectedEntities.empty() ) return;
-
-    ImGui::TextUnformatted(TR("ui.edit.note_metadata.annotation_title").data());
-    if ( selectedEntities.size() != 1U ) {
-        ImGui::TextDisabled(
-            "%s", TR("ui.edit.note_metadata.annotation_single_only").data());
-        ImGui::Separator();
-        return;
-    }
-
-    auto&      context  = session.getContextMutable();
-    auto&      registry = context.noteRegistry;
-    const auto entity   = selectedEntities.front();
-    if ( !registry.valid(entity) ||
-         !registry.all_of<Logic::NoteComponent>(entity) ) {
-        return;
-    }
-    const auto& note  = registry.get<const Logic::NoteComponent>(entity);
-    auto&       state = noteAnnotationEditorState();
-    if ( state.entity != entity ) {
-        state.entity      = entity;
-        state.subIndex    = -1;
-        state.initialized = false;
-        if ( note.m_type == ::MMM::NoteType::POLYLINE &&
-             context.hoveredEntity == entity && context.hoveredSubIndex >= 0 &&
-             static_cast<std::size_t>(context.hoveredSubIndex) <
-                 note.m_subNotes.size() ) {
-            state.subIndex = context.hoveredSubIndex;
-        }
-    }
-    if ( state.subIndex >= 0 && (note.m_type != ::MMM::NoteType::POLYLINE ||
-                                 static_cast<std::size_t>(state.subIndex) >=
-                                     note.m_subNotes.size()) ) {
-        state.subIndex    = -1;
-        state.initialized = false;
-    }
-
-    if ( note.m_type == ::MMM::NoteType::POLYLINE &&
-         !note.m_subNotes.empty() ) {
-        const std::string preview =
-            state.subIndex < 0
-                ? TR("ui.edit.note_metadata.annotation_whole").toString()
-                : TR_FMT("ui.edit.note_metadata.annotation_subnote",
-                         state.subIndex + 1);
-        ImGui::SetNextItemWidth(-1.0F);
-        if ( FeedbackBeginCombo(
-                 TR("ui.edit.note_metadata.annotation_target").data(),
-                 preview.c_str()) ) {
-            if ( FeedbackSelectable(
-                     TR("ui.edit.note_metadata.annotation_whole").data(),
-                     state.subIndex < 0) ) {
-                state.subIndex    = -1;
-                state.initialized = false;
-            }
-            for ( std::size_t index = 0; index < note.m_subNotes.size();
-                  ++index ) {
-                const auto label = TR_FMT(
-                    "ui.edit.note_metadata.annotation_subnote", index + 1U);
-                if ( FeedbackSelectable(
-                         label.c_str(),
-                         state.subIndex == static_cast<std::int32_t>(index)) ) {
-                    state.subIndex    = static_cast<std::int32_t>(index);
-                    state.initialized = false;
-                }
-            }
-            FeedbackEndCombo();
-        }
-    } else {
-        ImGui::TextDisabled(
-            "%s", TR("ui.edit.note_metadata.annotation_whole").data());
-    }
-
-    if ( !state.initialized ) loadNoteAnnotationBuffer(state, note);
-    const bool canAnnotate =
-        hasBeatmapMutationFlag(session.collaborationAllowedMutationFlags(),
-                               ::MMM::BeatmapMutationFlags::Annotations);
-    ImGui::BeginDisabled(!canAnnotate);
-    ImGui::InputTextMultiline("##NoteAnnotationText",
-                              state.buffer.data(),
-                              state.buffer.size(),
-                              ImVec2(-1.0F, 110.0F * dpiScale));
-    if ( FeedbackButton(TR("ui.edit.note_metadata.annotation_apply").data()) ) {
-        engine.pushCommand(Logic::CmdSetNoteAnnotation{
-            .entity     = entity,
-            .subIndex   = state.subIndex,
-            .annotation = std::string(state.buffer.data()),
-        });
-    }
-    ImGui::SameLine();
-    if ( FeedbackButton(TR("ui.edit.note_metadata.clear_btn").data()) ) {
-        state.buffer.fill('\0');
-        engine.pushCommand(Logic::CmdSetNoteAnnotation{
-            .entity   = entity,
-            .subIndex = state.subIndex,
-        });
-    }
-    ImGui::EndDisabled();
-    if ( !canAnnotate ) {
-        ImGui::TextDisabled(
-            "%s", TR("ui.edit.note_metadata.annotation_denied").data());
-    }
-    ImGui::Separator();
-}
-
 /// @brief 渲染选中谱面物件的元数据与自动采样精确属性窗口。
 void renderNoteMetadataEditorWindow(bool& showWindow)
 {
@@ -2234,7 +2079,6 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
     if ( showWindow && !lastShowState ) {
         inputBuffers.clear();
         samplePropertyEditorState().initialized = false;
-        noteAnnotationEditorState().initialized = false;
     }
     lastShowState = showWindow;
 
@@ -2293,7 +2137,6 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 double       timestamp;
             };
             std::vector<SelectedNote> selectedNotes;
-            std::vector<entt::entity> selectedNoteEntities;
             auto& sessionContext = session->getContextMutable();
             auto& registry       = sessionContext.noteRegistry;
 
@@ -2306,7 +2149,6 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                     const auto& nc = view.get<const Logic::NoteComponent>(e);
                     if ( nc.m_isSubNote ) continue;
                     selectedNotes.push_back({ e, nc.m_timestamp });
-                    selectedNoteEntities.push_back(e);
                 }
             }
 
@@ -2324,8 +2166,6 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
 
             renderSelectedSampleProperties(
                 sessionContext, engine, selectedSamples, dpiScale);
-            renderNoteAnnotationEditor(
-                *session, engine, selectedNoteEntities, dpiScale);
 
             if ( selectedNotes.empty() ) {
                 if ( selectedSamples.empty() ) {

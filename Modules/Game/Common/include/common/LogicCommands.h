@@ -7,6 +7,7 @@
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "mmm/Metadata.h"
+#include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
@@ -664,6 +665,41 @@ struct CmdSetNoteAnnotation {
     std::string annotation;
 };
 
+/// @brief 新建或修改一条谱面批注。
+struct CmdUpsertBeatmapAnnotation {
+    /// @brief 空字符串表示新建；非空表示修改已有批注正文。
+    std::string annotationId;
+
+    /// @brief 新建批注所依附的位置类型；修改时保留原目标。
+    ::MMM::BeatmapAnnotationTargetKind targetKind{
+        ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP
+    };
+
+    /// @brief 物件目标所在的独立 Registry；时间戳批注忽略。
+    ChartObjectKind objectKind{ ChartObjectKind::PlayerNote };
+
+    /// @brief 物件目标实体；时间戳批注忽略。
+    entt::entity entity{ entt::null };
+
+    /// @brief Polyline 子物件索引；负值表示玩家物件本体。
+    std::int32_t subIndex{ -1 };
+
+    /// @brief 新建独立时间戳批注的位置，单位秒。
+    double timestamp{ 0.0 };
+
+    /// @brief 新建批注时记录的规范化 Creator；修改时保留原作者。
+    std::string author;
+
+    /// @brief Markdown 正文。
+    std::string content;
+};
+
+/// @brief 删除一条谱面批注。
+struct CmdRemoveBeatmapAnnotation {
+    /// @brief 待删除批注的稳定标识。
+    std::string annotationId;
+};
+
 /// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
 struct CmdReplaceBeatmapData {
     /// @brief 数据来源谱面。
@@ -856,6 +892,7 @@ using LogicCommand = std::variant<
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
     CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
     CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
     CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,

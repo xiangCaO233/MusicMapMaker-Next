@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 namespace MMM
@@ -28,7 +29,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                        const std::filesystem::path& path)
 {
     json root;
-    root["format_version"] = 2;
+    root["format_version"] = 3;
 
     // 1. 元数据。
     auto& metadata = root["metadata"];
@@ -139,6 +140,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         });
     for ( const AudioSampleEvent* sample : sortedSamples ) {
         json sampleJson;
+        if ( !sample->m_collaborationId.empty() ) {
+            sampleJson["collaboration_id"] = sample->m_collaborationId;
+        }
         sampleJson["timestamp"] = sample->m_timestamp;
         sampleJson["offset_ms"] = sample->m_offsetMs;
         sampleJson["track"]     = sample->m_track;
@@ -172,11 +176,23 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     auto& noteArr = root["note"];
     noteArr       = json::array();
 
+    std::unordered_set<std::string> annotatedObjectIds;
+    for ( const auto& annotation : beatMap.m_annotations ) {
+        if ( annotation.m_targetKind !=
+                 BeatmapAnnotationTargetKind::TIMESTAMP &&
+             !annotation.m_targetId.empty() ) {
+            annotatedObjectIds.insert(annotation.m_targetId);
+        }
+    }
+
     // 将单个音符序列化为 JSON。
     auto serializeNote = [&](const Note& note) {
         json n;
         n["timestamp"] = note.m_timestamp;
         n["track"]     = note.m_track;
+        if ( !note.m_collaborationId.empty() ) {
+            n["collaboration_id"] = note.m_collaborationId;
+        }
         if ( !note.m_annotation.empty() ) {
             n["annotation"] = note.m_annotation;
         }
@@ -202,10 +218,13 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
 
             const bool preserveAnnotatedStructure =
                 !poly.m_annotation.empty() ||
+                annotatedObjectIds.contains(poly.m_collaborationId) ||
                 std::any_of(poly.m_subNotes.begin(),
                             poly.m_subNotes.end(),
-                            [](const auto& subNote) {
-                                return !subNote.get().m_annotation.empty();
+                            [&](const auto& subNote) {
+                                return !subNote.get().m_annotation.empty() ||
+                                       annotatedObjectIds.contains(
+                                           subNote.get().m_collaborationId);
                             });
             if ( preserveAnnotatedStructure ) {
                 n["type"]         = "polyline";
@@ -215,6 +234,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                     json        subJson;
                     subJson["timestamp"] = subNote.m_timestamp;
                     subJson["track"]     = subNote.m_track;
+                    if ( !subNote.m_collaborationId.empty() ) {
+                        subJson["collaboration_id"] = subNote.m_collaborationId;
+                    }
                     if ( subNote.m_type == NoteType::HOLD ) {
                         subJson["type"] = "hold";
                         subJson["duration"] =
@@ -428,6 +450,40 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
 
     for ( auto& n : serializedNotes ) {
         noteArr.push_back(n);
+    }
+
+    // 5. 批注。按回退时间和稳定标识排序，保证写出稳定。
+    auto& annotationArray = root["annotations"];
+    annotationArray       = json::array();
+    std::vector<const BeatmapAnnotation*> sortedAnnotations;
+    sortedAnnotations.reserve(beatMap.m_annotations.size());
+    for ( const auto& annotation : beatMap.m_annotations ) {
+        sortedAnnotations.push_back(&annotation);
+    }
+    std::stable_sort(
+        sortedAnnotations.begin(),
+        sortedAnnotations.end(),
+        [](const BeatmapAnnotation* lhs, const BeatmapAnnotation* rhs) {
+            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
+                return lhs->m_timestamp < rhs->m_timestamp;
+            }
+            return lhs->m_id < rhs->m_id;
+        });
+    for ( const BeatmapAnnotation* annotation : sortedAnnotations ) {
+        std::string targetKind = "timestamp";
+        if ( annotation->m_targetKind ==
+             BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+            targetKind = "player_object";
+        } else if ( annotation->m_targetKind ==
+                    BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+            targetKind = "audio_sample";
+        }
+        annotationArray.push_back({ { "id", annotation->m_id },
+                                    { "target_kind", targetKind },
+                                    { "target_id", annotation->m_targetId },
+                                    { "timestamp", annotation->m_timestamp },
+                                    { "author", annotation->m_author },
+                                    { "content", annotation->m_content } });
     }
 
     std::ofstream file(path);

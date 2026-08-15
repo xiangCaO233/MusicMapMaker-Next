@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mmm/Metadata.h"
+#include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/note/Flick.h"
 #include "mmm/note/Hold.h"
 #include "mmm/note/Note.h"
@@ -104,6 +105,9 @@ public:
 
     /// @brief 所有无需玩家操作即可自动播放的采样对象。
     std::deque<AudioSampleEvent> m_audioSamples;
+
+    /// @brief 所有独立时间戳与物件批注。
+    std::vector<BeatmapAnnotation> m_annotations;
 
     /// @brief 本次加载产生的结构化兼容诊断。
     std::vector<BeatmapLoadDiagnostic> m_loadDiagnostics;

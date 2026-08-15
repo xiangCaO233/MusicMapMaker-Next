@@ -297,8 +297,8 @@ bool testMMMVersion2AudioSampleRoundTrip(
     }
 
     bool ok = true;
-    ok &= check(saved.value("format_version", 0) == 2,
-                "MMM v2 should declare format_version 2");
+    ok &= check(saved.value("format_version", 0) == 3,
+                "MMM native saver should declare format_version 3");
     ok &= check(saved["metadata"]["base"].value("bgm_track_count", 0) == 3,
                 "MMM v2 should save BGM track count");
     ok &= check(saved["metadata"]["base"].value("song_file_hint", "") ==
@@ -492,8 +492,8 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
         json          migrated;
         std::ifstream input(migratedPath);
         input >> migrated;
-        ok &= check(migrated.value("format_version", 0) == 2,
-                    "migrated legacy MMM should save as v2");
+        ok &= check(migrated.value("format_version", 0) == 3,
+                    "migrated legacy MMM should save as v3");
         ok &= check(!migrated["metadata"]["base"].contains("audio"),
                     "migrated MMM v2 should omit the legacy audio field");
         ok &= check(migrated.contains("audio_samples") &&
@@ -980,6 +980,68 @@ bool testMMMPolylineAnnotationRoundTrip(
         "MMM polyline annotations should round-trip independently");
 }
 
+/// @brief 验证 MMM 原生格式保留同时间戳的多条 Markdown 批注及物件目标。
+/// @param outputDirectory 测试输出目录。
+/// @return 批注作者、内容、稳定目标和采样标识完整往返时返回 true。
+bool testMMMBeatmapAnnotationsRoundTrip(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count = 4;
+
+    auto& note             = source.m_noteData.notes.emplace_back();
+    note.m_timestamp       = 1250.0;
+    note.m_track           = 2;
+    note.m_collaborationId = "annotation-note-target";
+
+    auto& sample             = source.m_audioSamples.emplace_back();
+    sample.m_timestamp       = 1250.0;
+    sample.m_track           = 4;
+    sample.m_audioResourceId = "effect";
+    sample.m_collaborationId = "annotation-sample-target";
+
+    source.m_annotations = {
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-at-time",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .m_timestamp  = 1250.0,
+            .m_author     = "Creator One",
+            .m_content    = "# 时间点\n- 检查节奏",
+        },
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-on-note",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+            .m_targetId   = "annotation-note-target",
+            .m_timestamp  = 1250.0,
+            .m_author     = "Creator Two",
+            .m_content    = "> 音符位置待确认",
+        },
+        MMM::BeatmapAnnotation{
+            .m_id         = "annotation-on-sample",
+            .m_targetKind = MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE,
+            .m_targetId   = "annotation-sample-target",
+            .m_timestamp  = 1250.0,
+            .m_author     = "Creator Three",
+            .m_content    = "`sample` 音量过大",
+        },
+    };
+    source.sync();
+
+    const auto path = outputDirectory / "beatmap_annotations.mmm";
+    if ( !source.saveToFile(path) ) return false;
+    const auto restored = MMM::BeatMap::loadFromFile(path);
+    return check(restored.m_annotations == source.m_annotations,
+                 "MMM beatmap annotations should round-trip independently") &&
+           check(restored.m_audioSamples.size() == 1U &&
+                     restored.m_audioSamples.front().m_collaborationId ==
+                         "annotation-sample-target",
+                 "MMM sample annotation target identity should round-trip") &&
+           check(restored.m_noteData.notes.size() == 1U &&
+                     restored.m_noteData.notes.front().m_collaborationId ==
+                         "annotation-note-target",
+                 "MMM player annotation target identity should round-trip");
+}
+
 }  // namespace
 
 /// @brief 运行背景元数据格式兼容测试。
@@ -1020,6 +1082,7 @@ int main(int argc, char* argv[])
     ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
+    ok &= testMMMBeatmapAnnotationsRoundTrip(outputDirectory);
 
     if ( ok ) {
         XINFO("Metadata compatibility tests passed.");

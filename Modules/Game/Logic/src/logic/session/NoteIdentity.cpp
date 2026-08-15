@@ -1,7 +1,9 @@
 #include "logic/session/NoteIdentity.h"
 
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "mmm/note/Note.h"
+#include "mmm/sample/AudioSample.h"
 
 #include <array>
 #include <atomic>
@@ -66,6 +68,20 @@ void ensureNoteCollaborationIdentity(NoteComponent& note)
         if ( subNote.collaborationId.empty() ) {
             subNote.collaborationId = makeNoteCollaborationId();
         }
+    }
+}
+
+void ensureSampleCollaborationIdentity(::MMM::AudioSampleEvent& sample)
+{
+    if ( sample.m_collaborationId.empty() ) {
+        sample.m_collaborationId = makeNoteCollaborationId();
+    }
+}
+
+void ensureSampleCollaborationIdentity(SampleComponent& sample)
+{
+    if ( sample.m_collaborationId.empty() ) {
+        sample.m_collaborationId = makeNoteCollaborationId();
     }
 }
 

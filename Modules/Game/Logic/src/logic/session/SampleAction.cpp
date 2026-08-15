@@ -5,6 +5,7 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -34,8 +35,9 @@ void ensureSampleAuxiliaryComponents(entt::registry& registry,
 /// @param ctx 会话上下文。
 void markSampleOrderDirty(SessionContext& ctx)
 {
-    ctx.isSampleOrderDirty = true;
-    ctx.isSamplePruneDirty = false;
+    ctx.isSampleOrderDirty           = true;
+    ctx.isSamplePruneDirty           = false;
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 标记自动采样排序索引只需剔除失效实体。
@@ -45,6 +47,7 @@ void markSamplePruneDirty(SessionContext& ctx)
     if ( !ctx.isSampleOrderDirty ) {
         ctx.isSamplePruneDirty = true;
     }
+    ctx.isAnnotationRenderCacheDirty = true;
 }
 
 /// @brief 计算容纳指定自动采样绝对轨道所需的持久化 BGM 轨道数。
@@ -80,6 +83,7 @@ void SampleAction::execute(SessionContext& ctx)
 
     auto& registry = ctx.sampleRegistry;
     if ( m_type == Type::Create && m_after ) {
+        ensureSampleCollaborationIdentity(*m_after);
         if ( !registry.valid(m_entity) ) {
             m_entity = registry.create(m_entity);
         }

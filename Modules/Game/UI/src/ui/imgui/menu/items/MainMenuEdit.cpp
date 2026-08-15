@@ -83,6 +83,12 @@ MainMenuEdit::MainMenuEdit()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createEditSelectedObjectVolumeAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COMMENT,
+        "ui.edit.add_selected_annotation",
+        MainMenuItemTextKind::TranslationKey,
+        "Ctrl+Alt+A",
+        createAddSelectedObjectAnnotationAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.bms_editing",

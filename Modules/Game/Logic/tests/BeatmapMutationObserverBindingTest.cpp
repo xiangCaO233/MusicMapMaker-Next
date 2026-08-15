@@ -4,12 +4,14 @@
 #include "event/project/ProjectEvents.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ProjectController.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 
 #include "log/colorful-log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -243,9 +245,9 @@ private:
     return true;
 }
 
-/// @brief 验证折线子音符注释只发布 Annotations 类别并受独立权限门禁。
-/// @return 注释、撤销与权限拒绝均保持精确类别和父子组件一致时返回 true。
-[[nodiscard]] bool testSubNoteAnnotationPermissionAndMutationFlag()
+/// @brief 验证多批注的 Creator 门禁、物件定位、时间分组与协作权限。
+/// @return 无 Creator 拒绝新增，同时间戳聚合且撤销和权限类别正确时返回 true。
+[[nodiscard]] bool testBeatmapAnnotationPermissionAndTimestampGrouping()
 {
     MMM::Logic::BeatmapSession session;
     MMM::Config::EditorConfig  config;
@@ -267,6 +269,10 @@ private:
     polyline.m_subNotes.emplace_back(flick);
     polyline.m_subHolds.emplace_back(hold);
     polyline.m_subFlicks.emplace_back(flick);
+    auto& sample             = beatmap->m_audioSamples.emplace_back();
+    sample.m_timestamp       = 1000.0;
+    sample.m_track           = 4;
+    sample.m_audioResourceId = "sample";
     beatmap->sync();
     session.pushCommand(MMM::Logic::LogicCommand{
         MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) },
@@ -284,56 +290,153 @@ private:
         }
     }
     if ( polylineEntity == entt::null ) return false;
+    const auto sampleView =
+        session.getContext()
+            .sampleRegistry.view<const MMM::Logic::SampleComponent>();
+    if ( sampleView.size() != 1U ) return false;
+    const entt::entity sampleEntity = *sampleView.begin();
 
     auto observer = std::make_shared<CountingMutationObserver>();
     session.setMutationObserver(observer, false);
     session.setCollaborationAllowedMutationFlags(
         MMM::BeatmapMutationFlags::Annotations);
+
     session.pushCommand(MMM::Logic::LogicCommand{
-        MMM::Logic::CmdSetNoteAnnotation{
+        MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .targetKind = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+            .objectKind = MMM::Logic::ChartObjectKind::PlayerNote,
             .entity     = polylineEntity,
             .subIndex   = 0,
-            .annotation = "检查折线起段",
+            .content    = "无作者不应写入",
         },
     });
     session.update(0.0, config, false);
-    const auto& annotated =
-        session.getContext().noteRegistry.get<const MMM::Logic::NoteComponent>(
-            polylineEntity);
-    if ( annotated.m_subNotes.front().annotation != "检查折线起段" ||
+    if ( !session.getContext().currentBeatmap->m_annotations.empty() ||
+         observer->notificationCount() != 0 ||
+         session.getContext().lastActionMessage !=
+             "未设置默认 Creator，无法添加批注" ) {
+        XERROR("Annotation without Creator was not rejected");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .targetKind = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT,
+            .objectKind = MMM::Logic::ChartObjectKind::PlayerNote,
+            .entity     = polylineEntity,
+            .subIndex   = 0,
+            .author     = "  Creator One  ",
+            .content    = "# 折线起段\n- 检查节奏",
+        },
+    });
+    session.update(0.0, config, false);
+    const auto& annotations =
+        session.getContext().currentBeatmap->m_annotations;
+    if ( annotations.size() != 1U ||
+         annotations.front().m_targetKind !=
+             MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ||
+         annotations.front().m_targetId.empty() ||
+         annotations.front().m_author != "Creator One" ||
+         annotations.front().m_content != "# 折线起段\n- 检查节奏" ||
          observer->notificationCount() != 1 ||
          observer->lastFlags() != MMM::BeatmapMutationFlags::Annotations ) {
-        XERROR("Sub-note annotation did not publish exact mutation category");
+        XERROR("Object annotation did not preserve its target and Creator");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .timestamp  = 1.0,
+            .author     = "Creator Two",
+            .content    = "> 同一时间戳",
+        },
+    });
+    session.update(0.0, config, false);
+    const auto& grouped = session.getContext().annotationRenderCache;
+    if ( session.getContext().currentBeatmap->m_annotations.size() != 2U ||
+         grouped.size() != 1U || grouped.front().items.size() != 2U ||
+         std::abs(grouped.front().timestamp - 1.0) > 1e-9 ||
+         observer->notificationCount() != 2 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Annotations ) {
+        XERROR("Annotations at the same timestamp did not share one marker");
+        return false;
+    }
+
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .targetKind = MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE,
+            .objectKind = MMM::Logic::ChartObjectKind::AudioSample,
+            .entity     = sampleEntity,
+            .author     = "Creator Three",
+            .content    = "`sample` 批注",
+        },
+    });
+    session.update(0.0, config, false);
+    const auto& sampleAnnotations =
+        session.getContext().currentBeatmap->m_annotations;
+    const auto& sampleGrouped = session.getContext().annotationRenderCache;
+    if ( sampleAnnotations.size() != 3U ||
+         sampleAnnotations.back().m_targetKind !=
+             MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ||
+         sampleAnnotations.back().m_targetId.empty() ||
+         sampleGrouped.size() != 1U ||
+         sampleGrouped.front().items.size() != 3U ||
+         observer->notificationCount() != 3 ) {
+        XERROR("Automatic sample annotation did not join the timestamp marker");
+        return false;
+    }
+
+    auto remoteAnnotations           = std::make_shared<MMM::BeatMap>();
+    remoteAnnotations->m_annotations = sampleAnnotations;
+    remoteAnnotations->m_annotations.emplace_back(MMM::BeatmapAnnotation{
+        .m_id         = "remote-annotation",
+        .m_targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+        .m_timestamp  = 1000.0,
+        .m_author     = "Remote Creator",
+        .m_content    = "远程批注",
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap          = std::move(remoteAnnotations),
+            .replaceAnnotations     = true,
+            .notifyMutationObserver = false,
+            .authoritativeRemote    = true,
+        },
+    });
+    session.update(0.0, config, false);
+    if ( session.getContext().currentBeatmap->m_annotations.size() != 4U ) {
+        XERROR("Remote annotation replacement did not apply");
         return false;
     }
 
     session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
     session.update(0.0, config, false);
-    if ( !session.getContext()
-              .noteRegistry.get<const MMM::Logic::NoteComponent>(polylineEntity)
-              .m_subNotes.front()
-              .annotation.empty() ||
-         observer->notificationCount() != 2 ||
+    const auto& afterUndo = session.getContext().currentBeatmap->m_annotations;
+    const bool  keepsRemote =
+        std::any_of(afterUndo.begin(), afterUndo.end(), [](const auto& item) {
+            return item.m_id == "remote-annotation";
+        });
+    if ( afterUndo.size() != 3U || !keepsRemote ||
+         observer->notificationCount() != 4 ||
          observer->lastFlags() != MMM::BeatmapMutationFlags::Annotations ) {
-        XERROR("Sub-note annotation undo did not preserve mutation category");
+        XERROR("Annotation undo did not preserve mutation category");
         return false;
     }
 
     session.setCollaborationAllowedMutationFlags(
         MMM::BeatmapMutationFlags::Objects);
     session.pushCommand(MMM::Logic::LogicCommand{
-        MMM::Logic::CmdSetNoteAnnotation{
-            .entity     = polylineEntity,
-            .subIndex   = -1,
-            .annotation = "不应写入",
+        MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .targetKind = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .timestamp  = 2.0,
+            .author     = "Creator Four",
+            .content    = "不应写入",
         },
     });
     session.update(0.0, config, false);
-    return session.getContext()
-               .noteRegistry
-               .get<const MMM::Logic::NoteComponent>(polylineEntity)
-               .m_annotation.empty() &&
-           observer->notificationCount() == 2;
+    return session.getContext().currentBeatmap->m_annotations.size() == 3U &&
+           observer->notificationCount() == 4;
 }
 
 /// @brief 验证远端纯物件替换不会覆盖正在绘制的本地折线草稿。
@@ -1010,7 +1113,7 @@ int main()
 {
     return testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
-                   testSubNoteAnnotationPermissionAndMutationFlag() &&
+                   testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testRemoteSynchronizationWaitsForLocalMutationReceipt() &&
                    testPreparedRemoteObjectDeltaAppliesIncrementally() &&

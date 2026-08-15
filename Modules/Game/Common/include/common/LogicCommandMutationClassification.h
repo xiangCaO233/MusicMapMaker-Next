@@ -37,7 +37,11 @@ namespace MMM::Logic
                     flags |= ::MMM::BeatmapMutationFlags::Annotations;
                 }
                 return flags;
-            } else if constexpr ( std::is_same_v<T, CmdSetNoteAnnotation> ) {
+            } else if constexpr ( std::is_same_v<T, CmdSetNoteAnnotation> ||
+                                  std::is_same_v<T,
+                                                 CmdUpsertBeatmapAnnotation> ||
+                                  std::is_same_v<T,
+                                                 CmdRemoveBeatmapAnnotation> ) {
                 return ::MMM::BeatmapMutationFlags::Annotations;
             } else if constexpr ( std::is_same_v<T, CmdStartDrag> ) {
                 return value.kind == ChartObjectKind::AudioSample

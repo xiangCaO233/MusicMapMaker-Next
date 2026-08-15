@@ -122,6 +122,9 @@ struct CanvasTrackProjection {
 
 /// @brief 草稿区、玩家区与 BGM 区共享的主画布横向投影。
 struct CanvasLaneProjection {
+    /// @brief 批注时间戳标记区固定逻辑宽度。
+    static constexpr float ANNOTATION_GUTTER_WIDTH = 26.0F;
+
     /// @brief 草稿轨道数量，始终跟随玩家轨道数量。
     std::uint32_t draftLaneCount{ 0 };
 
@@ -139,6 +142,12 @@ struct CanvasLaneProjection {
 
     /// @brief 当前可访问的 BGM 轨道数量，包含末尾运行时追加轨。
     std::uint32_t bgmLaneCount{ 0 };
+
+    /// @brief 批注标记区左边界。
+    float annotationLeftX{ 0.0F };
+
+    /// @brief 批注标记区右边界。
+    float annotationRightX{ 0.0F };
 
     /// @brief BGM 轨道区左边界。
     float bgmLeftX{ 0.0F };
@@ -199,6 +208,7 @@ struct CanvasLaneProjection {
             }
             return std::nullopt;
         }
+        if ( x < annotationRightX ) return std::nullopt;
 
         const auto index = static_cast<std::uint32_t>(
             std::floor((x - bgmLeftX) / player.singleTrackWidth));
@@ -320,12 +330,17 @@ struct CanvasLaneProjection {
         includeBgmLanes
             ? persistentCount + static_cast<std::uint32_t>(includeAppendLane)
             : std::uint32_t{ 0 };
-    result.bgmLeftX = result.player.rightX;
+    result.annotationLeftX = result.player.rightX;
+    result.annotationRightX =
+        result.annotationLeftX + CanvasLaneProjection::ANNOTATION_GUTTER_WIDTH;
+    result.bgmLeftX = result.annotationRightX;
     result.bgmRightX =
         result.bgmLeftX + static_cast<float>(result.bgmLaneCount) *
                               result.player.singleTrackWidth;
     result.valid =
         std::isfinite(result.draftLeftX) && std::isfinite(result.draftRightX) &&
+        std::isfinite(result.annotationLeftX) &&
+        std::isfinite(result.annotationRightX) &&
         std::isfinite(result.bgmLeftX) && std::isfinite(result.bgmRightX) &&
         result.bgmRightX >= result.bgmLeftX;
     return result;

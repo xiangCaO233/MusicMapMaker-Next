@@ -314,6 +314,31 @@ bool testSelectedVolumeShortcutRoundTrip()
     return true;
 }
 
+/// @brief 验证添加选中物件批注快捷键可持久化且旧配置使用默认组合键。
+/// @return 自定义组合键往返无损且缺失字段恢复为 Ctrl+Alt+A 时返回 true。
+bool testSelectedAnnotationShortcutRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.addSelectedAnnotation =
+        MMM::Config::ShortcutBinding{ true, "N", true, true, false, false };
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding       = restored.shortcutConfig.addSelectedAnnotation;
+    const auto& legacyBinding = legacy.shortcutConfig.addSelectedAnnotation;
+    if ( !binding.enabled || binding.key != "N" || !binding.ctrl ||
+         !binding.shift || binding.alt || binding.super ||
+         !legacyBinding.enabled || legacyBinding.key != "A" ||
+         !legacyBinding.ctrl || legacyBinding.shift || !legacyBinding.alt ||
+         legacyBinding.super ) {
+        XERROR("Selected annotation shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证播放切换快捷键可持久化且旧配置保持空格默认值。
 /// @return 自定义组合键往返无损且缺失字段恢复为空格时返回 true。
 bool testPlaybackShortcutRoundTrip()
@@ -614,6 +639,7 @@ int main()
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&
+                   testSelectedAnnotationShortcutRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
                    testShortcutConflictDetection() &&
                    testRenderingDefaultsReset() &&

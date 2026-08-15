@@ -1,5 +1,6 @@
 #include "network/collaboration/BeatmapDocumentCodec.h"
 
+#include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "mmm/Metadata.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -26,7 +28,7 @@ namespace
 {
 using Json = nlohmann::json;
 
-constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 4;
+constexpr std::uint32_t DOCUMENT_FORMAT_VERSION = 5;
 /// @brief 协作谱面负载固定魔数，对应 ASCII `MMBD`。
 constexpr std::array<std::uint8_t, 4> DOCUMENT_PAYLOAD_MAGIC{
     'M', 'M', 'B', 'D'
@@ -440,6 +442,7 @@ Json encodeAudioSamples(const ::MMM::BeatMap& beatmap)
     Json result = Json::array();
     for ( const auto& sample : beatmap.m_audioSamples ) {
         result.push_back(Json{
+            { "collaboration_id", sample.m_collaborationId },
             { "timestamp", sample.m_timestamp },
             { "offset_ms", sample.m_offsetMs },
             { "track", sample.m_track },
@@ -451,26 +454,22 @@ Json encodeAudioSamples(const ::MMM::BeatMap& beatmap)
     return result;
 }
 
-/// @brief 编码独立于物件几何的玩家物件注释。
+/// @brief 编码独立于物件几何的谱面多批注。
 /// @param beatmap 待编码谱面。
-/// @return 以稳定协作标识寻址的非空注释数组。
+/// @return 以批注稳定标识寻址的记录数组。
 Json encodeAnnotations(const ::MMM::BeatMap& beatmap)
 {
-    Json       result = Json::array();
-    const auto append = [&](const ::MMM::Note& note) {
-        if ( note.m_annotation.empty() || note.m_collaborationId.empty() ) {
-            return;
-        }
+    Json result = Json::array();
+    for ( const auto& annotation : beatmap.m_annotations ) {
         result.push_back(Json{
-            { "collaboration_id", note.m_collaborationId },
-            { "text", note.m_annotation },
+            { "collaboration_id", annotation.m_id },
+            { "target_kind",
+              static_cast<std::uint32_t>(annotation.m_targetKind) },
+            { "target_id", annotation.m_targetId },
+            { "timestamp", annotation.m_timestamp },
+            { "author", annotation.m_author },
+            { "content", annotation.m_content },
         });
-    };
-    for ( const auto& note : beatmap.m_noteData.notes ) append(note);
-    for ( const auto& hold : beatmap.m_noteData.holds ) append(hold);
-    for ( const auto& flick : beatmap.m_noteData.flicks ) append(flick);
-    for ( const auto& polyline : beatmap.m_noteData.polylines ) {
-        append(polyline);
     }
     return result;
 }
@@ -633,10 +632,17 @@ bool decodeTimelines(const Json& source, ::MMM::BeatMap& beatmap)
 bool decodeAudioSamples(const Json& source, ::MMM::BeatMap& beatmap)
 {
     if ( !source.is_array() ) return false;
+    std::unordered_set<std::string> identities;
+    identities.reserve(source.size());
     for ( const auto& entry : source ) {
         auto&      sample     = beatmap.m_audioSamples.emplace_back();
         const auto metadataIt = entry.find("metadata");
         if ( !entry.is_object() ||
+             !readValue(entry, "collaboration_id", sample.m_collaborationId) ||
+             sample.m_collaborationId.size() >
+                 ::MMM::MAX_BEATMAP_ANNOTATION_ID_BYTES ||
+             (!sample.m_collaborationId.empty() &&
+              !identities.insert(sample.m_collaborationId).second) ||
              !readValue(entry, "timestamp", sample.m_timestamp) ||
              !readValue(entry, "offset_ms", sample.m_offsetMs) ||
              !readValue(entry, "track", sample.m_track) ||
@@ -651,48 +657,54 @@ bool decodeAudioSamples(const Json& source, ::MMM::BeatMap& beatmap)
     return true;
 }
 
-/// @brief 将独立注释分类应用到已经解码完成的玩家物件。
-/// @param source 注释数组。
-/// @param beatmap 已经包含物件与稳定标识的谱面。
+/// @brief 解码独立时间戳与物件多批注。
+/// @param source 批注数组。
+/// @param beatmap 接收批注的谱面。
 /// @return 结构、长度和稳定标识均有效时返回 true。
 bool decodeAnnotations(const Json& source, ::MMM::BeatMap& beatmap)
 {
-    if ( !source.is_array() ) return false;
-
-    std::unordered_map<std::string, ::MMM::Note*> notesByIdentity;
-    const auto registerNote = [&](::MMM::Note& note) {
-        if ( note.m_collaborationId.empty() ) return true;
-        return notesByIdentity.emplace(note.m_collaborationId, &note).second;
-    };
-    for ( auto& note : beatmap.m_noteData.notes ) {
-        if ( !registerNote(note) ) return false;
-    }
-    for ( auto& hold : beatmap.m_noteData.holds ) {
-        if ( !registerNote(hold) ) return false;
-    }
-    for ( auto& flick : beatmap.m_noteData.flicks ) {
-        if ( !registerNote(flick) ) return false;
-    }
-    for ( auto& polyline : beatmap.m_noteData.polylines ) {
-        if ( !registerNote(polyline) ) return false;
+    if ( !source.is_array() ||
+         source.size() > ::MMM::MAX_BEATMAP_ANNOTATION_COUNT ) {
+        return false;
     }
 
-    std::unordered_set<std::string> annotatedIdentities;
-    annotatedIdentities.reserve(source.size());
+    std::unordered_set<std::string> annotationIdentities;
+    annotationIdentities.reserve(source.size());
     for ( const auto& entry : source ) {
-        std::string identity;
-        std::string annotation;
+        ::MMM::BeatmapAnnotation annotation;
+        std::uint32_t            targetKind = 0U;
         if ( !entry.is_object() ||
-             !readValue(entry, "collaboration_id", identity) ||
-             !readValue(entry, "text", annotation) || identity.empty() ||
-             annotation.empty() ||
-             annotation.size() > ::MMM::MAX_NOTE_ANNOTATION_BYTES ||
-             !annotatedIdentities.insert(identity).second ) {
+             !readValue(entry, "collaboration_id", annotation.m_id) ||
+             !readValue(entry, "target_kind", targetKind) ||
+             targetKind >
+                 static_cast<std::uint32_t>(
+                     ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE) ||
+             !readValue(entry, "target_id", annotation.m_targetId) ||
+             !readValue(entry, "timestamp", annotation.m_timestamp) ||
+             !readValue(entry, "author", annotation.m_author) ||
+             !readValue(entry, "content", annotation.m_content) ||
+             annotation.m_id.empty() ||
+             annotation.m_id.size() > ::MMM::MAX_BEATMAP_ANNOTATION_ID_BYTES ||
+             annotation.m_targetId.size() >
+                 ::MMM::MAX_BEATMAP_ANNOTATION_ID_BYTES ||
+             !std::isfinite(annotation.m_timestamp) ||
+             annotation.m_content.empty() ||
+             annotation.m_content.size() >
+                 ::MMM::MAX_BEATMAP_ANNOTATION_CONTENT_BYTES ||
+             (!annotation.m_author.empty() &&
+              Config::normalizeCreatorIdentity(annotation.m_author) !=
+                  annotation.m_author) ||
+             !annotationIdentities.insert(annotation.m_id).second ) {
             return false;
         }
-        const auto note = notesByIdentity.find(identity);
-        if ( note == notesByIdentity.end() ) return false;
-        note->second->m_annotation = std::move(annotation);
+        annotation.m_targetKind =
+            static_cast<::MMM::BeatmapAnnotationTargetKind>(targetKind);
+        if ( annotation.m_targetKind !=
+                 ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP &&
+             annotation.m_targetId.empty() ) {
+            return false;
+        }
+        beatmap.m_annotations.push_back(std::move(annotation));
     }
     return true;
 }
