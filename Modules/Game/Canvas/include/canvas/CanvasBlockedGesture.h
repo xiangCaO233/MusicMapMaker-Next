@@ -25,6 +25,22 @@ struct BlockedCanvasGestureCompletion {
     bool endErase{ false };
 };
 
+/// @brief 判断既有框选拖动是否应连续穿过画布阻挡区。
+/// @param tool 当前编辑工具。
+/// @param leftDragging 左键是否已经形成拖动手势。
+/// @param leftStartedOnCanvas 左键手势是否从画布开始。
+/// @param leftStartedOnEntity 左键手势是否从物件开始。
+/// @param objectDragStarted 是否已经开始物件拖拽。
+/// @return 仅从画布空白处开始的活动框选拖动返回 true。
+/// @warning UI 热路径：阻挡区域悬浮时每帧调用，只执行常量布尔判断。
+[[nodiscard]] constexpr bool shouldContinueMarqueeAcrossBlockedArea(
+    Logic::EditTool tool, bool leftDragging, bool leftStartedOnCanvas,
+    bool leftStartedOnEntity, bool objectDragStarted)
+{
+    return tool == Logic::EditTool::Marquee && leftDragging &&
+           leftStartedOnCanvas && !leftStartedOnEntity && !objectDragStarted;
+}
+
 /// @brief 解析画布手势在批注区等阻挡区域中的释放行为。
 /// @param tool 当前编辑工具。
 /// @param leftReleased 本帧是否释放左键。

@@ -3313,7 +3313,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                                localMousePos.x,
                                localMousePos.y,
                                isHovered);
-    if ( annotationGutterInteraction.blocksCanvas ) {
+    const bool continueMarqueeAcrossAnnotation =
+        shouldContinueMarqueeAcrossBlockedArea(
+            currentSnapshot->currentTool,
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left),
+            m_leftPressStartedOnCanvas,
+            m_leftPressStartedOnEntity,
+            m_leftPressStartedObjectDrag);
+    if ( annotationGutterInteraction.blocksCanvas &&
+         !continueMarqueeAcrossAnnotation ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
