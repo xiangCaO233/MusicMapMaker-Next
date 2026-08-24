@@ -1866,9 +1866,9 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.openFileSelectionWindow        = false;
     m_package.showBeatmapMetadataWindow      = false;
     m_package.showMalodyCompatibilityWarning = false;
-    m_package.selectedMalodyMode             = MalodyMode::Slide;
-    m_package.formatPickerOpen               = false;
-    m_package.showFormatPicker               = true;
+    // 保留用户最近选择的 Malody 打包模式，下一次打开时继续沿用。
+    m_package.formatPickerOpen = false;
+    m_package.showFormatPicker = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;
     }
