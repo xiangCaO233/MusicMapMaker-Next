@@ -30,6 +30,9 @@ struct SaveResultPayload {
     /// @brief 是否来自另存为或导出流程。
     bool isExport = false;
 
+    /// @brief 失败时由业务层提供的具体原因。
+    std::string errorMessage;
+
     /// @brief 保存成功时应采用的界面反馈形式。
     Event::BeatmapSavePresentation presentation{
         Event::BeatmapSavePresentation::Transient
@@ -42,9 +45,12 @@ struct SaveResultPayload {
 std::string buildSaveResultMessage(const SaveResultPayload& payload)
 {
     const auto path      = Config::utf8ToPath(payload.path);
-    const bool isPackage = findPackageSupportedFileTypes(
-                               Config::pathToUtf8(path.extension())) != nullptr;
+    const auto extension = Config::pathToUtf8(path.extension());
+    const bool isPackage =
+        findPackageSupportedFileTypes(extension) != nullptr ||
+        packageExtensionEquals(extension, ".zip");
     if ( !payload.success ) {
+        if ( !payload.errorMessage.empty() ) return payload.errorMessage;
         if ( isPackage ) return "打包失败";
         return payload.isExport ? "导出失败" : "保存失败";
     }
@@ -73,6 +79,7 @@ struct SaveResultFeedback::Impl {
                               .path         = event.path,
                               .success      = event.success,
                               .isExport     = event.isExport,
+                              .errorMessage = event.errorMessage,
                               .presentation = event.presentation,
                           });
                       }))
@@ -110,6 +117,10 @@ void SaveResultFeedback::update(float               deltaSeconds,
 {
     SaveResultPayload payload;
     while ( m_impl->queue.try_dequeue(payload) ) {
+        if ( payload.success && !m_impl->success &&
+             m_impl->remainingSeconds > 0.0F ) {
+            continue;
+        }
         if ( payload.success &&
              payload.presentation ==
                  Event::BeatmapSavePresentation::TimedAutoSaveStatus ) {

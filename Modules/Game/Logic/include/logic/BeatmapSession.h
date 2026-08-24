@@ -247,6 +247,10 @@ private:
     void handleCommand(const CmdSetCollaborationClipboardIsolation& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
+    /// @brief 导出当前谱面的 RM/IMD 资源包。
+    /// @param cmd 目标 zip 路径。
+    /// @warning 用户触发的低频路径：会执行完整音频混合和压缩。
+    void handleCommand(const CmdExportImdPackage& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
     /// @brief 更新谱面元数据，并在主音轨提示变化时同步首个 Main BGM 采样。
     /// @param cmd 新的谱面基础元数据。

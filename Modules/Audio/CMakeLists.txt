@@ -2,6 +2,7 @@
 
 add_library(
   Audio STATIC
+  src/AudioTimelineExportService.cpp
   src/AudioTimelineMixerNode.cpp
   src/AudioTimelineResourceProcessor.cpp
   src/AudioTimelineTransport.cpp

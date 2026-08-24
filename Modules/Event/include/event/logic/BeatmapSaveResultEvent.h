@@ -24,6 +24,8 @@ struct BeatmapSaveResultEvent : public BaseEvent {
     bool success{ false };
     /// @brief 是否来自另存为/导出流程。
     bool isExport{ false };
+    /// @brief 失败时优先展示的具体原因；为空时由界面生成通用提示。
+    std::string errorMessage;
     /// @brief 保存成功时采用的界面反馈形式；失败仍显示显式错误反馈。
     BeatmapSavePresentation presentation{ BeatmapSavePresentation::Transient };
 };

@@ -27,6 +27,7 @@
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -197,6 +198,28 @@ std::string sanitizeExportFileNamePart(std::string value)
     std::replace(value.begin(), value.end(), '/', '_');
     std::replace(value.begin(), value.end(), '\\', '_');
     return value;
+}
+
+/// @brief 清理 IMD 资源包的同名前缀并移除会截断首段的下划线。
+/// @param value 原始歌曲名。
+/// @return 可同时用作 IMD 首段、背景图和音频文件主体的名称。
+std::string sanitizeImdPackagePrefix(std::string value)
+{
+    value = sanitizeExportFileNamePart(std::move(value));
+    for ( char& character : value ) {
+        switch ( character ) {
+        case '<':
+        case '>':
+        case ':':
+        case '"':
+        case '|':
+        case '?':
+        case '*':
+        case '_': character = '-'; break;
+        default: break;
+        }
+    }
+    return value.empty() ? "map" : value;
 }
 
 /// @brief 判断谱面是否包含 RM/IMD 无法保存的基础元数据。
@@ -439,6 +462,21 @@ std::string MenuUtil::makeExportFileNameForExtension(
                            sanitizeExportFileNamePart(title),
                            keyCount,
                            sanitizeExportFileNamePart(version));
+    }
+
+    if ( normalizedExt == ".zip" ) {
+        std::string title = "map";
+        if ( beatMap ) {
+            const auto& meta = beatMap->m_baseMapMetadata;
+            if ( !meta.title_unicode.empty() ) {
+                title = meta.title_unicode;
+            } else if ( !meta.title.empty() ) {
+                title = meta.title;
+            } else {
+                title = meta.name;
+            }
+        }
+        return sanitizeImdPackagePrefix(std::move(title)) + ".zip";
     }
 
     std::filesystem::path fileName = Config::utf8ToPath(currentFileName);

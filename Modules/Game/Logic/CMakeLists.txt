@@ -20,6 +20,7 @@ add_library(
   src/logic/EditorClipboard.cpp
   src/logic/EditorClipboardProtocol.cpp
   src/logic/BeatmapLoadDiagnosticPublisher.cpp
+  src/logic/ImdPackageExportService.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
@@ -121,6 +122,14 @@ mmm_add_test_executable(Logic AudioTimelineDescriptorTest
                         tests/AudioTimelineDescriptorTest.cpp)
 target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
 add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
+
+# IMD 资源包测试覆盖同名前缀、时间线拼装 MP3、zip 内容和 IMD 回读。
+mmm_add_test_executable(Logic ImdPackageExportServiceTest
+                        tests/ImdPackageExportServiceTest.cpp)
+target_link_libraries(ImdPackageExportServiceTest PRIVATE Logic Log)
+add_test(NAME ImdPackageExportServiceTest
+         COMMAND ImdPackageExportServiceTest
+                 "${CMAKE_BINARY_DIR}/test_output/imd_package_export_service")
 
 mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
                         tests/ProjectDirectoryWatcherTest.cpp)

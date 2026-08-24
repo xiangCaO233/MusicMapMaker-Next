@@ -11,8 +11,10 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
+#include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -40,6 +42,7 @@
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace
@@ -96,6 +99,119 @@ std::filesystem::path makeCurrentProjectRelativePath(
         return relativePath.lexically_normal();
     }
     return path.filename();
+}
+
+/// @brief 将项目音频或图片资源路径解析为可直接读取的实际路径。
+/// @param project 当前项目。
+/// @param beatmapPath 当前谱面路径，用作项目根缺失时的回退基准。
+/// @param storedPath 资源中保存的路径。
+/// @return 词法规范化后的实际路径；原路径为空时返回空。
+std::filesystem::path resolveProjectResourcePath(
+    const MMM::Project& project, const std::filesystem::path& beatmapPath,
+    const std::filesystem::path& storedPath)
+{
+    if ( storedPath.empty() ) return {};
+    auto resolvedPath = storedPath;
+    if ( resolvedPath.is_relative() ) {
+        if ( !project.m_projectRoot.empty() ) {
+            resolvedPath = project.m_projectRoot / resolvedPath;
+        } else if ( !beatmapPath.empty() ) {
+            resolvedPath = beatmapPath.parent_path() / resolvedPath;
+        }
+    }
+    std::error_code filesystemError;
+    const auto      canonicalPath =
+        std::filesystem::weakly_canonical(resolvedPath, filesystemError);
+    return filesystemError ? resolvedPath.lexically_normal()
+                           : canonicalPath.lexically_normal();
+}
+
+/// @brief 解析当前谱面可用于 IMD 资源包的背景图片。
+/// @param project 当前项目。
+/// @param beatMap 当前谱面。
+/// @return 第一张存在的主背景或封面图片；均不存在时返回空。
+std::filesystem::path resolveImdPackageCoverPath(const MMM::Project& project,
+                                                 const MMM::BeatMap& beatMap)
+{
+    const auto&                                meta = beatMap.m_baseMapMetadata;
+    const std::array<std::filesystem::path, 2> candidates{ meta.main_cover_path,
+                                                           meta.cover_path };
+    for ( const auto& candidate : candidates ) {
+        const auto path =
+            resolveProjectResourcePath(project, meta.map_path, candidate);
+        std::error_code filesystemError;
+        if ( std::filesystem::is_regular_file(path, filesystemError) &&
+             !filesystemError ) {
+            return path;
+        }
+    }
+    return {};
+}
+
+/// @brief 把玩家物件绑定音效追加到待导出的复合音频时间线。
+/// @param project 当前项目。
+/// @param beatMap 当前谱面。
+/// @param hitEvents 已按当前 ECS 同步的全部打击事件。
+/// @param events 已包含自动采样的目标事件列表。
+/// @param errorMessage 接收资源解析失败原因。
+/// @return 全部绑定均成功解析时返回 true。
+bool appendBoundSampleTimelineEvents(
+    const MMM::Project& project, const MMM::BeatMap& beatMap,
+    const std::vector<MMM::Logic::System::HitFXSystem::HitEvent>& hitEvents,
+    std::vector<MMM::Audio::AudioTimelineLoadEvent>&              events,
+    std::string&                                                  errorMessage)
+{
+    using HitEvent = MMM::Logic::System::HitFXSystem::HitEvent;
+    std::vector<const HitEvent*>  boundEvents;
+    std::vector<std::string_view> references;
+    boundEvents.reserve(hitEvents.size());
+    references.reserve(hitEvents.size());
+    for ( const auto& hitEvent : hitEvents ) {
+        if ( !hitEvent.sampleBinding ||
+             hitEvent.sampleBinding->m_audioResourceId.empty() ) {
+            continue;
+        }
+        boundEvents.push_back(&hitEvent);
+        references.emplace_back(hitEvent.sampleBinding->m_audioResourceId);
+    }
+    if ( boundEvents.empty() ) return true;
+
+    const auto resources =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, beatMap.m_baseMapMetadata.map_path, references);
+    std::unordered_set<std::uint64_t> usedEventIds;
+    usedEventIds.reserve(events.size() + boundEvents.size());
+    for ( const auto& event : events ) usedEventIds.insert(event.eventId);
+    std::uint64_t nextEventId = 1U;
+
+    for ( std::size_t index = 0U; index < boundEvents.size(); ++index ) {
+        const auto* resource = resources[index];
+        const auto& binding  = *boundEvents[index]->sampleBinding;
+        if ( !resource ) {
+            errorMessage = "无法解析物件音效资源：" + binding.m_audioResourceId;
+            return false;
+        }
+        while ( nextEventId == 0U || usedEventIds.contains(nextEventId) ) {
+            ++nextEventId;
+        }
+        usedEventIds.insert(nextEventId);
+
+        const auto resourcePath = resolveProjectResourcePath(
+            project,
+            beatMap.m_baseMapMetadata.map_path,
+            MMM::Config::utf8ToPath(resource->m_path));
+        events.push_back(MMM::Audio::AudioTimelineLoadEvent{
+            .eventId               = nextEventId,
+            .resourceKey           = resource->m_id,
+            .filePath              = MMM::Config::pathToUtf8(resourcePath),
+            .effectiveStartSeconds = boundEvents[index]->timestamp,
+            .bgmTrackIndex         = 0U,
+            .eventVolume           = binding.m_volume,
+            .resourceConfig        = resource->m_config,
+        });
+        ++nextEventId;
+    }
+    return true;
 }
 
 /// @brief 按当前项目资源刷新 Malody song.file 提示并清除旧单音轨字段。
@@ -1513,6 +1629,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetCollaborationClipboardIsolation> ||
                     std::is_same_v<T, CmdSaveBeatmap> ||
                     std::is_same_v<T, CmdSaveBeatmapAs> ||
+                    std::is_same_v<T, CmdExportImdPackage> ||
                     std::is_same_v<T, CmdPackBeatmap> ||
                     std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                     std::is_same_v<T, CmdMarkBeatmapMetadataDirty> ) {
@@ -2037,10 +2154,16 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             nullptr);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
+            const bool isImd = packageExtensionEquals(
+                Config::pathToUtf8(savePath.extension()), ".imd");
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
                 .path     = Config::pathToUtf8(savePath),
                 .success  = false,
                 .isExport = true,
+                .errorMessage =
+                    isImd ? "RM/IMD 导出失败：请检查目标路径，或改用“RM/IMD "
+                            "资源包”自动拼装音频与资源"
+                          : std::string{},
             });
             return;
         }
@@ -2053,6 +2176,82 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 导出到项目目录时刷新项目资源列表，但不切换当前会话的谱面文件。
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
+}
+
+/// @brief 将当前谱面、背景图和完整拼装音频导出为 RM/IMD 资源包。
+/// @param cmd 资源包输出路径。
+/// @warning 用户触发的低频导出路径：会同步谱面、解析全部音频资源并执行完整
+/// 离线混音和压缩，禁止在 Session update 热路径中调用。
+void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
+{
+    const auto publishFailure = [&cmd](std::string message) {
+        XERROR("ExportImdPackage: {}", message);
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = cmd.path,
+            .success      = false,
+            .isExport     = true,
+            .errorMessage = std::move(message),
+        });
+    };
+
+    if ( !m_ctx->currentBeatmap ) {
+        publishFailure("没有可导出的当前谱面");
+        return;
+    }
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) {
+        publishFailure("导出 IMD 资源包前需要先打开项目");
+        return;
+    }
+
+    m_ctx->m_needsTimingsSync = true;
+    m_ctx->m_needsNotesSync   = true;
+    SessionUtils::syncBeatmap(*m_ctx);
+    SessionUtils::ensureHitEvents(*m_ctx);
+
+    const double chartEndSeconds =
+        SessionUtils::calculateChartContentEndSeconds(*m_ctx->currentBeatmap);
+    auto descriptor = buildAudioTimelineDescriptor(
+        *m_ctx->currentBeatmap,
+        *project,
+        m_ctx->currentBeatmap->m_baseMapMetadata.map_path,
+        chartEndSeconds);
+    if ( !descriptor.m_diagnostics.empty() ) {
+        publishFailure(descriptor.m_diagnostics.front().m_message);
+        return;
+    }
+
+    std::string boundSampleError;
+    if ( !appendBoundSampleTimelineEvents(*project,
+                                          *m_ctx->currentBeatmap,
+                                          m_ctx->hitEvents,
+                                          descriptor.m_events,
+                                          boundSampleError) ) {
+        publishFailure(std::move(boundSampleError));
+        return;
+    }
+
+    const auto coverPath =
+        resolveImdPackageCoverPath(*project, *m_ctx->currentBeatmap);
+    const auto outputPath =
+        resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
+    const auto result =
+        ImdPackageExportService::exportPackage(*m_ctx->currentBeatmap,
+                                               descriptor.m_events,
+                                               chartEndSeconds,
+                                               coverPath,
+                                               outputPath);
+    if ( !result.success ) {
+        publishFailure(result.errorMessage);
+        return;
+    }
+
+    XINFO("ExportImdPackage: package written to {}", cmd.path);
+    Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+        .path     = Config::pathToUtf8(outputPath),
+        .success  = true,
+        .isExport = true,
+    });
 }
 
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)

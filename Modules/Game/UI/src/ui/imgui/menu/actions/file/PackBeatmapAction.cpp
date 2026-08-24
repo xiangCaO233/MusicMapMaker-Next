@@ -696,6 +696,10 @@ private:
     /// @param path 输出包路径。
     void requestPackBeatmapTo(std::string path);
 
+    /// @brief 请求把当前谱面导出为独立 RM/IMD 资源包。
+    /// @param path 输出 zip 路径。
+    void requestExportImdPackageTo(std::string path);
+
     /// @brief 渲染打包目标格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFormatPickerPopup(float dpiScale);
@@ -764,10 +768,19 @@ private:
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。
     void openPackageOutputFilePicker();
 
+    /// @brief 打开 RM/IMD 资源包输出路径选择器。
+    /// @warning 用户触发的低频路径：原生选择器可能阻塞。
+    void openImdPackageOutputFilePicker();
+
     /// @brief 渲染统一打包输出文件选择器。
     /// @param dpiScale 当前窗口内容缩放。
     /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
     void renderPackageOutputFileDialog(float dpiScale);
+
+    /// @brief 渲染统一 RM/IMD 资源包输出文件选择器。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
+    void renderImdPackageOutputFileDialog(float dpiScale);
 
     /// @brief 渲染打包输出覆盖确认弹窗。
     /// @param dpiScale 当前窗口内容缩放。
@@ -781,6 +794,8 @@ private:
     bool m_showPackageOverwriteWarning = false;
     /// @brief 待确认覆盖的打包输出路径。
     std::string m_pendingPackageOverwritePath;
+    /// @brief 待覆盖目标是否来自独立 RM/IMD 资源包流程。
+    bool m_pendingOverwriteIsImdPackage{ false };
 };
 
 /// @brief 仅在已有项目时允许打包。
@@ -809,6 +824,7 @@ void PackBeatmapAction::renderDeferred(MainMenuContext& context)
     renderPackageCompatibilityWarningPopup(context.dpiScale);
     renderPackageBeatmapMetadataWindow(context.dpiScale);
     renderPackageOutputFileDialog(context.dpiScale);
+    renderImdPackageOutputFileDialog(context.dpiScale);
     renderPackageOverwriteWarningPopup(context.dpiScale);
     m_statusMessageSink = nullptr;
 }
@@ -875,6 +891,18 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
     m_package.pendingMetadataOverrides.clear();
 }
 
+/// @brief 请求把当前谱面导出为独立 RM/IMD 资源包。
+/// @param path 输出 zip 路径。
+void PackBeatmapAction::requestExportImdPackageTo(std::string path)
+{
+    if ( path.empty() ) return;
+    auto outputPath = Config::utf8ToPath(path);
+    outputPath.replace_extension(".zip");
+    MenuUtil::dispatchCommand(Logic::CmdExportImdPackage{
+        .path = Config::pathToUtf8(outputPath),
+    });
+}
+
 /// @brief 渲染打包目标格式选择弹窗。
 /// @param dpiScale 当前窗口内容缩放。
 void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
@@ -887,9 +915,10 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
     }
     if ( !m_package.formatPickerOpen ) return;
 
-    bool            hasSelection = false;
-    bool            closeWindow  = false;
-    PackageFileType selectedType = m_package.selectedFileType;
+    bool            hasSelection            = false;
+    bool            requestImdPackagePicker = false;
+    bool            closeWindow             = false;
+    PackageFileType selectedType            = m_package.selectedFileType;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(
@@ -921,6 +950,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                 selectedType = PackageFileType::Mpk;
                 hasSelection = true;
             }
+            if ( drawCenteredButton("RM/IMD 资源包 (.zip)", buttonSize) ) {
+                requestImdPackagePicker = true;
+            }
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -930,7 +962,7 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                 closeWindow = true;
             }
 
-            if ( hasSelection ) {
+            if ( hasSelection || requestImdPackagePicker ) {
                 closeWindow = true;
             }
 
@@ -956,6 +988,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
         rebuildPackageCandidateFiles();
         m_package.showFileSelectionWindow = true;
         m_package.openFileSelectionWindow = true;
+    }
+    if ( requestImdPackagePicker ) {
+        openImdPackageOutputFilePicker();
     }
 }
 
@@ -1895,8 +1930,9 @@ void PackBeatmapAction::openPackageOutputFilePicker()
         if ( result == NFD_OKAY ) {
             std::string filePath = applyPackSelectedFormatToPath(outPath);
             if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                m_pendingPackageOverwritePath = std::move(filePath);
-                m_showPackageOverwriteWarning = true;
+                m_pendingPackageOverwritePath  = std::move(filePath);
+                m_pendingOverwriteIsImdPackage = false;
+                m_showPackageOverwriteWarning  = true;
             } else {
                 requestPackBeatmapTo(std::move(filePath));
             }
@@ -1921,6 +1957,54 @@ void PackBeatmapAction::openPackageOutputFilePicker()
              ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
             ::MMM::UI::PlayPopupOpenFeedback();
         }
+    }
+}
+
+/// @brief 打开 RM/IMD 资源包输出路径选择器。
+/// @warning 用户触发的低频路径：原生选择器可能阻塞。
+void PackBeatmapAction::openImdPackageOutputFilePicker()
+{
+    auto& config = Config::AppConfig::instance().getEditorSettings();
+    const std::string defaultFileName =
+        MenuUtil::makeExportFileNameForExtension(".zip", "map.zip");
+    const std::string defaultPath = getPackagePickerDefaultPath(config);
+    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+        nfdu8char_t*      outPath    = nullptr;
+        nfdu8filteritem_t filters[1] = { { "RM/IMD 资源包", "zip" } };
+        const nfdresult_t result     = NFD_SaveDialogU8(
+            &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
+        if ( result == NFD_OKAY ) {
+            auto outputPath = Config::utf8ToPath(outPath);
+            outputPath.replace_extension(".zip");
+            std::string     filePath = Config::pathToUtf8(outputPath);
+            std::error_code filesystemError;
+            if ( std::filesystem::exists(outputPath, filesystemError) &&
+                 !filesystemError ) {
+                m_pendingPackageOverwritePath  = std::move(filePath);
+                m_pendingOverwriteIsImdPackage = true;
+                m_showPackageOverwriteWarning  = true;
+            } else {
+                requestExportImdPackageTo(std::move(filePath));
+            }
+            NFD_FreePath(outPath);
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig fdConfig;
+    fdConfig.path              = defaultPath;
+    fdConfig.countSelectionMax = 1;
+    fdConfig.fileName          = defaultFileName;
+    fdConfig.flags =
+        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker");
+    ImGuiFileDialog::Instance()->OpenDialog(
+        "ImdPackageFilePicker", "导出 RM/IMD 资源包", ".zip", fdConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
     }
 }
 
@@ -1950,10 +2034,51 @@ void PackBeatmapAction::renderPackageOutputFileDialog(float dpiScale)
             engine.setEditorConfig(config);
 
             if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                m_pendingPackageOverwritePath = std::move(filePath);
-                m_showPackageOverwriteWarning = true;
+                m_pendingPackageOverwritePath  = std::move(filePath);
+                m_pendingOverwriteIsImdPackage = false;
+                m_showPackageOverwriteWarning  = true;
             } else {
                 requestPackBeatmapTo(std::move(filePath));
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
+/// @brief 渲染统一 RM/IMD 资源包输出文件选择器。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 热路径：仅在统一文件选择器打开时绘制。
+void PackBeatmapAction::renderImdPackageOutputFileDialog(float dpiScale)
+{
+    Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+    if ( ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker") ) {
+        Utils::prepareCenteredModalWindow({ 600, 400 });
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             "ImdPackageFilePicker",
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
+             { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            auto outputPath = Config::utf8ToPath(
+                ImGuiFileDialog::Instance()->GetFilePathName());
+            outputPath.replace_extension(".zip");
+            std::string filePath = Config::pathToUtf8(outputPath);
+
+            auto& engine       = Logic::EditorEngine::instance();
+            auto  editorConfig = engine.getEditorConfig();
+            editorConfig.settings.lastFilePickerPath =
+                ImGuiFileDialog::Instance()->GetCurrentPath();
+            engine.setEditorConfig(editorConfig);
+
+            std::error_code filesystemError;
+            if ( std::filesystem::exists(outputPath, filesystemError) &&
+                 !filesystemError ) {
+                m_pendingPackageOverwritePath  = std::move(filePath);
+                m_pendingOverwriteIsImdPackage = true;
+                m_showPackageOverwriteWarning  = true;
+            } else {
+                requestExportImdPackageTo(std::move(filePath));
             }
         }
         ImGuiFileDialog::Instance()->Close();
@@ -1991,14 +2116,20 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
 
         const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
         if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
-            requestPackBeatmapTo(m_pendingPackageOverwritePath);
+            if ( m_pendingOverwriteIsImdPackage ) {
+                requestExportImdPackageTo(m_pendingPackageOverwritePath);
+            } else {
+                requestPackBeatmapTo(m_pendingPackageOverwritePath);
+            }
             m_pendingPackageOverwritePath.clear();
+            m_pendingOverwriteIsImdPackage = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
                                        buttonSize) ) {
             m_pendingPackageOverwritePath.clear();
+            m_pendingOverwriteIsImdPackage = false;
             ImGui::CloseCurrentPopup();
         }
 

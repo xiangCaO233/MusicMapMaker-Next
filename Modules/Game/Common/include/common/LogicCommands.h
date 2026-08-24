@@ -504,6 +504,12 @@ struct CmdSaveBeatmapAs {
     std::string path;
 };
 
+/// @brief 将当前谱面导出为单谱面 RM/IMD 资源包。
+struct CmdExportImdPackage {
+    /// @brief 资源包输出路径，使用 UTF-8 编码。
+    std::string path;
+};
+
 /// @brief 打包转换时临时覆盖单个谱面的基础元数据。
 struct PackageBeatmapMetadataOverride {
     /// @brief 项目相对谱面路径，使用 UTF-8 编码。
@@ -901,7 +907,7 @@ using LogicCommand = std::variant<
     CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
     CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
-    CmdSaveTemporaryProject>;
+    CmdExportImdPackage, CmdSaveTemporaryProject>;
 
 /// @brief 判断命令是否会修改谱面、项目资源或把当前谱面写入文件。
 /// @param command 待检查的逻辑命令。
