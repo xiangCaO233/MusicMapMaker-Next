@@ -6,12 +6,14 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -27,10 +29,58 @@
 #include <system_error>
 #include <vector>
 
+#if defined(_WIN32)
+#    define GLFW_EXPOSE_NATIVE_WIN32
+#elif defined(__APPLE__)
+#    define GLFW_EXPOSE_NATIVE_COCOA
+#elif defined(__linux__)
+#    define GLFW_EXPOSE_NATIVE_WAYLAND
+#    define GLFW_EXPOSE_NATIVE_X11
+#endif
+#include <nfd_glfw3.h>
+
 namespace MMM::UI
 {
 namespace
 {
+/// @brief 原生对话框阻塞渲染期间临时恢复系统光标。
+/// @param window GLFW 主窗口句柄，可为空。
+/// @return 对话框打开前的 GLFW 光标模式。
+int showSystemCursorForNativeDialog(GLFWwindow* window)
+{
+    if ( !window ) return GLFW_CURSOR_NORMAL;
+
+    const int previousCursorMode = glfwGetInputMode(window, GLFW_CURSOR);
+    if ( previousCursorMode != GLFW_CURSOR_NORMAL ) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+    return previousCursorMode;
+}
+
+/// @brief 原生对话框关闭后恢复 GLFW 原有光标模式。
+/// @param window GLFW 主窗口句柄，可为空。
+/// @param cursorMode 对话框打开前记录的光标模式。
+void restoreCursorAfterNativeDialog(GLFWwindow* window, int cursorMode)
+{
+    if ( !window || cursorMode == GLFW_CURSOR_NORMAL ) return;
+    glfwSetInputMode(window, GLFW_CURSOR, cursorMode);
+}
+
+/// @brief 为项目文件夹选择器配置主窗口所有权。
+/// @param args 待传给 NFD 的文件夹选择器参数。
+/// @param window GLFW 主窗口句柄，可为空。
+/// @return 成功取得原生父窗口句柄时返回 true。
+bool configureProjectFolderPickerParent(nfdpickfolderu8args_t& args,
+                                        GLFWwindow*            window)
+{
+    if ( !window ) return false;
+
+#ifdef __linux__
+    (void)NFD_SetDisplayPropertiesFromGLFW();
+#endif
+    return NFD_GetNativeWindowFromGLFWWindow(window, &args.parentWindow);
+}
+
 /// @brief 去除 ASCII 空白，用于解析 Malody mode 元数据。
 /// @param text 原始字符串视图。
 /// @return 去除首尾空白后的字符串视图。
@@ -207,20 +257,44 @@ void MenuUtil::dispatchCommand(const Logic::LogicCommand& cmd)
 }
 
 /// @brief 打开项目目录选择器并发布打开项目事件。
+/// @param sourceManager 当前 UI 管理器，用于绑定原生选择器父窗口。
 /// @warning 用户触发的低频路径：原生选择器可能阻塞。
-void MenuUtil::openProjectFolderPicker()
+void MenuUtil::openProjectFolderPicker(UIManager* sourceManager)
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t* outPath = nullptr;
-        nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
+        auto* nativeWindow =
+            sourceManager ? sourceManager->getNativeWindow() : nullptr;
+        GLFWwindow* glfwWindow =
+            nativeWindow ? nativeWindow->getWindowHandle() : nullptr;
+        nfdpickfolderu8args_t pickerArgs{};
+        const bool            hasNativeParent =
+            configureProjectFolderPickerParent(pickerArgs, glfwWindow);
+#if defined(_WIN32)
+        if ( !hasNativeParent ||
+             pickerArgs.parentWindow.type != NFD_WINDOW_HANDLE_TYPE_WINDOWS ||
+             !pickerArgs.parentWindow.handle ) {
+            XERROR("无法取得 Windows 主窗口句柄，原生文件夹选择器未打开");
+            return;
+        }
+#else
+        (void)hasNativeParent;
+#endif
+
+        const int previousCursorMode =
+            showSystemCursorForNativeDialog(glfwWindow);
+        nfdu8char_t*      outPath = nullptr;
+        const nfdresult_t result = NFD_PickFolderU8_With(&outPath, &pickerArgs);
+        restoreCursorAfterNativeDialog(glfwWindow, previousCursorMode);
 
         if ( result == NFD_OKAY ) {
             Event::OpenProjectEvent ev;
             ev.m_projectPath = Config::utf8ToPath(outPath);
             Event::EventBus::instance().publish(ev);
-            NFD_FreePath(outPath);
+            NFD_FreePathU8(outPath);
+        } else if ( result == NFD_ERROR ) {
+            XERROR("NFD Error: {}", NFD_GetError());
         }
         return;
     }

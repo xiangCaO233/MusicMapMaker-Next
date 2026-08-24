@@ -22,8 +22,9 @@ public:
     static void dispatchCommand(const Logic::LogicCommand& cmd);
 
     /// @brief 打开项目目录选择器并发布打开项目事件。
+    /// @param sourceManager 当前 UI 管理器，用于绑定原生选择器父窗口。
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。
-    static void openProjectFolderPicker();
+    static void openProjectFolderPicker(UIManager* sourceManager);
 
     /// @brief 打开音频导入选择器并发布导入事件。
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。

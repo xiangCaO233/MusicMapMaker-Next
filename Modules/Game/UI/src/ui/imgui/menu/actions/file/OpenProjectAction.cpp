@@ -76,9 +76,8 @@ public:
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)context;
         (void)activation;
-        MenuUtil::openProjectFolderPicker();
+        MenuUtil::openProjectFolderPicker(context.sourceManager);
     }
 
     /// @brief 消费 Ctrl+O 快捷键。
