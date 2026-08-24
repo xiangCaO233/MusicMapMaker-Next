@@ -2693,7 +2693,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     drawList->PopClipRect();
 }
 
-bool Basic2DCanvasInteraction::renderAnnotationGutter(
+Basic2DCanvasInteraction::AnnotationGutterInteractionResult
+Basic2DCanvasInteraction::renderAnnotationGutter(
     const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
     float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
     float pointerY, bool canvasHovered)
@@ -2714,9 +2715,9 @@ bool Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                                pointerX >= projection.annotationLeftX &&
-                                pointerX <= projection.annotationRightX &&
-                                pointerY >= topY && pointerY <= bottomY;
+                               pointerX >= projection.annotationLeftX &&
+                               pointerX <= projection.annotationRightX &&
+                               pointerY >= topY && pointerY <= bottomY;
 
     const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
     std::optional<std::size_t>           hoveredDetailIndex;
@@ -2847,6 +2848,7 @@ bool Basic2DCanvasInteraction::renderAnnotationGutter(
                                             ImGui::GetFontSize() * 4.0F);
             if ( wheelResult.consumed ) {
                 ImGui::SetScrollY(wheelResult.scrollY);
+                detailWheelConsumed = true;
             }
         }
         if ( !detailCardHovered && hoveredMarker->items.size() > 1U &&
@@ -3038,8 +3040,13 @@ bool Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::EndPopup();
     }
 
-    return gutterHovered || detailCardHovered ||
-           ImGui::IsPopupOpen(popupLabel.c_str());
+    const bool annotationHovered = gutterHovered || detailCardHovered;
+    const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
+    return {
+        .blocksCanvas        = annotationHovered || editorPopupOpen,
+        .passesWheelToCanvas = shouldPassAnnotationWheelToCanvas(
+            annotationHovered, editorPopupOpen, detailWheelConsumed),
+    };
 }
 
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
@@ -3297,7 +3304,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         return;
     }
 
-    const bool annotationGutterBlocksCanvas =
+    const auto annotationGutterInteraction =
         renderAnnotationGutter(*currentSnapshot,
                                windowPos.x,
                                windowPos.y,
@@ -3306,7 +3313,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                localMousePos.x,
                                localMousePos.y,
                                isHovered);
-    if ( annotationGutterBlocksCanvas ) {
+    if ( annotationGutterInteraction.blocksCanvas ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -3356,6 +3363,15 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_lastMarqueeUpdateCommand.valid = false;
             m_lastBrushUpdateCommand.valid   = false;
             m_lastMoveUpdateCommand.valid    = false;
+        }
+        if ( annotationGutterInteraction.passesWheelToCanvas ) {
+            const auto& io = ImGui::GetIO();
+            if ( std::abs(io.MouseWheel) > 0.01F &&
+                 !handleModifierWheel(currentSnapshot) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdScroll{
+                        m_cameraId, -io.MouseWheel, io.KeyShift }));
+            }
         }
         return;
     }

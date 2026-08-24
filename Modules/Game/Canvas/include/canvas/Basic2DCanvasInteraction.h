@@ -54,6 +54,14 @@ public:
                              bool allowSelectionScroll = true);
 
 private:
+    /// @brief 批注交互层对当前画布输入的处理结果。
+    struct AnnotationGutterInteractionResult {
+        /// @brief 是否阻断画布的点击、拖拽等指针交互。
+        bool blocksCanvas{ false };
+        /// @brief 是否允许未消费的滚轮继续传给画布。
+        bool passesWheelToCanvas{ false };
+    };
+
     struct PendingDrop {
         std::vector<std::string> paths;
         glm::vec2                pos;
@@ -150,14 +158,13 @@ private:
     /// @param pointerX 指针相对画布左侧的横坐标。
     /// @param pointerY 指针相对画布顶部的纵坐标。
     /// @param canvasHovered 指针是否位于当前画布。
-    /// @return 批注标记区或弹窗正在取得画布交互所有权时返回 true。
+    /// @return 批注交互层对指针和滚轮输入的处理结果。
     /// @warning UI 热路径：只遍历当前快照已裁剪的可见批注标记；不访问 ECS、
     /// 文件系统或完整谱面。
-    bool renderAnnotationGutter(const Logic::RenderSnapshot& currentSnapshot,
-                                float canvasScreenX, float canvasScreenY,
-                                float targetWidth, float targetHeight,
-                                float pointerX, float pointerY,
-                                bool canvasHovered);
+    AnnotationGutterInteractionResult renderAnnotationGutter(
+        const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
+        float canvasScreenY, float targetWidth, float targetHeight,
+        float pointerX, float pointerY, bool canvasHovered);
     /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
