@@ -18,6 +18,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -521,6 +522,11 @@ void BpmMeasurementToolView::requestFocus()
 void BpmMeasurementToolView::requestAutomaticMeasurement(
     const std::string& audioTrackId, bool keepWindowVisible)
 {
+    if ( !shouldStartBpmAutomaticMeasurement(
+             m_backgroundAutomaticMeasurement) ) {
+        return;
+    }
+
     if ( keepWindowVisible && !m_isOpen ) {
         restoreUserPreferences();
     }
