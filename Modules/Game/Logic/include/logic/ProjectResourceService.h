@@ -106,6 +106,9 @@ class ProjectResourceService
 public:
     /// @brief 项目目录资源同步后的结果。
     struct DirectorySyncResult {
+        /// @brief 目录扫描是否成功并完成资源同步。
+        bool m_scanSucceeded{ false };
+
         /// @brief 本次同步是否改变了项目资源列表或资源类型。
         bool m_changed{ false };
 

@@ -1467,6 +1467,11 @@ ProjectResourceService::syncDirectoryResources(
 {
     /// @brief 本次同步的输出结果。
     DirectorySyncResult result;
+    if ( !scanResult.m_success ) {
+        return result;
+    }
+    result.m_scanSucceeded = true;
+
     /// @brief 同步后新的谱面条目列表。
     std::vector<Project::BeatmapEntry> newBeatmaps;
     /// @brief 扫描谱面后汇总的全部音频引用。

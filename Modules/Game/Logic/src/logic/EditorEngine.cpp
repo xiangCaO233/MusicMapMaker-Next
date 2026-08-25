@@ -4070,6 +4070,13 @@ void EditorEngine::scanProjectDirectory()
         markAudioTimelineDescriptorsDirtyUnsafe();
         saveProject();
     }
+
+    if ( syncResult.m_scanSucceeded ) {
+        Event::EventBus::instance().publish(
+            Event::ProjectDirectoryRefreshedEvent{
+                .m_resourcesChanged = syncResult.m_changed,
+            });
+    }
 }
 
 }  // namespace MMM::Logic

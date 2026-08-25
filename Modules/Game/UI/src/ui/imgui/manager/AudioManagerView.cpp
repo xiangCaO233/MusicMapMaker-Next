@@ -10,6 +10,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
+#include "event/project/ProjectEvents.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
@@ -375,6 +376,28 @@ UiFrameSnapshot captureAudioManagerUiFrameSnapshot(float dpiScale)
 }
 }  // namespace
 
+/// @brief 创建音频管理器并订阅外部目录刷新通知。
+/// @param subViewName 子视图名称。
+AudioManagerView::AudioManagerView(const std::string& subViewName)
+    : ISubView(subViewName)
+{
+    m_projectDirectoryRefreshedSubId =
+        Event::EventBus::instance()
+            .subscribe<Event::ProjectDirectoryRefreshedEvent>(
+                [this](const Event::ProjectDirectoryRefreshedEvent&) {
+                    m_projectDirectoryRefreshPending.store(
+                        true, std::memory_order_release);
+                });
+}
+
+/// @brief 取消音频管理器的目录刷新订阅。
+AudioManagerView::~AudioManagerView()
+{
+    Event::EventBus::instance()
+        .unsubscribe<Event::ProjectDirectoryRefreshedEvent>(
+            m_projectDirectoryRefreshedSubId);
+}
+
 /// @brief 捕获当前音频管理器布局输入。
 /// @return 当前项目、皮肤音效数量和展开状态。
 AudioManagerView::LayoutInputSnapshot
@@ -634,6 +657,11 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                 UIManager*     sourceManager)
 {
+    if ( m_projectDirectoryRefreshPending.exchange(
+             false, std::memory_order_acq_rel) ) {
+        m_audioTableSortCacheDirty = true;
+    }
+
     auto& engine       = Logic::EditorEngine::instance();
     auto* project      = engine.getCurrentProject();
     auto& skinCfg      = Config::SkinManager::instance();
