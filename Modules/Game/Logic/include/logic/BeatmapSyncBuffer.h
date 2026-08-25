@@ -214,7 +214,7 @@ struct Hitbox {
     entt::entity entity;
     HoverPart    part{ HoverPart::None };
     int          subIndex{
-                 -1
+        -1
     };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
     float x;
     float y;
@@ -385,6 +385,9 @@ struct RenderSnapshot {
     /// @brief 主画布当前可见时间范围内的批注标记。
     std::vector<AnnotationRenderMarker> annotationMarkers;
 
+    /// @brief 当前会话全量批注标记缓存的版本号。
+    std::uint64_t annotationRevision{ 0 };
+
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
@@ -522,7 +525,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-            0
+        0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -684,6 +687,7 @@ struct RenderSnapshot {
         interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();
         annotationMarkers.clear();
+        annotationRevision = 0;
         timelineElements.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();

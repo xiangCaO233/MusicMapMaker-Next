@@ -7,6 +7,7 @@
 #include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
 #include "canvas/TimeFormatUtils.h"
+#include "canvas/TimelineCanvas.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
@@ -26,6 +27,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/CanvasCamera.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
@@ -385,13 +387,13 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                                   right >= canvasWidth - edgeEpsilon &&
-                                   bottom >= canvasHeight - edgeEpsilon;
+                              right >= canvasWidth - edgeEpsilon &&
+                              bottom >= canvasHeight - edgeEpsilon;
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                               canvasScreenY + canvasHeight };
+                            canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -650,7 +652,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -913,9 +915,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
-                              pointerX <= cardRightX && pointerY >= cardTopY &&
-                              pointerY <= cardBottomY;
+        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
+                             pointerX <= cardRightX && pointerY >= cardTopY &&
+                             pointerY <= cardBottomY;
         if ( hovered && !result.marker ) {
             result.marker    = entry.marker;
             result.itemIndex = entry.itemIndex;
@@ -1299,11 +1301,11 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
             }));
     }
 
-    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
-                                      pointerX <= m_audioPreviewOverlay.right &&
-                                      pointerY >= m_audioPreviewOverlay.top &&
-                                      pointerY <= m_audioPreviewOverlay.bottom;
-    const float bridgePadding       = std::max(retentionPadding, gap);
+    const bool pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                     pointerX <= m_audioPreviewOverlay.right &&
+                                     pointerY >= m_audioPreviewOverlay.top &&
+                                     pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding = std::max(retentionPadding, gap);
     const float bridgeLeft =
         std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
     const float bridgeTop =
@@ -1329,7 +1331,8 @@ void Basic2DCanvasInteraction::update(
 
     if ( currentSnapshot ) {
         handleHotkeys(currentSnapshot);
-        handleInteractions(currentSnapshot, targetWidth, targetHeight);
+        handleInteractions(
+            sourceManager, currentSnapshot, targetWidth, targetHeight);
     }
 
     updateTransientUi();
@@ -2693,11 +2696,24 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     drawList->PopClipRect();
 }
 
+/// @brief 绘制批注栏、入口菜单、详情提示和编辑弹窗。
+/// @param sourceManager 用于访问共享 Timeline 窗口中的批注表状态。
+/// @param currentSnapshot 当前主画布渲染快照。
+/// @param canvasScreenX 画布左上角屏幕横坐标。
+/// @param canvasScreenY 画布左上角屏幕纵坐标。
+/// @param targetWidth 画布宽度。
+/// @param targetHeight 画布高度。
+/// @param pointerX 指针相对画布左侧的横坐标。
+/// @param pointerY 指针相对画布顶部的纵坐标。
+/// @param canvasHovered 指针是否位于当前画布。
+/// @return 批注交互层对指针和滚轮输入的处理结果。
+/// @warning UI 热路径：每帧只遍历当前快照可见批注；全量表格数据由 Timeline
+/// 窗口在批注版本变化时低频刷新。
 Basic2DCanvasInteraction::AnnotationGutterInteractionResult
 Basic2DCanvasInteraction::renderAnnotationGutter(
-    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
-    float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
-    float pointerY, bool canvasHovered)
+    UI::UIManager* sourceManager, const Logic::RenderSnapshot& currentSnapshot,
+    float canvasScreenX, float canvasScreenY, float targetWidth,
+    float targetHeight, float pointerX, float pointerY, bool canvasHovered)
 {
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     const auto& layout =
@@ -2721,9 +2737,11 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
 
     const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
     std::optional<std::size_t>           hoveredDetailIndex;
-    bool                                 detailCardHovered   = false;
-    bool                                 detailLinkHovered   = false;
-    bool                                 detailWheelConsumed = false;
+    bool                                 detailCardHovered     = false;
+    bool                                 detailLinkHovered     = false;
+    bool                                 detailWheelConsumed   = false;
+    bool                                 annotationMenuHovered = false;
+    bool                                 annotationMenuOpen    = false;
     if ( projection.valid && currentSnapshot.hasBeatmap ) {
         auto* drawList = ImGui::GetWindowDrawList();
         drawList->PushClipRect(
@@ -2817,6 +2835,61 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             }
         }
         drawList->PopClipRect();
+
+        const ImVec2 savedCursorPosition = ImGui::GetCursorScreenPos();
+        const ImVec2 menuButtonPosition{
+            canvasScreenX + centerX - 15.0F,
+            canvasScreenY + topY + 10.0F,
+        };
+        ImGui::SetCursorScreenPos(menuButtonPosition);
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              ImGui::GetStyleColorVec4(ImGuiCol_Button));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0F);
+        UI::Utils::pushFixedButtonStyleVars();
+        if ( ::MMM::UI::FeedbackButton(UI::ICON_MMM_BARS,
+                                       ImVec2(30.0F, 30.0F)) ) {
+            ImGui::OpenPopup("AnnotationOptionsMenu");
+        }
+        UI::Utils::popFixedButtonStyleVars();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        annotationMenuHovered = ImGui::IsItemHovered();
+        if ( annotationMenuHovered ) {
+            ImGui::SetTooltip("%s", TR("ui.annotation.menu.tooltip").data());
+        }
+
+        auto* timeline =
+            sourceManager
+                ? sourceManager->getView<TimelineCanvas>("TimelineWindow")
+                : nullptr;
+        annotationMenuOpen = ImGui::IsPopupOpen("AnnotationOptionsMenu");
+        if ( ImGui::BeginPopup("AnnotationOptionsMenu") ) {
+            annotationMenuHovered =
+                annotationMenuHovered || ImGui::IsWindowHovered();
+            ImGui::BeginDisabled(timeline == nullptr);
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.annotation.menu.open_table").data(),
+                     nullptr,
+                     timeline && timeline->isAnnotationTableOpen()) ) {
+                if ( timeline && !timeline->isAnnotationTableOpen() ) {
+                    ::MMM::UI::PlayPopupOpenFeedback();
+                    timeline->setAnnotationTableOpen(true);
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::EndPopup();
+        }
+        ImGui::SetCursorScreenPos(savedCursorPosition);
+    }
+
+    if ( annotationMenuHovered || annotationMenuOpen ) {
+        hoveredMarker = nullptr;
+        hoveredDetailIndex.reset();
     }
 
     if ( hoveredMarker && !hoveredMarker->items.empty() ) {
@@ -3040,8 +3113,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::EndPopup();
     }
 
-    const bool annotationHovered = gutterHovered || detailCardHovered;
-    const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
+    const bool annotationHovered = gutterHovered || detailCardHovered ||
+                                   annotationMenuHovered || annotationMenuOpen;
+    const bool editorPopupOpen = ImGui::IsPopupOpen(popupLabel.c_str());
     return {
         .blocksCanvas        = annotationHovered || editorPopupOpen,
         .passesWheelToCanvas = shouldPassAnnotationWheelToCanvas(
@@ -3050,21 +3124,22 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
 }
 
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
+/// @param sourceManager 用于打开共享的批注表窗口。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
 /// @param targetHeight 画布高度。
 /// @warning UI 热路径约束如下。
 /// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
-    const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
-    float targetHeight)
+    UI::UIManager* sourceManager, const Logic::RenderSnapshot* currentSnapshot,
+    float targetWidth, float targetHeight)
 {
     ImVec2     mousePos         = ImGui::GetMousePos();
     ImVec2     windowPos        = ImGui::GetCursorScreenPos();
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -3305,7 +3380,8 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     const auto annotationGutterInteraction =
-        renderAnnotationGutter(*currentSnapshot,
+        renderAnnotationGutter(sourceManager,
+                               *currentSnapshot,
                                windowPos.x,
                                windowPos.y,
                                targetWidth,
@@ -3417,8 +3493,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto drawPoint = [currentSnapshot](
+                        const auto& inspect   = currentSnapshot->hoverInspect;
+                        auto        drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {

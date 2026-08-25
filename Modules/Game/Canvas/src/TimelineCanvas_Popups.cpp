@@ -5,6 +5,7 @@
 #include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -17,6 +18,7 @@
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/ClipboardBridge.h"
+#include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -748,6 +750,22 @@ std::string_view getTimingPointsTableBeatmapKey(
     return snapshot.beatmapName;
 }
 
+/// @brief 获取批注表目标类型对应的翻译键。
+/// @param targetKind 批注目标类型。
+/// @return 可交给翻译系统的稳定键。
+const char* annotationTableTargetLabelKey(
+    ::MMM::BeatmapAnnotationTargetKind targetKind)
+{
+    switch ( targetKind ) {
+    case ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT:
+        return "ui.annotation.target.player_object";
+    case ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE:
+        return "ui.annotation.target.audio_sample";
+    case ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP:
+    default: return "ui.annotation.target.timestamp";
+    }
+}
+
 /// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
 std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 {
@@ -1377,6 +1395,332 @@ void TimelineCanvas::renderEventCreationPopup()
     }
 }
 
+/// @brief 批注缓存版本变化时复制一次全量、已解析的表格行。
+/// @param beatmapKey 当前表格绑定的谱面键。
+/// @param revision 当前快照发布的批注缓存版本。
+/// @return 成功取得与快照匹配的批注数据时返回 true。
+/// @warning UI 低频刷新路径：仅版本变化时持有 Session 锁和复制全量批注，
+/// 禁止无条件每帧调用。
+bool TimelineCanvas::refreshAnnotationTableRows(std::string_view beatmapKey,
+                                                std::uint64_t    revision)
+{
+    if ( m_annotationTableBeatmapKey == beatmapKey &&
+         m_annotationTableRevision == revision ) {
+        return true;
+    }
+
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) return false;
+
+    const auto& context = session->getContext();
+    if ( !context.currentBeatmap || context.isAnnotationRenderCacheDirty ||
+         context.annotationRenderCacheRevision != revision ) {
+        return false;
+    }
+
+    const auto&       metadata = context.currentBeatmap->m_baseMapMetadata;
+    const std::string currentBeatmapKey =
+        metadata.map_path.empty() ? metadata.name
+                                  : Config::pathToUtf8(metadata.map_path);
+    if ( currentBeatmapKey != beatmapKey ) return false;
+
+    std::string selectedId;
+    if ( m_selectedAnnotationTableRow &&
+         *m_selectedAnnotationTableRow < m_annotationTableRows.size() ) {
+        selectedId =
+            m_annotationTableRows[*m_selectedAnnotationTableRow].item.id;
+    }
+
+    std::vector<AnnotationTableRow> refreshedRows;
+    refreshedRows.reserve(context.currentBeatmap->m_annotations.size());
+    for ( const auto& marker : context.annotationRenderCache ) {
+        for ( const auto& item : marker.items ) {
+            refreshedRows.push_back(
+                AnnotationTableRow{ marker.timestamp, item });
+        }
+    }
+
+    m_annotationTableRows.swap(refreshedRows);
+    m_annotationTableBeatmapKey.assign(beatmapKey.data(), beatmapKey.size());
+    m_annotationTableRevision = revision;
+
+    m_selectedAnnotationTableRow.reset();
+    if ( !selectedId.empty() ) {
+        const auto selected = std::find_if(m_annotationTableRows.begin(),
+                                           m_annotationTableRows.end(),
+                                           [&](const AnnotationTableRow& row) {
+                                               return row.item.id == selectedId;
+                                           });
+        if ( selected != m_annotationTableRows.end() ) {
+            m_selectedAnnotationTableRow = static_cast<std::size_t>(
+                std::distance(m_annotationTableRows.begin(), selected));
+        }
+    }
+    if ( !m_selectedAnnotationTableRow && !m_annotationTableRows.empty() ) {
+        m_selectedAnnotationTableRow = 0U;
+    }
+    return true;
+}
+
+/// @brief 渲染可快速查看并跳转定位的批注表窗口（非模态）。
+void TimelineCanvas::renderAnnotationTableWindow()
+{
+    const auto resetTable = [this]() {
+        m_annotationTableBeatmapKey.clear();
+        m_annotationTableRevision = std::numeric_limits<std::uint64_t>::max();
+        m_annotationTableRows.clear();
+        m_selectedAnnotationTableRow.reset();
+    };
+    if ( !m_isAnnotationTableWindowOpen ) {
+        resetTable();
+        return;
+    }
+
+    auto closeTableWindow = [this, &resetTable]() {
+        m_isAnnotationTableWindowOpen = false;
+        resetTable();
+    };
+
+    auto&         engine      = Logic::EditorEngine::instance();
+    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+    if ( !activeEntry || activeEntry->isLogoPlaceholder || !m_currentSnapshot ||
+         !m_currentSnapshot->hasBeatmap ) {
+        closeTableWindow();
+        return;
+    }
+
+    const std::string_view currentBeatmapKey =
+        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+    if ( currentBeatmapKey.empty() ) {
+        closeTableWindow();
+        return;
+    }
+    if ( m_annotationTableBeatmapKey.empty() ) {
+        m_annotationTableBeatmapKey.assign(currentBeatmapKey.data(),
+                                           currentBeatmapKey.size());
+    } else if ( m_annotationTableBeatmapKey != currentBeatmapKey ) {
+        closeTableWindow();
+        return;
+    }
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    const float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    const ImVec2 itemSpacing{
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+    ImGui::SetNextWindowSize(ImVec2(860.0F, 560.0F), ImGuiCond_FirstUseEver);
+    std::string windowTitle =
+        TR("ui.annotation.table.title").toString() + "###AnnotationTableWindow";
+    const bool wasOpenBeforeBegin = m_isAnnotationTableWindowOpen;
+    const bool opened =
+        ImGui::Begin(windowTitle.c_str(), &m_isAnnotationTableWindowOpen);
+    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                                &m_isAnnotationTableWindowOpen);
+    if ( opened ) {
+        const bool rowsReady = refreshAnnotationTableRows(
+            currentBeatmapKey, m_currentSnapshot->annotationRevision);
+        if ( !rowsReady ) {
+            ImGui::TextDisabled("%s", TR("ui.annotation.table.syncing").data());
+        } else {
+            ImGui::Text("%s",
+                        TR_FMT("ui.annotation.table.count",
+                               m_annotationTableRows.size())
+                            .c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", TR("ui.annotation.table.hint").data());
+
+            const float availableHeight = ImGui::GetContentRegionAvail().y;
+            const float detailHeight =
+                std::clamp(availableHeight * 0.38F, 150.0F, 260.0F);
+            const float tableHeight =
+                std::max(160.0F,
+                         availableHeight - detailHeight -
+                             ImGui::GetStyle().ItemSpacing.y - 4.0F);
+            constexpr ImGuiTableFlags tableFlags =
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_SizingStretchProp;
+            if ( ImGui::BeginTable("AnnotationTableRows",
+                                   6,
+                                   tableFlags,
+                                   ImVec2(0.0F, tableHeight)) ) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn(TR("ui.annotation.table.index").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        52.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.timestamp").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        125.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.target").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        140.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.author").data(),
+                                        ImGuiTableColumnFlags_WidthStretch,
+                                        0.75F);
+                ImGui::TableSetupColumn(
+                    TR("ui.annotation.table.content").data(),
+                    ImGuiTableColumnFlags_WidthStretch,
+                    1.7F);
+                ImGui::TableSetupColumn(TR("ui.annotation.table.action").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        90.0F * dpiScale);
+                ImGui::TableHeadersRow();
+
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(m_annotationTableRows.size()),
+                              ImGui::GetFrameHeightWithSpacing());
+                while ( clipper.Step() ) {
+                    for ( int rowIndex = clipper.DisplayStart;
+                          rowIndex < clipper.DisplayEnd;
+                          ++rowIndex ) {
+                        const auto  index = static_cast<std::size_t>(rowIndex);
+                        const auto& row   = m_annotationTableRows[index];
+                        const bool  selected =
+                            m_selectedAnnotationTableRow == index;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        const std::string rowLabel = fmt::format(
+                            "#{}###AnnotationTableRow_{}", index + 1U, index);
+                        const bool rowClicked = ::MMM::UI::FeedbackSelectable(
+                            rowLabel.c_str(),
+                            selected,
+                            ImGuiSelectableFlags_SpanAllColumns |
+                                ImGuiSelectableFlags_AllowOverlap,
+                            ImVec2(0.0F, ImGui::GetFrameHeight()));
+                        const bool rowDoubleClicked =
+                            ImGui::IsItemHovered() &&
+                            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                        if ( rowClicked ) {
+                            m_selectedAnnotationTableRow = index;
+                        }
+
+                        const auto seekToRow = [&row]() {
+                            const float visualOffset =
+                                Config::AppConfig::instance()
+                                    .getVisualConfig()
+                                    .getEffectiveVisualOffset();
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(Logic::CmdSeek{
+                                    row.timestamp - visualOffset }));
+                        };
+                        if ( rowDoubleClicked ) seekToRow();
+
+                        ImGui::TableSetColumnIndex(1);
+                        const auto timeText =
+                            formatCanvasTime(row.timestamp, m_currentSnapshot);
+                        ImGui::TextUnformatted(timeText.c_str());
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(TR(annotationTableTargetLabelKey(
+                                                      row.item.targetKind))
+                                                   .data());
+                        if ( row.item.track >= 0 ) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("#%d", row.item.track + 1);
+                        }
+                        if ( row.item.targetMissing ) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                                               "!");
+                        }
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextUnformatted(
+                            row.item.author.empty()
+                                ? TR("ui.annotation.unknown_author").data()
+                                : row.item.author.c_str());
+
+                        ImGui::TableSetColumnIndex(4);
+                        const auto firstLineEnd = row.item.content.find('\n');
+                        const std::size_t firstLineLength =
+                            firstLineEnd == std::string::npos
+                                ? row.item.content.size()
+                                : firstLineEnd;
+                        ImGui::TextUnformatted(
+                            row.item.content.data(),
+                            row.item.content.data() + firstLineLength);
+
+                        ImGui::TableSetColumnIndex(5);
+                        const std::string jumpLabel =
+                            fmt::format("{}##AnnotationTableJump_{}",
+                                        TR("ui.annotation.table.jump").view(),
+                                        index);
+                        if ( ::MMM::UI::FeedbackButton(jumpLabel.c_str()) ) {
+                            seekToRow();
+                        }
+                    }
+                }
+                ImGui::EndTable();
+            }
+
+            if ( m_annotationTableRows.empty() ) {
+                ImGui::TextDisabled("%s",
+                                    TR("ui.annotation.table.empty").data());
+            } else if ( m_selectedAnnotationTableRow &&
+                        *m_selectedAnnotationTableRow <
+                            m_annotationTableRows.size() ) {
+                const auto& selected =
+                    m_annotationTableRows[*m_selectedAnnotationTableRow];
+                ImGui::BeginChild("AnnotationTableDetail",
+                                  ImVec2(0.0F, detailHeight),
+                                  ImGuiChildFlags_Borders);
+                const auto timeText =
+                    formatCanvasTime(selected.timestamp, m_currentSnapshot);
+                ImGui::Text("%s: %s",
+                            TR("ui.annotation.timestamp").data(),
+                            timeText.c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled(
+                    "· %s",
+                    selected.item.author.empty()
+                        ? TR("ui.annotation.unknown_author").data()
+                        : selected.item.author.c_str());
+                ImGui::Text(
+                    "%s: %s",
+                    TR("ui.annotation.target").data(),
+                    TR(annotationTableTargetLabelKey(selected.item.targetKind))
+                        .data());
+                if ( selected.item.track >= 0 ) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("#%d", selected.item.track + 1);
+                }
+                if ( selected.item.targetMissing ) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(
+                        ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                        "%s",
+                        TR("ui.annotation.target_missing").data());
+                }
+                ImGui::Separator();
+                UI::renderMarkdown(selected.item.content);
+                ImGui::EndChild();
+            }
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(6);
+}
+
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）。
 /// @warning UI 热路径：打开时每帧执行；无谱面快照时只关闭窗口并清理绑定。
 void TimelineCanvas::renderTimingPointsTableWindow()
@@ -1601,8 +1945,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                     ? parseTimingTableDouble(searchValueText)
-                                     : std::nullopt;
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =

@@ -476,8 +476,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2684,25 +2684,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -3794,7 +3794,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -3868,11 +3868,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -4126,6 +4126,9 @@ bool testAnnotationMarkerProjectionAndGutterSnap()
     }
     const auto* snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->annotationMarkers.size() != 1U ||
+         snapshot->annotationRevision == 0U ||
+         snapshot->annotationRevision !=
+             context.annotationRenderCacheRevision ||
          !snapshot->scrollSegments.empty() || !snapshot->isSnapped ||
          !near(snapshot->snappedTime, 0.5) ) {
         XERROR(
@@ -4136,6 +4139,24 @@ bool testAnnotationMarkerProjectionAndGutterSnap()
             snapshot ? snapshot->scrollSegments.size() : 0U,
             snapshot ? snapshot->isSnapped : false,
             snapshot ? snapshot->snappedTime : -1.0);
+        return false;
+    }
+
+    const std::uint64_t firstAnnotationRevision = snapshot->annotationRevision;
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .annotationId = "annotation-projection",
+            .targetKind   = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .timestamp    = 0.5,
+            .author       = "Creator",
+            .content      = "revision",
+        } });
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->annotationRevision <= firstAnnotationRevision ||
+         snapshot->annotationRevision !=
+             context.annotationRenderCacheRevision ) {
+        XERROR("Annotation snapshot revision did not follow cache rebuild");
         return false;
     }
 

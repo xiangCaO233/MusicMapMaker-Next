@@ -324,6 +324,9 @@ struct ProjectWorkspaceState {
     /// @brief 上次是否打开了时间点批量编辑表格。
     bool m_timingPointsTableOpen{ false };
 
+    /// @brief 上次是否打开了批注表。
+    bool m_annotationTableOpen{ false };
+
     /// @brief 上次是否打开了重叠检测工具窗口。
     bool m_overlapCheckOpen{ false };
 
@@ -362,6 +365,7 @@ struct ProjectWorkspaceState {
             { "m_bpmMeasurementAudioTrackId",
               workspace.m_bpmMeasurementAudioTrackId },
             { "m_timingPointsTableOpen", workspace.m_timingPointsTableOpen },
+            { "m_annotationTableOpen", workspace.m_annotationTableOpen },
             { "m_overlapCheckOpen", workspace.m_overlapCheckOpen },
             { "m_metadataEditorOpen", workspace.m_metadataEditorOpen },
             { "m_noteMetadataEditorOpen", workspace.m_noteMetadataEditorOpen }
@@ -413,6 +417,8 @@ struct ProjectWorkspaceState {
             j.value("m_bpmMeasurementAudioTrackId", std::string{});
         workspace.m_timingPointsTableOpen =
             j.value("m_timingPointsTableOpen", false);
+        workspace.m_annotationTableOpen =
+            j.value("m_annotationTableOpen", false);
         workspace.m_overlapCheckOpen   = j.value("m_overlapCheckOpen", false);
         workspace.m_metadataEditorOpen = j.value("m_metadataEditorOpen", false);
         workspace.m_noteMetadataEditorOpen =

@@ -840,6 +840,7 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
     workspace.m_projectAudioToolOpen   = false;
     workspace.m_bpmMeasurementAudioTrackId.clear();
     workspace.m_timingPointsTableOpen  = false;
+    workspace.m_annotationTableOpen    = false;
     workspace.m_overlapCheckOpen       = false;
     workspace.m_metadataEditorOpen     = false;
     workspace.m_noteMetadataEditorOpen = false;
@@ -884,6 +885,7 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
 
     if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
+        workspace.m_annotationTableOpen   = timeline->isAnnotationTableOpen();
     }
 
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
@@ -980,6 +982,7 @@ void UIManager::restoreProjectWorkspaceViews(
 
     if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
+        timeline->setAnnotationTableOpen(workspace.m_annotationTableOpen);
     }
 }
 

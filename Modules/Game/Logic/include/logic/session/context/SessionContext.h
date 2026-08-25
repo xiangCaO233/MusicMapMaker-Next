@@ -184,6 +184,8 @@ struct SessionContext {
     bool isAnnotationRenderCacheDirty{ true };
     /// @brief 已解析物件当前位置并按时间排序的批注标记缓存。
     std::vector<AnnotationRenderMarker> annotationRenderCache;
+    /// @brief 批注标记缓存每次重建后递增的版本号，供 UI 低频刷新全量表格。
+    std::uint64_t annotationRenderCacheRevision{ 0 };
     /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
     std::vector<double> previewDensityObjectTimes;
     /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。
