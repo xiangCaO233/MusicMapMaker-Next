@@ -2837,22 +2837,40 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         drawList->PopClipRect();
 
         const ImVec2 savedCursorPosition = ImGui::GetCursorScreenPos();
+        const float  dpiScale =
+            Config::AppConfig::instance().getWindowContentScale();
+        const float gutterWidth =
+            projection.annotationRightX - projection.annotationLeftX;
+        const float menuButtonSize =
+            std::clamp(gutterWidth - 6.0F, 18.0F, 22.0F);
+        const float menuButtonRounding =
+            std::min(menuButtonSize * 0.28F,
+                     std::max(3.0F,
+                              Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .aesthetics.frameRounding *
+                                  dpiScale));
         const ImVec2 menuButtonPosition{
-            canvasScreenX + centerX - 15.0F,
-            canvasScreenY + topY + 10.0F,
+            canvasScreenX + centerX - menuButtonSize * 0.5F,
+            canvasScreenY + topY + 4.0F,
         };
         ImGui::SetCursorScreenPos(menuButtonPosition);
         ImGui::SetNextItemAllowOverlap();
-        ImGui::PushStyleColor(ImGuiCol_Button,
-                              ImGui::GetStyleColorVec4(ImGuiCol_Button));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0F);
+        ImVec4 buttonColor = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+        buttonColor.w *= 0.72F;
+        ImVec4 buttonHoveredColor =
+            ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+        buttonHoveredColor.w *= 0.88F;
+        ImVec4 buttonActiveColor =
+            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+        buttonActiveColor.w *= 0.92F;
+        ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, buttonHoveredColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, buttonActiveColor);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, menuButtonRounding);
         UI::Utils::pushFixedButtonStyleVars();
-        if ( ::MMM::UI::FeedbackButton(UI::ICON_MMM_BARS,
-                                       ImVec2(30.0F, 30.0F)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 UI::ICON_MMM_BARS, ImVec2(menuButtonSize, menuButtonSize)) ) {
             ImGui::OpenPopup("AnnotationOptionsMenu");
         }
         UI::Utils::popFixedButtonStyleVars();

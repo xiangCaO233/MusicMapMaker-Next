@@ -1557,13 +1557,16 @@ void TimelineCanvas::renderAnnotationTableWindow()
                          availableHeight - detailHeight -
                              ImGui::GetStyle().ItemSpacing.y - 4.0F);
             constexpr ImGuiTableFlags tableFlags =
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
-                ImGuiTableFlags_SizingStretchProp;
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
+                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
             if ( ImGui::BeginTable("AnnotationTableRows",
                                    6,
                                    tableFlags,
                                    ImVec2(0.0F, tableHeight)) ) {
+                if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                    table->DisableDefaultContextMenu = true;
+                }
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableSetupColumn(TR("ui.annotation.table.index").data(),
                                         ImGuiTableColumnFlags_WidthFixed,
@@ -1587,8 +1590,7 @@ void TimelineCanvas::renderAnnotationTableWindow()
                 ImGui::TableHeadersRow();
 
                 ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(m_annotationTableRows.size()),
-                              ImGui::GetFrameHeightWithSpacing());
+                clipper.Begin(static_cast<int>(m_annotationTableRows.size()));
                 while ( clipper.Step() ) {
                     for ( int rowIndex = clipper.DisplayStart;
                           rowIndex < clipper.DisplayEnd;
@@ -1626,11 +1628,13 @@ void TimelineCanvas::renderAnnotationTableWindow()
                         if ( rowDoubleClicked ) seekToRow();
 
                         ImGui::TableSetColumnIndex(1);
+                        ImGui::AlignTextToFramePadding();
                         const auto timeText =
                             formatCanvasTime(row.timestamp, m_currentSnapshot);
                         ImGui::TextUnformatted(timeText.c_str());
 
                         ImGui::TableSetColumnIndex(2);
+                        ImGui::AlignTextToFramePadding();
                         ImGui::TextUnformatted(TR(annotationTableTargetLabelKey(
                                                       row.item.targetKind))
                                                    .data());
@@ -1645,12 +1649,14 @@ void TimelineCanvas::renderAnnotationTableWindow()
                         }
 
                         ImGui::TableSetColumnIndex(3);
+                        ImGui::AlignTextToFramePadding();
                         ImGui::TextUnformatted(
                             row.item.author.empty()
                                 ? TR("ui.annotation.unknown_author").data()
                                 : row.item.author.c_str());
 
                         ImGui::TableSetColumnIndex(4);
+                        ImGui::AlignTextToFramePadding();
                         const auto firstLineEnd = row.item.content.find('\n');
                         const std::size_t firstLineLength =
                             firstLineEnd == std::string::npos
@@ -1665,7 +1671,9 @@ void TimelineCanvas::renderAnnotationTableWindow()
                             fmt::format("{}##AnnotationTableJump_{}",
                                         TR("ui.annotation.table.jump").view(),
                                         index);
-                        if ( ::MMM::UI::FeedbackButton(jumpLabel.c_str()) ) {
+                        if ( ::MMM::UI::FeedbackButton(
+                                 jumpLabel.c_str(),
+                                 ImVec2(-FLT_MIN, ImGui::GetFrameHeight())) ) {
                             seekToRow();
                         }
                     }
