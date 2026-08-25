@@ -1987,13 +1987,15 @@ void test_malody_note_phase_shift_boundaries()
     constexpr double BPM            = 120.0;
     constexpr double BEAT_LENGTH_MS = 60000.0 / BPM;
     struct TestCase {
-        double      firstTimingMs;
-        int         expectedBeat;
-        const char* tag;
+        double       firstTimingMs;
+        int          expectedBeat;
+        double       expectedDelayMs;
+        std::int64_t expectedMainOffsetMs;
+        const char*  tag;
     };
     const std::array<TestCase, 2> cases{ {
-        { -100.0, 0, "negative_timing" },
-        { BEAT_LENGTH_MS, 1, "zero_phase" },
+        { -100.0, 0, 100.0, 100, "negative_timing" },
+        { BEAT_LENGTH_MS, 1, 0.0, 0, "zero_phase" },
     } };
 
     for ( const auto& testCase : cases ) {
@@ -2026,19 +2028,38 @@ void test_malody_note_phase_shift_boundaries()
                 exported["note"].begin(),
                 exported["note"].end(),
                 [](const json& node) { return !isSoundNode(node); });
+            const auto exportedMainSample = std::find_if(
+                exported["note"].begin(), exported["note"].end(), isSoundNode);
             TEST_ASSERT(
                 exportedPlayable != exported["note"].end() &&
                     (*exportedPlayable)["beat"] ==
                         json::array({ testCase.expectedBeat, 0, 1 }),
                 "phase boundary should preserve the playable absolute time");
+            TEST_ASSERT(
+                !exported["time"].empty() &&
+                    std::abs(exported["time"][0].value("delay", -1.0) -
+                             testCase.expectedDelayMs) < 1e-6 &&
+                    exportedMainSample != exported["note"].end() &&
+                    exportedMainSample->value("offset", -1) ==
+                        testCase.expectedMainOffsetMs,
+                "first timing should export the expected delay and paired "
+                "main SOUND offset");
 
             MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
             reloaded.sync();
+            const bool keptFirstTiming = std::any_of(
+                reloaded.m_timings.begin(),
+                reloaded.m_timings.end(),
+                [&](const MMM::Timing& timing) {
+                    return timing.m_timingEffect == MMM::TimingEffect::BPM &&
+                           std::abs(timing.m_timestamp -
+                                    testCase.firstTimingMs) < 1e-6;
+                });
             TEST_ASSERT(
-                reloaded.m_noteData.notes.size() == 1 &&
+                keptFirstTiming && reloaded.m_noteData.notes.size() == 1 &&
                     std::abs(reloaded.m_noteData.notes.front().m_timestamp -
                              testCase.firstTimingMs) < 1e-6,
-                "phase boundary playable note should round trip");
+                "phase boundary timing and playable note should round trip");
         }
     }
 

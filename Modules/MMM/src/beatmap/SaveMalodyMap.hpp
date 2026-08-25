@@ -483,11 +483,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  std::abs(timingPhase - firstBeatLength) <= 1e-6 ) {
                 timingPhase = 0.0;
             }
-            // Malody 在首红线位于前半拍时需要让主 SOUND 同步携带回卷
-            // delay；位于后半拍时则必须保持零 offset，避免游戏端重复
-            // 应用相位。两种情况都由其他 time/effect/note[] 对象的拍号
-            // 统一承担整拍补偿。
-            if ( firstBpmDelayMs > firstBeatLength * 0.5 + 1e-6 ) {
+            // MMM 允许首红线位于负时间；导出 Malody 时，该负相位会
+            // 转为非负 delay，配对主 SOUND 必须携带同一个值，不能因
+            // 其小于半拍而被清零。非负首红线仍沿用既有半拍规则，
+            // 避免游戏端重复应用相位。
+            if ( firstBpm.m_timestamp < -1e-6 ||
+                 firstBpmDelayMs > firstBeatLength * 0.5 + 1e-6 ) {
                 wrappedMainExportOffsetMs =
                     static_cast<std::int64_t>(std::llround(firstBpmDelayMs));
             }
@@ -1012,8 +1013,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         std::int64_t exportedOffset = sample.m_offsetMs;
         if ( &sample == wrappedMainSample ) {
             sampleJson["beat"] = timeToBeat(bpmTimings.front()->m_timestamp);
-            // 主 SOUND 的 offset 必须与首红线所在半拍匹配；前半拍保留
-            // 回卷 delay，后半拍使用零 offset。
+            // 主 SOUND 的 offset 必须与首红线相位匹配：负时间首红线
+            // 跟随转正后的 delay；非负首红线沿用既有半拍规则。
             exportedOffset = wrappedMainExportOffsetMs;
         } else if ( generatedFirstBpmOrigin != nullptr &&
                     sample.m_timestamp <
