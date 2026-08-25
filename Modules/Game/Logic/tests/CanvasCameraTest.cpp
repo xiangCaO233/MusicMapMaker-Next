@@ -1119,6 +1119,82 @@ bool testDraftMirrorStaysInDraftDomain()
                MMM::BeatmapMutationFlags::None;
 }
 
+/// @brief 验证常用分拍对齐不会丢弃缺少独立子实体的折线节点。
+/// @return 父折线的完整节点在执行、同步、撤销和重做后均保留时返回 true。
+bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = true;
+
+    MMM::Logic::NoteComponent polyline;
+    polyline.m_type       = MMM::NoteType::POLYLINE;
+    polyline.m_timestamp  = 1.013;
+    polyline.m_trackIndex = 0;
+    polyline.m_subNotes   = {
+        {
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
+        },
+        {
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
+        },
+        {
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
+        },
+    };
+
+    const auto parentEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(parentEntity,
+                                                            polyline);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        parentEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdAlignSelectedToCommonBeats{});
+
+    const auto hasCompletePolyline = [&]() {
+        if ( !context.noteRegistry.valid(parentEntity) ) return false;
+        const auto& current =
+            context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                parentEntity);
+        return current.m_type == MMM::NoteType::POLYLINE &&
+               current.m_subNotes.size() == polyline.m_subNotes.size();
+    };
+    if ( !hasCompletePolyline() ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Common beat alignment discarded embedded Polyline nodes");
+        return false;
+    }
+
+    MMM::Logic::SessionUtils::syncBeatmap(context);
+    if ( context.currentBeatmap->m_noteData.polylines.size() != 1U ||
+         context.currentBeatmap->m_noteData.polylines.front()
+                 .m_subNotes.size() != polyline.m_subNotes.size() ) {
+        XERROR("Aligned Polyline nodes were lost during beatmap sync");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !hasCompletePolyline() ) {
+        XERROR("Undo did not restore the complete Polyline");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return hasCompletePolyline();
+}
+
 /// @brief 验证逻辑视口 Resize 后横向位移保持相同比例。
 /// @return 偏移随逻辑宽度等比例换算时返回 true。
 bool testResizePreservesNormalizedOffset()
@@ -4194,6 +4270,7 @@ int main()
                    testDraftLaneReleaseGateHidesDraftArea() &&
                    testProjectDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
+                   testAlignCommonBeatsPreservesEmbeddedPolylineNodes() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&

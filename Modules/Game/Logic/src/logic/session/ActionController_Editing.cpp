@@ -1872,7 +1872,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Mirror Selected");
+                                                        "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -2049,7 +2049,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2274,7 +2274,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2959,11 +2959,11 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         return bestSnappedTime;
     };
 
-    auto alignNote = [&](NoteComponent& nc) {
-        double alignedStart = getAlignedTime(nc.m_timestamp);
-        double alignedEnd   = getAlignedTime(nc.m_timestamp + nc.m_duration);
-        nc.m_timestamp      = alignedStart;
-        nc.m_duration       = std::max(0.0, alignedEnd - alignedStart);
+    const auto alignTimeRange = [&](double& timestamp, double& duration) {
+        const double alignedStart = getAlignedTime(timestamp);
+        const double alignedEnd   = getAlignedTime(timestamp + duration);
+        timestamp                 = alignedStart;
+        duration                  = std::max(0.0, alignedEnd - alignedStart);
     };
 
     std::unordered_set<entt::entity> toAlign;
@@ -3025,70 +3025,81 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     std::unordered_map<entt::entity, NoteComponent> newNotes = originalNotes;
 
-    // 对齐非折线音符和子音符。
+    // 对齐普通音符和实际存在的折线子实体。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type != ::MMM::NoteType::POLYLINE ) {
-            bool shouldAlign = false;
-            if ( m_ctx.noteRegistry.all_of<InteractionComponent>(entity) &&
-                 m_ctx.noteRegistry.get<InteractionComponent>(entity)
-                     .isSelected ) {
-                shouldAlign = true;
-            } else if ( newNote.m_isSubNote &&
-                        newNote.m_parentPolyline != entt::null ) {
-                if ( toAlign.count(newNote.m_parentPolyline) ) {
-                    shouldAlign = true;
-                }
-            } else {
-                shouldAlign = true;
-            }
-
-            if ( shouldAlign ) {
-                alignNote(newNote);
-            }
+            (void)entity;
+            alignTimeRange(newNote.m_timestamp, newNote.m_duration);
         }
     }
 
-    // 同步父折线中的子音符顺序。
+    // 父折线自身持有完整子节点数据。独立子实体可能因导入来源而缺失，
+    // 因此必须以父折线为基准对齐，不能只用找到的子实体重建列表。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            struct ChildInfo {
-                entt::entity entity;
-                double       timestamp;
-                int          originalSubIndex;
+            struct AlignedSubNote {
+                NoteComponent::SubNote note;
+                entt::entity           childEntity{ entt::null };
+                std::size_t            originalSubIndex{ 0U };
             };
-            std::vector<ChildInfo> children;
+
+            std::vector<entt::entity> childEntities(
+                newNote.m_subNotes.size(),
+                static_cast<entt::entity>(entt::null));
             for ( const auto& [otherEnt, otherNote] : newNotes ) {
                 if ( otherNote.m_isSubNote &&
-                     otherNote.m_parentPolyline == entity ) {
-                    children.push_back({ otherEnt,
-                                         otherNote.m_timestamp,
-                                         otherNote.m_subIndex });
+                     otherNote.m_parentPolyline == entity &&
+                     otherNote.m_subIndex >= 0 ) {
+                    const auto subIndex =
+                        static_cast<std::size_t>(otherNote.m_subIndex);
+                    if ( subIndex < childEntities.size() &&
+                         childEntities[subIndex] == entt::null ) {
+                        childEntities[subIndex] = otherEnt;
+                    }
                 }
             }
 
+            std::vector<AlignedSubNote> alignedSubNotes;
+            alignedSubNotes.reserve(newNote.m_subNotes.size());
+            for ( std::size_t index = 0U; index < newNote.m_subNotes.size();
+                  ++index ) {
+                auto       alignedSubNote = newNote.m_subNotes[index];
+                const auto childEntity    = childEntities[index];
+                if ( childEntity != entt::null ) {
+                    const auto& childNote    = newNotes.at(childEntity);
+                    alignedSubNote.timestamp = childNote.m_timestamp;
+                    alignedSubNote.duration  = childNote.m_duration;
+                } else {
+                    alignTimeRange(alignedSubNote.timestamp,
+                                   alignedSubNote.duration);
+                }
+                alignedSubNotes.push_back(
+                    { std::move(alignedSubNote), childEntity, index });
+            }
+
             std::stable_sort(
-                children.begin(),
-                children.end(),
-                [](const ChildInfo& a, const ChildInfo& b) {
-                    if ( std::abs(a.timestamp - b.timestamp) < 1e-9 ) {
-                        return a.originalSubIndex < b.originalSubIndex;
+                alignedSubNotes.begin(),
+                alignedSubNotes.end(),
+                [](const AlignedSubNote& lhs, const AlignedSubNote& rhs) {
+                    if ( std::abs(lhs.note.timestamp - rhs.note.timestamp) <
+                         1e-9 ) {
+                        return lhs.originalSubIndex < rhs.originalSubIndex;
                     }
-                    return a.timestamp < b.timestamp;
+                    return lhs.note.timestamp < rhs.note.timestamp;
                 });
 
             std::vector<NoteComponent::SubNote> newSubNotesList;
             newSubNotesList.reserve(newNote.m_subNotes.size());
-
-            for ( size_t i = 0; i < children.size(); ++i ) {
-                entt::entity childEnt = children[i].entity;
-                int          oldIdx   = children[i].originalSubIndex;
-
-                NoteComponent::SubNote updatedSub = newNote.m_subNotes[oldIdx];
-                updatedSub.timestamp = newNotes[childEnt].m_timestamp;
-                updatedSub.duration  = newNotes[childEnt].m_duration;
-
-                newSubNotesList.push_back(updatedSub);
-                newNotes[childEnt].m_subIndex = static_cast<int>(i);
+            for ( std::size_t index = 0U; index < alignedSubNotes.size();
+                  ++index ) {
+                auto& alignedSubNote = alignedSubNotes[index];
+                newSubNotesList.push_back(alignedSubNote.note);
+                if ( alignedSubNote.childEntity != entt::null ) {
+                    auto& childNote = newNotes.at(alignedSubNote.childEntity);
+                    childNote.m_timestamp = alignedSubNote.note.timestamp;
+                    childNote.m_duration  = alignedSubNote.note.duration;
+                    childNote.m_subIndex  = static_cast<int>(index);
+                }
             }
 
             newNote.m_subNotes = std::move(newSubNotesList);
@@ -3101,14 +3112,15 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     }
 
     // 生成 BatchNoteAction 条目。
-    for ( auto entity : toAlign ) {
-        entries.push_back({ entity, originalNotes[entity], newNotes[entity] });
+    entries.reserve(originalNotes.size());
+    for ( const auto& [entity, originalNote] : originalNotes ) {
+        entries.push_back({ entity, originalNote, newNotes.at(entity) });
     }
 
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Align Selected");
+                                                        "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);
