@@ -434,8 +434,6 @@ void ToolbarView::update(UIManager* sourceManager)
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
         m_beatLineDisplayModeHistory.observe(
             editorCfg.visual.beatLineDisplayMode);
-        const bool shouldPlayAdjustmentFeedback =
-            editorCfg.settings.stopPlaybackOnScroll;
 
         auto tooltipWithShortcut =
             [](const char*                    tooltip,
@@ -581,17 +579,6 @@ void ToolbarView::update(UIManager* sourceManager)
                 advanceItem();
             };
 
-        const bool playbackPlaying = engine.isPlaybackPlaying();
-        drawRuntimeToggleButton(
-            playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
-            playbackPlaying,
-            TR("ui.toolbar.play_pause").data(),
-            TR("ui.toolbar.short.play_pause").data(),
-            shortcutConfig.togglePlayback,
-            [](bool shouldPlay) {
-                MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ shouldPlay });
-            });
-
         const bool isLayoutEditing = m_currentTool == Logic::EditTool::Layout;
         ImGui::BeginDisabled(isLayoutEditing);
         drawToolButton(ICON_MMM_HAND,
@@ -724,16 +711,6 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::PopStyleColor(3);
         advanceItem();
 
-        drawToggleButton(ICON_MMM_ARROWS_UP_DOWN,
-                         editorCfg.settings.reverseScroll,
-                         TR("ui.toolbar.reverse_scroll").data(),
-                         TR("ui.toolbar.short.reverse_scroll").data(),
-                         shortcutConfig.toggleReverseScroll,
-                         [](Config::EditorConfig& config) {
-                             config.settings.reverseScroll =
-                                 !config.settings.reverseScroll;
-                         });
-
         pushBtnStyle(true);
         ImGui::PushID("MagnetTool");
         if ( drawIconButton(ICON_MMM_MAGNET,
@@ -757,16 +734,6 @@ void ToolbarView::update(UIManager* sourceManager)
         drawTooltip(TR("ui.toolbar.magnet_tool").data());
         ImGui::PopStyleColor(3);
         advanceItem();
-
-        drawToggleButton(ICON_MMM_ARROW_DOWN,
-                         editorCfg.settings.snapFloor,
-                         TR("ui.toolbar.snap_floor").data(),
-                         TR("ui.toolbar.short.snap_floor").data(),
-                         shortcutConfig.toggleSnapFloor,
-                         [](Config::EditorConfig& config) {
-                             config.settings.snapFloor =
-                                 !config.settings.snapFloor;
-                         });
 
         drawToggleButton(ICON_MMM_EYE,
                          !editorCfg.visual.enableLinearScrollMapping,
@@ -807,16 +774,6 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::PopStyleColor(3);
         advanceItem();
 
-        drawToggleButton(ICON_MMM_STOP,
-                         editorCfg.settings.stopPlaybackOnScroll,
-                         TR("ui.toolbar.stop_on_scroll").data(),
-                         TR("ui.toolbar.short.stop_on_scroll").data(),
-                         shortcutConfig.toggleStopPlaybackOnScroll,
-                         [](Config::EditorConfig& config) {
-                             config.settings.stopPlaybackOnScroll =
-                                 !config.settings.stopPlaybackOnScroll;
-                         });
-
         pushBtnStyle(true);
         ImGui::PushID("SoundEffectTool");
         if ( drawIconButton(ICON_MMM_HIT_SFX,
@@ -856,37 +813,23 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::PopStyleColor(3);
         advanceItem();
 
-        drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
-                         editorCfg.visual.enableHitEffects,
-                         TR("ui.toolbar.hit_effects").data(),
-                         TR("ui.toolbar.short.hit_effects").data(),
-                         shortcutConfig.toggleHitEffects,
-                         [](Config::EditorConfig& config) {
-                             config.visual.enableHitEffects =
-                                 !config.visual.enableHitEffects;
-                         });
-
-        drawRuntimeToggleButton(
-            ICON_MMM_LINK,
-            engine.isSyncSameMainAudioCanvasesEnabled(),
-            TR("ui.toolbar.sync_same_main_audio").data(),
-            TR("ui.toolbar.short.sync_same_main_audio").data(),
-            shortcutConfig.toggleSyncSameMainAudio,
-            [&engine](bool enabled) {
-                engine.setSyncSameMainAudioCanvases(enabled);
-            });
-
-        float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
+        float bottomButtonsH = btnHeight + btnSize * 3.0f + itemSpacing * 3.0f;
         float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
         }
 
-        auto applyPlaybackSpeed = [&engine](double speed) {
-            engine.pushCommand(
-                Logic::CmdSetPlaybackSpeed{ std::clamp(speed, 0.25, 2.0) });
-        };
+        const bool playbackPlaying = engine.isPlaybackPlaying();
+        drawRuntimeToggleButton(
+            playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
+            playbackPlaying,
+            TR("ui.toolbar.play_pause").data(),
+            TR("ui.toolbar.short.play_pause").data(),
+            shortcutConfig.togglePlayback,
+            [](bool shouldPlay) {
+                MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ shouldPlay });
+            });
 
         {
             std::lock_guard<std::recursive_mutex> sessionLock(
@@ -937,35 +880,6 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
-                    float wheel = ImGui::GetIO().MouseWheel;
-                    if ( std::abs(wheel) > 0.1f ) {
-                        constexpr std::array<double, 4> presets = {
-                            0.25, 0.5, 0.75, 1.0
-                        };
-                        size_t bestIdx = 0;
-                        double minDiff = std::abs(currentSpeed - presets[0]);
-                        for ( size_t i = 1; i < presets.size(); ++i ) {
-                            double diff = std::abs(currentSpeed - presets[i]);
-                            if ( diff < minDiff ) {
-                                minDiff = diff;
-                                bestIdx = i;
-                            }
-                        }
-
-                        if ( wheel > 0.0f && bestIdx + 1 < presets.size() ) {
-                            ++bestIdx;
-                        } else if ( wheel < 0.0f && bestIdx > 0 ) {
-                            --bestIdx;
-                        }
-
-                        double newSpeed = presets[bestIdx];
-                        if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
-                            applyPlaybackSpeed(newSpeed);
-                            if ( shouldPlayAdjustmentFeedback ) {
-                                ::MMM::UI::PlayInteractionMouseUpFeedback();
-                            }
-                        }
-                    }
                     drawTooltip(TR("ui.toolbar.playback_speed").data());
                 }
 
@@ -1003,21 +917,6 @@ void ToolbarView::update(UIManager* sourceManager)
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
 
             if ( hasBeatmap && ImGui::IsItemHovered() ) {
-                float wheel = ImGui::GetIO().MouseWheel;
-                if ( std::abs(wheel) > 0.1f ) {
-                    int delta     = (wheel > 0) ? 1 : -1;
-                    int newTracks = std::clamp(currentTracks + delta, 1, 32);
-                    if ( newTracks != currentTracks ) {
-                        auto meta = session->getContext()
-                                        .currentBeatmap->m_baseMapMetadata;
-                        meta.track_count = newTracks;
-                        engine.pushCommand(
-                            Logic::CmdUpdateBeatmapMetadata{ meta });
-                        if ( shouldPlayAdjustmentFeedback ) {
-                            ::MMM::UI::PlayInteractionMouseUpFeedback();
-                        }
-                    }
-                }
                 drawTooltip(TR("ui.settings.beatmap.tracks").data());
             }
 
@@ -1055,23 +954,6 @@ void ToolbarView::update(UIManager* sourceManager)
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
             if ( ImGui::IsItemHovered() ) {
-                float wheel = ImGui::GetIO().MouseWheel;
-                if ( std::abs(wheel) > 0.1f ) {
-                    int delta = (wheel > 0) ? 1 : -1;
-                    if ( ImGui::GetIO().KeyShift )
-                        delta *= static_cast<int>(
-                            editorCfg.settings.scrollSpeedMultiplier);
-                    int newDivisor = std::clamp(currentDivisor + delta, 1, 64);
-                    if ( newDivisor != currentDivisor ) {
-                        auto newConfig                 = editorCfg;
-                        newConfig.settings.beatDivisor = newDivisor;
-                        engine.setEditorConfig(newConfig);
-                        if ( shouldPlayAdjustmentFeedback ) {
-                            ::MMM::UI::PlayInteractionMouseUpFeedback();
-                        }
-                    }
-                }
-
                 drawTooltip(TR("ui.toolbar.beat_divisor").data());
             }
             if ( contentFont ) ImGui::PopFont();
