@@ -991,6 +991,7 @@ void createKeepSpeedScrollEvent(double time, double bpm)
 }
 
 /// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
+/// @return 文本或步进按钮在当前帧改变秒值时返回 true。
 bool drawTimeEditor(const char* id, double& value,
                     const Logic::RenderSnapshot* snapshot)
 {
@@ -998,8 +999,7 @@ bool drawTimeEditor(const char* id, double& value,
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
-        return ImGui::IsItemDeactivatedAfterEdit();
+        return ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
     }
 
     std::string label = formatCanvasTime(value, snapshot) + "##" + id;
@@ -1014,8 +1014,7 @@ bool drawTimeEditor(const char* id, double& value,
     bool changed = false;
     if ( ImGui::BeginPopup(id) ) {
         ImGui::SetNextItemWidth(180.0f);
-        ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
-        changed = ImGui::IsItemDeactivatedAfterEdit();
+        changed = ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
         ImGui::EndPopup();
     }
     return changed;
@@ -2546,8 +2545,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     int beatIndexValue = fractionFit.beatIndex;
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string beatId = fmt::format("##Beat_{}", displayIdx);
-                    ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
-                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    // 单元值下一帧会从快照重建，步进按钮必须在变化当帧提交。
+                    const bool beatIndexChanged =
+                        ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
+                    if ( beatIndexChanged ) {
                         publishTimingBeatPositionUpdate(ent,
                                                         beatIndexValue,
                                                         fractionFit.fraction,
@@ -2615,7 +2616,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     if ( isBoundScroll ) {
                         ImGui::BeginDisabled();
                     }
-                    ImGui::InputDouble(
+                    // InputDouble 的返回值同时覆盖文本编辑和步进按钮。
+                    const bool displayValueChanged = ImGui::InputDouble(
                         vId.c_str(),
                         &vVal,
                         effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
@@ -2629,15 +2631,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 "保持画布速度联动中，修改 BPM 后自动刷新");
                         }
                     }
-                    if ( isBoundBpm && ImGui::IsItemEdited() ) {
-                        double finalValue = getStoredValue(effect, vVal, ent);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, el.time, finalValue }));
-                        updateKeepSpeedBindingScroll(vVal);
-                    }
-                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    if ( displayValueChanged && !isBoundScroll ) {
                         double finalValue = getStoredValue(effect, vVal, ent);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
@@ -2645,9 +2639,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                     ent, el.time, finalValue }));
                         if ( isBoundBpm ) {
                             updateKeepSpeedBindingScroll(vVal);
-                            finishKeepSpeedBinding();
                         }
-                    } else if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
+                    }
+                    if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
                         finishKeepSpeedBinding();
                     }
 
