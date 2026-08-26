@@ -73,6 +73,7 @@ add_library(
   src/ui/imgui/menu/items/MainMenuItemUtils.cpp
   src/ui/imgui/menu/items/MainMenuRecentProjectsItem.cpp
   src/ui/imgui/menu/items/MainMenuSeparatorItem.cpp
+  src/ui/imgui/menu/items/MainMenuToolbarVisibilityItem.cpp
   src/ui/imgui/menu/items/MainMenuTools.cpp
   src/ui/imgui/menu/items/MainMenuToggleItem.cpp
   src/ui/imgui/menu/items/MainMenuViewMenu.cpp

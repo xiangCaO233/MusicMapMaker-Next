@@ -558,6 +558,85 @@ void to_json(nlohmann::json& json, const CollaborationServerSettings& settings);
 void from_json(const nlohmann::json&        json,
                CollaborationServerSettings& settings);
 
+/// @brief 工具栏状态机工具的按钮可见性配置。
+struct ToolbarStateToolVisibility {
+    /// @brief 是否显示抓取工具按钮。
+    bool move{ true };
+
+    /// @brief 是否显示框选工具按钮。
+    bool marquee{ true };
+
+    /// @brief 是否显示绘制工具按钮。
+    bool draw{ true };
+
+    /// @brief 是否显示配色笔刷工具按钮。
+    bool colorBrush{ true };
+
+    /// @brief 是否显示配色橡皮工具按钮。
+    bool colorEraser{ true };
+
+    /// @brief 是否显示布局工具按钮。
+    bool layout{ true };
+};
+
+/// @brief 将状态机工具可见性配置序列化为 JSON。
+void to_json(nlohmann::json&                   json,
+             const ToolbarStateToolVisibility& visibility);
+/// @brief 从 JSON 读取状态机工具可见性配置。
+void from_json(const nlohmann::json&       json,
+               ToolbarStateToolVisibility& visibility);
+
+/// @brief 工具栏独立按钮的可见性配置。
+struct ToolbarIndependentButtonVisibility {
+    /// @brief 是否显示音符调色盘按钮。
+    bool notePalette{ true };
+
+    /// @brief 是否显示磁铁工具按钮。
+    bool magnet{ true };
+
+    /// @brief 是否显示滚动时间视觉映射按钮。
+    bool scrollTimingMapping{ true };
+
+    /// @brief 是否显示分拍线显示模式按钮。
+    bool beatLineDisplay{ true };
+
+    /// @brief 是否显示音效工具按钮。
+    bool soundEffectTool{ true };
+
+    /// @brief 是否显示播放与暂停按钮。
+    bool playback{ true };
+
+    /// @brief 是否显示播放速度按钮。
+    bool playbackSpeed{ true };
+
+    /// @brief 是否显示轨道数量按钮。
+    bool trackCount{ true };
+
+    /// @brief 是否显示分拍数量按钮。
+    bool beatDivisor{ true };
+};
+
+/// @brief 将独立按钮可见性配置序列化为 JSON。
+void to_json(nlohmann::json&                           json,
+             const ToolbarIndependentButtonVisibility& visibility);
+/// @brief 从 JSON 读取独立按钮可见性配置。
+void from_json(const nlohmann::json&               json,
+               ToolbarIndependentButtonVisibility& visibility);
+
+/// @brief 工具栏全部按钮的分组可见性配置。
+struct ToolbarVisibilityConfig {
+    /// @brief 状态机型编辑工具按钮集合。
+    ToolbarStateToolVisibility stateTools;
+
+    /// @brief 不切换编辑状态机的独立按钮集合。
+    ToolbarIndependentButtonVisibility independentButtons;
+};
+
+/// @brief 将工具栏按钮可见性配置序列化为 JSON。
+void to_json(nlohmann::json& json, const ToolbarVisibilityConfig& visibility);
+/// @brief 从 JSON 读取工具栏按钮可见性配置。
+void from_json(const nlohmann::json& json, ToolbarVisibilityConfig& visibility);
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -770,6 +849,9 @@ struct EditorSettings {
 
     /// @brief 是否在工具栏图标下方显示简短标签。
     bool showToolLabels{ false };
+
+    /// @brief 工具栏各按钮的显示与隐藏配置。
+    ToolbarVisibilityConfig toolbarVisibility;
 
     /// @brief 是否将工具窗口固定在主窗口右侧。
     bool fixedToolWindow{ true };
