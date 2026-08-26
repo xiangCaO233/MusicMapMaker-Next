@@ -1351,7 +1351,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
     const int   playerRows    = std::max(1, playerTrackCount);
     const int   bgmRows       = std::max(1, bgmTrackCount);
-    const int   totalRows     = 7 + playerRows + bgmRows;
+    const int   totalRows     = 8 + playerRows + bgmRows;
 
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
@@ -1475,6 +1475,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                                 const char* id,
                                 bool        muted,
                                 float       gain,
+                                float       maximumGain,
                                 const auto& applyMute,
                                 const auto& applyGain,
                                 const auto& persistGain) {
@@ -1490,9 +1491,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         drawMuteStateButton(muted, gain, applyMute);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(gainSliderWidth);
-        float gainPercent = std::clamp(gain * 100.0F, 0.0F, 200.0F);
+        const float maximumGainPercent = maximumGain * 100.0F;
+        float gainPercent = std::clamp(gain * 100.0F, 0.0F, maximumGainPercent);
         if ( ::MMM::UI::FeedbackSliderFloat(
-                 "##Gain", &gainPercent, 0.0F, 200.0F, "%.0f%%") ) {
+                 "##Gain", &gainPercent, 0.0F, maximumGainPercent, "%.0f%%") ) {
             applyGain(gainPercent * 0.01F);
         }
         if ( ImGui::IsItemDeactivatedAfterEdit() ) {
@@ -1505,11 +1507,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     };
 
     const int    hitSoundHeaderRow  = 0;
-    const int    unboundHitSoundRow = 1;
-    const int    boundHitSoundRow   = 2;
-    const int    playerHeaderRow    = 3;
-    const int    playerMasterRow    = 4;
-    const int    playerTrackBegin   = 5;
+    const int    allHitSoundRow     = 1;
+    const int    unboundHitSoundRow = 2;
+    const int    boundHitSoundRow   = 3;
+    const int    playerHeaderRow    = 4;
+    const int    playerMasterRow    = 5;
+    const int    playerTrackBegin   = 6;
     const int    bgmHeaderRow       = playerTrackBegin + playerRows;
     const int    bgmMasterRow       = bgmHeaderRow + 1;
     const int    bgmTrackBegin      = bgmMasterRow + 1;
@@ -1537,12 +1540,25 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
             continue;
         }
+        if ( row == allHitSoundRow ) {
+            drawMixRow(
+                TR("ui.key_sound_tool.all_hit_sounds").data(),
+                "AllHitSounds",
+                audio.isSFXGainMuted(),
+                audio.getSFXGain(),
+                1.0F,
+                [&audio](bool muted) { audio.setSFXGainMute(muted); },
+                [&audio](float gain) { audio.setSFXGain(gain, false); },
+                [&audio](float gain) { audio.setSFXGain(gain); });
+            continue;
+        }
         if ( row == unboundHitSoundRow ) {
             drawMixRow(
                 TR("ui.key_sound_tool.unbound_hit_sound").data(),
                 "UnboundHitSound",
                 !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
                 m_unboundHitSoundGainDraft,
+                2.0F,
                 [&engine](bool muted) {
                     auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.enableUnboundHitSfx = !muted;
@@ -1568,6 +1584,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "BoundHitSound",
                 !editorConfig.settings.sfxConfig.enableBoundHitSfx,
                 m_boundHitSoundGainDraft,
+                2.0F,
                 [&engine](bool muted) {
                     auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.enableBoundHitSfx = !muted;
@@ -1626,6 +1643,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "MixState",
                 audio.isPlayerKeySoundTrackMuted(trackIndex),
                 audio.getPlayerKeySoundTrackGain(trackIndex),
+                2.0F,
                 [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Player,
@@ -1686,6 +1704,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "MixState",
                 audio.isBgmKeySoundTrackMuted(trackIndex),
                 audio.getBgmKeySoundTrackGain(trackIndex),
+                2.0F,
                 [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Bgm,

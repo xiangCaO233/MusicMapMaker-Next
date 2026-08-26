@@ -572,8 +572,10 @@ public:
     /// @brief 获取 BGM 全局增益
     float getBGMGain() const;
 
-    /// @brief 设置 SFX 全局增益 (0.0 ~ 1.0)
-    void setSFXGain(float gain);
+    /// @brief 设置 SFX 全局增益 (0.0 ~ 1.0)。
+    /// @param gain 目标增益。
+    /// @param persist 是否立即写入用户配置；连续拖动预览时应传 false。
+    void setSFXGain(float gain, bool persist = true);
     /// @brief 获取 SFX 全局增益
     float getSFXGain() const;
 

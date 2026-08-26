@@ -929,6 +929,7 @@ return {
 	["ui.key_sound_tool.no_player_tracks"] = "There are no main canvas tracks",
 	["ui.key_sound_tool.no_bgm_tracks"] = "There are no BGM tracks",
 	["ui.key_sound_tool.hit_sound_area"] = "Hit Sounds",
+	["ui.key_sound_tool.all_hit_sounds"] = "All Hit Sounds",
 	["ui.key_sound_tool.unbound_hit_sound"] = "Unbound Hit Sounds",
 	["ui.key_sound_tool.bound_hit_sound"] = "Bound Hit Sounds",
 	["ui.key_sound_tool.gain"] = "Gain",
