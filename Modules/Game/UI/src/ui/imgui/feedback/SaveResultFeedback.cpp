@@ -115,6 +115,12 @@ SaveResultFeedback::~SaveResultFeedback() = default;
 void SaveResultFeedback::update(float               deltaSeconds,
                                 IStatusMessageSink& statusMessageSink)
 {
+    // 当前帧间隔只属于此前已经显示的反馈；新到达的结果必须从完整时长开始，
+    // 避免原生文件选择器或耗时导出造成的长帧让新反馈在首次绘制前直接过期。
+    if ( m_impl->remainingSeconds > 0.0f ) {
+        m_impl->remainingSeconds -= deltaSeconds;
+    }
+
     SaveResultPayload payload;
     while ( m_impl->queue.try_dequeue(payload) ) {
         if ( payload.success && !m_impl->success &&
@@ -144,10 +150,6 @@ void SaveResultFeedback::update(float               deltaSeconds,
             std::string(ICON_MMM_SAVE) + "  " + buildSaveResultMessage(payload);
         m_impl->success          = payload.success;
         m_impl->remainingSeconds = payload.success ? 2.0f : 3.0f;
-    }
-
-    if ( m_impl->remainingSeconds > 0.0f ) {
-        m_impl->remainingSeconds -= deltaSeconds;
     }
 }
 

@@ -216,6 +216,14 @@ target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
 add_test(NAME CollaborationSelectableButtonTest
          COMMAND CollaborationSelectableButtonTest)
 
+# 保存反馈测试覆盖原生文件选择器或耗时导出后的长帧首次绘制。
+mmm_add_test_executable(UI SaveResultFeedbackTest
+                        tests/SaveResultFeedbackTest.cpp)
+target_include_directories(SaveResultFeedbackTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(SaveResultFeedbackTest PRIVATE UI)
+add_test(NAME SaveResultFeedbackTest COMMAND SaveResultFeedbackTest)
+
 # 协作入口策略测试确保只有房主开启房间要求预先打开项目。
 mmm_add_test_executable(UI CollaborationEntryPolicyTest
                         tests/CollaborationEntryPolicyTest.cpp)
