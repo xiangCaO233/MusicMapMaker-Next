@@ -1583,9 +1583,20 @@ void TimelineCanvas::renderAnnotationTableWindow()
                     TR("ui.annotation.table.content").data(),
                     ImGuiTableColumnFlags_WidthStretch,
                     1.7F);
+                const ImGuiStyle& annotationTableStyle = ImGui::GetStyle();
+                const float       annotationActionButtonWidth =
+                    std::max(
+                        ImGui::CalcTextSize(
+                            TR("ui.annotation.table.jump").data())
+                            .x,
+                        ImGui::CalcTextSize(TR("ui.common.delete").data()).x) +
+                    annotationTableStyle.FramePadding.x * 2.0F;
+                const float annotationActionColumnWidth =
+                    annotationActionButtonWidth * 2.0F +
+                    annotationTableStyle.ItemSpacing.x + 8.0F * dpiScale;
                 ImGui::TableSetupColumn(TR("ui.annotation.table.action").data(),
                                         ImGuiTableColumnFlags_WidthFixed,
-                                        90.0F * dpiScale);
+                                        annotationActionColumnWidth);
                 ImGui::TableHeadersRow();
 
                 ImGuiListClipper clipper;
@@ -1666,14 +1677,34 @@ void TimelineCanvas::renderAnnotationTableWindow()
                             row.item.content.data() + firstLineLength);
 
                         ImGui::TableSetColumnIndex(5);
+                        const float actionButtonWidth =
+                            std::max(1.0F,
+                                     (ImGui::GetContentRegionAvail().x -
+                                      ImGui::GetStyle().ItemSpacing.x) /
+                                         2.0F);
                         const std::string jumpLabel =
                             fmt::format("{}##AnnotationTableJump_{}",
                                         TR("ui.annotation.table.jump").view(),
                                         index);
                         if ( ::MMM::UI::FeedbackButton(
                                  jumpLabel.c_str(),
-                                 ImVec2(-FLT_MIN, ImGui::GetFrameHeight())) ) {
+                                 ImVec2(actionButtonWidth,
+                                        ImGui::GetFrameHeight())) ) {
                             seekToRow();
+                        }
+                        ImGui::SameLine();
+                        const std::string deleteLabel =
+                            fmt::format("{}##AnnotationTableDelete_{}",
+                                        TR("ui.common.delete").view(),
+                                        index);
+                        if ( ::MMM::UI::FeedbackButton(
+                                 deleteLabel.c_str(),
+                                 ImVec2(actionButtonWidth,
+                                        ImGui::GetFrameHeight())) ) {
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdRemoveBeatmapAnnotation{
+                                        row.item.id }));
                         }
                     }
                 }
