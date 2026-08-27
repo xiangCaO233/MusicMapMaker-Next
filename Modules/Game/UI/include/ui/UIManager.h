@@ -37,6 +37,7 @@ namespace MMM::UI
 {
 class ICanvasView;
 class ICanvasWorkspaceService;
+class IEditorApplicationService;
 class IRenderableView;
 class ITextureLoader;
 class IParallelUiPreparable;
@@ -67,6 +68,15 @@ public:
 
     /// @brief 获取画布工作区服务观察指针。
     [[nodiscard]] ICanvasWorkspaceService* getCanvasWorkspaceService() const;
+
+    /// @brief 注入由 Game 组合根实现的编辑器应用服务。
+    /// @param service 服务唯一所有权；必须在 UI 生命周期事件到来前完成注入。
+    void setEditorApplicationService(
+        std::unique_ptr<IEditorApplicationService> service);
+
+    /// @brief 获取编辑器应用服务观察指针。
+    [[nodiscard]] IEditorApplicationService*
+    getEditorApplicationService() const;
 
     /// @brief 获取已注册视图暴露的画布能力接口。
     /// @param name 视图注册名。
@@ -288,6 +298,9 @@ private:
 
     /// @brief Game 组合根注入的画布工作区服务。
     std::unique_ptr<ICanvasWorkspaceService> m_canvasWorkspaceService;
+
+    /// @brief Game 组合根注入的编辑器应用服务。
+    std::unique_ptr<IEditorApplicationService> m_editorApplicationService;
 
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;

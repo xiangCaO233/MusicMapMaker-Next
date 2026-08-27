@@ -8,6 +8,7 @@
 #include "event/core/EventBus.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "game/CanvasWorkspaceService.h"
+#include "game/EditorApplicationService.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
@@ -91,6 +92,8 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 
     m_uiManager.setCanvasWorkspaceService(
         std::make_unique<Game::CanvasWorkspaceService>());
+    m_uiManager.setEditorApplicationService(
+        std::make_unique<Game::EditorApplicationService>());
 
     // 注册ui视图
     m_uiManager.registerView(
