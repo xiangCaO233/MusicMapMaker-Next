@@ -16,7 +16,7 @@ target_include_directories(
 
 target_link_libraries(
   Common
-  PUBLIC Log ICE::IonCachyEngine 3rd_concurrentqueue
+  PUBLIC Log ICE::IonCachyEngine 3rd_concurrentqueue 3rd_glm
   PRIVATE 3rd_ffmpeg)
 
 mmm_add_test_executable(Common VideoFrameDecoderTest
