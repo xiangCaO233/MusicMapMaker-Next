@@ -1,6 +1,5 @@
 #include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
-#include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineTimingTooltip.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -17,6 +16,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "ui/Icons.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -241,7 +241,7 @@ ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
     const float luminance = 0.2126f * gearColor.x * gearColor.x +
                             0.7152f * gearColor.y * gearColor.y +
                             0.0722f * gearColor.z * gearColor.z;
-    const int alpha = hovered ? 242 : 218;
+    const int   alpha     = hovered ? 242 : 218;
     if ( luminance < 0.18f ) {
         return IM_COL32(248, 250, 255, alpha);
     }
@@ -411,10 +411,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             const bool sliderDeactivatedAfterEdit =
                 ImGui::IsItemDeactivatedAfterEdit();
             if ( sliderChanged ) {
-                float visualOffset = Config::AppConfig::instance()
-                                         .getVisualConfig()
-                                         .getEffectiveVisualOffset();
-                double targetTime = static_cast<double>(time);
+                float  visualOffset = Config::AppConfig::instance()
+                                          .getVisualConfig()
+                                          .getEffectiveVisualOffset();
+                double targetTime   = static_cast<double>(time);
                 if ( ImGui::GetIO().KeyShift ) {
                     targetTime = std::clamp(snapTimeToBeatLine(targetTime),
                                             0.0,
@@ -436,10 +436,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
 
             if ( sliderActive || ImGui::IsItemHovered() ) {
-                const auto timeText =
-                    formatCanvasTimePair(static_cast<double>(time),
-                                         static_cast<double>(total),
-                                         m_currentSnapshot);
+                const auto timeText = MMM::UI::Utils::formatCanvasTimePair(
+                    static_cast<double>(time),
+                    static_cast<double>(total),
+                    m_currentSnapshot);
                 ImGui::SetTooltip("%s", timeText.c_str());
             }
 
@@ -586,8 +586,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Logic::TimelineInteractiveElement& el) {
-                    bool isNearTime = hoveredSnapped &&
-                                      std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime  = hoveredSnapped &&
+                                       std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     return isNearTime || isNearPixel;
                 };
@@ -813,7 +813,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                         if ( gearHovered ) {
                             const auto timeText =
-                                formatCanvasTime(el.time, m_currentSnapshot);
+                                MMM::UI::Utils::formatCanvasTime(
+                                    el.time, m_currentSnapshot);
                             const auto descriptor =
                                 timelineTimingTooltipDescriptor(gear.effect);
                             ImGui::SetTooltip(
@@ -1078,7 +1079,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     const bool professionalMode = Config::AppConfig::instance()
                                       .getEditorSettings()
                                       .timelineProfessionalMode;
-    float paddingX = 30.0f;
+    float      paddingX         = 30.0f;
 
     /// @brief Timeline marker 的绘制矩形参数。
     struct MarkerDrawRect {
@@ -1099,7 +1100,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);
             noteX                     = laneWidth * static_cast<float>(lane) +
-                    (laneWidth - noteW) * 0.5f;
+                                        (laneWidth - noteW) * 0.5f;
         }
 
         float noteH = noteW * 0.36f;
@@ -1117,15 +1118,16 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
                 return;
             }
 
-            UI::BrushDrawCmd cmd;
+            Common::Render::CanvasDrawCmd cmd;
             cmd.indexOffset     = indexOffset;
             cmd.indexCount      = indexCount;
             cmd.vertexOffset    = 0;
             cmd.customTextureId = static_cast<uint32_t>(Logic::TextureID::Note);
-            cmd.scissor         = vk::Rect2D{
-                        { 0, 0 },
-                        { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
-                          static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
+            cmd.scissor         = {
+                0,
+                0,
+                static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
+                static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y)))
             };
             m_currentSnapshot->glowCmds.push_back(cmd);
             hasDecoration = true;
@@ -1188,9 +1190,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     for ( const auto& target : collectVisibleTimingTargets() ) {
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered = target.entity == m_hoveredTimingEntity;
-        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
-                             m_timingEraseTargetEntities.end();
+        const bool hovered  = target.entity == m_hoveredTimingEntity;
+        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
+                              m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;
@@ -1358,8 +1360,8 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -1381,7 +1383,9 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -1410,8 +1414,8 @@ void TimelineCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->glowCmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -1433,7 +1437,9 @@ void TimelineCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

@@ -35,6 +35,8 @@ class CollaborationRoom;
 
 namespace MMM::UI
 {
+class ICanvasView;
+class ICanvasViewFactory;
 class IRenderableView;
 class ITextureLoader;
 class IParallelUiPreparable;
@@ -57,6 +59,19 @@ public:
 
     /// @brief 注销并销毁视图
     void unregisterView(const std::string& name);
+
+    /// @brief 注入由 Canvas 模块实现的画布创建工厂。
+    /// @param factory 工厂唯一所有权；必须在动态创建画布前完成注入。
+    void setCanvasViewFactory(std::unique_ptr<ICanvasViewFactory> factory);
+
+    /// @brief 获取画布创建工厂观察指针。
+    [[nodiscard]] ICanvasViewFactory* getCanvasViewFactory() const;
+
+    /// @brief 获取已注册视图暴露的画布能力接口。
+    /// @param name 视图注册名。
+    /// @return 视图存在并实现画布能力时返回观察指针，否则返回 nullptr。
+    /// @warning UI 热路径：只查询本地注册表并调用虚拟能力访问器。
+    [[nodiscard]] ICanvasView* getCanvasView(const std::string& name) const;
 
     /// @brief 清理所有ui
     void clearAllViews();
@@ -269,6 +284,9 @@ private:
     /// @warning UI 热路径：每帧只比较两个 ImGuiID；事件分支仅设置 Session
     /// 原子位，不执行文件 I/O 或复制谱面数据。
     void trackImGuiFocusForAutoSave();
+
+    /// @brief Canvas 模块注入的画布视图工厂。
+    std::unique_ptr<ICanvasViewFactory> m_canvasViewFactory;
 
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;

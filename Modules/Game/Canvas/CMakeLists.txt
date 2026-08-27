@@ -6,6 +6,7 @@ add_library(
   src/Basic2DCanvas.cpp
   src/Basic2DCanvas_Interaction.cpp
   src/Basic2DCanvas_Rendering.cpp
+  src/CanvasViewFactory.cpp
   src/MarqueeAutoScroll.cpp
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp
@@ -67,6 +68,7 @@ mmm_add_test_executable(Canvas CanvasContentVisibilityTest
                         tests/CanvasContentVisibilityTest.cpp)
 target_include_directories(CanvasContentVisibilityTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CanvasContentVisibilityTest PRIVATE UI)
 add_test(NAME CanvasContentVisibilityTest COMMAND CanvasContentVisibilityTest)
 
 # 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。

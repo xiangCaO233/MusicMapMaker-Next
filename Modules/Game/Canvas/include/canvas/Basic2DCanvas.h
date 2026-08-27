@@ -7,6 +7,7 @@
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <glm/glm.hpp>
@@ -33,7 +34,8 @@ struct RenderSnapshot;
 namespace MMM::Canvas
 {
 class Basic2DCanvas : public UI::IRenderableView,
-                      public UI::IParallelUiPreparable
+                      public UI::IParallelUiPreparable,
+                      public UI::ICanvasView
 {
 public:
     Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h,
@@ -56,20 +58,23 @@ public:
     bool isOpen() const override;
 
     /// @brief 请求关闭画布，复用未保存确认弹窗拦截 dirty 状态
-    void requestClose();
+    void requestClose() override;
 
     /// @brief 消费用户取消关闭操作的标记
-    bool consumeCloseCancelled();
+    bool consumeCloseCancelled() override;
 
     /// @brief 请求下一次显示时停靠到主编辑区
-    void requestDockToCenter();
+    void requestDockToCenter() override;
 
     /// @brief 请求下一次更新时将画布窗口聚焦到前台。
-    void requestFocus();
+    void requestFocus() override;
 
     /// @brief 获取画布当前所在的 ImGui Dock 节点。
     /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
-    ImGuiID getDockId() const;
+    ImGuiID getDockId() const override;
+
+    /// @brief 安全转换为画布能力接口。
+    UI::ICanvasView* asCanvasView() override { return this; }
 
     /// @brief 安全转换为 UI 并行准备接口。
     /// @return 当前画布的并行准备接口。

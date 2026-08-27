@@ -5,12 +5,11 @@
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "common/UnicodeFontData.h"
-#include "graphic/imguivk/mesh/VKBasicVertex.h"
+#include "common/render/CanvasRenderTypes.h"
 #include "logic/PreviewDensity.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/AnnotationRenderData.h"
-#include "ui/brush/BrushDrawCmd.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -214,7 +213,7 @@ struct Hitbox {
     entt::entity entity;
     HoverPart    part{ HoverPart::None };
     int          subIndex{
-        -1
+                 -1
     };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
     float x;
     float y;
@@ -342,12 +341,12 @@ struct CanvasComponentInstanceSnapshot {
  * @brief 渲染快照数据，包含 UI 画布所需的所有几何与指令信息
  */
 struct RenderSnapshot {
-    std::vector<Graphic::Vertex::VKBasicVertex> vertices;
-    std::vector<uint32_t>                       indices;
-    std::vector<UI::BrushDrawCmd>               cmds;
-    std::vector<UI::BrushDrawCmd>               glowCmds;
-    std::vector<UI::BrushDrawCmd>               overlayCmds;
-    std::vector<Hitbox>                         hitboxes;
+    std::vector<Common::Render::CanvasVertex>  vertices;
+    std::vector<uint32_t>                      indices;
+    std::vector<Common::Render::CanvasDrawCmd> cmds;
+    std::vector<Common::Render::CanvasDrawCmd> glowCmds;
+    std::vector<Common::Render::CanvasDrawCmd> overlayCmds;
+    std::vector<Hitbox>                        hitboxes;
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
@@ -525,7 +524,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-        0
+            0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息

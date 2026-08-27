@@ -56,12 +56,11 @@ target_link_libraries(
   PUBLIC Log
          MMM
          Common
-         UI
-         Graphic
          3rd_concurrentqueue
          3rd_entt
          3rd_glm
          3rd_miniz
+         3rd_stb
          Audio
          Config
          Runtime)

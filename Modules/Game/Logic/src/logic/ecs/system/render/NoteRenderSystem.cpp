@@ -286,7 +286,7 @@ void NoteRenderSystem::generateSnapshot(
     uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
 
     // 提取并暂存打击特效命令
-    std::vector<UI::BrushDrawCmd> deferredHitCmds;
+    std::vector<Common::Render::CanvasDrawCmd> deferredHitCmds;
     if ( fxCmdEnd > fxCmdStart ) {
         deferredHitCmds.assign(snapshot->cmds.begin() + fxCmdStart,
                                snapshot->cmds.end());

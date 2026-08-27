@@ -417,11 +417,11 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         const bool isBackground =
             cmd.customTextureId ==
@@ -454,7 +454,9 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -488,11 +490,11 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->glowCmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
@@ -517,7 +519,9 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -551,11 +555,11 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
@@ -580,7 +584,9 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

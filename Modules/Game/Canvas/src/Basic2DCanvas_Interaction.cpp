@@ -4,9 +4,7 @@
 #include "canvas/AnnotationDetailLayout.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/CanvasBlockedGesture.h"
-#include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
-#include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
@@ -33,6 +31,8 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
+#include "ui/utils/CanvasContentVisibility.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -387,13 +387,13 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                              right >= canvasWidth - edgeEpsilon &&
-                              bottom >= canvasHeight - edgeEpsilon;
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                            canvasScreenY + canvasHeight };
+                               canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -652,7 +652,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -915,9 +915,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
-                             pointerX <= cardRightX && pointerY >= cardTopY &&
-                             pointerY <= cardBottomY;
+        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
+                              pointerX <= cardRightX && pointerY >= cardTopY &&
+                              pointerY <= cardBottomY;
         if ( hovered && !result.marker ) {
             result.marker    = entry.marker;
             result.itemIndex = entry.itemIndex;
@@ -1301,11 +1301,11 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
             }));
     }
 
-    const bool pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
-                                     pointerX <= m_audioPreviewOverlay.right &&
-                                     pointerY >= m_audioPreviewOverlay.top &&
-                                     pointerY <= m_audioPreviewOverlay.bottom;
-    const float bridgePadding = std::max(retentionPadding, gap);
+    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                      pointerX <= m_audioPreviewOverlay.right &&
+                                      pointerY >= m_audioPreviewOverlay.top &&
+                                      pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding       = std::max(retentionPadding, gap);
     const float bridgeLeft =
         std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
     const float bridgeTop =
@@ -2731,9 +2731,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                               pointerX >= projection.annotationLeftX &&
-                               pointerX <= projection.annotationRightX &&
-                               pointerY >= topY && pointerY <= bottomY;
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
 
     const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
     std::optional<std::size_t>           hoveredDetailIndex;
@@ -2960,8 +2960,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 ImGui::SetScrollY(0.0F);
             }
         }
-        const auto timeText =
-            formatCanvasTime(hoveredMarker->timestamp, &currentSnapshot);
+        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+            hoveredMarker->timestamp, &currentSnapshot);
         ImGui::Text("%s · %s · %zu",
                     TR("ui.annotation.marker_title").data(),
                     timeText.c_str(),
@@ -3073,8 +3073,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         const bool editingExisting = !m_annotationEditor.annotationId.empty();
         const auto creator         = Config::normalizeCreatorIdentity(
             Config::AppConfig::instance().getEditorSettings().defaultCreator);
-        const auto timeText =
-            formatCanvasTime(m_annotationEditor.timestamp, &currentSnapshot);
+        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+            m_annotationEditor.timestamp, &currentSnapshot);
         ImGui::Text(
             "%s: %s", TR("ui.annotation.timestamp").data(), timeText.c_str());
         ImGui::Text(
@@ -3133,7 +3133,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
 
     const bool annotationHovered = gutterHovered || detailCardHovered ||
                                    annotationMenuHovered || annotationMenuOpen;
-    const bool editorPopupOpen = ImGui::IsPopupOpen(popupLabel.c_str());
+    const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
     return {
         .blocksCanvas        = annotationHovered || editorPopupOpen,
         .passesWheelToCanvas = shouldPassAnnotationWheelToCanvas(
@@ -3157,7 +3157,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -3488,11 +3488,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                                          localMousePos.y);
 
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( shouldShowCanvasHoverInspection(currentSnapshot->hasBeatmap,
-                                         audioPreviewOverlayBlocksCanvas,
-                                         isHovered,
-                                         currentSnapshot->isHoveringCanvas,
-                                         currentSnapshot->isPlaying) ) {
+    if ( MMM::UI::Utils::shouldShowCanvasHoverInspection(
+             currentSnapshot->hasBeatmap,
+             audioPreviewOverlayBlocksCanvas,
+             isHovered,
+             currentSnapshot->isHoveringCanvas,
+             currentSnapshot->isPlaying) ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
@@ -3511,8 +3512,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
@@ -3527,7 +3528,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 point.numerator,
                                 point.denominator);
                             const auto timeText =
-                                formatCanvasTime(point.time, currentSnapshot);
+                                MMM::UI::Utils::formatCanvasTime(
+                                    point.time, currentSnapshot);
                             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                                "%s %s: %s",
                                                label.data(),
@@ -3611,7 +3613,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
                         if ( inspect.showDuration ) {
                             const auto durationText =
-                                formatCanvasDuration(inspect.duration);
+                                MMM::UI::Utils::formatCanvasDuration(
+                                    inspect.duration);
                             ImGui::TextColored(
                                 ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                 "%s: %s",
@@ -3689,7 +3692,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     }
 
                     if ( currentSnapshot->isSnapped ) {
-                        const auto timeText = formatCanvasTime(
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
                             currentSnapshot->snappedTime, currentSnapshot);
                         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
                                            "%s: %s",
@@ -3711,7 +3714,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 currentSnapshot->snappedDenominator);
                         }
                     } else {
-                        const auto timeText = formatCanvasTime(
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
                             currentSnapshot->hoveredTime, currentSnapshot);
                         ImGui::Text("%s: %s",
                                     TR("ui.canvas.time").data(),

@@ -1,5 +1,3 @@
-#include "canvas/CanvasContentVisibility.h"
-#include "canvas/TimeFormatUtils.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -7,6 +5,8 @@
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/utils/CanvasContentVisibility.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -205,13 +205,13 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         }
         if ( syncBuffer ) {
             auto snapshot = syncBuffer->getReadingSnapshot();
-            if ( snapshot &&
-                 Canvas::shouldShowBeatmapDetails(snapshot->hasBeatmap) ) {
+            if ( snapshot && MMM::UI::Utils::shouldShowBeatmapDetails(
+                                 snapshot->hasBeatmap) ) {
                 // 判定线时间 (常驻)
                 const double displayedTime =
                     resolveStatusBarAnimateTime(*snapshot);
                 const auto currentTimeText =
-                    Canvas::formatCanvasTime(displayedTime, snapshot);
+                    MMM::UI::Utils::formatCanvasTime(displayedTime, snapshot);
                 ImGui::SetCursorPosY(offsetY);
                 ImGui::Text("%s: %s",
                             TR("ui.canvas.time").data(),
@@ -229,8 +229,9 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     (!std::isfinite(visibleEnd) ||
                      snapshot->hoveredTime <= visibleEnd + 1.0);
                 if ( snapshot->isHoveringCanvas && hasValidHoveredTime ) {
-                    const auto hoveredTimeText = Canvas::formatCanvasTime(
-                        snapshot->hoveredTime, snapshot);
+                    const auto hoveredTimeText =
+                        MMM::UI::Utils::formatCanvasTime(snapshot->hoveredTime,
+                                                         snapshot);
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

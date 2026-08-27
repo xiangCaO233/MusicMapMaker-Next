@@ -1,4 +1,3 @@
-#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -11,6 +10,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -544,8 +544,9 @@ void SettingsView::drawBeatmapSettings()
                        TR_CACHE("ui.settings.beatmap.length").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           const auto lengthText = Canvas::formatCanvasDuration(
-                               meta.map_length / 1000.0);
+                           const auto lengthText =
+                               MMM::UI::Utils::formatCanvasDuration(
+                                   meta.map_length / 1000.0);
                            ImGui::SetCursorScreenPos({ r.x, r.y });
                            ImGui::TextUnformatted(lengthText.c_str());
                        });

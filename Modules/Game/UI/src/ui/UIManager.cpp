@@ -1,7 +1,5 @@
 #include "ui/UIManager.h"
 #include "audio/AudioManager.h"
-#include "canvas/Basic2DCanvas.h"
-#include "canvas/TimelineCanvas.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -21,6 +19,8 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/ICanvasView.h"
+#include "ui/ICanvasViewFactory.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
@@ -487,7 +487,7 @@ bool UIManager::hasActiveProjectUiState() const
 /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
 bool UIManager::isTimelineTimingMarqueeSelecting()
 {
-    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    const auto* timeline = getCanvasView("TimelineWindow");
     return timeline && timeline->isTimingMarqueeSelecting();
 }
 
@@ -496,7 +496,7 @@ bool UIManager::isTimelineTimingMarqueeSelecting()
 /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
 bool UIManager::isTimelineTimingDragging()
 {
-    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    const auto* timeline = getCanvasView("TimelineWindow");
     return timeline && timeline->isTimingDragging();
 }
 
@@ -600,7 +600,7 @@ ImGuiID UIManager::resolveAudioControllerDockId()
             return static_cast<ImGuiID>(0);
         }
 
-        auto* canvas = getView<Canvas::Basic2DCanvas>(entry.cameraId);
+        auto* canvas = getCanvasView(entry.cameraId);
         if ( !canvas ) {
             return static_cast<ImGuiID>(0);
         }
@@ -885,7 +885,7 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
         }
     }
 
-    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+    if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
         workspace.m_annotationTableOpen   = timeline->isAnnotationTableOpen();
     }
@@ -982,7 +982,7 @@ void UIManager::restoreProjectWorkspaceViews(
                          TR("title.project_audio_tool").data()));
     }
 
-    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+    if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
         timeline->setAnnotationTableOpen(workspace.m_annotationTableOpen);
     }
@@ -1002,7 +1002,28 @@ void UIManager::clearProjectWorkspaceViews()
     }
 }
 
-/// @brief 注册视图，转交所有权
+/// @brief 注入 Canvas 模块提供的具体视图工厂。
+void UIManager::setCanvasViewFactory(
+    std::unique_ptr<ICanvasViewFactory> factory)
+{
+    m_canvasViewFactory = std::move(factory);
+}
+
+/// @brief 获取已注入画布视图工厂的观察指针。
+ICanvasViewFactory* UIManager::getCanvasViewFactory() const
+{
+    return m_canvasViewFactory.get();
+}
+
+/// @brief 按注册名查询画布能力观察指针。
+/// @warning UI 热路径：只查询本地注册表并调用能力访问器。
+ICanvasView* UIManager::getCanvasView(const std::string& name) const
+{
+    const auto it = m_uiviews.find(name);
+    return it == m_uiviews.end() ? nullptr : it->second->asCanvasView();
+}
+
+/// @brief 注册视图并接管其唯一所有权。
 void UIManager::registerView(const std::string&       name,
                              std::unique_ptr<IUIView> view)
 {

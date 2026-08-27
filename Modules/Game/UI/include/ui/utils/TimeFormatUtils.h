@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace MMM::Canvas
+namespace MMM::UI::Utils
 {
 namespace TimeFormatDetail
 {
@@ -209,4 +209,4 @@ inline std::string formatCanvasDuration(double durationSeconds)
         durationSeconds, preference, nullptr);
 }
 
-}  // namespace MMM::Canvas
+}  // namespace MMM::UI::Utils

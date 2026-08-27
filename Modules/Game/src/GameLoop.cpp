@@ -1,7 +1,6 @@
 #include "game/GameLoop.h"
 #include "audio/AudioManager.h"
-#include "canvas/PreviewCanvas.h"
-#include "canvas/TimelineCanvas.h"
+#include "canvas/CanvasViewFactory.h"
 #include "config/AppConfig.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
@@ -90,6 +89,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
 
+    m_uiManager.setCanvasViewFactory(
+        std::make_unique<Canvas::CanvasViewFactory>());
+
     // 注册ui视图
     m_uiManager.registerView(
         "MainDockSpaceUI",
@@ -149,16 +151,18 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // 默认创建一个初始 Logo 占位画布
     engine.createSession(nullptr, TR("canvas.welcome").data(), true);
 
+    auto* canvasFactory = m_uiManager.getCanvasViewFactory();
+
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(
         "PreviewWindow",
-        std::make_unique<Canvas::PreviewCanvas>(
+        canvasFactory->createPreviewCanvas(
             "PreviewWindow", 200, 200, engine.getSyncBuffer("Preview")));
 
     // 注册时间线标尺 (Timeline Window)
     m_uiManager.registerView(
         "TimelineWindow",
-        std::make_unique<Canvas::TimelineCanvas>(
+        canvasFactory->createTimelineCanvas(
             "Timeline", 60, 200, engine.getSyncBuffer("Timeline")));
 }
 

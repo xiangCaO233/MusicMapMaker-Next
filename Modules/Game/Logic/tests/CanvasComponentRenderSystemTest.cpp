@@ -297,9 +297,8 @@ bool testBeatNumberRendersUntilLayoutViewportExit()
     }
 
     for ( const auto& command : snapshot.overlayCmds ) {
-        if ( command.scissor.offset.x != 0 || command.scissor.offset.y != 25 ||
-             command.scissor.extent.width != 800U ||
-             command.scissor.extent.height != 575U ) {
+        if ( command.scissor.x != 0 || command.scissor.y != 25 ||
+             command.scissor.width != 800U || command.scissor.height != 575U ) {
             XERROR("Beat number did not use the layout viewport scissor");
             return false;
         }
@@ -586,9 +585,9 @@ bool testKpsRendersPerTrackAndTotal()
         return false;
     }
     const auto& kpsCommand = snapshot.overlayCmds.back();
-    if ( kpsCommand.scissor.offset.x != 0 || kpsCommand.scissor.offset.y != 0 ||
-         kpsCommand.scissor.extent.width != 800U ||
-         kpsCommand.scissor.extent.height != 600U ) {
+    if ( kpsCommand.scissor.x != 0 || kpsCommand.scissor.y != 0 ||
+         kpsCommand.scissor.width != 800U ||
+         kpsCommand.scissor.height != 600U ) {
         XERROR("KPS inherited the preceding beat component scissor");
         return false;
     }

@@ -1,5 +1,4 @@
 #include "ui/imgui/CanvasTabManager.h"
-#include "canvas/Basic2DCanvas.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
@@ -8,6 +7,8 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
+#include "ui/ICanvasView.h"
+#include "ui/ICanvasViewFactory.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 
@@ -57,8 +58,8 @@ void CanvasTabManager::handlePendingProjectSwitch(
     }
 
     if ( !m_projectSwitchClosingCanvas.empty() ) {
-        auto* canvas = sourceManager->getView<Canvas::Basic2DCanvas>(
-            m_projectSwitchClosingCanvas);
+        auto* canvas =
+            sourceManager->getCanvasView(m_projectSwitchClosingCanvas);
         if ( canvas && canvas->consumeCloseCancelled() ) {
             XINFO(
                 "CanvasTabManager: Project switch cancelled while closing "
@@ -76,8 +77,7 @@ void CanvasTabManager::handlePendingProjectSwitch(
             continue;
         }
 
-        auto* canvas =
-            sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
+        auto* canvas = sourceManager->getCanvasView(entry.cameraId);
         if ( !canvas ) {
             continue;
         }
@@ -103,9 +103,8 @@ void CanvasTabManager::focusPendingSessionCanvas(
         return;
     }
 
-    const auto& entry = entries[static_cast<size_t>(focusIndex)];
-    auto*       canvas =
-        sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
+    const auto& entry  = entries[static_cast<size_t>(focusIndex)];
+    auto*       canvas = sourceManager->getCanvasView(entry.cameraId);
     if ( !canvas ) {
         engine.requestSessionFocus(focusIndex);
         return;
@@ -144,14 +143,21 @@ void CanvasTabManager::update(UIManager* sourceManager)
             XINFO("CanvasTabManager: Creating Basic2DCanvas for cameraId={}",
                   entry.cameraId);
 
-            auto newCanvas = std::make_unique<Canvas::Basic2DCanvas>(
+            auto* canvasFactory = sourceManager->getCanvasViewFactory();
+            if ( !canvasFactory ) {
+                XERROR("CanvasTabManager: Canvas factory is not configured");
+                continue;
+            }
+            auto newCanvas = canvasFactory->createBasic2DCanvas(
                 entry.cameraId,
                 200,
                 200,
                 engine.getSyncBuffer(entry.cameraId),
                 entry.cameraId);
             if ( !entry.restoreDockFromWorkspace ) {
-                newCanvas->requestDockToCenter();
+                if ( auto* canvas = newCanvas->asCanvasView() ) {
+                    canvas->requestDockToCenter();
+                }
             }
 
             sourceManager->registerView(entry.cameraId, std::move(newCanvas));
@@ -177,8 +183,7 @@ void CanvasTabManager::update(UIManager* sourceManager)
         const auto& entry = entries[i];
         if ( m_initializedCanvases.find(entry.cameraId) !=
              m_initializedCanvases.end() ) {
-            auto* canvas =
-                sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
+            auto* canvas = sourceManager->getCanvasView(entry.cameraId);
             if ( !canvas ) {
                 // Canvas 已经不存在（已被 UIManager
                 // 垃圾回收/注销），说明用户关闭了该 Tab

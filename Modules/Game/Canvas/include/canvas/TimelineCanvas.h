@@ -5,6 +5,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/session/AnnotationRenderData.h"
 #include "mmm/timing/Timing.h"
+#include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <array>
@@ -34,7 +35,8 @@ namespace MMM::Canvas
  * 停靠在侧边栏与主画布之间，显示小节线、拍线以及 BPM/流速变更标记。
  */
 class TimelineCanvas : public UI::IRenderableView,
-                       public UI::IParallelUiPreparable
+                       public UI::IParallelUiPreparable,
+                       public UI::ICanvasView
 {
 public:
     TimelineCanvas(const std::string& name, uint32_t w, uint32_t h,
@@ -43,6 +45,9 @@ public:
 
     // IUIView 接口
     void update(UI::UIManager* sourceManager) override;
+
+    /// @brief 安全转换为画布能力接口。
+    UI::ICanvasView* asCanvasView() override { return this; }
 
     /// @brief 安全转换为 UI 并行准备接口。
     /// @return 当前时间线画布的并行准备接口。
@@ -81,49 +86,61 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
-    bool isTimingPointsTableOpen() const { return m_isTableWindowOpen; }
+    bool isTimingPointsTableOpen() const override
+    {
+        return m_isTableWindowOpen;
+    }
 
     /// @brief 设置时间点批量编辑表格窗口打开状态。
     /// @param open 是否打开表格窗口。
-    void setTimingPointsTableOpen(bool open) { m_isTableWindowOpen = open; }
+    void setTimingPointsTableOpen(bool open) override
+    {
+        m_isTableWindowOpen = open;
+    }
 
     /// @brief 获取批注表窗口是否打开。
     /// @return 批注表窗口当前是否打开。
-    bool isAnnotationTableOpen() const { return m_isAnnotationTableWindowOpen; }
+    bool isAnnotationTableOpen() const override
+    {
+        return m_isAnnotationTableWindowOpen;
+    }
 
     /// @brief 设置批注表窗口打开状态。
     /// @param open 是否打开批注表窗口。
-    void setAnnotationTableOpen(bool open)
+    void setAnnotationTableOpen(bool open) override
     {
         m_isAnnotationTableWindowOpen = open;
     }
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
-    void requestFocus();
+    void requestFocus() override;
 
     /// @brief 获取时间线窗口当前所在的 ImGui Dock 节点。
     /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
-    ImGuiID getDockId() const;
+    ImGuiID getDockId() const override;
 
     /// @brief 判断时间线上一帧是否拥有 Timing 编辑焦点。
     /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
-    bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
+    bool wasFocusedLastFrame() const override { return m_wasFocusedLastFrame; }
 
     /// @brief 判断时间线是否正在拖动 Timing 框选区域。
     /// @return 正在框选时返回 true。
     /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
-    bool isTimingMarqueeSelecting() const { return m_isTimingMarqueeSelecting; }
+    bool isTimingMarqueeSelecting() const override
+    {
+        return m_isTimingMarqueeSelecting;
+    }
 
     /// @brief 判断时间线是否正在通过抓取工具拖动 Timing。
     /// @return 正在拖动 Timing 时返回 true。
     /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
-    bool isTimingDragging() const { return m_isTimingDragging; }
+    bool isTimingDragging() const override { return m_isTimingDragging; }
 
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&

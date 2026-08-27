@@ -2,7 +2,6 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
-#include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -19,6 +18,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -1002,12 +1002,13 @@ bool drawTimeEditor(const char* id, double& value,
         return ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
     }
 
-    std::string label = formatCanvasTime(value, snapshot) + "##" + id;
+    std::string label =
+        MMM::UI::Utils::formatCanvasTime(value, snapshot) + "##" + id;
     if ( ::MMM::UI::FeedbackButton(label.c_str(), ImVec2(-FLT_MIN, 0.0f)) ) {
         ImGui::OpenPopup(id);
     }
     if ( ImGui::IsItemHovered() ) {
-        const auto timeText = formatCanvasTime(value, snapshot);
+        const auto timeText = MMM::UI::Utils::formatCanvasTime(value, snapshot);
         ImGui::SetTooltip("%s", timeText.c_str());
     }
 
@@ -1639,8 +1640,8 @@ void TimelineCanvas::renderAnnotationTableWindow()
 
                         ImGui::TableSetColumnIndex(1);
                         ImGui::AlignTextToFramePadding();
-                        const auto timeText =
-                            formatCanvasTime(row.timestamp, m_currentSnapshot);
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                            row.timestamp, m_currentSnapshot);
                         ImGui::TextUnformatted(timeText.c_str());
 
                         ImGui::TableSetColumnIndex(2);
@@ -1722,8 +1723,8 @@ void TimelineCanvas::renderAnnotationTableWindow()
                 ImGui::BeginChild("AnnotationTableDetail",
                                   ImVec2(0.0F, detailHeight),
                                   ImGuiChildFlags_Borders);
-                const auto timeText =
-                    formatCanvasTime(selected.timestamp, m_currentSnapshot);
+                const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                    selected.timestamp, m_currentSnapshot);
                 ImGui::Text("%s: %s",
                             TR("ui.annotation.timestamp").data(),
                             timeText.c_str());
@@ -1983,8 +1984,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                                ? parseTimingTableDouble(searchValueText)
-                                                : std::nullopt;
+                                     ? parseTimingTableDouble(searchValueText)
+                                     : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =

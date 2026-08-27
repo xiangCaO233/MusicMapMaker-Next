@@ -1,6 +1,5 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "audio/AudioManager.h"
-#include "canvas/TimelineCanvas.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/ColorPaletteFile.h"
@@ -13,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/ICanvasView.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -713,8 +713,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                     ? std::floor(5.0f * dpiScale)
-                                     : (btnHeight - swatchSize) * 0.5f),
+                                    ? std::floor(5.0f * dpiScale)
+                                    : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1157,7 +1157,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1206,11 +1206,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1473,7 +1473,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     float targetX = toolbarWindow->Pos.x - std::floor(4.0F * dpiScale);
     float targetY = m_lastSoundEffectToolBtnY;
     targetX       = std::max(targetX, viewportLeft + popupWidth + edgePadding);
-    targetY       = std::clamp(targetY,
+    targetY = std::clamp(targetY,
                          viewportTop + edgePadding,
                          std::max(viewportTop + edgePadding,
                                   viewportBottom - popupHeight - edgePadding));
@@ -1872,7 +1872,7 @@ void ToolbarView::loadSoftwareDefaultPalette()
     if ( !schemeName.empty() &&
          schemeName != Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         const auto& paletteConfig = settings.colorPalettes;
-        auto        it            = std::find_if(paletteConfig.schemes.begin(),
+        auto it = std::find_if(paletteConfig.schemes.begin(),
                                paletteConfig.schemes.end(),
                                [&](const Config::ColorPaletteScheme& scheme) {
                                    return scheme.name == schemeName;
@@ -2780,7 +2780,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##PaletteColorHex",
+        bool hexChanged = ImGui::InputText("##PaletteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -2998,8 +2998,7 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             Logic::EditorEngine::instance().pushCommand(
                 Logic::CmdChangeTool{ tool });
             if ( sourceManager ) {
-                auto* timeline = sourceManager->getView<Canvas::TimelineCanvas>(
-                    "TimelineWindow");
+                auto* timeline = sourceManager->getCanvasView("TimelineWindow");
                 if ( timeline && timeline->wasFocusedLastFrame() ) {
                     timeline->requestFocus();
                 }
@@ -3254,7 +3253,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
         auto& appConfig  = Config::AppConfig::instance();
         auto  mode       = appConfig.getVisualConfig().beatLineDisplayMode;
         auto  selectMode = [&](Config::BeatLineDisplayMode candidate,
-                              const char*                 labelKey) {
+                               const char*                 labelKey) {
             if ( !::MMM::UI::FeedbackRadioButton(TR(labelKey).data(),
                                                  mode == candidate) ) {
                 return;

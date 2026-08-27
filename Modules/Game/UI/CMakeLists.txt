@@ -119,7 +119,6 @@ target_include_directories(
   UI
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Logic/include
-  PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Canvas/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Audio/include)
 
 target_link_libraries(

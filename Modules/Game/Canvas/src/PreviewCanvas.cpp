@@ -2,7 +2,6 @@
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
-#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -21,6 +20,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -392,8 +392,8 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
 
     if ( isHovered || interactionFrame ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        const auto timeText =
-            formatCanvasTimePair(*targetTime, duration, m_currentSnapshot);
+        const auto timeText = MMM::UI::Utils::formatCanvasTimePair(
+            *targetTime, duration, m_currentSnapshot);
         ImGui::SetTooltip("%s", timeText.c_str());
     }
     if ( interactionFrame ) {
@@ -512,7 +512,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&
          m_currentSnapshot->isPreviewDragging ) {
-        const auto timeText = formatCanvasTime(
+        const auto timeText = MMM::UI::Utils::formatCanvasTime(
             m_currentSnapshot->previewHoverTime, m_currentSnapshot);
         ImGui::SetTooltip("%s",
                           TR_FMT("canvas.preview.jump_to", timeText).c_str());
@@ -794,8 +794,8 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -814,7 +814,9 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -843,8 +845,8 @@ void PreviewCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -863,7 +865,9 @@ void PreviewCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
