@@ -113,14 +113,31 @@ bool testAutoBackupRoundTrip()
     return true;
 }
 
+/// @brief 验证草稿轨发布门禁默认开启且不受用户配置文件覆盖。
+/// @return 默认配置和带旧门禁字段的配置都启用草稿轨时返回 true。
+bool testDraftLaneReleaseGate()
+{
+    MMM::Config::EditorSettings defaults;
+    const nlohmann::json        encoded  = defaults;
+    const auto                  restored = nlohmann::json{
+                         { "enableDraftLanes", false }
+    }.get<MMM::Config::EditorSettings>();
+    if ( !defaults.enableDraftLanes || encoded.contains("enableDraftLanes") ||
+         !restored.enableDraftLanes ) {
+        XERROR("Draft lane release gate was not enabled internally");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
-/// @brief 运行软件全局自动保存与自动备份配置的持久化兼容测试。
+/// @brief 运行软件全局自动保存、自动备份与内部发布门禁兼容测试。
 /// @return 全部测试通过时返回 0。
 int main()
 {
     return testTimedAutoSaveRoundTrip() && testEventAutoSaveRoundTrip() &&
-                   testAutoBackupRoundTrip()
+                   testAutoBackupRoundTrip() && testDraftLaneReleaseGate()
                ? 0
                : 1;
 }
