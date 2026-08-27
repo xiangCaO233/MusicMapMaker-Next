@@ -410,6 +410,54 @@ void to_json(nlohmann::json& json, const AutoSaveConfig& config);
 /// @brief 从 JSON 读取自动保存配置并约束定时间隔。
 void from_json(const nlohmann::json& json, AutoSaveConfig& config);
 
+/// @brief 单个谱面允许保留的最少自动备份数量。
+inline constexpr int AUTO_BACKUP_COUNT_MIN = 1;
+
+/// @brief 单个谱面允许保留的最多自动备份数量。
+inline constexpr int AUTO_BACKUP_COUNT_MAX = 100;
+
+/// @brief 谱面自动备份配置。
+struct AutoBackupConfig {
+    /// @brief 自动备份调度模式。
+    AutoSaveMode mode{ AutoSaveMode::Disabled };
+
+    /// @brief 定时间隔单位。
+    AutoSaveIntervalUnit intervalUnit{ AutoSaveIntervalUnit::Minutes };
+
+    /// @brief 定时间隔数值；读取配置时限制为 5~60。
+    int intervalValue{ 5 };
+
+    /// @brief 任意谱面内容修改提交后是否触发自动备份。
+    bool onObjectModified{ true };
+
+    /// @brief 切换活动谱面时是否触发自动备份。
+    bool onBeatmapSwitch{ true };
+
+    /// @brief ImGui 根窗口丢失焦点时是否触发自动备份。
+    bool onImGuiWindowFocusLost{ true };
+
+    /// @brief 程序原生窗口丢失焦点或最小化时是否触发自动备份。
+    bool onNativeWindowFocusLost{ true };
+
+    /// @brief 每个谱面保留的备份数量，超出后删除最旧备份。
+    int maxBackupCount{ 10 };
+
+    /// @brief 将配置的 5~60 定时间隔换算为秒。
+    /// @return 可供逻辑调度器使用的秒数。
+    [[nodiscard]] double intervalSeconds() const
+    {
+        const int safeValue = std::clamp(intervalValue, 5, 60);
+        return intervalUnit == AutoSaveIntervalUnit::Minutes
+                   ? static_cast<double>(safeValue) * 60.0
+                   : static_cast<double>(safeValue);
+    }
+};
+
+/// @brief 将自动备份配置序列化为 JSON。
+void to_json(nlohmann::json& json, const AutoBackupConfig& config);
+/// @brief 从 JSON 读取自动备份配置并约束间隔与保留数量。
+void from_json(const nlohmann::json& json, AutoBackupConfig& config);
+
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
     Clock,         ///< 时:分:秒.毫秒
@@ -778,6 +826,9 @@ struct EditorSettings {
 
     /// @brief 对所有项目生效的软件全局自动保存配置。
     AutoSaveConfig autoSave;
+
+    /// @brief 项目未覆盖时使用的软件全局谱面自动备份配置。
+    AutoBackupConfig autoBackup;
 
     /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
     bool autoAddStoreModeExtForMalodyExport{ false };

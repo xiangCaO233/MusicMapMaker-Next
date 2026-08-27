@@ -398,11 +398,13 @@ UIManager::UIManager()
             });
     m_nativeWindowFocusSubId = eventBus.subscribe<Event::GLFWNativeEvent>(
         [](const Event::GLFWNativeEvent& event) {
-            if ( event.type !=
-                     Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED ||
-                 !event.hasStateChange || event.isFocused ) {
-                return;
-            }
+            const bool focusLost =
+                event.type ==
+                    Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED &&
+                event.hasStateChange && !event.isFocused;
+            const bool minimized =
+                event.type == Event::NativeEventType::GLFW_ICONFY_WINDOW;
+            if ( !focusLost && !minimized ) return;
             Logic::EditorEngine::instance().requestAutoSaveForActiveSession(
                 Logic::AutoSaveTrigger::NativeWindowFocusLost);
         });

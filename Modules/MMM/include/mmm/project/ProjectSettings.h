@@ -435,6 +435,9 @@ struct ProjectSettings {
     /// @brief 覆盖全局编辑器行为 (若为 nullopt 则继承全局 .config/mmm 配置)
     std::optional<Config::EditorSettings> m_editorOverride;
 
+    /// @brief 覆盖软件级谱面自动备份配置；空值表示继承软件配置。
+    std::optional<Config::AutoBackupConfig> m_autoBackupOverride;
+
     /// @brief 项目中最后一次打开的谱面名称 (BeatmapEntry::m_name)
     std::string m_lastOpenedBeatmap;
 
@@ -463,6 +466,7 @@ struct ProjectSettings {
         j = nlohmann::json{
             { "m_visualOverride", settings.m_visualOverride },
             { "m_editorOverride", editorOverrideJson },
+            { "m_autoBackupOverride", settings.m_autoBackupOverride },
             { "m_lastOpenedBeatmap", settings.m_lastOpenedBeatmap },
             { "m_colorPaletteSchemeName", settings.m_colorPaletteSchemeName },
             { "m_workspace", settings.m_workspace }
@@ -487,6 +491,13 @@ struct ProjectSettings {
             settings.m_editorOverride->rtcDiagnosticLogging         = false;
         } else {
             settings.m_editorOverride = std::nullopt;
+        }
+
+        if ( auto it = j.find("m_autoBackupOverride");
+             it != j.end() && !it->is_null() ) {
+            settings.m_autoBackupOverride = it->get<Config::AutoBackupConfig>();
+        } else {
+            settings.m_autoBackupOverride = std::nullopt;
         }
 
         settings.m_lastOpenedBeatmap =

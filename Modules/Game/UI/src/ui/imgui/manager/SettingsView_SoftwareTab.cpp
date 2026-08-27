@@ -218,7 +218,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -381,10 +381,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -1323,6 +1323,118 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoSaveNativeFocusLost",
                         &settings.autoSave.onNativeWindowFocusLost);
+                });
+        }
+
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.software.auto_backup.mode").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.software.auto_backup.mode.disabled")
+                    .data(),
+                (int)Config::AutoSaveMode::Disabled },
+              { TR_CACHE("ui.settings.software.auto_backup.mode.timed").data(),
+                (int)Config::AutoSaveMode::Timed },
+              { TR_CACHE("ui.settings.software.auto_backup.mode.event").data(),
+                (int)Config::AutoSaveMode::EventTriggered } },
+            (int&)settings.autoBackup.mode,
+            changed);
+
+        if ( settings.autoBackup.mode == Config::AutoSaveMode::Timed ) {
+            addRadioSetting(
+                *sec,
+                rowIndex,
+                sectionIndex,
+                TR_CACHE("ui.settings.software.auto_backup.interval_unit")
+                    .data(),
+                maxLabelW,
+                { { TR_CACHE("ui.settings.software.auto_backup.interval_unit."
+                             "seconds")
+                        .data(),
+                    (int)Config::AutoSaveIntervalUnit::Seconds },
+                  { TR_CACHE("ui.settings.software.auto_backup.interval_unit."
+                             "minutes")
+                        .data(),
+                    (int)Config::AutoSaveIntervalUnit::Minutes } },
+                (int&)settings.autoBackup.intervalUnit,
+                changed);
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_backup.interval").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    ImGui::SetNextItemWidth(r.width);
+                    changed |= ::MMM::UI::FeedbackSliderInt(
+                        "##AutoBackupInterval",
+                        &settings.autoBackup.intervalValue,
+                        5,
+                        60);
+                });
+        } else if ( settings.autoBackup.mode ==
+                    Config::AutoSaveMode::EventTriggered ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_backup.on_object_modified")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoBackupObjectModified",
+                        &settings.autoBackup.onObjectModified);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_backup.on_beatmap_switch")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoBackupBeatmapSwitch",
+                        &settings.autoBackup.onBeatmapSwitch);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_backup.on_imgui_focus_lost")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoBackupImGuiFocusLost",
+                        &settings.autoBackup.onImGuiWindowFocusLost);
+                });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE(
+                    "ui.settings.software.auto_backup.on_native_focus_lost")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox, bool) {
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##AutoBackupNativeFocusLost",
+                        &settings.autoBackup.onNativeWindowFocusLost);
+                });
+        }
+
+        if ( settings.autoBackup.mode != Config::AutoSaveMode::Disabled ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.auto_backup.max_count").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    ImGui::SetNextItemWidth(r.width);
+                    changed |= ::MMM::UI::FeedbackSliderInt(
+                        "##AutoBackupMaxCount",
+                        &settings.autoBackup.maxBackupCount,
+                        Config::AUTO_BACKUP_COUNT_MIN,
+                        Config::AUTO_BACKUP_COUNT_MAX);
                 });
         }
 

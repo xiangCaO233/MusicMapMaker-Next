@@ -143,6 +143,21 @@ void SaveResultFeedback::update(float               deltaSeconds,
             continue;
         }
         if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TimedAutoBackupStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.timed_auto_backup_success").data(), 2.0f);
+            continue;
+        }
+        if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TriggeredAutoBackupStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.triggered_auto_backup_success").data(),
+                2.0f);
+            continue;
+        }
+        if ( payload.success &&
              payload.presentation == Event::BeatmapSavePresentation::Silent ) {
             continue;
         }

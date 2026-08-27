@@ -2,8 +2,12 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommandMutationClassification.h"
 #include "config/EditorSettings.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
 #include "event/project/ProjectEvents.h"
+#include "log/colorful-log.h"
+#include "logic/BeatmapBackupService.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectDraftLaneService.h"
 #include "logic/UnlimitedIdleUpdateGate.h"
@@ -17,6 +21,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -162,6 +167,26 @@ double sanitizeTimelineZoom(double zoom)
 /// @return 事件模式已启用且对应事件开关打开时返回 true。
 [[nodiscard]] bool isAutoSaveTriggerEnabled(
     const Config::AutoSaveConfig& config, AutoSaveTrigger trigger)
+{
+    if ( config.mode != Config::AutoSaveMode::EventTriggered ) return false;
+
+    switch ( trigger ) {
+    case AutoSaveTrigger::ObjectModified: return config.onObjectModified;
+    case AutoSaveTrigger::BeatmapSwitch: return config.onBeatmapSwitch;
+    case AutoSaveTrigger::ImGuiWindowFocusLost:
+        return config.onImGuiWindowFocusLost;
+    case AutoSaveTrigger::NativeWindowFocusLost:
+        return config.onNativeWindowFocusLost;
+    }
+    return false;
+}
+
+/// @brief 判断自动备份配置是否允许指定编辑器事件。
+/// @param config 项目覆盖后的有效自动备份配置。
+/// @param trigger 待检查的事件。
+/// @return 事件模式已启用且对应事件开关打开时返回 true。
+[[nodiscard]] bool isAutoBackupTriggerEnabled(
+    const Config::AutoBackupConfig& config, AutoSaveTrigger trigger)
 {
     if ( config.mode != Config::AutoSaveMode::EventTriggered ) return false;
 
@@ -422,23 +447,32 @@ bool BeatmapSession::needsUnlimitedPolling() const
     return m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
 }
 
-/// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
+/// @brief 跨线程请求一次由指定编辑器事件触发的自动保存与自动备份。
 void BeatmapSession::requestAutoSave(AutoSaveTrigger trigger)
 {
-    m_requestedAutoSaveTriggers.fetch_or(autoSaveTriggerBit(trigger),
-                                         std::memory_order_relaxed);
+    const auto triggerBit = autoSaveTriggerBit(trigger);
+    m_requestedAutoSaveTriggers.fetch_or(triggerBit, std::memory_order_relaxed);
+    m_requestedAutoBackupTriggers.fetch_or(triggerBit,
+                                           std::memory_order_relaxed);
 }
 
-/// @brief 判断后台会话是否仍需轮询自动保存期限或事件请求。
+/// @brief 判断后台会话是否仍需轮询自动保存或自动备份。
 bool BeatmapSession::needsAutoSavePolling(
-    const Config::AutoSaveConfig& config) const
+    const Config::AutoSaveConfig&   saveConfig,
+    const Config::AutoBackupConfig& backupConfig) const
 {
     if ( m_requestedAutoSaveTriggers.load(std::memory_order_relaxed) != 0U ||
-         m_triggeredAutoSavePending ) {
+         m_requestedAutoBackupTriggers.load(std::memory_order_relaxed) != 0U ||
+         m_triggeredAutoSavePending || m_triggeredAutoBackupPending ) {
         return true;
     }
-    return config.mode == Config::AutoSaveMode::Timed &&
-           m_ctx->currentBeatmap && m_ctx->actionStack.isDirty();
+    const bool needsTimedSave =
+        saveConfig.mode == Config::AutoSaveMode::Timed &&
+        m_ctx->currentBeatmap && m_ctx->actionStack.isDirty();
+    const bool needsTimedBackup =
+        backupConfig.mode == Config::AutoSaveMode::Timed &&
+        m_ctx->currentBeatmap && m_autoBackupDirty;
+    return needsTimedSave || needsTimedBackup;
 }
 
 /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
@@ -557,6 +591,98 @@ void BeatmapSession::flushConfiguredAutoSave(
             .kind = BeatmapSaveKind::TriggeredAutoSave,
         });
     }
+}
+
+/// @brief 消费有效项目配置允许的事件请求并推进谱面自动备份。
+void BeatmapSession::flushConfiguredAutoBackup(
+    double currentSysTime, bool isEditingBusy,
+    const Config::AutoBackupConfig& config)
+{
+    const std::uint8_t requestedTriggers =
+        m_requestedAutoBackupTriggers.exchange(0U, std::memory_order_relaxed);
+    constexpr AutoSaveTrigger EXTERNAL_TRIGGERS[]{
+        AutoSaveTrigger::BeatmapSwitch,
+        AutoSaveTrigger::ImGuiWindowFocusLost,
+        AutoSaveTrigger::NativeWindowFocusLost,
+    };
+    for ( const AutoSaveTrigger trigger : EXTERNAL_TRIGGERS ) {
+        if ( (requestedTriggers & autoSaveTriggerBit(trigger)) != 0U &&
+             isAutoBackupTriggerEnabled(config, trigger) ) {
+            m_triggeredAutoBackupPending = true;
+        }
+    }
+
+    bool shouldBackup = false;
+    bool timedBackup  = false;
+    if ( config.mode == Config::AutoSaveMode::Timed ) {
+        m_triggeredAutoBackupPending = false;
+        const double intervalSeconds = config.intervalSeconds();
+        if ( m_timedAutoBackupDeadline <= 0.0 ||
+             m_timedAutoBackupIntervalSeconds != intervalSeconds ) {
+            m_timedAutoBackupIntervalSeconds = intervalSeconds;
+            m_timedAutoBackupDeadline        = currentSysTime + intervalSeconds;
+            return;
+        }
+        if ( currentSysTime < m_timedAutoBackupDeadline || isEditingBusy ) {
+            return;
+        }
+        m_timedAutoBackupDeadline = currentSysTime + intervalSeconds;
+        shouldBackup              = m_autoBackupDirty;
+        timedBackup               = true;
+    } else {
+        m_timedAutoBackupDeadline        = 0.0;
+        m_timedAutoBackupIntervalSeconds = 0.0;
+        if ( config.mode != Config::AutoSaveMode::EventTriggered ) {
+            m_triggeredAutoBackupPending = false;
+            return;
+        }
+        if ( !m_triggeredAutoBackupPending || isEditingBusy ) return;
+        m_triggeredAutoBackupPending = false;
+        shouldBackup                 = m_autoBackupDirty;
+    }
+
+    if ( !shouldBackup || !m_ctx->currentBeatmap ) return;
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) return;
+
+    m_ctx->m_needsTimingsSync = true;
+    m_ctx->m_needsNotesSync   = true;
+    SessionUtils::syncBeatmap(*m_ctx);
+    const auto sourcePath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    const auto result =
+        BeatmapBackupService::createBackup(*m_ctx->currentBeatmap,
+                                           project->m_projectRoot,
+                                           sourcePath,
+                                           config.maxBackupCount);
+    const auto presentation =
+        timedBackup ? Event::BeatmapSavePresentation::TimedAutoBackupStatus
+                    : Event::BeatmapSavePresentation::TriggeredAutoBackupStatus;
+    if ( !result.m_success ) {
+        XERROR("Beatmap auto-backup failed for {}: {}",
+               Config::pathToUtf8(sourcePath),
+               result.m_errorMessage);
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = Config::pathToUtf8(sourcePath),
+            .success      = false,
+            .isExport     = false,
+            .errorMessage = result.m_errorMessage,
+            .presentation = presentation,
+        });
+        return;
+    }
+
+    m_autoBackupDirty = false;
+    if ( !result.m_errorMessage.empty() ) {
+        XWARN("Beatmap backup created but rotation was incomplete: {}",
+              result.m_errorMessage);
+    }
+    Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+        .path         = Config::pathToUtf8(result.m_backupPath),
+        .success      = true,
+        .isExport     = false,
+        .errorMessage = result.m_errorMessage,
+        .presentation = presentation,
+    });
 }
 
 /// @brief 立即落盘尚在等待空闲期的元数据自动保存。
@@ -698,7 +824,8 @@ void BeatmapSession::updateAnimatedTimelineZoom(
 
 /// @brief 会话逻辑每帧更新。
 /// @warning 逻辑热路径：由 EditorEngine::loop 按 UPS
-/// 调用；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+/// 调用；普通路径禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr
+/// 拷贝；仅配置到期的自动保存/备份低频分支允许持久化。
 void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                             bool isActiveSession)
 {
@@ -710,6 +837,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     }
     bool processed = processCommands();
     publishRequestedMutationSnapshot();
+    // 配置命令携带软件级快照；本轮调度仍必须恢复项目覆盖后的有效配置。
+    m_ctx->lastConfig = config;
     m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
     const auto& effectiveConfig = m_ctx->lastConfig;
 
@@ -745,9 +874,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
-    bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
-                               m_ctx->brushState.isActive ||
-                               m_ctx->eraserState.isActive;
+    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+                         m_ctx->brushState.isActive ||
+                         m_ctx->eraserState.isActive;
     const bool isVisualAnimationActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;
@@ -767,10 +896,14 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         }
     }
     flushDeferredBeatmapSync(currentSysTime, processed, isBusy);
-    const bool isMetadataEditingBusy = isInteracting || hasPendingCommands();
+    const bool isMetadataEditingBusy =
+        isInteracting || processed || hasPendingCommands();
     flushConfiguredAutoSave(currentSysTime,
                             isMetadataEditingBusy,
                             effectiveConfig.settings.autoSave);
+    flushConfiguredAutoBackup(currentSysTime,
+                              isMetadataEditingBusy,
+                              effectiveConfig.settings.autoBackup);
     flushDeferredMetadataAutoSave(currentSysTime, isMetadataEditingBusy);
     m_ctx->lastSnapshotTime = currentSysTime;
 

@@ -277,7 +277,7 @@ bool testBulkCurrentConfigMerge()
     for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
         const auto& resource       = scannedProject.m_audioResources[index];
         const auto  expectedVolume = static_cast<float>(index + 1U) /
-                                     static_cast<float>(RESOURCE_COUNT + 1U);
+                                    static_cast<float>(RESOURCE_COUNT + 1U);
         if ( resource.m_type != MMM::AudioTrackType::Main ||
              !near(resource.m_config.volume, expectedVolume) ) {
             XERROR("Bulk audio config merge failed at {}", index);
@@ -338,6 +338,33 @@ bool testBeatLineToolbarStateMigration()
     return true;
 }
 
+/// @brief 验证项目级自动备份覆盖可往返且旧项目继续继承软件配置。
+/// @return 覆盖字段稳定且缺失字段恢复为空值时返回 true。
+bool testProjectAutoBackupOverrideCompatibility()
+{
+    MMM::ProjectSettings settings;
+    settings.m_autoBackupOverride.emplace();
+    settings.m_autoBackupOverride->mode =
+        MMM::Config::AutoSaveMode::EventTriggered;
+    settings.m_autoBackupOverride->onBeatmapSwitch = false;
+    settings.m_autoBackupOverride->maxBackupCount  = 17;
+
+    const nlohmann::json encoded  = settings;
+    const auto           restored = encoded.get<MMM::ProjectSettings>();
+    const auto legacy = nlohmann::json::object().get<MMM::ProjectSettings>();
+    if ( !encoded.contains("m_autoBackupOverride") ||
+         !restored.m_autoBackupOverride ||
+         restored.m_autoBackupOverride->mode !=
+             MMM::Config::AutoSaveMode::EventTriggered ||
+         restored.m_autoBackupOverride->onBeatmapSwitch ||
+         restored.m_autoBackupOverride->maxBackupCount != 17 ||
+         legacy.m_autoBackupOverride ) {
+        XERROR("Project auto-backup override compatibility failed");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行旧版项目音频配置兼容测试。
@@ -348,7 +375,8 @@ int main()
                    testLegacyMergePreservesScannedTypes() &&
                    testCurrentConfigAndTypeMerge() && testMixedSchemaMerge() &&
                    testBulkCurrentConfigMerge() &&
-                   testBeatLineToolbarStateMigration()
+                   testBeatLineToolbarStateMigration() &&
+                   testProjectAutoBackupOverrideCompatibility()
                ? 0
                : 1;
 }

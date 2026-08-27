@@ -20,6 +20,7 @@ add_library(
   src/logic/EditorClipboard.cpp
   src/logic/EditorClipboardProtocol.cpp
   src/logic/BeatmapLoadDiagnosticPublisher.cpp
+  src/logic/BeatmapBackupService.cpp
   src/logic/ImdPackageExportService.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
@@ -84,6 +85,14 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
                         tests/ProjectCompatibilityTest.cpp)
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
+
+# 谱面自动备份测试覆盖原生快照写入、单谱面数量轮转和路径隔离。
+mmm_add_test_executable(Logic BeatmapBackupServiceTest
+                        tests/BeatmapBackupServiceTest.cpp)
+target_link_libraries(BeatmapBackupServiceTest PRIVATE Logic Log)
+add_test(NAME BeatmapBackupServiceTest
+         COMMAND BeatmapBackupServiceTest
+                 "${CMAKE_BINARY_DIR}/test_output/beatmap_backup_service")
 
 mmm_add_test_executable(Logic ObjectPlacementSnapTest
                         tests/ObjectPlacementSnapTest.cpp)

@@ -251,8 +251,8 @@ public:
      */
     void setActiveSessionIndex(int32_t index);
 
-    /// @brief 为当前活动谱面提交一次跨线程自动保存事件。
-    /// @param trigger 需要由逻辑线程按全局配置筛选的事件来源。
+    /// @brief 为当前活动谱面提交一次跨线程自动保存与自动备份事件。
+    /// @param trigger 需要由逻辑线程按软件级和项目级配置筛选的事件来源。
     /// @warning UI/原生窗口低频回调路径：只短暂持有 SessionRegistry 锁并
     /// 设置单个原子位，不执行谱面同步或文件 I/O。
     void requestAutoSaveForActiveSession(AutoSaveTrigger trigger);
@@ -502,6 +502,13 @@ public:
      */
     void setEditorConfig(const Config::EditorConfig& config);
 
+    /// @brief 更新当前项目对软件级谱面自动备份配置的可选覆盖。
+    /// @param config 项目级配置；空值表示继承软件配置。
+    /// @warning
+    /// UI/逻辑低频配置路径：只复制轻量配置并发布配置修订，不访问文件系统。
+    void setProjectAutoBackupOverride(
+        std::optional<Config::AutoBackupConfig> config);
+
     /**
      * @brief 持久化当前项目配置到 .mmm 隐藏目录中的职责分片。
      */
@@ -637,6 +644,11 @@ private:
 
     /// @brief 编辑器配置，由 m_editorConfigMutex 保护。
     Config::EditorConfig m_editorConfig;
+
+    /// @brief 当前项目对软件级谱面自动备份配置的可选覆盖。
+    /// @warning UI/逻辑线程低频读写，由 m_editorConfigMutex
+    /// 与配置修订共同保护。
+    std::optional<Config::AutoBackupConfig> m_projectAutoBackupOverride;
 
     /// @brief 当前编辑器配置修订号。
     /// @warning 逻辑/UI 热路径原子：UI 配置提交时 release

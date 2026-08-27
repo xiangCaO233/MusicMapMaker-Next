@@ -10,10 +10,12 @@ namespace MMM::Event
 
 /// @brief 保存成功后应采用的界面反馈形式。
 enum class BeatmapSavePresentation : std::uint8_t {
-    Transient,                ///< 在鼠标附近显示常规保存反馈。
-    TimedAutoSaveStatus,      ///< 在状态栏显示定时自动保存结果。
-    TriggeredAutoSaveStatus,  ///< 在状态栏显示事件自动保存结果。
-    Silent,                   ///< 成功时不显示界面反馈。
+    Transient,                  ///< 在鼠标附近显示常规保存反馈。
+    TimedAutoSaveStatus,        ///< 在状态栏显示定时自动保存结果。
+    TriggeredAutoSaveStatus,    ///< 在状态栏显示事件自动保存结果。
+    TimedAutoBackupStatus,      ///< 在状态栏显示定时自动备份结果。
+    TriggeredAutoBackupStatus,  ///< 在状态栏显示事件自动备份结果。
+    Silent,                     ///< 成功时不显示界面反馈。
 };
 
 /// @brief 谱面保存或导出完成后的结果事件。

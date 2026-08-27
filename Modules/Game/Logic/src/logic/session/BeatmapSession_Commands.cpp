@@ -1313,10 +1313,16 @@ bool BeatmapSession::processCommands()
         ::MMM::BeatmapMutationFlags::None;
     const auto publishPendingMutation = [this, &mutationFlags]() {
         if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        m_autoBackupDirty    = true;
         const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
         if ( autoSave.mode == Config::AutoSaveMode::EventTriggered &&
              autoSave.onObjectModified ) {
             m_triggeredAutoSavePending = true;
+        }
+        const auto& autoBackup = m_ctx->lastConfig.settings.autoBackup;
+        if ( autoBackup.mode == Config::AutoSaveMode::EventTriggered &&
+             autoBackup.onObjectModified ) {
+            m_triggeredAutoBackupPending = true;
         }
         auto observer = std::atomic_load_explicit(&m_mutationObserver,
                                                   std::memory_order_acquire);
@@ -2051,6 +2057,11 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     }
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
+    m_autoBackupDirty                 = false;
+    m_triggeredAutoBackupPending      = false;
+    m_timedAutoBackupDeadline         = 0.0;
+    m_timedAutoBackupIntervalSeconds  = 0.0;
+    m_requestedAutoBackupTriggers.store(0U, std::memory_order_relaxed);
     m_ctx->collaborationProject.reset();
     m_ctx->collaborationPathRemap.clear();
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);

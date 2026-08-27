@@ -485,6 +485,39 @@ void from_json(const nlohmann::json& json, AutoSaveConfig& config)
         json.value("onNativeWindowFocusLost", true);
 }
 
+void to_json(nlohmann::json& json, const AutoBackupConfig& config)
+{
+    json = nlohmann::json{
+        { "mode", config.mode },
+        { "intervalUnit", config.intervalUnit },
+        { "intervalValue", std::clamp(config.intervalValue, 5, 60) },
+        { "onObjectModified", config.onObjectModified },
+        { "onBeatmapSwitch", config.onBeatmapSwitch },
+        { "onImGuiWindowFocusLost", config.onImGuiWindowFocusLost },
+        { "onNativeWindowFocusLost", config.onNativeWindowFocusLost },
+        { "maxBackupCount",
+          std::clamp(config.maxBackupCount,
+                     AUTO_BACKUP_COUNT_MIN,
+                     AUTO_BACKUP_COUNT_MAX) },
+    };
+}
+
+void from_json(const nlohmann::json& json, AutoBackupConfig& config)
+{
+    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.intervalUnit =
+        json.value("intervalUnit", AutoSaveIntervalUnit::Minutes);
+    config.intervalValue    = std::clamp(json.value("intervalValue", 5), 5, 60);
+    config.onObjectModified = json.value("onObjectModified", true);
+    config.onBeatmapSwitch  = json.value("onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+    config.onNativeWindowFocusLost =
+        json.value("onNativeWindowFocusLost", true);
+    config.maxBackupCount = std::clamp(json.value("maxBackupCount", 10),
+                                       AUTO_BACKUP_COUNT_MIN,
+                                       AUTO_BACKUP_COUNT_MAX);
+}
+
 void to_json(nlohmann::json& json, const TimeFormatPreference& preference)
 {
     json = "Clock";
@@ -729,6 +762,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "marqueeRounding", settings.marqueeRounding },
         { "saveFormatPreference", settings.saveFormatPreference },
         { "autoSave", settings.autoSave },
+        { "autoBackup", settings.autoBackup },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", settings.timeFormatPreference },
@@ -845,7 +879,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.marqueeRounding  = json.value("marqueeRounding", 0.0f);
     settings.saveFormatPreference =
         json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
-    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
+    settings.autoSave   = json.value("autoSave", AutoSaveConfig{});
+    settings.autoBackup = json.value("autoBackup", AutoBackupConfig{});
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);
     settings.timeFormatPreference =
