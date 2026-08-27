@@ -6,7 +6,6 @@ add_library(
   src/Basic2DCanvas.cpp
   src/Basic2DCanvas_Interaction.cpp
   src/Basic2DCanvas_Rendering.cpp
-  src/CanvasViewFactory.cpp
   src/MarqueeAutoScroll.cpp
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp

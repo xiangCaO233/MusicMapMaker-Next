@@ -20,7 +20,7 @@
 #include "logic/ProjectController.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/ICanvasView.h"
-#include "ui/ICanvasViewFactory.h"
+#include "ui/ICanvasWorkspaceService.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
@@ -592,10 +592,14 @@ void UIManager::requestSkinResourceReload()
 /// @return 目标 Dock 节点 ID；无法解析时返回 0。
 ImGuiID UIManager::resolveAudioControllerDockId()
 {
-    auto& engine  = Logic::EditorEngine::instance();
-    auto  entries = engine.getSessionEntries();
+    auto* workspace = getCanvasWorkspaceService();
+    if ( !workspace ) {
+        return 0;
+    }
+    std::vector<CanvasWorkspaceEntry> entries;
+    workspace->fillEntries(entries);
 
-    auto resolveEntryDockId = [this](const Logic::SessionEntry& entry) {
+    auto resolveEntryDockId = [this](const CanvasWorkspaceEntry& entry) {
         if ( entry.isLogoPlaceholder ) {
             return static_cast<ImGuiID>(0);
         }
@@ -607,7 +611,7 @@ ImGuiID UIManager::resolveAudioControllerDockId()
         return canvas->getDockId();
     };
 
-    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const int32_t activeIndex = workspace->getActiveEntryIndex();
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(entries.size()) ) {
         ImGuiID activeDockId =
@@ -1002,17 +1006,17 @@ void UIManager::clearProjectWorkspaceViews()
     }
 }
 
-/// @brief 注入 Canvas 模块提供的具体视图工厂。
-void UIManager::setCanvasViewFactory(
-    std::unique_ptr<ICanvasViewFactory> factory)
+/// @brief 注入 Game 组合根提供的画布工作区服务。
+void UIManager::setCanvasWorkspaceService(
+    std::unique_ptr<ICanvasWorkspaceService> service)
 {
-    m_canvasViewFactory = std::move(factory);
+    m_canvasWorkspaceService = std::move(service);
 }
 
-/// @brief 获取已注入画布视图工厂的观察指针。
-ICanvasViewFactory* UIManager::getCanvasViewFactory() const
+/// @brief 获取已注入画布工作区服务的观察指针。
+ICanvasWorkspaceService* UIManager::getCanvasWorkspaceService() const
 {
-    return m_canvasViewFactory.get();
+    return m_canvasWorkspaceService.get();
 }
 
 /// @brief 按注册名查询画布能力观察指针。

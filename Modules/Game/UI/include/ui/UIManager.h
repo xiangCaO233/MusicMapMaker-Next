@@ -36,7 +36,7 @@ class CollaborationRoom;
 namespace MMM::UI
 {
 class ICanvasView;
-class ICanvasViewFactory;
+class ICanvasWorkspaceService;
 class IRenderableView;
 class ITextureLoader;
 class IParallelUiPreparable;
@@ -60,12 +60,13 @@ public:
     /// @brief 注销并销毁视图
     void unregisterView(const std::string& name);
 
-    /// @brief 注入由 Canvas 模块实现的画布创建工厂。
-    /// @param factory 工厂唯一所有权；必须在动态创建画布前完成注入。
-    void setCanvasViewFactory(std::unique_ptr<ICanvasViewFactory> factory);
+    /// @brief 注入由 Game 组合根实现的画布工作区服务。
+    /// @param service 服务唯一所有权；必须在创建画布视图前完成注入。
+    void setCanvasWorkspaceService(
+        std::unique_ptr<ICanvasWorkspaceService> service);
 
-    /// @brief 获取画布创建工厂观察指针。
-    [[nodiscard]] ICanvasViewFactory* getCanvasViewFactory() const;
+    /// @brief 获取画布工作区服务观察指针。
+    [[nodiscard]] ICanvasWorkspaceService* getCanvasWorkspaceService() const;
 
     /// @brief 获取已注册视图暴露的画布能力接口。
     /// @param name 视图注册名。
@@ -285,8 +286,8 @@ private:
     /// 原子位，不执行文件 I/O 或复制谱面数据。
     void trackImGuiFocusForAutoSave();
 
-    /// @brief Canvas 模块注入的画布视图工厂。
-    std::unique_ptr<ICanvasViewFactory> m_canvasViewFactory;
+    /// @brief Game 组合根注入的画布工作区服务。
+    std::unique_ptr<ICanvasWorkspaceService> m_canvasWorkspaceService;
 
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;

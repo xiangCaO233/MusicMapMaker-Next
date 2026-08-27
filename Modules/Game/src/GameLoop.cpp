@@ -1,6 +1,5 @@
 #include "game/GameLoop.h"
 #include "audio/AudioManager.h"
-#include "canvas/CanvasViewFactory.h"
 #include "config/AppConfig.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
@@ -8,6 +7,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "game/CanvasWorkspaceService.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
@@ -89,8 +89,8 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
 
-    m_uiManager.setCanvasViewFactory(
-        std::make_unique<Canvas::CanvasViewFactory>());
+    m_uiManager.setCanvasWorkspaceService(
+        std::make_unique<Game::CanvasWorkspaceService>());
 
     // 注册ui视图
     m_uiManager.registerView(
@@ -143,27 +143,22 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     m_uiManager.registerView("NewBeatmapWizard",
                              std::make_unique<UI::NewBeatmapWizard>());
 
-    auto& engine = Logic::EditorEngine::instance();
-
     m_uiManager.registerView("CanvasTabManager",
                              std::make_unique<UI::CanvasTabManager>());
 
-    // 默认创建一个初始 Logo 占位画布
-    engine.createSession(nullptr, TR("canvas.welcome").data(), true);
+    auto* workspace = m_uiManager.getCanvasWorkspaceService();
 
-    auto* canvasFactory = m_uiManager.getCanvasViewFactory();
+    // 默认创建一个初始 Logo 占位画布
+    workspace->createLogoPlaceholderSession(TR("canvas.welcome").toString());
 
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(
         "PreviewWindow",
-        canvasFactory->createPreviewCanvas(
-            "PreviewWindow", 200, 200, engine.getSyncBuffer("Preview")));
+        workspace->createPreviewCanvas("PreviewWindow", 200, 200));
 
     // 注册时间线标尺 (Timeline Window)
     m_uiManager.registerView(
-        "TimelineWindow",
-        canvasFactory->createTimelineCanvas(
-            "Timeline", 60, 200, engine.getSyncBuffer("Timeline")));
+        "TimelineWindow", workspace->createTimelineCanvas("Timeline", 60, 200));
 }
 
 GameLoop::~GameLoop() {}
