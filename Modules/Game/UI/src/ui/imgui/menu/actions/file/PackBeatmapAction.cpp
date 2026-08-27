@@ -516,6 +516,9 @@ struct PackageBeatmapInfo {
 
     /// @brief 是否包含 Flick 或折线。
     bool hasStoreModeExtEligibleElements{ false };
+
+    /// @brief 默认 Main 音频是否使用非 OGG 文件。
+    bool hasNonOggMainAudio{ false };
 };
 
 /// @brief 等待按单谱面批量解析的音频引用。
@@ -591,6 +594,9 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     result.hasStoreModeExtEligibleElements =
         !beatMap.m_noteData.flicks.empty() ||
         !beatMap.m_noteData.polylines.empty();
+    const auto* defaultMainAudio =
+        Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
+            project, beatMap, relativePath);
 
     std::vector<PackageAudioReference> audioReferences;
     audioReferences.reserve(
@@ -632,6 +638,16 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
             project,
             Config::utf8ToPath(normalizedBeatmapPath),
             audioReferenceViews);
+    if ( defaultMainAudio && defaultMainAudio->m_type == AudioTrackType::Main &&
+         !packageExtensionEquals(
+             Config::pathToUtf8(
+                 Config::utf8ToPath(defaultMainAudio->m_path).extension()),
+             ".ogg") ) {
+        result.hasNonOggMainAudio =
+            std::find(resolvedResources.begin(),
+                      resolvedResources.end(),
+                      defaultMainAudio) != resolvedResources.end();
+    }
     for ( std::size_t index = 0; index < audioReferences.size(); ++index ) {
         const auto* resource = resolvedResources[index];
         if ( resource && !resource->m_path.empty() ) {
@@ -752,6 +768,10 @@ private:
     /// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
     /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
     bool hasSelectedPackageStoreModeExtCandidates() const;
+
+    /// @brief 判断当前选中的 MCZ 谱面是否引用非 OGG 默认 Main 音频。
+    /// @return 至少一个已选谱面需要原点对齐时返回 true。
+    bool hasSelectedPackageNonOggMainAudio() const;
 
     /// @brief 收集当前已勾选的项目相对文件路径。
     /// @return 已勾选的项目相对文件路径列表。
@@ -881,6 +901,10 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
         .stripMainAudioVolumeFromMalodyExport =
             m_package.selectedFileType == PackageFileType::Mcz &&
             m_package.stripMainAudioVolumeFromMalodyExport,
+        .alignNonOggMainAudioToOrigin =
+            m_package.selectedFileType == PackageFileType::Mcz &&
+            hasSelectedPackageNonOggMainAudio() &&
+            m_package.alignNonOggMainAudioToOrigin,
         .malodyExportMode =
             m_package.selectedFileType == PackageFileType::Mcz
                 ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
@@ -1107,6 +1131,35 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     ImGui::SetTooltip(
                         "%s",
                         TR("ui.file.pack.strip_main_audio_volume_tooltip")
+                            .data());
+                }
+
+                const auto alignAudioLabel =
+                    TR_CACHE("ui.file.pack.align_non_ogg_audio");
+                const bool canAlignNonOggAudio =
+                    hasSelectedPackageNonOggMainAudio();
+                sameLineIfItemFits(
+                    getCheckboxDisplayWidth(alignAudioLabel.data()));
+                if ( !canAlignNonOggAudio ) {
+                    m_package.alignNonOggMainAudioToOrigin = false;
+                    ImGui::BeginDisabled();
+                }
+                ::MMM::UI::FeedbackCheckbox(
+                    alignAudioLabel.data(),
+                    &m_package.alignNonOggMainAudioToOrigin);
+                if ( !canAlignNonOggAudio ) {
+                    ImGui::EndDisabled();
+                }
+                if ( ImGui::IsItemHovered(
+                         canAlignNonOggAudio
+                             ? ImGuiHoveredFlags_None
+                             : ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR(canAlignNonOggAudio
+                               ? "ui.file.pack.align_non_ogg_audio_tooltip"
+                               : "ui.file.pack.align_non_ogg_audio_disabled_"
+                                 "tooltip")
                             .data());
                 }
             }
@@ -1691,6 +1744,7 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             std::move(beatmapInfo.dependencyRelativePaths);
         file.hasStoreModeExtEligibleElements =
             beatmapInfo.hasStoreModeExtEligibleElements;
+        file.hasNonOggMainAudio = beatmapInfo.hasNonOggMainAudio;
         file.missingDependencyRelativePaths =
             std::move(beatmapInfo.unresolvedAudioReferences);
         if ( beatmapInfo.loadFailed ) {
@@ -1860,6 +1914,22 @@ bool PackBeatmapAction::hasSelectedPackageStoreModeExtCandidates() const
                        });
 }
 
+/// @brief 判断当前选中的 MCZ 谱面是否引用非 OGG 默认 Main 音频。
+/// @return 至少一个已选谱面需要原点对齐时返回 true。
+/// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
+bool PackBeatmapAction::hasSelectedPackageNonOggMainAudio() const
+{
+    if ( m_package.selectedFileType != PackageFileType::Mcz ) return false;
+    return std::any_of(m_package.candidateFiles.begin(),
+                       m_package.candidateFiles.end(),
+                       [](const PackageCandidateFile& file) {
+                           return file.selected &&
+                                  file.resourceType ==
+                                      PackageResourceType::Beatmap &&
+                                  file.hasNonOggMainAudio;
+                       });
+}
+
 /// @brief 收集当前已勾选的项目相对文件路径。
 /// @return 已勾选的项目相对文件路径列表。
 /// @warning UI 热路径低频分支：点击确认打包时执行；只遍历候选缓存。
@@ -1909,6 +1979,7 @@ void PackBeatmapAction::openPackFilePicker()
     }
     if ( m_package.selectedFileType != PackageFileType::Mcz ) {
         m_package.stripMainAudioVolumeFromMalodyExport = false;
+        m_package.alignNonOggMainAudioToOrigin         = false;
     }
 }
 

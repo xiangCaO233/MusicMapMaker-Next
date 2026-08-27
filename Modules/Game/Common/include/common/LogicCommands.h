@@ -541,6 +541,9 @@ struct CmdPackBeatmap {
     /// @brief MCZ 打包时是否删除 Main 音轨自动采样的 vol 字段。
     bool stripMainAudioVolumeFromMalodyExport{ false };
 
+    /// @brief MCZ 打包时是否把非 OGG Main 音频和首 BPM 红线对齐到原点。
+    bool alignNonOggMainAudioToOrigin{ false };
+
     /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
     std::optional<MMM::MalodyMode> malodyExportMode;
 

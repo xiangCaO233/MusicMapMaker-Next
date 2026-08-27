@@ -22,6 +22,7 @@ add_library(
   src/logic/BeatmapLoadDiagnosticPublisher.cpp
   src/logic/BeatmapBackupService.cpp
   src/logic/ImdPackageExportService.cpp
+  src/logic/MczAudioOriginAlignment.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
@@ -125,6 +126,12 @@ mmm_add_test_executable(Logic MalodyExportModeTest
                         tests/MalodyExportModeTest.cpp)
 target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
 add_test(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
+
+# MCZ 音频原点对齐测试覆盖正负相位、整数拍前导和安全失败。
+mmm_add_test_executable(Logic MczAudioOriginAlignmentTest
+                        tests/MczAudioOriginAlignmentTest.cpp)
+target_link_libraries(MczAudioOriginAlignmentTest PRIVATE Logic Log)
+add_test(NAME MczAudioOriginAlignmentTest COMMAND MczAudioOriginAlignmentTest)
 
 mmm_add_test_executable(Logic AudioTimelineDescriptorTest
                         tests/AudioTimelineDescriptorTest.cpp)
