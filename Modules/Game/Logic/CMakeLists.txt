@@ -35,7 +35,6 @@ add_library(
   src/logic/EditorEngine.cpp
   src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/audio/PlaybackVisualClock.cpp
-  src/logic/BeatmapSyncBuffer.cpp
   src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Layout.cpp
@@ -49,7 +48,8 @@ add_library(
   src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp
   src/logic/ecs/system/NoteTransformSystem.cpp
   src/logic/ecs/system/ScrollCache.cpp
-  src/logic/ecs/system/HitFXSystem.cpp)
+  src/logic/ecs/system/HitFXSystem.cpp
+  src/logic/BeatmapSyncBuffer.cpp)
 
 target_link_libraries(
   Logic

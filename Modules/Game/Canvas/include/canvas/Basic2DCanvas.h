@@ -4,9 +4,9 @@
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
@@ -26,11 +26,6 @@ namespace MMM::Event
 struct GLFWDropEvent;
 }
 
-namespace MMM::Logic
-{
-struct RenderSnapshot;
-}
-
 namespace MMM::Canvas
 {
 class Basic2DCanvas : public UI::IRenderableView,
@@ -38,9 +33,10 @@ class Basic2DCanvas : public UI::IRenderableView,
                       public UI::ICanvasView
 {
 public:
-    Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h,
-                  std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer,
-                  const std::string&                        cameraId = "");
+    Basic2DCanvas(
+        const std::string& name, uint32_t w, uint32_t h,
+        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer,
+        const std::string&                                    cameraId = "");
     Basic2DCanvas(Basic2DCanvas&&)                 = delete;
     Basic2DCanvas(const Basic2DCanvas&)            = delete;
     Basic2DCanvas& operator=(Basic2DCanvas&&)      = delete;
@@ -212,10 +208,10 @@ private:
     /// @brief 同步缓冲区
     /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update
     /// 中不得复制该 shared_ptr。
-    std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
+    std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;
 
     /// @brief 当前正在使用的渲染快照
-    Logic::RenderSnapshot* m_currentSnapshot{ nullptr };
+    Common::Render::RenderSnapshot* m_currentSnapshot{ nullptr };
 
     /// @brief 缓存spv源码，避免重复读盘
     std::unordered_map<std::string, std::vector<std::string>>
@@ -329,7 +325,7 @@ private:
     float m_lastAppliedYOffset{ 0.0f };
 
     /// @brief 上一次应用偏移的快照指针 (用于检测快照是否更新)
-    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+    Common::Render::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 
     /// @brief 后台准备出的画布快照消费结果。
     PreparedCanvasSnapshot m_preparedSnapshot;

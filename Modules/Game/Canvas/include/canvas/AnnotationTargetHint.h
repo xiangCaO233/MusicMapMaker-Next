@@ -1,7 +1,7 @@
 #pragma once
 
-#include "logic/BeatmapSyncBuffer.h"
-#include "logic/session/AnnotationRenderData.h"
+#include "common/render/AnnotationRenderData.h"
+#include "common/render/RenderSnapshotBuffer.h"
 
 #include <algorithm>
 #include <optional>
@@ -31,8 +31,8 @@ struct AnnotationTargetHintBounds {
 /// @warning UI 热路径：仅在悬浮批注详情卡片时扫描当前可见命中框，不得访问
 /// ECS 或文件系统。
 [[nodiscard]] inline std::optional<AnnotationTargetHintBounds>
-findAnnotationTargetHintBounds(const Logic::AnnotationRenderItem& item,
-                               std::span<const Logic::Hitbox>     hitboxes,
+findAnnotationTargetHintBounds(const Common::Render::AnnotationRenderItem& item,
+                               std::span<const Common::Render::Hitbox> hitboxes,
                                float padding       = 5.0F,
                                float minimumExtent = 32.0F)
 {

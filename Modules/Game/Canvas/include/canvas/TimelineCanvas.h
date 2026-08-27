@@ -1,9 +1,9 @@
 #pragma once
 
 #include "canvas/CanvasSnapshotPrepare.h"
+#include "common/render/AnnotationRenderData.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
-#include "logic/BeatmapSyncBuffer.h"
-#include "logic/session/AnnotationRenderData.h"
 #include "mmm/timing/Timing.h"
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
@@ -24,7 +24,6 @@
 namespace MMM::Logic
 {
 class BeatmapSession;
-struct RenderSnapshot;
 }  // namespace MMM::Logic
 
 namespace MMM::Canvas
@@ -39,8 +38,9 @@ class TimelineCanvas : public UI::IRenderableView,
                        public UI::ICanvasView
 {
 public:
-    TimelineCanvas(const std::string& name, uint32_t w, uint32_t h,
-                   std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer);
+    TimelineCanvas(
+        const std::string& name, uint32_t w, uint32_t h,
+        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer);
     ~TimelineCanvas() override = default;
 
     // IUIView 接口
@@ -211,7 +211,8 @@ private:
     /// @brief 刷新当前“保持画布速度”联动关联的实体。
     /// @param elements 当前时间点表格展示的完整事件列表。
     void refreshKeepSpeedBinding(
-        const std::vector<Logic::TimelineInteractiveElement>& elements);
+        const std::vector<Common::Render::TimelineInteractiveElement>&
+            elements);
 
     /// @brief 判断表格行是否属于当前临时联动。
     /// @param entity 当前行实体。
@@ -409,7 +410,7 @@ private:
         double timestamp{ 0.0 };
 
         /// @brief 批注正文、作者与目标信息。
-        Logic::AnnotationRenderItem item;
+        Common::Render::AnnotationRenderItem item;
     };
 
     /// @brief 收集当前快照中可交互的 Timing 目标。
@@ -458,10 +459,10 @@ private:
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
 
-    std::string                               m_canvasName;
-    bool                                      m_needReload{ true };
-    std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
-    Logic::RenderSnapshot*                    m_currentSnapshot{ nullptr };
+    std::string                                           m_canvasName;
+    bool                                                  m_needReload{ true };
+    std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;
+    Common::Render::RenderSnapshot* m_currentSnapshot{ nullptr };
 
     // 弹窗状态
     bool m_isPopupOpen{ false };
@@ -613,7 +614,7 @@ private:
     float m_timingDrawPreviewY{ 0.0f };
 
     /// @brief 当前被 UI 侧交互修饰过的 Timeline 快照。
-    Logic::RenderSnapshot* m_decoratedTimelineSnapshot{ nullptr };
+    Common::Render::RenderSnapshot* m_decoratedTimelineSnapshot{ nullptr };
 
     /// @brief 修饰前快照顶点数量。
     size_t m_decoratedTimelineVertexCount{ 0 };
@@ -643,7 +644,7 @@ private:
     float m_lastAppliedYOffset{ 0.0f };
 
     /// @brief 上一次应用偏移的快照指针
-    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+    Common::Render::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 
     /// @brief 后台准备出的时间线快照消费结果。
     PreparedCanvasSnapshot m_preparedSnapshot;

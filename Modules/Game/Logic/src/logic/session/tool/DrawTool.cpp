@@ -4,6 +4,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SampleAction.h"

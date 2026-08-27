@@ -1,8 +1,8 @@
 #pragma once
 
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
-#include "logic/BeatmapSyncBuffer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -61,7 +61,7 @@ inline std::string formatMilliseconds(double timeSeconds)
 
 /// @brief 从快照滚动分段中提取完整 BPM 时间线。
 inline std::vector<BpmFormatPoint> collectBpmPoints(
-    const Logic::RenderSnapshot* snapshot)
+    const Common::Render::RenderSnapshot* snapshot)
 {
     std::vector<BpmFormatPoint> points;
     if ( !snapshot ) return points;
@@ -86,8 +86,8 @@ inline std::vector<BpmFormatPoint> collectBpmPoints(
 }
 
 /// @brief 格式化拍号 + 分拍位。
-inline std::string formatBeatTime(double                       timeSeconds,
-                                  const Logic::RenderSnapshot* snapshot)
+inline std::string formatBeatTime(
+    double timeSeconds, const Common::Render::RenderSnapshot* snapshot)
 {
     auto points = collectBpmPoints(snapshot);
     if ( points.empty() ) return fmt::format("{:.3f} s", timeSeconds);
@@ -153,7 +153,7 @@ inline std::string formatBeatTime(double                       timeSeconds,
 /// @brief 按指定偏好格式化时间。
 inline std::string formatTimeWithPreference(
     double timeSeconds, Config::TimeFormatPreference preference,
-    const Logic::RenderSnapshot* snapshot)
+    const Common::Render::RenderSnapshot* snapshot)
 {
     switch ( preference ) {
     case Config::TimeFormatPreference::Clock: return formatClock(timeSeconds);
@@ -173,7 +173,8 @@ inline std::string formatTimeWithPreference(
 /// @param snapshot 当前渲染快照，用于拍号格式查询 BPM 时间线
 /// @return 已格式化的时间文本
 inline std::string formatCanvasTime(
-    double timeSeconds, const Logic::RenderSnapshot* snapshot = nullptr)
+    double                                timeSeconds,
+    const Common::Render::RenderSnapshot* snapshot = nullptr)
 {
     auto preference =
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
@@ -188,7 +189,7 @@ inline std::string formatCanvasTime(
 /// @return 已格式化的时间范围文本
 inline std::string formatCanvasTimePair(
     double firstSeconds, double secondSeconds,
-    const Logic::RenderSnapshot* snapshot = nullptr)
+    const Common::Render::RenderSnapshot* snapshot = nullptr)
 {
     return fmt::format("{} / {}",
                        formatCanvasTime(firstSeconds, snapshot),

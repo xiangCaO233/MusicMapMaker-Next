@@ -1,7 +1,7 @@
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -20,7 +20,8 @@ namespace
 /// @param snapshot 当前活动画布快照。
 /// @return 已按 UI 当前帧补偿后的显示时间，单位秒。
 /// @warning UI 热路径：每帧状态栏绘制调用；只做常量级时间计算。
-double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
+double resolveStatusBarAnimateTime(
+    const Common::Render::RenderSnapshot& snapshot)
 {
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
@@ -188,7 +189,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
             sourceManager ? &sourceManager->getProjectOpenProgress() : nullptr;
         const bool projectTransitionInProgress =
             sourceManager && sourceManager->isProjectTransitionInProgress();
-        std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer;
+        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer;
         if ( projectOpenProgress &&
              (projectOpenProgress->active || projectTransitionInProgress) ) {
             const ProjectOpenProgressState initialProgress;

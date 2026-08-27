@@ -3,6 +3,7 @@
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -15,7 +16,6 @@
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
@@ -100,7 +100,7 @@ PreviewDensityRailLayout calculatePreviewDensityRailLayout(
 
 PreviewCanvas::PreviewCanvas(
     const std::string& name, uint32_t w, uint32_t h,
-    std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer)
+    std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
     : IUIView(name)
     , IRenderableView(name)
     , m_canvasName(name)
@@ -704,25 +704,27 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                               255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                               255, 255, 255, 255 };
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::None), white, 4, 4);
+        static_cast<uint32_t>(Common::Render::TextureID::None), white, 4, 4);
 
     auto& skin   = Config::SkinManager::instance();
-    auto  addTex = [&](Logic::TextureID id, const std::string& key) {
+    auto  addTex = [&](Common::Render::TextureID id, const std::string& key) {
         auto p = skin.getAssetPath(key);
         if ( !p.empty() )
             m_textureAtlas->addTexture(static_cast<uint32_t>(id), p);
     };
 
-    addTex(Logic::TextureID::Note, "note.note");
-    addTex(Logic::TextureID::Node, "note.node");
-    addTex(Logic::TextureID::HoldEnd, "note.holdend");
-    addTex(Logic::TextureID::HoldBodyVertical, "note.holdbodyvertical");
-    addTex(Logic::TextureID::HoldBodyHorizontal, "note.holdbodyhorizontal");
-    addTex(Logic::TextureID::FlickArrowLeft, "note.arrowleft");
-    addTex(Logic::TextureID::FlickArrowRight, "note.arrowright");
-    addTex(Logic::TextureID::Track, "panel.track.background");
-    addTex(Logic::TextureID::JudgeArea, "panel.track.judgearea");
-    addTex(Logic::TextureID::Logo, "logo");
+    addTex(Common::Render::TextureID::Note, "note.note");
+    addTex(Common::Render::TextureID::Node, "note.node");
+    addTex(Common::Render::TextureID::HoldEnd, "note.holdend");
+    addTex(Common::Render::TextureID::HoldBodyVertical,
+           "note.holdbodyvertical");
+    addTex(Common::Render::TextureID::HoldBodyHorizontal,
+           "note.holdbodyhorizontal");
+    addTex(Common::Render::TextureID::FlickArrowLeft, "note.arrowleft");
+    addTex(Common::Render::TextureID::FlickArrowRight, "note.arrowright");
+    addTex(Common::Render::TextureID::Track, "panel.track.background");
+    addTex(Common::Render::TextureID::JudgeArea, "panel.track.judgearea");
+    addTex(Common::Render::TextureID::Logo, "logo");
 
     // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
@@ -735,10 +737,10 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->build(4096);
 
     m_atlasUVs.clear();
-    for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
-          i <= static_cast<uint32_t>(Logic::TextureID::Logo);
+    for ( uint32_t i = static_cast<uint32_t>(Common::Render::TextureID::None);
+          i <= static_cast<uint32_t>(Common::Render::TextureID::Logo);
           ++i ) {
-        if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )
+        if ( i == static_cast<uint32_t>(Common::Render::TextureID::Background) )
             continue;
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }

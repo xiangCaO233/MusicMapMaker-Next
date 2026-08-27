@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/render/NoteRenderData.h"
 #include "mmm/note/Note.h"
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
@@ -10,26 +11,8 @@
 namespace MMM::Logic
 {
 
-/// @brief 音符局部自定义颜色缓存；为空时使用当前皮肤默认颜色。
-struct NoteColorOverrides {
-    /// @brief 普通 Note 本体颜色，对应 note_tap。
-    std::optional<glm::vec4> tap;
-
-    /// @brief Hold/Flick/Polyline 头部颜色，对应 note_head。
-    std::optional<glm::vec4> head;
-
-    /// @brief Hold/Flick/Polyline 连接体颜色，对应 note_hold。
-    std::optional<glm::vec4> hold;
-
-    /// @brief Hold/Flick/Polyline 尾部颜色，对应 note_end。
-    std::optional<glm::vec4> end;
-
-    /// @brief Flick/Polyline 滑键箭头颜色，对应 note_flick_arrow。
-    std::optional<glm::vec4> flickArrow;
-
-    /// @brief Polyline 中间节点颜色，对应 note_node。
-    std::optional<glm::vec4> node;
-};
+/// @brief 音符局部自定义颜色缓存兼容别名。
+using NoteColorOverrides = Common::Render::NoteColorOverrides;
 
 /**
  * @brief 谱面音符组件，用于 ECS 逻辑计算
@@ -74,23 +57,8 @@ struct NoteComponent {
     /// @brief 自定义音符配色缓存；保存时同步写入 m_metadata。
     NoteColorOverrides m_customColors;
 
-    /// @brief 折线子物件定义 (如果是 Polyline 类型)
-    struct SubNote {
-        ::MMM::NoteType     type;
-        double              timestamp;
-        double              duration;
-        int                 trackIndex;
-        int                 dtrack;
-        ::MMM::NoteMetadata metadata;
-        /// @brief 当前折线子物件的独立编辑器注释。
-        std::string annotation;
-        /// @brief 子物件命中时触发的可选采样绑定。
-        std::optional<::MMM::AudioSampleBinding> sampleBinding;
-        /// @brief 子物件自定义颜色缓存；为空时继承皮肤默认色。
-        NoteColorOverrides customColors;
-        /// @brief 协作会话内稳定的子物件逻辑标识。
-        std::string collaborationId;
-    };
+    /// @brief 折线子物件定义兼容别名。
+    using SubNote = Common::Render::PolylineSubNote;
     std::vector<SubNote> m_subNotes;
 
     /// @brief 协作会话内稳定的逻辑物件标识。

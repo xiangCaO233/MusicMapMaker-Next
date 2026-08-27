@@ -20,10 +20,10 @@ bool near(float lhs, float rhs)
 /// @return 时间戳批注始终没有物件提示边界时返回 true。
 bool testTimestampAnnotationHasNoTargetHint()
 {
-    const MMM::Logic::AnnotationRenderItem item;
-    const std::vector<MMM::Logic::Hitbox>  hitboxes{
+    const MMM::Common::Render::AnnotationRenderItem item;
+    const std::vector<MMM::Common::Render::Hitbox>  hitboxes{
         { static_cast<entt::entity>(1),
-          MMM::Logic::HoverPart::Head,
+          MMM::Common::Render::HoverPart::Head,
           -1,
           10.0F,
           20.0F,
@@ -37,22 +37,28 @@ bool testTimestampAnnotationHasNoTargetHint()
 /// @return 提示边界未包含同一父物件的其它子物件时返回 true。
 bool testPolylineSubTargetUsesMatchingHitboxes()
 {
-    const auto                       entity = static_cast<entt::entity>(7);
-    MMM::Logic::AnnotationRenderItem item;
+    const auto entity = static_cast<entt::entity>(7);
+    MMM::Common::Render::AnnotationRenderItem item;
     item.targetKind     = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
     item.targetEntity   = entity;
     item.targetSubIndex = 2;
-    const std::vector<MMM::Logic::Hitbox> hitboxes{
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
         { entity,
-          MMM::Logic::HoverPart::HoldBody,
+          MMM::Common::Render::HoverPart::HoldBody,
           1,
           20.0F,
           50.0F,
           30.0F,
           15.0F },
-        { entity, MMM::Logic::HoverPart::Head, 2, 100.0F, 40.0F, 8.0F, 12.0F },
         { entity,
-          MMM::Logic::HoverPart::HoldBody,
+          MMM::Common::Render::HoverPart::Head,
+          2,
+          100.0F,
+          40.0F,
+          8.0F,
+          12.0F },
+        { entity,
+          MMM::Common::Render::HoverPart::HoldBody,
           2,
           104.0F,
           52.0F,
@@ -69,13 +75,13 @@ bool testPolylineSubTargetUsesMatchingHitboxes()
 /// @return 合并边界同时覆盖两处几何并追加留白时返回 true。
 bool testAudioSampleTargetMergesVisibleParts()
 {
-    const auto                       entity = static_cast<entt::entity>(9);
-    MMM::Logic::AnnotationRenderItem item;
+    const auto entity = static_cast<entt::entity>(9);
+    MMM::Common::Render::AnnotationRenderItem item;
     item.targetKind   = MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE;
     item.targetEntity = entity;
-    const std::vector<MMM::Logic::Hitbox> hitboxes{
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
         { entity,
-          MMM::Logic::HoverPart::SampleAnchor,
+          MMM::Common::Render::HoverPart::SampleAnchor,
           -1,
           50.0F,
           80.0F,
@@ -83,7 +89,7 @@ bool testAudioSampleTargetMergesVisibleParts()
           20.0F,
           MMM::Logic::ChartObjectKind::AudioSample },
         { entity,
-          MMM::Logic::HoverPart::SampleOffset,
+          MMM::Common::Render::HoverPart::SampleOffset,
           -1,
           65.0F,
           30.0F,
@@ -101,13 +107,13 @@ bool testAudioSampleTargetMergesVisibleParts()
 /// @return 标记丢失后没有提示边界时返回 true。
 bool testMissingTargetHasNoHint()
 {
-    MMM::Logic::AnnotationRenderItem item;
+    MMM::Common::Render::AnnotationRenderItem item;
     item.targetKind    = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
     item.targetEntity  = static_cast<entt::entity>(3);
     item.targetMissing = true;
-    const std::vector<MMM::Logic::Hitbox> hitboxes{
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
         { static_cast<entt::entity>(3),
-          MMM::Logic::HoverPart::Head,
+          MMM::Common::Render::HoverPart::Head,
           -1,
           0.0F,
           0.0F,

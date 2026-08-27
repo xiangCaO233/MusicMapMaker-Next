@@ -29,7 +29,7 @@ namespace MMM::Logic
 {
 
 class BeatmapSession;
-class BeatmapSyncBuffer;
+using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 class ProjectController;
 struct SessionContext;
 

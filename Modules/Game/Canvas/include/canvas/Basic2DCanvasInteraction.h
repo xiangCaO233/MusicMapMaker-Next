@@ -16,7 +16,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace MMM::Logic
+namespace MMM::Common::Render
 {
 struct RenderSnapshot;
 }
@@ -36,9 +36,9 @@ public:
                              const std::string& cameraId);
     ~Basic2DCanvasInteraction();
 
-    void update(UI::UIManager*               sourceManager,
-                const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
-                float targetHeight);
+    void update(UI::UIManager*                        sourceManager,
+                const Common::Render::RenderSnapshot* currentSnapshot,
+                float targetWidth, float targetHeight);
 
     /// @brief 推进并绘制交互层的临时 UI。
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
@@ -50,8 +50,9 @@ public:
     /// @return 本帧滚轮已被修饰键命令消费时返回 true。
     /// @warning UI 输入路径：仅在滚轮事件发生时调用；可能发布逻辑命令或广播
     /// 编辑器配置更新，禁止放入无条件每帧路径。
-    bool handleModifierWheel(const Logic::RenderSnapshot* currentSnapshot,
-                             bool allowSelectionScroll = true);
+    bool handleModifierWheel(
+        const Common::Render::RenderSnapshot* currentSnapshot,
+        bool                                  allowSelectionScroll = true);
 
 private:
     /// @brief 批注交互层对当前画布输入的处理结果。
@@ -131,7 +132,7 @@ private:
     Event::SubscriptionID    m_dropSubId;
 
     void handleDrops(UI::UIManager* sourceManager);
-    void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
+    void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。
     /// @param sourceManager 用于打开共享的批注表窗口。
     /// @param currentSnapshot 当前主画布渲染快照。
@@ -139,9 +140,10 @@ private:
     /// @param targetHeight 画布高度。
     /// @warning UI 热路径：每帧执行；只允许常量级输入处理和可见物件遍历，
     /// 禁止文件系统访问、完整谱面扫描或阻塞操作。
-    void handleInteractions(UI::UIManager*               sourceManager,
-                            const Logic::RenderSnapshot* currentSnapshot,
-                            float targetWidth, float targetHeight);
+    void handleInteractions(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot* currentSnapshot,
+        float targetWidth, float targetHeight);
     /// @brief 在移动工具下绘制当前悬浮物件的独立音频试听按钮。
     /// @param currentSnapshot 当前主画布渲染快照。
     /// @param canvasScreenX 画布左上角屏幕横坐标。
@@ -154,9 +156,9 @@ private:
     /// @warning UI 热路径：移动工具下每帧只扫描当前可见拾取盒并提交三个
     /// ImGui 按钮；音频资源查找与加载仅在点击后发生。
     bool renderObjectAudioPreviewControls(
-        const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
-        float canvasScreenY, float targetWidth, float targetHeight,
-        float pointerX, float pointerY);
+        const Common::Render::RenderSnapshot& currentSnapshot,
+        float canvasScreenX, float canvasScreenY, float targetWidth,
+        float targetHeight, float pointerX, float pointerY);
     /// @brief 绘制批注标记区、悬浮详情和时间戳批注编辑弹窗。
     /// @param sourceManager 用于访问共享 Timeline 窗口中的批注表状态。
     /// @param currentSnapshot 当前主画布渲染快照。
@@ -171,10 +173,10 @@ private:
     /// @warning UI 热路径：只遍历当前快照已裁剪的可见批注标记；不访问 ECS、
     /// 文件系统或完整谱面。
     AnnotationGutterInteractionResult renderAnnotationGutter(
-        UI::UIManager*               sourceManager,
-        const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
-        float canvasScreenY, float targetWidth, float targetHeight,
-        float pointerX, float pointerY, bool canvasHovered);
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& currentSnapshot,
+        float canvasScreenX, float canvasScreenY, float targetWidth,
+        float targetHeight, float pointerX, float pointerY, bool canvasHovered);
     /// @brief 绘制并处理轨道、判定线与可选画布组件的布局编辑。
     /// @param pointerX 指针相对画布左侧的像素坐标。
     /// @param pointerY 指针相对画布顶部的像素坐标。
@@ -186,17 +188,16 @@ private:
     /// @param currentSnapshot 当前画布渲染快照。
     /// @warning UI 热路径：布局模式下每帧调用；仅允许常量级命中测试、
     /// ImGui 绘制和配置变更广播。
-    void handleLayoutEditing(float pointerX, float pointerY,
-                             float canvasScreenX, float canvasScreenY,
-                             float targetWidth, float targetHeight,
-                             bool                         isHovered,
-                             const Logic::RenderSnapshot& currentSnapshot);
+    void handleLayoutEditing(
+        float pointerX, float pointerY, float canvasScreenX,
+        float canvasScreenY, float targetWidth, float targetHeight,
+        bool isHovered, const Common::Render::RenderSnapshot& currentSnapshot);
     /// @brief 从当前渲染快照的物件拾取盒重建逐物件布局包围框。
     /// @param currentSnapshot 当前画布渲染快照。
     /// @warning UI 布局热路径：每帧只遍历当前可见拾取盒，不得扫描 ECS
     /// 或完整谱面。
     void rebuildNoteLayoutInstances(
-        const Logic::RenderSnapshot& currentSnapshot);
+        const Common::Render::RenderSnapshot& currentSnapshot);
     /// @brief 结束布局拖动，并在发生修改时持久化一次编辑器配置。
     /// @warning 低频路径：鼠标释放或退出布局模式时调用，允许写入配置文件。
     void finishLayoutEditing();
@@ -208,11 +209,10 @@ private:
     /// @param secondaryModifier 当前副修饰键状态。
     /// @return 需要发送命令时返回 true。
     /// @warning UI 热路径：拖动编辑期间每帧调用；只做常量级数值比较。
-    bool shouldSendContinuousEditCommand(LastContinuousEditCommand&   last,
-                                         glm::vec2                    pos,
-                                         const Logic::RenderSnapshot& snapshot,
-                                         bool primaryModifier,
-                                         bool secondaryModifier);
+    bool shouldSendContinuousEditCommand(
+        LastContinuousEditCommand& last, glm::vec2 pos,
+        const Common::Render::RenderSnapshot& snapshot, bool primaryModifier,
+        bool secondaryModifier);
     /// @brief 清空同一左键手势下的连续拖动编辑命令缓存。
     void resetContinuousEditCommands();
 

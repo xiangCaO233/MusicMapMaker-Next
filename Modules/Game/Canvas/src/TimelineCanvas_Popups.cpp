@@ -3,6 +3,7 @@
 #endif
 
 #include "canvas/TimelineCanvas.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -10,7 +11,6 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
@@ -124,7 +124,7 @@ double sanitizeTimingTableBpm(double bpm, double fallbackBpm)
 /// @brief 取得表格拍位换算使用的快照回退 BPM。
 /// @param snapshot 当前渲染快照。
 /// @return 有效回退 BPM。
-double timingTableFallbackBpm(const Logic::RenderSnapshot& snapshot)
+double timingTableFallbackBpm(const Common::Render::RenderSnapshot& snapshot)
 {
     return sanitizeTimingTableBpm(snapshot.fallbackBpm, 120.0);
 }
@@ -135,7 +135,7 @@ double timingTableFallbackBpm(const Logic::RenderSnapshot& snapshot)
 /// @warning UI 热路径：表格窗口打开时每帧调用，只遍历快照中的 Scroll
 /// 缓存，不访问文件系统。
 TimingTableBeatTimeline buildTimingTableBeatTimeline(
-    const Logic::RenderSnapshot& snapshot)
+    const Common::Render::RenderSnapshot& snapshot)
 {
     struct BpmEvent {
         /// @brief BPM 时间点，单位秒。
@@ -148,7 +148,7 @@ TimingTableBeatTimeline buildTimingTableBeatTimeline(
     std::vector<BpmEvent> bpmEvents;
     bpmEvents.reserve(snapshot.scrollSegments.size());
     for ( const auto& segment : snapshot.scrollSegments ) {
-        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ||
+        if ( (segment.effects & Common::Render::SCROLL_EFFECT_BPM) == 0 ||
              !std::isfinite(segment.time) ) {
             continue;
         }
@@ -651,22 +651,23 @@ void renderTimingTableHeaderContextMenu()
 
 /// @brief 从交互元素中提取主 Timing 类型
 ::MMM::TimingEffect getElementEffect(
-    const Logic::TimelineInteractiveElement& el)
+    const Common::Render::TimelineInteractiveElement& el)
 {
-    if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_BPM ) {
         return ::MMM::TimingEffect::BPM;
     }
-    if ( el.effects & Logic::System::SCROLL_EFFECT_JUMP ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_JUMP ) {
         return ::MMM::TimingEffect::JUMP;
     }
-    if ( el.effects & Logic::System::SCROLL_EFFECT_HS ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_HS ) {
         return ::MMM::TimingEffect::HS;
     }
     return ::MMM::TimingEffect::SCROLL;
 }
 
 /// @brief 获取 Timing 类型对应实体
-entt::entity getElementEntity(const Logic::TimelineInteractiveElement& el)
+entt::entity getElementEntity(
+    const Common::Render::TimelineInteractiveElement& el)
 {
     switch ( getElementEffect(el) ) {
     case ::MMM::TimingEffect::BPM: return el.bpmEntity;
@@ -678,7 +679,7 @@ entt::entity getElementEntity(const Logic::TimelineInteractiveElement& el)
 }
 
 /// @brief 获取 Timing 类型对应原始值
-double getElementRawValue(const Logic::TimelineInteractiveElement& el)
+double getElementRawValue(const Common::Render::TimelineInteractiveElement& el)
 {
     switch ( getElementEffect(el) ) {
     case ::MMM::TimingEffect::BPM: return el.bpmValue;
@@ -742,7 +743,7 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
 
 /// @brief 获取用于绑定时间点批量编辑窗口的谱面快照键。
 std::string_view getTimingPointsTableBeatmapKey(
-    const Logic::RenderSnapshot& snapshot)
+    const Common::Render::RenderSnapshot& snapshot)
 {
     if ( !snapshot.beatmapPathKey.empty() ) {
         return snapshot.beatmapPathKey;
@@ -767,9 +768,10 @@ const char* annotationTableTargetLabelKey(
 }
 
 /// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
-std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
+std::vector<Common::Render::TimelineInteractiveElement>
+collectTimelineElements()
 {
-    std::vector<Logic::TimelineInteractiveElement> elements;
+    std::vector<Common::Render::TimelineInteractiveElement> elements;
     auto& engine = Logic::EditorEngine::instance();
     std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
     auto                                  session = engine.getActiveSession();
@@ -781,24 +783,24 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 
     for ( auto entity : view ) {
         const auto& tc = view.get<const Logic::TimelineComponent>(entity);
-        Logic::TimelineInteractiveElement el;
+        Common::Render::TimelineInteractiveElement el;
         el.time = tc.m_timestamp;
         el.y    = 0.0f;
 
         if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-            el.effects   = Logic::System::SCROLL_EFFECT_BPM;
+            el.effects   = Common::Render::SCROLL_EFFECT_BPM;
             el.bpmEntity = entity;
             el.bpmValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
-            el.effects      = Logic::System::SCROLL_EFFECT_SCROLL;
+            el.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
             el.scrollEntity = entity;
             el.scrollValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
-            el.effects    = Logic::System::SCROLL_EFFECT_JUMP;
+            el.effects    = Common::Render::SCROLL_EFFECT_JUMP;
             el.jumpEntity = entity;
             el.jumpValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
-            el.effects  = Logic::System::SCROLL_EFFECT_HS;
+            el.effects  = Common::Render::SCROLL_EFFECT_HS;
             el.hsEntity = entity;
             el.hsValue  = tc.m_value;
         }
@@ -823,8 +825,8 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 /// @warning UI 快捷键低频路径：仅在复制或剪切时短暂持有 Session 锁，
 /// 遍历完整表格行并复制选中 Timing 元数据。
 bool copyTimingTableSelectionToClipboard(
-    const std::vector<Logic::TimelineInteractiveElement>& elements,
-    const std::unordered_set<entt::entity>&               selectedEntities,
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements,
+    const std::unordered_set<entt::entity>& selectedEntities,
     const TimingTableBeatTimeline& beatTimeline, double fallbackBpm)
 {
     auto& engine = Logic::EditorEngine::instance();
@@ -891,7 +893,7 @@ double getActiveSessionTimelineTime(double fallbackTime)
 /// @param targetTime 目标判定线时间，单位秒。
 /// @return 命中的可见行索引；无可用行时返回 -1。
 int findNearestTimelineElementIndex(
-    const std::vector<Logic::TimelineInteractiveElement>& elements,
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements,
     const std::vector<std::size_t>& visibleIndices, double targetTime)
 {
     if ( visibleIndices.empty() || !std::isfinite(targetTime) ) {
@@ -993,7 +995,7 @@ void createKeepSpeedScrollEvent(double time, double bpm)
 /// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
 /// @return 文本或步进按钮在当前帧改变秒值时返回 true。
 bool drawTimeEditor(const char* id, double& value,
-                    const Logic::RenderSnapshot* snapshot)
+                    const Common::Render::RenderSnapshot* snapshot)
 {
     auto preference =
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
@@ -1055,7 +1057,7 @@ void TimelineCanvas::beginKeepSpeedBinding(double time)
 
 /// @brief 刷新当前“保持画布速度”联动关联的实体。
 void TimelineCanvas::refreshKeepSpeedBinding(
-    const std::vector<Logic::TimelineInteractiveElement>& elements)
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements)
 {
     if ( !m_keepSpeedBindingActive ) return;
 
@@ -1071,11 +1073,11 @@ void TimelineCanvas::refreshKeepSpeedBinding(
     for ( const auto& el : elements ) {
         if ( std::abs(el.time - m_keepSpeedBindingTime) > 1e-6 ) continue;
 
-        if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+        if ( el.effects & Common::Render::SCROLL_EFFECT_BPM ) {
             m_keepSpeedBindingBpmEntity =
                 chooseNewest(m_keepSpeedBindingBpmEntity, el.bpmEntity);
         }
-        if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
+        if ( el.effects & Common::Render::SCROLL_EFFECT_SCROLL ) {
             m_keepSpeedBindingScrollEntity =
                 chooseNewest(m_keepSpeedBindingScrollEntity, el.scrollEntity);
         }
@@ -2276,7 +2278,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                      std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
                     for ( const auto& el : elements ) {
                         if ( el.effects &
-                             Logic::System::SCROLL_EFFECT_SCROLL ) {
+                             Common::Render::SCROLL_EFFECT_SCROLL ) {
                             double dispScroll =
                                 getDisplayValue(::MMM::TimingEffect::SCROLL,
                                                 el.scrollValue,

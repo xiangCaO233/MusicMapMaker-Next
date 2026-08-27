@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/ChartObjectKind.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/EditorConfig.h"
 #include "logic/PreviewDensity.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
@@ -31,7 +32,7 @@ class Project;
 namespace MMM::Logic
 {
 
-class BeatmapSyncBuffer;
+using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 
 /// @brief 相机/视口信息
 struct CameraInfo {

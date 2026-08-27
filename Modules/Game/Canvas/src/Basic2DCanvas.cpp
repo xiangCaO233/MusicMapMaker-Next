@@ -3,6 +3,7 @@
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
@@ -12,7 +13,6 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/CanvasCamera.h"
 #include "network/collaboration/CollaborationRoom.h"
@@ -90,14 +90,14 @@ bool isCurrentCanvasWindowVisible()
 /// @param time 远端视口边界的视觉时间。
 /// @return 与当前滚动分段一致的绝对 Y。
 /// @warning UI 热路径：每个远端用户最多调用两次，只执行一次二分查找。
-double collaborationAbsYAtTime(const Logic::RenderSnapshot& snapshot,
-                               double                       time)
+double collaborationAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
+                               double                                time)
 {
     const auto it = std::upper_bound(
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
         time,
-        [](double value, const Logic::System::ScrollSegment& segment) {
+        [](double value, const Common::Render::ScrollSegment& segment) {
             return value < segment.time;
         });
     const auto& segment = it == snapshot.scrollSegments.begin()
@@ -112,7 +112,7 @@ double collaborationAbsYAtTime(const Logic::RenderSnapshot& snapshot,
 /// @param canvasHeight 当前画布高度。
 /// @return 以主画布左上角为原点的 Y 坐标。
 /// @warning UI 热路径：只执行常量数值计算和两次滚动分段二分查找。
-float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
+float collaborationTimeToCanvasY(const Common::Render::RenderSnapshot& snapshot,
                                  double time, float canvasHeight)
 {
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
@@ -143,8 +143,8 @@ float collaborationTimeToCanvasY(const Logic::RenderSnapshot& snapshot,
 
 Basic2DCanvas::Basic2DCanvas(
     const std::string& name, uint32_t w, uint32_t h,
-    std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer,
-    const std::string&                        cameraId)
+    std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer,
+    const std::string&                                    cameraId)
     : IUIView(name)
     , IRenderableView(name)
     , m_canvasName(name)

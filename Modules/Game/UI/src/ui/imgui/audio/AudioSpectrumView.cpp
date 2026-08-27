@@ -486,7 +486,8 @@ void AudioSpectrumView::buildChannelGeometry(
 void AudioSpectrumView::renderChannelInteractionOverlay(
     const char* seekId, int channelIndex, ImVec2 groupMin, ImVec2 groupMax,
     double viewStart, double viewEnd, float globalVisualOffset,
-    double totalTime, double visualTime, const Logic::RenderSnapshot* snapshot)
+    double totalTime, double visualTime,
+    const Common::Render::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
