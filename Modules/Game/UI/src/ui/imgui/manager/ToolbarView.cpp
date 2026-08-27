@@ -13,6 +13,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/ICanvasView.h"
+#include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -355,13 +356,38 @@ std::string normalizePaletteExportPath(const std::string& path)
 
 ToolbarView::ToolbarView(const std::string& name) : IUIView(name) {}
 
+/// @brief 绑定工具栏使用的编辑器应用服务观察指针。
+void ToolbarView::setEditorApplicationService(
+    IEditorApplicationService* service)
+{
+    m_editorApplicationService = service;
+}
+
+Config::EditorConfig ToolbarView::currentEditorConfig() const
+{
+    return m_editorApplicationService
+               ? m_editorApplicationService->editorConfig()
+               : Config::AppConfig::instance().getEditorConfig();
+}
+
+void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
+{
+    if ( m_editorApplicationService ) {
+        m_editorApplicationService->updateEditorConfig(config);
+    }
+}
+
 void ToolbarView::update(UIManager* sourceManager)
 {
+    setEditorApplicationService(
+        sourceManager ? sourceManager->getEditorApplicationService() : nullptr);
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     // 从逻辑引擎同步当前工具状态
-    m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
+    if ( m_editorApplicationService ) {
+        m_currentTool = m_editorApplicationService->currentTool();
+    }
     if ( m_currentTool != Logic::EditTool::Layout ) {
         m_showLayoutPopup = false;
     }
@@ -451,7 +477,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
         auto&       engine      = Logic::EditorEngine::instance();
-        const auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
+        const auto  editorCfg   = currentEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
         m_beatLineDisplayModeHistory.observe(
             editorCfg.visual.beatLineDisplayMode);
@@ -477,7 +503,9 @@ void ToolbarView::update(UIManager* sourceManager)
             }
             auto newConfig = editorCfg;
             applyChange(newConfig);
-            engine.setEditorConfig(newConfig);
+            if ( m_editorApplicationService ) {
+                m_editorApplicationService->updateEditorConfig(newConfig);
+            }
             return true;
         };
 
@@ -567,7 +595,9 @@ void ToolbarView::update(UIManager* sourceManager)
                                 showToolLabels) ) {
                 auto newConfig = editorCfg;
                 applyChange(newConfig);
-                engine.setEditorConfig(newConfig);
+                if ( m_editorApplicationService ) {
+                    m_editorApplicationService->updateEditorConfig(newConfig);
+                }
             }
             ImGui::PopID();
             std::string tooltipText = tooltipWithShortcut(tooltip, binding);
@@ -909,7 +939,9 @@ void ToolbarView::update(UIManager* sourceManager)
         };
 
         if ( independentButtonVisibility.playback ) {
-            const bool playbackPlaying = engine.isPlaybackPlaying();
+            const bool playbackPlaying =
+                m_editorApplicationService &&
+                m_editorApplicationService->isPlaybackPlaying();
             drawRuntimeToggleButton(
                 playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
                 playbackPlaying,
@@ -1127,7 +1159,7 @@ void ToolbarView::update(UIManager* sourceManager)
                             ImVec2(itemSpacing, itemSpacing));
 
         if ( ImGui::Begin("##BeatDivisorPopup", nullptr, popupFlags) ) {
-            auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            auto editorCfg      = currentEditorConfig();
             int  currentDivisor = editorCfg.settings.beatDivisor;
 
             ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor").data());
@@ -1138,7 +1170,7 @@ void ToolbarView::update(UIManager* sourceManager)
                      "##DivisorSlider", &currentDivisor, 1, 64) ) {
                 auto newConfig                 = editorCfg;
                 newConfig.settings.beatDivisor = currentDivisor;
-                Logic::EditorEngine::instance().setEditorConfig(newConfig);
+                updateEditorConfig(newConfig);
             }
             if ( ImGui::IsItemHovered() ) {
                 Utils::renderTooltip(
@@ -1179,7 +1211,7 @@ void ToolbarView::update(UIManager* sourceManager)
                          buf, ImVec2(presetButtonWidth, presetButtonHeight)) ) {
                     auto newConfig                 = editorCfg;
                     newConfig.settings.beatDivisor = commonDivisors[i];
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
+                    updateEditorConfig(newConfig);
                 }
             }
             ImGui::PopStyleVar();
@@ -1503,7 +1535,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     ImGui::Separator();
 
     auto&      audio        = Audio::AudioManager::instance();
-    const auto editorConfig = engine.getEditorConfig();
+    const auto editorConfig = currentEditorConfig();
     if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
         m_unboundHitSoundGainDraft =
             editorConfig.settings.sfxConfig.unboundHitSfxGain;
@@ -1656,10 +1688,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
                 m_unboundHitSoundGainDraft,
                 2.0F,
-                [&engine](bool muted) {
-                    auto config = engine.getEditorConfig();
+                [this, &engine](bool muted) {
+                    auto config = currentEditorConfig();
                     config.settings.sfxConfig.enableUnboundHitSfx = !muted;
-                    engine.setEditorConfig(config);
+                    updateEditorConfig(config);
                 },
                 [this, &engine](float gain) {
                     m_unboundHitSoundGainDraft = gain;
@@ -1668,10 +1700,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                         .gain  = gain,
                     });
                 },
-                [&engine](float gain) {
-                    auto config = engine.getEditorConfig();
+                [this, &engine](float gain) {
+                    auto config = currentEditorConfig();
                     config.settings.sfxConfig.unboundHitSfxGain = gain;
-                    engine.setEditorConfig(config);
+                    updateEditorConfig(config);
                 });
             continue;
         }
@@ -1682,10 +1714,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 !editorConfig.settings.sfxConfig.enableBoundHitSfx,
                 m_boundHitSoundGainDraft,
                 2.0F,
-                [&engine](bool muted) {
-                    auto config = engine.getEditorConfig();
+                [this, &engine](bool muted) {
+                    auto config = currentEditorConfig();
                     config.settings.sfxConfig.enableBoundHitSfx = !muted;
-                    engine.setEditorConfig(config);
+                    updateEditorConfig(config);
                 },
                 [this, &engine](float gain) {
                     m_boundHitSoundGainDraft = gain;
@@ -1694,10 +1726,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                         .gain  = gain,
                     });
                 },
-                [&engine](float gain) {
-                    auto config = engine.getEditorConfig();
+                [this, &engine](float gain) {
+                    auto config = currentEditorConfig();
                     config.settings.sfxConfig.boundHitSfxGain = gain;
-                    engine.setEditorConfig(config);
+                    updateEditorConfig(config);
                 });
             continue;
         }
@@ -1709,10 +1741,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             drawMuteOnlyRow(TR("ui.key_sound_tool.area_master").data(),
                             "PlayerArea",
                             !editorConfig.settings.sfxConfig.enableHitSfx,
-                            [&engine](bool muted) {
-                                auto config = engine.getEditorConfig();
+                            [this, &engine](bool muted) {
+                                auto config = currentEditorConfig();
                                 config.settings.sfxConfig.enableHitSfx = !muted;
-                                engine.setEditorConfig(config);
+                                updateEditorConfig(config);
                             });
             continue;
         }
@@ -1770,7 +1802,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 TR("ui.key_sound_tool.area_master").data(),
                 "BgmArea",
                 audio.isBgmKeySoundAreaMuted(),
-                [&engine](bool muted) {
+                [this, &engine](bool muted) {
                     engine.pushCommand(
                         Logic::CmdSetBgmKeySoundAreaMute{ .muted = muted });
                 });
@@ -1974,13 +2006,13 @@ void ToolbarView::pushPaletteToSelection()
 void ToolbarView::pushBeatLinePaletteToRenderer()
 {
     auto& engine                         = Logic::EditorEngine::instance();
-    auto  config                         = engine.getEditorConfig();
+    auto  config                         = currentEditorConfig();
     config.visual.overrideBeatLineColors = m_overrideBeatLinePalette;
     for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
         config.visual.beatLineColors[i] =
             toStoredColor(m_beatLinePaletteColors[i]);
     }
-    engine.setEditorConfig(config);
+    updateEditorConfig(config);
 }
 
 void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
@@ -2995,8 +3027,7 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             if ( tool == Logic::EditTool::ColorBrush ) {
                 pushPaletteToBrush();
             }
-            Logic::EditorEngine::instance().pushCommand(
-                Logic::CmdChangeTool{ tool });
+            MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
             if ( sourceManager ) {
                 auto* timeline = sourceManager->getCanvasView("TimelineWindow");
                 if ( timeline && timeline->wasFocusedLastFrame() ) {
@@ -3053,8 +3084,7 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
             m_showSoundEffectTool = false;
         }
         m_currentTool = nextTool;
-        Logic::EditorEngine::instance().pushCommand(
-            Logic::CmdChangeTool{ nextTool });
+        MenuUtil::dispatchCommand(Logic::CmdChangeTool{ nextTool });
     }
     m_lastLayoutBtnY = ImGui::GetItemRectMin().y;
     ImGui::PopID();
@@ -3113,7 +3143,7 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
 
         auto editorConfig  = appConfig.getEditorConfig();
         auto persistConfig = [&]() {
-            Logic::EditorEngine::instance().setEditorConfig(editorConfig);
+            updateEditorConfig(editorConfig);
             appConfig.save();
         };
 
@@ -3260,7 +3290,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
             }
             auto updatedConfig = appConfig.getEditorConfig();
             updatedConfig.visual.beatLineDisplayMode = candidate;
-            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            updateEditorConfig(updatedConfig);
             m_beatLineDisplayModeHistory.observe(candidate);
             appConfig.save();
             m_beatLinePopupConfigDirty = false;
@@ -3295,7 +3325,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.beatLineCursorVisibleRatio =
                     visiblePercent * 0.01f;
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 m_beatLinePopupConfigDirty = true;
             }
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3317,7 +3347,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.beatLineCursorFadeRatio =
                     fadePercent * 0.01f;
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 m_beatLinePopupConfigDirty = true;
             }
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3419,8 +3449,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                      TR("ui.toolbar.layout_disable_vertical_object_drag")
                          .data(),
                      &dragSettings.disableVerticalObjectDrag) ) {
-                Logic::EditorEngine::instance().setEditorConfig(
-                    appConfig.getEditorConfig());
+                updateEditorConfig(appConfig.getEditorConfig());
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -3441,7 +3470,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
             auto updatedConfig   = appConfig.getEditorConfig();
             updatedConfig.visual = visual;
-            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+            updateEditorConfig(updatedConfig);
         };
         const auto saveVisualAfterEdit = [&]() {
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3462,7 +3491,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 resetConfig(updatedConfig);
                 appConfig.getEditorConfig() = updatedConfig;
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
                 m_layoutVisualConfigDirty = false;
             }
@@ -3704,7 +3733,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
                     updatedConfig.visual.background.spectrum.enabled = visible;
                 }
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
 
@@ -3759,7 +3788,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     updatedConfig.visual.background.spectrum.baselineRatio =
                         defaults.baselineRatio;
                 }
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -3785,8 +3814,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         .editableCanvasComponentsForKeyCount(keyCount)
                         .placement(type)
                         .color = toStoredColor(editableColor);
-                    Logic::EditorEngine::instance().setEditorConfig(
-                        updatedConfig);
+                    updateEditorConfig(updatedConfig);
                     m_layoutComponentColorDirty = true;
                 }
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3821,8 +3849,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         updatedConfig.visual
                             .canvasComponentsForKeyCount(keyCount)
                             .backgroundSpectrum.visible;
-                    Logic::EditorEngine::instance().setEditorConfig(
-                        updatedConfig);
+                    updateEditorConfig(updatedConfig);
                 };
             const auto saveSpectrumAfterEdit = [&]() {
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3994,7 +4021,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .syncKpsTrackSizes = syncKpsTrackSizes;
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -4014,7 +4041,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncKpsTrackRelativePositions(
                         syncKpsTrackRelativePositions);
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -4035,7 +4062,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncAllKpsComponentPositions(
                         syncAllKpsComponentPositions);
-                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
+                updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {

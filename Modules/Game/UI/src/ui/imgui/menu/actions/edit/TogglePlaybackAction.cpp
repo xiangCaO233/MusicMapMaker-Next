@@ -1,5 +1,5 @@
 #include "config/AppConfig.h"
-#include "logic/EditorEngine.h"
+#include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
@@ -41,11 +41,13 @@ public:
     const char* icon(const MainMenuContext& context,
                      const char*            fallbackIcon) const override
     {
-        (void)context;
         (void)fallbackIcon;
-        return Logic::EditorEngine::instance().isPlaybackPlaying()
-                   ? ICON_MMM_PAUSE
-                   : ICON_MMM_PLAY;
+        const auto* service =
+            context.sourceManager
+                ? context.sourceManager->getEditorApplicationService()
+                : nullptr;
+        return service && service->isPlaybackPlaying() ? ICON_MMM_PAUSE
+                                                       : ICON_MMM_PLAY;
     }
 
     /// @brief 获取用户配置的播放切换快捷键提示。
@@ -66,9 +68,13 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        const bool playing =
-            Logic::EditorEngine::instance().isPlaybackPlaying();
-        MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ !playing });
+        const auto* service =
+            context.sourceManager
+                ? context.sourceManager->getEditorApplicationService()
+                : nullptr;
+        if ( !service ) return;
+        MenuUtil::dispatchCommand(
+            Logic::CmdSetPlayState{ !service->isPlaybackPlaying() });
     }
 
     /// @brief 消费播放暂停快捷键，并保留 BPM 工具对空格键的专用路由。
@@ -108,13 +114,17 @@ public:
 
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
-        auto& engine = Logic::EditorEngine::instance();
-        bool  playbackShortcutPressed =
+        const auto* service =
+            context.sourceManager
+                ? context.sourceManager->getEditorApplicationService()
+                : nullptr;
+        if ( !service ) return false;
+        bool playbackShortcutPressed =
             ShortcutUtils::isShortcutPressed(shortcutConfig.togglePlayback);
         // 画笔绘制期间 Shift 是交互修饰键，继续允许它叠加在用户绑定上。
         if ( !playbackShortcutPressed && io.KeyShift &&
              !shortcutConfig.togglePlayback.shift &&
-             engine.isActiveSessionDrawingBrush() ) {
+             service->isDrawingBrush() ) {
             auto shiftedBinding  = shortcutConfig.togglePlayback;
             shiftedBinding.shift = true;
             playbackShortcutPressed =
@@ -134,9 +144,9 @@ public:
             const bool allowPlaybackToggle =
                 shouldAllowPlaybackToggleWhileItemActive(
                     io.KeyShift,
-                    engine.isActiveSessionSelectingMarquee(),
-                    engine.isActiveSessionDraggingNote(),
-                    engine.isActiveSessionDrawingBrush(),
+                    service->isSelectingMarquee(),
+                    service->isDraggingNote(),
+                    service->isDrawingBrush(),
                     timelineTimingDragging,
                     timelineMarqueeSelecting);
             if ( !allowPlaybackToggle ) return false;

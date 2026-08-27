@@ -20,6 +20,27 @@ public:
     /// @copydoc UI::IEditorApplicationService::markProjectAudioToolOpenAndSave
     void markProjectAudioToolOpenAndSave() override;
 
+    /// @copydoc UI::IEditorApplicationService::currentTool
+    [[nodiscard]] Logic::EditTool currentTool() const override;
+
+    /// @copydoc UI::IEditorApplicationService::editorConfig
+    [[nodiscard]] Config::EditorConfig editorConfig() const override;
+
+    /// @copydoc UI::IEditorApplicationService::updateEditorConfig
+    void updateEditorConfig(const Config::EditorConfig& config) override;
+
+    /// @copydoc UI::IEditorApplicationService::isPlaybackPlaying
+    [[nodiscard]] bool isPlaybackPlaying() const override;
+
+    /// @copydoc UI::IEditorApplicationService::isSelectingMarquee
+    [[nodiscard]] bool isSelectingMarquee() const override;
+
+    /// @copydoc UI::IEditorApplicationService::isDraggingNote
+    [[nodiscard]] bool isDraggingNote() const override;
+
+    /// @copydoc UI::IEditorApplicationService::isDrawingBrush
+    [[nodiscard]] bool isDrawingBrush() const override;
+
     /// @copydoc UI::IEditorApplicationService::requestAutoSave
     void requestAutoSave(UI::EditorAutoSaveReason reason) override;
 

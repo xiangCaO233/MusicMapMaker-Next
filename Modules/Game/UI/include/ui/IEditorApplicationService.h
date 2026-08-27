@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/EditTool.h"
+#include "config/EditorConfig.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/project/ProjectSettings.h"
 #include <cstdint>
@@ -48,6 +50,33 @@ public:
 
     /// @brief 标记项目音频工具已经打开并保存项目。
     virtual void markProjectAudioToolOpenAndSave() = 0;
+
+    /// @brief 获取当前编辑器工具。
+    /// @warning UI 热路径：只读取无锁标量状态。
+    [[nodiscard]] virtual Logic::EditTool currentTool() const = 0;
+
+    /// @brief 获取当前逻辑线程编辑器配置快照。
+    /// @warning UI 热路径：返回配置值副本，不得执行文件 I/O。
+    [[nodiscard]] virtual Config::EditorConfig editorConfig() const = 0;
+
+    /// @brief 更新逻辑线程编辑器配置。
+    virtual void updateEditorConfig(const Config::EditorConfig& config) = 0;
+
+    /// @brief 获取当前播放状态。
+    /// @warning UI 热路径：只读取播放标量状态。
+    [[nodiscard]] virtual bool isPlaybackPlaying() const = 0;
+
+    /// @brief 判断活动会话是否正在框选物件。
+    /// @warning UI 热路径：只读取活动交互状态。
+    [[nodiscard]] virtual bool isSelectingMarquee() const = 0;
+
+    /// @brief 判断活动会话是否正在拖动物件。
+    /// @warning UI 热路径：只读取活动交互状态。
+    [[nodiscard]] virtual bool isDraggingNote() const = 0;
+
+    /// @brief 判断活动会话是否正在绘制画笔。
+    /// @warning UI 热路径：只读取活动交互状态。
+    [[nodiscard]] virtual bool isDrawingBrush() const = 0;
 
     /// @brief 请求当前活动谱面自动保存。
     /// @warning UI 热路径低频分支：只设置 Logic 原子事件位，不执行文件 I/O。

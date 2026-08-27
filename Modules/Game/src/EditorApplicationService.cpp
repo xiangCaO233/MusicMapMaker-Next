@@ -45,6 +45,42 @@ void EditorApplicationService::markProjectAudioToolOpenAndSave()
     engine.saveProject();
 }
 
+Logic::EditTool EditorApplicationService::currentTool() const
+{
+    return Logic::EditorEngine::instance().getCurrentTool();
+}
+
+Config::EditorConfig EditorApplicationService::editorConfig() const
+{
+    return Logic::EditorEngine::instance().getEditorConfig();
+}
+
+void EditorApplicationService::updateEditorConfig(
+    const Config::EditorConfig& config)
+{
+    Logic::EditorEngine::instance().setEditorConfig(config);
+}
+
+bool EditorApplicationService::isPlaybackPlaying() const
+{
+    return Logic::EditorEngine::instance().isPlaybackPlaying();
+}
+
+bool EditorApplicationService::isSelectingMarquee() const
+{
+    return Logic::EditorEngine::instance().isActiveSessionSelectingMarquee();
+}
+
+bool EditorApplicationService::isDraggingNote() const
+{
+    return Logic::EditorEngine::instance().isActiveSessionDraggingNote();
+}
+
+bool EditorApplicationService::isDrawingBrush() const
+{
+    return Logic::EditorEngine::instance().isActiveSessionDrawingBrush();
+}
+
 void EditorApplicationService::requestAutoSave(UI::EditorAutoSaveReason reason)
 {
     const auto trigger =
