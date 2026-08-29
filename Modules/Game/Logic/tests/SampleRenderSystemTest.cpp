@@ -118,6 +118,7 @@ bool testLaneLayoutVisuals()
     MMM::Logic::System::SampleRenderSystem::renderLaneLayout(
         batcher,
         projection,
+        0,
         persistentBgmTrackCount,
         viewportWidth,
         topY,
@@ -186,6 +187,55 @@ bool testLaneLayoutVisuals()
     return true;
 }
 
+/// @brief 验证草稿轨道标题按追加轨及持久轨顺序绘制。
+/// @return 可见标题依次为 DRAFT +、DRAFT 1 与 DRAFT 2 时返回 true。
+bool testDraftLaneLabels()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::None),
+        glm::vec4{ 0.1F, 0.2F, 0.04F, 0.06F });
+    configureAsciiFont(snapshot);
+
+    constexpr float viewportWidth = 800.0F;
+    const auto      projection    = MMM::Logic::calculateCanvasLaneProjection(
+        viewportWidth, 4, 0, 0.5F, 0.9F, 300.0F, true, false, true, 2, true);
+    const auto visibleRange = projection.visibleDraftRange(0.0F, viewportWidth);
+    if ( !visibleRange || visibleRange->first != 0U ||
+         visibleRange->second != 3U ) {
+        XERROR("Draft lanes were not visible for label rendering");
+        return false;
+    }
+
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    MMM::Logic::System::SampleRenderSystem::renderLaneLayout(
+        batcher, projection, 2, 0, viewportWidth, 10.0F, 590.0F);
+    batcher.flush();
+
+    const auto hasGlyphAt = [&](char glyph, std::uint32_t laneIndex) {
+        const auto bounds =
+            projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, laneIndex });
+        if ( !bounds ) return false;
+        const float expectedU =
+            0.6F +
+            static_cast<float>(glyph - MMM::Common::ASCII_GLYPH_FIRST) * 0.001F;
+        std::uint32_t count = 0U;
+        for ( std::size_t vertexIndex = 0U;
+              vertexIndex + 3U < snapshot.vertices.size();
+              vertexIndex += 4U ) {
+            const auto* quad = snapshot.vertices.data() + vertexIndex;
+            if ( near(quad[0].uv.u, expectedU) &&
+                 quad[0].pos.x >= bounds->leftX &&
+                 quad[0].pos.x < bounds->rightX ) {
+                ++count;
+            }
+        }
+        return count == 1U;
+    };
+
+    return hasGlyphAt('+', 0U) && hasGlyphAt('1', 1U) && hasGlyphAt('2', 2U);
+}
+
 /// @brief 验证窄 BGM 轨道标题会在轨道范围内自动滚动。
 /// @return 同一字形随单调时钟左移且始终受轨道宽度裁剪时返回 true。
 bool testNarrowLaneLabelMarquee()
@@ -211,7 +261,7 @@ bool testNarrowLaneLabelMarquee()
 
         MMM::Logic::System::Batcher batcher(&snapshot);
         MMM::Logic::System::SampleRenderSystem::renderLaneLayout(
-            batcher, projection, 3, firstLane->rightX, 10.0F, 590.0F);
+            batcher, projection, 0, 3, firstLane->rightX, 10.0F, 590.0F);
         batcher.flush();
 
         constexpr float glyphU =
@@ -718,7 +768,8 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
 /// @return 全部测试通过时返回 0。
 int main()
 {
-    return testLaneLayoutVisuals() && testNarrowLaneLabelMarquee() &&
+    return testLaneLayoutVisuals() && testDraftLaneLabels() &&
+                   testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleInteractionGlow() && testSampleLabelMarquee() &&

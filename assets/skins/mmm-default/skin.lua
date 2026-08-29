@@ -71,6 +71,15 @@ local Skin = {
 			note_flick_arrow = { 1.0, 0.79, 0.43, 0.96 },
 		},
 
+		-- 草稿轨道底板、边框、判定区与标题配色
+		draft_tracks = {
+			texture_tint = { 1.0, 1.0, 1.0, 1.0 },
+			overlay = { 0.08, 0.12, 0.18, 0.48 },
+			border = { 0.35, 0.55, 0.75, 1.0 },
+			judgment_tint = { 1.0, 1.0, 1.0, 1.0 },
+			label = { 0.96, 0.69, 0.52, 0.92 },
+		},
+
 		-- BGM 轨道与自动采样配色
 		bgm_tracks = {
 			background = { 0.035, 0.055, 0.075, 0.92 },

@@ -1006,6 +1006,7 @@ return {
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "Time",
 	["ui.canvas.track"] = "Track",
+	["ui.canvas.draft_track"] = "DRAFT Track",
 	["ui.canvas.bgm_track"] = "BGM Track",
 	["ui.canvas.snap"] = "Snap",
 	["ui.canvas.beat_divisor"] = "Divisor",

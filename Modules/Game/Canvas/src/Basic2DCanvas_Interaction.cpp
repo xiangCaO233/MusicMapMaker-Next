@@ -70,6 +70,42 @@ constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
 /// @brief 画布悬浮信息窗口的纵向元素间距。
 constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
 
+/// @brief 按轨道区域绘制一基轨道编号。
+/// @param labelPrefix 可选的物件部件说明。
+/// @param track 统一画布有符号轨道。
+/// @param trackCount 玩家轨道数量。
+/// @param draftTrackCount 持久化草稿轨道数量。
+/// @param color 文本颜色；为空时使用 ImGui 默认文本颜色。
+/// @warning UI 热路径：悬浮信息可见时每帧调用，只执行常量级格式化与绘制。
+void renderHoverTrack(const char* labelPrefix, std::int32_t track,
+                      std::int32_t trackCount, std::int32_t draftTrackCount,
+                      const ImVec4* color = nullptr)
+{
+    const auto draw = [&](const char* label, std::int32_t number) {
+        if ( color ) {
+            if ( labelPrefix ) {
+                ImGui::TextColored(
+                    *color, "%s %s: %d", labelPrefix, label, number);
+            } else {
+                ImGui::TextColored(*color, "%s: %d", label, number);
+            }
+        } else if ( labelPrefix ) {
+            ImGui::Text("%s %s: %d", labelPrefix, label, number);
+        } else {
+            ImGui::Text("%s: %d", label, number);
+        }
+    };
+
+    if ( track < 0 ) {
+        draw(TR("ui.canvas.draft_track").data(),
+             Logic::draftTrackDisplayNumber(track, draftTrackCount));
+    } else if ( track >= trackCount ) {
+        draw(TR("ui.canvas.bgm_track").data(), track - trackCount + 1);
+    } else {
+        draw(TR("ui.canvas.track").data(), track + 1);
+    }
+}
+
 /// @brief 绘制当前悬浮批注所指向物件的高对比几何提示。
 /// @param bounds 批注目标在画布局部坐标中的提示边界。
 /// @param canvasPosition 画布左上角屏幕坐标。
@@ -3465,24 +3501,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     TR("ui.canvas.note_time").data(),
                                     timeText.c_str());
                                 if ( showTrack ) {
-                                    if ( point.track >=
-                                         currentSnapshot->trackCount ) {
-                                        ImGui::TextColored(
-                                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                            "%s %s: %d",
-                                            label.data(),
-                                            TR("ui.canvas.bgm_track").data(),
-                                            point.track -
-                                                currentSnapshot->trackCount +
-                                                1);
-                                    } else {
-                                        ImGui::TextColored(
-                                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                            "%s %s: %d",
-                                            label.data(),
-                                            TR("ui.canvas.track").data(),
-                                            point.track + 1);
-                                    }
+                                    const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
+                                    renderHoverTrack(
+                                        label.data(),
+                                        point.track,
+                                        currentSnapshot->trackCount,
+                                        currentSnapshot->draftTrackCount,
+                                        &color);
                                 }
                             };
 
@@ -3566,10 +3591,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                                   Common::Render::HoverInspectKind::HoldBody ||
                               inspect.kind == Common::Render::HoverInspectKind::
                                                   PolylineHoldBody) ) {
-                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                               "%s: %d",
-                                               TR("ui.canvas.track").data(),
-                                               inspect.track + 1);
+                            const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
+                            renderHoverTrack(nullptr,
+                                             inspect.track,
+                                             currentSnapshot->trackCount,
+                                             currentSnapshot->draftTrackCount,
+                                             &color);
                         }
                         if ( inspect.showAudioPreview ) {
                             ImGui::TextWrapped(
@@ -3660,17 +3687,10 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     currentSnapshot->hoveredBeatIndex);
                     }
 
-                    if ( currentSnapshot->hoveredTrack >=
-                         currentSnapshot->trackCount ) {
-                        ImGui::Text("%s: %d",
-                                    TR("ui.canvas.bgm_track").data(),
-                                    currentSnapshot->hoveredTrack -
-                                        currentSnapshot->trackCount + 1);
-                    } else {
-                        ImGui::Text("%s: %d",
-                                    TR("ui.canvas.track").data(),
-                                    currentSnapshot->hoveredTrack + 1);
-                    }
+                    renderHoverTrack(nullptr,
+                                     currentSnapshot->hoveredTrack,
+                                     currentSnapshot->trackCount,
+                                     currentSnapshot->draftTrackCount);
 
                     ImGui::Spacing();
                     ImGui::Separator();

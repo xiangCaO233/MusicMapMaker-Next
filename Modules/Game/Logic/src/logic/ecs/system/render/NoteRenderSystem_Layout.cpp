@@ -99,7 +99,8 @@ void NoteRenderSystem::renderTrackLayout(
 
 void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                            float leftX, float topY,
-                                           float bottomY, float singleTrackW)
+                                           float bottomY, float singleTrackW,
+                                           glm::vec4 color)
 {
     if ( trackCount <= 0 || singleTrackW <= 0.001f ) return;
 
@@ -148,7 +149,7 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                actualDrawH + 0.5f,
                                glm::vec2(uMin, finalVMin),
                                glm::vec2(uMax, finalVMax),
-                               { 1.0f, 1.0f, 1.0f, 1.0f });
+                               color);
 
             currentY -= drawH;
         }
@@ -158,7 +159,8 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
 void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                         float leftX, float judgmentLineY,
                                         float singleTrackW, float trackAreaW,
-                                        const Config::EditorConfig& config)
+                                        const Config::EditorConfig& config,
+                                        glm::vec4                   color)
 {
     batcher.setTexture(TextureID::JudgeArea);
     auto judgeUvIt = batcher.snapshot->uvMap.find(
@@ -190,16 +192,13 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                     glm::vec2(
                         judgeUvIt->second.x + judgeUvIt->second.z - halfPixelU,
                         judgeUvIt->second.y + judgeUvIt->second.w - halfPixelV),
-                    { 1.0f, 1.0f, 1.0f, 1.0f });
+                    color);
             }
         }
     } else {
         batcher.setTexture(TextureID::None);
-        batcher.pushQuad(leftX,
-                         judgmentLineY + 2.0f * 0.5f,
-                         trackAreaW,
-                         2.0f,
-                         { 1.0f, 1.0f, 1.0f, 1.0f });
+        batcher.pushQuad(
+            leftX, judgmentLineY + 2.0f * 0.5f, trackAreaW, 2.0f, color);
     }
 }
 

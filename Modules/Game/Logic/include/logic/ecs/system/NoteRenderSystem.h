@@ -4,6 +4,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <entt/entt.hpp>
+#include <glm/vec4.hpp>
 #include <vector>
 
 namespace MMM::Logic
@@ -108,17 +109,22 @@ private:
                                   float& bottomY, float& trackAreaW,
                                   float& singleTrackW, float renderScaleY);
 
+    /// @param color 轨道纹理叠加色。
     /// @warning 热路径：轨道布局生成时执行；循环次数必须受 trackCount
     /// 和可见高度限制。
     static void drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                     float leftX, float topY, float bottomY,
-                                    float singleTrackW);
+                                    float     singleTrackW,
+                                    glm::vec4 color = {
+                                        1.0F, 1.0F, 1.0F, 1.0F });
 
+    /// @param color 判定区纹理或回退线条的叠加色。
     /// @warning 热路径：轨道布局生成时执行；禁止读取磁盘或访问全量 ECS。
     static void drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                  float leftX, float judgmentLineY,
                                  float singleTrackW, float trackAreaW,
-                                 const Config::EditorConfig& config);
+                                 const Config::EditorConfig& config,
+                                 glm::vec4 color = { 1.0F, 1.0F, 1.0F, 1.0F });
 
     /// @param allowHoverSubdivisionPreview
     /// 是否允许绘制主画布玩家轨道的悬浮检视或编辑手势分拍预览。

@@ -214,7 +214,7 @@ bool readPngDimensions(const std::filesystem::path& path, std::uint32_t& width,
 /// @brief 验证内置皮肤声明完整且与正式物件不同的草稿区配色。
 /// @param skinPath 内置皮肤入口路径。
 /// @param translationsRoot 默认翻译资源目录。
-/// @return 六种草稿物件颜色均存在且与正式物件可区分时返回 true。
+/// @return 草稿物件和轨道颜色均存在且物件与正式区可区分时返回 true。
 bool verifyDraftPalette(const std::filesystem::path& skinPath,
                         const std::filesystem::path& translationsRoot)
 {
@@ -222,15 +222,18 @@ bool verifyDraftPalette(const std::filesystem::path& skinPath,
     bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
                                           translationsRoot),
                      "内置皮肤草稿配色检查前应成功加载");
-    constexpr std::array<std::string_view, 6> DRAFT_COLOR_KEYS{
-        "draft_notes.note_tap",  "draft_notes.note_head",
-        "draft_notes.note_hold", "draft_notes.note_end",
-        "draft_notes.note_node", "draft_notes.note_flick_arrow",
+    constexpr std::array<std::string_view, 11> DRAFT_COLOR_KEYS{
+        "draft_notes.note_tap",      "draft_notes.note_head",
+        "draft_notes.note_hold",     "draft_notes.note_end",
+        "draft_notes.note_node",     "draft_notes.note_flick_arrow",
+        "draft_tracks.texture_tint", "draft_tracks.overlay",
+        "draft_tracks.border",       "draft_tracks.judgment_tint",
+        "draft_tracks.label",
     };
     const auto& colors = skinManager.getData().colors;
     for ( const auto key : DRAFT_COLOR_KEYS ) {
         ok &= check(colors.contains(std::string(key)),
-                    "内置皮肤必须声明完整草稿区配色");
+                    "内置皮肤必须声明完整草稿物件与轨道配色");
     }
     if ( !ok ) return false;
 

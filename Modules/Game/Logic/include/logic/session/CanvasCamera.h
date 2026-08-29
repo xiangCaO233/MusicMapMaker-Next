@@ -73,6 +73,19 @@ struct CanvasLaneAddress {
     bool operator==(const CanvasLaneAddress&) const = default;
 };
 
+/// @brief 将草稿负轨道换算为面向用户的一基 DRAFT 轨道编号。
+/// @param absoluteTrack 草稿区统一画布负轨道。
+/// @param persistentDraftTrackCount 持久化草稿轨道数量。
+/// @return 当前持久轨编号；运行时追加轨返回确认扩充后将使用的 1。
+/// @warning 逻辑与 UI 热路径可能每帧调用；只允许常量级整数运算。
+[[nodiscard]] inline std::int32_t draftTrackDisplayNumber(
+    std::int32_t absoluteTrack, std::int32_t persistentDraftTrackCount)
+{
+    const auto count = std::max(0, persistentDraftTrackCount);
+    if ( absoluteTrack < -count ) return 1;
+    return std::max(1, absoluteTrack + count + 1);
+}
+
 /// @brief 单条统一画布轨道的逻辑像素边界。
 struct CanvasLaneBounds {
     /// @brief 左边界。
@@ -223,6 +236,36 @@ struct CanvasLaneProjection {
             return CanvasLaneAddress{ CanvasLaneKind::Bgm, index };
         }
         return std::nullopt;
+    }
+
+    /// @brief 计算视口内可见的草稿轨道索引半开区间。
+    /// @param viewportLeft 视口左边界。
+    /// @param viewportRight 视口右边界。
+    /// @return `[begin,end)`；没有可见草稿轨时返回空。
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    visibleDraftRange(float viewportLeft, float viewportRight) const
+    {
+        if ( !valid || draftLaneCount == 0 || !std::isfinite(viewportLeft) ||
+             !std::isfinite(viewportRight) ) {
+            return std::nullopt;
+        }
+        if ( viewportLeft > viewportRight ) {
+            std::swap(viewportLeft, viewportRight);
+        }
+        if ( viewportRight <= draftLeftX || viewportLeft >= draftRightX ) {
+            return std::nullopt;
+        }
+
+        const auto begin = static_cast<std::uint32_t>(std::clamp(
+            std::floor((viewportLeft - draftLeftX) / player.singleTrackWidth),
+            0.0F,
+            static_cast<float>(draftLaneCount)));
+        const auto end   = static_cast<std::uint32_t>(std::clamp(
+            std::ceil((viewportRight - draftLeftX) / player.singleTrackWidth),
+            0.0F,
+            static_cast<float>(draftLaneCount)));
+        if ( begin >= end ) return std::nullopt;
+        return std::pair{ begin, end };
     }
 
     /// @brief 计算视口内可见的 BGM 轨道索引半开区间。

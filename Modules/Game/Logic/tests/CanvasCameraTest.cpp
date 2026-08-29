@@ -895,6 +895,12 @@ bool testDynamicDraftAppendLaneProjection()
         MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-6, 4, 7);
     const auto existingBounds = before.bounds(existingLane);
 
+    const auto visibleRange = before.visibleDraftRange(-525.0F, -325.0F);
+    const bool numberingMatchesTracks =
+        MMM::Logic::draftTrackDisplayNumber(-7, 6) == 1 &&
+        MMM::Logic::draftTrackDisplayNumber(-6, 6) == 1 &&
+        MMM::Logic::draftTrackDisplayNumber(-1, 6) == 6;
+
     const auto after = MMM::Logic::calculateCanvasLaneProjection(
         1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 7, true);
     const auto expandedAddress =
@@ -905,6 +911,8 @@ bool testDynamicDraftAppendLaneProjection()
          !near(before.draftLeftX, -600.0) || !appendLane ||
          appendLane->kind != MMM::Logic::CanvasLaneKind::Draft ||
          appendLane->index != 0U || appendLane->absoluteTrack(4, 7) != -7 ||
+         !visibleRange || visibleRange->first != 0U ||
+         visibleRange->second != 3U || !numberingMatchesTracks ||
          existingLane.index != 1U || !existingBounds ||
          !near(existingBounds->leftX, -500.0) || !after.valid ||
          after.draftLaneCount != 8U || !near(after.draftLeftX, -700.0) ||
