@@ -3,6 +3,7 @@
 #endif
 
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimingTableFraction.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -27,7 +28,6 @@
 #include <fmt/format.h>
 #include <imgui_internal.h>
 #include <mutex>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -41,12 +41,6 @@ namespace
 {
 /// @brief 新建 Timing 行的高亮持续时间（秒）
 constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
-
-/// @brief 表格分拍位拟合使用的最大分母。
-constexpr int TIMING_TABLE_MAX_BEAT_DENOMINATOR = 64;
-
-/// @brief 表格拍位换算使用的误差阈值。
-constexpr double TIMING_TABLE_BEAT_EPSILON = 1e-6;
 
 /// @brief 表格分拍位拟合误差提示阈值，单位毫秒。
 constexpr double TIMING_TABLE_FRACTION_WARNING_MS = 3.0;
@@ -80,28 +74,6 @@ struct TimingTableBeatPoint {
 
 /// @brief 时间线表格可双向换算的连续拍位时间线。
 using TimingTableBeatTimeline = std::vector<TimingTableBeatPoint>;
-
-/// @brief 时间线表格中展示的拍号与分拍位。
-struct TimingTableBeatPosition {
-    /// @brief 连续拍位置的整数拍号部分。
-    int beatIndex{ 0 };
-    /// @brief 连续拍位置的小数分拍部分，范围通常为 [0, 1)。
-    double fraction{ 0.0 };
-};
-
-/// @brief 表格分拍位拟合结果。
-struct TimingTableFractionFit {
-    /// @brief 拟合后的拍号。
-    int beatIndex{ 0 };
-    /// @brief 分拍分子。
-    int numerator{ 0 };
-    /// @brief 分拍分母。
-    int denominator{ 1 };
-    /// @brief 分拍小数值。
-    double fraction{ 0.0 };
-    /// @brief 拟合到该分数后的时间误差，单位毫秒。
-    double errorMs{ 0.0 };
-};
 
 /// @brief 分拍位文本输入缓存。
 using TimingTableFractionInputBuffer = std::array<char, 32>;
@@ -235,76 +207,6 @@ double timingTableBeatToTime(const TimingTableBeatTimeline& timeline,
                          });
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
     return point.time + (beat - point.beat) * 60.0 / point.bpm;
-}
-
-/// @brief 将连续拍位置拆成表格展示的拍号和分拍位。
-/// @param beat 连续拍位置。
-/// @return 规整后的表格拍位。
-TimingTableBeatPosition splitTimingTableBeatPosition(double beat)
-{
-    if ( !std::isfinite(beat) ) {
-        return {};
-    }
-
-    int beatIndex =
-        static_cast<int>(std::floor(beat + TIMING_TABLE_BEAT_EPSILON));
-    double fraction = beat - static_cast<double>(beatIndex);
-    if ( fraction < TIMING_TABLE_BEAT_EPSILON ) {
-        fraction = 0.0;
-    }
-    if ( fraction > 1.0 - TIMING_TABLE_BEAT_EPSILON ) {
-        beatIndex++;
-        fraction = 0.0;
-    }
-    return { beatIndex, fraction };
-}
-
-/// @brief 将连续拍位置拟合到最大 1/64 精度。
-/// @param beat 连续拍位置。
-/// @return 拟合后的分数拍位置。
-TimingTableFractionFit fitTimingTableFraction(double beat)
-{
-    const auto position = splitTimingTableBeatPosition(beat);
-
-    int    bestNumerator   = 0;
-    int    bestDenominator = 1;
-    double bestError       = std::abs(position.fraction);
-    for ( int denominator = 1; denominator <= TIMING_TABLE_MAX_BEAT_DENOMINATOR;
-          ++denominator ) {
-        const int numerator = std::clamp(
-            static_cast<int>(std::round(position.fraction * denominator)),
-            0,
-            denominator);
-        const double fittedFraction =
-            static_cast<double>(numerator) / static_cast<double>(denominator);
-        const double error = std::abs(position.fraction - fittedFraction);
-        if ( error + TIMING_TABLE_BEAT_EPSILON < bestError ||
-             (std::abs(error - bestError) <= TIMING_TABLE_BEAT_EPSILON &&
-              denominator < bestDenominator) ) {
-            bestError       = error;
-            bestNumerator   = numerator;
-            bestDenominator = denominator;
-        }
-    }
-
-    int beatIndex = position.beatIndex;
-    if ( bestNumerator >= bestDenominator ) {
-        beatIndex += bestNumerator / bestDenominator;
-        bestNumerator %= bestDenominator;
-    }
-    if ( bestNumerator == 0 ) {
-        return { beatIndex, 0, 1, 0.0, 0.0 };
-    }
-
-    const int divisor = std::gcd(bestNumerator, bestDenominator);
-    bestNumerator /= divisor;
-    bestDenominator /= divisor;
-    return { beatIndex,
-             bestNumerator,
-             bestDenominator,
-             static_cast<double>(bestNumerator) /
-                 static_cast<double>(bestDenominator),
-             0.0 };
 }
 
 /// @brief 将连续拍位置拟合为分数并计算时间误差。

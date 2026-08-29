@@ -7,6 +7,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
+#include "mmm/beatmap/BeatFraction.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include <algorithm>
@@ -17,7 +18,6 @@
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
-#include <numeric>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -548,29 +548,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         }
         lastBeat += (time - lastTime) / (60000.0 / currentBpm);
 
-        int    integerBeat = static_cast<int>(std::floor(lastBeat + 1e-6));
-        double fraction    = lastBeat - integerBeat;
-
-        if ( fraction < 1e-6 ) return json::array({ integerBeat, 0, 1 });
-        if ( fraction > 1.0 - 1e-6 )
-            return json::array({ integerBeat + 1, 0, 1 });
-
-        // 尝试常见分母拟合，寻找最简约分
-        for ( int den : { 1,  2,  3,  4,   6,   8,   12,  16,  24,  32,
-                          48, 64, 96, 192, 288, 384, 480, 768, 960, 1920 } ) {
-            double num     = fraction * den;
-            double rounded = std::round(num);
-            if ( std::abs(num - rounded) < 1e-4 ) {
-                int n   = static_cast<int>(rounded);
-                int gcd = std::gcd(n, den);
-                return json::array({ integerBeat, n / gcd, den / gcd });
-            }
-        }
-
-        // 兜底方案
-        int n   = static_cast<int>(std::round(fraction * 1920));
-        int gcd = std::gcd(n, 1920);
-        return json::array({ integerBeat, n / gcd, 1920 / gcd });
+        const auto fit = fitMalodyBeatFraction(lastBeat);
+        return json::array({ fit.beatIndex, fit.numerator, fit.denominator });
     };
 
     /// @brief 将普通谱面内容转换到带首拍相位补偿的 Malody 拍轴。
@@ -746,37 +725,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 (relBeatArr[1].get<double>() / relBeatArr[2].get<double>()) -
                 rootBeatVal;
 
-            int    intRelBeat = static_cast<int>(std::floor(relBeatVal + 1e-6));
-            double relFrac    = relBeatVal - intRelBeat;
-
-            if ( relFrac < 1e-6 ) return json::array({ intRelBeat, 0, 1 });
-
-            for ( int den : { 1,
-                              2,
-                              3,
-                              4,
-                              6,
-                              8,
-                              12,
-                              16,
-                              24,
-                              32,
-                              48,
-                              64,
-                              96,
-                              192,
-                              1920 } ) {
-                double num     = relFrac * den;
-                double rounded = std::round(num);
-                if ( std::abs(num - rounded) < 1e-4 ) {
-                    int n   = static_cast<int>(rounded);
-                    int gcd = std::gcd(n, den);
-                    return json::array({ intRelBeat, n / gcd, den / gcd });
-                }
-            }
-            int n   = static_cast<int>(std::round(relFrac * 1920));
-            int gcd = std::gcd(n, 1920);
-            return json::array({ intRelBeat, n / gcd, 1920 / gcd });
+            const auto fit = fitMalodyBeatFraction(relBeatVal);
+            return json::array(
+                { fit.beatIndex, fit.numerator, fit.denominator });
         };
 
         if ( note.m_type == NoteType::HOLD ) {

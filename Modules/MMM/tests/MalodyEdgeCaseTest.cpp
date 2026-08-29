@@ -2729,6 +2729,58 @@ void testPolylineSubnoteSampleBindingRejected()
     XINFO("PASS: Bound Polyline sub-note rejected without partial file");
 }
 
+/// @brief 验证 MC 时间线与相对 seg 均使用固定分拍候选并保留 1920 精度。
+void testMalodyTimelineUsesFixedHighPrecisionFractions()
+{
+    XINFO("=== Test: Malody timeline fixed high precision fractions ===");
+    auto             beatMap        = makeMinimalBeatMap(7 /*Slide*/, 4);
+    constexpr double BEAT_LENGTH_MS = 500.0;
+
+    MMM::Timing& scroll            = beatMap.m_timings.emplace_back();
+    scroll.m_timestamp             = BEAT_LENGTH_MS * (1.0 + 1919.0 / 1920.0);
+    scroll.m_bpm                   = 120.0;
+    scroll.m_beat_length           = 1.25;
+    scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    scroll.m_timingEffectParameter = 1.25;
+
+    MMM::Polyline& polyline = beatMap.m_noteData.polylines.emplace_back();
+    polyline.m_type         = MMM::NoteType::POLYLINE;
+    polyline.m_timestamp    = 0.0;
+    polyline.m_track        = 0;
+    MMM::Hold& hold         = beatMap.m_noteData.holds.emplace_back();
+    hold.m_type             = MMM::NoteType::HOLD;
+    hold.m_timestamp        = 0.0;
+    hold.m_duration         = BEAT_LENGTH_MS * (287.0 / 288.0);
+    hold.m_track            = 0;
+    hold.m_isSubNote        = true;
+    polyline.m_subNotes.push_back(hold);
+    polyline.m_subHolds.push_back(hold);
+    beatMap.sync();
+
+    const fs::path outputPath =
+        std::filesystem::temp_directory_path() / "edge_malody_fraction_1920.mc";
+    TEST_ASSERT(beatMap.saveToFile(outputPath),
+                "high precision Malody map should export");
+    std::ifstream outputFile(outputPath);
+    json          exported;
+    outputFile >> exported;
+
+    TEST_ASSERT(
+        exported.contains("effect") && exported["effect"].size() == 1 &&
+            exported["effect"][0]["beat"] == json::array({ 1, 1919, 1920 }),
+        "timeline effect should preserve 1919/1920");
+    const auto gameNote = std::find_if(
+        exported["note"].begin(), exported["note"].end(), [](const json& node) {
+            return !isSoundNode(node);
+        });
+    TEST_ASSERT(
+        gameNote != exported["note"].end() && gameNote->contains("seg") &&
+            (*gameNote)["seg"].size() == 1 &&
+            (*gameNote)["seg"][0]["beat"] == json::array({ 0, 287, 288 }),
+        "relative seg should use the same fixed denominator candidates");
+    XINFO("PASS: Malody timeline preserves fixed 1920 precision fractions");
+}
+
 int main()
 {
     XINFO("========================================");
@@ -2764,6 +2816,7 @@ int main()
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();
     testPolylineSubnoteSampleBindingRejected();
+    testMalodyTimelineUsesFixedHighPrecisionFractions();
 
     XINFO("========================================");
     if ( g_failed == 0 ) {

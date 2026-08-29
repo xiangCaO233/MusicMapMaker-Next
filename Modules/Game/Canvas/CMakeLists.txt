@@ -86,6 +86,14 @@ target_include_directories(TimelineTimingTooltipTest
 target_link_libraries(TimelineTimingTooltipTest PRIVATE MMM)
 add_test(NAME TimelineTimingTooltipTest COMMAND TimelineTimingTooltipTest)
 
+# 时间点表格分拍拟合使用纯数值计算，覆盖最高 1920 分母的保存边界。
+mmm_add_test_executable(Canvas TimingTableFractionTest
+                        tests/TimingTableFractionTest.cpp)
+target_include_directories(TimingTableFractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimingTableFractionTest PRIVATE MMM)
+add_test(NAME TimingTableFractionTest COMMAND TimingTableFractionTest)
+
 # 物件拖拽边缘自动平移使用纯数值计算，覆盖速度和两侧轨道区域边界。
 mmm_add_test_executable(Canvas ObjectDragAutoPanTest
                         tests/ObjectDragAutoPanTest.cpp)
