@@ -1233,8 +1233,10 @@ void SettingsView::drawSoftwareSettings()
             (int&)settings.saveFormatPreference,
             changed);
 
+        auto& autoSaveGroup =
+            addSettingGroup(*sec, sectionIndex, "AutoSaveSettingsGroup");
         addRadioSetting(
-            *sec,
+            autoSaveGroup,
             rowIndex,
             sectionIndex,
             TR_CACHE("ui.settings.software.auto_save.mode").data(),
@@ -1246,11 +1248,12 @@ void SettingsView::drawSoftwareSettings()
               { TR_CACHE("ui.settings.software.auto_save.mode.event").data(),
                 (int)Config::AutoSaveMode::EventTriggered } },
             (int&)settings.autoSave.mode,
-            changed);
+            changed,
+            false);
 
         if ( settings.autoSave.mode == Config::AutoSaveMode::Timed ) {
             addRadioSetting(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 sectionIndex,
                 TR_CACHE("ui.settings.software.auto_save.interval_unit").data(),
@@ -1264,9 +1267,10 @@ void SettingsView::drawSoftwareSettings()
                         .data(),
                     (int)Config::AutoSaveIntervalUnit::Minutes } },
                 (int&)settings.autoSave.intervalUnit,
-                changed);
+                changed,
+                false);
             addSettingItem(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_save.interval").data(),
                 maxLabelW,
@@ -1277,11 +1281,13 @@ void SettingsView::drawSoftwareSettings()
                         &settings.autoSave.intervalValue,
                         5,
                         60);
-                });
+                },
+                false,
+                false);
         } else if ( settings.autoSave.mode ==
                     Config::AutoSaveMode::EventTriggered ) {
             addSettingItem(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_save.on_object_modified")
                     .data(),
@@ -1290,9 +1296,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoSaveObjectModified",
                         &settings.autoSave.onObjectModified);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_save.on_beatmap_switch")
                     .data(),
@@ -1301,9 +1309,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoSaveBeatmapSwitch",
                         &settings.autoSave.onBeatmapSwitch);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_save.on_imgui_focus_lost")
                     .data(),
@@ -1312,9 +1322,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoSaveImGuiFocusLost",
                         &settings.autoSave.onImGuiWindowFocusLost);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoSaveGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_save.on_native_focus_lost")
                     .data(),
@@ -1323,11 +1335,15 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoSaveNativeFocusLost",
                         &settings.autoSave.onNativeWindowFocusLost);
-                });
+                },
+                false,
+                false);
         }
 
+        auto& autoBackupGroup =
+            addSettingGroup(*sec, sectionIndex, "AutoBackupSettingsGroup");
         addRadioSetting(
-            *sec,
+            autoBackupGroup,
             rowIndex,
             sectionIndex,
             TR_CACHE("ui.settings.software.auto_backup.mode").data(),
@@ -1340,11 +1356,12 @@ void SettingsView::drawSoftwareSettings()
               { TR_CACHE("ui.settings.software.auto_backup.mode.event").data(),
                 (int)Config::AutoSaveMode::EventTriggered } },
             (int&)settings.autoBackup.mode,
-            changed);
+            changed,
+            false);
 
         if ( settings.autoBackup.mode == Config::AutoSaveMode::Timed ) {
             addRadioSetting(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 sectionIndex,
                 TR_CACHE("ui.settings.software.auto_backup.interval_unit")
@@ -1359,9 +1376,10 @@ void SettingsView::drawSoftwareSettings()
                         .data(),
                     (int)Config::AutoSaveIntervalUnit::Minutes } },
                 (int&)settings.autoBackup.intervalUnit,
-                changed);
+                changed,
+                false);
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_backup.interval").data(),
                 maxLabelW,
@@ -1372,11 +1390,13 @@ void SettingsView::drawSoftwareSettings()
                         &settings.autoBackup.intervalValue,
                         5,
                         60);
-                });
+                },
+                false,
+                false);
         } else if ( settings.autoBackup.mode ==
                     Config::AutoSaveMode::EventTriggered ) {
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_backup.on_object_modified")
                     .data(),
@@ -1385,9 +1405,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoBackupObjectModified",
                         &settings.autoBackup.onObjectModified);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_backup.on_beatmap_switch")
                     .data(),
@@ -1396,9 +1418,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoBackupBeatmapSwitch",
                         &settings.autoBackup.onBeatmapSwitch);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_backup.on_imgui_focus_lost")
                     .data(),
@@ -1407,9 +1431,11 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoBackupImGuiFocusLost",
                         &settings.autoBackup.onImGuiWindowFocusLost);
-                });
+                },
+                false,
+                false);
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE(
                     "ui.settings.software.auto_backup.on_native_focus_lost")
@@ -1419,12 +1445,14 @@ void SettingsView::drawSoftwareSettings()
                     changed |= ::MMM::UI::FeedbackCheckbox(
                         "##AutoBackupNativeFocusLost",
                         &settings.autoBackup.onNativeWindowFocusLost);
-                });
+                },
+                false,
+                false);
         }
 
         if ( settings.autoBackup.mode != Config::AutoSaveMode::Disabled ) {
             addSettingItem(
-                *sec,
+                autoBackupGroup,
                 rowIndex,
                 TR_CACHE("ui.settings.software.auto_backup.max_count").data(),
                 maxLabelW,
@@ -1435,7 +1463,9 @@ void SettingsView::drawSoftwareSettings()
                         &settings.autoBackup.maxBackupCount,
                         Config::AUTO_BACKUP_COUNT_MIN,
                         Config::AUTO_BACKUP_COUNT_MAX);
-                });
+                },
+                false,
+                false);
         }
 
         addSettingItem(

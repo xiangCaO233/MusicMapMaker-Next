@@ -247,7 +247,9 @@ void SettingsView::drawProjectSettings()
                         "ui.settings.project.auto_backup.inherit_hint");
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     ImGui::TextWrapped("%s", hint.data());
-                });
+                },
+                false,
+                false);
         } else {
             auto& backup = *project->m_settings.m_autoBackupOverride;
             addRadioSetting(
@@ -266,7 +268,8 @@ void SettingsView::drawProjectSettings()
                         .data(),
                     (int)Config::AutoSaveMode::EventTriggered } },
                 (int&)backup.mode,
-                changed);
+                changed,
+                false);
 
             if ( backup.mode == Config::AutoSaveMode::Timed ) {
                 addRadioSetting(
@@ -285,7 +288,8 @@ void SettingsView::drawProjectSettings()
                             .data(),
                         (int)Config::AutoSaveIntervalUnit::Minutes } },
                     (int&)backup.intervalUnit,
-                    changed);
+                    changed,
+                    false);
                 addSettingItem(
                     *sec,
                     rowIndex,
@@ -299,7 +303,9 @@ void SettingsView::drawProjectSettings()
                             &backup.intervalValue,
                             5,
                             60);
-                    });
+                    },
+                    false,
+                    false);
             } else if ( backup.mode == Config::AutoSaveMode::EventTriggered ) {
                 addSettingItem(
                     *sec,
@@ -312,7 +318,9 @@ void SettingsView::drawProjectSettings()
                         changed |= ::MMM::UI::FeedbackCheckbox(
                             "##ProjectAutoBackupObjectModified",
                             &backup.onObjectModified);
-                    });
+                    },
+                    false,
+                    false);
                 addSettingItem(
                     *sec,
                     rowIndex,
@@ -324,7 +332,9 @@ void SettingsView::drawProjectSettings()
                         changed |= ::MMM::UI::FeedbackCheckbox(
                             "##ProjectAutoBackupBeatmapSwitch",
                             &backup.onBeatmapSwitch);
-                    });
+                    },
+                    false,
+                    false);
                 addSettingItem(
                     *sec,
                     rowIndex,
@@ -336,7 +346,9 @@ void SettingsView::drawProjectSettings()
                         changed |= ::MMM::UI::FeedbackCheckbox(
                             "##ProjectAutoBackupImGuiFocusLost",
                             &backup.onImGuiWindowFocusLost);
-                    });
+                    },
+                    false,
+                    false);
                 addSettingItem(
                     *sec,
                     rowIndex,
@@ -348,7 +360,9 @@ void SettingsView::drawProjectSettings()
                         changed |= ::MMM::UI::FeedbackCheckbox(
                             "##ProjectAutoBackupNativeFocusLost",
                             &backup.onNativeWindowFocusLost);
-                    });
+                    },
+                    false,
+                    false);
             }
 
             if ( backup.mode != Config::AutoSaveMode::Disabled ) {
@@ -365,7 +379,9 @@ void SettingsView::drawProjectSettings()
                             &backup.maxBackupCount,
                             Config::AUTO_BACKUP_COUNT_MIN,
                             Config::AUTO_BACKUP_COUNT_MAX);
-                    });
+                    },
+                    false,
+                    false);
             }
         }
     }

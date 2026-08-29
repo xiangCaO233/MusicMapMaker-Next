@@ -391,6 +391,14 @@ private:
     /// @return 可复用的纵向段落布局。
     CLayVBox& getSection(size_t index);
 
+    /// @brief 创建一个可容纳多个关联子项的独立设置框。
+    /// @param parent 接收设置框的父级布局。
+    /// @param sectionIndex 当前段落索引，会在创建时递增。
+    /// @param id 设置框的稳定布局 ID。
+    /// @return 已加入父布局的设置框。
+    CLayVBox& addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
+                              const char* id);
+
     /// @brief 添加一个设置项行（标签 + 控件）。
     /// @param parent 接收设置行的父级布局。
     /// @param rowIndex 当前行索引，会在添加时递增。
@@ -398,9 +406,10 @@ private:
     /// @param labelWidth 标签列宽度。
     /// @param widget 控件绘制回调。
     /// @param dangerLabel 是否使用危险色绘制标签。
+    /// @param decorated 是否为该行单独绘制设置框。
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget,
-                        bool dangerLabel = false);
+                        bool dangerLabel = false, bool decorated = true);
 
     /// @brief 添加一个带自动换行的 RadioButton 组。
     /// @param parent 接收设置行的父级布局。
@@ -410,12 +419,13 @@ private:
     /// @param labelWidth 标签列宽度。
     /// @param options 单选项文本和值列表。
     /// @param current 当前选中的值。
-    /// @param changed 发生修改时写入 true。
+    /// @param changed 设置发生变化时写入 true。
+    /// @param decorated 是否为该行单独绘制设置框。
     void addRadioSetting(
         CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex,
         const char* label, float labelWidth,
         const std::vector<std::pair<std::string, int>>& options, int& current,
-        bool& changed);
+        bool& changed, bool decorated = true);
 };
 
 }  // namespace MMM::UI
