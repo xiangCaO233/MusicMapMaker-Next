@@ -211,6 +211,46 @@ bool readPngDimensions(const std::filesystem::path& path, std::uint32_t& width,
     return width > 0U && height > 0U;
 }
 
+/// @brief 验证内置皮肤声明完整且与正式物件不同的草稿区配色。
+/// @param skinPath 内置皮肤入口路径。
+/// @param translationsRoot 默认翻译资源目录。
+/// @return 六种草稿物件颜色均存在且与正式物件可区分时返回 true。
+bool verifyDraftPalette(const std::filesystem::path& skinPath,
+                        const std::filesystem::path& translationsRoot)
+{
+    auto& skinManager = MMM::Config::SkinManager::instance();
+    bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                          translationsRoot),
+                     "内置皮肤草稿配色检查前应成功加载");
+    constexpr std::array<std::string_view, 6> DRAFT_COLOR_KEYS{
+        "draft_notes.note_tap",  "draft_notes.note_head",
+        "draft_notes.note_hold", "draft_notes.note_end",
+        "draft_notes.note_node", "draft_notes.note_flick_arrow",
+    };
+    const auto& colors = skinManager.getData().colors;
+    for ( const auto key : DRAFT_COLOR_KEYS ) {
+        ok &= check(colors.contains(std::string(key)),
+                    "内置皮肤必须声明完整草稿区配色");
+    }
+    if ( !ok ) return false;
+
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 6>
+        NOTE_COLOR_PAIRS{
+            std::pair{ "draft_notes.note_tap", "note_tap" },
+            std::pair{ "draft_notes.note_head", "note_head" },
+            std::pair{ "draft_notes.note_hold", "note_hold" },
+            std::pair{ "draft_notes.note_end", "note_end" },
+            std::pair{ "draft_notes.note_node", "note_node" },
+            std::pair{ "draft_notes.note_flick_arrow", "note_flick_arrow" },
+        };
+    for ( const auto& [draftKey, playerKey] : NOTE_COLOR_PAIRS ) {
+        ok &= check(!sameColor(skinManager.getColor(std::string(draftKey)),
+                               skinManager.getColor(std::string(playerKey))),
+                    "草稿物件颜色必须与对应正式物件颜色可区分");
+    }
+    return ok;
+}
+
 /// @brief 验证 IVM 内置皮肤的固定主题、颜色和纹理几何约束。
 /// @param skinPath 仓库中 IVM 皮肤入口路径。
 /// @param referenceSkinPath mmm-default 老皮肤入口路径。
@@ -454,6 +494,10 @@ int main(int argc, char* argv[])
     ok &= verifyLegacyAppConfigSemantics();
     ok &= verifyDefaultSkinEffectFrameRate(MMM::Config::utf8ToPath(argv[4]),
                                            translationsRoot);
+    ok &=
+        verifyDraftPalette(MMM::Config::utf8ToPath(argv[4]), translationsRoot);
+    ok &=
+        verifyDraftPalette(MMM::Config::utf8ToPath(argv[2]), translationsRoot);
     ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]),
                         MMM::Config::utf8ToPath(argv[4]),
                         translationsRoot);

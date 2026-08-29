@@ -154,15 +154,27 @@ private:
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
     struct NoteRenderContext {
-        float              noteW;
-        float              noteH;
-        float              baseAspect;
-        glm::vec4          colorTap;
-        glm::vec4          colorHead;
-        glm::vec4          colorHold;
-        glm::vec4          colorEnd;
-        glm::vec4          colorNode;
-        glm::vec4          colorArrow;
+        float     noteW;
+        float     noteH;
+        float     baseAspect;
+        glm::vec4 colorTap;
+        glm::vec4 colorHead;
+        glm::vec4 colorHold;
+        glm::vec4 colorEnd;
+        glm::vec4 colorNode;
+        glm::vec4 colorArrow;
+        /// @brief 草稿 Tap 默认颜色；物件自定义颜色仍有更高优先级。
+        glm::vec4 colorDraftTap;
+        /// @brief 草稿 Hold 头部默认颜色。
+        glm::vec4 colorDraftHead;
+        /// @brief 草稿 Hold 主体默认颜色。
+        glm::vec4 colorDraftHold;
+        /// @brief 草稿 Hold 尾部默认颜色。
+        glm::vec4 colorDraftEnd;
+        /// @brief 草稿 Polyline 节点默认颜色。
+        glm::vec4 colorDraftNode;
+        /// @brief 草稿 Flick 箭头默认颜色。
+        glm::vec4          colorDraftArrow;
         const ScrollCache* cache;
         double             currentAbsY;
         double             currentTime;

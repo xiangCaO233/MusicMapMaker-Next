@@ -196,11 +196,16 @@ target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
 add_test(NAME NoteBoundSampleLabelRenderTest
          COMMAND NoteBoundSampleLabelRenderTest)
 
-# 重叠键遮罩测试确保播放快照仍会生成顶层重叠提示。
+# 音符渲染测试覆盖草稿物件独立配色与播放中的顶层重叠提示。
 mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
                         tests/NoteOverlapMaskRenderTest.cpp)
 target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
-add_test(NAME NoteOverlapMaskRenderTest COMMAND NoteOverlapMaskRenderTest)
+add_test(
+  NAME NoteOverlapMaskRenderTest
+  COMMAND
+    NoteOverlapMaskRenderTest
+    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
+    "${CMAKE_SOURCE_DIR}/assets/translations")
 
 # 交互拾取包围盒测试覆盖独立横纵缩放、中心保持和非法值回退。
 mmm_add_test_executable(Logic InteractionHitboxScaleTest
