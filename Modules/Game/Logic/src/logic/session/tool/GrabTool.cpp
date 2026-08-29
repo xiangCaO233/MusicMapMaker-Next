@@ -549,17 +549,25 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.dragSampleRenderPinnedEntities.clear();
 
     if ( cmd.entity == entt::null ) return;
+    entt::entity draggedEntity = cmd.entity;
     if ( cmd.kind == ChartObjectKind::PlayerNote ||
          cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
-            ctx.noteRegistry.try_get<const NoteComponent>(cmd.entity);
+            ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        if ( cmd.kind == ChartObjectKind::DraftNote && note &&
+             note->m_isSubNote && note->m_parentPolyline != entt::null &&
+             ctx.noteRegistry.valid(note->m_parentPolyline) &&
+             ctx.noteRegistry.all_of<NoteComponent>(note->m_parentPolyline) ) {
+            draggedEntity = note->m_parentPolyline;
+            note = ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        }
         if ( !note ||
              !SessionUtils::isNoteEditable(*note, ctx.lastConfig.settings) ) {
             return;
         }
     }
 
-    ctx.draggedEntity     = cmd.entity;
+    ctx.draggedEntity     = draggedEntity;
     ctx.draggedObjectKind = cmd.kind;
     ctx.dragCameraId      = cmd.cameraId;
     ctx.draggedPart       = static_cast<HoverPart>(ctx.hoveredPart);
@@ -644,10 +652,10 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         ctx.dragInitialSample = initialIterator->second.sample;
         ctx.dragInitialNote.reset();
         ctx.isDragging = true;
-    } else if ( ctx.noteRegistry.valid(cmd.entity) &&
-                ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+    } else if ( ctx.noteRegistry.valid(draggedEntity) &&
+                ctx.noteRegistry.all_of<NoteComponent>(draggedEntity) ) {
         auto&      registry        = ctx.noteRegistry;
-        const bool primarySelected = isEntitySelected(registry, cmd.entity);
+        const bool primarySelected = isEntitySelected(registry, draggedEntity);
 
         if ( primarySelected ) {
             // 模式 A: 拖动整个选中组
@@ -709,12 +717,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
             }
         } else {
             // 模式 B: 只拖动当前物件
-            if ( auto* note = registry.try_get<NoteComponent>(cmd.entity) ) {
-                m_initialStates[cmd.entity] = { *note, false };
-                if ( !registry.all_of<InteractionComponent>(cmd.entity) ) {
-                    registry.emplace<InteractionComponent>(cmd.entity);
+            if ( auto* note = registry.try_get<NoteComponent>(draggedEntity) ) {
+                m_initialStates[draggedEntity] = { *note, false };
+                if ( !registry.all_of<InteractionComponent>(draggedEntity) ) {
+                    registry.emplace<InteractionComponent>(draggedEntity);
                 }
-                registry.get<InteractionComponent>(cmd.entity).isDragging =
+                registry.get<InteractionComponent>(draggedEntity).isDragging =
                     true;
 
                 // 如果是 Polyline，也收集其子物件
@@ -722,7 +730,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                     for ( auto subEnt : registry.view<NoteComponent>() ) {
                         const auto& subNC = registry.get<NoteComponent>(subEnt);
                         if ( subNC.m_isSubNote &&
-                             subNC.m_parentPolyline == cmd.entity ) {
+                             subNC.m_parentPolyline == draggedEntity ) {
                             m_initialStates[subEnt] = {
                                 subNC,
                                 isEntitySelected(registry, subEnt),
@@ -739,8 +747,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         }
 
         // 兼容旧代码 (保留主拖拽物件的初始备份)
-        if ( m_initialStates.count(cmd.entity) ) {
-            ctx.dragInitialNote = m_initialStates[cmd.entity].note;
+        if ( m_initialStates.count(draggedEntity) ) {
+            ctx.dragInitialNote = m_initialStates[draggedEntity].note;
             ctx.dragInitialSample.reset();
             ctx.isDragging = true;
         }

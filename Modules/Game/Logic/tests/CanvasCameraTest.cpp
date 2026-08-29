@@ -3756,6 +3756,103 @@ bool testMarqueeToolEntityDragCrossesCanvasAreas()
            context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty();
 }
 
+/// @brief 验证从草稿折线子实体起拖时会移动完整折线而不会删除根实体。
+/// @return 折线进入玩家区且 Undo/Redo 保留根子结构时返回 true。
+bool testDraftPolylineChildDragMovesWholePolyline()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto                rootEntity  = context.noteRegistry.create();
+    const auto                childEntity = context.noteRegistry.create();
+    MMM::Logic::NoteComponent root{
+        .m_type            = MMM::NoteType::POLYLINE,
+        .m_timestamp       = 1.0,
+        .m_trackIndex      = -2,
+        .m_isDraft         = true,
+        .m_collaborationId = "draft-polyline-root",
+    };
+    root.m_subNotes.push_back(MMM::Logic::NoteComponent::SubNote{
+        .type            = MMM::NoteType::NOTE,
+        .timestamp       = 1.25,
+        .trackIndex      = -1,
+        .collaborationId = "draft-polyline-child",
+    });
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(rootEntity);
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        childEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::NOTE,
+            .m_timestamp       = 1.25,
+            .m_trackIndex      = -1,
+            .m_isSubNote       = true,
+            .m_isDraft         = true,
+            .m_parentPolyline  = rootEntity,
+            .m_subIndex        = 0,
+            .m_collaborationId = "draft-polyline-child",
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(childEntity);
+    context.hoveredEntity     = childEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::DraftNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
+    context.hoveredSubIndex = 0;
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             childEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::DraftNote,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              250.0F,
+                              300.0F,
+                              true,
+                          });
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto structureMatches =
+        [&](bool isDraft, int rootTrack, int childTrack) {
+            if ( !context.noteRegistry.valid(rootEntity) ||
+                 !context.noteRegistry.valid(childEntity) ) {
+                return false;
+            }
+            const auto& currentRoot =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    rootEntity);
+            const auto& currentChild =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    childEntity);
+            return currentRoot.m_type == MMM::NoteType::POLYLINE &&
+                   currentRoot.m_isDraft == isDraft &&
+                   currentRoot.m_trackIndex == rootTrack &&
+                   currentRoot.m_subNotes.size() == 1 &&
+                   currentRoot.m_subNotes.front().trackIndex == childTrack &&
+                   currentChild.m_isSubNote &&
+                   currentChild.m_parentPolyline == rootEntity &&
+                   currentChild.m_isDraft == isDraft &&
+                   currentChild.m_trackIndex == childTrack;
+        };
+
+    if ( !structureMatches(false, 1, 2) ||
+         context.actionStack.getUndoStackSize() != 1 ) {
+        XERROR("Draft Polyline child drag lost or misplaced the Polyline");
+        return false;
+    }
+    context.actionStack.undo(context);
+    if ( !structureMatches(true, -2, -1) ) {
+        XERROR("Draft Polyline child drag undo lost the original structure");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return structureMatches(false, 1, 2);
+}
+
 /// @brief 验证未绑定 Tap 拖入 BGM 轨道后成为可撤销的空采样草稿。
 /// @return 转换、Undo 与 Redo 均保持未绑定音频语义时返回 true。
 bool testUnboundNoteDragConvertsToSilentSample()
@@ -4308,6 +4405,7 @@ int main()
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
                    testMarqueeToolEntityDragCrossesCanvasAreas() &&
+                   testDraftPolylineChildDragMovesWholePolyline() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
