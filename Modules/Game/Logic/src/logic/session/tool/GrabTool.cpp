@@ -408,26 +408,6 @@ bool noteFitsPlayerArea(const NoteComponent& note, std::int32_t trackCount)
                        });
 }
 
-/// @brief 判断草稿物件是否完整位于当前持久化草稿轨中。
-bool noteFitsDraftArea(const NoteComponent& note, std::int32_t trackCount)
-{
-    if ( trackCount <= 0 ) return false;
-    const auto fits = [trackCount](::MMM::NoteType type,
-                                   std::int32_t    track,
-                                   std::int32_t    dtrack) {
-        if ( track < -trackCount || track >= 0 ) return false;
-        if ( type != ::MMM::NoteType::FLICK ) return true;
-        const auto endTrack = track + dtrack;
-        return endTrack >= -trackCount && endTrack < 0;
-    };
-    if ( !fits(note.m_type, note.m_trackIndex, note.m_dtrack) ) return false;
-    return std::all_of(note.m_subNotes.begin(),
-                       note.m_subNotes.end(),
-                       [&](const NoteComponent::SubNote& sub) {
-                           return fits(sub.type, sub.trackIndex, sub.dtrack);
-                       });
-}
-
 /// @brief 判断拖动可变字段是否保持不变。
 /// @warning 释放低频路径：仅遍历单个 Polyline 的局部子物件。
 bool sameDraggedNoteState(const NoteComponent& lhs, const NoteComponent& rhs)
@@ -546,8 +526,6 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     m_usesUnifiedObjectDrag    = false;
     m_isSampleOffsetDrag       = false;
     m_hasLastAppliedDragTarget = false;
-    m_initialDraftTrackCount   = std::max(0, ctx.draftTrackCount);
-    m_expandedDraftTracks      = false;
     m_initialStates.clear();
     m_initialSampleStates.clear();
     ctx.dragRenderPinnedEntities.clear();
@@ -940,16 +918,6 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
     m_hasLastAppliedDragTarget   = true;
     m_lastAppliedDragTargetTime  = appliedTargetTime;
     m_lastAppliedDragTargetTrack = appliedTargetTrack;
-
-    const auto movedMinimumTrack = minimumTrack + deltaTrack;
-    const auto requiredDraftTrackCount =
-        movedMinimumTrack < 0 ? static_cast<std::int32_t>(-movedMinimumTrack)
-                              : 0;
-    if ( requiredDraftTrackCount > ctx.draftTrackCount ) {
-        ctx.draftTrackCount   = requiredDraftTrackCount;
-        m_expandedDraftTracks = true;
-        ctx.isTransformDirty  = true;
-    }
 
     for ( const auto& [entity, state] : m_initialStates ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(entity);
@@ -1377,14 +1345,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             ctx.noteRegistry.try_get<const NoteComponent>(entity);
         if ( !current || current->m_isSubNote ) continue;
 
-        if ( current->m_trackIndex < 0 ) {
-            if ( !noteFitsDraftArea(*current, ctx.draftTrackCount) ) {
-                rejectionReason =
-                    "草稿物件拖动结果超出左侧草稿轨道区，已取消本次操作";
-                break;
-            }
-            continue;
-        }
+        if ( current->m_trackIndex < 0 ) continue;
 
         if ( current->m_trackIndex < ctx.trackCount ) {
             if ( !noteFitsPlayerArea(*current, ctx.trackCount) ) {
@@ -1462,10 +1423,6 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
 
     if ( !rejectionReason.empty() ) {
         restoreInitialStates();
-        if ( m_expandedDraftTracks ) {
-            ctx.draftTrackCount  = m_initialDraftTrackCount;
-            ctx.isTransformDirty = true;
-        }
         ctx.lastActionMessage = std::move(rejectionReason);
     } else {
         std::vector<BatchNoteAction::Entry>   noteEntries;
@@ -1533,11 +1490,6 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             });
         }
 
-        if ( m_expandedDraftTracks ) {
-            ctx.draftTrackCount  = m_initialDraftTrackCount;
-            ctx.isTransformDirty = true;
-        }
-
         std::vector<std::unique_ptr<IEditorAction>> actions;
         if ( !noteEntries.empty() ) {
             actions.push_back(std::make_unique<BatchNoteAction>(
@@ -1579,7 +1531,6 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     m_usesUnifiedObjectDrag    = false;
     m_isSampleOffsetDrag       = false;
     m_hasLastAppliedDragTarget = false;
-    m_expandedDraftTracks      = false;
 }
 
 /// @brief 结束物件移动或局部编辑拖拽并提交动作。

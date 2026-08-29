@@ -3901,12 +3901,22 @@ bool testDraftAppendLaneDragExpandsPersistentCount()
         false,
         MMM::Logic::ChartObjectKind::PlayerNote,
     });
-    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
-        "Basic2DCanvas",
-        -350.0F,
-        300.0F,
-        true,
-    });
+    for ( int update = 0; update < 128; ++update ) {
+        controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+            "Basic2DCanvas",
+            -350.0F,
+            300.0F,
+            true,
+        });
+    }
+    const auto preview =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( preview.m_trackIndex != -5 || !preview.m_isDraft ||
+         context.draftTrackCount != 4 ) {
+        XERROR("Draft append drag expanded persistent lanes before release");
+        return false;
+    }
+
     controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
 
     const auto moved =
@@ -3936,6 +3946,56 @@ bool testDraftAppendLaneDragExpandsPersistentCount()
         return false;
     }
     return true;
+}
+
+/// @brief 验证进入草稿追加轨后移回原轨，松开时不会扩充草稿区。
+/// @return 预览和提交均保持原轨道数量且不产生空操作时返回 true。
+bool testDraftAppendLanePreviewCanBeWithdrawn()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        entity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        entity,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        -350.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        150.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& note =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return note.m_trackIndex == 0 && !note.m_isDraft &&
+           context.draftTrackCount == 4 &&
+           context.actionStack.getUndoStackSize() == 0U;
 }
 
 /// @brief 验证折线在草稿区和玩家区之间双向拖动并保持完整结构。
@@ -4626,6 +4686,7 @@ int main()
                    testSilentSampleDragConvertsToUnboundNote() &&
                    testMarqueeToolEntityDragCrossesCanvasAreas() &&
                    testDraftAppendLaneDragExpandsPersistentCount() &&
+                   testDraftAppendLanePreviewCanBeWithdrawn() &&
                    testPolylineDragMovesBetweenDraftAndPlayer() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
