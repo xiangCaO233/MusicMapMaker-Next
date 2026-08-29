@@ -82,8 +82,8 @@ bool readSymlinkStatus(const std::filesystem::path&  path,
 {
     filesystemError.clear();
     status = std::filesystem::symlink_status(path, filesystemError);
-    if ( filesystemError ==
-         std::make_error_code(std::errc::no_such_file_or_directory) ) {
+    if ( filesystemError && filesystemError.default_error_condition() ==
+                                std::errc::no_such_file_or_directory ) {
         filesystemError.clear();
         status = std::filesystem::file_status{
             std::filesystem::file_type::not_found

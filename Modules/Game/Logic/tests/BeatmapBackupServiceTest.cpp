@@ -103,6 +103,11 @@ bool testBackupRotation(const std::filesystem::path& outputRoot)
         XERROR("Failed to create backup test output: {}", error.message());
         return false;
     }
+    if ( std::filesystem::exists(outputRoot / ".mmm", error) || error ) {
+        XERROR(
+            "Backup test unexpectedly started with an existing .mmm directory");
+        return false;
+    }
 
     MMM::BeatMap beatmap;
     beatmap.m_baseMapMetadata.name     = "Backup Test";
