@@ -1784,6 +1784,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                                std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                               std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -1968,6 +1969,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -2019,6 +2021,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdClearNoteColorOverrides> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||

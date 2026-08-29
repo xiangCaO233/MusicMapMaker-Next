@@ -1158,6 +1158,18 @@ void TimelineCanvas::renderEventEditorPopup()
         if ( editEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             drawFullWidthInputDouble("##Value", m_editValue, 0.1, 1.0, "%.4f");
+            ImGui::Spacing();
+            ::MMM::UI::FeedbackCheckbox(
+                TR("ui.timeline.event_editor.keep_preferred_bpm_speed_sv")
+                    .data(),
+                &m_keepSpeedOnBpmEdit);
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip(
+                    "%s",
+                    TR("ui.timeline.event_editor.keep_preferred_bpm_speed_sv_"
+                       "tooltip")
+                        .data());
+            }
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.4f");
@@ -1184,9 +1196,20 @@ void TimelineCanvas::renderEventEditorPopup()
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                    m_editingEntity, m_editTime, finalValue }));
+            if ( editEffect == ::MMM::TimingEffect::BPM &&
+                 m_keepSpeedOnBpmEdit ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateBpmWithKeepSpeedSv{
+                        .bpmEntity   = m_editingEntity,
+                        .newTime     = m_editTime,
+                        .newBpm      = finalValue,
+                        .scrollValue = getKeepSpeedScrollValue(m_editValue),
+                    }));
+            } else {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                        m_editingEntity, m_editTime, finalValue }));
+            }
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }

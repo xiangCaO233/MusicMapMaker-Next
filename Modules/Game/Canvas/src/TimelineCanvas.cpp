@@ -676,6 +676,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 m_editTime               = hit.time;
                 m_editValue              = hit.value;
                 m_editType               = hit.editType;
+                m_keepSpeedOnBpmEdit     = false;
                 m_isPopupOpen            = true;
                 m_isCreatePopupOpen      = false;
                 m_isTimingDrawPreviewing = false;

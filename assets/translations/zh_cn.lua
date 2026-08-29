@@ -1176,6 +1176,8 @@ return {
 	["ui.timeline.event_editor.title"] = "{} 事件详情",
 	["ui.timeline.event_editor.timestamp"] = "时间戳 (秒)",
 	["ui.timeline.event_editor.bpm"] = "BPM",
+	["ui.timeline.event_editor.keep_preferred_bpm_speed_sv"] = "新增/修改同时间戳保速 SV",
+	["ui.timeline.event_editor.keep_preferred_bpm_speed_sv_tooltip"] = "按预设 BPM ÷ 当前 BPM 计算 SV；同时间戳已有绿线时更新，否则新增。",
 	["ui.timeline.event_editor.scroll"] = "倍率",
 	["ui.timeline.event_editor.scroll_hint"] = "例如: 1.0, 1.5, 2.0",
 	["ui.timeline.event_editor.apply"] = "应用",

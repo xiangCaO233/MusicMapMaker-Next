@@ -904,6 +904,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvents>(cmd) ||
+         std::holds_alternative<CmdUpdateBpmWithKeepSpeedSv>(cmd) ||
          std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||

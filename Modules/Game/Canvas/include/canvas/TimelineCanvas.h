@@ -523,6 +523,8 @@ private:
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
     std::string  m_editType;  ///< @brief 编辑中的 Timing 类型名称
+    /// @brief 应用 BPM 编辑时是否新增或更新保持预设 BPM 流速的 SV。
+    bool m_keepSpeedOnBpmEdit{ false };
 
     // 创建弹窗状态
     bool   m_isCreatePopupOpen{ false };

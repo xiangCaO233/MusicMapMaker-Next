@@ -1872,7 +1872,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -2049,7 +2049,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2274,7 +2274,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2378,6 +2378,68 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
     }
     auto action = std::make_unique<BatchTimelineAction>(
         std::move(entries), "Batch Timeline Update");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
+void ActionController::handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd)
+{
+    auto& registry = m_ctx.timelineRegistry;
+    if ( !registry.valid(cmd.bpmEntity) ||
+         !registry.all_of<TimelineComponent>(cmd.bpmEntity) ) {
+        return;
+    }
+
+    const auto bpmBefore = registry.get<TimelineComponent>(cmd.bpmEntity);
+    if ( bpmBefore.m_effect != ::MMM::TimingEffect::BPM ) {
+        return;
+    }
+
+    auto bpmAfter        = bpmBefore;
+    bpmAfter.m_timestamp = cmd.newTime;
+    bpmAfter.m_value     = cmd.newBpm;
+    if ( std::abs(bpmAfter.m_timestamp - bpmBefore.m_timestamp) > 1e-6 ) {
+        clearMalodyTimingBeatMetadata(bpmAfter.m_metadata);
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(2U);
+    entries.push_back({ cmd.bpmEntity, bpmBefore, std::move(bpmAfter) });
+
+    entt::entity companionScrollEntity = entt::null;
+    const auto   timelines = registry.view<const TimelineComponent>();
+    for ( const auto entity : timelines ) {
+        const auto& timeline = timelines.get<const TimelineComponent>(entity);
+        if ( timeline.m_effect == ::MMM::TimingEffect::SCROLL &&
+             std::abs(timeline.m_timestamp - cmd.newTime) <= 1e-6 &&
+             (companionScrollEntity == entt::null ||
+              entt::to_integral(entity) >
+                  entt::to_integral(companionScrollEntity)) ) {
+            companionScrollEntity = entity;
+        }
+    }
+
+    if ( companionScrollEntity != entt::null ) {
+        const auto scrollBefore =
+            registry.get<TimelineComponent>(companionScrollEntity);
+        auto scrollAfter        = scrollBefore;
+        scrollAfter.m_timestamp = cmd.newTime;
+        scrollAfter.m_value     = cmd.scrollValue;
+        if ( std::abs(scrollAfter.m_timestamp - scrollBefore.m_timestamp) >
+             1e-12 ) {
+            clearMalodyTimingBeatMetadata(scrollAfter.m_metadata);
+        }
+        entries.push_back(
+            { companionScrollEntity, scrollBefore, std::move(scrollAfter) });
+    } else {
+        TimelineComponent newScroll{ cmd.newTime,
+                                     ::MMM::TimingEffect::SCROLL,
+                                     cmd.scrollValue };
+        entries.push_back({ entt::null, std::nullopt, std::move(newScroll) });
+    }
+
+    auto action = std::make_unique<BatchTimelineAction>(std::move(entries),
+                                                        "BPM Keep Speed SV");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
 }
@@ -3120,7 +3182,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

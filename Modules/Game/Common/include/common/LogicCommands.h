@@ -629,6 +629,20 @@ struct CmdCreateTimelineEvent {
 };
 
 /**
+ * @brief 原子更新 BPM 并新增或更新同时间戳的保持预设流速 SV。
+ */
+struct CmdUpdateBpmWithKeepSpeedSv {
+    /// @brief 待更新的 BPM Timeline 实体。
+    entt::entity bpmEntity{ entt::null };
+    /// @brief BPM 的新时间戳，单位秒。
+    double newTime{ 0.0 };
+    /// @brief BPM 的新值。
+    double newBpm{ 120.0 };
+    /// @brief 根据预设 BPM 计算出的 Scroll 值。
+    double scrollValue{ 1.0 };
+};
+
+/**
  * @brief 批量创建时间线事件指令
  */
 struct CmdCreateTimelineEvents {
@@ -900,15 +914,15 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
-    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
-    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
+    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
+    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
+    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
+    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 
