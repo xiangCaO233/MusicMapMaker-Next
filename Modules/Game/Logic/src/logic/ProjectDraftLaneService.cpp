@@ -293,6 +293,7 @@ std::string applyPayload(SessionContext&              ctx,
     ctx.isNotePruneDirty      = false;
     ctx.isTransformDirty      = true;
     ctx.isPreviewDensityDirty = true;
+    ctx.isHitEventsDirty      = true;
     return serializeDraftItems(visibleItems);
 }
 

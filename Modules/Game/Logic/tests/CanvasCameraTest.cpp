@@ -1014,8 +1014,10 @@ bool testProjectDraftLaneSharingAndIsolation()
     if ( project->m_draftLaneGroups.size() != 1 ||
          first.currentBeatmap->m_noteData.notes.size() != 1 ||
          first.currentBeatmap->m_noteData.notes.front().m_track != 1 ||
-         first.hitEvents.size() != 1 ) {
-        XERROR("Draft notes leaked into the formal beatmap or hit events");
+         first.hitEvents.size() != 2 || first.hitEvents[0].isDraft ||
+         !first.hitEvents[1].isDraft || first.hitEvents[1].trackIndex != -4 ||
+         !near(first.currentBeatmap->m_baseMapMetadata.map_length, 500.0) ) {
+        XERROR("Draft note persistence or hit event routing was incorrect");
         return false;
     }
 

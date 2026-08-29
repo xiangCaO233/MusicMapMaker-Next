@@ -1479,8 +1479,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
     const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
     const int   playerRows    = std::max(1, playerTrackCount);
+    const int   draftRows     = std::max(1, playerTrackCount);
     const int   bgmRows       = std::max(1, bgmTrackCount);
-    const int   totalRows     = 8 + playerRows + bgmRows;
+    const int   totalRows     = 10 + playerRows + draftRows + bgmRows;
 
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
@@ -1642,7 +1643,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int    playerHeaderRow    = 4;
     const int    playerMasterRow    = 5;
     const int    playerTrackBegin   = 6;
-    const int    bgmHeaderRow       = playerTrackBegin + playerRows;
+    const int    draftHeaderRow     = playerTrackBegin + playerRows;
+    const int    draftMasterRow     = draftHeaderRow + 1;
+    const int    draftTrackBegin    = draftMasterRow + 1;
+    const int    bgmHeaderRow       = draftTrackBegin + draftRows;
     const int    bgmMasterRow       = bgmHeaderRow + 1;
     const int    bgmTrackBegin      = bgmMasterRow + 1;
     const ImVec2 contentStart       = ImGui::GetCursorPos();
@@ -1748,7 +1752,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                             });
             continue;
         }
-        if ( row < bgmHeaderRow ) {
+        if ( row < draftHeaderRow ) {
             const int track = row - playerTrackBegin;
             if ( track >= playerTrackCount ) {
                 ImGui::TextDisabled(
@@ -1783,6 +1787,67 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 [&engine, trackIndex](float gain) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
                         .area       = Logic::KeySoundTrackArea::Player,
+                        .trackIndex = trackIndex,
+                        .gain       = gain,
+                    });
+                },
+                [](float) {});
+            ImGui::PopID();
+            ImGui::PopID();
+            continue;
+        }
+        if ( row == draftHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.draft_area").data());
+            continue;
+        }
+        if ( row == draftMasterRow ) {
+            if ( !hasBeatmap || playerTrackCount == 0 ) ImGui::BeginDisabled();
+            drawMuteOnlyRow(
+                TR("ui.key_sound_tool.area_master").data(),
+                "DraftArea",
+                audio.isDraftKeySoundAreaMuted(),
+                [&engine](bool muted) {
+                    engine.pushCommand(
+                        Logic::CmdSetDraftKeySoundAreaMute{ .muted = muted });
+                });
+            if ( !hasBeatmap || playerTrackCount == 0 ) ImGui::EndDisabled();
+            continue;
+        }
+        if ( row < bgmHeaderRow ) {
+            const int track = row - draftTrackBegin;
+            if ( track >= playerTrackCount ) {
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(hasBeatmap ? "ui.key_sound_tool.no_draft_tracks"
+                                  : "ui.key_sound_tool.no_beatmap")
+                        .data());
+                continue;
+            }
+
+            ImGui::PushID("DraftTrack");
+            ImGui::PushID(track);
+            char label[64];
+            std::snprintf(label,
+                          sizeof(label),
+                          TR("ui.key_sound_tool.draft_track").data(),
+                          track + 1);
+            const auto trackIndex = static_cast<std::uint32_t>(track);
+            drawMixRow(
+                label,
+                "MixState",
+                audio.isDraftKeySoundTrackMuted(trackIndex),
+                audio.getDraftKeySoundTrackGain(trackIndex),
+                2.0F,
+                [&engine, trackIndex](bool muted) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
+                        .area       = Logic::KeySoundTrackArea::Draft,
+                        .trackIndex = trackIndex,
+                        .muted      = muted,
+                    });
+                },
+                [&engine, trackIndex](float gain) {
+                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
+                        .area       = Logic::KeySoundTrackArea::Draft,
                         .trackIndex = trackIndex,
                         .gain       = gain,
                     });

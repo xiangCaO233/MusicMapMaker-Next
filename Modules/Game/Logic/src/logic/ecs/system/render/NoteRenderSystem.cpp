@@ -282,6 +282,20 @@ void NoteRenderSystem::generateSnapshot(
                                       tempTY,
                                       tempBY,
                                       tempSTW);
+        if ( isMainCanvas && config.settings.enableDraftLanes ) {
+            const float draftLeftX =
+                tempLX - static_cast<float>(trackCount) * tempSTW;
+            hitFXSystem->generateSnapshot(batcher,
+                                          renderTime,
+                                          config,
+                                          trackCount,
+                                          judgmentLineY,
+                                          draftLeftX,
+                                          tempTY,
+                                          tempBY,
+                                          tempSTW,
+                                          true);
+        }
     }
     uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
 

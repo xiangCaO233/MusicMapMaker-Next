@@ -137,6 +137,46 @@ KeySoundControlSnapshot KeySoundControlBank::getPlayerTrackControl(
                                               : KeySoundControlSnapshot{};
 }
 
+void KeySoundControlBank::setDraftAreaMuted(bool muted) noexcept
+{
+    setMuted(m_draftArea, muted);
+}
+
+bool KeySoundControlBank::isDraftAreaMuted() const noexcept
+{
+    return load(m_draftArea).muted;
+}
+
+void KeySoundControlBank::setDraftTrackMuted(std::uint32_t trackIndex,
+                                             bool          muted) noexcept
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
+    setMuted(m_draftTracks[trackIndex], muted);
+}
+
+bool KeySoundControlBank::isDraftTrackMuted(
+    std::uint32_t trackIndex) const noexcept
+{
+    return trackIndex < KEY_SOUND_TRACK_LIMIT
+               ? load(m_draftTracks[trackIndex]).muted
+               : false;
+}
+
+void KeySoundControlBank::setDraftTrackGain(std::uint32_t trackIndex,
+                                            float         gain) noexcept
+{
+    if ( trackIndex >= KEY_SOUND_TRACK_LIMIT ) return;
+    setGain(m_draftTracks[trackIndex], gain);
+}
+
+float KeySoundControlBank::getDraftTrackGain(
+    std::uint32_t trackIndex) const noexcept
+{
+    return trackIndex < KEY_SOUND_TRACK_LIMIT
+               ? load(m_draftTracks[trackIndex]).gain
+               : 1.0F;
+}
+
 void KeySoundControlBank::setBgmAreaMuted(bool muted) noexcept
 {
     setMuted(m_bgmArea, muted);
@@ -216,12 +256,14 @@ float KeySoundControlBank::effectivePlayerGain(
 {
     if ( !control.enabled ) return 1.0F;
 
-    const auto area = load(m_playerArea);
+    const bool isDraft = control.area == KeySoundPlaybackArea::Draft;
+    const auto area    = isDraft ? load(m_draftArea) : load(m_playerArea);
     if ( area.muted ) return 0.0F;
 
     KeySoundControlSnapshot track;
     if ( control.playerTrackIndex < KEY_SOUND_TRACK_LIMIT ) {
-        track = load(m_playerTracks[control.playerTrackIndex]);
+        track = isDraft ? load(m_draftTracks[control.playerTrackIndex])
+                        : load(m_playerTracks[control.playerTrackIndex]);
         if ( track.muted ) return 0.0F;
     }
 

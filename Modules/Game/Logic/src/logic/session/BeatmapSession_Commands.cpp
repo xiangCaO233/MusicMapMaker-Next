@@ -1926,6 +1926,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                     std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                     std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                    std::is_same_v<T, CmdSetDraftKeySoundAreaMute> ||
                     std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
                     std::is_same_v<T, CmdScroll> ||
                     std::is_same_v<T, CmdPanCanvas> ) {

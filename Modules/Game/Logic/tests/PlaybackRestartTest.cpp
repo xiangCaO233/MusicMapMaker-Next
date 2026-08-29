@@ -288,6 +288,67 @@ bool testBackgroundSessionCannotControlKeySoundGain()
     return true;
 }
 
+/// @brief 验证草稿区 Key 音命令只允许活动会话修改对应运行时控制。
+/// @return 后台命令被忽略，活动会话可修改草稿总控、逐轨增益和静音时返回 true。
+bool testDraftKeySoundControlsRequireActiveSession()
+{
+    auto&                   audio       = MMM::Audio::AudioManager::instance();
+    constexpr std::uint32_t TRACK_INDEX = 9U;
+    const float originalGain = audio.getDraftKeySoundTrackGain(TRACK_INDEX);
+    const bool  originalTrackMuted =
+        audio.isDraftKeySoundTrackMuted(TRACK_INDEX);
+    const bool originalAreaMuted = audio.isDraftKeySoundAreaMuted();
+
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.isActiveSession = false;
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackGain{
+        .area       = MMM::Logic::KeySoundTrackArea::Draft,
+        .trackIndex = TRACK_INDEX,
+        .gain       = 0.35F,
+    });
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackMute{
+        .area       = MMM::Logic::KeySoundTrackArea::Draft,
+        .trackIndex = TRACK_INDEX,
+        .muted      = !originalTrackMuted,
+    });
+    controller.handleCommand(
+        MMM::Logic::CmdSetDraftKeySoundAreaMute{ .muted = !originalAreaMuted });
+    const bool backgroundIgnored =
+        nearGain(audio.getDraftKeySoundTrackGain(TRACK_INDEX), originalGain) &&
+        audio.isDraftKeySoundTrackMuted(TRACK_INDEX) == originalTrackMuted &&
+        audio.isDraftKeySoundAreaMuted() == originalAreaMuted;
+
+    context.isActiveSession = true;
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackGain{
+        .area       = MMM::Logic::KeySoundTrackArea::Draft,
+        .trackIndex = TRACK_INDEX,
+        .gain       = 0.35F,
+    });
+    controller.handleCommand(MMM::Logic::CmdSetKeySoundTrackMute{
+        .area       = MMM::Logic::KeySoundTrackArea::Draft,
+        .trackIndex = TRACK_INDEX,
+        .muted      = !originalTrackMuted,
+    });
+    controller.handleCommand(
+        MMM::Logic::CmdSetDraftKeySoundAreaMute{ .muted = !originalAreaMuted });
+    const bool activeApplied =
+        nearGain(audio.getDraftKeySoundTrackGain(TRACK_INDEX), 0.35F) &&
+        audio.isDraftKeySoundTrackMuted(TRACK_INDEX) != originalTrackMuted &&
+        audio.isDraftKeySoundAreaMuted() != originalAreaMuted;
+
+    audio.setDraftKeySoundTrackGain(TRACK_INDEX, originalGain);
+    audio.setDraftKeySoundTrackMuted(TRACK_INDEX, originalTrackMuted);
+    audio.setDraftKeySoundAreaMuted(originalAreaMuted);
+    if ( !backgroundIgnored || !activeApplied ) {
+        XERROR(
+            "Draft Key sound commands did not respect active-session "
+            "ownership");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证无活动会话时配置更新仍会同步全局打击音效控制库。
 /// @return 玩家总控和两个绑定类别均按配置更新时返回 true。
 bool testEditorConfigSynchronizesGlobalKeySoundControls()
@@ -437,6 +498,7 @@ int main()
                    testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&
                    testBackgroundSessionCannotControlKeySoundGain() &&
+                   testDraftKeySoundControlsRequireActiveSession() &&
                    testEditorConfigSynchronizesGlobalKeySoundControls() &&
                    testBeatDivisorUpdatePreservesCollaborationViewportRenderMode() &&
                    testSeekCancelsPendingRestart() &&

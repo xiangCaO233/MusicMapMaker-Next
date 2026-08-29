@@ -285,6 +285,36 @@ public:
     [[nodiscard]] float getPlayerKeySoundTrackGain(
         std::uint32_t trackIndex) const noexcept;
 
+    /// @brief 设置整个草稿轨道区的 Key 音静音状态。
+    /// @param muted 是否静音。
+    void setDraftKeySoundAreaMuted(bool muted) noexcept;
+
+    /// @brief 查询整个草稿轨道区是否已静音。
+    [[nodiscard]] bool isDraftKeySoundAreaMuted() const noexcept;
+
+    /// @brief 设置指定草稿轨道的 Key 音静音状态。
+    /// @param trackIndex 零基草稿轨道索引。
+    /// @param muted 是否静音。
+    void setDraftKeySoundTrackMuted(std::uint32_t trackIndex,
+                                    bool          muted) noexcept;
+
+    /// @brief 查询指定草稿轨道是否已静音。
+    /// @param trackIndex 零基草稿轨道索引。
+    [[nodiscard]] bool isDraftKeySoundTrackMuted(
+        std::uint32_t trackIndex) const noexcept;
+
+    /// @brief 设置指定草稿轨道的 Key 音线性增益。
+    /// @param trackIndex 零基草稿轨道索引。
+    /// @param gain 目标线性增益，限制到 0.0~2.0。
+    void setDraftKeySoundTrackGain(std::uint32_t trackIndex,
+                                   float         gain) noexcept;
+
+    /// @brief 查询指定草稿轨道的 Key 音线性增益。
+    /// @param trackIndex 零基草稿轨道索引。
+    /// @return 越界轨道返回 1。
+    [[nodiscard]] float getDraftKeySoundTrackGain(
+        std::uint32_t trackIndex) const noexcept;
+
     /// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
     /// @param muted 是否静音。
     void setBgmKeySoundAreaMuted(bool muted) noexcept;

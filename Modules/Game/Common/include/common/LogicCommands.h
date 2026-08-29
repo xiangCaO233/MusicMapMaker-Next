@@ -304,6 +304,7 @@ struct CmdSetPlaybackSpeed {
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
+    Draft,   ///< 项目级草稿轨道区。
     Bgm      ///< 自动采样 BGM 轨道区。
 };
 
@@ -313,7 +314,7 @@ enum class KeySoundEffectGroup : std::uint8_t {
     Bound     ///< 已绑定项目音效文件。
 };
 
-/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+/// @brief 设置单条玩家、草稿或 BGM 轨道的运行时 Key 音静音状态。
 struct CmdSetKeySoundTrackMute {
     /// @brief 目标轨道区域。
     KeySoundTrackArea area{ KeySoundTrackArea::Player };
@@ -325,7 +326,7 @@ struct CmdSetKeySoundTrackMute {
     bool muted{ false };
 };
 
-/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音增益。
+/// @brief 设置单条玩家、草稿或 BGM 轨道的运行时 Key 音增益。
 struct CmdSetKeySoundTrackGain {
     /// @brief 目标轨道区域。
     KeySoundTrackArea area{ KeySoundTrackArea::Player };
@@ -344,6 +345,12 @@ struct CmdSetKeySoundEffectGroupGain {
 
     /// @brief 非负线性增益；音频层负责限制到支持范围。
     float gain{ 1.0F };
+};
+
+/// @brief 设置整个草稿轨道区的运行时 Key 音静音状态。
+struct CmdSetDraftKeySoundAreaMute {
+    /// @brief 是否静音。
+    bool muted{ false };
 };
 
 /// @brief 设置整个 BGM 轨道区的运行时 Key 音静音状态。
@@ -905,7 +912,8 @@ using LogicCommand = std::variant<
     CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
     CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
     CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
-    CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
+    CmdSetBgmKeySoundAreaMute, CmdChangeTool,
     CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
     CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
     CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
@@ -954,6 +962,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                 std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                std::is_same_v<T, CmdSetDraftKeySoundAreaMute> ||
                 std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
                 std::is_same_v<T, CmdChangeTool> ||
                 std::is_same_v<T, CmdSetBrushNoteColor> ||
