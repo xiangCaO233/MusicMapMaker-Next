@@ -91,6 +91,7 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying)
                                                            500.0F,
                                                            4,
                                                            0,
+                                                           4,
                                                            config,
                                                            VIEWPORT_HEIGHT);
 }
@@ -163,6 +164,7 @@ void renderPlayerAndDraftTaps(MMM::Logic::RenderSnapshot& snapshot)
                                                            500.0F,
                                                            4,
                                                            0,
+                                                           4,
                                                            config,
                                                            VIEWPORT_HEIGHT);
 }

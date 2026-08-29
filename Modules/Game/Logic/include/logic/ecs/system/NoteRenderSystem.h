@@ -41,6 +41,7 @@ public:
      * @param judgmentLineY 判定线位置 (视口空间)
      * @param trackCount 玩家轨道数量
      * @param bgmTrackCount 持久化 BGM 轨道数量
+     * @param draftTrackCount 持久化草稿轨道数量
      * @param config 编辑器配置
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      * @param hitFXSystem 打击特效系统 (可选)
@@ -57,8 +58,9 @@ public:
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount, int32_t bgmTrackCount,
-        const Config::EditorConfig& config, float mainViewportHeight = 1000.0f,
-        class HitFXSystem* hitFXSystem = nullptr);
+        int32_t draftTrackCount, const Config::EditorConfig& config,
+        float              mainViewportHeight = 1000.0f,
+        class HitFXSystem* hitFXSystem        = nullptr);
 
 private:
     // --- 内部逻辑拆分方法 ---
@@ -89,9 +91,10 @@ private:
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
         int32_t trackCount, const Config::EditorConfig& config,
-        int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
-        float& rightX, float& topY, float& bottomY, float& trackAreaW,
-        float& singleTrackW, float renderScaleY);
+        int32_t bgmTrackCount, int32_t draftTrackCount,
+        const ScrollCache* cache, float& leftX, float& rightX, float& topY,
+        float& bottomY, float& trackAreaW, float& singleTrackW,
+        float renderScaleY);
 
     /// @warning 热路径：每次画布快照生成基础轨道布局时执行；仅允许
     /// O(trackCount) 绘制。

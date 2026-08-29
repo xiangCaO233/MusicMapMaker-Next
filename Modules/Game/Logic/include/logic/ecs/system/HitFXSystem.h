@@ -77,30 +77,36 @@ public:
 
     /// @brief 触发音效（仅音效，带预测支持）。
     /// @param ev 待播放的物件打击事件。
-    /// @param trackCount 当前谱面的总轨道数。
+    /// @param playerTrackCount 当前谱面的玩家轨道数。
+    /// @param draftTrackCount 当前项目共享草稿轨道数。
     /// @param config 当前编辑器配置。
     /// @warning 逻辑预测播放热路径：每个待触发物件调用一次，只允许固定计算和
     /// 音效池调度，禁止文件访问或阻塞等待。
-    void triggerAudio(const HitEvent& ev, std::int32_t trackCount,
+    void triggerAudio(const HitEvent& ev, std::int32_t playerTrackCount,
+                      std::int32_t                draftTrackCount,
                       const Config::EditorConfig& config);
 
     /// @brief 计算物件中心对应的双声道增益包络。
     /// @param ev 待定位的物件打击事件。
-    /// @param trackCount 当前谱面的总轨道数。
+    /// @param playerTrackCount 当前谱面的玩家轨道数。
     /// @param enabled 是否启用立体打击音效。
+    /// @param draftTrackCount 当前项目共享草稿轨道数；负值时兼容为玩家轨道数。
     /// @return 普通物件为固定增益，Flick
     /// 为起点到滑动终点的线性增益包络；关闭时保持原始立体声。
     /// @warning 逻辑预测播放热路径：仅执行常量时间算术，不得访问 ECS 或分配。
     [[nodiscard]] static Audio::StereoGainEnvelope stereoGainEnvelopeForEvent(
-        const HitEvent& ev, std::int32_t trackCount, bool enabled);
+        const HitEvent& ev, std::int32_t playerTrackCount, bool enabled,
+        std::int32_t draftTrackCount = -1);
 
     /// @brief 将事件绝对轨道换算为所属区域内的零基轨道。
     /// @param ev 待换算的正式或草稿打击事件。
-    /// @param trackCount 玩家轨道数量，亦为草稿轨道数量。
-    /// @return 正式事件保留原轨道，草稿事件将负轨道平移到 0 开始。
+    /// @param playerTrackCount 玩家轨道数量。
+    /// @param draftTrackCount 草稿轨道数量；负值时兼容为玩家轨道数。
+    /// @return 正式事件保留原轨道，草稿事件按草稿区宽度平移到 0 开始。
     /// @warning 逻辑与渲染热路径：只执行一次常量时间加法。
     [[nodiscard]] static std::int32_t areaTrackIndexForEvent(
-        const HitEvent& ev, std::int32_t trackCount) noexcept;
+        const HitEvent& ev, std::int32_t playerTrackCount,
+        std::int32_t draftTrackCount = -1) noexcept;
 
     /// @brief 解析打击事件实际使用的音效资源标识。
     /// @param ev 待解析的打击事件。

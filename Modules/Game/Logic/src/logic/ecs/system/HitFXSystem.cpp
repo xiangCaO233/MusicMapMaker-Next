@@ -31,7 +31,9 @@ std::optional<std::size_t> HitFXSystem::loopingEffectFrameIndex(
     return static_cast<std::size_t>(wrappedFrame);
 }
 
-void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
+void HitFXSystem::triggerAudio(const HitEvent&             ev,
+                               std::int32_t                playerTrackCount,
+                               std::int32_t                draftTrackCount,
                                const Config::EditorConfig& config)
 {
     auto& audioManager = Audio::AudioManager::instance();
@@ -70,8 +72,12 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
     const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
-        ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
-    const auto areaTrack       = areaTrackIndexForEvent(ev, trackCount);
+        ev,
+        playerTrackCount,
+        config.settings.sfxConfig.enableStereoHitEffects,
+        draftTrackCount);
+    const auto areaTrack =
+        areaTrackIndexForEvent(ev, playerTrackCount, draftTrackCount);
     const auto playbackControl = Audio::KeySoundPlaybackControl{
         .enabled          = true,
         .area             = ev.isDraft ? Audio::KeySoundPlaybackArea::Draft
@@ -140,26 +146,34 @@ HitEffectRenderBounds HitFXSystem::calculateRenderBounds(
 }
 
 std::int32_t HitFXSystem::areaTrackIndexForEvent(
-    const HitEvent& ev, std::int32_t trackCount) noexcept
+    const HitEvent& ev, std::int32_t playerTrackCount,
+    std::int32_t draftTrackCount) noexcept
 {
-    return ev.isDraft ? ev.trackIndex + std::max(trackCount, 0) : ev.trackIndex;
+    const auto effectiveDraftCount =
+        draftTrackCount >= 0 ? draftTrackCount : playerTrackCount;
+    return ev.isDraft ? ev.trackIndex + std::max(effectiveDraftCount, 0)
+                      : ev.trackIndex;
 }
 
 Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
-    const HitEvent& ev, std::int32_t trackCount, bool enabled)
+    const HitEvent& ev, std::int32_t playerTrackCount, bool enabled,
+    std::int32_t draftTrackCount)
 {
-    if ( !enabled || trackCount <= 0 ) return {};
+    const auto areaTrackCount =
+        ev.isDraft && draftTrackCount >= 0 ? draftTrackCount : playerTrackCount;
+    if ( !enabled || areaTrackCount <= 0 ) return {};
 
     // 草稿区与玩家区分别按各自从左到右的轨道中心计算声像。
-    const auto leftGainAtTrack = [trackCount](int trackIndex) {
+    const auto leftGainAtTrack = [areaTrackCount](int trackIndex) {
         const int boundedTrack =
-            std::clamp(trackIndex, 0, static_cast<int>(trackCount) - 1);
+            std::clamp(trackIndex, 0, static_cast<int>(areaTrackCount) - 1);
         const float rightPosition = (static_cast<float>(boundedTrack) + 0.5F) /
-                                    static_cast<float>(trackCount);
+                                    static_cast<float>(areaTrackCount);
         return 1.0F - rightPosition;
     };
 
-    const int   areaTrack = areaTrackIndexForEvent(ev, trackCount);
+    const int areaTrack =
+        areaTrackIndexForEvent(ev, playerTrackCount, draftTrackCount);
     const float startLeft = leftGainAtTrack(areaTrack);
     const float endLeft   = ev.type == ::MMM::NoteType::FLICK
                                 ? leftGainAtTrack(areaTrack + ev.trackOffset)

@@ -92,7 +92,9 @@ constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.enableDraftLanes);
+                                      ctx.lastConfig.settings.enableDraftLanes,
+                                      ctx.draftTrackCount,
+                                      true);
     const auto lane = lanes.laneAt(mouseX);
     return lane && lane->kind == CanvasLaneKind::Bgm
                ? ::MMM::BeatmapMutationFlags::AudioSamples
@@ -874,9 +876,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
-    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
-                         m_ctx->brushState.isActive ||
-                         m_ctx->eraserState.isActive;
+    bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+                               m_ctx->brushState.isActive ||
+                               m_ctx->eraserState.isActive;
     const bool isVisualAnimationActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;
@@ -974,8 +976,10 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                         m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
                     // 只要物件在当前播放点之后，都触发
                     if ( ev.timestamp >= m_ctx->animateTime ) {
-                        m_ctx->hitFXSystem.triggerAudio(
-                            ev, m_ctx->trackCount, effectiveConfig);
+                        m_ctx->hitFXSystem.triggerAudio(ev,
+                                                        m_ctx->trackCount,
+                                                        m_ctx->draftTrackCount,
+                                                        effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -991,8 +995,10 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                         m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
                     if ( ev.timestamp >
                          (previousAnimateTime + predictWindow) ) {
-                        m_ctx->hitFXSystem.triggerAudio(
-                            ev, m_ctx->trackCount, effectiveConfig);
+                        m_ctx->hitFXSystem.triggerAudio(ev,
+                                                        m_ctx->trackCount,
+                                                        m_ctx->draftTrackCount,
+                                                        effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }

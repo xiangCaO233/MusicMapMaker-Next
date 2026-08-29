@@ -68,6 +68,12 @@ private:
     /// @brief 当前拖拽手势是否已经应用过目标格点。
     bool m_hasLastAppliedDragTarget{ false };
 
+    /// @brief 拖拽开始时的持久化草稿轨道数量。
+    std::int32_t m_initialDraftTrackCount{ 0 };
+
+    /// @brief 当前手势是否触发过草稿追加轨扩展。
+    bool m_expandedDraftTracks{ false };
+
     /// @brief 当前拖拽手势上一次应用的目标时间。
     double m_lastAppliedDragTargetTime{ 0.0 };
 

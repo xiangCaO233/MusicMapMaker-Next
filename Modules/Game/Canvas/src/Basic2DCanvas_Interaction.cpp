@@ -2677,7 +2677,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         currentSnapshot.canvasHorizontalOffsetX,
         true,
         currentSnapshot.bmsEditingEnabled,
-        currentSnapshot.draftLanesEnabled);
+        currentSnapshot.draftLanesEnabled,
+        currentSnapshot.draftTrackCount,
+        true);
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
@@ -3147,7 +3149,9 @@ void Basic2DCanvasInteraction::handleInteractions(
             currentSnapshot->canvasHorizontalOffsetX,
             true,
             currentSnapshot->bmsEditingEnabled,
-            currentSnapshot->draftLanesEnabled);
+            currentSnapshot->draftLanesEnabled,
+            currentSnapshot->draftTrackCount,
+            true);
         const float dropLeft =
             std::clamp(projection.bgmLeftX, 0.0F, targetWidth);
         const float dropRight =
@@ -3204,7 +3208,9 @@ void Basic2DCanvasInteraction::handleInteractions(
         currentSnapshot->canvasHorizontalOffsetX,
         true,
         currentSnapshot->bmsEditingEnabled,
-        currentSnapshot->draftLanesEnabled);
+        currentSnapshot->draftLanesEnabled,
+        currentSnapshot->draftTrackCount,
+        true);
     const float trackLeftX  = laneProjection.draftLeftX;
     const float trackRightX = laneProjection.bgmRightX;
     const float normY =

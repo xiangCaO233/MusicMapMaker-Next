@@ -48,8 +48,10 @@ int getMirrorTrackCount(const SessionContext& ctx)
 }
 
 /// @brief 对单个 NoteComponent 应用轨道镜像变换。
-void mirrorNoteComponent(NoteComponent& note, int trackCount)
+void mirrorNoteComponent(NoteComponent& note, int playerTrackCount,
+                         int draftTrackCount)
 {
+    const auto trackCount = note.m_isDraft ? draftTrackCount : playerTrackCount;
     if ( trackCount <= 0 ) return;
 
     const auto mirrorTrack = [trackCount, isDraft = note.m_isDraft](int track) {
@@ -1864,7 +1866,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
         const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
         auto        newNote = oldNote;
 
-        mirrorNoteComponent(newNote, trackCount);
+        mirrorNoteComponent(newNote, trackCount, m_ctx.draftTrackCount);
 
         entries.push_back({ entity, oldNote, newNote });
     }
@@ -2079,7 +2081,8 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
 
             if ( cmd.m_mirrored ) {
-                mirrorNoteComponent(newNote, mirrorTrackCount);
+                mirrorNoteComponent(
+                    newNote, mirrorTrackCount, m_ctx.draftTrackCount);
             }
 
             if ( !isPlaceableCreatedNote(newNote) ) {

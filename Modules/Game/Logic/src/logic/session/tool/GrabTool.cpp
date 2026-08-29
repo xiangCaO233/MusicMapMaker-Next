@@ -349,7 +349,9 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
-        isMainCanvas && ctx.lastConfig.settings.enableDraftLanes);
+        isMainCanvas && ctx.lastConfig.settings.enableDraftLanes,
+        ctx.draftTrackCount,
+        isMainCanvas);
     if ( !projection.valid ) return std::nullopt;
 
     CanvasLaneAddress address;
@@ -376,7 +378,8 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
 
     return UnifiedDragTarget{
         .time             = targetTime,
-        .absoluteTrack    = address.absoluteTrack(projection.playerLaneCount),
+        .absoluteTrack    = address.absoluteTrack(projection.playerLaneCount,
+                                                  projection.draftLaneCount),
         .leftX            = projection.player.leftX,
         .singleTrackWidth = projection.player.singleTrackWidth,
     };
@@ -405,7 +408,7 @@ bool noteFitsPlayerArea(const NoteComponent& note, std::int32_t trackCount)
                        });
 }
 
-/// @brief 判断草稿物件是否完整位于左侧 K 条草稿轨中。
+/// @brief 判断草稿物件是否完整位于当前持久化草稿轨中。
 bool noteFitsDraftArea(const NoteComponent& note, std::int32_t trackCount)
 {
     if ( trackCount <= 0 ) return false;
@@ -543,6 +546,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     m_usesUnifiedObjectDrag    = false;
     m_isSampleOffsetDrag       = false;
     m_hasLastAppliedDragTarget = false;
+    m_initialDraftTrackCount   = std::max(0, ctx.draftTrackCount);
+    m_expandedDraftTracks      = false;
     m_initialStates.clear();
     m_initialSampleStates.clear();
     ctx.dragRenderPinnedEntities.clear();
@@ -907,7 +912,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         static_cast<std::int64_t>(std::max(0, ctx.bgmTrackCount));
     const std::int64_t minimumAccessibleTrack =
         m_initialSampleStates.empty()
-            ? -static_cast<std::int64_t>(std::max(0, ctx.trackCount))
+            ? -static_cast<std::int64_t>(std::max(0, ctx.draftTrackCount) + 1)
             : 0;
     if ( minimumTrack != std::numeric_limits<std::int64_t>::max() &&
          maximumTrack != std::numeric_limits<std::int64_t>::min() ) {
@@ -935,6 +940,16 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
     m_hasLastAppliedDragTarget   = true;
     m_lastAppliedDragTargetTime  = appliedTargetTime;
     m_lastAppliedDragTargetTrack = appliedTargetTrack;
+
+    const auto movedMinimumTrack = minimumTrack + deltaTrack;
+    const auto requiredDraftTrackCount =
+        movedMinimumTrack < 0 ? static_cast<std::int32_t>(-movedMinimumTrack)
+                              : 0;
+    if ( requiredDraftTrackCount > ctx.draftTrackCount ) {
+        ctx.draftTrackCount   = requiredDraftTrackCount;
+        m_expandedDraftTracks = true;
+        ctx.isTransformDirty  = true;
+    }
 
     for ( const auto& [entity, state] : m_initialStates ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(entity);
@@ -1363,7 +1378,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
         if ( !current || current->m_isSubNote ) continue;
 
         if ( current->m_trackIndex < 0 ) {
-            if ( !noteFitsDraftArea(*current, ctx.trackCount) ) {
+            if ( !noteFitsDraftArea(*current, ctx.draftTrackCount) ) {
                 rejectionReason =
                     "草稿物件拖动结果超出左侧草稿轨道区，已取消本次操作";
                 break;
@@ -1447,6 +1462,10 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
 
     if ( !rejectionReason.empty() ) {
         restoreInitialStates();
+        if ( m_expandedDraftTracks ) {
+            ctx.draftTrackCount  = m_initialDraftTrackCount;
+            ctx.isTransformDirty = true;
+        }
         ctx.lastActionMessage = std::move(rejectionReason);
     } else {
         std::vector<BatchNoteAction::Entry>   noteEntries;
@@ -1514,6 +1533,11 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             });
         }
 
+        if ( m_expandedDraftTracks ) {
+            ctx.draftTrackCount  = m_initialDraftTrackCount;
+            ctx.isTransformDirty = true;
+        }
+
         std::vector<std::unique_ptr<IEditorAction>> actions;
         if ( !noteEntries.empty() ) {
             actions.push_back(std::make_unique<BatchNoteAction>(
@@ -1555,6 +1579,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     m_usesUnifiedObjectDrag    = false;
     m_isSampleOffsetDrag       = false;
     m_hasLastAppliedDragTarget = false;
+    m_expandedDraftTracks      = false;
 }
 
 /// @brief 结束物件移动或局部编辑拖拽并提交动作。

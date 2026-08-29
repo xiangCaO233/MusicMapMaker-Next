@@ -97,6 +97,30 @@ bool testDraftTrackMappingAndStereo()
     return true;
 }
 
+/// @brief 验证草稿轨数量独立增长后仍使用草稿区自身宽度定位声像。
+/// @return 六轨草稿最左与最右轨分别映射到局部 0 和 5 时返回 true。
+bool testDynamicDraftTrackMappingAndStereo()
+{
+    using HitFXSystem  = MMM::Logic::System::HitFXSystem;
+    auto leftDraft     = makeEvent(MMM::NoteType::NOTE, -6);
+    auto rightDraft    = makeEvent(MMM::NoteType::NOTE, -1);
+    leftDraft.isDraft  = true;
+    rightDraft.isDraft = true;
+
+    const auto leftEnvelope =
+        HitFXSystem::stereoGainEnvelopeForEvent(leftDraft, 4, true, 6);
+    const auto rightEnvelope =
+        HitFXSystem::stereoGainEnvelopeForEvent(rightDraft, 4, true, 6);
+    if ( HitFXSystem::areaTrackIndexForEvent(leftDraft, 4, 6) != 0 ||
+         HitFXSystem::areaTrackIndexForEvent(rightDraft, 4, 6) != 5 ||
+         !near(leftEnvelope.startLeft, 11.0F / 12.0F) ||
+         !near(rightEnvelope.startRight, 11.0F / 12.0F) ) {
+        XERROR("Dynamic draft hit event used player lane width for stereo");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证画面两侧轨道与实际左右声道方向一致。
 /// @return 最左轨左声道更响且最右轨右声道更响时返回 true。
 bool testTrackSidesMatchChannels()
@@ -335,6 +359,7 @@ int main()
 {
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
                    testDraftTrackMappingAndStereo() &&
+                   testDynamicDraftTrackMappingAndStereo() &&
                    testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo() &&
                    testBoundSoundOverridesDefault() &&

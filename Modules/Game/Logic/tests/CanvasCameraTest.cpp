@@ -76,6 +76,7 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
     }
     context.currentBeatmap->m_baseMapMetadata.track_count = 4;
     context.trackCount                                    = 4;
+    context.draftTrackCount                               = 4;
     context.bgmTrackCount                                 = 1;
     context.currentTime                                   = 1.0;
     context.animateTime                                   = 1.0;
@@ -476,8 +477,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                  sample.m_audioResourceId == "main" &&
-                                  near(sample.m_volume, 0.7));
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -883,6 +884,38 @@ bool testUnifiedLaneProjection()
     return true;
 }
 
+/// @brief 验证草稿持久轨道数量独立于玩家键数并始终保留最左追加轨。
+/// @return 追加轨映射、扩轨后原轨道屏幕位置和反向地址均保持稳定时返回 true。
+bool testDynamicDraftAppendLaneProjection()
+{
+    const auto before = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 6, true);
+    const auto appendLane = before.laneAt(-550.0F);
+    const auto existingLane =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-6, 4, 7);
+    const auto existingBounds = before.bounds(existingLane);
+
+    const auto after = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 7, true);
+    const auto expandedAddress =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-6, 4, 8);
+    const auto expandedBounds = after.bounds(expandedAddress);
+
+    if ( !before.valid || before.draftLaneCount != 7U ||
+         !near(before.draftLeftX, -600.0) || !appendLane ||
+         appendLane->kind != MMM::Logic::CanvasLaneKind::Draft ||
+         appendLane->index != 0U || appendLane->absoluteTrack(4, 7) != -7 ||
+         existingLane.index != 1U || !existingBounds ||
+         !near(existingBounds->leftX, -500.0) || !after.valid ||
+         after.draftLaneCount != 8U || !near(after.draftLeftX, -700.0) ||
+         expandedAddress.index != 2U || !expandedBounds ||
+         !near(expandedBounds->leftX, existingBounds->leftX) ) {
+        XERROR("Dynamic draft append projection shifted existing lanes");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证未发布草稿轨时不会绘制可访问投影、创建草稿或全选草稿物件。
 /// @return 默认投影隐藏草稿区且编辑入口不会命中草稿数据时返回 true。
 bool testDraftLaneReleaseGateHidesDraftArea()
@@ -1005,6 +1038,7 @@ bool testProjectDraftLaneSharingAndIsolation()
             .m_isDraft         = true,
             .m_collaborationId = "draft-a",
         });
+    first.draftTrackCount       = 6;
     first.m_needsDraftNotesSync = true;
     MMM::Logic::ProjectDraftLaneService::sync(first);
 
@@ -1012,6 +1046,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     MMM::Logic::SessionUtils::syncBeatmap(first);
     MMM::Logic::SessionUtils::rebuildHitEvents(first);
     if ( project->m_draftLaneGroups.size() != 1 ||
+         project->m_draftLaneGroups.front().m_trackCount != 6 ||
          first.currentBeatmap->m_noteData.notes.size() != 1 ||
          first.currentBeatmap->m_noteData.notes.front().m_track != 1 ||
          first.hitEvents.size() != 2 || first.hitEvents[0].isDraft ||
@@ -1023,8 +1058,21 @@ bool testProjectDraftLaneSharingAndIsolation()
 
     MMM::Logic::SessionContext second;
     configure(second, "song.ogg");
-    if ( collectDraftRootIds(second) !=
-         std::unordered_set<std::string>{ "draft-a" } ) {
+    entt::entity loadedDraftA = entt::null;
+    for ( const auto entity :
+          second.noteRegistry.view<const MMM::Logic::NoteComponent>() ) {
+        const auto& note =
+            second.noteRegistry.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_collaborationId == "draft-a" ) {
+            loadedDraftA = entity;
+            break;
+        }
+    }
+    if ( second.draftTrackCount != 6 || loadedDraftA == entt::null ||
+         second.noteRegistry.get<const MMM::Logic::NoteComponent>(loadedDraftA)
+                 .m_trackIndex != -4 ||
+         collectDraftRootIds(second) !=
+             std::unordered_set<std::string>{ "draft-a" } ) {
         XERROR("A beatmap using the same main audio did not load drafts");
         return false;
     }
@@ -1087,6 +1135,45 @@ bool testProjectDraftLaneSharingAndIsolation()
         return false;
     }
 
+    MMM::Logic::SessionContext stale;
+    configure(stale, "song.ogg");
+    first.draftTrackCount       = 7;
+    first.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(first);
+    const auto staleEntity = stale.noteRegistry.create();
+    stale.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        staleEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::NOTE,
+            .m_timestamp       = 4.0,
+            .m_trackIndex      = -2,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-stale",
+        });
+    stale.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(stale);
+    MMM::Logic::SessionContext afterConcurrentGrowth;
+    configure(afterConcurrentGrowth, "song.ogg");
+    entt::entity concurrentOuter = entt::null;
+    entt::entity concurrentStale = entt::null;
+    const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
+                                       .view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : concurrentView ) {
+        const auto& note =
+            concurrentView.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_collaborationId == "draft-c" ) concurrentOuter = entity;
+        if ( note.m_collaborationId == "draft-stale" ) concurrentStale = entity;
+    }
+    if ( afterConcurrentGrowth.draftTrackCount != 7 ||
+         concurrentOuter == entt::null || concurrentStale == entt::null ||
+         concurrentView.get<const MMM::Logic::NoteComponent>(concurrentOuter)
+                 .m_trackIndex != -3 ||
+         concurrentView.get<const MMM::Logic::NoteComponent>(concurrentStale)
+                 .m_trackIndex != -2 ) {
+        XERROR("Concurrent draft count growth shifted or truncated objects");
+        return false;
+    }
+
     MMM::Logic::SessionContext isolated;
     configure(isolated, "other.ogg");
     return isolated.m_draftLaneGroupId == "other-main" &&
@@ -1121,6 +1208,33 @@ bool testDraftMirrorStaysInDraftDomain()
                MMM::BeatmapMutationFlags::None;
 }
 
+/// @brief 验证草稿镜像使用动态草稿轨数量而非玩家键数。
+/// @return 六轨草稿最左轨镜像至最右轨且不扩展轨道数时返回 true。
+bool testDraftMirrorUsesDynamicDraftTrackCount()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.draftTrackCount = 6;
+    const auto entity       = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -6,
+            .m_isDraft    = true,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdMirrorSelected{});
+    const auto& mirrored =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return mirrored.m_trackIndex == -1 && mirrored.m_isDraft &&
+           context.draftTrackCount == 6;
+}
+
 /// @brief 验证常用分拍对齐不会丢弃缺少独立子实体的折线节点。
 /// @return 父折线的完整节点在执行、同步、撤销和重做后均保留时返回 true。
 bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
@@ -1135,25 +1249,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.013,
-              .duration   = 0.241,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 1.254,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.254,
-              .duration   = 0.246,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
     };
 
@@ -2762,25 +2876,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::NOTE,
-              .timestamp  = 1.0,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 2.0,
-              .duration   = 0.5,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 3.0,
-              .duration   = 0.0,
-              .trackIndex = 1,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
         },
     };
 
@@ -3758,6 +3872,72 @@ bool testMarqueeToolEntityDragCrossesCanvasAreas()
            context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty();
 }
 
+/// @brief 验证物件拖入草稿追加轨后扩展持久轨道数并保持单次撤销记录。
+/// @return 拖动、Undo 与 Redo 同步恢复物件轨道和草稿轨道数量时返回 true。
+bool testDraftAppendLaneDragExpandsPersistentCount()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        entity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        entity,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        -350.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto moved =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( moved.m_trackIndex != -5 || !moved.m_isDraft ||
+         context.draftTrackCount != 5 ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Draft append drag did not expand one persistent lane");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    const auto undone =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( undone.m_trackIndex != 0 || undone.m_isDraft ||
+         context.draftTrackCount != 4 ) {
+        XERROR("Draft append drag undo did not restore lane count");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    const auto redone =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( redone.m_trackIndex != -5 || !redone.m_isDraft ||
+         context.draftTrackCount != 5 ) {
+        XERROR("Draft append drag redo did not restore expansion");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证折线在草稿区和玩家区之间双向拖动并保持完整结构。
 /// @return 双向移动、正式同步及 Undo/Redo 均保留根子结构时返回 true。
 bool testPolylineDragMovesBetweenDraftAndPlayer()
@@ -4005,7 +4185,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after          = std::nullopt,
+                .after  = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -4079,11 +4259,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-                        .startTime  = 0.9,
-                        .endTime    = 1.1,
-                        .startTrack = 4.05F,
-                        .endTrack   = 4.95F,
-                        .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.9,
+            .endTime    = 1.1,
+            .startTrack = 4.05F,
+            .endTrack   = 4.95F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -4402,9 +4582,11 @@ int main()
                    testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
+                   testDynamicDraftAppendLaneProjection() &&
                    testDraftLaneReleaseGateHidesDraftArea() &&
                    testProjectDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
+                   testDraftMirrorUsesDynamicDraftTrackCount() &&
                    testAlignCommonBeatsPreservesEmbeddedPolylineNodes() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
@@ -4443,6 +4625,7 @@ int main()
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
                    testMarqueeToolEntityDragCrossesCanvasAreas() &&
+                   testDraftAppendLaneDragExpandsPersistentCount() &&
                    testPolylineDragMovesBetweenDraftAndPlayer() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&

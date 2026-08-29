@@ -43,6 +43,7 @@ bool testLogoUsesFullViewportScissor()
         VIEWPORT_HEIGHT * 0.8f,
         4,
         0,
+        4,
         config);
 
     for ( const auto& command : snapshot.cmds ) {

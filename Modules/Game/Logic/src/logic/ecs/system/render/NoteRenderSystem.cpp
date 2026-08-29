@@ -162,7 +162,7 @@ void NoteRenderSystem::generateSnapshot(
     const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, int32_t bgmTrackCount,
+    int32_t trackCount, int32_t bgmTrackCount, int32_t draftTrackCount,
     const Config::EditorConfig& config, float mainViewportHeight,
     HitFXSystem* hitFXSystem)
 {
@@ -283,12 +283,14 @@ void NoteRenderSystem::generateSnapshot(
                                       tempBY,
                                       tempSTW);
         if ( isMainCanvas && config.settings.enableDraftLanes ) {
+            const auto visibleDraftTrackCount =
+                std::max(0, draftTrackCount) + 1;
             const float draftLeftX =
-                tempLX - static_cast<float>(trackCount) * tempSTW;
+                tempLX - static_cast<float>(visibleDraftTrackCount) * tempSTW;
             hitFXSystem->generateSnapshot(batcher,
                                           renderTime,
                                           config,
-                                          trackCount,
+                                          visibleDraftTrackCount,
                                           judgmentLineY,
                                           draftLeftX,
                                           tempTY,
@@ -358,6 +360,7 @@ void NoteRenderSystem::generateSnapshot(
                                                      trackCount,
                                                      config,
                                                      bgmTrackCount,
+                                                     draftTrackCount,
                                                      cache,
                                                      leftX,
                                                      rightX,
@@ -447,7 +450,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             const float visibleDraftLeft =
                 std::max(0.0F, laneProjection.draftLeftX);
             const float visibleDraftRight =
@@ -528,7 +533,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             noteRenderClipLeftX = laneProjection.draftLeftX;
             if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
                 noteRenderRightX = laneProjection.bgmRightX;
@@ -562,7 +569,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             SampleRenderSystem::renderSamples(sampleRegistry,
                                               sortedSampleEntities,
                                               sortedSampleMaxEndPrefix,
@@ -595,7 +604,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             const float clipLeft = std::max(0.0F, laneProjection.draftLeftX);
             const float clipRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
@@ -1212,8 +1223,8 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
-    float& rightX, float& topY, float& bottomY, float& trackAreaW,
+    int32_t bgmTrackCount, int32_t draftTrackCount, const ScrollCache* cache,
+    float& leftX, float& rightX, float& topY, float& bottomY, float& trackAreaW,
     float& singleTrackW, float renderScaleY)
 {
     BackgroundRenderSystem::render(
@@ -1269,7 +1280,9 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
                                           config.settings.enableBmsEditing,
-                                          config.settings.enableDraftLanes);
+                                          config.settings.enableDraftLanes,
+                                          draftTrackCount,
+                                          true);
         const float visibleDraftLeft =
             std::max(0.0F, laneProjection.draftLeftX);
         const float visibleDraftRight =
@@ -1279,12 +1292,13 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                topY,
                                visibleDraftRight - visibleDraftLeft,
                                bottomY - topY);
-            NoteRenderSystem::drawTrackBackground(batcher,
-                                                  trackCount,
-                                                  laneProjection.draftLeftX,
-                                                  topY,
-                                                  bottomY,
-                                                  singleTrackW);
+            NoteRenderSystem::drawTrackBackground(
+                batcher,
+                static_cast<std::int32_t>(laneProjection.draftLaneCount),
+                laneProjection.draftLeftX,
+                topY,
+                bottomY,
+                singleTrackW);
             batcher.setTexture(TextureID::None);
             batcher.pushQuad(
                 laneProjection.draftLeftX,
@@ -1300,7 +1314,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                    { 0.35F, 0.55F, 0.75F, 1.0F });
             NoteRenderSystem::drawJudgmentArea(
                 batcher,
-                trackCount,
+                static_cast<std::int32_t>(laneProjection.draftLaneCount),
                 laneProjection.draftLeftX,
                 judgmentLineY,
                 singleTrackW,

@@ -539,7 +539,9 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
-    int32_t trackCount{ 4 };  ///< 谱面轨道数量
+    int32_t trackCount{ 4 };  ///< 谱面玩家轨道数量。
+    /// @brief 持久化草稿轨道数量，不包含最左侧运行时追加轨。
+    int32_t draftTrackCount{ 4 };
     /// @brief 持久化 BGM 轨道数量，不包含运行时追加轨。
     int32_t bgmTrackCount{ 0 };
     /// @brief 当前快照是否显示并允许交互 BGM 轨道区。
@@ -762,6 +764,7 @@ struct RenderSnapshot {
         visibleTimeEnd     = 0.0;
         noteCount          = 0;
         maxCombo           = 0;
+        draftTrackCount    = trackCount;
         bgmTrackCount      = 0;
         bmsEditingEnabled  = true;
         draftLanesEnabled  = false;

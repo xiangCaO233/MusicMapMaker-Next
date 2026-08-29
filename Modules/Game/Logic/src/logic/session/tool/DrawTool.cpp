@@ -175,6 +175,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     float                            leftX  = playerProjection.leftX;
     float                            rightX = playerProjection.rightX;
     std::optional<CanvasLaneAddress> targetLane;
+    std::uint32_t                    projectedDraftLaneCount{ 0U };
     if ( isPreview ) {
         leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
         rightX = itCamera->second.viewportWidth -
@@ -199,8 +200,11 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.enableDraftLanes);
-        targetLane = laneProjection.laneAt(cmd.mouseX);
+            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.draftTrackCount,
+            true);
+        projectedDraftLaneCount = laneProjection.draftLaneCount;
+        targetLane              = laneProjection.laneAt(cmd.mouseX);
     }
 
     if ( !targetLane ) {
@@ -289,8 +293,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         return;
     }
 
-    ctx.brushState.track = static_cast<int>(
-        targetLane->absoluteTrack(static_cast<std::uint32_t>(ctx.trackCount)));
+    ctx.brushState.track = static_cast<int>(targetLane->absoluteTrack(
+        static_cast<std::uint32_t>(ctx.trackCount), projectedDraftLaneCount));
     if ( createsAudioSample ) {
         ctx.brushState.type = ::MMM::NoteType::NOTE;
         return;
@@ -516,6 +520,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     const bool isPreview =
         cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas";
     std::optional<CanvasLaneAddress> currentLane;
+    std::uint32_t                    projectedDraftLaneCount{ 0U };
     if ( !isPreview ) {
         const auto laneProjection = calculateCanvasLaneProjection(
             itCamera->second.viewportWidth,
@@ -526,8 +531,11 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.enableDraftLanes);
-        currentLane = laneProjection.laneAt(cmd.mouseX);
+            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.draftTrackCount,
+            true);
+        projectedDraftLaneCount = laneProjection.draftLaneCount;
+        currentLane             = laneProjection.laneAt(cmd.mouseX);
         if ( !currentLane ) return;
 
         const CanvasLaneKind brushLaneKind =
@@ -543,7 +551,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     if ( ctx.brushState.createsAudioSample ) {
         if ( currentLane && currentLane->kind == CanvasLaneKind::Bgm ) {
             ctx.brushState.track = static_cast<int>(currentLane->absoluteTrack(
-                static_cast<std::uint32_t>(ctx.trackCount)));
+                static_cast<std::uint32_t>(ctx.trackCount),
+                projectedDraftLaneCount));
             ctx.brushState.time  = currentPosTime;
         }
         return;
@@ -567,10 +576,11 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     int   currentTrack =
         currentLane
             ? currentLane->absoluteTrack(
-                  static_cast<std::uint32_t>(ctx.trackCount))
+                  static_cast<std::uint32_t>(ctx.trackCount),
+                  projectedDraftLaneCount)
             : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     const bool editsDraft   = ctx.brushState.track < 0;
-    const int  minimumTrack = editsDraft ? -ctx.trackCount : 0;
+    const int  minimumTrack = editsDraft ? -(ctx.draftTrackCount + 1) : 0;
     const int  maximumTrack = editsDraft ? -1 : ctx.trackCount - 1;
     currentTrack = std::clamp(currentTrack, minimumTrack, maximumTrack);
 
