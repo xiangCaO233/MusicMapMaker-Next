@@ -1402,10 +1402,12 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     }
 
     const auto restoreInitialStates = [&]() {
+        bool restoredNotes = false;
         for ( const auto& [entity, state] : m_initialStates ) {
             if ( ctx.noteRegistry.valid(entity) &&
                  ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
                 ctx.noteRegistry.replace<NoteComponent>(entity, state.note);
+                restoredNotes = true;
             }
         }
         for ( const auto& [entity, state] : m_initialSampleStates ) {
@@ -1414,6 +1416,14 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
                 ctx.sampleRegistry.replace<SampleComponent>(entity,
                                                             state.sample);
             }
+        }
+        if ( restoredNotes ) {
+            // 拖动预览期间可见性索引仍保留旧位置；回弹后必须令时间排序、
+            // Polyline 包围区间和 AbsY 分桶一起失效，否则清除拖动固定列表后
+            // 大折线可能继续按非法落点剔除，表现为整个物件消失。
+            ctx.isNoteOrderDirty             = true;
+            ctx.isNoteStatsDirty             = true;
+            ctx.isAnnotationRenderCacheDirty = true;
         }
         ctx.isTransformDirty = true;
     };
