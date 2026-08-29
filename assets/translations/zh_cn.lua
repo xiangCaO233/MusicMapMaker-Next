@@ -1005,7 +1005,7 @@ return {
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "时间",
 	["ui.canvas.track"] = "轨道",
-	["ui.canvas.draft_track"] = "DRAFT轨道",
+	["ui.canvas.draft_track"] = "草稿轨道",
 	["ui.canvas.bgm_track"] = "BGM轨道",
 	["ui.canvas.snap"] = "吸附",
 	["ui.canvas.beat_divisor"] = "总分拍数",
