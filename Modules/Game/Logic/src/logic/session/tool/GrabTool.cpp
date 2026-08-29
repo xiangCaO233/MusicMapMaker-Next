@@ -836,8 +836,8 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         target->absoluteTrack >=
         static_cast<std::int32_t>(std::max(0, ctx.trackCount));
     if ( !m_usesUnifiedObjectDrag &&
-         ctx.draggedObjectKind == ChartObjectKind::PlayerNote &&
-         !targetIsBgm ) {
+         ctx.draggedObjectKind == ChartObjectKind::PlayerNote && !targetIsBgm &&
+         target->absoluteTrack >= 0 ) {
         return false;
     }
     m_usesUnifiedObjectDrag = true;
@@ -961,14 +961,22 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
                                          std::numeric_limits<int>::min(),
                                          std::numeric_limits<int>::max()));
         }
-        if ( note->m_type == ::MMM::NoteType::POLYLINE && !note->m_isSubNote ) {
-            syncPolylineSubEntities(ctx, entity, *note);
-        }
         if ( auto* transform =
                  ctx.noteRegistry.try_get<TransformComponent>(entity) ) {
             transform->m_pos.x =
                 target->leftX + static_cast<float>(note->m_trackIndex) *
                                     target->singleTrackWidth;
+        }
+    }
+
+    // unordered_map 不保证父子实体顺序；根折线全部移动后再以根数据覆盖子实体。
+    for ( const auto& [entity, state] : m_initialStates ) {
+        (void)state;
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(entity);
+        if ( note && note->m_type == ::MMM::NoteType::POLYLINE &&
+             !note->m_isSubNote ) {
+            syncPolylineSubEntities(ctx, entity, *note);
         }
     }
 

@@ -3756,15 +3756,16 @@ bool testMarqueeToolEntityDragCrossesCanvasAreas()
            context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty();
 }
 
-/// @brief 验证从草稿折线子实体起拖时会移动完整折线而不会删除根实体。
-/// @return 折线进入玩家区且 Undo/Redo 保留根子结构时返回 true。
-bool testDraftPolylineChildDragMovesWholePolyline()
+/// @brief 验证折线在草稿区和玩家区之间双向拖动并保持完整结构。
+/// @return 双向移动、正式同步及 Undo/Redo 均保留根子结构时返回 true。
+bool testPolylineDragMovesBetweenDraftAndPlayer()
 {
     MMM::Logic::SessionContext context;
     configureObjectEditingCanvas(context);
 
     const auto                rootEntity  = context.noteRegistry.create();
-    const auto                childEntity = context.noteRegistry.create();
+    const auto                firstChild  = context.noteRegistry.create();
+    const auto                secondChild = context.noteRegistry.create();
     MMM::Logic::NoteComponent root{
         .m_type            = MMM::NoteType::POLYLINE,
         .m_timestamp       = 1.0,
@@ -3772,85 +3773,120 @@ bool testDraftPolylineChildDragMovesWholePolyline()
         .m_isDraft         = true,
         .m_collaborationId = "draft-polyline-root",
     };
-    root.m_subNotes.push_back(MMM::Logic::NoteComponent::SubNote{
-        .type            = MMM::NoteType::NOTE,
-        .timestamp       = 1.25,
-        .trackIndex      = -1,
-        .collaborationId = "draft-polyline-child",
-    });
+    root.m_subNotes = {
+        MMM::Logic::NoteComponent::SubNote{
+            .type            = MMM::NoteType::NOTE,
+            .timestamp       = 1.0,
+            .trackIndex      = -2,
+            .collaborationId = "draft-polyline-first",
+        },
+        MMM::Logic::NoteComponent::SubNote{
+            .type            = MMM::NoteType::FLICK,
+            .timestamp       = 1.25,
+            .trackIndex      = -1,
+            .dtrack          = -1,
+            .collaborationId = "draft-polyline-second",
+        },
+    };
     context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
     context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(rootEntity);
-    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
-        childEntity,
-        MMM::Logic::NoteComponent{
-            .m_type            = MMM::NoteType::NOTE,
-            .m_timestamp       = 1.25,
-            .m_trackIndex      = -1,
-            .m_isSubNote       = true,
-            .m_isDraft         = true,
-            .m_parentPolyline  = rootEntity,
-            .m_subIndex        = 0,
-            .m_collaborationId = "draft-polyline-child",
-        });
-    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(childEntity);
-    context.hoveredEntity     = childEntity;
-    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::DraftNote;
-    context.hoveredPart =
-        static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
-    context.hoveredSubIndex = 0;
-
-    MMM::Logic::GrabTool tool;
-    tool.handleStartDrag(context,
-                         MMM::Logic::CmdStartDrag{
-                             childEntity,
-                             "Basic2DCanvas",
-                             false,
-                             MMM::Logic::ChartObjectKind::DraftNote,
-                         });
-    tool.handleUpdateDrag(context,
-                          MMM::Logic::CmdUpdateDrag{
-                              "Basic2DCanvas",
-                              250.0F,
-                              300.0F,
-                              true,
-                          });
-    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    const auto addChild = [&](entt::entity entity, std::size_t index) {
+        const auto& sub = root.m_subNotes[index];
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{
+                .m_type            = sub.type,
+                .m_timestamp       = sub.timestamp,
+                .m_trackIndex      = sub.trackIndex,
+                .m_dtrack          = sub.dtrack,
+                .m_isSubNote       = true,
+                .m_isDraft         = true,
+                .m_parentPolyline  = rootEntity,
+                .m_subIndex        = static_cast<int>(index),
+                .m_collaborationId = sub.collaborationId,
+            });
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    };
+    // 先创建根、后创建两个子实体，覆盖 unordered_map 子实体先于根遍历的路径。
+    addChild(firstChild, 0);
+    addChild(secondChild, 1);
 
     const auto structureMatches =
-        [&](bool isDraft, int rootTrack, int childTrack) {
+        [&](bool isDraft, int firstTrack, int secondTrack) {
             if ( !context.noteRegistry.valid(rootEntity) ||
-                 !context.noteRegistry.valid(childEntity) ) {
+                 !context.noteRegistry.valid(firstChild) ||
+                 !context.noteRegistry.valid(secondChild) ) {
                 return false;
             }
             const auto& currentRoot =
                 context.noteRegistry.get<const MMM::Logic::NoteComponent>(
                     rootEntity);
-            const auto& currentChild =
+            const auto& currentFirst =
                 context.noteRegistry.get<const MMM::Logic::NoteComponent>(
-                    childEntity);
+                    firstChild);
+            const auto& currentSecond =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    secondChild);
             return currentRoot.m_type == MMM::NoteType::POLYLINE &&
                    currentRoot.m_isDraft == isDraft &&
-                   currentRoot.m_trackIndex == rootTrack &&
-                   currentRoot.m_subNotes.size() == 1 &&
-                   currentRoot.m_subNotes.front().trackIndex == childTrack &&
-                   currentChild.m_isSubNote &&
-                   currentChild.m_parentPolyline == rootEntity &&
-                   currentChild.m_isDraft == isDraft &&
-                   currentChild.m_trackIndex == childTrack;
+                   currentRoot.m_trackIndex == firstTrack &&
+                   currentRoot.m_subNotes.size() == 2 &&
+                   currentRoot.m_subNotes[0].trackIndex == firstTrack &&
+                   currentRoot.m_subNotes[1].trackIndex == secondTrack &&
+                   currentFirst.m_parentPolyline == rootEntity &&
+                   currentFirst.m_isDraft == isDraft &&
+                   currentFirst.m_trackIndex == firstTrack &&
+                   currentSecond.m_parentPolyline == rootEntity &&
+                   currentSecond.m_isDraft == isDraft &&
+                   currentSecond.m_trackIndex == secondTrack;
         };
+    const auto drag = [&](MMM::Logic::ChartObjectKind kind, float mouseX) {
+        context.hoveredEntity     = rootEntity;
+        context.hoveredObjectKind = kind;
+        context.hoveredPart =
+            static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
+        context.hoveredSubIndex = 0;
+        MMM::Logic::GrabTool tool;
+        tool.handleStartDrag(context,
+                             MMM::Logic::CmdStartDrag{
+                                 rootEntity,
+                                 "Basic2DCanvas",
+                                 false,
+                                 kind,
+                             });
+        tool.handleUpdateDrag(context,
+                              MMM::Logic::CmdUpdateDrag{
+                                  "Basic2DCanvas",
+                                  mouseX,
+                                  300.0F,
+                                  true,
+                              });
+        tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    };
 
+    drag(MMM::Logic::ChartObjectKind::DraftNote, 250.0F);
+    MMM::Logic::SessionUtils::syncBeatmap(context);
     if ( !structureMatches(false, 1, 2) ||
-         context.actionStack.getUndoStackSize() != 1 ) {
-        XERROR("Draft Polyline child drag lost or misplaced the Polyline");
+         context.currentBeatmap->m_noteData.polylines.size() != 1 ||
+         context.currentBeatmap->m_noteData.polylines.front()
+                 .m_subNotes.size() != 2 ) {
+        XERROR("Draft-to-player Polyline drag lost its complete structure");
+        return false;
+    }
+
+    drag(MMM::Logic::ChartObjectKind::PlayerNote, -50.0F);
+    if ( !structureMatches(true, -2, -1) ||
+         context.actionStack.getUndoStackSize() != 2 ) {
+        XERROR("Player-to-draft Polyline drag did not cross the area boundary");
         return false;
     }
     context.actionStack.undo(context);
-    if ( !structureMatches(true, -2, -1) ) {
-        XERROR("Draft Polyline child drag undo lost the original structure");
+    if ( !structureMatches(false, 1, 2) ) {
+        XERROR("Bidirectional Polyline drag undo lost the player structure");
         return false;
     }
     context.actionStack.redo(context);
-    return structureMatches(false, 1, 2);
+    return structureMatches(true, -2, -1);
 }
 
 /// @brief 验证未绑定 Tap 拖入 BGM 轨道后成为可撤销的空采样草稿。
@@ -4405,7 +4441,7 @@ int main()
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
                    testMarqueeToolEntityDragCrossesCanvasAreas() &&
-                   testDraftPolylineChildDragMovesWholePolyline() &&
+                   testPolylineDragMovesBetweenDraftAndPlayer() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
