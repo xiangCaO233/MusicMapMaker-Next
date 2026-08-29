@@ -851,9 +851,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.timelineProfessionalMode =
         source.settings.timelineProfessionalMode;
     target.settings.showPreviewWindow = source.settings.showPreviewWindow;
-    target.settings.showToolLabels    = source.settings.showToolLabels;
-    target.settings.fixedToolWindow   = source.settings.fixedToolWindow;
-    target.settings.showManagerLabels = source.settings.showManagerLabels;
+    Config::preserveGlobalToolbarDisplaySettings(target.settings,
+                                                 source.settings);
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;

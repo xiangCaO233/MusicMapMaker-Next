@@ -618,10 +618,10 @@ struct ToolbarStateToolVisibility {
     bool draw{ true };
 
     /// @brief 是否显示配色笔刷工具按钮。
-    bool colorBrush{ true };
+    bool colorBrush{ false };
 
     /// @brief 是否显示配色橡皮工具按钮。
-    bool colorEraser{ true };
+    bool colorEraser{ false };
 
     /// @brief 是否显示布局工具按钮。
     bool layout{ true };
@@ -637,7 +637,7 @@ void from_json(const nlohmann::json&       json,
 /// @brief 工具栏独立按钮的可见性配置。
 struct ToolbarIndependentButtonVisibility {
     /// @brief 是否显示音符调色盘按钮。
-    bool notePalette{ true };
+    bool notePalette{ false };
 
     /// @brief 是否显示磁铁工具按钮。
     bool magnet{ true };
@@ -655,13 +655,13 @@ struct ToolbarIndependentButtonVisibility {
     bool playback{ true };
 
     /// @brief 是否显示播放速度按钮。
-    bool playbackSpeed{ true };
+    bool playbackSpeed{ false };
 
     /// @brief 是否显示轨道数量按钮。
-    bool trackCount{ true };
+    bool trackCount{ false };
 
     /// @brief 是否显示分拍数量按钮。
-    bool beatDivisor{ true };
+    bool beatDivisor{ false };
 };
 
 /// @brief 将独立按钮可见性配置序列化为 JSON。
@@ -923,6 +923,12 @@ struct EditorSettings {
     /// @brief 编辑器自定义快捷键配置。
     ShortcutConfig shortcutConfig;
 };
+
+/// @brief 将全软件工具栏显示配置从源设置复制到目标设置。
+/// @param target 需要保留全局工具栏显示状态的目标设置。
+/// @param source AppConfig 中的全软件设置。
+void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
+                                          const EditorSettings& source);
 
 /// @brief 将编辑器设置序列化为 JSON。
 void to_json(nlohmann::json& json, const EditorSettings& settings);

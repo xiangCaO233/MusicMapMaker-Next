@@ -459,6 +459,10 @@ struct ProjectSettings {
             editorOverride.defaultColorPaletteSchemeName =
                 Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
             editorOverrideJson = editorOverride;
+            editorOverrideJson.erase("showToolLabels");
+            editorOverrideJson.erase("fixedToolWindow");
+            editorOverrideJson.erase("showManagerLabels");
+            editorOverrideJson.erase("toolbarVisibility");
             editorOverrideJson.erase("autoUploadPgoProfiles");
             editorOverrideJson.erase("pgoProfileUploadConsentAsked");
             editorOverrideJson.erase("rtcDiagnosticLogging");
@@ -486,6 +490,8 @@ struct ProjectSettings {
         if ( auto it = j.find("m_editorOverride");
              it != j.end() && !it->is_null() ) {
             settings.m_editorOverride = it->get<Config::EditorSettings>();
+            Config::preserveGlobalToolbarDisplaySettings(
+                *settings.m_editorOverride, Config::EditorSettings{});
             settings.m_editorOverride->autoUploadPgoProfiles        = false;
             settings.m_editorOverride->pgoProfileUploadConsentAsked = false;
             settings.m_editorOverride->rtcDiagnosticLogging         = false;

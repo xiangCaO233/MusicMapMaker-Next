@@ -6,27 +6,20 @@
 namespace
 {
 
-/// @brief 判断状态机工具集合是否全部可见。
-/// @param visibility 待检查的状态机工具可见性配置。
-/// @return 全部按钮均可见时返回 true。
-bool areAllStateToolsVisible(
-    const MMM::Config::ToolbarStateToolVisibility& visibility)
+/// @brief 判断工具栏可见性是否匹配软件默认精简布局。
+/// @param visibility 待检查的工具栏可见性配置。
+/// @return 与默认显示配置完全一致时返回 true。
+bool matchesDefaultToolbarVisibility(
+    const MMM::Config::ToolbarVisibilityConfig& visibility)
 {
-    return visibility.move && visibility.marquee && visibility.draw &&
-           visibility.colorBrush && visibility.colorEraser && visibility.layout;
-}
-
-/// @brief 判断独立按钮集合是否全部可见。
-/// @param visibility 待检查的独立按钮可见性配置。
-/// @return 全部按钮均可见时返回 true。
-bool areAllIndependentButtonsVisible(
-    const MMM::Config::ToolbarIndependentButtonVisibility& visibility)
-{
-    return visibility.notePalette && visibility.magnet &&
-           visibility.scrollTimingMapping && visibility.beatLineDisplay &&
-           visibility.soundEffectTool && visibility.playback &&
-           visibility.playbackSpeed && visibility.trackCount &&
-           visibility.beatDivisor;
+    const auto& tools   = visibility.stateTools;
+    const auto& buttons = visibility.independentButtons;
+    return tools.move && tools.marquee && tools.draw && !tools.colorBrush &&
+           !tools.colorEraser && tools.layout && !buttons.notePalette &&
+           buttons.magnet && buttons.scrollTimingMapping &&
+           buttons.beatLineDisplay && buttons.soundEffectTool &&
+           buttons.playback && !buttons.playbackSpeed && !buttons.trackCount &&
+           !buttons.beatDivisor;
 }
 
 /// @brief 验证两个工具栏按钮集合的全部隐藏状态可以完整往返。
@@ -72,39 +65,63 @@ bool testToolbarVisibilityRoundTrip()
     return true;
 }
 
-/// @brief 验证旧配置缺少工具栏可见性字段时继续显示全部按钮。
-/// @return 两个集合中的全部按钮均默认可见时返回 true。
-bool testLegacyToolbarVisibilityDefaults()
+/// @brief 验证缺少工具栏可见性字段时使用软件默认精简布局。
+/// @return 显示抓取、框选、绘制、布局与常用独立按钮时返回 true。
+bool testToolbarVisibilityDefaults()
 {
     const auto restored =
         nlohmann::json::object().get<MMM::Config::EditorSettings>();
-    if ( !areAllStateToolsVisible(restored.toolbarVisibility.stateTools) ||
-         !areAllIndependentButtonsVisible(
-             restored.toolbarVisibility.independentButtons) ) {
-        XERROR("Legacy toolbar visibility config did not show all buttons");
+    if ( !matchesDefaultToolbarVisibility(restored.toolbarVisibility) ) {
+        XERROR("Toolbar visibility config did not use compact defaults");
         return false;
     }
     return true;
 }
 
-/// @brief 验证部分配置只覆盖明确写出的按钮，其余按钮保持可见。
-/// @return 抓取工具被隐藏且其余按钮保持可见时返回 true。
+/// @brief 验证部分配置只覆盖明确写出的按钮，其余按钮保持软件默认值。
+/// @return 抓取工具被隐藏且其余按钮仍匹配默认精简布局时返回 true。
 bool testPartialToolbarVisibilityDefaults()
 {
     const nlohmann::json partial{
         { "toolbarVisibility", { { "stateTools", { { "move", false } } } } },
     };
-    const auto restored   = partial.get<MMM::Config::EditorSettings>();
-    auto       stateTools = restored.toolbarVisibility.stateTools;
-    stateTools.move       = true;
-    if ( restored.toolbarVisibility.stateTools.move ||
-         !areAllStateToolsVisible(stateTools) ||
-         !areAllIndependentButtonsVisible(
-             restored.toolbarVisibility.independentButtons) ) {
-        XERROR("Partial toolbar visibility config changed omitted buttons");
+    auto restored = partial.get<MMM::Config::EditorSettings>();
+    if ( restored.toolbarVisibility.stateTools.move ) {
+        XERROR("Partial toolbar visibility config did not hide move tool");
+        return false;
+    }
+    restored.toolbarVisibility.stateTools.move = true;
+    if ( !matchesDefaultToolbarVisibility(restored.toolbarVisibility) ) {
+        XERROR("Partial toolbar visibility config changed omitted defaults");
         return false;
     }
     return true;
+}
+
+/// @brief 验证项目配置合并时保留全软件工具栏显示设置。
+/// @return 标签、固定模式和全部按钮可见性均取自全局设置时返回 true。
+bool testGlobalToolbarVisibilityPreservation()
+{
+    MMM::Config::EditorSettings globalSettings;
+    globalSettings.showToolLabels                                  = true;
+    globalSettings.fixedToolWindow                                 = false;
+    globalSettings.showManagerLabels                               = false;
+    globalSettings.toolbarVisibility.stateTools.colorBrush         = true;
+    globalSettings.toolbarVisibility.independentButtons.trackCount = true;
+
+    MMM::Config::EditorSettings projectSettings;
+    projectSettings.showToolLabels                                  = false;
+    projectSettings.fixedToolWindow                                 = true;
+    projectSettings.showManagerLabels                               = true;
+    projectSettings.toolbarVisibility.stateTools.colorBrush         = false;
+    projectSettings.toolbarVisibility.independentButtons.trackCount = false;
+
+    MMM::Config::preserveGlobalToolbarDisplaySettings(projectSettings,
+                                                      globalSettings);
+    return projectSettings.showToolLabels && !projectSettings.fixedToolWindow &&
+           !projectSettings.showManagerLabels &&
+           projectSettings.toolbarVisibility.stateTools.colorBrush &&
+           projectSettings.toolbarVisibility.independentButtons.trackCount;
 }
 
 }  // namespace
@@ -114,8 +131,9 @@ bool testPartialToolbarVisibilityDefaults()
 int main()
 {
     return testToolbarVisibilityRoundTrip() &&
-                   testLegacyToolbarVisibilityDefaults() &&
-                   testPartialToolbarVisibilityDefaults()
+                   testToolbarVisibilityDefaults() &&
+                   testPartialToolbarVisibilityDefaults() &&
+                   testGlobalToolbarVisibilityPreservation()
                ? 0
                : 1;
 }

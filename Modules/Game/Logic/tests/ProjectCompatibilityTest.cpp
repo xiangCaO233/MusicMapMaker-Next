@@ -365,6 +365,49 @@ bool testProjectAutoBackupOverrideCompatibility()
     return true;
 }
 
+/// @brief 验证项目编辑器覆盖不再持久化工具栏显示配置。
+/// @return 新项目未写出相关字段且旧项目字段读取后回落到软件默认值时返回 true。
+bool testProjectToolbarDisplaySettingsAreGlobal()
+{
+    MMM::ProjectSettings settings;
+    settings.m_editorOverride.emplace();
+    auto& projectEditor             = *settings.m_editorOverride;
+    projectEditor.showToolLabels    = true;
+    projectEditor.fixedToolWindow   = false;
+    projectEditor.showManagerLabels = false;
+    projectEditor.toolbarVisibility.stateTools.colorBrush          = true;
+    projectEditor.toolbarVisibility.independentButtons.notePalette = true;
+
+    const nlohmann::json encoded    = settings;
+    const auto&          editorJson = encoded.at("m_editorOverride");
+    if ( editorJson.contains("showToolLabels") ||
+         editorJson.contains("fixedToolWindow") ||
+         editorJson.contains("showManagerLabels") ||
+         editorJson.contains("toolbarVisibility") ) {
+        XERROR("Project settings persisted global toolbar display fields");
+        return false;
+    }
+
+    nlohmann::json legacyEditor       = projectEditor;
+    nlohmann::json legacyProject      = encoded;
+    legacyProject["m_editorOverride"] = std::move(legacyEditor);
+    const auto restored = legacyProject.get<MMM::ProjectSettings>();
+    if ( !restored.m_editorOverride ) {
+        XERROR("Project editor override was not restored");
+        return false;
+    }
+
+    const auto& restoredEditor = *restored.m_editorOverride;
+    if ( restoredEditor.showToolLabels || !restoredEditor.fixedToolWindow ||
+         !restoredEditor.showManagerLabels ||
+         restoredEditor.toolbarVisibility.stateTools.colorBrush ||
+         restoredEditor.toolbarVisibility.independentButtons.notePalette ) {
+        XERROR("Legacy project toolbar display fields remained project-scoped");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行旧版项目音频配置兼容测试。
@@ -376,7 +419,8 @@ int main()
                    testCurrentConfigAndTypeMerge() && testMixedSchemaMerge() &&
                    testBulkCurrentConfigMerge() &&
                    testBeatLineToolbarStateMigration() &&
-                   testProjectAutoBackupOverrideCompatibility()
+                   testProjectAutoBackupOverrideCompatibility() &&
+                   testProjectToolbarDisplaySettingsAreGlobal()
                ? 0
                : 1;
 }

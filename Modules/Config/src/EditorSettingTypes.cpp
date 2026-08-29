@@ -628,12 +628,13 @@ void to_json(nlohmann::json& json, const ToolbarStateToolVisibility& visibility)
 void from_json(const nlohmann::json&       json,
                ToolbarStateToolVisibility& visibility)
 {
-    visibility.move        = json.value("move", true);
-    visibility.marquee     = json.value("marquee", true);
-    visibility.draw        = json.value("draw", true);
-    visibility.colorBrush  = json.value("colorBrush", true);
-    visibility.colorEraser = json.value("colorEraser", true);
-    visibility.layout      = json.value("layout", true);
+    const ToolbarStateToolVisibility defaults;
+    visibility.move        = json.value("move", defaults.move);
+    visibility.marquee     = json.value("marquee", defaults.marquee);
+    visibility.draw        = json.value("draw", defaults.draw);
+    visibility.colorBrush  = json.value("colorBrush", defaults.colorBrush);
+    visibility.colorEraser = json.value("colorEraser", defaults.colorEraser);
+    visibility.layout      = json.value("layout", defaults.layout);
 }
 
 void to_json(nlohmann::json&                           json,
@@ -654,15 +655,20 @@ void to_json(nlohmann::json&                           json,
 void from_json(const nlohmann::json&               json,
                ToolbarIndependentButtonVisibility& visibility)
 {
-    visibility.notePalette         = json.value("notePalette", true);
-    visibility.magnet              = json.value("magnet", true);
-    visibility.scrollTimingMapping = json.value("scrollTimingMapping", true);
-    visibility.beatLineDisplay     = json.value("beatLineDisplay", true);
-    visibility.soundEffectTool     = json.value("soundEffectTool", true);
-    visibility.playback            = json.value("playback", true);
-    visibility.playbackSpeed       = json.value("playbackSpeed", true);
-    visibility.trackCount          = json.value("trackCount", true);
-    visibility.beatDivisor         = json.value("beatDivisor", true);
+    const ToolbarIndependentButtonVisibility defaults;
+    visibility.notePalette = json.value("notePalette", defaults.notePalette);
+    visibility.magnet      = json.value("magnet", defaults.magnet);
+    visibility.scrollTimingMapping =
+        json.value("scrollTimingMapping", defaults.scrollTimingMapping);
+    visibility.beatLineDisplay =
+        json.value("beatLineDisplay", defaults.beatLineDisplay);
+    visibility.soundEffectTool =
+        json.value("soundEffectTool", defaults.soundEffectTool);
+    visibility.playback = json.value("playback", defaults.playback);
+    visibility.playbackSpeed =
+        json.value("playbackSpeed", defaults.playbackSpeed);
+    visibility.trackCount  = json.value("trackCount", defaults.trackCount);
+    visibility.beatDivisor = json.value("beatDivisor", defaults.beatDivisor);
 }
 
 void to_json(nlohmann::json& json, const ToolbarVisibilityConfig& visibility)
@@ -711,6 +717,15 @@ void from_json(const nlohmann::json&        json,
          useTls != json.end() && useTls->is_boolean() ) {
         settings.useTls = useTls->get<bool>();
     }
+}
+
+void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
+                                          const EditorSettings& source)
+{
+    target.showToolLabels    = source.showToolLabels;
+    target.fixedToolWindow   = source.fixedToolWindow;
+    target.showManagerLabels = source.showManagerLabels;
+    target.toolbarVisibility = source.toolbarVisibility;
 }
 
 void to_json(nlohmann::json& json, const EditorSettings& settings)
