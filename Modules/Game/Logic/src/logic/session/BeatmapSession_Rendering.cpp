@@ -41,6 +41,7 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
     if ( !ctx.isAnnotationRenderCacheDirty ) return;
     ctx.annotationRenderCache.clear();
     ctx.isAnnotationRenderCacheDirty = false;
+    ++ctx.annotationRenderCacheRevision;
     if ( !ctx.currentBeatmap || ctx.currentBeatmap->m_annotations.empty() ) {
         return;
     }
@@ -922,16 +923,17 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             SessionUtils::isMainCanvasCameraId(cameraId)
                 ? camera.horizontalOffsetX
                 : 0.0F;
-        snapshot->playbackTime      = m_ctx->currentTime;
-        snapshot->totalTime         = snapshotTotalTime;
-        snapshot->snapshotSysTime   = snapshotSysTime;
-        snapshot->playbackSpeed     = snapshotPlaybackSpeed;
-        snapshot->fallbackBpm       = snapshotFallbackBpm;
-        snapshot->currentBpm        = snapshotCurrentBpm;
-        snapshot->currentBeatIndex  = snapshotCurrentBeatIndex;
-        snapshot->currentSv         = snapshotCurrentSv;
-        snapshot->hasBeatmap        = hasBeatmap;
-        snapshot->lastActionMessage = m_ctx->lastActionMessage;
+        snapshot->playbackTime       = m_ctx->currentTime;
+        snapshot->totalTime          = snapshotTotalTime;
+        snapshot->snapshotSysTime    = snapshotSysTime;
+        snapshot->playbackSpeed      = snapshotPlaybackSpeed;
+        snapshot->fallbackBpm        = snapshotFallbackBpm;
+        snapshot->currentBpm         = snapshotCurrentBpm;
+        snapshot->currentBeatIndex   = snapshotCurrentBeatIndex;
+        snapshot->currentSv          = snapshotCurrentSv;
+        snapshot->hasBeatmap         = hasBeatmap;
+        snapshot->annotationRevision = m_ctx->annotationRenderCacheRevision;
+        snapshot->lastActionMessage  = m_ctx->lastActionMessage;
         if ( cameraId == "Preview" ) {
             snapshot->previewDensity = m_ctx->previewDensityCache;
         }
@@ -996,6 +998,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->trackCount         = m_ctx->trackCount;
+        snapshot->draftTrackCount    = m_ctx->draftTrackCount;
         snapshot->bgmTrackCount      = m_ctx->bgmTrackCount;
         snapshot->bmsEditingEnabled =
             m_ctx->lastConfig.settings.enableBmsEditing;
@@ -1086,13 +1089,16 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         camera.horizontalOffsetX,
                         true,
                         config.settings.enableBmsEditing,
-                        config.settings.enableDraftLanes);
+                        config.settings.enableDraftLanes,
+                        m_ctx->draftTrackCount,
+                        true);
                     trackProjection = laneProjection.player;
                     const auto lane =
                         laneProjection.laneAt(m_ctx->lastMousePos.x);
                     if ( lane ) {
                         snapshot->hoveredTrack =
-                            lane->absoluteTrack(laneProjection.playerLaneCount);
+                            lane->absoluteTrack(laneProjection.playerLaneCount,
+                                                laneProjection.draftLaneCount);
                         isInsideTrack = true;
                     } else if ( m_ctx->lastMousePos.x >=
                                     laneProjection.annotationLeftX &&
@@ -1210,31 +1216,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         }
                     }
 
-                    int64_t totalBeatsPrefix = 0;
-                    for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-                        const auto* bpmEv = bpmEvents[i];
-                        if ( !bpmEv || bpmEv == activeBpm ) break;
-
-                        double nextTime = (i + 1 < bpmEvents.size())
-                                              ? bpmEvents[i + 1]->m_timestamp
-                                              : activeBpm->m_timestamp;
-                        double dur      = nextTime - bpmEv->m_timestamp;
-                        if ( dur < 0 ) dur = 0;
-
-                        double bVal = bpmEv->m_value;
-                        if ( bVal <= 0.0 ) {
-                            bVal = 120.0;
-                            if ( m_ctx->currentBeatmap &&
-                                 m_ctx->currentBeatmap->m_baseMapMetadata
-                                         .preference_bpm > 0.0 ) {
-                                bVal = m_ctx->currentBeatmap->m_baseMapMetadata
-                                           .preference_bpm;
-                            }
-                        }
-                        totalBeatsPrefix += static_cast<int64_t>(
-                            std::round(dur / (60.0 / bVal)));
-                    }
-
                     double  rel           = time - activeBpm->m_timestamp;
                     int64_t beatsInActive = static_cast<int64_t>(
                         std::floor(rel / beatDuration + 1e-6));
@@ -1242,11 +1223,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex = isBeforeFirstBpm
-                                          ? static_cast<int>(beatsInActive)
-                                          : static_cast<int>(totalBeatsPrefix +
-                                                             beatsInActive + 1);
-                    point.numerator = bestNum;
+                    point.beatIndex =
+                        isBeforeFirstBpm
+                            ? static_cast<int>(beatsInActive)
+                            : SessionUtils::calculateBeatIndex(
+                                  time, bpmEvents, snapshotFallbackBpm);
+                    point.numerator   = bestNum;
                     point.denominator = bestDen;
                     point.beatStartTime =
                         activeBpm->m_timestamp +
@@ -1662,6 +1644,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             judgmentLineY,
             m_ctx->trackCount,
             m_ctx->bgmTrackCount,
+            m_ctx->draftTrackCount,
             config,
             finalMainHeight,
             &m_ctx->hitFXSystem);

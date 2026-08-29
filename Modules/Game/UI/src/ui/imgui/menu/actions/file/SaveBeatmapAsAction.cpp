@@ -12,6 +12,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <ImGuiFileDialog.h>
@@ -193,15 +194,16 @@ private:
                 filters[filterCount++] = { "Malody Chart", "mc" };
             }
 
-            nfdresult_t result = NFD_SaveDialogU8(&outPath,
-                                                  filters,
-                                                  filterCount,
-                                                  defaultPath.c_str(),
-                                                  defaultName.c_str());
+            nfdresult_t result =
+                NativeFileDialog::saveFile(&outPath,
+                                           filters,
+                                           filterCount,
+                                           defaultPath.c_str(),
+                                           defaultName.c_str());
 
             if ( result == NFD_OKAY ) {
                 handleSelectedExportPath(outPath);
-                NFD_FreePath(outPath);
+                NFD_FreePathU8(outPath);
             }
             return;
         }

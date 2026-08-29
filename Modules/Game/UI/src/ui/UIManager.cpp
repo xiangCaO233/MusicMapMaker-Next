@@ -1,7 +1,5 @@
 #include "ui/UIManager.h"
 #include "audio/AudioManager.h"
-#include "canvas/Basic2DCanvas.h"
-#include "canvas/TimelineCanvas.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -18,9 +16,10 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "logic/EditorEngine.h"
-#include "logic/ProjectController.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/ICanvasView.h"
+#include "ui/ICanvasWorkspaceService.h"
+#include "ui/IEditorApplicationService.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
@@ -34,6 +33,7 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
@@ -202,44 +202,6 @@ bool resolveWorkspaceAudioTrack(
     return false;
 }
 
-/// @brief 在打开音效控制器前按需加载对应音效。
-/// @param trackId 需要试听或控制的音效资源 ID。
-/// @return 音效已经加载或成功加载时返回 true。
-/// @warning 低频显式交互路径：仅在用户打开或恢复音效控制器时调用，可能
-/// 访问文件系统并等待单个音效解码，禁止放入每帧 UI 更新。
-bool ensureEffectAudioTrackLoaded(const std::string& trackId)
-{
-    auto& audio = Audio::AudioManager::instance();
-    if ( audio.isSoundEffectLoaded(trackId) ) {
-        return true;
-    }
-
-    auto* project = Logic::ProjectController::instance().currentProject();
-    if ( project ) {
-        for ( const auto& resource : project->m_audioResources ) {
-            if ( resource.m_id != trackId ||
-                 resource.m_type != AudioTrackType::Effect ) {
-                continue;
-            }
-
-            const auto absolutePath =
-                project->m_projectRoot / Config::utf8ToPath(resource.m_path);
-            audio.registerSoundEffect(
-                trackId, Config::pathToUtf8(absolutePath), resource.m_config);
-            return audio.ensureSoundEffectLoaded(trackId);
-        }
-    }
-
-    const auto& skinData = Config::SkinManager::instance().getData();
-    if ( auto path = skinData.audioPaths.find(trackId);
-         path != skinData.audioPaths.end() ) {
-        audio.registerSoundEffect(trackId,
-                                  Config::pathToUtf8(path->second),
-                                  audio.getSFXPoolVolume(trackId));
-    }
-    return audio.ensureSoundEffectLoaded(trackId);
-}
-
 /// @brief 判断文本是否拥有指定前缀。
 /// @param text 被检查文本。
 /// @param prefix 需要匹配的前缀。
@@ -359,12 +321,14 @@ UIManager::UIManager()
             update.kind        = ProjectUiLifecycleKind::Opened;
             update.projectRoot = Config::utf8ToPath(event.m_projectPath);
 
-            const auto* project =
-                Logic::ProjectController::instance().currentProject();
-            if ( project && project->m_projectRoot.lexically_normal() ==
-                                update.projectRoot.lexically_normal() ) {
-                update.workspace          = project->m_settings.m_workspace;
-                update.audioResources     = project->m_audioResources;
+            EditorProjectUiSnapshot snapshot;
+            if ( m_editorApplicationService &&
+                 m_editorApplicationService->currentProjectUiSnapshot(
+                     snapshot) &&
+                 snapshot.projectRoot.lexically_normal() ==
+                     update.projectRoot.lexically_normal() ) {
+                update.workspace          = std::move(snapshot.workspace);
+                update.audioResources     = std::move(snapshot.audioResources);
                 update.hasProjectSnapshot = true;
             }
             m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
@@ -397,19 +361,24 @@ UIManager::UIManager()
                 m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
             });
     m_nativeWindowFocusSubId = eventBus.subscribe<Event::GLFWNativeEvent>(
-        [](const Event::GLFWNativeEvent& event) {
-            if ( event.type !=
-                     Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED ||
-                 !event.hasStateChange || event.isFocused ) {
-                return;
+        [this](const Event::GLFWNativeEvent& event) {
+            const bool focusLost =
+                event.type ==
+                    Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED &&
+                event.hasStateChange && !event.isFocused;
+            const bool minimized =
+                event.type == Event::NativeEventType::GLFW_ICONFY_WINDOW;
+            if ( !focusLost && !minimized ) return;
+            if ( m_editorApplicationService ) {
+                m_editorApplicationService->requestAutoSave(
+                    EditorAutoSaveReason::NativeWindowFocusLost);
             }
-            Logic::EditorEngine::instance().requestAutoSaveForActiveSession(
-                Logic::AutoSaveTrigger::NativeWindowFocusLost);
         });
 }
 
 UIManager::~UIManager()
 {
+    NativeFileDialog::bindMainWindow(nullptr);
     auto& eventBus = Event::EventBus::instance();
     if ( m_projectOpenStartedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
@@ -441,6 +410,8 @@ UIManager::~UIManager()
 void UIManager::setNativeWindow(Graphic::NativeWindow* window)
 {
     m_nativeWindow = window;
+    NativeFileDialog::bindMainWindow(window ? window->getWindowHandle()
+                                            : nullptr);
 }
 
 Graphic::NativeWindow* UIManager::getNativeWindow() const
@@ -485,7 +456,7 @@ bool UIManager::hasActiveProjectUiState() const
 /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
 bool UIManager::isTimelineTimingMarqueeSelecting()
 {
-    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    const auto* timeline = getCanvasView("TimelineWindow");
     return timeline && timeline->isTimingMarqueeSelecting();
 }
 
@@ -494,7 +465,7 @@ bool UIManager::isTimelineTimingMarqueeSelecting()
 /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。
 bool UIManager::isTimelineTimingDragging()
 {
-    const auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow");
+    const auto* timeline = getCanvasView("TimelineWindow");
     return timeline && timeline->isTimingDragging();
 }
 
@@ -529,23 +500,24 @@ void UIManager::captureProjectWorkspaceState()
         return;
     }
 
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project || project->m_projectRoot.lexically_normal() !=
-                         m_activeProjectRoot.lexically_normal() ) {
+    if ( !m_editorApplicationService ) {
         return;
     }
-
-    auto& workspace = project->m_settings.m_workspace;
-    captureProjectWorkspaceViews(workspace);
+    auto* workspace = m_editorApplicationService->mutableCurrentWorkspace(
+        m_activeProjectRoot);
+    if ( !workspace ) {
+        return;
+    }
+    captureProjectWorkspaceViews(*workspace);
 
     size_t      iniSize = 0;
     const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
     if ( iniData && iniSize > 0 ) {
-        workspace.m_imguiIniData.assign(iniData, iniSize);
+        workspace->m_imguiIniData.assign(iniData, iniSize);
     }
 
     if ( m_nativeWindow ) {
-        auto& windowState = workspace.m_mainWindow;
+        auto& windowState = workspace->m_mainWindow;
         m_nativeWindow->getWindowPlacement(windowState.m_x,
                                            windowState.m_y,
                                            windowState.m_width,
@@ -590,22 +562,26 @@ void UIManager::requestSkinResourceReload()
 /// @return 目标 Dock 节点 ID；无法解析时返回 0。
 ImGuiID UIManager::resolveAudioControllerDockId()
 {
-    auto& engine  = Logic::EditorEngine::instance();
-    auto  entries = engine.getSessionEntries();
+    auto* workspace = getCanvasWorkspaceService();
+    if ( !workspace ) {
+        return 0;
+    }
+    std::vector<CanvasWorkspaceEntry> entries;
+    workspace->fillEntries(entries);
 
-    auto resolveEntryDockId = [this](const Logic::SessionEntry& entry) {
+    auto resolveEntryDockId = [this](const CanvasWorkspaceEntry& entry) {
         if ( entry.isLogoPlaceholder ) {
             return static_cast<ImGuiID>(0);
         }
 
-        auto* canvas = getView<Canvas::Basic2DCanvas>(entry.cameraId);
+        auto* canvas = getCanvasView(entry.cameraId);
         if ( !canvas ) {
             return static_cast<ImGuiID>(0);
         }
         return canvas->getDockId();
     };
 
-    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const int32_t activeIndex = workspace->getActiveEntryIndex();
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(entries.size()) ) {
         ImGuiID activeDockId =
@@ -634,7 +610,10 @@ void UIManager::openAudioTrackController(const std::string& trackId,
                                          AudioTrackControllerUI::TrackType type)
 {
     if ( type == AudioTrackControllerUI::TrackType::Effect ) {
-        (void)ensureEffectAudioTrackLoaded(trackId);
+        if ( m_editorApplicationService ) {
+            (void)m_editorApplicationService->ensureEffectAudioTrackLoaded(
+                trackId);
+        }
     }
 
     std::string viewName   = AudioTrackControllerUI::makeViewName(trackId);
@@ -670,9 +649,8 @@ void UIManager::openProjectAudioTool()
 
     tool->setOpen(true);
     tool->requestFocus();
-    if ( auto* project = Logic::EditorEngine::instance().getCurrentProject() ) {
-        project->m_settings.m_workspace.m_projectAudioToolOpen = true;
-        Logic::EditorEngine::instance().saveProject();
+    if ( m_editorApplicationService ) {
+        m_editorApplicationService->markProjectAudioToolOpenAndSave();
     }
     if ( !wasOpen ) {
         ::MMM::UI::PlayPopupOpenFeedback();
@@ -695,7 +673,10 @@ void UIManager::reloadOpenEffectAudioTracks()
                                 AudioTrackControllerUI::TrackType::Effect ) {
             continue;
         }
-        (void)ensureEffectAudioTrackLoaded(controller->getTrackId());
+        if ( m_editorApplicationService ) {
+            (void)m_editorApplicationService->ensureEffectAudioTrackLoaded(
+                controller->getTrackId());
+        }
     }
 }
 
@@ -840,6 +821,7 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
     workspace.m_projectAudioToolOpen   = false;
     workspace.m_bpmMeasurementAudioTrackId.clear();
     workspace.m_timingPointsTableOpen  = false;
+    workspace.m_annotationTableOpen    = false;
     workspace.m_overlapCheckOpen       = false;
     workspace.m_metadataEditorOpen     = false;
     workspace.m_noteMetadataEditorOpen = false;
@@ -882,8 +864,9 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
         }
     }
 
-    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+    if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
+        workspace.m_annotationTableOpen   = timeline->isAnnotationTableOpen();
     }
 
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
@@ -929,7 +912,10 @@ void UIManager::restoreProjectWorkspaceViews(
             continue;
         }
         if ( trackType == AudioTrackControllerUI::TrackType::Effect ) {
-            (void)ensureEffectAudioTrackLoaded(controllerState.m_trackId);
+            if ( m_editorApplicationService ) {
+                (void)m_editorApplicationService->ensureEffectAudioTrackLoaded(
+                    controllerState.m_trackId);
+            }
         }
 
         std::string viewName =
@@ -978,8 +964,9 @@ void UIManager::restoreProjectWorkspaceViews(
                          TR("title.project_audio_tool").data()));
     }
 
-    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+    if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
+        timeline->setAnnotationTableOpen(workspace.m_annotationTableOpen);
     }
 }
 
@@ -997,7 +984,41 @@ void UIManager::clearProjectWorkspaceViews()
     }
 }
 
-/// @brief 注册视图，转交所有权
+/// @brief 注入 Game 组合根提供的画布工作区服务。
+void UIManager::setCanvasWorkspaceService(
+    std::unique_ptr<ICanvasWorkspaceService> service)
+{
+    m_canvasWorkspaceService = std::move(service);
+}
+
+/// @brief 获取已注入画布工作区服务的观察指针。
+ICanvasWorkspaceService* UIManager::getCanvasWorkspaceService() const
+{
+    return m_canvasWorkspaceService.get();
+}
+
+/// @brief 注入 Game 组合根提供的编辑器应用服务。
+void UIManager::setEditorApplicationService(
+    std::unique_ptr<IEditorApplicationService> service)
+{
+    m_editorApplicationService = std::move(service);
+}
+
+/// @brief 获取已注入编辑器应用服务的观察指针。
+IEditorApplicationService* UIManager::getEditorApplicationService() const
+{
+    return m_editorApplicationService.get();
+}
+
+/// @brief 按注册名查询画布能力观察指针。
+/// @warning UI 热路径：只查询本地注册表并调用能力访问器。
+ICanvasView* UIManager::getCanvasView(const std::string& name) const
+{
+    const auto it = m_uiviews.find(name);
+    return it == m_uiviews.end() ? nullptr : it->second->asCanvasView();
+}
+
+/// @brief 注册视图并接管其唯一所有权。
 void UIManager::registerView(const std::string&       name,
                              std::unique_ptr<IUIView> view)
 {
@@ -1126,7 +1147,9 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
-    Logic::EditorEngine::instance().publishRenderFps(ImGui::GetIO().Framerate);
+    if ( m_editorApplicationService ) {
+        m_editorApplicationService->publishRenderFps(ImGui::GetIO().Framerate);
+    }
     SetInteractionFeedbackEnabled(isInteractionFeedbackAllowed(m_nativeWindow));
     ProcessGlobalMouseFeedback();
 
@@ -1266,8 +1289,10 @@ void UIManager::trackImGuiFocusForAutoSave()
     }
     if ( m_lastFocusedImGuiRootId != 0 &&
          focusedRootId != m_lastFocusedImGuiRootId ) {
-        Logic::EditorEngine::instance().requestAutoSaveForActiveSession(
-            Logic::AutoSaveTrigger::ImGuiWindowFocusLost);
+        if ( m_editorApplicationService ) {
+            m_editorApplicationService->requestAutoSave(
+                EditorAutoSaveReason::ImGuiWindowFocusLost);
+        }
     }
     m_lastFocusedImGuiRootId = focusedRootId;
 }

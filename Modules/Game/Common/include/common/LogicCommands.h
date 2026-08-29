@@ -304,6 +304,7 @@ struct CmdSetPlaybackSpeed {
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
+    Draft,   ///< 项目级草稿轨道区。
     Bgm      ///< 自动采样 BGM 轨道区。
 };
 
@@ -313,7 +314,7 @@ enum class KeySoundEffectGroup : std::uint8_t {
     Bound     ///< 已绑定项目音效文件。
 };
 
-/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音静音状态。
+/// @brief 设置单条玩家、草稿或 BGM 轨道的运行时 Key 音静音状态。
 struct CmdSetKeySoundTrackMute {
     /// @brief 目标轨道区域。
     KeySoundTrackArea area{ KeySoundTrackArea::Player };
@@ -325,7 +326,7 @@ struct CmdSetKeySoundTrackMute {
     bool muted{ false };
 };
 
-/// @brief 设置单条玩家或 BGM 轨道的运行时 Key 音增益。
+/// @brief 设置单条玩家、草稿或 BGM 轨道的运行时 Key 音增益。
 struct CmdSetKeySoundTrackGain {
     /// @brief 目标轨道区域。
     KeySoundTrackArea area{ KeySoundTrackArea::Player };
@@ -344,6 +345,12 @@ struct CmdSetKeySoundEffectGroupGain {
 
     /// @brief 非负线性增益；音频层负责限制到支持范围。
     float gain{ 1.0F };
+};
+
+/// @brief 设置整个草稿轨道区的运行时 Key 音静音状态。
+struct CmdSetDraftKeySoundAreaMute {
+    /// @brief 是否静音。
+    bool muted{ false };
 };
 
 /// @brief 设置整个 BGM 轨道区的运行时 Key 音静音状态。
@@ -504,6 +511,12 @@ struct CmdSaveBeatmapAs {
     std::string path;
 };
 
+/// @brief 将当前谱面导出为单谱面 RM/IMD 资源包。
+struct CmdExportImdPackage {
+    /// @brief 资源包输出路径，使用 UTF-8 编码。
+    std::string path;
+};
+
 /// @brief 打包转换时临时覆盖单个谱面的基础元数据。
 struct PackageBeatmapMetadataOverride {
     /// @brief 项目相对谱面路径，使用 UTF-8 编码。
@@ -534,6 +547,9 @@ struct CmdPackBeatmap {
 
     /// @brief MCZ 打包时是否删除 Main 音轨自动采样的 vol 字段。
     bool stripMainAudioVolumeFromMalodyExport{ false };
+
+    /// @brief MCZ 打包时是否把非 OGG Main 音频和首 BPM 红线对齐到原点。
+    bool alignNonOggMainAudioToOrigin{ false };
 
     /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
     std::optional<MMM::MalodyMode> malodyExportMode;
@@ -617,6 +633,20 @@ struct CmdCreateTimelineEvent {
     double              time;
     ::MMM::TimingEffect type;
     double              value;
+};
+
+/**
+ * @brief 原子更新 BPM 并新增或更新同时间戳的保持预设流速 SV。
+ */
+struct CmdUpdateBpmWithKeepSpeedSv {
+    /// @brief 待更新的 BPM Timeline 实体。
+    entt::entity bpmEntity{ entt::null };
+    /// @brief BPM 的新时间戳，单位秒。
+    double newTime{ 0.0 };
+    /// @brief BPM 的新值。
+    double newBpm{ 120.0 };
+    /// @brief 根据预设 BPM 计算出的 Scroll 值。
+    double scrollValue{ 1.0 };
 };
 
 /**
@@ -882,7 +912,8 @@ using LogicCommand = std::variant<
     CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
     CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
     CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
-    CmdSetKeySoundEffectGroupGain, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
+    CmdSetBgmKeySoundAreaMute, CmdChangeTool,
     CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
     CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
     CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
@@ -891,17 +922,17 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
-    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
-    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
+    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
+    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
+    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
+    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
-    CmdSaveTemporaryProject>;
+    CmdExportImdPackage, CmdSaveTemporaryProject>;
 
 /// @brief 判断命令是否会修改谱面、项目资源或把当前谱面写入文件。
 /// @param command 待检查的逻辑命令。
@@ -931,6 +962,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                 std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                std::is_same_v<T, CmdSetDraftKeySoundAreaMute> ||
                 std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
                 std::is_same_v<T, CmdChangeTool> ||
                 std::is_same_v<T, CmdSetBrushNoteColor> ||

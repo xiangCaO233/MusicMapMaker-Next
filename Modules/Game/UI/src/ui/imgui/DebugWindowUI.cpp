@@ -1,7 +1,7 @@
 #include "ui/imgui/DebugWindowUI.h"
-#include "canvas/Basic2DCanvas.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
+#include "ui/IRenderableView.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <imgui.h>
@@ -18,8 +18,9 @@ void DebugWindowUI::update(UIManager* sourceManager)
         // 获取主画布实例
         std::string activeCameraId =
             Logic::EditorEngine::instance().getActiveCameraId();
-        auto canvas = sourceManager->getView<Canvas::Basic2DCanvas>(
+        auto* view = sourceManager->getView<IUIView>(
             activeCameraId.empty() ? "Basic2DCanvas" : activeCameraId);
+        auto* canvas = view ? view->asRenderableView() : nullptr;
         if ( canvas ) {
             // 获取发光层遮罩的 ImGui 纹理 ID
             ImTextureID glowTex =

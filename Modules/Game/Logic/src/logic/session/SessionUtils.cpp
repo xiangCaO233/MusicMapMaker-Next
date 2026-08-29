@@ -174,13 +174,13 @@ bool sameSampleBinding(const std::optional<::MMM::AudioSampleBinding>& lhs,
                     lhs->m_volume == rhs->m_volume);
 }
 
-/// @brief 将单个正式顶层音符转换为打击事件。
+/// @brief 将单个正式或草稿顶层音符转换为打击事件。
 void appendHitEvents(const NoteComponent&                        note,
                      std::vector<System::HitFXSystem::HitEvent>& output)
 {
     using HitEvent = System::HitFXSystem::HitEvent;
     using HitRole  = HitEvent::Role;
-    if ( note.m_isDraft || note.m_isSubNote ) return;
+    if ( note.m_isSubNote ) return;
 
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         for ( std::size_t index = 0U; index < note.m_subNotes.size();
@@ -205,7 +205,8 @@ void appendHitEvents(const NoteComponent&                        note,
                                sub.dtrack,
                                sub.duration,
                                true,
-                               std::move(binding) });
+                               std::move(binding),
+                               note.m_isDraft });
         }
         return;
     }
@@ -220,7 +221,8 @@ void appendHitEvents(const NoteComponent&                        note,
                        note.m_dtrack,
                        note.m_duration,
                        false,
-                       note.m_sampleBinding });
+                       note.m_sampleBinding,
+                       note.m_isDraft });
 }
 
 /// @brief 判断两个打击事件是否来自同一个音符状态。
@@ -231,7 +233,7 @@ bool sameHitEvent(const System::HitFXSystem::HitEvent& lhs,
            lhs.role == rhs.role && lhs.trackSpan == rhs.trackSpan &&
            lhs.trackIndex == rhs.trackIndex &&
            lhs.trackOffset == rhs.trackOffset && lhs.duration == rhs.duration &&
-           lhs.isSubNote == rhs.isSubNote &&
+           lhs.isSubNote == rhs.isSubNote && lhs.isDraft == rhs.isDraft &&
            sameSampleBinding(lhs.sampleBinding, rhs.sampleBinding);
 }
 }  // namespace
@@ -253,8 +255,8 @@ bool applyNoteCacheMutationsIncrementally(
     std::vector<System::HitFXSystem::HitEvent> addedHitEvents;
     NoteStatisticsContribution                 beforeStatistics;
     NoteStatisticsContribution                 afterStatistics;
-    double earliestTimestamp = std::numeric_limits<double>::infinity();
-    bool   touchesFormalNote = false;
+    double earliestTimestamp   = std::numeric_limits<double>::infinity();
+    bool   touchesHitEventNote = false;
 
     affectedEntities.reserve(mutations.size());
     replacementEntities.reserve(mutations.size());
@@ -271,9 +273,8 @@ bool applyNoteCacheMutationsIncrementally(
             beforeStatistics.noteCount += contribution.noteCount;
             beforeStatistics.maxCombo += contribution.maxCombo;
             appendDensityTimes(*mutation.before, removedDensityTimes);
-            if ( !mutation.before->m_isDraft &&
-                 !mutation.before->m_isSubNote ) {
-                touchesFormalNote = true;
+            if ( !mutation.before->m_isSubNote ) {
+                touchesHitEventNote = true;
                 if ( !ctx.isHitEventsDirty ) {
                     appendHitEvents(*mutation.before, removedHitEvents);
                 }
@@ -292,8 +293,8 @@ bool applyNoteCacheMutationsIncrementally(
             afterStatistics.noteCount += contribution.noteCount;
             afterStatistics.maxCombo += contribution.maxCombo;
             appendDensityTimes(*mutation.after, addedDensityTimes);
-            if ( !mutation.after->m_isDraft && !mutation.after->m_isSubNote ) {
-                touchesFormalNote = true;
+            if ( !mutation.after->m_isSubNote ) {
+                touchesHitEventNote = true;
                 if ( !ctx.isHitEventsDirty ) {
                     appendHitEvents(*mutation.after, addedHitEvents);
                 }
@@ -383,7 +384,7 @@ bool applyNoteCacheMutationsIncrementally(
     ctx.isPreviewDensityDirty =
         !removedDensityTimes.empty() || !addedDensityTimes.empty();
 
-    if ( touchesFormalNote && !ctx.isHitEventsDirty ) {
+    if ( touchesHitEventNote && !ctx.isHitEventsDirty ) {
         for ( const auto& event : removedHitEvents ) {
             const auto range = std::equal_range(
                 ctx.hitEvents.begin(), ctx.hitEvents.end(), event);
@@ -926,10 +927,10 @@ void rebuildHitEvents(SessionContext& ctx)
 
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
-        if ( note.m_isSubNote || note.m_isDraft ) continue;
+        if ( note.m_isSubNote ) continue;
 
         double noteEndTime = note.m_timestamp + note.m_duration;
-        if ( noteEndTime > maxEndTime ) {
+        if ( !note.m_isDraft && noteEndTime > maxEndTime ) {
             maxEndTime = noteEndTime;
         }
 
@@ -960,10 +961,11 @@ void rebuildHitEvents(SessionContext& ctx)
                                           sn.dtrack,
                                           sn.duration,
                                           true,
-                                          std::move(sampleBinding) });
+                                          std::move(sampleBinding),
+                                          note.m_isDraft });
 
                 double snEndTime = sn.timestamp + sn.duration;
-                if ( snEndTime > maxEndTime ) {
+                if ( !note.m_isDraft && snEndTime > maxEndTime ) {
                     maxEndTime = snEndTime;
                 }
             }
@@ -981,7 +983,8 @@ void rebuildHitEvents(SessionContext& ctx)
                                       note.m_dtrack,
                                       note.m_duration,
                                       false,
-                                      note.m_sampleBinding });
+                                      note.m_sampleBinding,
+                                      note.m_isDraft });
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());

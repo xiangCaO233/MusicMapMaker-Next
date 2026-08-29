@@ -21,6 +21,7 @@
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 #include "ui/imgui/manager/CollaborationLogWindow.h"
 #include "ui/imgui/manager/CollaborationRoomCoverImage.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <ImGuiFileDialog.h>
@@ -447,8 +448,8 @@ void CollaborationView::openRoomCoverFilePicker()
         nfdu8char_t*      selectedPath = nullptr;
         nfdu8filteritem_t filters[1]   = { { "Image Files",
                                              "png,jpg,jpeg,bmp,tga" } };
-        const nfdresult_t result =
-            NFD_OpenDialogU8(&selectedPath, filters, 1, defaultPath.c_str());
+        const nfdresult_t result       = NativeFileDialog::openFile(
+            &selectedPath, filters, 1, defaultPath.c_str());
         if ( result == NFD_OKAY && selectedPath ) {
             const auto path = Config::utf8ToPath(selectedPath);
             NFD_FreePathU8(selectedPath);

@@ -2,21 +2,24 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
-#include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimingTableFraction.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/ClipboardBridge.h"
+#include "ui/imgui/markdown/MarkdownRenderer.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -25,7 +28,6 @@
 #include <fmt/format.h>
 #include <imgui_internal.h>
 #include <mutex>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -39,12 +41,6 @@ namespace
 {
 /// @brief 新建 Timing 行的高亮持续时间（秒）
 constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
-
-/// @brief 表格分拍位拟合使用的最大分母。
-constexpr int TIMING_TABLE_MAX_BEAT_DENOMINATOR = 64;
-
-/// @brief 表格拍位换算使用的误差阈值。
-constexpr double TIMING_TABLE_BEAT_EPSILON = 1e-6;
 
 /// @brief 表格分拍位拟合误差提示阈值，单位毫秒。
 constexpr double TIMING_TABLE_FRACTION_WARNING_MS = 3.0;
@@ -79,28 +75,6 @@ struct TimingTableBeatPoint {
 /// @brief 时间线表格可双向换算的连续拍位时间线。
 using TimingTableBeatTimeline = std::vector<TimingTableBeatPoint>;
 
-/// @brief 时间线表格中展示的拍号与分拍位。
-struct TimingTableBeatPosition {
-    /// @brief 连续拍位置的整数拍号部分。
-    int beatIndex{ 0 };
-    /// @brief 连续拍位置的小数分拍部分，范围通常为 [0, 1)。
-    double fraction{ 0.0 };
-};
-
-/// @brief 表格分拍位拟合结果。
-struct TimingTableFractionFit {
-    /// @brief 拟合后的拍号。
-    int beatIndex{ 0 };
-    /// @brief 分拍分子。
-    int numerator{ 0 };
-    /// @brief 分拍分母。
-    int denominator{ 1 };
-    /// @brief 分拍小数值。
-    double fraction{ 0.0 };
-    /// @brief 拟合到该分数后的时间误差，单位毫秒。
-    double errorMs{ 0.0 };
-};
-
 /// @brief 分拍位文本输入缓存。
 using TimingTableFractionInputBuffer = std::array<char, 32>;
 
@@ -122,7 +96,7 @@ double sanitizeTimingTableBpm(double bpm, double fallbackBpm)
 /// @brief 取得表格拍位换算使用的快照回退 BPM。
 /// @param snapshot 当前渲染快照。
 /// @return 有效回退 BPM。
-double timingTableFallbackBpm(const Logic::RenderSnapshot& snapshot)
+double timingTableFallbackBpm(const Common::Render::RenderSnapshot& snapshot)
 {
     return sanitizeTimingTableBpm(snapshot.fallbackBpm, 120.0);
 }
@@ -133,7 +107,7 @@ double timingTableFallbackBpm(const Logic::RenderSnapshot& snapshot)
 /// @warning UI 热路径：表格窗口打开时每帧调用，只遍历快照中的 Scroll
 /// 缓存，不访问文件系统。
 TimingTableBeatTimeline buildTimingTableBeatTimeline(
-    const Logic::RenderSnapshot& snapshot)
+    const Common::Render::RenderSnapshot& snapshot)
 {
     struct BpmEvent {
         /// @brief BPM 时间点，单位秒。
@@ -146,7 +120,7 @@ TimingTableBeatTimeline buildTimingTableBeatTimeline(
     std::vector<BpmEvent> bpmEvents;
     bpmEvents.reserve(snapshot.scrollSegments.size());
     for ( const auto& segment : snapshot.scrollSegments ) {
-        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ||
+        if ( (segment.effects & Common::Render::SCROLL_EFFECT_BPM) == 0 ||
              !std::isfinite(segment.time) ) {
             continue;
         }
@@ -233,76 +207,6 @@ double timingTableBeatToTime(const TimingTableBeatTimeline& timeline,
                          });
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
     return point.time + (beat - point.beat) * 60.0 / point.bpm;
-}
-
-/// @brief 将连续拍位置拆成表格展示的拍号和分拍位。
-/// @param beat 连续拍位置。
-/// @return 规整后的表格拍位。
-TimingTableBeatPosition splitTimingTableBeatPosition(double beat)
-{
-    if ( !std::isfinite(beat) ) {
-        return {};
-    }
-
-    int beatIndex =
-        static_cast<int>(std::floor(beat + TIMING_TABLE_BEAT_EPSILON));
-    double fraction = beat - static_cast<double>(beatIndex);
-    if ( fraction < TIMING_TABLE_BEAT_EPSILON ) {
-        fraction = 0.0;
-    }
-    if ( fraction > 1.0 - TIMING_TABLE_BEAT_EPSILON ) {
-        beatIndex++;
-        fraction = 0.0;
-    }
-    return { beatIndex, fraction };
-}
-
-/// @brief 将连续拍位置拟合到最大 1/64 精度。
-/// @param beat 连续拍位置。
-/// @return 拟合后的分数拍位置。
-TimingTableFractionFit fitTimingTableFraction(double beat)
-{
-    const auto position = splitTimingTableBeatPosition(beat);
-
-    int    bestNumerator   = 0;
-    int    bestDenominator = 1;
-    double bestError       = std::abs(position.fraction);
-    for ( int denominator = 1; denominator <= TIMING_TABLE_MAX_BEAT_DENOMINATOR;
-          ++denominator ) {
-        const int numerator = std::clamp(
-            static_cast<int>(std::round(position.fraction * denominator)),
-            0,
-            denominator);
-        const double fittedFraction =
-            static_cast<double>(numerator) / static_cast<double>(denominator);
-        const double error = std::abs(position.fraction - fittedFraction);
-        if ( error + TIMING_TABLE_BEAT_EPSILON < bestError ||
-             (std::abs(error - bestError) <= TIMING_TABLE_BEAT_EPSILON &&
-              denominator < bestDenominator) ) {
-            bestError       = error;
-            bestNumerator   = numerator;
-            bestDenominator = denominator;
-        }
-    }
-
-    int beatIndex = position.beatIndex;
-    if ( bestNumerator >= bestDenominator ) {
-        beatIndex += bestNumerator / bestDenominator;
-        bestNumerator %= bestDenominator;
-    }
-    if ( bestNumerator == 0 ) {
-        return { beatIndex, 0, 1, 0.0, 0.0 };
-    }
-
-    const int divisor = std::gcd(bestNumerator, bestDenominator);
-    bestNumerator /= divisor;
-    bestDenominator /= divisor;
-    return { beatIndex,
-             bestNumerator,
-             bestDenominator,
-             static_cast<double>(bestNumerator) /
-                 static_cast<double>(bestDenominator),
-             0.0 };
 }
 
 /// @brief 将连续拍位置拟合为分数并计算时间误差。
@@ -649,22 +553,23 @@ void renderTimingTableHeaderContextMenu()
 
 /// @brief 从交互元素中提取主 Timing 类型
 ::MMM::TimingEffect getElementEffect(
-    const Logic::TimelineInteractiveElement& el)
+    const Common::Render::TimelineInteractiveElement& el)
 {
-    if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_BPM ) {
         return ::MMM::TimingEffect::BPM;
     }
-    if ( el.effects & Logic::System::SCROLL_EFFECT_JUMP ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_JUMP ) {
         return ::MMM::TimingEffect::JUMP;
     }
-    if ( el.effects & Logic::System::SCROLL_EFFECT_HS ) {
+    if ( el.effects & Common::Render::SCROLL_EFFECT_HS ) {
         return ::MMM::TimingEffect::HS;
     }
     return ::MMM::TimingEffect::SCROLL;
 }
 
 /// @brief 获取 Timing 类型对应实体
-entt::entity getElementEntity(const Logic::TimelineInteractiveElement& el)
+entt::entity getElementEntity(
+    const Common::Render::TimelineInteractiveElement& el)
 {
     switch ( getElementEffect(el) ) {
     case ::MMM::TimingEffect::BPM: return el.bpmEntity;
@@ -676,7 +581,7 @@ entt::entity getElementEntity(const Logic::TimelineInteractiveElement& el)
 }
 
 /// @brief 获取 Timing 类型对应原始值
-double getElementRawValue(const Logic::TimelineInteractiveElement& el)
+double getElementRawValue(const Common::Render::TimelineInteractiveElement& el)
 {
     switch ( getElementEffect(el) ) {
     case ::MMM::TimingEffect::BPM: return el.bpmValue;
@@ -740,7 +645,7 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
 
 /// @brief 获取用于绑定时间点批量编辑窗口的谱面快照键。
 std::string_view getTimingPointsTableBeatmapKey(
-    const Logic::RenderSnapshot& snapshot)
+    const Common::Render::RenderSnapshot& snapshot)
 {
     if ( !snapshot.beatmapPathKey.empty() ) {
         return snapshot.beatmapPathKey;
@@ -748,10 +653,27 @@ std::string_view getTimingPointsTableBeatmapKey(
     return snapshot.beatmapName;
 }
 
-/// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
-std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
+/// @brief 获取批注表目标类型对应的翻译键。
+/// @param targetKind 批注目标类型。
+/// @return 可交给翻译系统的稳定键。
+const char* annotationTableTargetLabelKey(
+    ::MMM::BeatmapAnnotationTargetKind targetKind)
 {
-    std::vector<Logic::TimelineInteractiveElement> elements;
+    switch ( targetKind ) {
+    case ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT:
+        return "ui.annotation.target.player_object";
+    case ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE:
+        return "ui.annotation.target.audio_sample";
+    case ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP:
+    default: return "ui.annotation.target.timestamp";
+    }
+}
+
+/// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
+std::vector<Common::Render::TimelineInteractiveElement>
+collectTimelineElements()
+{
+    std::vector<Common::Render::TimelineInteractiveElement> elements;
     auto& engine = Logic::EditorEngine::instance();
     std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
     auto                                  session = engine.getActiveSession();
@@ -763,24 +685,24 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 
     for ( auto entity : view ) {
         const auto& tc = view.get<const Logic::TimelineComponent>(entity);
-        Logic::TimelineInteractiveElement el;
+        Common::Render::TimelineInteractiveElement el;
         el.time = tc.m_timestamp;
         el.y    = 0.0f;
 
         if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-            el.effects   = Logic::System::SCROLL_EFFECT_BPM;
+            el.effects   = Common::Render::SCROLL_EFFECT_BPM;
             el.bpmEntity = entity;
             el.bpmValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
-            el.effects      = Logic::System::SCROLL_EFFECT_SCROLL;
+            el.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
             el.scrollEntity = entity;
             el.scrollValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
-            el.effects    = Logic::System::SCROLL_EFFECT_JUMP;
+            el.effects    = Common::Render::SCROLL_EFFECT_JUMP;
             el.jumpEntity = entity;
             el.jumpValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
-            el.effects  = Logic::System::SCROLL_EFFECT_HS;
+            el.effects  = Common::Render::SCROLL_EFFECT_HS;
             el.hsEntity = entity;
             el.hsValue  = tc.m_value;
         }
@@ -805,8 +727,8 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 /// @warning UI 快捷键低频路径：仅在复制或剪切时短暂持有 Session 锁，
 /// 遍历完整表格行并复制选中 Timing 元数据。
 bool copyTimingTableSelectionToClipboard(
-    const std::vector<Logic::TimelineInteractiveElement>& elements,
-    const std::unordered_set<entt::entity>&               selectedEntities,
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements,
+    const std::unordered_set<entt::entity>& selectedEntities,
     const TimingTableBeatTimeline& beatTimeline, double fallbackBpm)
 {
     auto& engine = Logic::EditorEngine::instance();
@@ -873,7 +795,7 @@ double getActiveSessionTimelineTime(double fallbackTime)
 /// @param targetTime 目标判定线时间，单位秒。
 /// @return 命中的可见行索引；无可用行时返回 -1。
 int findNearestTimelineElementIndex(
-    const std::vector<Logic::TimelineInteractiveElement>& elements,
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements,
     const std::vector<std::size_t>& visibleIndices, double targetTime)
 {
     if ( visibleIndices.empty() || !std::isfinite(targetTime) ) {
@@ -973,31 +895,31 @@ void createKeepSpeedScrollEvent(double time, double bpm)
 }
 
 /// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
+/// @return 文本或步进按钮在当前帧改变秒值时返回 true。
 bool drawTimeEditor(const char* id, double& value,
-                    const Logic::RenderSnapshot* snapshot)
+                    const Common::Render::RenderSnapshot* snapshot)
 {
     auto preference =
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
-        return ImGui::IsItemDeactivatedAfterEdit();
+        return ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
     }
 
-    std::string label = formatCanvasTime(value, snapshot) + "##" + id;
+    std::string label =
+        MMM::UI::Utils::formatCanvasTime(value, snapshot) + "##" + id;
     if ( ::MMM::UI::FeedbackButton(label.c_str(), ImVec2(-FLT_MIN, 0.0f)) ) {
         ImGui::OpenPopup(id);
     }
     if ( ImGui::IsItemHovered() ) {
-        const auto timeText = formatCanvasTime(value, snapshot);
+        const auto timeText = MMM::UI::Utils::formatCanvasTime(value, snapshot);
         ImGui::SetTooltip("%s", timeText.c_str());
     }
 
     bool changed = false;
     if ( ImGui::BeginPopup(id) ) {
         ImGui::SetNextItemWidth(180.0f);
-        ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
-        changed = ImGui::IsItemDeactivatedAfterEdit();
+        changed = ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
         ImGui::EndPopup();
     }
     return changed;
@@ -1037,7 +959,7 @@ void TimelineCanvas::beginKeepSpeedBinding(double time)
 
 /// @brief 刷新当前“保持画布速度”联动关联的实体。
 void TimelineCanvas::refreshKeepSpeedBinding(
-    const std::vector<Logic::TimelineInteractiveElement>& elements)
+    const std::vector<Common::Render::TimelineInteractiveElement>& elements)
 {
     if ( !m_keepSpeedBindingActive ) return;
 
@@ -1053,11 +975,11 @@ void TimelineCanvas::refreshKeepSpeedBinding(
     for ( const auto& el : elements ) {
         if ( std::abs(el.time - m_keepSpeedBindingTime) > 1e-6 ) continue;
 
-        if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+        if ( el.effects & Common::Render::SCROLL_EFFECT_BPM ) {
             m_keepSpeedBindingBpmEntity =
                 chooseNewest(m_keepSpeedBindingBpmEntity, el.bpmEntity);
         }
-        if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
+        if ( el.effects & Common::Render::SCROLL_EFFECT_SCROLL ) {
             m_keepSpeedBindingScrollEntity =
                 chooseNewest(m_keepSpeedBindingScrollEntity, el.scrollEntity);
         }
@@ -1138,6 +1060,18 @@ void TimelineCanvas::renderEventEditorPopup()
         if ( editEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             drawFullWidthInputDouble("##Value", m_editValue, 0.1, 1.0, "%.4f");
+            ImGui::Spacing();
+            ::MMM::UI::FeedbackCheckbox(
+                TR("ui.timeline.event_editor.keep_preferred_bpm_speed_sv")
+                    .data(),
+                &m_keepSpeedOnBpmEdit);
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip(
+                    "%s",
+                    TR("ui.timeline.event_editor.keep_preferred_bpm_speed_sv_"
+                       "tooltip")
+                        .data());
+            }
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.4f");
@@ -1164,9 +1098,20 @@ void TimelineCanvas::renderEventEditorPopup()
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                    m_editingEntity, m_editTime, finalValue }));
+            if ( editEffect == ::MMM::TimingEffect::BPM &&
+                 m_keepSpeedOnBpmEdit ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateBpmWithKeepSpeedSv{
+                        .bpmEntity   = m_editingEntity,
+                        .newTime     = m_editTime,
+                        .newBpm      = finalValue,
+                        .scrollValue = getKeepSpeedScrollValue(m_editValue),
+                    }));
+            } else {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                        m_editingEntity, m_editTime, finalValue }));
+            }
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
@@ -1375,6 +1320,371 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::EndPopup();
     }
+}
+
+/// @brief 批注缓存版本变化时复制一次全量、已解析的表格行。
+/// @param beatmapKey 当前表格绑定的谱面键。
+/// @param revision 当前快照发布的批注缓存版本。
+/// @return 成功取得与快照匹配的批注数据时返回 true。
+/// @warning UI 低频刷新路径：仅版本变化时持有 Session 锁和复制全量批注，
+/// 禁止无条件每帧调用。
+bool TimelineCanvas::refreshAnnotationTableRows(std::string_view beatmapKey,
+                                                std::uint64_t    revision)
+{
+    if ( m_annotationTableBeatmapKey == beatmapKey &&
+         m_annotationTableRevision == revision ) {
+        return true;
+    }
+
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) return false;
+
+    const auto& context = session->getContext();
+    if ( !context.currentBeatmap || context.isAnnotationRenderCacheDirty ||
+         context.annotationRenderCacheRevision != revision ) {
+        return false;
+    }
+
+    const auto&       metadata = context.currentBeatmap->m_baseMapMetadata;
+    const std::string currentBeatmapKey =
+        metadata.map_path.empty() ? metadata.name
+                                  : Config::pathToUtf8(metadata.map_path);
+    if ( currentBeatmapKey != beatmapKey ) return false;
+
+    std::string selectedId;
+    if ( m_selectedAnnotationTableRow &&
+         *m_selectedAnnotationTableRow < m_annotationTableRows.size() ) {
+        selectedId =
+            m_annotationTableRows[*m_selectedAnnotationTableRow].item.id;
+    }
+
+    std::vector<AnnotationTableRow> refreshedRows;
+    refreshedRows.reserve(context.currentBeatmap->m_annotations.size());
+    for ( const auto& marker : context.annotationRenderCache ) {
+        for ( const auto& item : marker.items ) {
+            refreshedRows.push_back(
+                AnnotationTableRow{ marker.timestamp, item });
+        }
+    }
+
+    m_annotationTableRows.swap(refreshedRows);
+    m_annotationTableBeatmapKey.assign(beatmapKey.data(), beatmapKey.size());
+    m_annotationTableRevision = revision;
+
+    m_selectedAnnotationTableRow.reset();
+    if ( !selectedId.empty() ) {
+        const auto selected = std::find_if(m_annotationTableRows.begin(),
+                                           m_annotationTableRows.end(),
+                                           [&](const AnnotationTableRow& row) {
+                                               return row.item.id == selectedId;
+                                           });
+        if ( selected != m_annotationTableRows.end() ) {
+            m_selectedAnnotationTableRow = static_cast<std::size_t>(
+                std::distance(m_annotationTableRows.begin(), selected));
+        }
+    }
+    if ( !m_selectedAnnotationTableRow && !m_annotationTableRows.empty() ) {
+        m_selectedAnnotationTableRow = 0U;
+    }
+    return true;
+}
+
+/// @brief 渲染可快速查看并跳转定位的批注表窗口（非模态）。
+void TimelineCanvas::renderAnnotationTableWindow()
+{
+    const auto resetTable = [this]() {
+        m_annotationTableBeatmapKey.clear();
+        m_annotationTableRevision = std::numeric_limits<std::uint64_t>::max();
+        m_annotationTableRows.clear();
+        m_selectedAnnotationTableRow.reset();
+    };
+    if ( !m_isAnnotationTableWindowOpen ) {
+        resetTable();
+        return;
+    }
+
+    auto closeTableWindow = [this, &resetTable]() {
+        m_isAnnotationTableWindowOpen = false;
+        resetTable();
+    };
+
+    auto&         engine      = Logic::EditorEngine::instance();
+    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+    if ( !activeEntry || activeEntry->isLogoPlaceholder || !m_currentSnapshot ||
+         !m_currentSnapshot->hasBeatmap ) {
+        closeTableWindow();
+        return;
+    }
+
+    const std::string_view currentBeatmapKey =
+        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+    if ( currentBeatmapKey.empty() ) {
+        closeTableWindow();
+        return;
+    }
+    if ( m_annotationTableBeatmapKey.empty() ) {
+        m_annotationTableBeatmapKey.assign(currentBeatmapKey.data(),
+                                           currentBeatmapKey.size());
+    } else if ( m_annotationTableBeatmapKey != currentBeatmapKey ) {
+        closeTableWindow();
+        return;
+    }
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    const float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    const ImVec2 itemSpacing{
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+    ImGui::SetNextWindowSize(ImVec2(860.0F, 560.0F), ImGuiCond_FirstUseEver);
+    std::string windowTitle =
+        TR("ui.annotation.table.title").toString() + "###AnnotationTableWindow";
+    const bool wasOpenBeforeBegin = m_isAnnotationTableWindowOpen;
+    const bool opened =
+        ImGui::Begin(windowTitle.c_str(), &m_isAnnotationTableWindowOpen);
+    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                                &m_isAnnotationTableWindowOpen);
+    if ( opened ) {
+        const bool rowsReady = refreshAnnotationTableRows(
+            currentBeatmapKey, m_currentSnapshot->annotationRevision);
+        if ( !rowsReady ) {
+            ImGui::TextDisabled("%s", TR("ui.annotation.table.syncing").data());
+        } else {
+            ImGui::Text("%s",
+                        TR_FMT("ui.annotation.table.count",
+                               m_annotationTableRows.size())
+                            .c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", TR("ui.annotation.table.hint").data());
+
+            const float availableHeight = ImGui::GetContentRegionAvail().y;
+            const float detailHeight =
+                std::clamp(availableHeight * 0.38F, 150.0F, 260.0F);
+            const float tableHeight =
+                std::max(160.0F,
+                         availableHeight - detailHeight -
+                             ImGui::GetStyle().ItemSpacing.y - 4.0F);
+            constexpr ImGuiTableFlags tableFlags =
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
+                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+            if ( ImGui::BeginTable("AnnotationTableRows",
+                                   6,
+                                   tableFlags,
+                                   ImVec2(0.0F, tableHeight)) ) {
+                if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                    table->DisableDefaultContextMenu = true;
+                }
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn(TR("ui.annotation.table.index").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        52.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.timestamp").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        125.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.target").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        140.0F * dpiScale);
+                ImGui::TableSetupColumn(TR("ui.annotation.author").data(),
+                                        ImGuiTableColumnFlags_WidthStretch,
+                                        0.75F);
+                ImGui::TableSetupColumn(
+                    TR("ui.annotation.table.content").data(),
+                    ImGuiTableColumnFlags_WidthStretch,
+                    1.7F);
+                const ImGuiStyle& annotationTableStyle = ImGui::GetStyle();
+                const float       annotationActionButtonWidth =
+                    std::max(
+                        ImGui::CalcTextSize(
+                            TR("ui.annotation.table.jump").data())
+                            .x,
+                        ImGui::CalcTextSize(TR("ui.common.delete").data()).x) +
+                    annotationTableStyle.FramePadding.x * 2.0F;
+                const float annotationActionColumnWidth =
+                    annotationActionButtonWidth * 2.0F +
+                    annotationTableStyle.ItemSpacing.x + 8.0F * dpiScale;
+                ImGui::TableSetupColumn(TR("ui.annotation.table.action").data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        annotationActionColumnWidth);
+                ImGui::TableHeadersRow();
+
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(m_annotationTableRows.size()));
+                while ( clipper.Step() ) {
+                    for ( int rowIndex = clipper.DisplayStart;
+                          rowIndex < clipper.DisplayEnd;
+                          ++rowIndex ) {
+                        const auto  index = static_cast<std::size_t>(rowIndex);
+                        const auto& row   = m_annotationTableRows[index];
+                        const bool  selected =
+                            m_selectedAnnotationTableRow == index;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        const std::string rowLabel = fmt::format(
+                            "#{}###AnnotationTableRow_{}", index + 1U, index);
+                        const bool rowClicked = ::MMM::UI::FeedbackSelectable(
+                            rowLabel.c_str(),
+                            selected,
+                            ImGuiSelectableFlags_SpanAllColumns |
+                                ImGuiSelectableFlags_AllowOverlap,
+                            ImVec2(0.0F, ImGui::GetFrameHeight()));
+                        const bool rowDoubleClicked =
+                            ImGui::IsItemHovered() &&
+                            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                        if ( rowClicked ) {
+                            m_selectedAnnotationTableRow = index;
+                        }
+
+                        const auto seekToRow = [&row]() {
+                            const float visualOffset =
+                                Config::AppConfig::instance()
+                                    .getVisualConfig()
+                                    .getEffectiveVisualOffset();
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(Logic::CmdSeek{
+                                    row.timestamp - visualOffset }));
+                        };
+                        if ( rowDoubleClicked ) seekToRow();
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::AlignTextToFramePadding();
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                            row.timestamp, m_currentSnapshot);
+                        ImGui::TextUnformatted(timeText.c_str());
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted(TR(annotationTableTargetLabelKey(
+                                                      row.item.targetKind))
+                                                   .data());
+                        if ( row.item.track >= 0 ) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("#%d", row.item.track + 1);
+                        }
+                        if ( row.item.targetMissing ) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                                               "!");
+                        }
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted(
+                            row.item.author.empty()
+                                ? TR("ui.annotation.unknown_author").data()
+                                : row.item.author.c_str());
+
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::AlignTextToFramePadding();
+                        const auto firstLineEnd = row.item.content.find('\n');
+                        const std::size_t firstLineLength =
+                            firstLineEnd == std::string::npos
+                                ? row.item.content.size()
+                                : firstLineEnd;
+                        ImGui::TextUnformatted(
+                            row.item.content.data(),
+                            row.item.content.data() + firstLineLength);
+
+                        ImGui::TableSetColumnIndex(5);
+                        const float actionButtonWidth =
+                            std::max(1.0F,
+                                     (ImGui::GetContentRegionAvail().x -
+                                      ImGui::GetStyle().ItemSpacing.x) /
+                                         2.0F);
+                        const std::string jumpLabel =
+                            fmt::format("{}##AnnotationTableJump_{}",
+                                        TR("ui.annotation.table.jump").view(),
+                                        index);
+                        if ( ::MMM::UI::FeedbackButton(
+                                 jumpLabel.c_str(),
+                                 ImVec2(actionButtonWidth,
+                                        ImGui::GetFrameHeight())) ) {
+                            seekToRow();
+                        }
+                        ImGui::SameLine();
+                        const std::string deleteLabel =
+                            fmt::format("{}##AnnotationTableDelete_{}",
+                                        TR("ui.common.delete").view(),
+                                        index);
+                        if ( ::MMM::UI::FeedbackButton(
+                                 deleteLabel.c_str(),
+                                 ImVec2(actionButtonWidth,
+                                        ImGui::GetFrameHeight())) ) {
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdRemoveBeatmapAnnotation{
+                                        row.item.id }));
+                        }
+                    }
+                }
+                ImGui::EndTable();
+            }
+
+            if ( m_annotationTableRows.empty() ) {
+                ImGui::TextDisabled("%s",
+                                    TR("ui.annotation.table.empty").data());
+            } else if ( m_selectedAnnotationTableRow &&
+                        *m_selectedAnnotationTableRow <
+                            m_annotationTableRows.size() ) {
+                const auto& selected =
+                    m_annotationTableRows[*m_selectedAnnotationTableRow];
+                ImGui::BeginChild("AnnotationTableDetail",
+                                  ImVec2(0.0F, detailHeight),
+                                  ImGuiChildFlags_Borders);
+                const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                    selected.timestamp, m_currentSnapshot);
+                ImGui::Text("%s: %s",
+                            TR("ui.annotation.timestamp").data(),
+                            timeText.c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled(
+                    "· %s",
+                    selected.item.author.empty()
+                        ? TR("ui.annotation.unknown_author").data()
+                        : selected.item.author.c_str());
+                ImGui::Text(
+                    "%s: %s",
+                    TR("ui.annotation.target").data(),
+                    TR(annotationTableTargetLabelKey(selected.item.targetKind))
+                        .data());
+                if ( selected.item.track >= 0 ) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("#%d", selected.item.track + 1);
+                }
+                if ( selected.item.targetMissing ) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(
+                        ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                        "%s",
+                        TR("ui.annotation.target_missing").data());
+                }
+                ImGui::Separator();
+                UI::renderMarkdown(selected.item.content);
+                ImGui::EndChild();
+            }
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(6);
 }
 
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）。
@@ -1893,7 +2203,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                      std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
                     for ( const auto& el : elements ) {
                         if ( el.effects &
-                             Logic::System::SCROLL_EFFECT_SCROLL ) {
+                             Common::Render::SCROLL_EFFECT_SCROLL ) {
                             double dispScroll =
                                 getDisplayValue(::MMM::TimingEffect::SCROLL,
                                                 el.scrollValue,
@@ -2194,8 +2504,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     int beatIndexValue = fractionFit.beatIndex;
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string beatId = fmt::format("##Beat_{}", displayIdx);
-                    ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
-                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    // 单元值下一帧会从快照重建，步进按钮必须在变化当帧提交。
+                    const bool beatIndexChanged =
+                        ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
+                    if ( beatIndexChanged ) {
                         publishTimingBeatPositionUpdate(ent,
                                                         beatIndexValue,
                                                         fractionFit.fraction,
@@ -2263,7 +2575,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     if ( isBoundScroll ) {
                         ImGui::BeginDisabled();
                     }
-                    ImGui::InputDouble(
+                    // InputDouble 的返回值同时覆盖文本编辑和步进按钮。
+                    const bool displayValueChanged = ImGui::InputDouble(
                         vId.c_str(),
                         &vVal,
                         effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
@@ -2277,15 +2590,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 "保持画布速度联动中，修改 BPM 后自动刷新");
                         }
                     }
-                    if ( isBoundBpm && ImGui::IsItemEdited() ) {
-                        double finalValue = getStoredValue(effect, vVal, ent);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, el.time, finalValue }));
-                        updateKeepSpeedBindingScroll(vVal);
-                    }
-                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    if ( displayValueChanged && !isBoundScroll ) {
                         double finalValue = getStoredValue(effect, vVal, ent);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
@@ -2293,9 +2598,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                     ent, el.time, finalValue }));
                         if ( isBoundBpm ) {
                             updateKeepSpeedBindingScroll(vVal);
-                            finishKeepSpeedBinding();
                         }
-                    } else if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
+                    }
+                    if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
                         finishKeepSpeedBinding();
                     }
 

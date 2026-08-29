@@ -10,6 +10,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/EditorAction.h"
@@ -76,6 +77,7 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
     }
     context.currentBeatmap->m_baseMapMetadata.track_count = 4;
     context.trackCount                                    = 4;
+    context.draftTrackCount                               = 4;
     context.bgmTrackCount                                 = 1;
     context.currentTime                                   = 1.0;
     context.animateTime                                   = 1.0;
@@ -883,6 +885,46 @@ bool testUnifiedLaneProjection()
     return true;
 }
 
+/// @brief 验证草稿持久轨道数量独立于玩家键数并始终保留最左追加轨。
+/// @return 追加轨映射、扩轨后原轨道屏幕位置和反向地址均保持稳定时返回 true。
+bool testDynamicDraftAppendLaneProjection()
+{
+    const auto before = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 6, true);
+    const auto appendLane = before.laneAt(-550.0F);
+    const auto existingLane =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-6, 4, 7);
+    const auto existingBounds = before.bounds(existingLane);
+
+    const auto visibleRange = before.visibleDraftRange(-525.0F, -325.0F);
+    const bool numberingMatchesTracks =
+        MMM::Logic::draftTrackDisplayNumber(-7, 6) == 1 &&
+        MMM::Logic::draftTrackDisplayNumber(-6, 6) == 1 &&
+        MMM::Logic::draftTrackDisplayNumber(-1, 6) == 6;
+
+    const auto after = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 7, true);
+    const auto expandedAddress =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-6, 4, 8);
+    const auto expandedBounds = after.bounds(expandedAddress);
+
+    if ( !before.valid || before.draftLaneCount != 7U ||
+         !near(before.draftLeftX, -600.0) || !appendLane ||
+         appendLane->kind != MMM::Logic::CanvasLaneKind::Draft ||
+         appendLane->index != 0U || appendLane->absoluteTrack(4, 7) != -7 ||
+         !visibleRange || visibleRange->first != 0U ||
+         visibleRange->second != 3U || !numberingMatchesTracks ||
+         existingLane.index != 1U || !existingBounds ||
+         !near(existingBounds->leftX, -500.0) || !after.valid ||
+         after.draftLaneCount != 8U || !near(after.draftLeftX, -700.0) ||
+         expandedAddress.index != 2U || !expandedBounds ||
+         !near(expandedBounds->leftX, existingBounds->leftX) ) {
+        XERROR("Dynamic draft append projection shifted existing lanes");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证未发布草稿轨时不会绘制可访问投影、创建草稿或全选草稿物件。
 /// @return 默认投影隐藏草稿区且编辑入口不会命中草稿数据时返回 true。
 bool testDraftLaneReleaseGateHidesDraftArea()
@@ -1005,6 +1047,7 @@ bool testProjectDraftLaneSharingAndIsolation()
             .m_isDraft         = true,
             .m_collaborationId = "draft-a",
         });
+    first.draftTrackCount       = 6;
     first.m_needsDraftNotesSync = true;
     MMM::Logic::ProjectDraftLaneService::sync(first);
 
@@ -1012,17 +1055,33 @@ bool testProjectDraftLaneSharingAndIsolation()
     MMM::Logic::SessionUtils::syncBeatmap(first);
     MMM::Logic::SessionUtils::rebuildHitEvents(first);
     if ( project->m_draftLaneGroups.size() != 1 ||
+         project->m_draftLaneGroups.front().m_trackCount != 6 ||
          first.currentBeatmap->m_noteData.notes.size() != 1 ||
          first.currentBeatmap->m_noteData.notes.front().m_track != 1 ||
-         first.hitEvents.size() != 1 ) {
-        XERROR("Draft notes leaked into the formal beatmap or hit events");
+         first.hitEvents.size() != 2 || first.hitEvents[0].isDraft ||
+         !first.hitEvents[1].isDraft || first.hitEvents[1].trackIndex != -4 ||
+         !near(first.currentBeatmap->m_baseMapMetadata.map_length, 500.0) ) {
+        XERROR("Draft note persistence or hit event routing was incorrect");
         return false;
     }
 
     MMM::Logic::SessionContext second;
     configure(second, "song.ogg");
-    if ( collectDraftRootIds(second) !=
-         std::unordered_set<std::string>{ "draft-a" } ) {
+    entt::entity loadedDraftA = entt::null;
+    for ( const auto entity :
+          second.noteRegistry.view<const MMM::Logic::NoteComponent>() ) {
+        const auto& note =
+            second.noteRegistry.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_collaborationId == "draft-a" ) {
+            loadedDraftA = entity;
+            break;
+        }
+    }
+    if ( second.draftTrackCount != 6 || loadedDraftA == entt::null ||
+         second.noteRegistry.get<const MMM::Logic::NoteComponent>(loadedDraftA)
+                 .m_trackIndex != -4 ||
+         collectDraftRootIds(second) !=
+             std::unordered_set<std::string>{ "draft-a" } ) {
         XERROR("A beatmap using the same main audio did not load drafts");
         return false;
     }
@@ -1085,6 +1144,45 @@ bool testProjectDraftLaneSharingAndIsolation()
         return false;
     }
 
+    MMM::Logic::SessionContext stale;
+    configure(stale, "song.ogg");
+    first.draftTrackCount       = 7;
+    first.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(first);
+    const auto staleEntity = stale.noteRegistry.create();
+    stale.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        staleEntity,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::NOTE,
+            .m_timestamp       = 4.0,
+            .m_trackIndex      = -2,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-stale",
+        });
+    stale.m_needsDraftNotesSync = true;
+    MMM::Logic::ProjectDraftLaneService::sync(stale);
+    MMM::Logic::SessionContext afterConcurrentGrowth;
+    configure(afterConcurrentGrowth, "song.ogg");
+    entt::entity concurrentOuter = entt::null;
+    entt::entity concurrentStale = entt::null;
+    const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
+                                       .view<const MMM::Logic::NoteComponent>();
+    for ( const auto entity : concurrentView ) {
+        const auto& note =
+            concurrentView.get<const MMM::Logic::NoteComponent>(entity);
+        if ( note.m_collaborationId == "draft-c" ) concurrentOuter = entity;
+        if ( note.m_collaborationId == "draft-stale" ) concurrentStale = entity;
+    }
+    if ( afterConcurrentGrowth.draftTrackCount != 7 ||
+         concurrentOuter == entt::null || concurrentStale == entt::null ||
+         concurrentView.get<const MMM::Logic::NoteComponent>(concurrentOuter)
+                 .m_trackIndex != -3 ||
+         concurrentView.get<const MMM::Logic::NoteComponent>(concurrentStale)
+                 .m_trackIndex != -2 ) {
+        XERROR("Concurrent draft count growth shifted or truncated objects");
+        return false;
+    }
+
     MMM::Logic::SessionContext isolated;
     configure(isolated, "other.ogg");
     return isolated.m_draftLaneGroupId == "other-main" &&
@@ -1117,6 +1215,109 @@ bool testDraftMirrorStaysInDraftDomain()
            mirrored.m_dtrack == -1 && !context.m_needsNotesSync &&
            context.actionStack.takePendingMutationFlags() ==
                MMM::BeatmapMutationFlags::None;
+}
+
+/// @brief 验证草稿镜像使用动态草稿轨数量而非玩家键数。
+/// @return 六轨草稿最左轨镜像至最右轨且不扩展轨道数时返回 true。
+bool testDraftMirrorUsesDynamicDraftTrackCount()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.draftTrackCount = 6;
+    const auto entity       = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -6,
+            .m_isDraft    = true,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdMirrorSelected{});
+    const auto& mirrored =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return mirrored.m_trackIndex == -1 && mirrored.m_isDraft &&
+           context.draftTrackCount == 6;
+}
+
+/// @brief 验证常用分拍对齐不会丢弃缺少独立子实体的折线节点。
+/// @return 父折线的完整节点在执行、同步、撤销和重做后均保留时返回 true。
+bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = true;
+
+    MMM::Logic::NoteComponent polyline;
+    polyline.m_type       = MMM::NoteType::POLYLINE;
+    polyline.m_timestamp  = 1.013;
+    polyline.m_trackIndex = 0;
+    polyline.m_subNotes   = {
+        {
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
+        },
+        {
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
+        },
+        {
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
+        },
+    };
+
+    const auto parentEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(parentEntity,
+                                                            polyline);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        parentEntity, MMM::Logic::InteractionComponent{ .isSelected = true });
+
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdAlignSelectedToCommonBeats{});
+
+    const auto hasCompletePolyline = [&]() {
+        if ( !context.noteRegistry.valid(parentEntity) ) return false;
+        const auto& current =
+            context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                parentEntity);
+        return current.m_type == MMM::NoteType::POLYLINE &&
+               current.m_subNotes.size() == polyline.m_subNotes.size();
+    };
+    if ( !hasCompletePolyline() ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Common beat alignment discarded embedded Polyline nodes");
+        return false;
+    }
+
+    MMM::Logic::SessionUtils::syncBeatmap(context);
+    if ( context.currentBeatmap->m_noteData.polylines.size() != 1U ||
+         context.currentBeatmap->m_noteData.polylines.front()
+                 .m_subNotes.size() != polyline.m_subNotes.size() ) {
+        XERROR("Aligned Polyline nodes were lost during beatmap sync");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    if ( !hasCompletePolyline() ) {
+        XERROR("Undo did not restore the complete Polyline");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return hasCompletePolyline();
 }
 
 /// @brief 验证逻辑视口 Resize 后横向位移保持相同比例。
@@ -3680,6 +3881,397 @@ bool testMarqueeToolEntityDragCrossesCanvasAreas()
            context.sampleRegistry.view<MMM::Logic::SampleComponent>().empty();
 }
 
+/// @brief 验证物件拖入草稿追加轨后扩展持久轨道数并保持单次撤销记录。
+/// @return 拖动、Undo 与 Redo 同步恢复物件轨道和草稿轨道数量时返回 true。
+bool testDraftAppendLaneDragExpandsPersistentCount()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        entity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        entity,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    for ( int update = 0; update < 128; ++update ) {
+        controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+            "Basic2DCanvas",
+            -350.0F,
+            300.0F,
+            true,
+        });
+    }
+    const auto preview =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( preview.m_trackIndex != -5 || !preview.m_isDraft ||
+         context.draftTrackCount != 4 ) {
+        XERROR("Draft append drag expanded persistent lanes before release");
+        return false;
+    }
+
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto moved =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( moved.m_trackIndex != -5 || !moved.m_isDraft ||
+         context.draftTrackCount != 5 ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Draft append drag did not expand one persistent lane");
+        return false;
+    }
+
+    context.actionStack.undo(context);
+    const auto undone =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( undone.m_trackIndex != 0 || undone.m_isDraft ||
+         context.draftTrackCount != 4 ) {
+        XERROR("Draft append drag undo did not restore lane count");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    const auto redone =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    if ( redone.m_trackIndex != -5 || !redone.m_isDraft ||
+         context.draftTrackCount != 5 ) {
+        XERROR("Draft append drag redo did not restore expansion");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证进入草稿追加轨后移回原轨，松开时不会扩充草稿区。
+/// @return 预览和提交均保持原轨道数量且不产生空操作时返回 true。
+bool testDraftAppendLanePreviewCanBeWithdrawn()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        entity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        entity,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        -350.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{
+        "Basic2DCanvas",
+        150.0F,
+        300.0F,
+        true,
+    });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& note =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return note.m_trackIndex == 0 && !note.m_isDraft &&
+           context.draftTrackCount == 4 &&
+           context.actionStack.getUndoStackSize() == 0U;
+}
+
+/// @brief 验证折线在草稿区和玩家区之间双向拖动并保持完整结构。
+/// @return 双向移动、正式同步及 Undo/Redo 均保留根子结构时返回 true。
+bool testPolylineDragMovesBetweenDraftAndPlayer()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto                rootEntity  = context.noteRegistry.create();
+    const auto                firstChild  = context.noteRegistry.create();
+    const auto                secondChild = context.noteRegistry.create();
+    MMM::Logic::NoteComponent root{
+        .m_type            = MMM::NoteType::POLYLINE,
+        .m_timestamp       = 1.0,
+        .m_trackIndex      = -2,
+        .m_isDraft         = true,
+        .m_collaborationId = "draft-polyline-root",
+    };
+    root.m_subNotes = {
+        MMM::Logic::NoteComponent::SubNote{
+            .type            = MMM::NoteType::NOTE,
+            .timestamp       = 1.0,
+            .trackIndex      = -2,
+            .collaborationId = "draft-polyline-first",
+        },
+        MMM::Logic::NoteComponent::SubNote{
+            .type            = MMM::NoteType::FLICK,
+            .timestamp       = 1.25,
+            .trackIndex      = -1,
+            .dtrack          = -1,
+            .collaborationId = "draft-polyline-second",
+        },
+    };
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(rootEntity);
+    const auto addChild = [&](entt::entity entity, std::size_t index) {
+        const auto& sub = root.m_subNotes[index];
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{
+                .m_type            = sub.type,
+                .m_timestamp       = sub.timestamp,
+                .m_trackIndex      = sub.trackIndex,
+                .m_dtrack          = sub.dtrack,
+                .m_isSubNote       = true,
+                .m_isDraft         = true,
+                .m_parentPolyline  = rootEntity,
+                .m_subIndex        = static_cast<int>(index),
+                .m_collaborationId = sub.collaborationId,
+            });
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    };
+    // 先创建根、后创建两个子实体，覆盖 unordered_map 子实体先于根遍历的路径。
+    addChild(firstChild, 0);
+    addChild(secondChild, 1);
+
+    const auto structureMatches =
+        [&](bool isDraft, int firstTrack, int secondTrack) {
+            if ( !context.noteRegistry.valid(rootEntity) ||
+                 !context.noteRegistry.valid(firstChild) ||
+                 !context.noteRegistry.valid(secondChild) ) {
+                return false;
+            }
+            const auto& currentRoot =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    rootEntity);
+            const auto& currentFirst =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    firstChild);
+            const auto& currentSecond =
+                context.noteRegistry.get<const MMM::Logic::NoteComponent>(
+                    secondChild);
+            return currentRoot.m_type == MMM::NoteType::POLYLINE &&
+                   currentRoot.m_isDraft == isDraft &&
+                   currentRoot.m_trackIndex == firstTrack &&
+                   currentRoot.m_subNotes.size() == 2 &&
+                   currentRoot.m_subNotes[0].trackIndex == firstTrack &&
+                   currentRoot.m_subNotes[1].trackIndex == secondTrack &&
+                   currentFirst.m_parentPolyline == rootEntity &&
+                   currentFirst.m_isDraft == isDraft &&
+                   currentFirst.m_trackIndex == firstTrack &&
+                   currentSecond.m_parentPolyline == rootEntity &&
+                   currentSecond.m_isDraft == isDraft &&
+                   currentSecond.m_trackIndex == secondTrack;
+        };
+    const auto drag = [&](MMM::Logic::ChartObjectKind kind, float mouseX) {
+        context.hoveredEntity     = rootEntity;
+        context.hoveredObjectKind = kind;
+        context.hoveredPart =
+            static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
+        context.hoveredSubIndex = 0;
+        MMM::Logic::GrabTool tool;
+        tool.handleStartDrag(context,
+                             MMM::Logic::CmdStartDrag{
+                                 rootEntity,
+                                 "Basic2DCanvas",
+                                 false,
+                                 kind,
+                             });
+        tool.handleUpdateDrag(context,
+                              MMM::Logic::CmdUpdateDrag{
+                                  "Basic2DCanvas",
+                                  mouseX,
+                                  300.0F,
+                                  true,
+                              });
+        tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    };
+
+    drag(MMM::Logic::ChartObjectKind::DraftNote, 250.0F);
+    MMM::Logic::SessionUtils::syncBeatmap(context);
+    if ( !structureMatches(false, 1, 2) ||
+         context.currentBeatmap->m_noteData.polylines.size() != 1 ||
+         context.currentBeatmap->m_noteData.polylines.front()
+                 .m_subNotes.size() != 2 ) {
+        XERROR("Draft-to-player Polyline drag lost its complete structure");
+        return false;
+    }
+
+    drag(MMM::Logic::ChartObjectKind::PlayerNote, -50.0F);
+    if ( !structureMatches(true, -2, -1) ||
+         context.actionStack.getUndoStackSize() != 2 ) {
+        XERROR("Player-to-draft Polyline drag did not cross the area boundary");
+        return false;
+    }
+    context.actionStack.undo(context);
+    if ( !structureMatches(false, 1, 2) ) {
+        XERROR("Bidirectional Polyline drag undo lost the player structure");
+        return false;
+    }
+    context.actionStack.redo(context);
+    return structureMatches(true, -2, -1);
+}
+
+/// @brief 验证大折线停留在非法玩家落点后完整回弹并重建可见性索引。
+/// @return 根折线、子实体、拖拽态与渲染缓存均恢复且不产生撤销记录时返回 true。
+bool testRejectedPolylineDragRestoresVisibility()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    const auto                rootEntity = context.noteRegistry.create();
+    const auto                childA     = context.noteRegistry.create();
+    const auto                childB     = context.noteRegistry.create();
+    const auto                childC     = context.noteRegistry.create();
+    MMM::Logic::NoteComponent root{
+        .m_type       = MMM::NoteType::POLYLINE,
+        .m_timestamp  = 1.0,
+        .m_trackIndex = 0,
+    };
+    root.m_subNotes = {
+        MMM::Logic::NoteComponent::SubNote{
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .trackIndex = 0,
+        },
+        MMM::Logic::NoteComponent::SubNote{
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 3.0,
+            .trackIndex = 1,
+        },
+        MMM::Logic::NoteComponent::SubNote{
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 6.0,
+            .trackIndex = 2,
+            .dtrack     = 1,
+        },
+    };
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(rootEntity);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(rootEntity);
+
+    const auto addChild = [&](entt::entity entity, std::size_t index) {
+        const auto& sub = root.m_subNotes[index];
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{
+                .m_type           = sub.type,
+                .m_timestamp      = sub.timestamp,
+                .m_trackIndex     = sub.trackIndex,
+                .m_dtrack         = sub.dtrack,
+                .m_isSubNote      = true,
+                .m_parentPolyline = rootEntity,
+                .m_subIndex       = static_cast<int>(index),
+            });
+        context.noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
+        context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    };
+    addChild(childA, 0);
+    addChild(childB, 1);
+    addChild(childC, 2);
+
+    context.sortedNoteEntities = { rootEntity, childA, childB, childC };
+    context.sortedNoteMaxEndPrefix.assign(4U, 6.0);
+    context.isNoteOrderDirty             = false;
+    context.isNoteStatsDirty             = false;
+    context.isAnnotationRenderCacheDirty = false;
+    context.isTransformDirty             = false;
+    context.hoveredEntity                = rootEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
+    context.hoveredSubIndex = 0;
+
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             rootEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::PlayerNote,
+                         });
+    tool.handleUpdateDrag(context,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas",
+                              550.0F,
+                              0.0F,
+                              true,
+                          });
+    const auto& preview =
+        context.noteRegistry.get<const MMM::Logic::NoteComponent>(rootEntity);
+    if ( preview.m_subNotes.back().trackIndex +
+             preview.m_subNotes.back().dtrack <
+         context.trackCount ) {
+        XERROR(
+            "Polyline invalid-drop regression did not reach an illegal span");
+        return false;
+    }
+
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& restored =
+        context.noteRegistry.get<const MMM::Logic::NoteComponent>(rootEntity);
+    const auto childMatches = [&](entt::entity entity, std::size_t index) {
+        const auto& child =
+            context.noteRegistry.get<const MMM::Logic::NoteComponent>(entity);
+        return child.m_parentPolyline == rootEntity &&
+               child.m_subIndex == static_cast<int>(index) &&
+               near(child.m_timestamp, root.m_subNotes[index].timestamp) &&
+               child.m_trackIndex == root.m_subNotes[index].trackIndex &&
+               child.m_dtrack == root.m_subNotes[index].dtrack;
+    };
+    const auto notDragging = [&](entt::entity entity) {
+        return !context.noteRegistry
+                    .get<const MMM::Logic::InteractionComponent>(entity)
+                    .isDragging;
+    };
+    if ( restored.m_type != MMM::NoteType::POLYLINE ||
+         !near(restored.m_timestamp, root.m_timestamp) ||
+         restored.m_trackIndex != root.m_trackIndex ||
+         restored.m_subNotes.size() != root.m_subNotes.size() ||
+         !childMatches(childA, 0) || !childMatches(childB, 1) ||
+         !childMatches(childC, 2) || !notDragging(rootEntity) ||
+         !notDragging(childA) || !notDragging(childB) || !notDragging(childC) ||
+         context.isDragging || context.draggedEntity != entt::null ||
+         !context.dragRenderPinnedEntities.empty() ||
+         context.actionStack.getUndoStackSize() != 0U ||
+         context.lastActionMessage.empty() || !context.isNoteOrderDirty ||
+         !context.isNoteStatsDirty || !context.isAnnotationRenderCacheDirty ||
+         !context.isTransformDirty ) {
+        XERROR("Rejected Polyline drag did not fully restore renderable state");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证未绑定 Tap 拖入 BGM 轨道后成为可撤销的空采样草稿。
 /// @return 转换、Undo 与 Redo 均保持未绑定音频语义时返回 true。
 bool testUnboundNoteDragConvertsToSilentSample()
@@ -4126,6 +4718,9 @@ bool testAnnotationMarkerProjectionAndGutterSnap()
     }
     const auto* snapshot = bufferIt->second->pullLatestSnapshot();
     if ( !snapshot || snapshot->annotationMarkers.size() != 1U ||
+         snapshot->annotationRevision == 0U ||
+         snapshot->annotationRevision !=
+             context.annotationRenderCacheRevision ||
          !snapshot->scrollSegments.empty() || !snapshot->isSnapped ||
          !near(snapshot->snappedTime, 0.5) ) {
         XERROR(
@@ -4136,6 +4731,24 @@ bool testAnnotationMarkerProjectionAndGutterSnap()
             snapshot ? snapshot->scrollSegments.size() : 0U,
             snapshot ? snapshot->isSnapped : false,
             snapshot ? snapshot->snappedTime : -1.0);
+        return false;
+    }
+
+    const std::uint64_t firstAnnotationRevision = snapshot->annotationRevision;
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpsertBeatmapAnnotation{
+            .annotationId = "annotation-projection",
+            .targetKind   = MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
+            .timestamp    = 0.5,
+            .author       = "Creator",
+            .content      = "revision",
+        } });
+    session.update(0.0, config, true);
+    snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || snapshot->annotationRevision <= firstAnnotationRevision ||
+         snapshot->annotationRevision !=
+             context.annotationRenderCacheRevision ) {
+        XERROR("Annotation snapshot revision did not follow cache rebuild");
         return false;
     }
 
@@ -4170,9 +4783,12 @@ int main()
                    testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
+                   testDynamicDraftAppendLaneProjection() &&
                    testDraftLaneReleaseGateHidesDraftArea() &&
                    testProjectDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
+                   testDraftMirrorUsesDynamicDraftTrackCount() &&
+                   testAlignCommonBeatsPreservesEmbeddedPolylineNodes() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
@@ -4210,6 +4826,10 @@ int main()
                    testCrossAreaConversionRules() &&
                    testSilentSampleDragConvertsToUnboundNote() &&
                    testMarqueeToolEntityDragCrossesCanvasAreas() &&
+                   testDraftAppendLaneDragExpandsPersistentCount() &&
+                   testDraftAppendLanePreviewCanBeWithdrawn() &&
+                   testPolylineDragMovesBetweenDraftAndPlayer() &&
+                   testRejectedPolylineDragRestoresVisibility() &&
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&

@@ -1,6 +1,6 @@
 #include "canvas/MarqueeAutoScroll.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
-#include "logic/BeatmapSyncBuffer.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -24,7 +24,8 @@ double defaultSnapshotAbsYSpeed()
 /// @param time 显示时间，单位为秒。
 /// @return 指定显示时间对应的绝对 Y 坐标。
 /// @warning UI 热路径：只读取快照滚动分段缓存。
-double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
+double snapshotAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
+                          double                                time)
 {
     if ( snapshot.scrollSegments.empty() ) {
         return time * defaultSnapshotAbsYSpeed();
@@ -34,7 +35,7 @@ double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
         time,
-        [](double val, const Logic::System::ScrollSegment& segment) {
+        [](double val, const Common::Render::ScrollSegment& segment) {
             return val < segment.time;
         });
 
@@ -51,8 +52,9 @@ double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
 /// @param outTime 解析出的显示时间，单位为秒。
 /// @return 目标绝对 Y 坐标位于该分段内时返回 true。
 /// @warning UI 热路径：只做常量时间的分段数学计算。
-bool trySnapshotTimeAtSegmentAbsY(const Logic::RenderSnapshot& snapshot,
-                                  size_t index, double absY, double& outTime)
+bool trySnapshotTimeAtSegmentAbsY(
+    const Common::Render::RenderSnapshot& snapshot, size_t index, double absY,
+    double& outTime)
 {
     constexpr double EPSILON  = 1e-6;
     const auto&      segments = snapshot.scrollSegments;
@@ -92,7 +94,8 @@ bool trySnapshotTimeAtSegmentAbsY(const Logic::RenderSnapshot& snapshot,
 /// @param absY 目标绝对 Y 坐标。
 /// @return 指定绝对 Y 坐标对应的显示时间，单位为秒。
 /// @warning UI 热路径：通常先测试当前分段，只在跨分段时扫描快照分段。
-double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
+double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
+                          double                                absY)
 {
     if ( snapshot.scrollSegments.empty() ) {
         const double speed = defaultSnapshotAbsYSpeed();
@@ -103,7 +106,7 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
         snapshot.currentTime,
-        [](double val, const Logic::System::ScrollSegment& segment) {
+        [](double val, const Common::Render::ScrollSegment& segment) {
             return val < segment.time;
         });
     const size_t currentIndex =
@@ -137,10 +140,9 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 }
 }  // namespace
 
-double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
-                                   float viewportHeight, float mouseY,
-                                   float deltaTime, bool isAccelerated,
-                                   bool& scrolled)
+double marqueeAutoScrollTargetTime(
+    const Common::Render::RenderSnapshot& snapshot, float viewportHeight,
+    float mouseY, float deltaTime, bool isAccelerated, bool& scrolled)
 {
     scrolled = false;
     if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
@@ -186,7 +188,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }

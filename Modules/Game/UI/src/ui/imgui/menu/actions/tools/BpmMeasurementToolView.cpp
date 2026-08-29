@@ -1,6 +1,5 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "audio/AudioManager.h"
-#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -18,6 +17,8 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
+#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -521,6 +522,11 @@ void BpmMeasurementToolView::requestFocus()
 void BpmMeasurementToolView::requestAutomaticMeasurement(
     const std::string& audioTrackId, bool keepWindowVisible)
 {
+    if ( !shouldStartBpmAutomaticMeasurement(
+             m_backgroundAutomaticMeasurement) ) {
+        return;
+    }
+
     if ( keepWindowVisible && !m_isOpen ) {
         restoreUserPreferences();
     }
@@ -1513,9 +1519,9 @@ void BpmMeasurementToolView::renderPlaybackControls()
         ImGui::EndDisabled();
     }
 
-    const std::string positionText = Canvas::formatCanvasTime(position) +
-                                     " / " +
-                                     Canvas::formatCanvasTime(totalTime);
+    const std::string positionText =
+        MMM::UI::Utils::formatCanvasTime(position) + " / " +
+        MMM::UI::Utils::formatCanvasTime(totalTime);
     ImGui::TextDisabled("%s", positionText.c_str());
 
     char speedInfo[160] = { 0 };
@@ -1703,9 +1709,9 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
             xToTime(ImGui::GetIO().MousePos.x), 0.0, canvasDuration);
         const std::string tooltip =
             fmt::format("{} - {} / {}",
-                        Canvas::formatCanvasTime(viewStart),
-                        Canvas::formatCanvasTime(viewEnd),
-                        Canvas::formatCanvasTime(hoverTime));
+                        MMM::UI::Utils::formatCanvasTime(viewStart),
+                        MMM::UI::Utils::formatCanvasTime(viewEnd),
+                        MMM::UI::Utils::formatCanvasTime(hoverTime));
         ImGui::SetTooltip("%s", tooltip.c_str());
     }
 }
@@ -2035,8 +2041,8 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
             ImPlotPoint  mousePos  = ImPlot::GetPlotMousePos();
             const double hoverTime = std::clamp<double>(
                 mousePos.x, 0.0, std::max(0.0, canvasDuration));
-            ImGui::SetTooltip("%s",
-                              Canvas::formatCanvasTime(hoverTime).c_str());
+            ImGui::SetTooltip(
+                "%s", MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
             if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
                 m_firstBeatTime = hoverTime;
                 syncPrimaryTimingFieldsToSegments();
@@ -2128,7 +2134,8 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             1.0);
         const double hoverTime = std::clamp<double>(
             viewStart + relX * viewRange, 0.0, std::max(0.0, canvasDuration));
-        ImGui::SetTooltip("%s", Canvas::formatCanvasTime(hoverTime).c_str());
+        ImGui::SetTooltip("%s",
+                          MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
         if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
             m_firstBeatTime = hoverTime;
             syncPrimaryTimingFieldsToSegments();
@@ -2722,7 +2729,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
 
         const std::string tooltip =
             fmt::format("{} / {:.3f} BPM",
-                        Canvas::formatCanvasTime(clampedStart),
+                        MMM::UI::Utils::formatCanvasTime(clampedStart),
                         segment.bpm);
         ImGui::SetTooltip("%s", tooltip.c_str());
         return;
@@ -2747,7 +2754,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
 
     const std::string tooltip =
         fmt::format("{} / {:.3f} BPM",
-                    Canvas::formatCanvasTime(clampedTargetTime),
+                    MMM::UI::Utils::formatCanvasTime(clampedTargetTime),
                     segment.bpm);
     ImGui::SetTooltip("%s", tooltip.c_str());
 }
@@ -2915,7 +2922,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         IM_COL32(255, 80, 80, 180));
     drawList->PopClipRect();
 
-    ImGui::SetTooltip("%s", Canvas::formatCanvasTime(targetCanvasTime).c_str());
+    ImGui::SetTooltip(
+        "%s", MMM::UI::Utils::formatCanvasTime(targetCanvasTime).c_str());
 }
 
 /// @brief 处理分析视图的滚轮缩放和鼠标拖动平移。

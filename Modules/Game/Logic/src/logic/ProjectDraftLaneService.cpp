@@ -62,7 +62,36 @@ void convertDraftTracksToPersisted(NoteComponent& note, int trackCount)
     }
 }
 
-/// @brief 判断草稿物件的全部轨道是否适用于当前键数。
+/// @brief 在持久化草稿轨道数量变化时保持既有负轨道坐标不变。
+void rebasePersistedTracks(NoteComponent& note, int oldTrackCount,
+                           int newTrackCount)
+{
+    const auto delta = newTrackCount - oldTrackCount;
+    note.m_trackIndex += delta;
+    for ( auto& subNote : note.m_subNotes ) {
+        subNote.trackIndex += delta;
+    }
+}
+
+/// @brief 计算持久化物件保持当前负轨道坐标所需的草稿轨道数量。
+int requiredTrackCountForPersistedNote(const NoteComponent& note,
+                                       int                  encodedTrackCount)
+{
+    int        required    = 0;
+    const auto includePart = [&](::MMM::NoteType type, int track, int dtrack) {
+        required = std::max(required, encodedTrackCount - track);
+        if ( type == ::MMM::NoteType::FLICK ) {
+            required = std::max(required, encodedTrackCount - track - dtrack);
+        }
+    };
+    includePart(note.m_type, note.m_trackIndex, note.m_dtrack);
+    for ( const auto& subNote : note.m_subNotes ) {
+        includePart(subNote.type, subNote.trackIndex, subNote.dtrack);
+    }
+    return required;
+}
+
+/// @brief 判断草稿物件的全部轨道是否适用于当前草稿轨数量。
 bool hasValidPersistedDraftTracks(const NoteComponent& note, int trackCount)
 {
     const auto validPart = [trackCount](
@@ -204,12 +233,12 @@ std::string applyPayload(SessionContext&              ctx,
         visibleItems.reserve(items.size());
         for ( const auto& item : items ) {
             auto note = item.note;
-            if ( !hasValidPersistedDraftTracks(note, ctx.trackCount) ) {
+            if ( !hasValidPersistedDraftTracks(note, ctx.draftTrackCount) ) {
                 continue;
             }
             ensureNoteCollaborationIdentity(note);
             visibleItems.push_back(ClipboardItem{ .note = note });
-            convertPersistedTracksToDraft(note, ctx.trackCount);
+            convertPersistedTracksToDraft(note, ctx.draftTrackCount);
             desiredNotes.push_back(std::move(note));
         }
     }
@@ -293,6 +322,7 @@ std::string applyPayload(SessionContext&              ctx,
     ctx.isNotePruneDirty      = false;
     ctx.isTransformDirty      = true;
     ctx.isPreviewDensityDirty = true;
+    ctx.isHitEventsDirty      = true;
     return serializeDraftItems(visibleItems);
 }
 
@@ -303,6 +333,8 @@ void ProjectDraftLaneService::load(SessionContext& ctx, Project* project)
     ctx.m_draftLaneGroupId.clear();
     ctx.m_draftLaneGroupRevision = 0U;
     ctx.m_draftLaneBasePayload.clear();
+    ctx.draftTrackCount           = std::max(0, ctx.trackCount);
+    ctx.m_draftLaneBaseTrackCount = ctx.draftTrackCount;
     if ( !project || !ctx.currentBeatmap || ctx.trackCount <= 0 ) {
         static_cast<void>(applyPayload(ctx, nullptr));
         return;
@@ -320,9 +352,14 @@ void ProjectDraftLaneService::load(SessionContext& ctx, Project* project)
 
     ctx.m_draftLaneGroupId = resource->m_id;
     auto* group            = findGroup(*project, ctx.m_draftLaneGroupId);
-    if ( group ) canonicalizeGroupPayload(*group);
-    ctx.m_draftLaneBasePayload   = applyPayload(ctx, group);
-    ctx.m_draftLaneGroupRevision = group ? group->m_runtimeRevision : 0U;
+    if ( group ) {
+        canonicalizeGroupPayload(*group);
+        ctx.draftTrackCount =
+            group->m_trackCount > 0 ? group->m_trackCount : ctx.trackCount;
+    }
+    ctx.m_draftLaneBasePayload    = applyPayload(ctx, group);
+    ctx.m_draftLaneBaseTrackCount = ctx.draftTrackCount;
+    ctx.m_draftLaneGroupRevision  = group ? group->m_runtimeRevision : 0U;
 }
 
 void ProjectDraftLaneService::refreshIfChanged(SessionContext& ctx)
@@ -339,8 +376,11 @@ void ProjectDraftLaneService::refreshIfChanged(SessionContext& ctx)
         revision = group->m_runtimeRevision;
     }
 
-    ctx.m_draftLaneBasePayload   = applyPayload(ctx, group);
-    ctx.m_draftLaneGroupRevision = revision;
+    ctx.draftTrackCount =
+        group && group->m_trackCount > 0 ? group->m_trackCount : ctx.trackCount;
+    ctx.m_draftLaneBasePayload    = applyPayload(ctx, group);
+    ctx.m_draftLaneBaseTrackCount = ctx.draftTrackCount;
+    ctx.m_draftLaneGroupRevision  = revision;
 }
 
 void ProjectDraftLaneService::sync(SessionContext& ctx)
@@ -361,7 +401,7 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
         ensureNoteCollaborationIdentity(source);
         ClipboardItem item;
         item.note = source;
-        convertDraftTracksToPersisted(item.note, ctx.trackCount);
+        convertDraftTracksToPersisted(item.note, ctx.draftTrackCount);
         items.push_back(std::move(item));
     }
     std::stable_sort(
@@ -381,9 +421,53 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
     } else {
         canonicalizeGroupPayload(*group);
     }
-    const auto base   = parseDraftItems(ctx.m_draftLaneBasePayload);
-    auto       latest = parseDraftItems(group->m_notePayload);
-    auto       merged = mergeDraftItems(base, items, std::move(latest));
+    const auto latestTrackCount =
+        group->m_trackCount > 0 ? group->m_trackCount : ctx.trackCount;
+    const bool localTrackCountChanged =
+        ctx.draftTrackCount != ctx.m_draftLaneBaseTrackCount;
+    const bool concurrentGroupChange =
+        group->m_runtimeRevision != ctx.m_draftLaneGroupRevision;
+    const auto targetTrackCount =
+        std::max(0,
+                 localTrackCountChanged
+                     ? (concurrentGroupChange
+                            ? std::max(ctx.draftTrackCount, latestTrackCount)
+                            : ctx.draftTrackCount)
+                     : latestTrackCount);
+
+    if ( ctx.draftTrackCount != targetTrackCount ) {
+        for ( auto& item : items ) {
+            rebasePersistedTracks(
+                item.note, ctx.draftTrackCount, targetTrackCount);
+        }
+    }
+    auto base = parseDraftItems(ctx.m_draftLaneBasePayload);
+    if ( ctx.m_draftLaneBaseTrackCount != targetTrackCount ) {
+        for ( auto& item : base ) {
+            rebasePersistedTracks(
+                item.note, ctx.m_draftLaneBaseTrackCount, targetTrackCount);
+        }
+    }
+    auto latest = parseDraftItems(group->m_notePayload);
+    if ( latestTrackCount != targetTrackCount ) {
+        for ( auto& item : latest ) {
+            rebasePersistedTracks(
+                item.note, latestTrackCount, targetTrackCount);
+        }
+    }
+    auto merged           = mergeDraftItems(base, items, std::move(latest));
+    auto mergedTrackCount = targetTrackCount;
+    for ( const auto& item : merged ) {
+        mergedTrackCount = std::max(
+            mergedTrackCount,
+            requiredTrackCountForPersistedNote(item.note, targetTrackCount));
+    }
+    if ( mergedTrackCount != targetTrackCount ) {
+        for ( auto& item : merged ) {
+            rebasePersistedTracks(
+                item.note, targetTrackCount, mergedTrackCount);
+        }
+    }
     std::stable_sort(
         merged.begin(), merged.end(), [](const auto& lhs, const auto& rhs) {
             if ( lhs.note.m_timestamp != rhs.note.m_timestamp ) {
@@ -392,9 +476,12 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
             return lhs.note.m_trackIndex < rhs.note.m_trackIndex;
         });
     group->m_notePayload = serializeDraftItems(merged);
+    group->m_trackCount  = mergedTrackCount;
     ++group->m_runtimeRevision;
-    ctx.m_draftLaneBasePayload   = applyPayload(ctx, group);
-    ctx.m_draftLaneGroupRevision = group->m_runtimeRevision;
+    ctx.draftTrackCount           = group->m_trackCount;
+    ctx.m_draftLaneBasePayload    = applyPayload(ctx, group);
+    ctx.m_draftLaneBaseTrackCount = ctx.draftTrackCount;
+    ctx.m_draftLaneGroupRevision  = group->m_runtimeRevision;
 }
 
 }  // namespace MMM::Logic

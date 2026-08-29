@@ -30,6 +30,9 @@ struct SaveResultPayload {
     /// @brief 是否来自另存为或导出流程。
     bool isExport = false;
 
+    /// @brief 失败时由业务层提供的具体原因。
+    std::string errorMessage;
+
     /// @brief 保存成功时应采用的界面反馈形式。
     Event::BeatmapSavePresentation presentation{
         Event::BeatmapSavePresentation::Transient
@@ -42,9 +45,12 @@ struct SaveResultPayload {
 std::string buildSaveResultMessage(const SaveResultPayload& payload)
 {
     const auto path      = Config::utf8ToPath(payload.path);
-    const bool isPackage = findPackageSupportedFileTypes(
-                               Config::pathToUtf8(path.extension())) != nullptr;
+    const auto extension = Config::pathToUtf8(path.extension());
+    const bool isPackage =
+        findPackageSupportedFileTypes(extension) != nullptr ||
+        packageExtensionEquals(extension, ".zip");
     if ( !payload.success ) {
+        if ( !payload.errorMessage.empty() ) return payload.errorMessage;
         if ( isPackage ) return "打包失败";
         return payload.isExport ? "导出失败" : "保存失败";
     }
@@ -73,6 +79,7 @@ struct SaveResultFeedback::Impl {
                               .path         = event.path,
                               .success      = event.success,
                               .isExport     = event.isExport,
+                              .errorMessage = event.errorMessage,
                               .presentation = event.presentation,
                           });
                       }))
@@ -108,8 +115,18 @@ SaveResultFeedback::~SaveResultFeedback() = default;
 void SaveResultFeedback::update(float               deltaSeconds,
                                 IStatusMessageSink& statusMessageSink)
 {
+    // 当前帧间隔只属于此前已经显示的反馈；新到达的结果必须从完整时长开始，
+    // 避免原生文件选择器或耗时导出造成的长帧让新反馈在首次绘制前直接过期。
+    if ( m_impl->remainingSeconds > 0.0f ) {
+        m_impl->remainingSeconds -= deltaSeconds;
+    }
+
     SaveResultPayload payload;
     while ( m_impl->queue.try_dequeue(payload) ) {
+        if ( payload.success && !m_impl->success &&
+             m_impl->remainingSeconds > 0.0F ) {
+            continue;
+        }
         if ( payload.success &&
              payload.presentation ==
                  Event::BeatmapSavePresentation::TimedAutoSaveStatus ) {
@@ -126,6 +143,21 @@ void SaveResultFeedback::update(float               deltaSeconds,
             continue;
         }
         if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TimedAutoBackupStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.timed_auto_backup_success").data(), 2.0f);
+            continue;
+        }
+        if ( payload.success &&
+             payload.presentation ==
+                 Event::BeatmapSavePresentation::TriggeredAutoBackupStatus ) {
+            statusMessageSink.showStatusMessage(
+                TR("ui.status.beatmap.triggered_auto_backup_success").data(),
+                2.0f);
+            continue;
+        }
+        if ( payload.success &&
              payload.presentation == Event::BeatmapSavePresentation::Silent ) {
             continue;
         }
@@ -133,10 +165,6 @@ void SaveResultFeedback::update(float               deltaSeconds,
             std::string(ICON_MMM_SAVE) + "  " + buildSaveResultMessage(payload);
         m_impl->success          = payload.success;
         m_impl->remainingSeconds = payload.success ? 2.0f : 3.0f;
-    }
-
-    if ( m_impl->remainingSeconds > 0.0f ) {
-        m_impl->remainingSeconds -= deltaSeconds;
     }
 }
 

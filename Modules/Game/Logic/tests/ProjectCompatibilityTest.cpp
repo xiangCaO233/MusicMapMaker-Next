@@ -277,7 +277,7 @@ bool testBulkCurrentConfigMerge()
     for ( std::size_t index = 0U; index < RESOURCE_COUNT; ++index ) {
         const auto& resource       = scannedProject.m_audioResources[index];
         const auto  expectedVolume = static_cast<float>(index + 1U) /
-                                     static_cast<float>(RESOURCE_COUNT + 1U);
+                                    static_cast<float>(RESOURCE_COUNT + 1U);
         if ( resource.m_type != MMM::AudioTrackType::Main ||
              !near(resource.m_config.volume, expectedVolume) ) {
             XERROR("Bulk audio config merge failed at {}", index);
@@ -338,6 +338,76 @@ bool testBeatLineToolbarStateMigration()
     return true;
 }
 
+/// @brief 验证项目级自动备份覆盖可往返且旧项目继续继承软件配置。
+/// @return 覆盖字段稳定且缺失字段恢复为空值时返回 true。
+bool testProjectAutoBackupOverrideCompatibility()
+{
+    MMM::ProjectSettings settings;
+    settings.m_autoBackupOverride.emplace();
+    settings.m_autoBackupOverride->mode =
+        MMM::Config::AutoSaveMode::EventTriggered;
+    settings.m_autoBackupOverride->onBeatmapSwitch = false;
+    settings.m_autoBackupOverride->maxBackupCount  = 17;
+
+    const nlohmann::json encoded  = settings;
+    const auto           restored = encoded.get<MMM::ProjectSettings>();
+    const auto legacy = nlohmann::json::object().get<MMM::ProjectSettings>();
+    if ( !encoded.contains("m_autoBackupOverride") ||
+         !restored.m_autoBackupOverride ||
+         restored.m_autoBackupOverride->mode !=
+             MMM::Config::AutoSaveMode::EventTriggered ||
+         restored.m_autoBackupOverride->onBeatmapSwitch ||
+         restored.m_autoBackupOverride->maxBackupCount != 17 ||
+         legacy.m_autoBackupOverride ) {
+        XERROR("Project auto-backup override compatibility failed");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证项目编辑器覆盖不再持久化工具栏显示配置。
+/// @return 新项目未写出相关字段且旧项目字段读取后回落到软件默认值时返回 true。
+bool testProjectToolbarDisplaySettingsAreGlobal()
+{
+    MMM::ProjectSettings settings;
+    settings.m_editorOverride.emplace();
+    auto& projectEditor             = *settings.m_editorOverride;
+    projectEditor.showToolLabels    = true;
+    projectEditor.fixedToolWindow   = false;
+    projectEditor.showManagerLabels = false;
+    projectEditor.toolbarVisibility.stateTools.colorBrush          = true;
+    projectEditor.toolbarVisibility.independentButtons.notePalette = true;
+
+    const nlohmann::json encoded    = settings;
+    const auto&          editorJson = encoded.at("m_editorOverride");
+    if ( editorJson.contains("showToolLabels") ||
+         editorJson.contains("fixedToolWindow") ||
+         editorJson.contains("showManagerLabels") ||
+         editorJson.contains("toolbarVisibility") ) {
+        XERROR("Project settings persisted global toolbar display fields");
+        return false;
+    }
+
+    nlohmann::json legacyEditor       = projectEditor;
+    nlohmann::json legacyProject      = encoded;
+    legacyProject["m_editorOverride"] = std::move(legacyEditor);
+    const auto restored = legacyProject.get<MMM::ProjectSettings>();
+    if ( !restored.m_editorOverride ) {
+        XERROR("Project editor override was not restored");
+        return false;
+    }
+
+    const auto& restoredEditor = *restored.m_editorOverride;
+    if ( restoredEditor.showToolLabels || !restoredEditor.fixedToolWindow ||
+         !restoredEditor.showManagerLabels ||
+         restoredEditor.toolbarVisibility.stateTools.colorBrush ||
+         restoredEditor.toolbarVisibility.independentButtons.notePalette ) {
+        XERROR("Legacy project toolbar display fields remained project-scoped");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行旧版项目音频配置兼容测试。
@@ -348,7 +418,9 @@ int main()
                    testLegacyMergePreservesScannedTypes() &&
                    testCurrentConfigAndTypeMerge() && testMixedSchemaMerge() &&
                    testBulkCurrentConfigMerge() &&
-                   testBeatLineToolbarStateMigration()
+                   testBeatLineToolbarStateMigration() &&
+                   testProjectAutoBackupOverrideCompatibility() &&
+                   testProjectToolbarDisplaySettingsAreGlobal()
                ? 0
                : 1;
 }

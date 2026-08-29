@@ -51,22 +51,24 @@ bool testProjectAudioToolWorkspaceRoundTrip()
 {
     MMM::ProjectWorkspaceState source;
     source.m_projectAudioToolOpen               = true;
+    source.m_timingPointsTableOpen              = true;
+    source.m_annotationTableOpen                = true;
     source.m_projectAudioToolSelectedResourceId = "main";
     source.m_projectAudioToolBrushVolume        = 0.75F;
     source.m_projectAudioToolPlacements         = {
         MMM::ProjectAudioToolItemPlacement{
-            .m_audioResourceId = "main",
-            .m_x               = 12.5F,
-            .m_y               = 30.0F,
-            .m_width           = 260.0F,
-            .m_height          = 120.0F,
-            .m_zOrder          = 4,
+                    .m_audioResourceId = "main",
+                    .m_x               = 12.5F,
+                    .m_y               = 30.0F,
+                    .m_width           = 260.0F,
+                    .m_height          = 120.0F,
+                    .m_zOrder          = 4,
         },
         MMM::ProjectAudioToolItemPlacement{
-            .m_audioResourceId = "effect",
-            .m_x               = 80.0F,
-            .m_y               = 50.0F,
-            .m_zOrder          = 5,
+                    .m_audioResourceId = "effect",
+                    .m_x               = 80.0F,
+                    .m_y               = 50.0F,
+                    .m_zOrder          = 5,
         },
     };
 
@@ -82,6 +84,10 @@ bool testProjectAudioToolWorkspaceRoundTrip()
             .get<MMM::ProjectAudioToolItemPlacement>();
     return check(restored.m_projectAudioToolOpen,
                  "project audio tool open state should round trip") &&
+           check(restored.m_timingPointsTableOpen,
+                 "timing table open state should round trip") &&
+           check(restored.m_annotationTableOpen,
+                 "annotation table open state should round trip") &&
            check(restored.m_projectAudioToolSelectedResourceId == "main",
                  "project audio selection should round trip") &&
            check(
@@ -821,8 +827,8 @@ bool testSingleAudioExporterCompatibility(
         const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
         const auto         binding =
             reloaded.m_allNotes.empty()
-                ? std::optional<MMM::AudioSampleBinding>{}
-                : reloaded.m_allNotes.front().get().getSampleBinding();
+                        ? std::optional<MMM::AudioSampleBinding>{}
+                        : reloaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(
             binding.has_value() && binding->m_audioResourceId == "hit.wav",
             "osu! should round-trip a playable sample file");

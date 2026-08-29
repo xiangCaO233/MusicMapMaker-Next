@@ -56,6 +56,26 @@ public:
     [[nodiscard]] KeySoundControlSnapshot getPlayerTrackControl(
         std::uint32_t trackIndex) const noexcept;
 
+    /// @brief 设置整个草稿打击音区的静音覆盖。
+    void setDraftAreaMuted(bool muted) noexcept;
+
+    /// @brief 查询整个草稿打击音区的静音覆盖。
+    [[nodiscard]] bool isDraftAreaMuted() const noexcept;
+
+    /// @brief 设置指定草稿轨道的静音覆盖。
+    void setDraftTrackMuted(std::uint32_t trackIndex, bool muted) noexcept;
+
+    /// @brief 查询指定草稿轨道的静音覆盖。
+    [[nodiscard]] bool isDraftTrackMuted(
+        std::uint32_t trackIndex) const noexcept;
+
+    /// @brief 设置指定草稿轨道的线性增益。
+    void setDraftTrackGain(std::uint32_t trackIndex, float gain) noexcept;
+
+    /// @brief 查询指定草稿轨道的线性增益。
+    [[nodiscard]] float getDraftTrackGain(
+        std::uint32_t trackIndex) const noexcept;
+
     /// @brief 设置整个 BGM Key 音区的静音覆盖。
     void setBgmAreaMuted(bool muted) noexcept;
 
@@ -95,11 +115,11 @@ public:
     [[nodiscard]] float getEffectGroupGain(
         KeySoundEffectGroup group) const noexcept;
 
-    /// @brief 读取玩家预定打击音实例的最终运行时控制增益。
-    /// @param control 实例所属玩家轨道和音效类别。
+    /// @brief 读取玩家或草稿预定打击音实例的最终运行时控制增益。
+    /// @param control 实例所属区域、轨道和音效类别。
     /// @return 未启用控制时返回 1；任一级静音时返回 0。
     /// @warning 音频回调热路径：每个活动实例每个 block 调用一次，只执行
-    /// 三次 relaxed 原子读取与常量时间算术，禁止加入锁、分配或容器查询。
+    /// 常量次 relaxed 原子读取与算术，禁止加入锁、分配或容器查询。
     [[nodiscard]] float effectivePlayerGain(
         const KeySoundPlaybackControl& control) const noexcept;
 
@@ -161,6 +181,12 @@ private:
 
     /// @brief 玩家区逐轨控制。
     std::array<AtomicControl, KEY_SOUND_TRACK_LIMIT> m_playerTracks{};
+
+    /// @brief 草稿打击音区总控制。
+    AtomicControl m_draftArea;
+
+    /// @brief 草稿区逐轨控制。
+    std::array<AtomicControl, KEY_SOUND_TRACK_LIMIT> m_draftTracks{};
 
     /// @brief BGM Key 音区总控制。
     AtomicControl m_bgmArea;

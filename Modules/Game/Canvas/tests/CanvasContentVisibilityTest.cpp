@@ -1,4 +1,4 @@
-#include "canvas/CanvasContentVisibility.h"
+#include "ui/utils/CanvasContentVisibility.h"
 
 namespace
 {
@@ -7,8 +7,8 @@ namespace
 /// @return 两类谱面专属信息均被隐藏时返回 true。
 constexpr bool testPlaceholderHidesBeatmapDetails()
 {
-    return !MMM::Canvas::shouldShowBeatmapDetails(false) &&
-           !MMM::Canvas::shouldShowCanvasHoverInspection(
+    return !MMM::UI::Utils::shouldShowBeatmapDetails(false) &&
+           !MMM::UI::Utils::shouldShowCanvasHoverInspection(
                false, false, true, true, false);
 }
 
@@ -16,8 +16,8 @@ constexpr bool testPlaceholderHidesBeatmapDetails()
 /// @return 谱面状态和悬浮检视均可见时返回 true。
 constexpr bool testBeatmapKeepsInspectionVisible()
 {
-    return MMM::Canvas::shouldShowBeatmapDetails(true) &&
-           MMM::Canvas::shouldShowCanvasHoverInspection(
+    return MMM::UI::Utils::shouldShowBeatmapDetails(true) &&
+           MMM::UI::Utils::shouldShowCanvasHoverInspection(
                true, false, true, true, false);
 }
 
@@ -25,13 +25,13 @@ constexpr bool testBeatmapKeepsInspectionVisible()
 /// @return 所有限制条件均生效时返回 true。
 constexpr bool testHoverInspectionRespectsInteractionState()
 {
-    return !MMM::Canvas::shouldShowCanvasHoverInspection(
+    return !MMM::UI::Utils::shouldShowCanvasHoverInspection(
                true, true, true, true, false) &&
-           !MMM::Canvas::shouldShowCanvasHoverInspection(
+           !MMM::UI::Utils::shouldShowCanvasHoverInspection(
                true, false, false, true, false) &&
-           !MMM::Canvas::shouldShowCanvasHoverInspection(
+           !MMM::UI::Utils::shouldShowCanvasHoverInspection(
                true, false, true, false, false) &&
-           !MMM::Canvas::shouldShowCanvasHoverInspection(
+           !MMM::UI::Utils::shouldShowCanvasHoverInspection(
                true, false, true, true, true);
 }
 

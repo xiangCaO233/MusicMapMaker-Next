@@ -417,15 +417,15 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         const bool isBackground =
             cmd.customTextureId ==
-            static_cast<uint32_t>(Logic::TextureID::Background);
+            static_cast<uint32_t>(Common::Render::TextureID::Background);
         if ( isBackground &&
              (!m_bgTexture || (m_currentSnapshot->backgroundIsVideo &&
                                !m_videoFrameVisible)) ) {
@@ -454,7 +454,9 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -488,16 +490,17 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->glowCmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
-                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+                    static_cast<uint32_t>(
+                        Common::Render::TextureID::Background) ) {
             actualTexture = backgroundDescriptor;
         }
 
@@ -517,7 +520,9 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -551,16 +556,17 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             m_bgTexture->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
-    vk::Rect2D        lastScissor;
+    vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
+    Common::Render::CanvasScissor lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
-        vk::DescriptorSet actualTexture = cmd.texture;
+        vk::DescriptorSet actualTexture{};
 
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
-                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+                    static_cast<uint32_t>(
+                        Common::Render::TextureID::Background) ) {
             actualTexture = backgroundDescriptor;
         }
 
@@ -580,7 +586,9 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(
+                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
+                            { cmd.scissor.width, cmd.scissor.height } });
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -690,34 +698,39 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                               255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                               255, 255, 255, 255 };
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::None), white, 4, 4);
+        static_cast<uint32_t>(Common::Render::TextureID::None), white, 4, 4);
 
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Note),
-                               skin.getAssetPath("note.note"));
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Node),
-                               skin.getAssetPath("note.node"));
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::HoldEnd),
-                               skin.getAssetPath("note.holdend"));
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::HoldBodyVertical),
+        static_cast<uint32_t>(Common::Render::TextureID::Note),
+        skin.getAssetPath("note.note"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Common::Render::TextureID::Node),
+        skin.getAssetPath("note.node"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Common::Render::TextureID::HoldEnd),
+        skin.getAssetPath("note.holdend"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Common::Render::TextureID::HoldBodyVertical),
         skin.getAssetPath("note.holdbodyvertical"));
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::HoldBodyHorizontal),
+        static_cast<uint32_t>(Common::Render::TextureID::HoldBodyHorizontal),
         skin.getAssetPath("note.holdbodyhorizontal"));
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::FlickArrowLeft),
+        static_cast<uint32_t>(Common::Render::TextureID::FlickArrowLeft),
         skin.getAssetPath("note.arrowleft"));
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::FlickArrowRight),
+        static_cast<uint32_t>(Common::Render::TextureID::FlickArrowRight),
         skin.getAssetPath("note.arrowright"));
 
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Track),
-                               skin.getAssetPath("panel.track.background"));
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::JudgeArea),
+        static_cast<uint32_t>(Common::Render::TextureID::Track),
+        skin.getAssetPath("panel.track.background"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Common::Render::TextureID::JudgeArea),
         skin.getAssetPath("panel.track.judgearea"));
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
-                               skin.getAssetPath("logo"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Common::Render::TextureID::Logo),
+        skin.getAssetPath("logo"));
 
     const float fontRasterScale         = currentFontRasterScale();
     m_asciiFontAtlasMetrics             = {};
@@ -763,7 +776,7 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                 const auto& glyph       = rasterizedFont->glyphs[index];
                 if ( !metrics.hasBitmap || glyph.pixels.empty() ) continue;
 
-                const auto textureId = Logic::asciiGlyphTextureId(
+                const auto textureId = Common::Render::asciiGlyphTextureId(
                     tierIndex, static_cast<char>(code));
                 m_textureAtlas->addTexture(
                     static_cast<std::uint32_t>(textureId),
@@ -819,8 +832,8 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                     continue;
                 }
                 const auto textureId =
-                    Logic::unicodeGlyphTextureId(metrics.codepoint);
-                if ( textureId == Logic::TextureID::None ) continue;
+                    Common::Render::unicodeGlyphTextureId(metrics.codepoint);
+                if ( textureId == Common::Render::TextureID::None ) continue;
                 m_textureAtlas->addTexture(
                     static_cast<std::uint32_t>(textureId),
                     glyph.pixels.data(),
@@ -840,10 +853,10 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->build(4096);
 
     m_atlasUVs.clear();
-    for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
-          i <= static_cast<uint32_t>(Logic::TextureID::Logo);
+    for ( uint32_t i = static_cast<uint32_t>(Common::Render::TextureID::None);
+          i <= static_cast<uint32_t>(Common::Render::TextureID::Logo);
           ++i ) {
-        if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )
+        if ( i == static_cast<uint32_t>(Common::Render::TextureID::Background) )
             continue;
 
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
@@ -868,7 +881,7 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                   ++code ) {
                 const std::size_t index = code - Common::ASCII_GLYPH_FIRST;
                 if ( !metrics.glyphs[index].hasBitmap ) continue;
-                const auto textureId = Logic::asciiGlyphTextureId(
+                const auto textureId = Common::Render::asciiGlyphTextureId(
                     tierIndex, static_cast<char>(code));
                 m_atlasUVs[static_cast<std::uint32_t>(textureId)] =
                     m_textureAtlas->getUV(
@@ -881,8 +894,8 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         for ( const auto& glyph : m_unicodeFontMetrics.glyphs ) {
             if ( !glyph.metrics.hasBitmap ) continue;
             const auto textureId =
-                Logic::unicodeGlyphTextureId(glyph.codepoint);
-            if ( textureId == Logic::TextureID::None ) continue;
+                Common::Render::unicodeGlyphTextureId(glyph.codepoint);
+            if ( textureId == Common::Render::TextureID::None ) continue;
             m_atlasUVs[static_cast<std::uint32_t>(textureId)] =
                 m_textureAtlas->getUV(static_cast<std::uint32_t>(textureId));
         }

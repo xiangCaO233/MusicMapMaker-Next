@@ -1,6 +1,7 @@
 #include "logic/BeatmapSession.h"
 
 #include "audio/AudioManager.h"
+#include "audio/AudioOriginAlignmentService.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -11,8 +12,11 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
 #include "logic/EditorEngine.h"
+#include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
+#include "logic/MczAudioOriginAlignment.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -40,6 +44,7 @@
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace
@@ -96,6 +101,119 @@ std::filesystem::path makeCurrentProjectRelativePath(
         return relativePath.lexically_normal();
     }
     return path.filename();
+}
+
+/// @brief 将项目音频或图片资源路径解析为可直接读取的实际路径。
+/// @param project 当前项目。
+/// @param beatmapPath 当前谱面路径，用作项目根缺失时的回退基准。
+/// @param storedPath 资源中保存的路径。
+/// @return 词法规范化后的实际路径；原路径为空时返回空。
+std::filesystem::path resolveProjectResourcePath(
+    const MMM::Project& project, const std::filesystem::path& beatmapPath,
+    const std::filesystem::path& storedPath)
+{
+    if ( storedPath.empty() ) return {};
+    auto resolvedPath = storedPath;
+    if ( resolvedPath.is_relative() ) {
+        if ( !project.m_projectRoot.empty() ) {
+            resolvedPath = project.m_projectRoot / resolvedPath;
+        } else if ( !beatmapPath.empty() ) {
+            resolvedPath = beatmapPath.parent_path() / resolvedPath;
+        }
+    }
+    std::error_code filesystemError;
+    const auto      canonicalPath =
+        std::filesystem::weakly_canonical(resolvedPath, filesystemError);
+    return filesystemError ? resolvedPath.lexically_normal()
+                           : canonicalPath.lexically_normal();
+}
+
+/// @brief 解析当前谱面可用于 IMD 资源包的背景图片。
+/// @param project 当前项目。
+/// @param beatMap 当前谱面。
+/// @return 第一张存在的主背景或封面图片；均不存在时返回空。
+std::filesystem::path resolveImdPackageCoverPath(const MMM::Project& project,
+                                                 const MMM::BeatMap& beatMap)
+{
+    const auto&                                meta = beatMap.m_baseMapMetadata;
+    const std::array<std::filesystem::path, 2> candidates{ meta.main_cover_path,
+                                                           meta.cover_path };
+    for ( const auto& candidate : candidates ) {
+        const auto path =
+            resolveProjectResourcePath(project, meta.map_path, candidate);
+        std::error_code filesystemError;
+        if ( std::filesystem::is_regular_file(path, filesystemError) &&
+             !filesystemError ) {
+            return path;
+        }
+    }
+    return {};
+}
+
+/// @brief 把玩家物件绑定音效追加到待导出的复合音频时间线。
+/// @param project 当前项目。
+/// @param beatMap 当前谱面。
+/// @param hitEvents 已按当前 ECS 同步的全部打击事件。
+/// @param events 已包含自动采样的目标事件列表。
+/// @param errorMessage 接收资源解析失败原因。
+/// @return 全部绑定均成功解析时返回 true。
+bool appendBoundSampleTimelineEvents(
+    const MMM::Project& project, const MMM::BeatMap& beatMap,
+    const std::vector<MMM::Logic::System::HitFXSystem::HitEvent>& hitEvents,
+    std::vector<MMM::Audio::AudioTimelineLoadEvent>&              events,
+    std::string&                                                  errorMessage)
+{
+    using HitEvent = MMM::Logic::System::HitFXSystem::HitEvent;
+    std::vector<const HitEvent*>  boundEvents;
+    std::vector<std::string_view> references;
+    boundEvents.reserve(hitEvents.size());
+    references.reserve(hitEvents.size());
+    for ( const auto& hitEvent : hitEvents ) {
+        if ( !hitEvent.sampleBinding ||
+             hitEvent.sampleBinding->m_audioResourceId.empty() ) {
+            continue;
+        }
+        boundEvents.push_back(&hitEvent);
+        references.emplace_back(hitEvent.sampleBinding->m_audioResourceId);
+    }
+    if ( boundEvents.empty() ) return true;
+
+    const auto resources =
+        MMM::Logic::ProjectResourceService::resolveAudioResourceReferences(
+            project, beatMap.m_baseMapMetadata.map_path, references);
+    std::unordered_set<std::uint64_t> usedEventIds;
+    usedEventIds.reserve(events.size() + boundEvents.size());
+    for ( const auto& event : events ) usedEventIds.insert(event.eventId);
+    std::uint64_t nextEventId = 1U;
+
+    for ( std::size_t index = 0U; index < boundEvents.size(); ++index ) {
+        const auto* resource = resources[index];
+        const auto& binding  = *boundEvents[index]->sampleBinding;
+        if ( !resource ) {
+            errorMessage = "无法解析物件音效资源：" + binding.m_audioResourceId;
+            return false;
+        }
+        while ( nextEventId == 0U || usedEventIds.contains(nextEventId) ) {
+            ++nextEventId;
+        }
+        usedEventIds.insert(nextEventId);
+
+        const auto resourcePath = resolveProjectResourcePath(
+            project,
+            beatMap.m_baseMapMetadata.map_path,
+            MMM::Config::utf8ToPath(resource->m_path));
+        events.push_back(MMM::Audio::AudioTimelineLoadEvent{
+            .eventId               = nextEventId,
+            .resourceKey           = resource->m_id,
+            .filePath              = MMM::Config::pathToUtf8(resourcePath),
+            .effectiveStartSeconds = boundEvents[index]->timestamp,
+            .bgmTrackIndex         = 0U,
+            .eventVolume           = binding.m_volume,
+            .resourceConfig        = resource->m_config,
+        });
+        ++nextEventId;
+    }
+    return true;
 }
 
 /// @brief 按当前项目资源刷新 Malody song.file 提示并清除旧单音轨字段。
@@ -582,7 +700,8 @@ bool patchMalodyStoreModeExtFile(const std::filesystem::path& path)
 /// @return 需要在 MC 写出时清理 vol 的资源引用集合。
 std::unordered_set<std::string> collectMalodyMainAudioSampleReferences(
     const MMM::Project& project, const MMM::BeatMap& beatMap,
-    const std::filesystem::path& sourcePath)
+    const std::filesystem::path& sourcePath,
+    const MMM::AudioResource*    targetResource = nullptr)
 {
     std::vector<std::string_view> references;
     references.reserve(beatMap.m_audioSamples.size());
@@ -597,11 +716,77 @@ std::unordered_set<std::string> collectMalodyMainAudioSampleReferences(
     mainReferences.reserve(references.size());
     for ( std::size_t index = 0; index < references.size(); ++index ) {
         const auto* resource = resolvedResources[index];
-        if ( resource && resource->m_type == MMM::AudioTrackType::Main ) {
+        if ( resource && resource->m_type == MMM::AudioTrackType::Main &&
+             (!targetResource || resource == targetResource) ) {
             mainReferences.emplace(references[index]);
         }
     }
     return mainReferences;
+}
+
+/// @brief 单张谱面启用原点对齐后使用的非 OGG Main 音频计划。
+struct MczBeatmapAudioAlignmentPlan {
+    /// @brief 目标项目音频资源。
+    const MMM::AudioResource* resource{ nullptr };
+
+    /// @brief 首红线折回一拍内后的有符号相位，单位毫秒。
+    double phaseMilliseconds{ 0.0 };
+
+    /// @brief 谱面中解析到目标资源的 Main 自动采样引用。
+    std::unordered_set<std::string> mainAudioReferences;
+};
+
+/// @brief 单张谱面的 MCZ 音频原点对齐计划构建结果。
+struct MczAudioAlignmentPlanResult {
+    /// @brief 非 OGG Main 音频需要执行的对齐计划；OGG 时为空。
+    std::optional<MczBeatmapAudioAlignmentPlan> plan;
+
+    /// @brief 无法安全建立计划时的原因；OGG 或成功时为空。
+    std::string errorMessage;
+};
+
+/// @brief 为一张待转换为 MC 的谱面建立非 OGG Main 音频原点对齐计划。
+/// @param project 谱面所属项目。
+/// @param beatMap 已加载的谱面副本。
+/// @param sourcePath 来源谱面路径。
+/// @return OGG 时返回空计划；非 OGG 时返回计划或具体失败原因。
+MczAudioAlignmentPlanResult makeMczAudioAlignmentPlan(
+    const MMM::Project& project, const MMM::BeatMap& beatMap,
+    const std::filesystem::path& sourcePath)
+{
+    MczAudioAlignmentPlanResult result;
+    const auto*                 resource =
+        MMM::Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
+            project, beatMap, sourcePath);
+    if ( !resource || resource->m_type != MMM::AudioTrackType::Main ) {
+        result.errorMessage = "没有可识别的 Main 音频资源";
+        return result;
+    }
+    if ( MMM::packageExtensionEquals(
+             MMM::Config::pathToUtf8(
+                 MMM::Config::utf8ToPath(resource->m_path).extension()),
+             ".ogg") ) {
+        return result;
+    }
+
+    const auto timing =
+        MMM::Logic::calculateMczAudioOriginAlignmentTiming(beatMap);
+    if ( !timing.success ) {
+        result.errorMessage = timing.errorMessage;
+        return result;
+    }
+    auto references = collectMalodyMainAudioSampleReferences(
+        project, beatMap, sourcePath, resource);
+    if ( references.empty() ) {
+        result.errorMessage = "没有引用目标非 OGG Main 音频的自动采样";
+        return result;
+    }
+    result.plan = MczBeatmapAudioAlignmentPlan{
+        .resource            = resource,
+        .phaseMilliseconds   = timing.phaseMilliseconds,
+        .mainAudioReferences = std::move(references),
+    };
+    return result;
 }
 
 /// @brief 清理已写出的 MC 中 Main 自动音频对象的 vol 字段。
@@ -756,6 +941,26 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
     return (tempRoot / fileName).lexically_normal();
 }
 
+/// @brief 生成 MCZ 主音频原点对齐使用的临时文件路径。
+/// @param sourcePath 原始音频路径。
+/// @return 保持源扩展名的唯一临时路径；失败时为空。
+std::filesystem::path makeTemporaryAlignedAudioPath(
+    const std::filesystem::path& sourcePath)
+{
+    std::error_code filesystemError;
+    auto tempRoot = std::filesystem::temp_directory_path(filesystemError);
+    if ( filesystemError || tempRoot.empty() ) return {};
+
+    const auto stamp =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    std::filesystem::path fileName = sourcePath.stem();
+    if ( fileName.empty() ) fileName = "mmm_package_audio";
+    fileName += "_origin_aligned_";
+    fileName += std::to_string(stamp);
+    fileName += sourcePath.extension();
+    return (tempRoot / fileName).lexically_normal();
+}
+
 /// @brief 将谱面源文件转换成指定路径的目标格式文件。
 /// @param sourcePath 来源谱面路径。
 /// @param project 谱面所属项目。
@@ -765,14 +970,16 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
 /// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
 /// 字段。
+/// @param audioAlignmentPlan MCZ 导出副本使用的音频原点对齐计划；为空则不对齐。
 /// @return 是否转换成功。
-bool convertPackageBeatmapFile(const MMM::Project&            project,
-                               const std::filesystem::path&   sourcePath,
-                               const std::filesystem::path&   outputPath,
-                               const MMM::BaseMapMeta*        metadataOverride,
-                               std::optional<MMM::MalodyMode> malodyExportMode,
-                               bool addStoreModeExtForMalodyExport,
-                               bool stripMainAudioVolumeFromMalodyExport)
+bool convertPackageBeatmapFile(
+    const MMM::Project& project, const std::filesystem::path& sourcePath,
+    const std::filesystem::path&        outputPath,
+    const MMM::BaseMapMeta*             metadataOverride,
+    std::optional<MMM::MalodyMode>      malodyExportMode,
+    bool                                addStoreModeExtForMalodyExport,
+    bool                                stripMainAudioVolumeFromMalodyExport,
+    const MczBeatmapAudioAlignmentPlan* audioAlignmentPlan)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
@@ -783,6 +990,19 @@ bool convertPackageBeatmapFile(const MMM::Project&            project,
             : std::unordered_set<std::string>{};
     if ( metadataOverride ) {
         beatMap.m_baseMapMetadata = *metadataOverride;
+    }
+    if ( audioAlignmentPlan ) {
+        std::string alignmentError;
+        if ( !MMM::Logic::applyMczAudioOriginAlignment(
+                 beatMap,
+                 audioAlignmentPlan->mainAudioReferences,
+                 audioAlignmentPlan->phaseMilliseconds,
+                 alignmentError) ) {
+            XERROR("MCZ audio alignment failed for '{}': {}",
+                   MMM::Config::pathToUtf8(sourcePath),
+                   alignmentError);
+            return false;
+        }
     }
     beatMap.m_baseMapMetadata.map_path = outputPath;
     return saveBeatmapWithMalodyExportOptions(
@@ -804,17 +1024,19 @@ bool convertPackageBeatmapFile(const MMM::Project&            project,
 /// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
 /// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
 /// 字段。
+/// @param audioAlignmentPlan MCZ 导出副本使用的音频原点对齐计划；为空则不对齐。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
     const MMM::Project& project, const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
-    const MMM::BaseMapMeta*        metadataOverride,
-    std::optional<MMM::MalodyMode> malodyExportMode,
-    bool                           addStoreModeExtForMalodyExport,
-    bool                           stripMainAudioVolumeFromMalodyExport,
-    std::vector<std::uint8_t>&     outBytes)
+    const MMM::BaseMapMeta*             metadataOverride,
+    std::optional<MMM::MalodyMode>      malodyExportMode,
+    bool                                addStoreModeExtForMalodyExport,
+    bool                                stripMainAudioVolumeFromMalodyExport,
+    const MczBeatmapAudioAlignmentPlan* audioAlignmentPlan,
+    std::vector<std::uint8_t>&          outBytes)
 {
     const auto conversionPath =
         saveToProject
@@ -837,7 +1059,8 @@ bool readConvertedPackageBeatmapBytes(
                                     metadataOverride,
                                     malodyExportMode,
                                     addStoreModeExtForMalodyExport,
-                                    stripMainAudioVolumeFromMalodyExport) ) {
+                                    stripMainAudioVolumeFromMalodyExport,
+                                    audioAlignmentPlan) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -911,6 +1134,24 @@ std::string normalizePackageRelativePathKey(
     return MMM::Config::pathToUtf8Generic(relativePath.lexically_normal());
 }
 
+/// @brief 规范化项目资源身份键，并在 Windows 上兼容文件系统大小写不敏感语义。
+/// @param relativePath 项目资源相对路径。
+/// @return 用于资源计划和选择匹配的稳定路径键。
+std::string normalizePackageResourceIdentityKey(
+    const std::filesystem::path& relativePath)
+{
+    auto key = normalizePackageRelativePathKey(relativePath);
+#if defined(_WIN32)
+    std::transform(
+        key.begin(), key.end(), key.begin(), [](unsigned char value) {
+            return value >= 'A' && value <= 'Z'
+                       ? static_cast<char>(value - 'A' + 'a')
+                       : static_cast<char>(value);
+        });
+#endif
+    return key;
+}
+
 /// @brief 构建打包元数据覆盖项查询表。
 /// @param metadataOverrides 命令中携带的元数据覆盖项。
 /// @return 项目相对路径到基础元数据的映射。
@@ -962,6 +1203,8 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 /// mode_ext。
 /// @param stripMainAudioVolumeFromMalodyExport 是否删除 Main 自动采样的 vol
 /// 字段。
+/// @param alignNonOggMainAudioToOrigin 是否在 MCZ 中对齐非 OGG Main
+/// 音频与首红线。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(
     const MMM::Project& project, const std::filesystem::path& outputPath,
@@ -972,7 +1215,8 @@ bool writeBeatmapPackage(
     bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage,
     std::optional<MMM::MalodyMode> malodyExportMode,
     bool                           addStoreModeExtForMalodyExport,
-    bool                           stripMainAudioVolumeFromMalodyExport)
+    bool                           stripMainAudioVolumeFromMalodyExport,
+    bool                           alignNonOggMainAudioToOrigin)
 {
     if ( selectedRelativePaths.empty() ) return false;
     const auto& projectRoot = project.m_projectRoot;
@@ -1006,6 +1250,100 @@ bool writeBeatmapPackage(
             : std::unordered_set<std::string>{};
     const auto metadataOverrideMap =
         makePackageMetadataOverrideMap(metadataOverrides);
+    const bool alignNonOggMainAudio =
+        alignNonOggMainAudioToOrigin &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    std::unordered_map<std::string, MczBeatmapAudioAlignmentPlan>
+                                            alignmentPlansByBeatmapPath;
+    std::unordered_map<std::string, double> alignmentPhaseByAudioPath;
+    std::unordered_map<std::string, const MMM::AudioResource*>
+        alignmentResourcesByAudioPath;
+    if ( alignNonOggMainAudio ) {
+        std::unordered_set<std::string> selectedRelativePathKeys;
+        selectedRelativePathKeys.reserve(selectedRelativePaths.size());
+        for ( const auto& relativeUtf8 : selectedRelativePaths ) {
+            const auto relativePath =
+                MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+            if ( packageRelativePathEscapesRoot(relativePath) ) {
+                XERROR("PackBeatmap: path escapes project root: {}",
+                       relativeUtf8);
+                mz_zip_writer_end(&zipArchive);
+                return false;
+            }
+            selectedRelativePathKeys.emplace(
+                normalizePackageResourceIdentityKey(relativePath));
+        }
+        for ( const auto& relativeUtf8 : selectedRelativePaths ) {
+            const auto relativePath =
+                MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+            const auto extension =
+                MMM::Config::pathToUtf8(relativePath.extension());
+            if ( !MMM::isKnownPackageResourceExtension(
+                     MMM::PackageResourceType::Beatmap, extension) ) {
+                continue;
+            }
+
+            const auto sourcePath =
+                (projectRoot / relativePath).lexically_normal();
+            auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
+            if ( beatMap.m_baseMapMetadata.map_path.empty() ) {
+                XERROR(
+                    "PackBeatmap: failed to load source for audio alignment: "
+                    "{}",
+                    relativeUtf8);
+                mz_zip_writer_end(&zipArchive);
+                return false;
+            }
+            auto planResult =
+                makeMczAudioAlignmentPlan(project, beatMap, sourcePath);
+            if ( !planResult.errorMessage.empty() ) {
+                XERROR("PackBeatmap: cannot align '{}': {}",
+                       relativeUtf8,
+                       planResult.errorMessage);
+                mz_zip_writer_end(&zipArchive);
+                return false;
+            }
+            if ( !planResult.plan ) continue;
+
+            const auto audioRelativePath =
+                MMM::Config::utf8ToPath(planResult.plan->resource->m_path)
+                    .lexically_normal();
+            const auto audioPathKey =
+                normalizePackageResourceIdentityKey(audioRelativePath);
+            if ( packageRelativePathEscapesRoot(audioRelativePath) ||
+                 !selectedRelativePathKeys.contains(audioPathKey) ) {
+                XERROR(
+                    "PackBeatmap: aligned Main audio '{}' is not a selected "
+                    "project resource",
+                    MMM::Config::pathToUtf8(audioRelativePath));
+                mz_zip_writer_end(&zipArchive);
+                return false;
+            }
+            if ( const auto phase =
+                     alignmentPhaseByAudioPath.find(audioPathKey);
+                 phase != alignmentPhaseByAudioPath.end() &&
+                 std::abs(phase->second - planResult.plan->phaseMilliseconds) >
+                     1.0e-6 ) {
+                XERROR(
+                    "PackBeatmap: Main audio '{}' is shared by charts with "
+                    "different first-BPM phases",
+                    MMM::Config::pathToUtf8(audioRelativePath));
+                mz_zip_writer_end(&zipArchive);
+                return false;
+            }
+            alignmentPhaseByAudioPath[audioPathKey] =
+                planResult.plan->phaseMilliseconds;
+            // 相位已为零时原音频本身已经从歌曲原点播放，只规范谱面首红线，
+            // 避免没有必要的有损重编码。
+            if ( std::abs(planResult.plan->phaseMilliseconds) > 1.0e-6 ) {
+                alignmentResourcesByAudioPath[audioPathKey] =
+                    planResult.plan->resource;
+            }
+            alignmentPlansByBeatmapPath.emplace(
+                normalizePackageRelativePathKey(relativePath),
+                std::move(*planResult.plan));
+        }
+    }
     for ( const auto& relativeUtf8 : selectedRelativePaths ) {
         const auto relativePath =
             MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
@@ -1043,9 +1381,15 @@ bool writeBeatmapPackage(
             if ( shouldConvertSource ) {
                 targetArchivePath.replace_extension(packageBeatmapExtension);
             }
-            const bool shouldReencode = shouldConvertSource ||
-                                        packageMalodyExportMode.has_value() ||
-                                        stripMainAudioVolumeFromMc;
+            const auto alignmentPlanIt =
+                alignmentPlansByBeatmapPath.find(relativePathKey);
+            const MczBeatmapAudioAlignmentPlan* alignmentPlan =
+                alignmentPlanIt == alignmentPlansByBeatmapPath.end()
+                    ? nullptr
+                    : &alignmentPlanIt->second;
+            const bool shouldReencode =
+                shouldConvertSource || packageMalodyExportMode.has_value() ||
+                stripMainAudioVolumeFromMc || alignmentPlan != nullptr;
 
             const auto metadataIt = metadataOverrideMap.find(relativePathKey);
             const MMM::BaseMapMeta* metadataOverride =
@@ -1067,6 +1411,7 @@ bool writeBeatmapPackage(
                              packageMalodyExportMode,
                              addStoreModeExtToMc,
                              stripMainAudioVolumeFromMc,
+                             alignmentPlan,
                              fileBytes) ) {
                         XERROR("PackBeatmap: failed to convert source file: {}",
                                relativeUtf8);
@@ -1124,6 +1469,7 @@ bool writeBeatmapPackage(
                                  std::nullopt,
                                  false,
                                  false,
+                                 nullptr,
                                  fileBytes) ) {
                             XERROR(
                                 "PackBeatmap: failed to convert legacy IMD "
@@ -1150,7 +1496,48 @@ bool writeBeatmapPackage(
         if ( hasPackageArchivePath(archivedNames, relativePath) ) {
             continue;
         }
-        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+        const auto resourceIdentityKey =
+            normalizePackageResourceIdentityKey(relativePath);
+        const auto alignmentResource =
+            alignmentResourcesByAudioPath.find(resourceIdentityKey);
+        if ( alignmentResource != alignmentResourcesByAudioPath.end() ) {
+            const auto alignedAudioPath =
+                makeTemporaryAlignedAudioPath(sourcePath);
+            if ( alignedAudioPath.empty() ) {
+                XERROR("PackBeatmap: failed to create aligned audio path: {}",
+                       relativeUtf8);
+                success = false;
+                break;
+            }
+            const auto phase =
+                alignmentPhaseByAudioPath.find(resourceIdentityKey);
+            if ( phase == alignmentPhaseByAudioPath.end() ) {
+                XERROR("PackBeatmap: incomplete Main audio alignment plan: {}",
+                       relativeUtf8);
+                std::error_code removeError;
+                std::filesystem::remove(alignedAudioPath, removeError);
+                success = false;
+                break;
+            }
+            const auto alignmentResult =
+                MMM::Audio::AudioOriginAlignmentService::alignToOrigin({
+                    .inputPath         = sourcePath,
+                    .outputPath        = alignedAudioPath,
+                    .phaseMilliseconds = phase->second,
+                });
+            if ( !alignmentResult.success ||
+                 !readPackageSourceFile(alignedAudioPath, fileBytes) ) {
+                XERROR("PackBeatmap: failed to align Main audio '{}': {}",
+                       relativeUtf8,
+                       alignmentResult.errorMessage);
+                std::error_code removeError;
+                std::filesystem::remove(alignedAudioPath, removeError);
+                success = false;
+                break;
+            }
+            std::error_code removeError;
+            std::filesystem::remove(alignedAudioPath, removeError);
+        } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
             XERROR("PackBeatmap: failed to read source file: {}", relativeUtf8);
             success = false;
             break;
@@ -1197,10 +1584,16 @@ bool BeatmapSession::processCommands()
         ::MMM::BeatmapMutationFlags::None;
     const auto publishPendingMutation = [this, &mutationFlags]() {
         if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        m_autoBackupDirty    = true;
         const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
         if ( autoSave.mode == Config::AutoSaveMode::EventTriggered &&
              autoSave.onObjectModified ) {
             m_triggeredAutoSavePending = true;
+        }
+        const auto& autoBackup = m_ctx->lastConfig.settings.autoBackup;
+        if ( autoBackup.mode == Config::AutoSaveMode::EventTriggered &&
+             autoBackup.onObjectModified ) {
+            m_triggeredAutoBackupPending = true;
         }
         auto observer = std::atomic_load_explicit(&m_mutationObserver,
                                                   std::memory_order_acquire);
@@ -1391,6 +1784,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                                std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                               std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -1513,6 +1907,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetCollaborationClipboardIsolation> ||
                     std::is_same_v<T, CmdSaveBeatmap> ||
                     std::is_same_v<T, CmdSaveBeatmapAs> ||
+                    std::is_same_v<T, CmdExportImdPackage> ||
                     std::is_same_v<T, CmdPackBeatmap> ||
                     std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
                     std::is_same_v<T, CmdMarkBeatmapMetadataDirty> ) {
@@ -1531,6 +1926,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                     std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                     std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
+                    std::is_same_v<T, CmdSetDraftKeySoundAreaMute> ||
                     std::is_same_v<T, CmdSetBgmKeySoundAreaMute> ||
                     std::is_same_v<T, CmdScroll> ||
                     std::is_same_v<T, CmdPanCanvas> ) {
@@ -1574,6 +1970,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -1625,6 +2022,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdClearNoteColorOverrides> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
+                    std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -1934,6 +2332,11 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     }
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
+    m_autoBackupDirty                 = false;
+    m_triggeredAutoBackupPending      = false;
+    m_timedAutoBackupDeadline         = 0.0;
+    m_timedAutoBackupIntervalSeconds  = 0.0;
+    m_requestedAutoBackupTriggers.store(0U, std::memory_order_relaxed);
     m_ctx->collaborationProject.reset();
     m_ctx->collaborationPathRemap.clear();
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
@@ -2037,10 +2440,16 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             nullptr);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
+            const bool isImd = packageExtensionEquals(
+                Config::pathToUtf8(savePath.extension()), ".imd");
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
                 .path     = Config::pathToUtf8(savePath),
                 .success  = false,
                 .isExport = true,
+                .errorMessage =
+                    isImd ? "RM/IMD 导出失败：请检查目标路径，或改用“RM/IMD "
+                            "资源包”自动拼装音频与资源"
+                          : std::string{},
             });
             return;
         }
@@ -2053,6 +2462,82 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 导出到项目目录时刷新项目资源列表，但不切换当前会话的谱面文件。
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
+}
+
+/// @brief 将当前谱面、背景图和完整拼装音频导出为 RM/IMD 资源包。
+/// @param cmd 资源包输出路径。
+/// @warning 用户触发的低频导出路径：会同步谱面、解析全部音频资源并执行完整
+/// 离线混音和压缩，禁止在 Session update 热路径中调用。
+void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
+{
+    const auto publishFailure = [&cmd](std::string message) {
+        XERROR("ExportImdPackage: {}", message);
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = cmd.path,
+            .success      = false,
+            .isExport     = true,
+            .errorMessage = std::move(message),
+        });
+    };
+
+    if ( !m_ctx->currentBeatmap ) {
+        publishFailure("没有可导出的当前谱面");
+        return;
+    }
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) {
+        publishFailure("导出 IMD 资源包前需要先打开项目");
+        return;
+    }
+
+    m_ctx->m_needsTimingsSync = true;
+    m_ctx->m_needsNotesSync   = true;
+    SessionUtils::syncBeatmap(*m_ctx);
+    SessionUtils::ensureHitEvents(*m_ctx);
+
+    const double chartEndSeconds =
+        SessionUtils::calculateChartContentEndSeconds(*m_ctx->currentBeatmap);
+    auto descriptor = buildAudioTimelineDescriptor(
+        *m_ctx->currentBeatmap,
+        *project,
+        m_ctx->currentBeatmap->m_baseMapMetadata.map_path,
+        chartEndSeconds);
+    if ( !descriptor.m_diagnostics.empty() ) {
+        publishFailure(descriptor.m_diagnostics.front().m_message);
+        return;
+    }
+
+    std::string boundSampleError;
+    if ( !appendBoundSampleTimelineEvents(*project,
+                                          *m_ctx->currentBeatmap,
+                                          m_ctx->hitEvents,
+                                          descriptor.m_events,
+                                          boundSampleError) ) {
+        publishFailure(std::move(boundSampleError));
+        return;
+    }
+
+    const auto coverPath =
+        resolveImdPackageCoverPath(*project, *m_ctx->currentBeatmap);
+    const auto outputPath =
+        resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
+    const auto result =
+        ImdPackageExportService::exportPackage(*m_ctx->currentBeatmap,
+                                               descriptor.m_events,
+                                               chartEndSeconds,
+                                               coverPath,
+                                               outputPath);
+    if ( !result.success ) {
+        publishFailure(result.errorMessage);
+        return;
+    }
+
+    XINFO("ExportImdPackage: package written to {}", cmd.path);
+    Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+        .path     = Config::pathToUtf8(outputPath),
+        .success  = true,
+        .isExport = true,
+    });
 }
 
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
@@ -2102,7 +2587,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.includeLegacyImdBeatmapsInPackage,
                             cmd.malodyExportMode,
                             cmd.addStoreModeExtForMalodyExport,
-                            cmd.stripMainAudioVolumeFromMalodyExport);
+                            cmd.stripMainAudioVolumeFromMalodyExport,
+                            cmd.alignNonOggMainAudioToOrigin);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

@@ -26,13 +26,17 @@ struct CanvasLaneAddress {
 
     /// @brief 将区域内地址换算为统一画布绝对轨道。
     /// @param playerTrackCount 玩家轨道数量。
-    /// @return 草稿轨返回 `index-K`，玩家轨返回 index，BGM 轨返回 K+index。
+    /// @param draftTrackCount 当前可访问的草稿轨道数量；零时兼容为玩家轨道数。
+    /// @return 草稿轨按当前草稿区宽度返回负轨，玩家轨返回 index，BGM 轨返回
+    /// K+index。
     [[nodiscard]] std::int32_t absoluteTrack(
-        std::uint32_t playerTrackCount) const
+        std::uint32_t playerTrackCount, std::uint32_t draftTrackCount = 0) const
     {
         if ( kind == CanvasLaneKind::Draft ) {
+            const auto count =
+                draftTrackCount > 0 ? draftTrackCount : playerTrackCount;
             return static_cast<std::int32_t>(index) -
-                   static_cast<std::int32_t>(playerTrackCount);
+                   static_cast<std::int32_t>(count);
         }
         if ( kind == CanvasLaneKind::Player ) {
             return static_cast<std::int32_t>(index);
@@ -43,14 +47,17 @@ struct CanvasLaneAddress {
     /// @brief 将统一画布绝对轨道转换为区域内地址。
     /// @param absoluteTrack 统一画布有符号轨道；负值表示草稿轨。
     /// @param playerTrackCount 玩家轨道数量。
+    /// @param draftTrackCount 当前可访问的草稿轨道数量；零时兼容为玩家轨道数。
     /// @return 负轨返回 Draft 地址，玩家区返回 Player 地址，其余返回 Bgm
     /// 地址。
     [[nodiscard]] static CanvasLaneAddress fromAbsoluteTrack(
-        std::int32_t absoluteTrack, std::uint32_t playerTrackCount)
+        std::int32_t absoluteTrack, std::uint32_t playerTrackCount,
+        std::uint32_t draftTrackCount = 0)
     {
         if ( absoluteTrack < 0 ) {
-            const auto index =
-                absoluteTrack + static_cast<std::int32_t>(playerTrackCount);
+            const auto count =
+                draftTrackCount > 0 ? draftTrackCount : playerTrackCount;
+            const auto index = absoluteTrack + static_cast<std::int32_t>(count);
             return { CanvasLaneKind::Draft,
                      static_cast<std::uint32_t>(std::max(0, index)) };
         }
@@ -65,6 +72,19 @@ struct CanvasLaneAddress {
     /// @brief 判断两个轨道地址是否相同。
     bool operator==(const CanvasLaneAddress&) const = default;
 };
+
+/// @brief 将草稿负轨道换算为面向用户的一基 DRAFT 轨道编号。
+/// @param absoluteTrack 草稿区统一画布负轨道。
+/// @param persistentDraftTrackCount 持久化草稿轨道数量。
+/// @return 当前持久轨编号；运行时追加轨返回确认扩充后将使用的 1。
+/// @warning 逻辑与 UI 热路径可能每帧调用；只允许常量级整数运算。
+[[nodiscard]] inline std::int32_t draftTrackDisplayNumber(
+    std::int32_t absoluteTrack, std::int32_t persistentDraftTrackCount)
+{
+    const auto count = std::max(0, persistentDraftTrackCount);
+    if ( absoluteTrack < -count ) return 1;
+    return std::max(1, absoluteTrack + count + 1);
+}
 
 /// @brief 单条统一画布轨道的逻辑像素边界。
 struct CanvasLaneBounds {
@@ -125,7 +145,7 @@ struct CanvasLaneProjection {
     /// @brief 批注时间戳标记区固定逻辑宽度。
     static constexpr float ANNOTATION_GUTTER_WIDTH = 26.0F;
 
-    /// @brief 草稿轨道数量，始终跟随玩家轨道数量。
+    /// @brief 当前可访问的草稿轨道数量，包含最左侧运行时追加轨。
     std::uint32_t draftLaneCount{ 0 };
 
     /// @brief 草稿轨道区左边界。
@@ -218,6 +238,36 @@ struct CanvasLaneProjection {
         return std::nullopt;
     }
 
+    /// @brief 计算视口内可见的草稿轨道索引半开区间。
+    /// @param viewportLeft 视口左边界。
+    /// @param viewportRight 视口右边界。
+    /// @return `[begin,end)`；没有可见草稿轨时返回空。
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    visibleDraftRange(float viewportLeft, float viewportRight) const
+    {
+        if ( !valid || draftLaneCount == 0 || !std::isfinite(viewportLeft) ||
+             !std::isfinite(viewportRight) ) {
+            return std::nullopt;
+        }
+        if ( viewportLeft > viewportRight ) {
+            std::swap(viewportLeft, viewportRight);
+        }
+        if ( viewportRight <= draftLeftX || viewportLeft >= draftRightX ) {
+            return std::nullopt;
+        }
+
+        const auto begin = static_cast<std::uint32_t>(std::clamp(
+            std::floor((viewportLeft - draftLeftX) / player.singleTrackWidth),
+            0.0F,
+            static_cast<float>(draftLaneCount)));
+        const auto end   = static_cast<std::uint32_t>(std::clamp(
+            std::ceil((viewportRight - draftLeftX) / player.singleTrackWidth),
+            0.0F,
+            static_cast<float>(draftLaneCount)));
+        if ( begin >= end ) return std::nullopt;
+        return std::pair{ begin, end };
+    }
+
     /// @brief 计算视口内可见的 BGM 轨道索引半开区间。
     /// @param viewportLeft 视口左边界。
     /// @param viewportRight 视口右边界。
@@ -294,20 +344,24 @@ struct CanvasLaneProjection {
 /// @brief 计算左侧草稿区、玩家区及右侧 BGM 区的统一轨道投影。
 /// @param viewportWidth 视口逻辑宽度。
 /// @param playerTrackCount 玩家轨道数量 K。
+/// @param persistentDraftTrackCount 持久化草稿轨道数量。
 /// @param persistentBgmTrackCount 持久化 BGM 轨道数量。
 /// @param layoutLeft 玩家轨道区左边界比例。
 /// @param layoutRight 玩家轨道区右边界比例。
 /// @param horizontalOffsetX 相机产生的内容横向逻辑像素偏移。
-/// @param includeAppendLane 是否在持久轨道后显示一条运行时追加轨。
+/// @param includeAppendLane 是否在 BGM 持久轨道后显示一条运行时追加轨。
 /// @param includeBgmLanes 是否显示并允许访问 BGM 轨道区。
 /// @param includeDraftLanes 是否显示并允许访问项目级草稿轨道区。
+/// @param includeDraftAppendLane 是否在草稿持久轨道前显示一条运行时追加轨。
 /// @return 可供渲染、拾取、框选和拖动共用的统一投影。
 /// @warning 逻辑与渲染热路径可能每帧调用；只允许常量级数值运算。
 [[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
     float viewportWidth, std::int32_t playerTrackCount,
     std::int32_t persistentBgmTrackCount, float layoutLeft, float layoutRight,
     float horizontalOffsetX, bool includeAppendLane = true,
-    bool includeBgmLanes = true, bool includeDraftLanes = false)
+    bool includeBgmLanes = true, bool includeDraftLanes = false,
+    std::int32_t persistentDraftTrackCount = -1,
+    bool         includeDraftAppendLane    = false)
 {
     CanvasLaneProjection result;
     result.player = calculatePlayerTrackProjection(viewportWidth,
@@ -318,8 +372,15 @@ struct CanvasLaneProjection {
     if ( !result.player.valid ) return result;
 
     result.playerLaneCount = static_cast<std::uint32_t>(playerTrackCount);
+    const auto persistentDraftCount = static_cast<std::uint32_t>(
+        std::max(std::int32_t{ 0 },
+                 persistentDraftTrackCount >= 0 ? persistentDraftTrackCount
+                                                : playerTrackCount));
     result.draftLaneCount =
-        includeDraftLanes ? result.playerLaneCount : std::uint32_t{ 0 };
+        includeDraftLanes
+            ? persistentDraftCount +
+                  static_cast<std::uint32_t>(includeDraftAppendLane)
+            : std::uint32_t{ 0 };
     result.draftRightX = result.player.leftX;
     result.draftLeftX =
         result.draftRightX - static_cast<float>(result.draftLaneCount) *

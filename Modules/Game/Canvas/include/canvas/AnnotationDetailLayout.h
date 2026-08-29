@@ -56,6 +56,19 @@ inline AnnotationDetailWheelResult updateAnnotationDetailWheel(float wheel,
     return result;
 }
 
+/// @brief 判断批注交互层未消费的滚轮是否应继续传给画布。
+/// @param annotationHovered 指针是否位于批注栏或详情卡片。
+/// @param editorPopupOpen 批注编辑弹窗是否打开。
+/// @param detailWheelConsumed 批注详情正文是否已消费滚轮。
+/// @return 仅悬停批注交互层且没有弹窗或详情滚动消费时返回 true。
+/// @warning UI 热路径：每帧只执行常量级布尔判断。
+constexpr bool shouldPassAnnotationWheelToCanvas(bool annotationHovered,
+                                                 bool editorPopupOpen,
+                                                 bool detailWheelConsumed)
+{
+    return annotationHovered && !editorPopupOpen && !detailWheelConsumed;
+}
+
 /// @brief 按方向键方向循环切换同一时间戳上的批注。
 /// @param itemCount 同一时间戳上的批注数量。
 /// @param itemIndex 当前批注索引。

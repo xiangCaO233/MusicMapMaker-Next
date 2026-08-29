@@ -1,10 +1,12 @@
 #pragma once
 
 #include "audio/AudioManager.h"
+#include "event/core/EventBus.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -16,12 +18,15 @@ namespace MMM::UI
 class AudioManagerView : public ISubView, public IParallelUiPreparable
 {
 public:
-    AudioManagerView(const std::string& subViewName) : ISubView(subViewName) {}
-    AudioManagerView(AudioManagerView&&)                 = default;
-    AudioManagerView(const AudioManagerView&)            = default;
+    /// @brief 创建音频管理器并订阅项目目录刷新事件。
+    /// @param subViewName 子视图名称。
+    AudioManagerView(const std::string& subViewName);
+    AudioManagerView(AudioManagerView&&)                 = delete;
+    AudioManagerView(const AudioManagerView&)            = delete;
     AudioManagerView& operator=(AudioManagerView&&)      = delete;
     AudioManagerView& operator=(const AudioManagerView&) = delete;
-    ~AudioManagerView() override                         = default;
+    /// @brief 取消目录刷新订阅并销毁音频管理器。
+    ~AudioManagerView() override;
 
     /// @brief 内部绘制逻辑 (Clay/ImGui)
     /// @param layoutContext 当前 Clay/ImGui 布局上下文。
@@ -287,6 +292,14 @@ private:
 
     /// @brief 音频表格排序缓存是否需要重建。
     bool m_audioTableSortCacheDirty{ true };
+
+    /// @brief 外部目录重扫后等待 UI 线程消费的音频缓存刷新标记。
+    /// @warning 目录重扫由逻辑线程写入、UI 热路径读取；为避免跨线程直接修改
+    /// 表格缓存，只使用单个原子脏标记传递低频刷新请求。
+    std::atomic<bool> m_projectDirectoryRefreshPending{ false };
+
+    /// @brief 项目目录重扫事件订阅 ID。
+    Event::SubscriptionID m_projectDirectoryRefreshedSubId{ 0 };
 
     /// @brief 当前后端缓存的输出设备列表。
     std::vector<Audio::AudioOutputDevice> m_cachedOutputDevices;

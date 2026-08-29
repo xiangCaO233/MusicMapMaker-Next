@@ -67,6 +67,7 @@ mmm_add_test_executable(Canvas CanvasContentVisibilityTest
                         tests/CanvasContentVisibilityTest.cpp)
 target_include_directories(CanvasContentVisibilityTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(CanvasContentVisibilityTest PRIVATE UI)
 add_test(NAME CanvasContentVisibilityTest COMMAND CanvasContentVisibilityTest)
 
 # 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。
@@ -84,6 +85,22 @@ target_include_directories(TimelineTimingTooltipTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(TimelineTimingTooltipTest PRIVATE MMM)
 add_test(NAME TimelineTimingTooltipTest COMMAND TimelineTimingTooltipTest)
+
+# 时间点表格分拍拟合使用纯数值计算，覆盖最高 1920 分母的保存边界。
+mmm_add_test_executable(Canvas TimingTableFractionTest
+                        tests/TimingTableFractionTest.cpp)
+target_include_directories(TimingTableFractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimingTableFractionTest PRIVATE MMM)
+add_test(NAME TimingTableFractionTest COMMAND TimingTableFractionTest)
+
+# 物件拖拽边缘自动平移使用纯数值计算，覆盖速度和两侧轨道区域边界。
+mmm_add_test_executable(Canvas ObjectDragAutoPanTest
+                        tests/ObjectDragAutoPanTest.cpp)
+target_include_directories(ObjectDragAutoPanTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ObjectDragAutoPanTest PRIVATE Logic 3rd_glm)
+add_test(NAME ObjectDragAutoPanTest COMMAND ObjectDragAutoPanTest)
 
 # 主画布悬浮层选择使用纯候选去重，覆盖同一物件的多个相交命中框。
 mmm_add_test_executable(Canvas HoverLayerSelectionTest

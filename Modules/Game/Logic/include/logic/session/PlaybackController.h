@@ -6,6 +6,7 @@ struct CmdPanCanvas;
 struct CmdScroll;
 struct CmdSeek;
 struct CmdSetBgmKeySoundAreaMute;
+struct CmdSetDraftKeySoundAreaMute;
 struct CmdSetKeySoundEffectGroupGain;
 struct CmdSetKeySoundTrackGain;
 struct CmdSetKeySoundTrackMute;
@@ -44,6 +45,10 @@ public:
     /// @brief 处理绑定或未绑定打击音效类别的实时增益命令。
     /// @param cmd 目标类别和线性增益。
     void handleCommand(const CmdSetKeySoundEffectGroupGain& cmd);
+
+    /// @brief 处理整个草稿轨道区的 Key 音静音命令。
+    /// @param cmd 草稿区静音状态。
+    void handleCommand(const CmdSetDraftKeySoundAreaMute& cmd);
 
     /// @brief 处理整个 BGM 轨道区的 Key 音静音命令。
     /// @param cmd BGM 区静音状态。

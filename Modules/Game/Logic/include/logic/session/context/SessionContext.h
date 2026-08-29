@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/ChartObjectKind.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/EditorConfig.h"
 #include "logic/PreviewDensity.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
@@ -31,7 +32,7 @@ class Project;
 namespace MMM::Logic
 {
 
-class BeatmapSyncBuffer;
+using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 
 /// @brief 相机/视口信息
 struct CameraInfo {
@@ -78,6 +79,9 @@ struct SessionContext {
     /// @brief 当前会话上次同步完成时的草稿组载荷，用于三方合并。
     std::string m_draftLaneBasePayload;
 
+    /// @brief 当前会话上次同步完成时的草稿轨道数量，用于并发三方合并。
+    std::int32_t m_draftLaneBaseTrackCount{ 0 };
+
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
     double animateTime{ 0.0 };  ///< 当前动画渲染时间，已包含视觉偏移。
     /// @brief 当前暂停态滚动动画的目标渲染时间，单位秒。
@@ -97,7 +101,9 @@ struct SessionContext {
     bool isActiveSession{ false };
     /// @brief 是否作为同复合时间线后台跟随者读取全局 transport。
     bool    isAudioTimelineSyncFollower{ false };
-    int32_t trackCount{ 12 };  ///< 当前轨道总数
+    int32_t trackCount{ 12 };  ///< 当前玩家轨道总数。
+    /// @brief 项目共享的持久化草稿轨道数量，不包含最左侧运行时追加轨。
+    int32_t draftTrackCount{ 12 };
     /// @brief 用户持久化的 BGM 轨道数量，不包含末尾运行时追加轨。
     int32_t bgmTrackCount{ 0 };
 
@@ -184,6 +190,8 @@ struct SessionContext {
     bool isAnnotationRenderCacheDirty{ true };
     /// @brief 已解析物件当前位置并按时间排序的批注标记缓存。
     std::vector<AnnotationRenderMarker> annotationRenderCache;
+    /// @brief 批注标记缓存每次重建后递增的版本号，供 UI 低频刷新全量表格。
+    std::uint64_t annotationRenderCacheRevision{ 0 };
     /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
     std::vector<double> previewDensityObjectTimes;
     /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。

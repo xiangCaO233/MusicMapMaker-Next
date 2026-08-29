@@ -251,6 +251,58 @@ bool testBeatNumbersRenderInsideEachBeat()
     return true;
 }
 
+/// @brief 验证不足一拍的相邻 BPM 红线仍各自推进一个拍号。
+/// @return 三条密集红线对应的拍号依次为 1、2、3 时返回 true。
+bool testDenseBpmMarkersAdvanceBeatNumbers()
+{
+    MMM::Logic::RenderSnapshot               snapshot;
+    MMM::Config::CanvasComponentLayoutConfig config;
+    configureAsciiFont(snapshot);
+    config.beatNumber.visible = true;
+
+    entt::registry                                timelineRegistry;
+    std::array<MMM::Logic::TimelineComponent*, 3> bpmEvents{};
+    constexpr std::array<double, 3>               BPM_TIMES{ 0.0, 0.1, 0.2 };
+    for ( std::size_t index = 0U; index < BPM_TIMES.size(); ++index ) {
+        const auto entity = timelineRegistry.create();
+        auto&      bpm =
+            timelineRegistry.emplace<MMM::Logic::TimelineComponent>(entity);
+        bpm.m_timestamp  = BPM_TIMES[index];
+        bpm.m_effect     = MMM::TimingEffect::BPM;
+        bpm.m_value      = 120.0;
+        bpmEvents[index] = &bpm;
+    }
+
+    MMM::Logic::System::ScrollCache cache;
+    MMM::Config::EditorConfig       editorConfig;
+    cache.rebuild(timelineRegistry, editorConfig, nullptr);
+    const std::vector<const MMM::Logic::TimelineComponent*> orderedBpmEvents{
+        bpmEvents.begin(), bpmEvents.end()
+    };
+
+    auto context        = makeRenderContext(0.2);
+    context.bpmEvents   = orderedBpmEvents;
+    context.scrollCache = &cache;
+    MMM::Logic::System::CanvasComponentRenderSystem::render(
+        &snapshot, context, config);
+
+    for ( std::int64_t expectedBeat = 1; expectedBeat <= 3; ++expectedBeat ) {
+        const auto instance = std::find_if(
+            snapshot.canvasComponentInstances.begin(),
+            snapshot.canvasComponentInstances.end(),
+            [expectedBeat](const auto& candidate) {
+                return candidate.type ==
+                           MMM::Config::CanvasComponentType::BeatNumber &&
+                       candidate.instanceIndex == expectedBeat;
+            });
+        if ( instance == snapshot.canvasComponentInstances.end() ) {
+            XERROR("Dense BPM marker did not advance to beat {}", expectedBeat);
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证拍起点越过判定线后，拍号会保留到文字离开轨道布局视口。
 /// @return 当前拍文字仍被生成且绘制命令使用布局视口 scissor 时返回 true。
 bool testBeatNumberRendersUntilLayoutViewportExit()
@@ -297,9 +349,8 @@ bool testBeatNumberRendersUntilLayoutViewportExit()
     }
 
     for ( const auto& command : snapshot.overlayCmds ) {
-        if ( command.scissor.offset.x != 0 || command.scissor.offset.y != 25 ||
-             command.scissor.extent.width != 800U ||
-             command.scissor.extent.height != 575U ) {
+        if ( command.scissor.x != 0 || command.scissor.y != 25 ||
+             command.scissor.width != 800U || command.scissor.height != 575U ) {
             XERROR("Beat number did not use the layout viewport scissor");
             return false;
         }
@@ -586,9 +637,9 @@ bool testKpsRendersPerTrackAndTotal()
         return false;
     }
     const auto& kpsCommand = snapshot.overlayCmds.back();
-    if ( kpsCommand.scissor.offset.x != 0 || kpsCommand.scissor.offset.y != 0 ||
-         kpsCommand.scissor.extent.width != 800U ||
-         kpsCommand.scissor.extent.height != 600U ) {
+    if ( kpsCommand.scissor.x != 0 || kpsCommand.scissor.y != 0 ||
+         kpsCommand.scissor.width != 800U ||
+         kpsCommand.scissor.height != 600U ) {
         XERROR("KPS inherited the preceding beat component scissor");
         return false;
     }
@@ -763,6 +814,7 @@ int main()
                    testVisibleComponentRendersInOverlay() &&
                    testJudgmentLineTimeDoesNotRenderWithoutBeatmap() &&
                    testBeatNumbersRenderInsideEachBeat() &&
+                   testDenseBpmMarkersAdvanceBeatNumbers() &&
                    testBeatNumberRendersUntilLayoutViewportExit() &&
                    testBeatNumberLayoutRegionCentersOnBeatHead() &&
                    testBeatLineTimesRenderInsideEachSubdivision() &&
