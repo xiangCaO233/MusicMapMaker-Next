@@ -1,7 +1,9 @@
 # Modules/Game/Common/CMakeLists.txt
 
-add_library(Common STATIC src/common/AudioInfoUtils.cpp
-                          src/common/VideoFrameDecoder.cpp)
+add_library(
+  Common STATIC
+  src/common/AudioInfoUtils.cpp src/common/RenderSnapshotBuffer.cpp
+  src/common/VideoFrameDecoder.cpp)
 
 target_include_directories(
   Common
@@ -14,7 +16,7 @@ target_include_directories(
 
 target_link_libraries(
   Common
-  PUBLIC Log ICE::IonCachyEngine
+  PUBLIC Log ICE::IonCachyEngine 3rd_concurrentqueue 3rd_glm
   PRIVATE 3rd_ffmpeg)
 
 mmm_add_test_executable(Common VideoFrameDecoderTest

@@ -6,9 +6,8 @@ add_subdirectory("Logic")
 add_subdirectory("UI")
 add_subdirectory("Canvas")
 
-target_link_libraries(UI PRIVATE Canvas)
-
-add_library(Game STATIC src/GameLoop.cpp)
+add_library(Game STATIC src/CanvasWorkspaceService.cpp
+                        src/EditorApplicationService.cpp src/GameLoop.cpp)
 
 target_link_libraries(
   Game

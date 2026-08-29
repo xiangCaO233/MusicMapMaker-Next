@@ -349,7 +349,9 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
-        isMainCanvas && ctx.lastConfig.settings.enableDraftLanes);
+        isMainCanvas && ctx.lastConfig.settings.enableDraftLanes,
+        ctx.draftTrackCount,
+        isMainCanvas);
     if ( !projection.valid ) return std::nullopt;
 
     CanvasLaneAddress address;
@@ -376,46 +378,32 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
 
     return UnifiedDragTarget{
         .time             = targetTime,
-        .absoluteTrack    = address.absoluteTrack(projection.playerLaneCount),
+        .absoluteTrack    = address.absoluteTrack(projection.playerLaneCount,
+                                                  projection.draftLaneCount),
         .leftX            = projection.player.leftX,
         .singleTrackWidth = projection.player.singleTrackWidth,
     };
 }
 
-/// @brief 判断音符及其折线子物件是否完整位于玩家轨道区。
-/// @param note 待检查音符。
+/// @brief 判断音符及其折线子物件是否完整位于同一个可持久化轨道域。
+/// @param note 待检查音符；根轨道决定草稿域或玩家域。
 /// @param trackCount 玩家轨道数。
-/// @return 所有轨道和 Flick 终点都合法时返回 true。
-bool noteFitsPlayerArea(const NoteComponent& note, std::int32_t trackCount)
+/// @return 所有节点和 Flick 终点均未跨越轨道域边界时返回 true。
+bool noteFitsTrackDomain(const NoteComponent& note, std::int32_t trackCount)
 {
     if ( trackCount <= 0 ) return false;
-    const auto fits = [trackCount](::MMM::NoteType type,
-                                   std::int32_t    track,
-                                   std::int32_t    dtrack) {
+    const bool draftDomain = note.m_trackIndex < 0;
+    const auto fits        = [trackCount, draftDomain](::MMM::NoteType type,
+                                                       std::int32_t    track,
+                                                       std::int32_t    dtrack) {
+        const auto endTrack = static_cast<std::int64_t>(track) + dtrack;
+        if ( draftDomain ) {
+            return track < 0 &&
+                   (type != ::MMM::NoteType::FLICK || endTrack < 0);
+        }
         if ( track < 0 || track >= trackCount ) return false;
-        if ( type != ::MMM::NoteType::FLICK ) return true;
-        const auto endTrack = track + dtrack;
-        return endTrack >= 0 && endTrack < trackCount;
-    };
-    if ( !fits(note.m_type, note.m_trackIndex, note.m_dtrack) ) return false;
-    return std::all_of(note.m_subNotes.begin(),
-                       note.m_subNotes.end(),
-                       [&](const NoteComponent::SubNote& sub) {
-                           return fits(sub.type, sub.trackIndex, sub.dtrack);
-                       });
-}
-
-/// @brief 判断草稿物件是否完整位于左侧 K 条草稿轨中。
-bool noteFitsDraftArea(const NoteComponent& note, std::int32_t trackCount)
-{
-    if ( trackCount <= 0 ) return false;
-    const auto fits = [trackCount](::MMM::NoteType type,
-                                   std::int32_t    track,
-                                   std::int32_t    dtrack) {
-        if ( track < -trackCount || track >= 0 ) return false;
-        if ( type != ::MMM::NoteType::FLICK ) return true;
-        const auto endTrack = track + dtrack;
-        return endTrack >= -trackCount && endTrack < 0;
+        return type != ::MMM::NoteType::FLICK ||
+               (endTrack >= 0 && endTrack < trackCount);
     };
     if ( !fits(note.m_type, note.m_trackIndex, note.m_dtrack) ) return false;
     return std::all_of(note.m_subNotes.begin(),
@@ -549,17 +537,25 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.dragSampleRenderPinnedEntities.clear();
 
     if ( cmd.entity == entt::null ) return;
+    entt::entity draggedEntity = cmd.entity;
     if ( cmd.kind == ChartObjectKind::PlayerNote ||
          cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
-            ctx.noteRegistry.try_get<const NoteComponent>(cmd.entity);
+            ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        if ( cmd.kind == ChartObjectKind::DraftNote && note &&
+             note->m_isSubNote && note->m_parentPolyline != entt::null &&
+             ctx.noteRegistry.valid(note->m_parentPolyline) &&
+             ctx.noteRegistry.all_of<NoteComponent>(note->m_parentPolyline) ) {
+            draggedEntity = note->m_parentPolyline;
+            note = ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        }
         if ( !note ||
              !SessionUtils::isNoteEditable(*note, ctx.lastConfig.settings) ) {
             return;
         }
     }
 
-    ctx.draggedEntity     = cmd.entity;
+    ctx.draggedEntity     = draggedEntity;
     ctx.draggedObjectKind = cmd.kind;
     ctx.dragCameraId      = cmd.cameraId;
     ctx.draggedPart       = static_cast<HoverPart>(ctx.hoveredPart);
@@ -644,10 +640,10 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         ctx.dragInitialSample = initialIterator->second.sample;
         ctx.dragInitialNote.reset();
         ctx.isDragging = true;
-    } else if ( ctx.noteRegistry.valid(cmd.entity) &&
-                ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+    } else if ( ctx.noteRegistry.valid(draggedEntity) &&
+                ctx.noteRegistry.all_of<NoteComponent>(draggedEntity) ) {
         auto&      registry        = ctx.noteRegistry;
-        const bool primarySelected = isEntitySelected(registry, cmd.entity);
+        const bool primarySelected = isEntitySelected(registry, draggedEntity);
 
         if ( primarySelected ) {
             // 模式 A: 拖动整个选中组
@@ -709,12 +705,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
             }
         } else {
             // 模式 B: 只拖动当前物件
-            if ( auto* note = registry.try_get<NoteComponent>(cmd.entity) ) {
-                m_initialStates[cmd.entity] = { *note, false };
-                if ( !registry.all_of<InteractionComponent>(cmd.entity) ) {
-                    registry.emplace<InteractionComponent>(cmd.entity);
+            if ( auto* note = registry.try_get<NoteComponent>(draggedEntity) ) {
+                m_initialStates[draggedEntity] = { *note, false };
+                if ( !registry.all_of<InteractionComponent>(draggedEntity) ) {
+                    registry.emplace<InteractionComponent>(draggedEntity);
                 }
-                registry.get<InteractionComponent>(cmd.entity).isDragging =
+                registry.get<InteractionComponent>(draggedEntity).isDragging =
                     true;
 
                 // 如果是 Polyline，也收集其子物件
@@ -722,7 +718,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                     for ( auto subEnt : registry.view<NoteComponent>() ) {
                         const auto& subNC = registry.get<NoteComponent>(subEnt);
                         if ( subNC.m_isSubNote &&
-                             subNC.m_parentPolyline == cmd.entity ) {
+                             subNC.m_parentPolyline == draggedEntity ) {
                             m_initialStates[subEnt] = {
                                 subNC,
                                 isEntitySelected(registry, subEnt),
@@ -739,8 +735,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         }
 
         // 兼容旧代码 (保留主拖拽物件的初始备份)
-        if ( m_initialStates.count(cmd.entity) ) {
-            ctx.dragInitialNote = m_initialStates[cmd.entity].note;
+        if ( m_initialStates.count(draggedEntity) ) {
+            ctx.dragInitialNote = m_initialStates[draggedEntity].note;
             ctx.dragInitialSample.reset();
             ctx.isDragging = true;
         }
@@ -828,8 +824,8 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         target->absoluteTrack >=
         static_cast<std::int32_t>(std::max(0, ctx.trackCount));
     if ( !m_usesUnifiedObjectDrag &&
-         ctx.draggedObjectKind == ChartObjectKind::PlayerNote &&
-         !targetIsBgm ) {
+         ctx.draggedObjectKind == ChartObjectKind::PlayerNote && !targetIsBgm &&
+         target->absoluteTrack >= 0 ) {
         return false;
     }
     m_usesUnifiedObjectDrag = true;
@@ -899,7 +895,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         static_cast<std::int64_t>(std::max(0, ctx.bgmTrackCount));
     const std::int64_t minimumAccessibleTrack =
         m_initialSampleStates.empty()
-            ? -static_cast<std::int64_t>(std::max(0, ctx.trackCount))
+            ? -static_cast<std::int64_t>(std::max(0, ctx.draftTrackCount) + 1)
             : 0;
     if ( minimumTrack != std::numeric_limits<std::int64_t>::max() &&
          maximumTrack != std::numeric_limits<std::int64_t>::min() ) {
@@ -953,14 +949,22 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
                                          std::numeric_limits<int>::min(),
                                          std::numeric_limits<int>::max()));
         }
-        if ( note->m_type == ::MMM::NoteType::POLYLINE && !note->m_isSubNote ) {
-            syncPolylineSubEntities(ctx, entity, *note);
-        }
         if ( auto* transform =
                  ctx.noteRegistry.try_get<TransformComponent>(entity) ) {
             transform->m_pos.x =
                 target->leftX + static_cast<float>(note->m_trackIndex) *
                                     target->singleTrackWidth;
+        }
+    }
+
+    // unordered_map 不保证父子实体顺序；根折线全部移动后再以根数据覆盖子实体。
+    for ( const auto& [entity, state] : m_initialStates ) {
+        (void)state;
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(entity);
+        if ( note && note->m_type == ::MMM::NoteType::POLYLINE &&
+             !note->m_isSubNote ) {
+            syncPolylineSubEntities(ctx, entity, *note);
         }
     }
 
@@ -1346,19 +1350,10 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             ctx.noteRegistry.try_get<const NoteComponent>(entity);
         if ( !current || current->m_isSubNote ) continue;
 
-        if ( current->m_trackIndex < 0 ) {
-            if ( !noteFitsDraftArea(*current, ctx.trackCount) ) {
-                rejectionReason =
-                    "草稿物件拖动结果超出左侧草稿轨道区，已取消本次操作";
-                break;
-            }
-            continue;
-        }
-
         if ( current->m_trackIndex < ctx.trackCount ) {
-            if ( !noteFitsPlayerArea(*current, ctx.trackCount) ) {
+            if ( !noteFitsTrackDomain(*current, ctx.trackCount) ) {
                 rejectionReason =
-                    "玩家物件拖动结果超出玩家轨道区，已取消本次操作";
+                    "物件拖动结果跨越草稿与玩家轨道边界，已取消本次操作";
                 break;
             }
             continue;
@@ -1410,10 +1405,12 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     }
 
     const auto restoreInitialStates = [&]() {
+        bool restoredNotes = false;
         for ( const auto& [entity, state] : m_initialStates ) {
             if ( ctx.noteRegistry.valid(entity) &&
                  ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
                 ctx.noteRegistry.replace<NoteComponent>(entity, state.note);
+                restoredNotes = true;
             }
         }
         for ( const auto& [entity, state] : m_initialSampleStates ) {
@@ -1422,6 +1419,14 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
                 ctx.sampleRegistry.replace<SampleComponent>(entity,
                                                             state.sample);
             }
+        }
+        if ( restoredNotes ) {
+            // 拖动预览期间可见性索引仍保留旧位置；回弹后必须令时间排序、
+            // Polyline 包围区间和 AbsY 分桶一起失效，否则清除拖动固定列表后
+            // 大折线可能继续按非法落点剔除，表现为整个物件消失。
+            ctx.isNoteOrderDirty             = true;
+            ctx.isNoteStatsDirty             = true;
+            ctx.isAnnotationRenderCacheDirty = true;
         }
         ctx.isTransformDirty = true;
     };

@@ -54,6 +54,10 @@ private:
     entt::entity                 m_entity;  ///< 实体 ID
     std::optional<NoteComponent> m_before;  ///< 变更前数据
     std::optional<NoteComponent> m_after;   ///< 变更后数据
+    /// @brief 首次执行前的草稿轨道数量。
+    std::optional<std::int32_t> m_beforeDraftTrackCount;
+    /// @brief 为容纳变更后草稿物件计算出的轨道数量。
+    std::optional<std::int32_t> m_afterDraftTrackCount;
 };
 
 /// @brief 批量音符操作 (用于粘贴/批量删除)，提高处理效率并合并撤销历史。
@@ -111,6 +115,10 @@ public:
 private:
     std::vector<Entry> m_entries;  ///< 条目列表
     std::string        m_name;     ///< 操作名称
+    /// @brief 首次执行前的草稿轨道数量。
+    std::optional<std::int32_t> m_beforeDraftTrackCount;
+    /// @brief 为容纳批量变更后草稿物件计算出的轨道数量。
+    std::optional<std::int32_t> m_afterDraftTrackCount;
     /// @brief 该动作对协作同步声明的精确变更类别。
     ::MMM::BeatmapMutationFlags m_mutationFlags{
         ::MMM::BeatmapMutationFlags::Objects

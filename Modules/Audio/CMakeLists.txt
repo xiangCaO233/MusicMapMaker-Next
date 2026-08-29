@@ -2,11 +2,13 @@
 
 add_library(
   Audio STATIC
+  src/AudioTimelineExportService.cpp
   src/AudioTimelineMixerNode.cpp
   src/AudioTimelineResourceProcessor.cpp
   src/AudioTimelineTransport.cpp
   src/BackgroundSpectrumAnalyzer.cpp
   src/AudioManager.cpp
+  src/AudioOriginAlignmentService.cpp
   src/AudioManager_BGM.cpp
   src/AudioManager_EQ.cpp
   src/AudioManager_Mix.cpp
@@ -54,6 +56,16 @@ target_link_libraries(AudioSpeedExportServiceTest PRIVATE Audio Log Config)
 add_test(NAME AudioSpeedExportServiceTest
          COMMAND AudioSpeedExportServiceTest "${MMM_TEST_RESOURCE_DIR}/ma"
                  "${CMAKE_BINARY_DIR}/test_output/audio_speed_export_coverage")
+
+# 原点对齐测试覆盖裁切开头、补前置静音和零相位重编码。
+mmm_add_test_executable(Audio AudioOriginAlignmentServiceTest
+                        tests/AudioOriginAlignmentServiceTest.cpp)
+target_link_libraries(AudioOriginAlignmentServiceTest PRIVATE Audio Log Runtime)
+target_compile_definitions(
+  AudioOriginAlignmentServiceTest
+  PRIVATE MMM_TEST_OUTPUT_DIR="${CMAKE_BINARY_DIR}/test_output")
+add_test(NAME AudioOriginAlignmentServiceTest
+         COMMAND AudioOriginAlignmentServiceTest)
 
 mmm_add_test_executable(Audio BackgroundSpectrumAnalyzerTest
                         tests/BackgroundSpectrumAnalyzerTest.cpp)

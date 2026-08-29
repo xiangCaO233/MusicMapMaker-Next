@@ -14,6 +14,22 @@ constexpr bool testBlockedAreaPreservesHeldBrush()
            !completion.clearLeftState && !completion.endErase;
 }
 
+/// @brief 验证从画布空白处开始的框选拖动可连续穿过批注区。
+/// @return 仅真实活动框选绕过阻挡，批注区起手和物件拖拽仍被拦截。
+constexpr bool testBlockedAreaPassesActiveMarquee()
+{
+    return MMM::Canvas::shouldContinueMarqueeAcrossBlockedArea(
+               MMM::Logic::EditTool::Marquee, true, true, false, false) &&
+           !MMM::Canvas::shouldContinueMarqueeAcrossBlockedArea(
+               MMM::Logic::EditTool::Marquee, true, false, false, false) &&
+           !MMM::Canvas::shouldContinueMarqueeAcrossBlockedArea(
+               MMM::Logic::EditTool::Marquee, true, true, true, false) &&
+           !MMM::Canvas::shouldContinueMarqueeAcrossBlockedArea(
+               MMM::Logic::EditTool::Marquee, true, true, false, true) &&
+           !MMM::Canvas::shouldContinueMarqueeAcrossBlockedArea(
+               MMM::Logic::EditTool::Marquee, false, true, false, false);
+}
+
 /// @brief 验证在批注区释放左键会结束原画布笔刷并清理手势状态。
 /// @return 绘制手势收到 Brush 结束动作。
 constexpr bool testBlockedAreaFinishesReleasedBrush()
@@ -47,6 +63,7 @@ constexpr bool testBlockedAreaFinishesOtherReleasedGestures()
 int main()
 {
     static_assert(testBlockedAreaPreservesHeldBrush());
+    static_assert(testBlockedAreaPassesActiveMarquee());
     static_assert(testBlockedAreaFinishesReleasedBrush());
     static_assert(testBlockedAreaFinishesOtherReleasedGestures());
     return 0;

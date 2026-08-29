@@ -310,15 +310,18 @@ bool AudioManager::isBGMGainMuted() const
     return m_bgmGainMuted;
 }
 
-/// @brief 设置 SFX 全局增益、保存配置并刷新音效音量。
+/// @brief 设置 SFX 全局增益，按需保存配置并刷新音效音量。
 /// @param gain 目标增益。
-void AudioManager::setSFXGain(float gain)
+/// @param persist 是否立即写入用户配置。
+void AudioManager::setSFXGain(float gain, bool persist)
 {
     m_sfxGain = std::clamp(gain, 0.0f, 1.0f);
 
-    auto& settings   = Config::AppConfig::instance().getEditorSettings();
-    settings.sfxGain = m_sfxGain;
-    Config::AppConfig::instance().save();
+    if ( persist ) {
+        auto& settings   = Config::AppConfig::instance().getEditorSettings();
+        settings.sfxGain = m_sfxGain;
+        Config::AppConfig::instance().save();
+    }
 
     refreshSFXEffectiveVolumes();
 }

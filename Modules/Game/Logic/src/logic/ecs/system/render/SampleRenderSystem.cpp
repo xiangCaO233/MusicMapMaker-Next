@@ -26,8 +26,31 @@ namespace MMM::Logic::System
 namespace
 {
 
-/// @brief BGM 轨道标题使用的画布字体像素高度。
-constexpr float BGM_LANE_LABEL_FONT_PIXEL_HEIGHT = 16.0F;
+/// @brief 草稿与 BGM 轨道标题使用的画布字体像素高度。
+constexpr float LANE_LABEL_FONT_PIXEL_HEIGHT = 16.0F;
+
+/// @brief 批注栏底色键，避免主画布热路径构造临时字符串。
+const std::string ANNOTATION_GUTTER_BACKGROUND_COLOR_KEY =
+    "annotations.gutter_background";
+/// @brief 批注栏边框色键，避免主画布热路径构造临时字符串。
+const std::string ANNOTATION_GUTTER_BORDER_COLOR_KEY =
+    "annotations.gutter_border";
+/// @brief 草稿轨道标题色键，避免主画布热路径构造临时字符串。
+const std::string DRAFT_TRACK_LABEL_COLOR_KEY = "draft_tracks.label";
+/// @brief BGM 轨道底色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_BACKGROUND_COLOR_KEY = "bgm_tracks.background";
+/// @brief BGM 轨道交替底色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_ALTERNATE_COLOR_KEY = "bgm_tracks.alternate";
+/// @brief BGM 轨道边框色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_BORDER_COLOR_KEY = "bgm_tracks.border";
+/// @brief BGM 区分隔线色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_SEPARATOR_COLOR_KEY = "bgm_tracks.separator";
+/// @brief BGM 轨道标题色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_LABEL_COLOR_KEY = "bgm_tracks.label";
+/// @brief 自动采样主体色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_SAMPLE_COLOR_KEY = "bgm_tracks.sample";
+/// @brief 自动采样偏移色键，避免主画布热路径构造临时字符串。
+const std::string BGM_TRACK_OFFSET_COLOR_KEY = "bgm_tracks.offset";
 
 /// @brief 判断皮肤颜色是否为缺省的洋红哨兵。
 /// @param color 皮肤颜色。
@@ -38,14 +61,14 @@ bool isMissingSkinColor(const Config::Color& color)
            color.a == 1.0F;
 }
 
-/// @brief 获取可回退的 BGM 轨道皮肤颜色。
+/// @brief 获取可回退的轨道布局皮肤颜色。
 /// @param key 皮肤颜色键。
 /// @param fallback 缺失时使用的颜色。
 /// @return 转换后的 GLM 颜色。
-glm::vec4 bgmColor(std::string_view key, glm::vec4 fallback)
+/// @warning 主画布热路径：只接收静态键并执行内存内皮肤颜色查询。
+glm::vec4 laneColor(const std::string& key, glm::vec4 fallback)
 {
-    const auto color =
-        Config::SkinManager::instance().getColor(std::string(key));
+    const auto color = Config::SkinManager::instance().getColor(key);
     if ( isMissingSkinColor(color) ) return fallback;
     return { color.r, color.g, color.b, color.a };
 }
@@ -124,6 +147,7 @@ void collectVisibleSamples(
 
 void SampleRenderSystem::renderLaneLayout(
     Batcher& batcher, const CanvasLaneProjection& projection,
+    std::int32_t persistentDraftTrackCount,
     std::int32_t persistentBgmTrackCount, float viewportWidth, float topY,
     float bottomY)
 {
@@ -134,10 +158,11 @@ void SampleRenderSystem::renderLaneLayout(
     const float gutterRight =
         std::min(viewportWidth, projection.annotationRightX);
     if ( gutterRight > gutterLeft ) {
-        const auto gutterBackground = bgmColor(
-            "annotations.gutter_background", { 0.025F, 0.035F, 0.05F, 0.94F });
-        const auto gutterBorder = bgmColor("annotations.gutter_border",
-                                           { 0.28F, 0.78F, 0.94F, 0.75F });
+        const auto gutterBackground =
+            laneColor(ANNOTATION_GUTTER_BACKGROUND_COLOR_KEY,
+                      { 0.025F, 0.035F, 0.05F, 0.94F });
+        const auto gutterBorder = laneColor(ANNOTATION_GUTTER_BORDER_COLOR_KEY,
+                                            { 0.28F, 0.78F, 0.94F, 0.75F });
         batcher.setTexture(TextureID::None);
         batcher.setScissor(
             gutterLeft, topY, gutterRight - gutterLeft, bottomY - topY);
@@ -158,20 +183,65 @@ void SampleRenderSystem::renderLaneLayout(
                          gutterBorder);
     }
 
+    const auto visibleDraftRange =
+        projection.visibleDraftRange(0.0F, viewportWidth);
+    if ( visibleDraftRange ) {
+        const auto  draftLabel  = laneColor(DRAFT_TRACK_LABEL_COLOR_KEY,
+                                            { 0.96F, 0.69F, 0.52F, 0.92F });
+        const float visibleLeft = std::max(0.0F, projection.draftLeftX);
+        const float visibleRight =
+            std::min(viewportWidth, projection.draftRightX);
+        batcher.setScissor(
+            visibleLeft, topY, visibleRight - visibleLeft, bottomY - topY);
+
+        const bool hasAppendLane =
+            projection.draftLaneCount >
+            static_cast<std::uint32_t>(std::max(0, persistentDraftTrackCount));
+        const auto [begin, end] = *visibleDraftRange;
+        for ( std::uint32_t index = begin; index < end; ++index ) {
+            const auto bounds =
+                projection.bounds({ CanvasLaneKind::Draft, index });
+            if ( !bounds ) continue;
+
+            std::array<char, 32> labelBuffer{};
+            std::string_view     labelText{ "DRAFT +" };
+            if ( !hasAppendLane || index != 0U ) {
+                const auto number = hasAppendLane ? index : index + 1U;
+                const auto result = fmt::format_to_n(labelBuffer.data(),
+                                                     labelBuffer.size() - 1,
+                                                     "DRAFT {}",
+                                                     number);
+                *result.out       = '\0';
+                labelText         = std::string_view(
+                    labelBuffer.data(),
+                    static_cast<std::size_t>(result.out - labelBuffer.data()));
+            }
+            renderMarqueeCanvasAsciiText(
+                batcher,
+                labelText,
+                bounds->leftX + 4.0F,
+                topY + 4.0F,
+                LANE_LABEL_FONT_PIXEL_HEIGHT,
+                projection.player.singleTrackWidth - 8.0F,
+                draftLabel,
+                batcher.snapshot->snapshotSysTime);
+        }
+    }
+
     if ( projection.bgmLaneCount == 0 ) return;
     const auto visibleRange = projection.visibleBgmRange(0.0F, viewportWidth);
     if ( !visibleRange ) return;
 
-    const auto background =
-        bgmColor("bgm_tracks.background", { 0.035F, 0.055F, 0.075F, 0.92F });
-    const auto alternate =
-        bgmColor("bgm_tracks.alternate", { 0.055F, 0.08F, 0.105F, 0.92F });
+    const auto background = laneColor(BGM_TRACK_BACKGROUND_COLOR_KEY,
+                                      { 0.035F, 0.055F, 0.075F, 0.92F });
+    const auto alternate  = laneColor(BGM_TRACK_ALTERNATE_COLOR_KEY,
+                                      { 0.055F, 0.08F, 0.105F, 0.92F });
     const auto border =
-        bgmColor("bgm_tracks.border", { 0.32F, 0.48F, 0.62F, 0.55F });
-    const auto separator =
-        bgmColor("bgm_tracks.separator", { 0.28F, 0.78F, 0.94F, 0.95F });
+        laneColor(BGM_TRACK_BORDER_COLOR_KEY, { 0.32F, 0.48F, 0.62F, 0.55F });
+    const auto separator = laneColor(BGM_TRACK_SEPARATOR_COLOR_KEY,
+                                     { 0.28F, 0.78F, 0.94F, 0.95F });
     const auto label =
-        bgmColor("bgm_tracks.label", { 0.72F, 0.88F, 0.96F, 0.92F });
+        laneColor(BGM_TRACK_LABEL_COLOR_KEY, { 0.72F, 0.88F, 0.96F, 0.92F });
 
     const float visibleLeft  = std::max(0.0F, projection.bgmLeftX);
     const float visibleRight = std::min(viewportWidth, projection.bgmRightX);
@@ -210,7 +280,7 @@ void SampleRenderSystem::renderLaneLayout(
                                      labelText,
                                      bounds->leftX + 4.0F,
                                      topY + 4.0F,
-                                     BGM_LANE_LABEL_FONT_PIXEL_HEIGHT,
+                                     LANE_LABEL_FONT_PIXEL_HEIGHT,
                                      projection.player.singleTrackWidth - 8.0F,
                                      label,
                                      batcher.snapshot->snapshotSysTime);
@@ -271,9 +341,9 @@ void SampleRenderSystem::renderSamples(
         }
     }
     const auto sampleColor =
-        bgmColor("bgm_tracks.sample", { 0.36F, 0.72F, 0.92F, 0.96F });
+        laneColor(BGM_TRACK_SAMPLE_COLOR_KEY, { 0.36F, 0.72F, 0.92F, 0.96F });
     const auto offsetColor =
-        bgmColor("bgm_tracks.offset", { 0.96F, 0.56F, 0.28F, 0.92F });
+        laneColor(BGM_TRACK_OFFSET_COLOR_KEY, { 0.96F, 0.56F, 0.28F, 0.92F });
     const auto textColor = audioObjectLabelColor();
     const auto noteTextureIt =
         snapshot->uvMap.find(static_cast<std::uint32_t>(TextureID::Note));

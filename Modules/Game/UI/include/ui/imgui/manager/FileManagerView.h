@@ -340,6 +340,9 @@ private:
     Event::SubscriptionID    m_dropSubId{ 0 };
     Event::SubscriptionID    m_saveResultSubId{ 0 };
     Event::SubscriptionID    m_projectSavedSubId{ 0 };
+
+    /// @brief 项目目录重扫事件订阅 ID。
+    Event::SubscriptionID m_projectDirectoryRefreshedSubId{ 0 };
 };
 
 }  // namespace MMM::UI

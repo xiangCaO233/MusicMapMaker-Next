@@ -13,6 +13,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <ImGuiFileDialog.h>
@@ -25,6 +26,7 @@
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace MMM::UI
@@ -149,6 +151,28 @@ std::string sanitizeExportFileNamePart(std::string value)
     return value;
 }
 
+/// @brief 清理 IMD 资源包的同名前缀并移除会截断首段的下划线。
+/// @param value 原始歌曲名。
+/// @return 可同时用作 IMD 首段、背景图和音频文件主体的名称。
+std::string sanitizeImdPackagePrefix(std::string value)
+{
+    value = sanitizeExportFileNamePart(std::move(value));
+    for ( char& character : value ) {
+        switch ( character ) {
+        case '<':
+        case '>':
+        case ':':
+        case '"':
+        case '|':
+        case '?':
+        case '*':
+        case '_': character = '-'; break;
+        default: break;
+        }
+    }
+    return value.empty() ? "map" : value;
+}
+
 /// @brief 判断谱面是否包含 RM/IMD 无法保存的基础元数据。
 /// @param meta 基础谱面元数据。
 /// @return 存在不支持字段时返回 true。
@@ -213,14 +237,17 @@ void MenuUtil::openProjectFolderPicker()
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t* outPath = nullptr;
-        nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
+        nfdu8char_t*      outPath = nullptr;
+        const nfdresult_t result =
+            NativeFileDialog::pickFolder(&outPath, nullptr);
 
         if ( result == NFD_OKAY ) {
             Event::OpenProjectEvent ev;
             ev.m_projectPath = Config::utf8ToPath(outPath);
             Event::EventBus::instance().publish(ev);
-            NFD_FreePath(outPath);
+            NFD_FreePathU8(outPath);
+        } else if ( result == NFD_ERROR ) {
+            XERROR("NFD Error: {}", NFD_GetError());
         }
         return;
     }
@@ -255,12 +282,13 @@ void MenuUtil::openAudioImportPicker()
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "Audio Files",
                                            "mp3,ogg,wav,flac,opus,aac,m4a" } };
-        nfdresult_t result = NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+        nfdresult_t       result =
+            NativeFileDialog::openFile(&outPath, filters, 1, nullptr);
 
         if ( result == NFD_OKAY ) {
             Event::EventBus::instance().publish(
                 Event::AudioImportTriggerEvent{ outPath });
-            NFD_FreePath(outPath);
+            NFD_FreePathU8(outPath);
         } else if ( result == NFD_ERROR ) {
             XERROR("NFD Error: {}", NFD_GetError());
         }
@@ -365,6 +393,21 @@ std::string MenuUtil::makeExportFileNameForExtension(
                            sanitizeExportFileNamePart(title),
                            keyCount,
                            sanitizeExportFileNamePart(version));
+    }
+
+    if ( normalizedExt == ".zip" ) {
+        std::string title = "map";
+        if ( beatMap ) {
+            const auto& meta = beatMap->m_baseMapMetadata;
+            if ( !meta.title_unicode.empty() ) {
+                title = meta.title_unicode;
+            } else if ( !meta.title.empty() ) {
+                title = meta.title;
+            } else {
+                title = meta.name;
+            }
+        }
+        return sanitizeImdPackagePrefix(std::move(title)) + ".zip";
     }
 
     std::filesystem::path fileName = Config::utf8ToPath(currentFileName);

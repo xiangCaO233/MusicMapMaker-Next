@@ -1,5 +1,7 @@
 #include "config/AppConfig.h"
-#include "logic/EditorEngine.h"
+#include "ui/IEditorApplicationService.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 
 namespace MMM::UI
@@ -28,11 +30,14 @@ public:
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)context;
         (void)activation;
         auto& appConfig = Config::AppConfig::instance();
-        Logic::EditorEngine::instance().setEditorConfig(
-            appConfig.getEditorConfig());
+        if ( context.sourceManager ) {
+            if ( auto* service =
+                     context.sourceManager->getEditorApplicationService() ) {
+                service->updateEditorConfig(appConfig.getEditorConfig());
+            }
+        }
         appConfig.save();
     }
 };

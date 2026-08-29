@@ -298,7 +298,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -851,9 +851,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.timelineProfessionalMode =
         source.settings.timelineProfessionalMode;
     target.settings.showPreviewWindow = source.settings.showPreviewWindow;
-    target.settings.showToolLabels    = source.settings.showToolLabels;
-    target.settings.fixedToolWindow   = source.settings.fixedToolWindow;
-    target.settings.showManagerLabels = source.settings.showManagerLabels;
+    Config::preserveGlobalToolbarDisplaySettings(target.settings,
+                                                 source.settings);
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;
@@ -866,6 +865,7 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
     target.settings.autoSave             = source.settings.autoSave;
+    target.settings.autoBackup           = source.settings.autoBackup;
     target.settings.collaborationViewportRenderMode =
         source.settings.collaborationViewportRenderMode;
     target.settings.shortcutConfig = source.settings.shortcutConfig;
@@ -903,6 +903,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvents>(cmd) ||
+         std::holds_alternative<CmdUpdateBpmWithKeepSpeedSv>(cmd) ||
          std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
@@ -1238,10 +1239,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1418,6 +1419,7 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 {
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
+        setProjectAutoBackupOverride(project->m_settings.m_autoBackupOverride);
         const auto& workspace = project->m_settings.m_workspace;
         m_brushAudioResourceId.clear();
         m_brushAudioTrackType = AudioTrackType::Effect;
@@ -1530,6 +1532,7 @@ bool EditorEngine::closeProject()
     if ( !closeResult.m_closed || !closeResult.m_project ) {
         return false;
     }
+    setProjectAutoBackupOverride(std::nullopt);
 
     auto& audio = Audio::AudioManager::instance();
     audio.stop();
@@ -2564,10 +2567,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
                 if ( !preferredCameraId.empty() ) {
@@ -2581,6 +2584,15 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 restoreBrushAudioResourceUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
+                /// @brief 复用占位画布前的活动 Session，用于补交谱面切换事件。
+                const int32_t previousIndex = m_sessionRegistry.activeIndex();
+                if ( previousIndex >= 0 && previousIndex != i &&
+                     previousIndex < static_cast<int32_t>(sessions.size()) &&
+                     sessions[static_cast<size_t>(previousIndex)].session ) {
+                    sessions[static_cast<size_t>(previousIndex)]
+                        .session->requestAutoSave(
+                            AutoSaveTrigger::BeatmapSwitch);
+                }
                 m_sessionRegistry.setActiveIndex(i);
                 refreshMainAudioSyncPeerStateUnsafe();
                 m_sessionRegistry.publishSnapshotUnsafe();
@@ -2821,8 +2833,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
     const bool timelineReady = !sessions[index].isLogoPlaceholder &&
                                SessionUtils::activateAudioTimeline(ctx, false);
-    double     totalTime     = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
-    double     minTime       = -editorConfig.visual.getEffectiveVisualOffset();
+    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    double minTime   = -editorConfig.visual.getEffectiveVisualOffset();
     if ( minTime > totalTime ) minTime = totalTime;
     ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
     if ( timelineReady ) {
@@ -2910,7 +2922,10 @@ bool EditorEngine::refreshEditorConfigSnapshot(
     }
 
     std::lock_guard<std::mutex> lock(m_editorConfigMutex);
-    target         = m_editorConfig;
+    target = m_editorConfig;
+    if ( m_projectAutoBackupOverride ) {
+        target.settings.autoBackup = *m_projectAutoBackupOverride;
+    }
     targetRevision = m_editorConfigRevision.load(std::memory_order_relaxed);
     return true;
 }
@@ -2947,9 +2962,13 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
             m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
     }
 
+    Config::EditorConfig sessionConfig = updatedConfig;
     {
         std::lock_guard<std::mutex> lock(m_editorConfigMutex);
         m_editorConfig = updatedConfig;
+        if ( m_projectAutoBackupOverride ) {
+            sessionConfig.settings.autoBackup = *m_projectAutoBackupOverride;
+        }
         m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
 
@@ -2965,7 +2984,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 entry.session->pushCommand(
-                    LogicCommand(CmdUpdateEditorConfig{ updatedConfig }));
+                    LogicCommand(CmdUpdateEditorConfig{ sessionConfig }));
             }
         }
     }
@@ -2981,6 +3000,15 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // 发布配置更新事件，供 UI 层订阅
     Event::EventBus::instance().publish(
         Event::EditorConfigChangedEvent{ updatedConfig });
+}
+
+/// @brief 更新当前项目对软件级谱面自动备份配置的可选覆盖。
+void EditorEngine::setProjectAutoBackupOverride(
+    std::optional<Config::AutoBackupConfig> config)
+{
+    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    m_projectAutoBackupOverride = std::move(config);
+    m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
 void EditorEngine::saveProject()
@@ -3029,8 +3057,8 @@ bool EditorEngine::saveDirtyBeatmapsForPackaging()
 /// SessionRegistry 递归锁，以与 UI 的低频 SessionContext/ECS 读取串行化；锁内
 /// 普通路径禁止等待、文件系统操作、额外完整 entt 遍历、完整排序、try/catch
 /// 和可避免的 shared_ptr 拷贝。Unlimited 无播放命令的视觉维护轮次必须在锁
-/// 外合并，播放时钟和待处理命令不得受门控限制。元数据尾随保存仅允许在既有
-/// 低频超时分支阻塞。
+/// 外合并，播放时钟和待处理命令不得受门控限制。自动保存、自动备份与元数据
+/// 尾随保存仅允许在既有低频到期或事件分支阻塞。
 void EditorEngine::loop()
 {
     auto                    lastTime     = FrameLimitClock::now();
@@ -3184,7 +3212,8 @@ void EditorEngine::loop()
                         entry.session->hasPendingMetadataAutoSave();
                     const bool needsAutoSavePolling =
                         entry.session->needsAutoSavePolling(
-                            editorConfigSnapshot.settings.autoSave);
+                            editorConfigSnapshot.settings.autoSave,
+                            editorConfigSnapshot.settings.autoBackup);
                     bool shouldUpdateSession = isActiveSession;
                     if ( !shouldUpdateSession ) {
                         const bool needsRealtimeUpdate =
@@ -4069,6 +4098,13 @@ void EditorEngine::scanProjectDirectory()
     if ( syncResult.m_changed ) {
         markAudioTimelineDescriptorsDirtyUnsafe();
         saveProject();
+    }
+
+    if ( syncResult.m_scanSucceeded ) {
+        Event::EventBus::instance().publish(
+            Event::ProjectDirectoryRefreshedEvent{
+                .m_resourcesChanged = syncResult.m_changed,
+            });
     }
 }
 

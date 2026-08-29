@@ -94,6 +94,36 @@ bool markBatchNoteStorageDirty(
     return touchesFormal;
 }
 
+/// @brief 计算完整容纳草稿物件所需的持久化草稿轨道数量。
+/// @warning 编辑动作低频路径：仅遍历单个物件自身的 Polyline 子段。
+std::int32_t requiredDraftTrackCount(const NoteComponent& note)
+{
+    if ( !note.m_isDraft ) return 0;
+    std::int32_t required = 0;
+    const auto   includePart =
+        [&](::MMM::NoteType type, std::int32_t track, std::int32_t dtrack) {
+            required = std::max(required, -track);
+            if ( type == ::MMM::NoteType::FLICK ) {
+                required = std::max(required, -(track + dtrack));
+            }
+        };
+    includePart(note.m_type, note.m_trackIndex, note.m_dtrack);
+    for ( const auto& subNote : note.m_subNotes ) {
+        includePart(subNote.type, subNote.trackIndex, subNote.dtrack);
+    }
+    return required;
+}
+
+/// @brief 应用动作记录的草稿轨道数量并标记共享项目数据脏。
+void applyDraftTrackCount(SessionContext& ctx, std::int32_t count)
+{
+    const auto normalized = std::max(0, count);
+    if ( normalized == ctx.draftTrackCount ) return;
+    ctx.draftTrackCount       = normalized;
+    ctx.m_needsDraftNotesSync = true;
+    ctx.isTransformDirty      = true;
+}
+
 /// @brief 判断两个可选音符颜色是否相同。
 bool sameOptionalNoteColor(const std::optional<glm::vec4>& lhs,
                            const std::optional<glm::vec4>& rhs)
@@ -428,6 +458,17 @@ std::string BatchTimelineAction::getName() const
 
 void NoteAction::execute(SessionContext& ctx)
 {
+    if ( !m_beforeDraftTrackCount ) {
+        m_beforeDraftTrackCount = ctx.draftTrackCount;
+        m_afterDraftTrackCount =
+            m_after ? std::max(ctx.draftTrackCount,
+                               requiredDraftTrackCount(*m_after))
+                    : ctx.draftTrackCount;
+    }
+    if ( m_afterDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_afterDraftTrackCount);
+    }
+
     auto&                        reg                = ctx.noteRegistry;
     const bool                   hadPendingNoteSync = ctx.m_needsNotesSync;
     std::optional<NoteComponent> cacheBefore;
@@ -504,6 +545,10 @@ void NoteAction::execute(SessionContext& ctx)
 
 void NoteAction::undo(SessionContext& ctx)
 {
+    if ( m_beforeDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_beforeDraftTrackCount);
+    }
+
     auto&                        reg = ctx.noteRegistry;
     std::optional<NoteComponent> cacheBefore;
     std::optional<NoteComponent> cacheAfter;
@@ -551,6 +596,9 @@ void NoteAction::undo(SessionContext& ctx)
 
 void NoteAction::redo(SessionContext& ctx)
 {
+    if ( m_afterDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_afterDraftTrackCount);
+    }
     XINFO("[Redo] NoteAction");
     if ( m_type != Type::Update ) {
         execute(ctx);
@@ -611,6 +659,21 @@ std::string NoteAction::getName() const
 
 void BatchNoteAction::execute(SessionContext& ctx)
 {
+    if ( !m_beforeDraftTrackCount ) {
+        m_beforeDraftTrackCount = ctx.draftTrackCount;
+        auto requiredCount      = ctx.draftTrackCount;
+        for ( const auto& entry : m_entries ) {
+            if ( entry.after ) {
+                requiredCount = std::max(requiredCount,
+                                         requiredDraftTrackCount(*entry.after));
+            }
+        }
+        m_afterDraftTrackCount = requiredCount;
+    }
+    if ( m_afterDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_afterDraftTrackCount);
+    }
+
     auto& reg = ctx.noteRegistry;
     prepareBatchNoteIdentities(reg, m_entries);
     XINFO("[Action] BatchNoteAction: {} entries", m_entries.size());
@@ -660,6 +723,10 @@ void BatchNoteAction::execute(SessionContext& ctx)
 
 void BatchNoteAction::undo(SessionContext& ctx)
 {
+    if ( m_beforeDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_beforeDraftTrackCount);
+    }
+
     auto& reg = ctx.noteRegistry;
     XINFO("[Undo] BatchNoteAction: {} entries", m_entries.size());
     for ( auto& entry : m_entries ) {
@@ -725,6 +792,9 @@ void BatchNoteAction::undo(SessionContext& ctx)
 
 void BatchNoteAction::redo(SessionContext& ctx)
 {
+    if ( m_afterDraftTrackCount ) {
+        applyDraftTrackCount(ctx, *m_afterDraftTrackCount);
+    }
     XINFO("[Redo] BatchNoteAction");
     auto& reg = ctx.noteRegistry;
     for ( auto& entry : m_entries ) {

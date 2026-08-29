@@ -6,6 +6,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
+#include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -305,6 +306,28 @@ void renderScrollingTableText(const std::string& text, ImVec2 cursorPos,
 
 }  // namespace
 
+/// @brief 创建谱面管理器并订阅外部目录刷新通知。
+/// @param subViewName 子视图名称。
+BeatMapManagerView::BeatMapManagerView(const std::string& subViewName)
+    : ISubView(subViewName)
+{
+    m_projectDirectoryRefreshedSubId =
+        Event::EventBus::instance()
+            .subscribe<Event::ProjectDirectoryRefreshedEvent>(
+                [this](const Event::ProjectDirectoryRefreshedEvent&) {
+                    m_projectDirectoryRefreshPending.store(
+                        true, std::memory_order_release);
+                });
+}
+
+/// @brief 取消谱面管理器的目录刷新订阅。
+BeatMapManagerView::~BeatMapManagerView()
+{
+    Event::EventBus::instance()
+        .unsubscribe<Event::ProjectDirectoryRefreshedEvent>(
+            m_projectDirectoryRefreshedSubId);
+}
+
 /// @brief 获取谱面管理器中不可再换行控件所需的最小内容尺寸。
 /// @warning UI 热路径：子视图可见时每帧查询；仅保留轻量文本测量。
 ImVec2 BeatMapManagerView::getMinContentSize(float dpiScale) const
@@ -337,6 +360,11 @@ ImVec2 BeatMapManagerView::getMinContentSize(float dpiScale) const
 void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                   UIManager*     sourceManager)
 {
+    if ( m_projectDirectoryRefreshPending.exchange(
+             false, std::memory_order_acq_rel) ) {
+        m_beatmapSortCacheDirty = true;
+    }
+
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();

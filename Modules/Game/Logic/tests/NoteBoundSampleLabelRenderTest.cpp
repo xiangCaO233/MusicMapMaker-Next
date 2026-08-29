@@ -193,6 +193,7 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
         300.0F,
         4,
         0,
+        4,
         config,
         VIEWPORT_HEIGHT);
 }

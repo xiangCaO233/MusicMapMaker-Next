@@ -485,6 +485,39 @@ void from_json(const nlohmann::json& json, AutoSaveConfig& config)
         json.value("onNativeWindowFocusLost", true);
 }
 
+void to_json(nlohmann::json& json, const AutoBackupConfig& config)
+{
+    json = nlohmann::json{
+        { "mode", config.mode },
+        { "intervalUnit", config.intervalUnit },
+        { "intervalValue", std::clamp(config.intervalValue, 5, 60) },
+        { "onObjectModified", config.onObjectModified },
+        { "onBeatmapSwitch", config.onBeatmapSwitch },
+        { "onImGuiWindowFocusLost", config.onImGuiWindowFocusLost },
+        { "onNativeWindowFocusLost", config.onNativeWindowFocusLost },
+        { "maxBackupCount",
+          std::clamp(config.maxBackupCount,
+                     AUTO_BACKUP_COUNT_MIN,
+                     AUTO_BACKUP_COUNT_MAX) },
+    };
+}
+
+void from_json(const nlohmann::json& json, AutoBackupConfig& config)
+{
+    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.intervalUnit =
+        json.value("intervalUnit", AutoSaveIntervalUnit::Minutes);
+    config.intervalValue    = std::clamp(json.value("intervalValue", 5), 5, 60);
+    config.onObjectModified = json.value("onObjectModified", true);
+    config.onBeatmapSwitch  = json.value("onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+    config.onNativeWindowFocusLost =
+        json.value("onNativeWindowFocusLost", true);
+    config.maxBackupCount = std::clamp(json.value("maxBackupCount", 10),
+                                       AUTO_BACKUP_COUNT_MIN,
+                                       AUTO_BACKUP_COUNT_MAX);
+}
+
 void to_json(nlohmann::json& json, const TimeFormatPreference& preference)
 {
     json = "Clock";
@@ -582,6 +615,77 @@ void from_json(const nlohmann::json&            json,
     }
 }
 
+void to_json(nlohmann::json& json, const ToolbarStateToolVisibility& visibility)
+{
+    json = nlohmann::json{ { "move", visibility.move },
+                           { "marquee", visibility.marquee },
+                           { "draw", visibility.draw },
+                           { "colorBrush", visibility.colorBrush },
+                           { "colorEraser", visibility.colorEraser },
+                           { "layout", visibility.layout } };
+}
+
+void from_json(const nlohmann::json&       json,
+               ToolbarStateToolVisibility& visibility)
+{
+    const ToolbarStateToolVisibility defaults;
+    visibility.move        = json.value("move", defaults.move);
+    visibility.marquee     = json.value("marquee", defaults.marquee);
+    visibility.draw        = json.value("draw", defaults.draw);
+    visibility.colorBrush  = json.value("colorBrush", defaults.colorBrush);
+    visibility.colorEraser = json.value("colorEraser", defaults.colorEraser);
+    visibility.layout      = json.value("layout", defaults.layout);
+}
+
+void to_json(nlohmann::json&                           json,
+             const ToolbarIndependentButtonVisibility& visibility)
+{
+    json = nlohmann::json{ { "notePalette", visibility.notePalette },
+                           { "magnet", visibility.magnet },
+                           { "scrollTimingMapping",
+                             visibility.scrollTimingMapping },
+                           { "beatLineDisplay", visibility.beatLineDisplay },
+                           { "soundEffectTool", visibility.soundEffectTool },
+                           { "playback", visibility.playback },
+                           { "playbackSpeed", visibility.playbackSpeed },
+                           { "trackCount", visibility.trackCount },
+                           { "beatDivisor", visibility.beatDivisor } };
+}
+
+void from_json(const nlohmann::json&               json,
+               ToolbarIndependentButtonVisibility& visibility)
+{
+    const ToolbarIndependentButtonVisibility defaults;
+    visibility.notePalette = json.value("notePalette", defaults.notePalette);
+    visibility.magnet      = json.value("magnet", defaults.magnet);
+    visibility.scrollTimingMapping =
+        json.value("scrollTimingMapping", defaults.scrollTimingMapping);
+    visibility.beatLineDisplay =
+        json.value("beatLineDisplay", defaults.beatLineDisplay);
+    visibility.soundEffectTool =
+        json.value("soundEffectTool", defaults.soundEffectTool);
+    visibility.playback = json.value("playback", defaults.playback);
+    visibility.playbackSpeed =
+        json.value("playbackSpeed", defaults.playbackSpeed);
+    visibility.trackCount  = json.value("trackCount", defaults.trackCount);
+    visibility.beatDivisor = json.value("beatDivisor", defaults.beatDivisor);
+}
+
+void to_json(nlohmann::json& json, const ToolbarVisibilityConfig& visibility)
+{
+    json = nlohmann::json{ { "stateTools", visibility.stateTools },
+                           { "independentButtons",
+                             visibility.independentButtons } };
+}
+
+void from_json(const nlohmann::json& json, ToolbarVisibilityConfig& visibility)
+{
+    visibility.stateTools =
+        json.value("stateTools", ToolbarStateToolVisibility{});
+    visibility.independentButtons =
+        json.value("independentButtons", ToolbarIndependentButtonVisibility{});
+}
+
 void to_json(nlohmann::json& json, const CollaborationServerSettings& settings)
 {
     json = nlohmann::json{ { "address", settings.address },
@@ -613,6 +717,15 @@ void from_json(const nlohmann::json&        json,
          useTls != json.end() && useTls->is_boolean() ) {
         settings.useTls = useTls->get<bool>();
     }
+}
+
+void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
+                                          const EditorSettings& source)
+{
+    target.showToolLabels    = source.showToolLabels;
+    target.fixedToolWindow   = source.fixedToolWindow;
+    target.showManagerLabels = source.showManagerLabels;
+    target.toolbarVisibility = source.toolbarVisibility;
 }
 
 void to_json(nlohmann::json& json, const EditorSettings& settings)
@@ -664,6 +777,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "marqueeRounding", settings.marqueeRounding },
         { "saveFormatPreference", settings.saveFormatPreference },
         { "autoSave", settings.autoSave },
+        { "autoBackup", settings.autoBackup },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", settings.timeFormatPreference },
@@ -690,6 +804,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "showPreviewWindow", settings.showPreviewWindow },
         { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
+        { "toolbarVisibility", settings.toolbarVisibility },
         { "fixedToolWindow", settings.fixedToolWindow },
         { "showManagerLabels", settings.showManagerLabels },
         { "aesthetics", settings.aesthetics },
@@ -779,7 +894,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.marqueeRounding  = json.value("marqueeRounding", 0.0f);
     settings.saveFormatPreference =
         json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
-    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
+    settings.autoSave   = json.value("autoSave", AutoSaveConfig{});
+    settings.autoBackup = json.value("autoBackup", AutoBackupConfig{});
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);
     settings.timeFormatPreference =
@@ -817,9 +933,11 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.showPreviewWindow     = json.value("showPreviewWindow", true);
     settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
     settings.showToolLabels        = json.value("showToolLabels", false);
-    settings.fixedToolWindow       = json.value("fixedToolWindow", true);
-    settings.showManagerLabels     = json.value("showManagerLabels", true);
-    settings.aesthetics    = json.value("aesthetics", UIAestheticsConfig());
+    settings.toolbarVisibility =
+        json.value("toolbarVisibility", ToolbarVisibilityConfig{});
+    settings.fixedToolWindow   = json.value("fixedToolWindow", true);
+    settings.showManagerLabels = json.value("showManagerLabels", true);
+    settings.aesthetics        = json.value("aesthetics", UIAestheticsConfig());
     settings.colorPalettes = json.value("colorPalettes", ColorPaletteConfig());
     settings.defaultColorPaletteSchemeName =
         json.value("defaultColorPaletteSchemeName",

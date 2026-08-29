@@ -7,6 +7,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/NoteAction.h"
@@ -195,7 +196,9 @@ void detachMarqueeSelection(SessionContext& ctx)
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.enableDraftLanes);
+                                      ctx.lastConfig.settings.enableDraftLanes,
+                                      ctx.draftTrackCount,
+                                      true);
     const auto lane = projection.laneAt(ctx.lastMainCanvasMousePos.x);
     return lane ? std::optional<CanvasLaneKind>{ lane->kind } : std::nullopt;
 }
@@ -1250,7 +1253,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         camera.horizontalOffsetX,
         true,
         m_ctx.lastConfig.settings.enableBmsEditing,
-        m_ctx.lastConfig.settings.enableDraftLanes);
+        m_ctx.lastConfig.settings.enableDraftLanes,
+        m_ctx.draftTrackCount,
+        true);
     const auto lane = projection.laneAt(cmd.mouseX);
     if ( !lane || lane->kind != CanvasLaneKind::Bgm ) {
         m_ctx.lastActionMessage = "音频资源只能放置到 BGM 轨道区";
@@ -1282,10 +1287,10 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
     timestamp = std::max(0.0, timestamp);
 
     SampleComponent sample{
-        .m_timestamp = timestamp,
-        .m_offsetMs  = 0,
-        .m_track     = static_cast<std::uint32_t>(
-            lane->absoluteTrack(projection.playerLaneCount)),
+        .m_timestamp       = timestamp,
+        .m_offsetMs        = 0,
+        .m_track           = static_cast<std::uint32_t>(lane->absoluteTrack(
+            projection.playerLaneCount, projection.draftLaneCount)),
         .m_audioResourceId = resource->m_id,
         .m_volume          = 1.0F,
     };

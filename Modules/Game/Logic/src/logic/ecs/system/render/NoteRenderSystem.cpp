@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <string>
 
 #include "logic/ecs/system/HitFXSystem.h"
 
@@ -37,6 +38,39 @@ constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
 
 /// @brief Timeline 专业模式轨道数量。
 constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 4;
+
+/// @brief 草稿轨道纹理叠加色键，避免快照热路径构造临时字符串。
+const std::string DRAFT_TRACK_TEXTURE_TINT_COLOR_KEY =
+    "draft_tracks.texture_tint";
+/// @brief 草稿轨道覆盖色键，避免快照热路径构造临时字符串。
+const std::string DRAFT_TRACK_OVERLAY_COLOR_KEY = "draft_tracks.overlay";
+/// @brief 草稿轨道边框色键，避免快照热路径构造临时字符串。
+const std::string DRAFT_TRACK_BORDER_COLOR_KEY = "draft_tracks.border";
+/// @brief 草稿轨道判定区叠加色键，避免快照热路径构造临时字符串。
+const std::string DRAFT_TRACK_JUDGMENT_TINT_COLOR_KEY =
+    "draft_tracks.judgment_tint";
+
+/// @brief 判断皮肤颜色是否为缺省的洋红哨兵。
+/// @param color 皮肤颜色。
+/// @return 颜色为缺省哨兵时返回 true。
+bool isMissingSkinColor(const Config::Color& color)
+{
+    return color.r == 1.0F && color.g == 0.0F && color.b == 1.0F &&
+           color.a == 1.0F;
+}
+
+/// @brief 获取可回退的主画布轨道皮肤颜色。
+/// @param key 皮肤颜色键。
+/// @param fallback 缺失时使用的颜色。
+/// @return 转换后的 GLM 颜色。
+/// @warning
+/// 快照热路径：只接收静态键并执行内存内皮肤颜色查询，不得访问文件系统。
+glm::vec4 laneColor(const std::string& key, glm::vec4 fallback)
+{
+    const auto color = Config::SkinManager::instance().getColor(key);
+    if ( isMissingSkinColor(color) ) return fallback;
+    return { color.r, color.g, color.b, color.a };
+}
 
 /// @brief 判断当前拖动中的玩家物件是否已进入 BGM 轨道区。
 /// @param registry 玩家物件注册表。
@@ -162,7 +196,7 @@ void NoteRenderSystem::generateSnapshot(
     const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, int32_t bgmTrackCount,
+    int32_t trackCount, int32_t bgmTrackCount, int32_t draftTrackCount,
     const Config::EditorConfig& config, float mainViewportHeight,
     HitFXSystem* hitFXSystem)
 {
@@ -282,11 +316,27 @@ void NoteRenderSystem::generateSnapshot(
                                       tempTY,
                                       tempBY,
                                       tempSTW);
+        if ( isMainCanvas && config.settings.enableDraftLanes ) {
+            const auto visibleDraftTrackCount =
+                std::max(0, draftTrackCount) + 1;
+            const float draftLeftX =
+                tempLX - static_cast<float>(visibleDraftTrackCount) * tempSTW;
+            hitFXSystem->generateSnapshot(batcher,
+                                          renderTime,
+                                          config,
+                                          visibleDraftTrackCount,
+                                          judgmentLineY,
+                                          draftLeftX,
+                                          tempTY,
+                                          tempBY,
+                                          tempSTW,
+                                          true);
+        }
     }
     uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
 
     // 提取并暂存打击特效命令
-    std::vector<UI::BrushDrawCmd> deferredHitCmds;
+    std::vector<Common::Render::CanvasDrawCmd> deferredHitCmds;
     if ( fxCmdEnd > fxCmdStart ) {
         deferredHitCmds.assign(snapshot->cmds.begin() + fxCmdStart,
                                snapshot->cmds.end());
@@ -344,6 +394,7 @@ void NoteRenderSystem::generateSnapshot(
                                                      trackCount,
                                                      config,
                                                      bgmTrackCount,
+                                                     draftTrackCount,
                                                      cache,
                                                      leftX,
                                                      rightX,
@@ -433,7 +484,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             const float visibleDraftLeft =
                 std::max(0.0F, laneProjection.draftLeftX);
             const float visibleDraftRight =
@@ -514,7 +567,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             noteRenderClipLeftX = laneProjection.draftLeftX;
             if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
                 noteRenderRightX = laneProjection.bgmRightX;
@@ -548,7 +603,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             SampleRenderSystem::renderSamples(sampleRegistry,
                                               sortedSampleEntities,
                                               sortedSampleMaxEndPrefix,
@@ -581,7 +638,9 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes);
+                                              config.settings.enableDraftLanes,
+                                              draftTrackCount,
+                                              true);
             const float clipLeft = std::max(0.0F, laneProjection.draftLeftX);
             const float clipRight =
                 std::min(viewportWidth, laneProjection.bgmRightX);
@@ -1198,8 +1257,8 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
-    float& rightX, float& topY, float& bottomY, float& trackAreaW,
+    int32_t bgmTrackCount, int32_t draftTrackCount, const ScrollCache* cache,
+    float& leftX, float& rightX, float& topY, float& bottomY, float& trackAreaW,
     float& singleTrackW, float renderScaleY)
 {
     BackgroundRenderSystem::render(
@@ -1255,46 +1314,61 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
                                           config.settings.enableBmsEditing,
-                                          config.settings.enableDraftLanes);
+                                          config.settings.enableDraftLanes,
+                                          draftTrackCount,
+                                          true);
         const float visibleDraftLeft =
             std::max(0.0F, laneProjection.draftLeftX);
         const float visibleDraftRight =
             std::min(viewportWidth, laneProjection.draftRightX);
         if ( visibleDraftRight > visibleDraftLeft ) {
+            const auto trackTint = laneColor(DRAFT_TRACK_TEXTURE_TINT_COLOR_KEY,
+                                             { 1.0F, 1.0F, 1.0F, 1.0F });
+            const auto overlay   = laneColor(DRAFT_TRACK_OVERLAY_COLOR_KEY,
+                                             { 0.08F, 0.12F, 0.18F, 0.48F });
+            const auto border    = laneColor(DRAFT_TRACK_BORDER_COLOR_KEY,
+                                             { 0.35F, 0.55F, 0.75F, 1.0F });
+            const auto judgmentTint =
+                laneColor(DRAFT_TRACK_JUDGMENT_TINT_COLOR_KEY,
+                          { 1.0F, 1.0F, 1.0F, 1.0F });
             batcher.setScissor(visibleDraftLeft,
                                topY,
                                visibleDraftRight - visibleDraftLeft,
                                bottomY - topY);
-            NoteRenderSystem::drawTrackBackground(batcher,
-                                                  trackCount,
-                                                  laneProjection.draftLeftX,
-                                                  topY,
-                                                  bottomY,
-                                                  singleTrackW);
+            NoteRenderSystem::drawTrackBackground(
+                batcher,
+                static_cast<std::int32_t>(laneProjection.draftLaneCount),
+                laneProjection.draftLeftX,
+                topY,
+                bottomY,
+                singleTrackW,
+                trackTint);
             batcher.setTexture(TextureID::None);
             batcher.pushQuad(
                 laneProjection.draftLeftX,
                 bottomY,
                 laneProjection.draftRightX - laneProjection.draftLeftX,
                 bottomY - topY,
-                { 0.08F, 0.12F, 0.18F, 0.48F });
+                overlay);
             batcher.pushStrokeRect(laneProjection.draftLeftX,
                                    topY,
                                    laneProjection.draftRightX,
                                    bottomY,
                                    config.visual.trackBoxLineWidth,
-                                   { 0.35F, 0.55F, 0.75F, 1.0F });
+                                   border);
             NoteRenderSystem::drawJudgmentArea(
                 batcher,
-                trackCount,
+                static_cast<std::int32_t>(laneProjection.draftLaneCount),
                 laneProjection.draftLeftX,
                 judgmentLineY,
                 singleTrackW,
                 laneProjection.draftRightX - laneProjection.draftLeftX,
-                config);
+                config,
+                judgmentTint);
         }
         SampleRenderSystem::renderLaneLayout(batcher,
                                              laneProjection,
+                                             draftTrackCount,
                                              bgmTrackCount,
                                              viewportWidth,
                                              topY,

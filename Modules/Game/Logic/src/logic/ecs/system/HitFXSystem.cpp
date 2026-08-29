@@ -31,7 +31,9 @@ std::optional<std::size_t> HitFXSystem::loopingEffectFrameIndex(
     return static_cast<std::size_t>(wrappedFrame);
 }
 
-void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
+void HitFXSystem::triggerAudio(const HitEvent&             ev,
+                               std::int32_t                playerTrackCount,
+                               std::int32_t                draftTrackCount,
                                const Config::EditorConfig& config)
 {
     auto& audioManager = Audio::AudioManager::instance();
@@ -70,11 +72,18 @@ void HitFXSystem::triggerAudio(const HitEvent& ev, std::int32_t trackCount,
     const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
-        ev, trackCount, config.settings.sfxConfig.enableStereoHitEffects);
+        ev,
+        playerTrackCount,
+        config.settings.sfxConfig.enableStereoHitEffects,
+        draftTrackCount);
+    const auto areaTrack =
+        areaTrackIndexForEvent(ev, playerTrackCount, draftTrackCount);
     const auto playbackControl = Audio::KeySoundPlaybackControl{
         .enabled          = true,
-        .playerTrackIndex = ev.trackIndex >= 0
-                                ? static_cast<std::uint32_t>(ev.trackIndex)
+        .area             = ev.isDraft ? Audio::KeySoundPlaybackArea::Draft
+                                       : Audio::KeySoundPlaybackArea::Player,
+        .playerTrackIndex = areaTrack >= 0
+                                ? static_cast<std::uint32_t>(areaTrack)
                                 : Audio::KEY_SOUND_INVALID_TRACK_INDEX,
         .effectGroup      = hasBoundSoundEffect(ev)
                                 ? Audio::KeySoundEffectGroup::Bound
@@ -136,25 +145,39 @@ HitEffectRenderBounds HitFXSystem::calculateRenderBounds(
     };
 }
 
-Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
-    const HitEvent& ev, std::int32_t trackCount, bool enabled)
+std::int32_t HitFXSystem::areaTrackIndexForEvent(
+    const HitEvent& ev, std::int32_t playerTrackCount,
+    std::int32_t draftTrackCount) noexcept
 {
-    if ( !enabled || trackCount <= 0 ) return {};
+    const auto effectiveDraftCount =
+        draftTrackCount >= 0 ? draftTrackCount : playerTrackCount;
+    return ev.isDraft ? ev.trackIndex + std::max(effectiveDraftCount, 0)
+                      : ev.trackIndex;
+}
 
-    // 轨道索引从画面左侧向右递增，因此左声道增益应随索引增大而减小。
-    // 右声道始终使用其补数，确保启用后两侧增益之和为 1。
-    const auto leftGainAtTrack = [trackCount](int trackIndex) {
+Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
+    const HitEvent& ev, std::int32_t playerTrackCount, bool enabled,
+    std::int32_t draftTrackCount)
+{
+    const auto areaTrackCount =
+        ev.isDraft && draftTrackCount >= 0 ? draftTrackCount : playerTrackCount;
+    if ( !enabled || areaTrackCount <= 0 ) return {};
+
+    // 草稿区与玩家区分别按各自从左到右的轨道中心计算声像。
+    const auto leftGainAtTrack = [areaTrackCount](int trackIndex) {
         const int boundedTrack =
-            std::clamp(trackIndex, 0, static_cast<int>(trackCount) - 1);
+            std::clamp(trackIndex, 0, static_cast<int>(areaTrackCount) - 1);
         const float rightPosition = (static_cast<float>(boundedTrack) + 0.5F) /
-                                    static_cast<float>(trackCount);
+                                    static_cast<float>(areaTrackCount);
         return 1.0F - rightPosition;
     };
 
-    const float startLeft = leftGainAtTrack(ev.trackIndex);
-    const float endLeft = ev.type == ::MMM::NoteType::FLICK
-                              ? leftGainAtTrack(ev.trackIndex + ev.trackOffset)
-                              : startLeft;
+    const int areaTrack =
+        areaTrackIndexForEvent(ev, playerTrackCount, draftTrackCount);
+    const float startLeft = leftGainAtTrack(areaTrack);
+    const float endLeft   = ev.type == ::MMM::NoteType::FLICK
+                                ? leftGainAtTrack(areaTrack + ev.trackOffset)
+                                : startLeft;
     return {
         .startLeft  = startLeft,
         .startRight = 1.0F - startLeft,
@@ -197,6 +220,7 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
     newEffect.startTime    = ev.timestamp;
     newEffect.holdDuration = ev.duration;
     newEffect.trackIndex   = ev.trackIndex;
+    newEffect.isDraft      = ev.isDraft;
     newEffect.trackSpan    = ev.trackSpan;
     newEffect.trackOffset  = ev.trackOffset;
     newEffect.isHold       = (ev.type == ::MMM::NoteType::HOLD);
@@ -301,6 +325,7 @@ void HitFXSystem::updateKps(double                       animateTime,
     if ( !std::isfinite(animateTime) ) return;
 
     for ( const auto& event : events ) {
+        if ( event.isDraft ) continue;
         const auto hitTrack = static_cast<std::int64_t>(event.trackIndex) +
                               static_cast<std::int64_t>(event.trackOffset);
         if ( !std::isfinite(event.timestamp) || hitTrack < 0 ||
@@ -344,11 +369,16 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
                                    const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,
                                    float leftX, float topY, float bottomY,
-                                   float singleTrackW)
+                                   float singleTrackW, bool renderDraftEffects)
 {
     if ( !config.visual.enableHitEffects || m_trackActiveEffects.empty() ||
          trackCount <= 0 || singleTrackW <= 0.0f )
         return;
+
+    batcher.setScissor(leftX,
+                       topY,
+                       singleTrackW * static_cast<float>(trackCount),
+                       bottomY - topY);
 
     RenderSnapshot* snapshot    = batcher.snapshot;
     auto&           skinManager = Config::SkinManager::instance();
@@ -356,6 +386,8 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     const auto      layoutMode  = skinManager.getHitEffectLayoutMode();
 
     for ( const auto& [track, active] : m_trackActiveEffects ) {
+        (void)track;
+        if ( active.isDraft != renderDraftEffects ) continue;
         const auto* seq =
             skinManager.getEffectSequence("note.effect." + active.effectKey);
         if ( !seq || seq->frames.empty() ) continue;
@@ -388,10 +420,12 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         const float fixedWidth = singleTrackW * config.visual.noteScaleX;
         const float fixedHeight =
             (singleTrackW / texAspect) * config.visual.noteScaleY;
+        const int renderTrack =
+            active.isDraft ? active.trackIndex + trackCount : active.trackIndex;
         const HitEffectRenderBounds bounds =
             calculateRenderBounds(layoutMode,
                                   trackCount,
-                                  active.trackIndex,
+                                  renderTrack,
                                   active.trackOffset,
                                   judgmentLineY,
                                   leftX,

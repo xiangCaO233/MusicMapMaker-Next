@@ -4,6 +4,7 @@
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
 #include "ui/imgui/menu/items/MainMenuSeparatorItem.h"
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
+#include "ui/imgui/menu/items/MainMenuToolbarVisibilityItem.h"
 #include <memory>
 #include <utility>
 
@@ -26,6 +27,7 @@ MainMenuViewMenu::MainMenuViewMenu()
         MainMenuItemTextKind::TranslationKey,
         createAnnotationDetailsToggleAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
+    registerItem(std::make_unique<MainMenuToolbarVisibilityItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.view.show_tool_labels",
         MainMenuItemTextKind::TranslationKey,
