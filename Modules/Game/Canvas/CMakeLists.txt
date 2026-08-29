@@ -86,6 +86,14 @@ target_include_directories(TimelineTimingTooltipTest
 target_link_libraries(TimelineTimingTooltipTest PRIVATE MMM)
 add_test(NAME TimelineTimingTooltipTest COMMAND TimelineTimingTooltipTest)
 
+# 物件拖拽边缘自动平移使用纯数值计算，覆盖速度和两侧轨道区域边界。
+mmm_add_test_executable(Canvas ObjectDragAutoPanTest
+                        tests/ObjectDragAutoPanTest.cpp)
+target_include_directories(ObjectDragAutoPanTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ObjectDragAutoPanTest PRIVATE Logic 3rd_glm)
+add_test(NAME ObjectDragAutoPanTest COMMAND ObjectDragAutoPanTest)
+
 # 主画布悬浮层选择使用纯候选去重，覆盖同一物件的多个相交命中框。
 mmm_add_test_executable(Canvas HoverLayerSelectionTest
                         tests/HoverLayerSelectionTest.cpp)

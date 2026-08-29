@@ -5,6 +5,7 @@
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/CanvasBlockedGesture.h"
 #include "canvas/HoverLayerSelection.h"
+#include "canvas/ObjectDragAutoPan.h"
 #include "canvas/TimelineCanvas.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
@@ -123,64 +124,6 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
 
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
-
-/// @brief 计算物件拖拽靠近单轴视口边缘时的内容平移量。
-/// @param coordinate 指针在该轴上的局部坐标。
-/// @param extent 视口在该轴上的尺寸。
-/// @param deltaTime 当前 UI 帧间隔。
-/// @param sensitivity 用户配置的边缘滚动灵敏度。
-/// @return 内容应在本帧平移的逻辑像素；靠近起始边缘时为正。
-/// @warning UI 热路径：物件拖动期间每帧调用，只做常量数值运算。
-float objectDragAutoPanAxisDelta(float coordinate, float extent,
-                                 float deltaTime, float sensitivity)
-{
-    if ( !std::isfinite(coordinate) || !std::isfinite(extent) ||
-         extent <= 1.0F || !std::isfinite(sensitivity) ||
-         sensitivity <= 0.0F ) {
-        return 0.0F;
-    }
-
-    const float margin      = std::clamp(extent * 0.08F, 24.0F, 64.0F);
-    float       penetration = 0.0F;
-    float       direction   = 0.0F;
-    if ( coordinate < margin ) {
-        penetration = margin - coordinate;
-        direction   = 1.0F;
-    } else if ( coordinate > extent - margin ) {
-        penetration = coordinate - (extent - margin);
-        direction   = -1.0F;
-    }
-    if ( penetration <= 0.0F ) return 0.0F;
-
-    const float frameSeconds = std::clamp(
-        std::isfinite(deltaTime) && deltaTime > 0.0F ? deltaTime : 1.0F / 60.0F,
-        1.0F / 240.0F,
-        1.0F / 15.0F);
-    const float     ramp = std::clamp(penetration / margin, 0.0F, 2.0F);
-    constexpr float PIXELS_PER_SECOND = 900.0F;
-    return direction * PIXELS_PER_SECOND * ramp * ramp * sensitivity *
-           frameSeconds;
-}
-
-/// @brief 计算左键物件拖拽的二维边缘自动平移量。
-/// @param mousePos 指针相对画布的位置。
-/// @param viewportWidth 画布宽度。
-/// @param viewportHeight 画布高度。
-/// @param deltaTime 当前 UI 帧间隔。
-/// @param sensitivity 用户配置的边缘滚动灵敏度。
-/// @return 直接传给 CmdPanCanvas 的二维内容位移。
-/// @warning UI 热路径：物件拖动期间每帧调用，不分配内存。
-glm::vec2 objectDragAutoPanDelta(glm::vec2 mousePos, float viewportWidth,
-                                 float viewportHeight, float deltaTime,
-                                 float sensitivity)
-{
-    return {
-        objectDragAutoPanAxisDelta(
-            mousePos.x, viewportWidth, deltaTime, sensitivity),
-        objectDragAutoPanAxisDelta(
-            mousePos.y, viewportHeight, deltaTime, sensitivity),
-    };
-}
 
 /// @brief 从渲染快照实例取得实际文字内容边界。
 /// @param instance 组件实例快照。
@@ -4040,7 +3983,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     (currentSnapshot->currentTool == Logic::EditTool::Move ||
                      currentSnapshot->currentTool ==
                          Logic::EditTool::Marquee) ) {
-            const glm::vec2 autoPanDelta =
+            glm::vec2 autoPanDelta =
                 currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying
                     ? objectDragAutoPanDelta(
                           { localMousePos.x, localMousePos.y },
@@ -4050,6 +3993,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                           std::max(0.0F,
                                    visual.previewConfig.edgeScrollSensitivity))
                     : glm::vec2{ 0.0F, 0.0F };
+            autoPanDelta.x = clampObjectDragHorizontalAutoPanDelta(
+                autoPanDelta.x, targetWidth, laneProjection);
             const bool autoPanned = std::abs(autoPanDelta.x) > 0.001F ||
                                     std::abs(autoPanDelta.y) > 0.001F;
             if ( autoPanned ) {
