@@ -690,36 +690,6 @@ const char* annotationTargetLabelKey(
     return "ui.annotation.target.timestamp";
 }
 
-/// @brief 计算一条物件批注连线在轨道区中的起点横坐标。
-/// @param item 批注展示数据。
-/// @param projection 当前画布横向投影。
-/// @param fallbackX 无有效物件轨道时使用的批注栏中心。
-/// @return 对应玩家物件、自动采样或批注栏中心的横坐标。
-/// @warning UI 热路径：每张可见详情卡片调用一次，只执行常量级投影查询。
-float annotationConnectorSourceX(
-    const Common::Render::AnnotationRenderItem& item,
-    const Logic::CanvasLaneProjection& projection, float fallbackX)
-{
-    if ( item.track < 0 ) return fallbackX;
-
-    std::optional<Logic::CanvasLaneBounds> bounds;
-    const auto track = static_cast<std::uint32_t>(item.track);
-    if ( item.targetKind ==
-         ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
-        bounds = projection.bounds({ Logic::CanvasLaneKind::Player, track });
-    } else if ( item.targetKind ==
-                ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
-        if ( track < projection.playerLaneCount ) {
-            bounds =
-                projection.bounds({ Logic::CanvasLaneKind::Player, track });
-        } else {
-            bounds = projection.bounds({ Logic::CanvasLaneKind::Bgm,
-                                         track - projection.playerLaneCount });
-        }
-    }
-    return bounds ? (bounds->leftX + bounds->rightX) * 0.5F : fallbackX;
-}
-
 /// @brief 绘制当前可见批注的避让卡片与物件连线。
 /// @param markers 当前主画布已裁剪的批注时间戳分组。
 /// @param projection 当前画布横向投影。

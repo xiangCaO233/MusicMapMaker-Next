@@ -123,6 +123,51 @@ bool testMissingTargetHasNoHint()
     return !MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
 }
 
+/// @brief 验证草稿物件使用负轨道投影连到草稿区并支持悬浮提示。
+/// @return 连线起点位于目标草稿轨中心且提示边界命中草稿物件时返回 true。
+bool testDraftTargetUsesDraftLaneProjection()
+{
+    const auto entity = static_cast<entt::entity>(13);
+    MMM::Common::Render::AnnotationRenderItem item;
+    item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.targetEntity = entity;
+    item.track        = -2;
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 3, true);
+    const float sourceX =
+        MMM::Canvas::annotationConnectorSourceX(item, projection, 512.0F);
+
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        { entity,
+          MMM::Common::Render::HoverPart::Head,
+          -1,
+          sourceX - 20.0F,
+          70.0F,
+          40.0F,
+          20.0F,
+          MMM::Logic::ChartObjectKind::DraftNote },
+    };
+    const auto bounds =
+        MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    return near(sourceX, -50.0F) && bounds && near(bounds->left, -75.0F) &&
+           near(bounds->right, -25.0F);
+}
+
+/// @brief 验证无效负轨不会被夹到最左草稿轨。
+/// @return 超出草稿区范围时回退到批注栏中心坐标。
+bool testInvalidDraftTrackUsesAnnotationGutterFallback()
+{
+    MMM::Common::Render::AnnotationRenderItem item;
+    item.targetKind       = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.track            = -5;
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 3, true);
+    return near(
+        MMM::Canvas::annotationConnectorSourceX(item, projection, 512.0F),
+        512.0F);
+}
+
 }  // namespace
 
 /// @brief 覆盖批注悬浮时解析连线目标几何的规则。
@@ -132,7 +177,9 @@ int main()
     return testTimestampAnnotationHasNoTargetHint() &&
                    testPolylineSubTargetUsesMatchingHitboxes() &&
                    testAudioSampleTargetMergesVisibleParts() &&
-                   testMissingTargetHasNoHint()
+                   testMissingTargetHasNoHint() &&
+                   testDraftTargetUsesDraftLaneProjection() &&
+                   testInvalidDraftTrackUsesAnnotationGutterFallback()
                ? 0
                : 1;
 }
