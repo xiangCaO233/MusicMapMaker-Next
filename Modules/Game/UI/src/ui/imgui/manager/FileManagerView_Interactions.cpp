@@ -10,7 +10,6 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/layout/box/CLayBox.h"
-#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
@@ -241,12 +240,12 @@ void FileManagerView::openFolderPicker()
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
-        nfdresult_t  result  = NativeFileDialog::pickFolder(&outPath, nullptr);
+        nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
             Event::OpenProjectEvent ev;
             ev.m_projectPath = Config::utf8ToPath(outPath);
             Event::EventBus::instance().publish(ev);
-            NFD_FreePathU8(outPath);
+            NFD_FreePath(outPath);
         }
     } else {
         IGFD::FileDialogConfig fdConfig;

@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -10,7 +11,6 @@
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -395,7 +395,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 double hoverAudioTime  = currentHoverAudioTime;
 
                 const auto timeText =
-                    MMM::UI::Utils::formatCanvasTime(hoverVisualTime, snapshot);
+                    Canvas::formatCanvasTime(hoverVisualTime, snapshot);
                 ImGui::SetTooltip("%s", timeText.c_str());
 
                 if ( ImGui::IsItemActive() ) {

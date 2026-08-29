@@ -7,16 +7,6 @@
 namespace MMM::UI
 {
 
-/// @brief 创建一个共享边框的关联设置项容器。
-CLayVBox& SettingsView::addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
-                                        const char* id)
-{
-    auto& group = getSection(sectionIndex++);
-    group.setDecorated(true).setSpacing(4).setPadding(8, 8, 6, 6);
-    parent.addLayout(id, group, Sizing::Grow(), Sizing::Fit());
-    return group;
-}
-
 /// @brief 添加一行标准设置项。
 /// @param parent 接收该行的父级纵向布局。
 /// @param rowIndex 当前布局行索引，会在添加过程中递增。
@@ -26,17 +16,10 @@ CLayVBox& SettingsView::addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
 /// @param dangerLabel 是否使用危险色绘制标签。
 void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   const char* label, float labelWidth,
-                                  CLayBox::DrawFunc widget, bool dangerLabel,
-                                  bool decorated)
+                                  CLayBox::DrawFunc widget, bool dangerLabel)
 {
     auto& row = getRow(rowIndex++);
-    row.setDecorated(decorated)
-        .setPadding(decorated ? 8 : 0,
-                    decorated ? 8 : 0,
-                    decorated ? 6 : 2,
-                    decorated ? 6 : 2)
-        .setSpacing(8)
-        .setAlignment(Alignment::Center());
+    row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
     std::string labelId = "R" + std::to_string(rowIndex) + "_L_" + label;
 
@@ -85,7 +68,7 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                        widget(r, h);
                    });
 
-    float rowH = ImGui::GetFrameHeight() + (decorated ? 12.0f : 4.0f);
+    float rowH = ImGui::GetFrameHeight() + 8.0f;
     parent.addLayout(
         (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));
 }
@@ -102,7 +85,7 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
 void SettingsView::addRadioSetting(
     CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex, const char* label,
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
-    int& current, bool& changed, bool decorated)
+    int& current, bool& changed)
 {
     // 获取当前面板的实际可用宽度，并将剩余空间全部分配给控件
     float totalWidth = ImGui::GetContentRegionAvail().x;
@@ -116,13 +99,7 @@ void SettingsView::addRadioSetting(
     }
 
     auto& row = getRow(rowIndex++);
-    row.setDecorated(decorated)
-        .setPadding(decorated ? 8 : 0,
-                    decorated ? 8 : 0,
-                    decorated ? 6 : 2,
-                    decorated ? 6 : 2)
-        .setSpacing(8)
-        .setAlignment(Alignment::Center());
+    row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
     std::string labelId = "S" + std::to_string(sectionIndex) + "_R" +
                           std::to_string(rowIndex) + "_L_" + label;
@@ -171,19 +148,14 @@ void SettingsView::addRadioSetting(
             optId.c_str(),
             Sizing::Fixed(itemW),
             Sizing::Fixed(ImGui::GetFrameHeight()),
-            [optLabel = optLabel,
-             optValue = optValue,
-             optionId = optId,
-             &current,
-             &changed](Clay_BoundingBox r, bool) {
+            [optLabel = optLabel, optValue = optValue, &current, &changed](
+                Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::PushID(optionId.c_str());
                 if ( ::MMM::UI::FeedbackRadioButton(optLabel.c_str(),
                                                     current == optValue) ) {
                     current = optValue;
                     changed = true;
                 }
-                ImGui::PopID();
             });
 
         currentLineW += itemW + 12.0f;

@@ -9,7 +9,6 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectStorage.h"
 #include "ui/UIManager.h"
-#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -160,7 +159,7 @@ nfdresult_t pickNativeParentFolder(nfdu8char_t**      outPath,
 {
     const nfdu8char_t* defaultPathPtr =
         defaultPath.empty() ? nullptr : defaultPath.c_str();
-    nfdresult_t result = NativeFileDialog::pickFolder(outPath, defaultPathPtr);
+    nfdresult_t result = NFD_PickFolderU8(outPath, defaultPathPtr);
     if ( result != NFD_ERROR || defaultPathPtr == nullptr ) {
         return result;
     }
@@ -173,7 +172,7 @@ nfdresult_t pickNativeParentFolder(nfdu8char_t**      outPath,
         NFD_FreePathU8(*outPath);
         *outPath = nullptr;
     }
-    return NativeFileDialog::pickFolder(outPath, nullptr);
+    return NFD_PickFolderU8(outPath, nullptr);
 }
 
 }  // namespace

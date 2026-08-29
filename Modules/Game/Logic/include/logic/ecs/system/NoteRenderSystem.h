@@ -4,7 +4,6 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <entt/entt.hpp>
-#include <glm/vec4.hpp>
 #include <vector>
 
 namespace MMM::Logic
@@ -42,7 +41,6 @@ public:
      * @param judgmentLineY 判定线位置 (视口空间)
      * @param trackCount 玩家轨道数量
      * @param bgmTrackCount 持久化 BGM 轨道数量
-     * @param draftTrackCount 持久化草稿轨道数量
      * @param config 编辑器配置
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      * @param hitFXSystem 打击特效系统 (可选)
@@ -59,9 +57,8 @@ public:
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount, int32_t bgmTrackCount,
-        int32_t draftTrackCount, const Config::EditorConfig& config,
-        float              mainViewportHeight = 1000.0f,
-        class HitFXSystem* hitFXSystem        = nullptr);
+        const Config::EditorConfig& config, float mainViewportHeight = 1000.0f,
+        class HitFXSystem* hitFXSystem = nullptr);
 
 private:
     // --- 内部逻辑拆分方法 ---
@@ -92,10 +89,9 @@ private:
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
         int32_t trackCount, const Config::EditorConfig& config,
-        int32_t bgmTrackCount, int32_t draftTrackCount,
-        const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-        float& bottomY, float& trackAreaW, float& singleTrackW,
-        float renderScaleY);
+        int32_t bgmTrackCount, const ScrollCache* cache, float& leftX,
+        float& rightX, float& topY, float& bottomY, float& trackAreaW,
+        float& singleTrackW, float renderScaleY);
 
     /// @warning 热路径：每次画布快照生成基础轨道布局时执行；仅允许
     /// O(trackCount) 绘制。
@@ -109,22 +105,17 @@ private:
                                   float& bottomY, float& trackAreaW,
                                   float& singleTrackW, float renderScaleY);
 
-    /// @param color 轨道纹理叠加色。
     /// @warning 热路径：轨道布局生成时执行；循环次数必须受 trackCount
     /// 和可见高度限制。
     static void drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                     float leftX, float topY, float bottomY,
-                                    float     singleTrackW,
-                                    glm::vec4 color = {
-                                        1.0F, 1.0F, 1.0F, 1.0F });
+                                    float singleTrackW);
 
-    /// @param color 判定区纹理或回退线条的叠加色。
     /// @warning 热路径：轨道布局生成时执行；禁止读取磁盘或访问全量 ECS。
     static void drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                  float leftX, float judgmentLineY,
                                  float singleTrackW, float trackAreaW,
-                                 const Config::EditorConfig& config,
-                                 glm::vec4 color = { 1.0F, 1.0F, 1.0F, 1.0F });
+                                 const Config::EditorConfig& config);
 
     /// @param allowHoverSubdivisionPreview
     /// 是否允许绘制主画布玩家轨道的悬浮检视或编辑手势分拍预览。
@@ -163,27 +154,15 @@ private:
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
     struct NoteRenderContext {
-        float     noteW;
-        float     noteH;
-        float     baseAspect;
-        glm::vec4 colorTap;
-        glm::vec4 colorHead;
-        glm::vec4 colorHold;
-        glm::vec4 colorEnd;
-        glm::vec4 colorNode;
-        glm::vec4 colorArrow;
-        /// @brief 草稿 Tap 默认颜色；物件自定义颜色仍有更高优先级。
-        glm::vec4 colorDraftTap;
-        /// @brief 草稿 Hold 头部默认颜色。
-        glm::vec4 colorDraftHead;
-        /// @brief 草稿 Hold 主体默认颜色。
-        glm::vec4 colorDraftHold;
-        /// @brief 草稿 Hold 尾部默认颜色。
-        glm::vec4 colorDraftEnd;
-        /// @brief 草稿 Polyline 节点默认颜色。
-        glm::vec4 colorDraftNode;
-        /// @brief 草稿 Flick 箭头默认颜色。
-        glm::vec4          colorDraftArrow;
+        float              noteW;
+        float              noteH;
+        float              baseAspect;
+        glm::vec4          colorTap;
+        glm::vec4          colorHead;
+        glm::vec4          colorHold;
+        glm::vec4          colorEnd;
+        glm::vec4          colorNode;
+        glm::vec4          colorArrow;
         const ScrollCache* cache;
         double             currentAbsY;
         double             currentTime;

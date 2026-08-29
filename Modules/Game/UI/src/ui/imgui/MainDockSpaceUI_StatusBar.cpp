@@ -1,12 +1,12 @@
-#include "common/render/RenderSnapshotBuffer.h"
+#include "canvas/CanvasContentVisibility.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
-#include "ui/utils/CanvasContentVisibility.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -20,8 +20,7 @@ namespace
 /// @param snapshot 当前活动画布快照。
 /// @return 已按 UI 当前帧补偿后的显示时间，单位秒。
 /// @warning UI 热路径：每帧状态栏绘制调用；只做常量级时间计算。
-double resolveStatusBarAnimateTime(
-    const Common::Render::RenderSnapshot& snapshot)
+double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
 {
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
@@ -189,7 +188,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
             sourceManager ? &sourceManager->getProjectOpenProgress() : nullptr;
         const bool projectTransitionInProgress =
             sourceManager && sourceManager->isProjectTransitionInProgress();
-        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer;
+        std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer;
         if ( projectOpenProgress &&
              (projectOpenProgress->active || projectTransitionInProgress) ) {
             const ProjectOpenProgressState initialProgress;
@@ -206,13 +205,13 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         }
         if ( syncBuffer ) {
             auto snapshot = syncBuffer->getReadingSnapshot();
-            if ( snapshot && MMM::UI::Utils::shouldShowBeatmapDetails(
-                                 snapshot->hasBeatmap) ) {
+            if ( snapshot &&
+                 Canvas::shouldShowBeatmapDetails(snapshot->hasBeatmap) ) {
                 // 判定线时间 (常驻)
                 const double displayedTime =
                     resolveStatusBarAnimateTime(*snapshot);
                 const auto currentTimeText =
-                    MMM::UI::Utils::formatCanvasTime(displayedTime, snapshot);
+                    Canvas::formatCanvasTime(displayedTime, snapshot);
                 ImGui::SetCursorPosY(offsetY);
                 ImGui::Text("%s: %s",
                             TR("ui.canvas.time").data(),
@@ -230,9 +229,8 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     (!std::isfinite(visibleEnd) ||
                      snapshot->hoveredTime <= visibleEnd + 1.0);
                 if ( snapshot->isHoveringCanvas && hasValidHoveredTime ) {
-                    const auto hoveredTimeText =
-                        MMM::UI::Utils::formatCanvasTime(snapshot->hoveredTime,
-                                                         snapshot);
+                    const auto hoveredTimeText = Canvas::formatCanvasTime(
+                        snapshot->hoveredTime, snapshot);
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

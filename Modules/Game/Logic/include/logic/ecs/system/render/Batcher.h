@@ -12,21 +12,21 @@ using BackgroundFillMode = MMM::Config::BackgroundFillMode;
 
 // 内部批处理器，负责根据 TextureID 自动切分 DrawCall
 struct Batcher {
-    RenderSnapshot*                             snapshot;
-    std::vector<Common::Render::CanvasDrawCmd>* targetCmds;
-    TextureID                                   currentTex = TextureID::None;
-    Common::Render::CanvasDrawCmd               currentCmd;
+    RenderSnapshot*                snapshot;
+    std::vector<UI::BrushDrawCmd>* targetCmds;
+    TextureID                      currentTex = TextureID::None;
+    UI::BrushDrawCmd               currentCmd;
 
-    Batcher(RenderSnapshot*                             s,
-            std::vector<Common::Render::CanvasDrawCmd>* cmds = nullptr)
+    Batcher(RenderSnapshot* s, std::vector<UI::BrushDrawCmd>* cmds = nullptr)
         : snapshot(s)
     {
         targetCmds                 = cmds ? cmds : &s->cmds;
         currentCmd.indexOffset     = static_cast<uint32_t>(s->indices.size());
         currentCmd.vertexOffset    = 0;
         currentCmd.indexCount      = 0;
+        currentCmd.texture         = VK_NULL_HANDLE;
         currentCmd.customTextureId = 0;
-        currentCmd.scissor         = { 0, 0, 8192U, 8192U };
+        currentCmd.scissor         = vk::Rect2D{ { 0, 0 }, { 8192, 8192 } };
     }
 
     void setScissor(float x, float y, float w, float h)
@@ -36,11 +36,11 @@ struct Batcher {
         int32_t ir = static_cast<int32_t>(std::max(0.0f, std::ceil(x + w)));
         int32_t ib = static_cast<int32_t>(std::max(0.0f, std::ceil(y + h)));
 
-        Common::Render::CanvasScissor nextScissor;
-        nextScissor.x      = ix;
-        nextScissor.y      = iy;
-        nextScissor.width  = static_cast<uint32_t>(std::max(0, ir - ix));
-        nextScissor.height = static_cast<uint32_t>(std::max(0, ib - iy));
+        vk::Rect2D nextScissor;
+        nextScissor.offset.x      = ix;
+        nextScissor.offset.y      = iy;
+        nextScissor.extent.width  = static_cast<uint32_t>(std::max(0, ir - ix));
+        nextScissor.extent.height = static_cast<uint32_t>(std::max(0, ib - iy));
 
         if ( currentCmd.indexCount > 0 && currentCmd.scissor != nextScissor ) {
             targetCmds->push_back(currentCmd);
@@ -116,7 +116,7 @@ struct Batcher {
         }
         uint32_t baseIndex = static_cast<uint32_t>(snapshot->vertices.size());
 
-        Common::Render::CanvasVertex v1, v2, v3, v4;
+        Graphic::Vertex::VKBasicVertex v1, v2, v3, v4;
         // p1: 左下, p2: 右下, p3: 右上, p4: 左上
         v1.pos = { x, y, 0.0f };
         v2.pos = { x + w, y, 0.0f };
@@ -231,7 +231,7 @@ struct Batcher {
         }
         uint32_t baseIndex = static_cast<uint32_t>(snapshot->vertices.size());
 
-        Common::Render::CanvasVertex v1, v2, v3, v4;
+        Graphic::Vertex::VKBasicVertex v1, v2, v3, v4;
         v1.pos = { p1.x, p1.y, 0.0f };
         v2.pos = { p2.x, p2.y, 0.0f };
         v3.pos = { p3.x, p3.y, 0.0f };
@@ -305,7 +305,7 @@ struct Batcher {
                 const int segments = 6;
                 uint32_t  centerIdx =
                     static_cast<uint32_t>(snapshot->vertices.size());
-                Common::Render::CanvasVertex center;
+                Graphic::Vertex::VKBasicVertex center;
                 center.pos   = { cx, cy, 0.0f };
                 center.color = { color.r, color.g, color.b, color.a };
 
@@ -323,7 +323,7 @@ struct Batcher {
                 for ( int i = 0; i <= segments; ++i ) {
                     float ang =
                         startAng + (endAng - startAng) * (float)i / segments;
-                    Common::Render::CanvasVertex v;
+                    Graphic::Vertex::VKBasicVertex v;
                     v.pos   = { cx + r * std::cos(ang),
                                 cy + r * std::sin(ang),
                                 0.0f };

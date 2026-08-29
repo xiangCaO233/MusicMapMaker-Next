@@ -1,22 +1,17 @@
 #pragma once
 
 #include "canvas/CanvasSnapshotPrepare.h"
-#include "common/render/AnnotationRenderData.h"
-#include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "mmm/timing/Timing.h"
-#include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <array>
-#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -24,6 +19,7 @@
 namespace MMM::Logic
 {
 class BeatmapSession;
+struct RenderSnapshot;
 }  // namespace MMM::Logic
 
 namespace MMM::Canvas
@@ -34,20 +30,15 @@ namespace MMM::Canvas
  * 停靠在侧边栏与主画布之间，显示小节线、拍线以及 BPM/流速变更标记。
  */
 class TimelineCanvas : public UI::IRenderableView,
-                       public UI::IParallelUiPreparable,
-                       public UI::ICanvasView
+                       public UI::IParallelUiPreparable
 {
 public:
-    TimelineCanvas(
-        const std::string& name, uint32_t w, uint32_t h,
-        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer);
+    TimelineCanvas(const std::string& name, uint32_t w, uint32_t h,
+                   std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer);
     ~TimelineCanvas() override = default;
 
     // IUIView 接口
     void update(UI::UIManager* sourceManager) override;
-
-    /// @brief 安全转换为画布能力接口。
-    UI::ICanvasView* asCanvasView() override { return this; }
 
     /// @brief 安全转换为 UI 并行准备接口。
     /// @return 当前时间线画布的并行准备接口。
@@ -92,55 +83,32 @@ public:
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
-    bool isTimingPointsTableOpen() const override
-    {
-        return m_isTableWindowOpen;
-    }
+    bool isTimingPointsTableOpen() const { return m_isTableWindowOpen; }
 
     /// @brief 设置时间点批量编辑表格窗口打开状态。
     /// @param open 是否打开表格窗口。
-    void setTimingPointsTableOpen(bool open) override
-    {
-        m_isTableWindowOpen = open;
-    }
-
-    /// @brief 获取批注表窗口是否打开。
-    /// @return 批注表窗口当前是否打开。
-    bool isAnnotationTableOpen() const override
-    {
-        return m_isAnnotationTableWindowOpen;
-    }
-
-    /// @brief 设置批注表窗口打开状态。
-    /// @param open 是否打开批注表窗口。
-    void setAnnotationTableOpen(bool open) override
-    {
-        m_isAnnotationTableWindowOpen = open;
-    }
+    void setTimingPointsTableOpen(bool open) { m_isTableWindowOpen = open; }
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
-    void requestFocus() override;
+    void requestFocus();
 
     /// @brief 获取时间线窗口当前所在的 ImGui Dock 节点。
     /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
-    ImGuiID getDockId() const override;
+    ImGuiID getDockId() const;
 
     /// @brief 判断时间线上一帧是否拥有 Timing 编辑焦点。
     /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
-    bool wasFocusedLastFrame() const override { return m_wasFocusedLastFrame; }
+    bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
 
     /// @brief 判断时间线是否正在拖动 Timing 框选区域。
     /// @return 正在框选时返回 true。
     /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
-    bool isTimingMarqueeSelecting() const override
-    {
-        return m_isTimingMarqueeSelecting;
-    }
+    bool isTimingMarqueeSelecting() const { return m_isTimingMarqueeSelecting; }
 
     /// @brief 判断时间线是否正在通过抓取工具拖动 Timing。
     /// @return 正在拖动 Timing 时返回 true。
     /// @warning UI 热路径：空格快捷键按下时读取；只返回 UI 本地状态。
-    bool isTimingDragging() const override { return m_isTimingDragging; }
+    bool isTimingDragging() const { return m_isTimingDragging; }
 
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
@@ -190,20 +158,6 @@ private:
     // 渲染时间点表格大窗口
     void renderTimingPointsTableWindow();
 
-    /// @brief 渲染可查看完整正文并跳转定位的批注表窗口。
-    /// @warning UI 热路径：仅在窗口打开时绘制；全量批注只在版本变化时复制，
-    /// 普通帧必须通过 ImGuiListClipper 限制行绘制数量。
-    void renderAnnotationTableWindow();
-
-    /// @brief 批注缓存版本变化时刷新表格行。
-    /// @param beatmapKey 当前表格绑定的谱面键。
-    /// @param revision 当前快照发布的批注缓存版本。
-    /// @return 成功取得与快照匹配的全量批注时返回 true。
-    /// @warning UI 低频刷新路径：只在谱面切换或批注缓存变化时短暂持有
-    /// Session 锁并复制全量批注，禁止无条件每帧调用。
-    bool refreshAnnotationTableRows(std::string_view beatmapKey,
-                                    std::uint64_t    revision);
-
     /// @brief 开始跟踪一次“保持画布速度”创建出的 BPM/Scroll 联动。
     /// @param time 新建 BPM 与 Scroll 所在时间点。
     void beginKeepSpeedBinding(double time);
@@ -211,8 +165,7 @@ private:
     /// @brief 刷新当前“保持画布速度”联动关联的实体。
     /// @param elements 当前时间点表格展示的完整事件列表。
     void refreshKeepSpeedBinding(
-        const std::vector<Common::Render::TimelineInteractiveElement>&
-            elements);
+        const std::vector<Logic::TimelineInteractiveElement>& elements);
 
     /// @brief 判断表格行是否属于当前临时联动。
     /// @param entity 当前行实体。
@@ -404,15 +357,6 @@ private:
         Graphic::Vertex::Color color;
     };
 
-    /// @brief 批注表中一条已经解析到实际谱面位置的行。
-    struct AnnotationTableRow {
-        /// @brief 批注实际展示时间，单位秒。
-        double timestamp{ 0.0 };
-
-        /// @brief 批注正文、作者与目标信息。
-        Common::Render::AnnotationRenderItem item;
-    };
-
     /// @brief 收集当前快照中可交互的 Timing 目标。
     /// @return 当前可见 Timing 目标列表。
     std::vector<TimelineHitTarget> collectVisibleTimingTargets() const;
@@ -459,16 +403,14 @@ private:
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
 
-    std::string                                           m_canvasName;
-    bool                                                  m_needReload{ true };
-    std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;
-    Common::Render::RenderSnapshot* m_currentSnapshot{ nullptr };
+    std::string                               m_canvasName;
+    bool                                      m_needReload{ true };
+    std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
+    Logic::RenderSnapshot*                    m_currentSnapshot{ nullptr };
 
     // 弹窗状态
     bool m_isPopupOpen{ false };
     bool m_isTableWindowOpen{ false };
-    /// @brief 批注表非模态窗口是否打开。
-    bool m_isAnnotationTableWindowOpen{ false };
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
     bool m_shouldFocusNextFrame{ false };
     /// @brief 时间线上一帧是否拥有 Timing 编辑焦点。
@@ -487,16 +429,6 @@ private:
     ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
     std::string m_tableBeatmapKey;
-    /// @brief 批注表绑定的谱面快照键。
-    std::string m_annotationTableBeatmapKey;
-    /// @brief 批注表已经同步的逻辑缓存版本。
-    std::uint64_t m_annotationTableRevision{
-        std::numeric_limits<std::uint64_t>::max()
-    };
-    /// @brief 批注表按实际时间排序的全量行缓存。
-    std::vector<AnnotationTableRow> m_annotationTableRows;
-    /// @brief 当前在详情区查看的批注行；空值表示没有可查看项。
-    std::optional<std::size_t> m_selectedAnnotationTableRow;
     /// @brief 下一帧表格是否需要滚动到当前判定线时间附近。
     bool m_tableScrollToCurrentTimePending{ false };
     /// @brief 表格待滚动定位的目标时间，单位秒。
@@ -523,8 +455,6 @@ private:
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
     std::string  m_editType;  ///< @brief 编辑中的 Timing 类型名称
-    /// @brief 应用 BPM 编辑时是否新增或更新保持预设 BPM 流速的 SV。
-    bool m_keepSpeedOnBpmEdit{ false };
 
     // 创建弹窗状态
     bool   m_isCreatePopupOpen{ false };
@@ -616,7 +546,7 @@ private:
     float m_timingDrawPreviewY{ 0.0f };
 
     /// @brief 当前被 UI 侧交互修饰过的 Timeline 快照。
-    Common::Render::RenderSnapshot* m_decoratedTimelineSnapshot{ nullptr };
+    Logic::RenderSnapshot* m_decoratedTimelineSnapshot{ nullptr };
 
     /// @brief 修饰前快照顶点数量。
     size_t m_decoratedTimelineVertexCount{ 0 };
@@ -646,7 +576,7 @@ private:
     float m_lastAppliedYOffset{ 0.0f };
 
     /// @brief 上一次应用偏移的快照指针
-    Common::Render::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 
     /// @brief 后台准备出的时间线快照消费结果。
     PreparedCanvasSnapshot m_preparedSnapshot;

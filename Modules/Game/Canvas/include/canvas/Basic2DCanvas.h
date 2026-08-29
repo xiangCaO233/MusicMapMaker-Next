@@ -4,10 +4,9 @@
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
-#include "common/render/RenderSnapshotBuffer.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
-#include "ui/ICanvasView.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <glm/glm.hpp>
@@ -26,17 +25,20 @@ namespace MMM::Event
 struct GLFWDropEvent;
 }
 
+namespace MMM::Logic
+{
+struct RenderSnapshot;
+}
+
 namespace MMM::Canvas
 {
 class Basic2DCanvas : public UI::IRenderableView,
-                      public UI::IParallelUiPreparable,
-                      public UI::ICanvasView
+                      public UI::IParallelUiPreparable
 {
 public:
-    Basic2DCanvas(
-        const std::string& name, uint32_t w, uint32_t h,
-        std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer,
-        const std::string&                                    cameraId = "");
+    Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h,
+                  std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer,
+                  const std::string&                        cameraId = "");
     Basic2DCanvas(Basic2DCanvas&&)                 = delete;
     Basic2DCanvas(const Basic2DCanvas&)            = delete;
     Basic2DCanvas& operator=(Basic2DCanvas&&)      = delete;
@@ -54,23 +56,20 @@ public:
     bool isOpen() const override;
 
     /// @brief 请求关闭画布，复用未保存确认弹窗拦截 dirty 状态
-    void requestClose() override;
+    void requestClose();
 
     /// @brief 消费用户取消关闭操作的标记
-    bool consumeCloseCancelled() override;
+    bool consumeCloseCancelled();
 
     /// @brief 请求下一次显示时停靠到主编辑区
-    void requestDockToCenter() override;
+    void requestDockToCenter();
 
     /// @brief 请求下一次更新时将画布窗口聚焦到前台。
-    void requestFocus() override;
+    void requestFocus();
 
     /// @brief 获取画布当前所在的 ImGui Dock 节点。
     /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
-    ImGuiID getDockId() const override;
-
-    /// @brief 安全转换为画布能力接口。
-    UI::ICanvasView* asCanvasView() override { return this; }
+    ImGuiID getDockId() const;
 
     /// @brief 安全转换为 UI 并行准备接口。
     /// @return 当前画布的并行准备接口。
@@ -208,10 +207,10 @@ private:
     /// @brief 同步缓冲区
     /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update
     /// 中不得复制该 shared_ptr。
-    std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;
+    std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
 
     /// @brief 当前正在使用的渲染快照
-    Common::Render::RenderSnapshot* m_currentSnapshot{ nullptr };
+    Logic::RenderSnapshot* m_currentSnapshot{ nullptr };
 
     /// @brief 缓存spv源码，避免重复读盘
     std::unordered_map<std::string, std::vector<std::string>>
@@ -325,7 +324,7 @@ private:
     float m_lastAppliedYOffset{ 0.0f };
 
     /// @brief 上一次应用偏移的快照指针 (用于检测快照是否更新)
-    Common::Render::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 
     /// @brief 后台准备出的画布快照消费结果。
     PreparedCanvasSnapshot m_preparedSnapshot;

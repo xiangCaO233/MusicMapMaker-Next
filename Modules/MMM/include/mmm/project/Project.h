@@ -1,7 +1,6 @@
 #pragma once
 #include "AudioResource.h"
 #include "ProjectSettings.h"
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -35,9 +34,6 @@ struct ProjectDraftLaneGroup {
     /// @brief 使用编辑器音符协议保存的草稿物件载荷。
     std::string m_notePayload;
 
-    /// @brief 持久化草稿轨道数量；零表示旧项目尚未声明。
-    std::int32_t m_trackCount{ 0 };
-
     /// @brief 进程内变更版本，仅用于打开会话之间的增量刷新。
     std::uint64_t m_runtimeRevision{ 0U };
 
@@ -48,7 +44,6 @@ struct ProjectDraftLaneGroup {
         json = nlohmann::json{
             { "m_mainAudioResourceId", group.m_mainAudioResourceId },
             { "m_notePayload", group.m_notePayload },
-            { "m_trackCount", group.m_trackCount },
         };
     }
 
@@ -59,7 +54,6 @@ struct ProjectDraftLaneGroup {
         group.m_mainAudioResourceId =
             json.value("m_mainAudioResourceId", std::string{});
         group.m_notePayload     = json.value("m_notePayload", std::string{});
-        group.m_trackCount      = std::max(0, json.value("m_trackCount", 0));
         group.m_runtimeRevision = 0U;
     }
 };

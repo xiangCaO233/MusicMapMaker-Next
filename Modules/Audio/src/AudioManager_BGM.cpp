@@ -446,46 +446,6 @@ float AudioManager::getPlayerKeySoundTrackGain(
     return m_keySoundControls->getPlayerTrackGain(trackIndex);
 }
 
-/// @brief 设置整个草稿轨道区的 Key 音静音状态。
-void AudioManager::setDraftKeySoundAreaMuted(bool muted) noexcept
-{
-    m_keySoundControls->setDraftAreaMuted(muted);
-}
-
-/// @brief 查询整个草稿轨道区是否已静音。
-bool AudioManager::isDraftKeySoundAreaMuted() const noexcept
-{
-    return m_keySoundControls->isDraftAreaMuted();
-}
-
-/// @brief 设置指定草稿轨道的 Key 音静音状态。
-void AudioManager::setDraftKeySoundTrackMuted(std::uint32_t trackIndex,
-                                              bool          muted) noexcept
-{
-    m_keySoundControls->setDraftTrackMuted(trackIndex, muted);
-}
-
-/// @brief 查询指定草稿轨道是否已静音。
-bool AudioManager::isDraftKeySoundTrackMuted(
-    std::uint32_t trackIndex) const noexcept
-{
-    return m_keySoundControls->isDraftTrackMuted(trackIndex);
-}
-
-/// @brief 设置指定草稿轨道的 Key 音线性增益。
-void AudioManager::setDraftKeySoundTrackGain(std::uint32_t trackIndex,
-                                             float         gain) noexcept
-{
-    m_keySoundControls->setDraftTrackGain(trackIndex, gain);
-}
-
-/// @brief 查询指定草稿轨道的 Key 音线性增益。
-float AudioManager::getDraftKeySoundTrackGain(
-    std::uint32_t trackIndex) const noexcept
-{
-    return m_keySoundControls->getDraftTrackGain(trackIndex);
-}
-
 /// @brief 设置整个 BGM 轨道区的 Key 音静音状态。
 void AudioManager::setBgmKeySoundAreaMuted(bool muted) noexcept
 {

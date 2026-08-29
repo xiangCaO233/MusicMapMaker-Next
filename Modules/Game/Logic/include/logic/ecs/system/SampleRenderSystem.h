@@ -21,18 +21,16 @@ struct ScrollCache;
 class SampleRenderSystem
 {
 public:
-    /// @brief 绘制当前视口可见的草稿与 BGM 轨道标题及 BGM 静态布局。
+    /// @brief 绘制当前视口可见的 BGM 轨道静态布局。
     /// @param batcher 画布批处理器。
-    /// @param projection 草稿区、玩家区与 BGM 区统一轨道投影。
-    /// @param persistentDraftTrackCount 持久化草稿轨道数量。
+    /// @param projection 玩家区与 BGM 区统一轨道投影。
     /// @param persistentBgmTrackCount 持久化 BGM 轨道数量。
     /// @param viewportWidth 视口宽度。
     /// @param topY 轨道区上边界。
     /// @param bottomY 轨道区下边界。
-    /// @warning 主画布快照热路径：只允许遍历当前可见的草稿与 BGM 轨道。
+    /// @warning 主画布快照热路径：只允许遍历当前可见 BGM 轨道。
     static void renderLaneLayout(Batcher&                    batcher,
                                  const CanvasLaneProjection& projection,
-                                 std::int32_t persistentDraftTrackCount,
                                  std::int32_t persistentBgmTrackCount,
                                  float viewportWidth, float topY,
                                  float bottomY);

@@ -37,9 +37,6 @@ struct PackageCandidateFile {
 
     /// @brief 谱面是否含 Flick/折线，决定是否显示 MCZ 上架 mode_ext 选项。
     bool hasStoreModeExtEligibleElements{ false };
-
-    /// @brief 谱面默认 Main 音频是否为非 OGG，决定原点对齐选项是否可用。
-    bool hasNonOggMainAudio{ false };
 };
 
 /// @brief 打包转换前临时编辑的目标谱面元数据。
@@ -115,9 +112,6 @@ struct PackageDialogState {
 
     /// @brief MCZ 打包时是否删除 Main 音轨自动采样的 vol 字段。
     bool stripMainAudioVolumeFromMalodyExport{ false };
-
-    /// @brief MCZ 打包时是否把非 OGG Main 音频和首 BPM 红线对齐到原点。
-    bool alignNonOggMainAudioToOrigin{ false };
 };
 
 }  // namespace MMM::UI

@@ -21,7 +21,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
-#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
@@ -893,12 +892,12 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
-        nfdresult_t  result  = NativeFileDialog::pickFolder(&outPath, nullptr);
+        nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
             m_temporaryProjectSaveInProgress = true;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSaveTemporaryProject{ outPath }));
-            NFD_FreePathU8(outPath);
+            NFD_FreePath(outPath);
         }
         return;
     }

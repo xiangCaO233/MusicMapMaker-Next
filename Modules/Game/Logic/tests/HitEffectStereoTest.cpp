@@ -4,9 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 
-#include <algorithm>
 #include <cmath>
-#include <cstdint>
 
 namespace
 {
@@ -66,56 +64,6 @@ bool testFlickMovesAcrossChannels()
          !near(middle.left, 0.5F) || !near(middle.right, 0.5F) ||
          !near(envelope.endLeft + envelope.endRight, 1.0F) ) {
         XERROR("Flick hit effect did not move linearly between track centers");
-        return false;
-    }
-    return true;
-}
-
-/// @brief 验证负坐标草稿轨正确映射到草稿区局部轨道和声像。
-/// @return 四轨草稿最左与最右轨分别映射到局部 0 和 3 时返回 true。
-bool testDraftTrackMappingAndStereo()
-{
-    using HitFXSystem  = MMM::Logic::System::HitFXSystem;
-    auto leftDraft     = makeEvent(MMM::NoteType::NOTE, -4);
-    auto rightDraft    = makeEvent(MMM::NoteType::NOTE, -1);
-    leftDraft.isDraft  = true;
-    rightDraft.isDraft = true;
-
-    const auto leftEnvelope =
-        HitFXSystem::stereoGainEnvelopeForEvent(leftDraft, 4, true);
-    const auto rightEnvelope =
-        HitFXSystem::stereoGainEnvelopeForEvent(rightDraft, 4, true);
-    if ( HitFXSystem::areaTrackIndexForEvent(leftDraft, 4) != 0 ||
-         HitFXSystem::areaTrackIndexForEvent(rightDraft, 4) != 3 ||
-         !near(leftEnvelope.startLeft, 0.875F) ||
-         !near(leftEnvelope.startRight, 0.125F) ||
-         !near(rightEnvelope.startLeft, 0.125F) ||
-         !near(rightEnvelope.startRight, 0.875F) ) {
-        XERROR("Draft hit event did not use draft-local lane mapping");
-        return false;
-    }
-    return true;
-}
-
-/// @brief 验证草稿轨数量独立增长后仍使用草稿区自身宽度定位声像。
-/// @return 六轨草稿最左与最右轨分别映射到局部 0 和 5 时返回 true。
-bool testDynamicDraftTrackMappingAndStereo()
-{
-    using HitFXSystem  = MMM::Logic::System::HitFXSystem;
-    auto leftDraft     = makeEvent(MMM::NoteType::NOTE, -6);
-    auto rightDraft    = makeEvent(MMM::NoteType::NOTE, -1);
-    leftDraft.isDraft  = true;
-    rightDraft.isDraft = true;
-
-    const auto leftEnvelope =
-        HitFXSystem::stereoGainEnvelopeForEvent(leftDraft, 4, true, 6);
-    const auto rightEnvelope =
-        HitFXSystem::stereoGainEnvelopeForEvent(rightDraft, 4, true, 6);
-    if ( HitFXSystem::areaTrackIndexForEvent(leftDraft, 4, 6) != 0 ||
-         HitFXSystem::areaTrackIndexForEvent(rightDraft, 4, 6) != 5 ||
-         !near(leftEnvelope.startLeft, 11.0F / 12.0F) ||
-         !near(rightEnvelope.startRight, 11.0F / 12.0F) ) {
-        XERROR("Dynamic draft hit event used player lane width for stereo");
         return false;
     }
     return true;
@@ -242,29 +190,6 @@ bool testFixedHitEffectBounds()
     return true;
 }
 
-/// @brief 验证草稿事件不会进入玩家轨道 KPS 统计。
-/// @return 草稿 Flick 即使偏移落入非负轨道也不增加玩家 KPS 时返回 true。
-bool testDraftEventsDoNotAffectPlayerKps()
-{
-    using HitFXSystem  = MMM::Logic::System::HitFXSystem;
-    auto draftFlick    = makeEvent(MMM::NoteType::FLICK, -1, 1);
-    draftFlick.isDraft = true;
-
-    MMM::Config::EditorConfig config;
-    config.visual.canvasComponents.kps.visible = true;
-    HitFXSystem system;
-    system.update(0.0, { draftFlick }, 4, config);
-    const auto kps = system.trackKps();
-    if ( kps.size() != 4U ||
-         std::any_of(kps.begin(), kps.end(), [](std::uint32_t count) {
-             return count != 0U;
-         }) ) {
-        XERROR("Draft hit event leaked into player KPS statistics");
-        return false;
-    }
-    return true;
-}
-
 /// @brief 验证整轨模式覆盖 Flick 目标轨道的完整可见区域。
 /// @return 目标轨道宽度和上下边界均精确匹配时返回 true。
 bool testTrackFillHitEffectBounds()
@@ -358,14 +283,11 @@ bool testRestoreActiveHoldEffectsFromMiddle()
 int main()
 {
     return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
-                   testDraftTrackMappingAndStereo() &&
-                   testDynamicDraftTrackMappingAndStereo() &&
                    testTrackSidesMatchChannels() &&
                    testDisabledKeepsOriginalStereo() &&
                    testBoundSoundOverridesDefault() &&
                    testBoundSampleVolume() && testBoundSoundClassification() &&
                    testFixedHitEffectBounds() &&
-                   testDraftEventsDoNotAffectPlayerKps() &&
                    testTrackFillHitEffectBounds() &&
                    testNonHoldHitEffectPlayback() &&
                    testRestoreActiveHoldEffectsFromMiddle()

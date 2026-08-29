@@ -236,10 +236,6 @@ void PlaybackController::handleCommand(const CmdSetKeySoundTrackMute& cmd)
         audio.setBgmKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
         return;
     }
-    if ( cmd.area == KeySoundTrackArea::Draft ) {
-        audio.setDraftKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
-        return;
-    }
     audio.setPlayerKeySoundTrackMuted(cmd.trackIndex, cmd.muted);
 }
 
@@ -253,10 +249,6 @@ void PlaybackController::handleCommand(const CmdSetKeySoundTrackGain& cmd)
     auto& audio = Audio::AudioManager::instance();
     if ( cmd.area == KeySoundTrackArea::Bgm ) {
         audio.setBgmKeySoundTrackGain(cmd.trackIndex, cmd.gain);
-        return;
-    }
-    if ( cmd.area == KeySoundTrackArea::Draft ) {
-        audio.setDraftKeySoundTrackGain(cmd.trackIndex, cmd.gain);
         return;
     }
     audio.setPlayerKeySoundTrackGain(cmd.trackIndex, cmd.gain);
@@ -273,15 +265,6 @@ void PlaybackController::handleCommand(const CmdSetKeySoundEffectGroupGain& cmd)
                            ? Audio::KeySoundEffectGroup::Bound
                            : Audio::KeySoundEffectGroup::Unbound;
     Audio::AudioManager::instance().setKeySoundEffectGroupGain(group, cmd.gain);
-}
-
-/// @brief 应用整个草稿轨道区的运行时 Key 音静音状态。
-/// @param cmd 草稿区静音状态。
-/// @warning 低频 UI 控制路径；只发布一个固定大小原子控制字。
-void PlaybackController::handleCommand(const CmdSetDraftKeySoundAreaMute& cmd)
-{
-    if ( !m_ctx.isActiveSession ) return;
-    Audio::AudioManager::instance().setDraftKeySoundAreaMuted(cmd.muted);
 }
 
 /// @brief 应用整个 BGM 轨道区的运行时 Key 音静音状态。

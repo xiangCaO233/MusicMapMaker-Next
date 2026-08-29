@@ -14,7 +14,6 @@
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
-#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -517,9 +516,6 @@ struct PackageBeatmapInfo {
 
     /// @brief 是否包含 Flick 或折线。
     bool hasStoreModeExtEligibleElements{ false };
-
-    /// @brief 默认 Main 音频是否使用非 OGG 文件。
-    bool hasNonOggMainAudio{ false };
 };
 
 /// @brief 等待按单谱面批量解析的音频引用。
@@ -595,9 +591,6 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     result.hasStoreModeExtEligibleElements =
         !beatMap.m_noteData.flicks.empty() ||
         !beatMap.m_noteData.polylines.empty();
-    const auto* defaultMainAudio =
-        Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
-            project, beatMap, relativePath);
 
     std::vector<PackageAudioReference> audioReferences;
     audioReferences.reserve(
@@ -639,16 +632,6 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
             project,
             Config::utf8ToPath(normalizedBeatmapPath),
             audioReferenceViews);
-    if ( defaultMainAudio && defaultMainAudio->m_type == AudioTrackType::Main &&
-         !packageExtensionEquals(
-             Config::pathToUtf8(
-                 Config::utf8ToPath(defaultMainAudio->m_path).extension()),
-             ".ogg") ) {
-        result.hasNonOggMainAudio =
-            std::find(resolvedResources.begin(),
-                      resolvedResources.end(),
-                      defaultMainAudio) != resolvedResources.end();
-    }
     for ( std::size_t index = 0; index < audioReferences.size(); ++index ) {
         const auto* resource = resolvedResources[index];
         if ( resource && !resource->m_path.empty() ) {
@@ -713,10 +696,6 @@ private:
     /// @param path 输出包路径。
     void requestPackBeatmapTo(std::string path);
 
-    /// @brief 请求把当前谱面导出为独立 RM/IMD 资源包。
-    /// @param path 输出 zip 路径。
-    void requestExportImdPackageTo(std::string path);
-
     /// @brief 渲染打包目标格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFormatPickerPopup(float dpiScale);
@@ -770,10 +749,6 @@ private:
     /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
     bool hasSelectedPackageStoreModeExtCandidates() const;
 
-    /// @brief 判断当前选中的 MCZ 谱面是否引用非 OGG 默认 Main 音频。
-    /// @return 至少一个已选谱面需要原点对齐时返回 true。
-    bool hasSelectedPackageNonOggMainAudio() const;
-
     /// @brief 收集当前已勾选的项目相对文件路径。
     /// @return 已勾选的项目相对文件路径列表。
     std::vector<std::string> collectSelectedPackageRelativePaths() const;
@@ -789,19 +764,10 @@ private:
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。
     void openPackageOutputFilePicker();
 
-    /// @brief 打开 RM/IMD 资源包输出路径选择器。
-    /// @warning 用户触发的低频路径：原生选择器可能阻塞。
-    void openImdPackageOutputFilePicker();
-
     /// @brief 渲染统一打包输出文件选择器。
     /// @param dpiScale 当前窗口内容缩放。
     /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
     void renderPackageOutputFileDialog(float dpiScale);
-
-    /// @brief 渲染统一 RM/IMD 资源包输出文件选择器。
-    /// @param dpiScale 当前窗口内容缩放。
-    /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
-    void renderImdPackageOutputFileDialog(float dpiScale);
 
     /// @brief 渲染打包输出覆盖确认弹窗。
     /// @param dpiScale 当前窗口内容缩放。
@@ -815,8 +781,6 @@ private:
     bool m_showPackageOverwriteWarning = false;
     /// @brief 待确认覆盖的打包输出路径。
     std::string m_pendingPackageOverwritePath;
-    /// @brief 待覆盖目标是否来自独立 RM/IMD 资源包流程。
-    bool m_pendingOverwriteIsImdPackage{ false };
 };
 
 /// @brief 仅在已有项目时允许打包。
@@ -845,7 +809,6 @@ void PackBeatmapAction::renderDeferred(MainMenuContext& context)
     renderPackageCompatibilityWarningPopup(context.dpiScale);
     renderPackageBeatmapMetadataWindow(context.dpiScale);
     renderPackageOutputFileDialog(context.dpiScale);
-    renderImdPackageOutputFileDialog(context.dpiScale);
     renderPackageOverwriteWarningPopup(context.dpiScale);
     m_statusMessageSink = nullptr;
 }
@@ -902,10 +865,6 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
         .stripMainAudioVolumeFromMalodyExport =
             m_package.selectedFileType == PackageFileType::Mcz &&
             m_package.stripMainAudioVolumeFromMalodyExport,
-        .alignNonOggMainAudioToOrigin =
-            m_package.selectedFileType == PackageFileType::Mcz &&
-            hasSelectedPackageNonOggMainAudio() &&
-            m_package.alignNonOggMainAudioToOrigin,
         .malodyExportMode =
             m_package.selectedFileType == PackageFileType::Mcz
                 ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
@@ -914,18 +873,6 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
     });
     m_package.pendingRelativePaths.clear();
     m_package.pendingMetadataOverrides.clear();
-}
-
-/// @brief 请求把当前谱面导出为独立 RM/IMD 资源包。
-/// @param path 输出 zip 路径。
-void PackBeatmapAction::requestExportImdPackageTo(std::string path)
-{
-    if ( path.empty() ) return;
-    auto outputPath = Config::utf8ToPath(path);
-    outputPath.replace_extension(".zip");
-    MenuUtil::dispatchCommand(Logic::CmdExportImdPackage{
-        .path = Config::pathToUtf8(outputPath),
-    });
 }
 
 /// @brief 渲染打包目标格式选择弹窗。
@@ -940,10 +887,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
     }
     if ( !m_package.formatPickerOpen ) return;
 
-    bool            hasSelection            = false;
-    bool            requestImdPackagePicker = false;
-    bool            closeWindow             = false;
-    PackageFileType selectedType            = m_package.selectedFileType;
+    bool            hasSelection = false;
+    bool            closeWindow  = false;
+    PackageFileType selectedType = m_package.selectedFileType;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(
@@ -975,9 +921,6 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                 selectedType = PackageFileType::Mpk;
                 hasSelection = true;
             }
-            if ( drawCenteredButton("RM/IMD 资源包 (.zip)", buttonSize) ) {
-                requestImdPackagePicker = true;
-            }
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -987,7 +930,7 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                 closeWindow = true;
             }
 
-            if ( hasSelection || requestImdPackagePicker ) {
+            if ( hasSelection ) {
                 closeWindow = true;
             }
 
@@ -1013,9 +956,6 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
         rebuildPackageCandidateFiles();
         m_package.showFileSelectionWindow = true;
         m_package.openFileSelectionWindow = true;
-    }
-    if ( requestImdPackagePicker ) {
-        openImdPackageOutputFilePicker();
     }
 }
 
@@ -1132,35 +1072,6 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     ImGui::SetTooltip(
                         "%s",
                         TR("ui.file.pack.strip_main_audio_volume_tooltip")
-                            .data());
-                }
-
-                const auto alignAudioLabel =
-                    TR_CACHE("ui.file.pack.align_non_ogg_audio");
-                const bool canAlignNonOggAudio =
-                    hasSelectedPackageNonOggMainAudio();
-                sameLineIfItemFits(
-                    getCheckboxDisplayWidth(alignAudioLabel.data()));
-                if ( !canAlignNonOggAudio ) {
-                    m_package.alignNonOggMainAudioToOrigin = false;
-                    ImGui::BeginDisabled();
-                }
-                ::MMM::UI::FeedbackCheckbox(
-                    alignAudioLabel.data(),
-                    &m_package.alignNonOggMainAudioToOrigin);
-                if ( !canAlignNonOggAudio ) {
-                    ImGui::EndDisabled();
-                }
-                if ( ImGui::IsItemHovered(
-                         canAlignNonOggAudio
-                             ? ImGuiHoveredFlags_None
-                             : ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                    ImGui::SetTooltip(
-                        "%s",
-                        TR(canAlignNonOggAudio
-                               ? "ui.file.pack.align_non_ogg_audio_tooltip"
-                               : "ui.file.pack.align_non_ogg_audio_disabled_"
-                                 "tooltip")
                             .data());
                 }
             }
@@ -1745,7 +1656,6 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             std::move(beatmapInfo.dependencyRelativePaths);
         file.hasStoreModeExtEligibleElements =
             beatmapInfo.hasStoreModeExtEligibleElements;
-        file.hasNonOggMainAudio = beatmapInfo.hasNonOggMainAudio;
         file.missingDependencyRelativePaths =
             std::move(beatmapInfo.unresolvedAudioReferences);
         if ( beatmapInfo.loadFailed ) {
@@ -1915,22 +1825,6 @@ bool PackBeatmapAction::hasSelectedPackageStoreModeExtCandidates() const
                        });
 }
 
-/// @brief 判断当前选中的 MCZ 谱面是否引用非 OGG 默认 Main 音频。
-/// @return 至少一个已选谱面需要原点对齐时返回 true。
-/// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
-bool PackBeatmapAction::hasSelectedPackageNonOggMainAudio() const
-{
-    if ( m_package.selectedFileType != PackageFileType::Mcz ) return false;
-    return std::any_of(m_package.candidateFiles.begin(),
-                       m_package.candidateFiles.end(),
-                       [](const PackageCandidateFile& file) {
-                           return file.selected &&
-                                  file.resourceType ==
-                                      PackageResourceType::Beatmap &&
-                                  file.hasNonOggMainAudio;
-                       });
-}
-
 /// @brief 收集当前已勾选的项目相对文件路径。
 /// @return 已勾选的项目相对文件路径列表。
 /// @warning UI 热路径低频分支：点击确认打包时执行；只遍历候选缓存。
@@ -1972,15 +1866,14 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.openFileSelectionWindow        = false;
     m_package.showBeatmapMetadataWindow      = false;
     m_package.showMalodyCompatibilityWarning = false;
-    // 保留用户最近选择的 Malody 打包模式，下一次打开时继续沿用。
-    m_package.formatPickerOpen = false;
-    m_package.showFormatPicker = true;
+    m_package.selectedMalodyMode             = MalodyMode::Slide;
+    m_package.formatPickerOpen               = false;
+    m_package.showFormatPicker               = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;
     }
     if ( m_package.selectedFileType != PackageFileType::Mcz ) {
         m_package.stripMainAudioVolumeFromMalodyExport = false;
-        m_package.alignNonOggMainAudioToOrigin         = false;
     }
 }
 
@@ -1996,19 +1889,18 @@ void PackBeatmapAction::openPackageOutputFilePicker()
         const char*  packageFilter =
             getNativePackageOutputFilterText(m_package.selectedFileType);
         nfdu8filteritem_t filters[1] = { { "Beatmap Package", packageFilter } };
-        nfdresult_t       result     = NativeFileDialog::saveFile(
+        nfdresult_t       result     = NFD_SaveDialogU8(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
 
         if ( result == NFD_OKAY ) {
             std::string filePath = applyPackSelectedFormatToPath(outPath);
             if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                m_pendingPackageOverwritePath  = std::move(filePath);
-                m_pendingOverwriteIsImdPackage = false;
-                m_showPackageOverwriteWarning  = true;
+                m_pendingPackageOverwritePath = std::move(filePath);
+                m_showPackageOverwriteWarning = true;
             } else {
                 requestPackBeatmapTo(std::move(filePath));
             }
-            NFD_FreePathU8(outPath);
+            NFD_FreePath(outPath);
         }
     } else {
         IGFD::FileDialogConfig fdConfig;
@@ -2029,54 +1921,6 @@ void PackBeatmapAction::openPackageOutputFilePicker()
              ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
             ::MMM::UI::PlayPopupOpenFeedback();
         }
-    }
-}
-
-/// @brief 打开 RM/IMD 资源包输出路径选择器。
-/// @warning 用户触发的低频路径：原生选择器可能阻塞。
-void PackBeatmapAction::openImdPackageOutputFilePicker()
-{
-    auto& config = Config::AppConfig::instance().getEditorSettings();
-    const std::string defaultFileName =
-        MenuUtil::makeExportFileNameForExtension(".zip", "map.zip");
-    const std::string defaultPath = getPackagePickerDefaultPath(config);
-    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t*      outPath    = nullptr;
-        nfdu8filteritem_t filters[1] = { { "RM/IMD 资源包", "zip" } };
-        const nfdresult_t result     = NativeFileDialog::saveFile(
-            &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
-        if ( result == NFD_OKAY ) {
-            auto outputPath = Config::utf8ToPath(outPath);
-            outputPath.replace_extension(".zip");
-            std::string     filePath = Config::pathToUtf8(outputPath);
-            std::error_code filesystemError;
-            if ( std::filesystem::exists(outputPath, filesystemError) &&
-                 !filesystemError ) {
-                m_pendingPackageOverwritePath  = std::move(filePath);
-                m_pendingOverwriteIsImdPackage = true;
-                m_showPackageOverwriteWarning  = true;
-            } else {
-                requestExportImdPackageTo(std::move(filePath));
-            }
-            NFD_FreePathU8(outPath);
-        }
-        return;
-    }
-
-    IGFD::FileDialogConfig fdConfig;
-    fdConfig.path              = defaultPath;
-    fdConfig.countSelectionMax = 1;
-    fdConfig.fileName          = defaultFileName;
-    fdConfig.flags =
-        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
-    const bool wasOpen =
-        ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker");
-    ImGuiFileDialog::Instance()->OpenDialog(
-        "ImdPackageFilePicker", "导出 RM/IMD 资源包", ".zip", fdConfig);
-    if ( !wasOpen &&
-         ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker") ) {
-        ::MMM::UI::PlayPopupOpenFeedback();
     }
 }
 
@@ -2106,51 +1950,10 @@ void PackBeatmapAction::renderPackageOutputFileDialog(float dpiScale)
             engine.setEditorConfig(config);
 
             if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                m_pendingPackageOverwritePath  = std::move(filePath);
-                m_pendingOverwriteIsImdPackage = false;
-                m_showPackageOverwriteWarning  = true;
+                m_pendingPackageOverwritePath = std::move(filePath);
+                m_showPackageOverwriteWarning = true;
             } else {
                 requestPackBeatmapTo(std::move(filePath));
-            }
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-}
-
-/// @brief 渲染统一 RM/IMD 资源包输出文件选择器。
-/// @param dpiScale 当前窗口内容缩放。
-/// @warning UI 热路径：仅在统一文件选择器打开时绘制。
-void PackBeatmapAction::renderImdPackageOutputFileDialog(float dpiScale)
-{
-    Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-    if ( ImGuiFileDialog::Instance()->IsOpened("ImdPackageFilePicker") ) {
-        Utils::prepareCenteredModalWindow({ 600, 400 });
-    }
-    if ( ImGuiFileDialog::Instance()->Display(
-             "ImdPackageFilePicker",
-             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoSavedSettings,
-             { 600, 400 }) ) {
-        if ( ImGuiFileDialog::Instance()->IsOk() ) {
-            auto outputPath = Config::utf8ToPath(
-                ImGuiFileDialog::Instance()->GetFilePathName());
-            outputPath.replace_extension(".zip");
-            std::string filePath = Config::pathToUtf8(outputPath);
-
-            auto& engine       = Logic::EditorEngine::instance();
-            auto  editorConfig = engine.getEditorConfig();
-            editorConfig.settings.lastFilePickerPath =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-            engine.setEditorConfig(editorConfig);
-
-            std::error_code filesystemError;
-            if ( std::filesystem::exists(outputPath, filesystemError) &&
-                 !filesystemError ) {
-                m_pendingPackageOverwritePath  = std::move(filePath);
-                m_pendingOverwriteIsImdPackage = true;
-                m_showPackageOverwriteWarning  = true;
-            } else {
-                requestExportImdPackageTo(std::move(filePath));
             }
         }
         ImGuiFileDialog::Instance()->Close();
@@ -2188,20 +1991,14 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
 
         const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
         if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
-            if ( m_pendingOverwriteIsImdPackage ) {
-                requestExportImdPackageTo(m_pendingPackageOverwritePath);
-            } else {
-                requestPackBeatmapTo(m_pendingPackageOverwritePath);
-            }
+            requestPackBeatmapTo(m_pendingPackageOverwritePath);
             m_pendingPackageOverwritePath.clear();
-            m_pendingOverwriteIsImdPackage = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
                                        buttonSize) ) {
             m_pendingPackageOverwritePath.clear();
-            m_pendingOverwriteIsImdPackage = false;
             ImGui::CloseCurrentPopup();
         }
 

@@ -20,12 +20,6 @@ enum class KeySoundEffectGroup : std::uint8_t {
     Bound     ///< 已绑定项目音效文件。
 };
 
-/// @brief 物件打击音效所在的画布轨道区域。
-enum class KeySoundPlaybackArea : std::uint8_t {
-    Player,  ///< 玩家操作轨道区。
-    Draft    ///< 项目级草稿轨道区。
-};
-
 /// @brief 单项 Key 音控制的完整只读快照。
 struct KeySoundControlSnapshot {
     /// @brief 是否静音。
@@ -40,10 +34,7 @@ struct KeySoundPlaybackControl {
     /// @brief 是否对该播放实例应用 Key 音运行时控制。
     bool enabled{ false };
 
-    /// @brief 当前播放实例所在的画布轨道区域。
-    KeySoundPlaybackArea area{ KeySoundPlaybackArea::Player };
-
-    /// @brief 区域内零基轨道索引；无逐轨控制时使用无效值。
+    /// @brief 玩家区零基轨道索引；无轨道控制时使用无效值。
     std::uint32_t playerTrackIndex{ KEY_SOUND_INVALID_TRACK_INDEX };
 
     /// @brief 当前物件使用的打击音效资源类别。

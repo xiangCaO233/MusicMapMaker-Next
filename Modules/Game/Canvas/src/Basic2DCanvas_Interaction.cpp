@@ -4,13 +4,12 @@
 #include "canvas/AnnotationDetailLayout.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/CanvasBlockedGesture.h"
+#include "canvas/CanvasContentVisibility.h"
 #include "canvas/HoverLayerSelection.h"
-#include "canvas/ObjectDragAutoPan.h"
-#include "canvas/TimelineCanvas.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/AudioResourceDragPayload.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/LogicCommands.h"
-#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
@@ -23,17 +22,15 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/CanvasCamera.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
-#include "ui/utils/CanvasContentVisibility.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -69,42 +66,6 @@ constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_X = 8.0F;
 
 /// @brief 画布悬浮信息窗口的纵向元素间距。
 constexpr float CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y = 6.0F;
-
-/// @brief 按轨道区域绘制一基轨道编号。
-/// @param labelPrefix 可选的物件部件说明。
-/// @param track 统一画布有符号轨道。
-/// @param trackCount 玩家轨道数量。
-/// @param draftTrackCount 持久化草稿轨道数量。
-/// @param color 文本颜色；为空时使用 ImGui 默认文本颜色。
-/// @warning UI 热路径：悬浮信息可见时每帧调用，只执行常量级格式化与绘制。
-void renderHoverTrack(const char* labelPrefix, std::int32_t track,
-                      std::int32_t trackCount, std::int32_t draftTrackCount,
-                      const ImVec4* color = nullptr)
-{
-    const auto draw = [&](const char* label, std::int32_t number) {
-        if ( color ) {
-            if ( labelPrefix ) {
-                ImGui::TextColored(
-                    *color, "%s %s: %d", labelPrefix, label, number);
-            } else {
-                ImGui::TextColored(*color, "%s: %d", label, number);
-            }
-        } else if ( labelPrefix ) {
-            ImGui::Text("%s %s: %d", labelPrefix, label, number);
-        } else {
-            ImGui::Text("%s: %d", label, number);
-        }
-    };
-
-    if ( track < 0 ) {
-        draw(TR("ui.canvas.draft_track").data(),
-             Logic::draftTrackDisplayNumber(track, draftTrackCount));
-    } else if ( track >= trackCount ) {
-        draw(TR("ui.canvas.bgm_track").data(), track - trackCount + 1);
-    } else {
-        draw(TR("ui.canvas.track").data(), track + 1);
-    }
-}
 
 /// @brief 绘制当前悬浮批注所指向物件的高对比几何提示。
 /// @param bounds 批注目标在画布局部坐标中的提示边界。
@@ -161,11 +122,69 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 constexpr float CANVAS_COMPONENT_SNAP_DISTANCE = 8.0f;
 
+/// @brief 计算物件拖拽靠近单轴视口边缘时的内容平移量。
+/// @param coordinate 指针在该轴上的局部坐标。
+/// @param extent 视口在该轴上的尺寸。
+/// @param deltaTime 当前 UI 帧间隔。
+/// @param sensitivity 用户配置的边缘滚动灵敏度。
+/// @return 内容应在本帧平移的逻辑像素；靠近起始边缘时为正。
+/// @warning UI 热路径：物件拖动期间每帧调用，只做常量数值运算。
+float objectDragAutoPanAxisDelta(float coordinate, float extent,
+                                 float deltaTime, float sensitivity)
+{
+    if ( !std::isfinite(coordinate) || !std::isfinite(extent) ||
+         extent <= 1.0F || !std::isfinite(sensitivity) ||
+         sensitivity <= 0.0F ) {
+        return 0.0F;
+    }
+
+    const float margin      = std::clamp(extent * 0.08F, 24.0F, 64.0F);
+    float       penetration = 0.0F;
+    float       direction   = 0.0F;
+    if ( coordinate < margin ) {
+        penetration = margin - coordinate;
+        direction   = 1.0F;
+    } else if ( coordinate > extent - margin ) {
+        penetration = coordinate - (extent - margin);
+        direction   = -1.0F;
+    }
+    if ( penetration <= 0.0F ) return 0.0F;
+
+    const float frameSeconds = std::clamp(
+        std::isfinite(deltaTime) && deltaTime > 0.0F ? deltaTime : 1.0F / 60.0F,
+        1.0F / 240.0F,
+        1.0F / 15.0F);
+    const float     ramp = std::clamp(penetration / margin, 0.0F, 2.0F);
+    constexpr float PIXELS_PER_SECOND = 900.0F;
+    return direction * PIXELS_PER_SECOND * ramp * ramp * sensitivity *
+           frameSeconds;
+}
+
+/// @brief 计算左键物件拖拽的二维边缘自动平移量。
+/// @param mousePos 指针相对画布的位置。
+/// @param viewportWidth 画布宽度。
+/// @param viewportHeight 画布高度。
+/// @param deltaTime 当前 UI 帧间隔。
+/// @param sensitivity 用户配置的边缘滚动灵敏度。
+/// @return 直接传给 CmdPanCanvas 的二维内容位移。
+/// @warning UI 热路径：物件拖动期间每帧调用，不分配内存。
+glm::vec2 objectDragAutoPanDelta(glm::vec2 mousePos, float viewportWidth,
+                                 float viewportHeight, float deltaTime,
+                                 float sensitivity)
+{
+    return {
+        objectDragAutoPanAxisDelta(
+            mousePos.x, viewportWidth, deltaTime, sensitivity),
+        objectDragAutoPanAxisDelta(
+            mousePos.y, viewportHeight, deltaTime, sensitivity),
+    };
+}
+
 /// @brief 从渲染快照实例取得实际文字内容边界。
 /// @param instance 组件实例快照。
 /// @return 与 Vulkan 字形几何一致的边界。
 Logic::CanvasComponentBounds canvasComponentContentBounds(
-    const Common::Render::CanvasComponentInstanceSnapshot& instance)
+    const Logic::CanvasComponentInstanceSnapshot& instance)
 {
     return { instance.left, instance.top, instance.right, instance.bottom };
 }
@@ -174,7 +193,7 @@ Logic::CanvasComponentBounds canvasComponentContentBounds(
 /// @param instance 组件实例快照。
 /// @return 普通组件为整张画布，拍号组件为向下扩展文字半高的拍内区间。
 Logic::CanvasComponentBounds canvasComponentLayoutRegion(
-    const Common::Render::CanvasComponentInstanceSnapshot& instance)
+    const Logic::CanvasComponentInstanceSnapshot& instance)
 {
     return { instance.regionLeft,
              instance.regionTop,
@@ -244,7 +263,7 @@ void mergeCanvasComponentBounds(const Logic::CanvasComponentBounds& bounds,
 /// @param targetsY 可写横向目标线缓存。
 /// @warning UI 布局热路径：整体轨道移动时每帧遍历已缓存的组件快照一次。
 void appendDisplayedCanvasComponentSnapTargets(
-    const Common::Render::RenderSnapshot&      snapshot,
+    const Logic::RenderSnapshot&               snapshot,
     const Config::CanvasComponentLayoutConfig& config,
     std::vector<float>& targetsX, std::vector<float>& targetsY)
 {
@@ -429,7 +448,7 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
 /// @param snapshot 当前渲染快照，时间字段使用视觉时间域。
 /// @return 成功发送跳转命令时返回 true。
 /// @warning UI 输入路径：只在点击导航手势触发时调用；不访问 ECS 或文件系统。
-bool publishCanvasHoverSeek(const Common::Render::RenderSnapshot& snapshot)
+bool publishCanvasHoverSeek(const Logic::RenderSnapshot& snapshot)
 {
     const double targetTime =
         snapshot.isSnapped ? snapshot.snappedTime : snapshot.hoveredTime;
@@ -460,8 +479,7 @@ double defaultSnapshotAbsYSpeed()
 /// @return 对应的绝对 Y。
 /// @warning UI 热路径：Move 工具空白拖动画布时调用；只读取快照中的
 /// ScrollSegment，不访问 ECS 或文件系统。
-double snapshotAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
-                          double                                time)
+double snapshotAbsYAtTime(const Logic::RenderSnapshot& snapshot, double time)
 {
     if ( snapshot.scrollSegments.empty() ) {
         return time * defaultSnapshotAbsYSpeed();
@@ -471,7 +489,7 @@ double snapshotAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
         time,
-        [](double val, const Common::Render::ScrollSegment& segment) {
+        [](double val, const Logic::System::ScrollSegment& segment) {
             return val < segment.time;
         });
 
@@ -488,9 +506,8 @@ double snapshotAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
 /// @param outTime 反算出的显示时间。
 /// @return 该 segment 覆盖目标绝对 Y 时返回 true。
 /// @warning UI 热路径：优先测试当前时间所在 segment，跨段时才由调用方扩展搜索。
-bool trySnapshotTimeAtSegmentAbsY(
-    const Common::Render::RenderSnapshot& snapshot, size_t index, double absY,
-    double& outTime)
+bool trySnapshotTimeAtSegmentAbsY(const Logic::RenderSnapshot& snapshot,
+                                  size_t index, double absY, double& outTime)
 {
     constexpr double EPSILON  = 1e-6;
     const auto&      segments = snapshot.scrollSegments;
@@ -531,8 +548,7 @@ bool trySnapshotTimeAtSegmentAbsY(
 /// @return 对应的显示时间，单位秒。
 /// @warning UI 热路径：Move 工具空白拖动画布时调用；通常命中当前
 /// ScrollSegment，跨段拖拽时才扫描快照分段。
-double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
-                          double                                absY)
+double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 {
     if ( snapshot.scrollSegments.empty() ) {
         const double speed = defaultSnapshotAbsYSpeed();
@@ -543,7 +559,7 @@ double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
         snapshot.scrollSegments.begin(),
         snapshot.scrollSegments.end(),
         snapshot.currentTime,
-        [](double val, const Common::Render::ScrollSegment& segment) {
+        [](double val, const Logic::System::ScrollSegment& segment) {
             return val < segment.time;
         });
     const size_t currentIndex =
@@ -585,9 +601,10 @@ double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
 /// @return 自动滚动后的显示时间，单位秒。
 /// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
 /// @param isAccelerated 是否应用 Shift 加速。
-double marqueeAutoScrollTargetTime(
-    const Common::Render::RenderSnapshot& snapshot, float viewportHeight,
-    float mouseY, float deltaTime, bool isAccelerated, bool& scrolled)
+double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
+                                   float viewportHeight, float mouseY,
+                                   float deltaTime, bool isAccelerated,
+                                   bool& scrolled)
 {
     scrolled = false;
     if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
@@ -692,9 +709,9 @@ constexpr std::size_t MAX_VISIBLE_ANNOTATION_DETAIL_CARDS = 48U;
 /// @brief 单张详情卡片对应的只读批注数据。
 struct AnnotationDetailCardEntry {
     /// @brief 卡片所在的时间戳分组。
-    const Common::Render::AnnotationRenderMarker* marker{ nullptr };
+    const Logic::AnnotationRenderMarker* marker{ nullptr };
     /// @brief 卡片展示的具体批注。
-    const Common::Render::AnnotationRenderItem* item{ nullptr };
+    const Logic::AnnotationRenderItem* item{ nullptr };
     /// @brief 批注在时间戳分组内的索引。
     std::size_t itemIndex{ 0U };
     /// @brief Markdown 正文完整排版高度。
@@ -704,7 +721,7 @@ struct AnnotationDetailCardEntry {
 /// @brief 批注详情卡片悬浮命中结果。
 struct AnnotationDetailCardHit {
     /// @brief 被命中的时间戳分组。
-    const Common::Render::AnnotationRenderMarker* marker{ nullptr };
+    const Logic::AnnotationRenderMarker* marker{ nullptr };
     /// @brief 被命中的分组内批注索引。
     std::size_t itemIndex{ 0U };
     /// @brief 指针是否命中了卡片正文中的链接。
@@ -726,6 +743,36 @@ const char* annotationTargetLabelKey(
     return "ui.annotation.target.timestamp";
 }
 
+/// @brief 计算一条物件批注连线在轨道区中的起点横坐标。
+/// @param item 批注展示数据。
+/// @param projection 当前画布横向投影。
+/// @param fallbackX 无有效物件轨道时使用的批注栏中心。
+/// @return 对应玩家物件、自动采样或批注栏中心的横坐标。
+/// @warning UI 热路径：每张可见详情卡片调用一次，只执行常量级投影查询。
+float annotationConnectorSourceX(const Logic::AnnotationRenderItem& item,
+                                 const Logic::CanvasLaneProjection& projection,
+                                 float                              fallbackX)
+{
+    if ( item.track < 0 ) return fallbackX;
+
+    std::optional<Logic::CanvasLaneBounds> bounds;
+    const auto track = static_cast<std::uint32_t>(item.track);
+    if ( item.targetKind ==
+         ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT ) {
+        bounds = projection.bounds({ Logic::CanvasLaneKind::Player, track });
+    } else if ( item.targetKind ==
+                ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE ) {
+        if ( track < projection.playerLaneCount ) {
+            bounds =
+                projection.bounds({ Logic::CanvasLaneKind::Player, track });
+        } else {
+            bounds = projection.bounds({ Logic::CanvasLaneKind::Bgm,
+                                         track - projection.playerLaneCount });
+        }
+    }
+    return bounds ? (bounds->leftX + bounds->rightX) * 0.5F : fallbackX;
+}
+
 /// @brief 绘制当前可见批注的避让卡片与物件连线。
 /// @param markers 当前主画布已裁剪的批注时间戳分组。
 /// @param projection 当前画布横向投影。
@@ -743,7 +790,7 @@ const char* annotationTargetLabelKey(
 /// @warning UI 热路径：只线性遍历当前快照最多 48 条可见批注，不排序、不访问
 /// ECS 或文件系统。
 AnnotationDetailCardHit renderConnectedAnnotationDetails(
-    const std::vector<Common::Render::AnnotationRenderMarker>& markers,
+    const std::vector<Logic::AnnotationRenderMarker>& markers,
     const Logic::CanvasLaneProjection& projection, float canvasScreenX,
     float canvasScreenY, float targetWidth, float topY, float bottomY,
     float pointerX, float pointerY, bool canvasHovered,
@@ -807,36 +854,34 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                 placements{};
     std::size_t cardCount = 0U;
 
-    auto appendMarker =
-        [&](const Common::Render::AnnotationRenderMarker& marker) {
-            if ( marker.canvasY < topY - 10.0F ||
-                 marker.canvasY > bottomY + 10.0F ) {
-                return;
-            }
-            for ( std::size_t index = 0U; index < marker.items.size();
-                  ++index ) {
-                if ( cardCount >= entries.size() ) return;
-                const auto& item = marker.items[index];
-                const auto  contentLayout =
-                    UI::measureMarkdown(item.content, markdownOptions);
-                const float visibleContentHeight =
-                    std::clamp(contentLayout.size.y, fontSize, fontSize * 5.0F);
-                entries[cardCount] = {
-                    &marker,
-                    &item,
-                    index,
-                    std::max(fontSize, contentLayout.size.y),
-                };
-                placements[cardCount] = {
-                    marker.canvasY,
-                    CARD_PADDING * 2.0F +
-                        CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
-                        fontSize * 2.0F + visibleContentHeight,
-                    0.0F,
-                };
-                ++cardCount;
-            }
-        };
+    auto appendMarker = [&](const Logic::AnnotationRenderMarker& marker) {
+        if ( marker.canvasY < topY - 10.0F ||
+             marker.canvasY > bottomY + 10.0F ) {
+            return;
+        }
+        for ( std::size_t index = 0U; index < marker.items.size(); ++index ) {
+            if ( cardCount >= entries.size() ) return;
+            const auto& item = marker.items[index];
+            const auto  contentLayout =
+                UI::measureMarkdown(item.content, markdownOptions);
+            const float visibleContentHeight =
+                std::clamp(contentLayout.size.y, fontSize, fontSize * 5.0F);
+            entries[cardCount] = {
+                &marker,
+                &item,
+                index,
+                std::max(fontSize, contentLayout.size.y),
+            };
+            placements[cardCount] = {
+                marker.canvasY,
+                CARD_PADDING * 2.0F +
+                    CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
+                    fontSize * 2.0F + visibleContentHeight,
+                0.0F,
+            };
+            ++cardCount;
+        }
+    };
 
     const bool ascending = markers.size() < 2U ||
                            markers.front().canvasY <= markers.back().canvasY;
@@ -1034,7 +1079,7 @@ Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 /// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
 bool Basic2DCanvasInteraction::shouldSendContinuousEditCommand(
     LastContinuousEditCommand& last, glm::vec2 pos,
-    const Common::Render::RenderSnapshot& snapshot, bool primaryModifier,
+    const Logic::RenderSnapshot& snapshot, bool primaryModifier,
     bool secondaryModifier)
 {
     constexpr double visualTimeEpsilon  = 1e-6;
@@ -1079,7 +1124,7 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
 
 /// @brief 在移动工具下绘制悬浮物件的项目音频试听按钮。
 bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
-    const Common::Render::RenderSnapshot& currentSnapshot, float canvasScreenX,
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
     float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
     float pointerY)
 {
@@ -1150,8 +1195,8 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     const float previousCenterY =
         (m_audioPreviewOverlay.top + m_audioPreviewOverlay.bottom) * 0.5F;
 
-    const Common::Render::Hitbox* anchor    = nullptr;
-    float                         bestScore = std::numeric_limits<float>::max();
+    const Logic::Hitbox* anchor    = nullptr;
+    float                bestScore = std::numeric_limits<float>::max();
     for ( const auto& hitbox : currentSnapshot.hitboxes ) {
         if ( hitbox.entity != targetEntity || hitbox.kind != targetObjectKind ||
              hitbox.w <= 0.0F || hitbox.h <= 0.0F ) {
@@ -1277,16 +1322,14 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
 }
 
 void Basic2DCanvasInteraction::update(
-    UI::UIManager*                        sourceManager,
-    const Common::Render::RenderSnapshot* currentSnapshot, float targetWidth,
-    float targetHeight)
+    UI::UIManager* sourceManager, const Logic::RenderSnapshot* currentSnapshot,
+    float targetWidth, float targetHeight)
 {
     handleDrops(sourceManager);
 
     if ( currentSnapshot ) {
         handleHotkeys(currentSnapshot);
-        handleInteractions(
-            sourceManager, currentSnapshot, targetWidth, targetHeight);
+        handleInteractions(currentSnapshot, targetWidth, targetHeight);
     }
 
     updateTransientUi();
@@ -1294,8 +1337,7 @@ void Basic2DCanvasInteraction::update(
 
 /// @brief 处理活动主画布上的 Ctrl/Command/Alt 修饰键滚轮。
 bool Basic2DCanvasInteraction::handleModifierWheel(
-    const Common::Render::RenderSnapshot* currentSnapshot,
-    bool                                  allowSelectionScroll)
+    const Logic::RenderSnapshot* currentSnapshot, bool allowSelectionScroll)
 {
     if ( !currentSnapshot ) {
         return false;
@@ -1558,7 +1600,7 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 /// @warning UI 热路径：每帧检查输入状态；禁止加入文件系统访问、ECS
 /// 全量遍历或阻塞操作。
 void Basic2DCanvasInteraction::handleHotkeys(
-    const Common::Render::RenderSnapshot* currentSnapshot)
+    const Logic::RenderSnapshot* currentSnapshot)
 {
     if ( Logic::EditorEngine::instance().getCurrentTool() ==
          Logic::EditTool::Layout ) {
@@ -1598,7 +1640,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
 }
 
 void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
-    const Common::Render::RenderSnapshot& currentSnapshot)
+    const Logic::RenderSnapshot& currentSnapshot)
 {
     m_noteLayoutInstances.clear();
     m_noteLayoutIndexScratch.clear();
@@ -1653,7 +1695,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
 void Basic2DCanvasInteraction::handleLayoutEditing(
     float pointerX, float pointerY, float canvasScreenX, float canvasScreenY,
     float targetWidth, float targetHeight, bool isHovered,
-    const Common::Render::RenderSnapshot& currentSnapshot)
+    const Logic::RenderSnapshot& currentSnapshot)
 {
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
         if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
@@ -1722,7 +1764,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     std::optional<Config::CanvasComponentType> hoveredComponent;
-    std::optional<Common::Render::CanvasComponentInstanceSnapshot>
+    std::optional<Logic::CanvasComponentInstanceSnapshot>
                                      hoveredComponentInstance;
     Logic::CanvasComponentDragHandle hoveredComponentHandle =
         Logic::CanvasComponentDragHandle::None;
@@ -2651,23 +2693,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     drawList->PopClipRect();
 }
 
-/// @brief 绘制批注栏、入口菜单、详情提示和编辑弹窗。
-/// @param sourceManager 用于访问共享 Timeline 窗口中的批注表状态。
-/// @param currentSnapshot 当前主画布渲染快照。
-/// @param canvasScreenX 画布左上角屏幕横坐标。
-/// @param canvasScreenY 画布左上角屏幕纵坐标。
-/// @param targetWidth 画布宽度。
-/// @param targetHeight 画布高度。
-/// @param pointerX 指针相对画布左侧的横坐标。
-/// @param pointerY 指针相对画布顶部的纵坐标。
-/// @param canvasHovered 指针是否位于当前画布。
-/// @return 批注交互层对指针和滚轮输入的处理结果。
-/// @warning UI 热路径：每帧只遍历当前快照可见批注；全量表格数据由 Timeline
-/// 窗口在批注版本变化时低频刷新。
-Basic2DCanvasInteraction::AnnotationGutterInteractionResult
-Basic2DCanvasInteraction::renderAnnotationGutter(
-    UI::UIManager*                        sourceManager,
-    const Common::Render::RenderSnapshot& currentSnapshot, float canvasScreenX,
+bool Basic2DCanvasInteraction::renderAnnotationGutter(
+    const Logic::RenderSnapshot& currentSnapshot, float canvasScreenX,
     float canvasScreenY, float targetWidth, float targetHeight, float pointerX,
     float pointerY, bool canvasHovered)
 {
@@ -2683,9 +2710,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         currentSnapshot.canvasHorizontalOffsetX,
         true,
         currentSnapshot.bmsEditingEnabled,
-        currentSnapshot.draftLanesEnabled,
-        currentSnapshot.draftTrackCount,
-        true);
+        currentSnapshot.draftLanesEnabled);
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
@@ -2693,13 +2718,11 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                 pointerX <= projection.annotationRightX &&
                                 pointerY >= topY && pointerY <= bottomY;
 
-    const Common::Render::AnnotationRenderMarker* hoveredMarker = nullptr;
-    std::optional<std::size_t>                    hoveredDetailIndex;
-    bool                                          detailCardHovered     = false;
-    bool                                          detailLinkHovered     = false;
-    bool                                          detailWheelConsumed   = false;
-    bool                                          annotationMenuHovered = false;
-    bool                                          annotationMenuOpen    = false;
+    const Logic::AnnotationRenderMarker* hoveredMarker = nullptr;
+    std::optional<std::size_t>           hoveredDetailIndex;
+    bool                                 detailCardHovered   = false;
+    bool                                 detailLinkHovered   = false;
+    bool                                 detailWheelConsumed = false;
     if ( projection.valid && currentSnapshot.hasBeatmap ) {
         auto* drawList = ImGui::GetWindowDrawList();
         drawList->PushClipRect(
@@ -2793,79 +2816,6 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             }
         }
         drawList->PopClipRect();
-
-        const ImVec2 savedCursorPosition = ImGui::GetCursorScreenPos();
-        const float  dpiScale =
-            Config::AppConfig::instance().getWindowContentScale();
-        const float gutterWidth =
-            projection.annotationRightX - projection.annotationLeftX;
-        const float menuButtonSize =
-            std::clamp(gutterWidth - 6.0F, 18.0F, 22.0F);
-        const float menuButtonRounding =
-            std::min(menuButtonSize * 0.28F,
-                     std::max(3.0F,
-                              Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .aesthetics.frameRounding *
-                                  dpiScale));
-        const ImVec2 menuButtonPosition{
-            canvasScreenX + centerX - menuButtonSize * 0.5F,
-            canvasScreenY + topY + 4.0F,
-        };
-        ImGui::SetCursorScreenPos(menuButtonPosition);
-        ImGui::SetNextItemAllowOverlap();
-        ImVec4 buttonColor = ImGui::GetStyleColorVec4(ImGuiCol_Button);
-        buttonColor.w *= 0.72F;
-        ImVec4 buttonHoveredColor =
-            ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
-        buttonHoveredColor.w *= 0.88F;
-        ImVec4 buttonActiveColor =
-            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
-        buttonActiveColor.w *= 0.92F;
-        ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, buttonHoveredColor);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, buttonActiveColor);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, menuButtonRounding);
-        UI::Utils::pushFixedButtonStyleVars();
-        if ( ::MMM::UI::FeedbackButton(
-                 UI::ICON_MMM_BARS, ImVec2(menuButtonSize, menuButtonSize)) ) {
-            ImGui::OpenPopup("AnnotationOptionsMenu");
-        }
-        UI::Utils::popFixedButtonStyleVars();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
-        annotationMenuHovered = ImGui::IsItemHovered();
-        if ( annotationMenuHovered ) {
-            ImGui::SetTooltip("%s", TR("ui.annotation.menu.tooltip").data());
-        }
-
-        auto* timeline =
-            sourceManager
-                ? sourceManager->getView<TimelineCanvas>("TimelineWindow")
-                : nullptr;
-        annotationMenuOpen = ImGui::IsPopupOpen("AnnotationOptionsMenu");
-        if ( ImGui::BeginPopup("AnnotationOptionsMenu") ) {
-            annotationMenuHovered =
-                annotationMenuHovered || ImGui::IsWindowHovered();
-            ImGui::BeginDisabled(timeline == nullptr);
-            if ( ::MMM::UI::FeedbackMenuItem(
-                     TR("ui.annotation.menu.open_table").data(),
-                     nullptr,
-                     timeline && timeline->isAnnotationTableOpen()) ) {
-                if ( timeline && !timeline->isAnnotationTableOpen() ) {
-                    ::MMM::UI::PlayPopupOpenFeedback();
-                    timeline->setAnnotationTableOpen(true);
-                }
-            }
-            ImGui::EndDisabled();
-            ImGui::EndPopup();
-        }
-        ImGui::SetCursorScreenPos(savedCursorPosition);
-    }
-
-    if ( annotationMenuHovered || annotationMenuOpen ) {
-        hoveredMarker = nullptr;
-        hoveredDetailIndex.reset();
     }
 
     if ( hoveredMarker && !hoveredMarker->items.empty() ) {
@@ -2897,7 +2847,6 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                             ImGui::GetFontSize() * 4.0F);
             if ( wheelResult.consumed ) {
                 ImGui::SetScrollY(wheelResult.scrollY);
-                detailWheelConsumed = true;
             }
         }
         if ( !detailCardHovered && hoveredMarker->items.size() > 1U &&
@@ -2918,8 +2867,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 ImGui::SetScrollY(0.0F);
             }
         }
-        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-            hoveredMarker->timestamp, &currentSnapshot);
+        const auto timeText =
+            formatCanvasTime(hoveredMarker->timestamp, &currentSnapshot);
         ImGui::Text("%s · %s · %zu",
                     TR("ui.annotation.marker_title").data(),
                     timeText.c_str(),
@@ -3031,8 +2980,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         const bool editingExisting = !m_annotationEditor.annotationId.empty();
         const auto creator         = Config::normalizeCreatorIdentity(
             Config::AppConfig::instance().getEditorSettings().defaultCreator);
-        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-            m_annotationEditor.timestamp, &currentSnapshot);
+        const auto timeText =
+            formatCanvasTime(m_annotationEditor.timestamp, &currentSnapshot);
         ImGui::Text(
             "%s: %s", TR("ui.annotation.timestamp").data(), timeText.c_str());
         ImGui::Text(
@@ -3089,26 +3038,18 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::EndPopup();
     }
 
-    const bool annotationHovered = gutterHovered || detailCardHovered ||
-                                   annotationMenuHovered || annotationMenuOpen;
-    const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
-    return {
-        .blocksCanvas        = annotationHovered || editorPopupOpen,
-        .passesWheelToCanvas = shouldPassAnnotationWheelToCanvas(
-            annotationHovered, editorPopupOpen, detailWheelConsumed),
-    };
+    return gutterHovered || detailCardHovered ||
+           ImGui::IsPopupOpen(popupLabel.c_str());
 }
 
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
-/// @param sourceManager 用于打开共享的批注表窗口。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
 /// @param targetHeight 画布高度。
 /// @warning UI 热路径约束如下。
 /// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
-    UI::UIManager*                        sourceManager,
-    const Common::Render::RenderSnapshot* currentSnapshot, float targetWidth,
+    const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
 {
     ImVec2     mousePos         = ImGui::GetMousePos();
@@ -3155,9 +3096,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             currentSnapshot->canvasHorizontalOffsetX,
             true,
             currentSnapshot->bmsEditingEnabled,
-            currentSnapshot->draftLanesEnabled,
-            currentSnapshot->draftTrackCount,
-            true);
+            currentSnapshot->draftLanesEnabled);
         const float dropLeft =
             std::clamp(projection.bgmLeftX, 0.0F, targetWidth);
         const float dropRight =
@@ -3214,9 +3153,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         currentSnapshot->canvasHorizontalOffsetX,
         true,
         currentSnapshot->bmsEditingEnabled,
-        currentSnapshot->draftLanesEnabled,
-        currentSnapshot->draftTrackCount,
-        true);
+        currentSnapshot->draftLanesEnabled);
     const float trackLeftX  = laneProjection.draftLeftX;
     const float trackRightX = laneProjection.bgmRightX;
     const float normY =
@@ -3360,9 +3297,8 @@ void Basic2DCanvasInteraction::handleInteractions(
         return;
     }
 
-    const auto annotationGutterInteraction =
-        renderAnnotationGutter(sourceManager,
-                               *currentSnapshot,
+    const bool annotationGutterBlocksCanvas =
+        renderAnnotationGutter(*currentSnapshot,
                                windowPos.x,
                                windowPos.y,
                                targetWidth,
@@ -3370,15 +3306,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                localMousePos.x,
                                localMousePos.y,
                                isHovered);
-    const bool continueMarqueeAcrossAnnotation =
-        shouldContinueMarqueeAcrossBlockedArea(
-            currentSnapshot->currentTool,
-            ImGui::IsMouseDragging(ImGuiMouseButton_Left),
-            m_leftPressStartedOnCanvas,
-            m_leftPressStartedOnEntity,
-            m_leftPressStartedObjectDrag);
-    if ( annotationGutterInteraction.blocksCanvas &&
-         !continueMarqueeAcrossAnnotation ) {
+    if ( annotationGutterBlocksCanvas ) {
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -3429,15 +3357,6 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_lastBrushUpdateCommand.valid   = false;
             m_lastMoveUpdateCommand.valid    = false;
         }
-        if ( annotationGutterInteraction.passesWheelToCanvas ) {
-            const auto& io = ImGui::GetIO();
-            if ( std::abs(io.MouseWheel) > 0.01F &&
-                 !handleModifierWheel(currentSnapshot) ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdScroll{
-                        m_cameraId, -io.MouseWheel, io.KeyShift }));
-            }
-        }
         return;
     }
 
@@ -3451,12 +3370,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                          localMousePos.y);
 
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( MMM::UI::Utils::shouldShowCanvasHoverInspection(
-             currentSnapshot->hasBeatmap,
-             audioPreviewOverlayBlocksCanvas,
-             isHovered,
-             currentSnapshot->isHoveringCanvas,
-             currentSnapshot->isPlaying) ) {
+    if ( shouldShowCanvasHoverInspection(currentSnapshot->hasBeatmap,
+                                         audioPreviewOverlayBlocksCanvas,
+                                         isHovered,
+                                         currentSnapshot->isHoveringCanvas,
+                                         currentSnapshot->isPlaying) ) {
         if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
@@ -3476,87 +3394,91 @@ void Basic2DCanvasInteraction::handleInteractions(
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
                         const auto& inspect = currentSnapshot->hoverInspect;
-                        auto        drawPoint =
-                            [currentSnapshot](
-                                const char*                           labelKey,
-                                const Common::Render::HoverBeatPoint& point,
-                                bool showTrack) {
-                                if ( !point.show ) return;
-                                const auto label = TR(labelKey);
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %d + %d/%d",
-                                    label.data(),
-                                    TR("ui.canvas.note_fraction").data(),
-                                    point.beatIndex,
-                                    point.numerator,
-                                    point.denominator);
-                                const auto timeText =
-                                    MMM::UI::Utils::formatCanvasTime(
-                                        point.time, currentSnapshot);
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %s",
-                                    label.data(),
-                                    TR("ui.canvas.note_time").data(),
-                                    timeText.c_str());
-                                if ( showTrack ) {
-                                    const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
-                                    renderHoverTrack(
+                        auto drawPoint = [currentSnapshot](
+                                             const char* labelKey,
+                                             const Logic::HoverBeatPoint& point,
+                                             bool showTrack) {
+                            if ( !point.show ) return;
+                            const auto label = TR(labelKey);
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s %s: %d + %d/%d",
+                                label.data(),
+                                TR("ui.canvas.note_fraction").data(),
+                                point.beatIndex,
+                                point.numerator,
+                                point.denominator);
+                            const auto timeText =
+                                formatCanvasTime(point.time, currentSnapshot);
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                               "%s %s: %s",
+                                               label.data(),
+                                               TR("ui.canvas.note_time").data(),
+                                               timeText.c_str());
+                            if ( showTrack ) {
+                                if ( point.track >=
+                                     currentSnapshot->trackCount ) {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
                                         label.data(),
-                                        point.track,
-                                        currentSnapshot->trackCount,
-                                        currentSnapshot->draftTrackCount,
-                                        &color);
+                                        TR("ui.canvas.bgm_track").data(),
+                                        point.track -
+                                            currentSnapshot->trackCount + 1);
+                                } else {
+                                    ImGui::TextColored(
+                                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                        "%s %s: %d",
+                                        label.data(),
+                                        TR("ui.canvas.track").data(),
+                                        point.track + 1);
                                 }
-                            };
+                            }
+                        };
 
                         switch ( inspect.kind ) {
-                        case Common::Render::HoverInspectKind::Note:
+                        case Logic::HoverInspectKind::Note:
                             drawPoint("ui.canvas.hover.note",
                                       inspect.head,
                                       inspect.showTrack);
                             break;
-                        case Common::Render::HoverInspectKind::HoldHead:
+                        case Logic::HoverInspectKind::HoldHead:
                             drawPoint(
                                 "ui.canvas.hover.head", inspect.head, true);
                             break;
-                        case Common::Render::HoverInspectKind::HoldEnd:
-                        case Common::Render::HoverInspectKind::PolylineHoldEnd:
+                        case Logic::HoverInspectKind::HoldEnd:
+                        case Logic::HoverInspectKind::PolylineHoldEnd:
                             drawPoint(
                                 "ui.canvas.hover.hold_end", inspect.end, true);
                             break;
-                        case Common::Render::HoverInspectKind::FlickHead:
+                        case Logic::HoverInspectKind::FlickHead:
                             drawPoint("ui.canvas.hover.flick_head",
                                       inspect.head,
                                       true);
                             break;
-                        case Common::Render::HoverInspectKind::FlickBody:
-                        case Common::Render::HoverInspectKind::
-                            PolylineFlickBody:
+                        case Logic::HoverInspectKind::FlickBody:
+                        case Logic::HoverInspectKind::PolylineFlickBody:
                             drawPoint("ui.canvas.hover.flick_body",
                                       inspect.body,
                                       false);
                             break;
-                        case Common::Render::HoverInspectKind::FlickEnd:
-                        case Common::Render::HoverInspectKind::PolylineFlickEnd:
+                        case Logic::HoverInspectKind::FlickEnd:
+                        case Logic::HoverInspectKind::PolylineFlickEnd:
                             drawPoint(
                                 "ui.canvas.hover.flick_end", inspect.end, true);
                             break;
-                        case Common::Render::HoverInspectKind::PolylineHead:
+                        case Logic::HoverInspectKind::PolylineHead:
                             drawPoint("ui.canvas.hover.polyline_head",
                                       inspect.body,
                                       inspect.showTrack);
                             break;
-                        case Common::Render::HoverInspectKind::PolylineNode:
+                        case Logic::HoverInspectKind::PolylineNode:
                             drawPoint("ui.canvas.hover.polyline_node",
                                       inspect.body,
                                       inspect.showTrack);
                             break;
-                        case Common::Render::HoverInspectKind::
-                            AudioSampleAnchor:
-                        case Common::Render::HoverInspectKind::
-                            AudioSampleTrigger:
+                        case Logic::HoverInspectKind::AudioSampleAnchor:
+                        case Logic::HoverInspectKind::AudioSampleTrigger:
                             drawPoint("ui.canvas.hover.sample_anchor",
                                       inspect.head,
                                       inspect.showTrack);
@@ -3564,15 +3486,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                                       inspect.end,
                                       inspect.showTrack);
                             break;
-                        case Common::Render::HoverInspectKind::HoldBody:
-                        case Common::Render::HoverInspectKind::PolylineHoldBody:
-                        case Common::Render::HoverInspectKind::None: break;
+                        case Logic::HoverInspectKind::HoldBody:
+                        case Logic::HoverInspectKind::PolylineHoldBody:
+                        case Logic::HoverInspectKind::None: break;
                         }
 
                         if ( inspect.showDuration ) {
                             const auto durationText =
-                                MMM::UI::Utils::formatCanvasDuration(
-                                    inspect.duration);
+                                formatCanvasDuration(inspect.duration);
                             ImGui::TextColored(
                                 ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                 "%s: %s",
@@ -3588,15 +3509,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                         }
                         if ( inspect.showTrack &&
                              (inspect.kind ==
-                                  Common::Render::HoverInspectKind::HoldBody ||
-                              inspect.kind == Common::Render::HoverInspectKind::
-                                                  PolylineHoldBody) ) {
-                            const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
-                            renderHoverTrack(nullptr,
-                                             inspect.track,
-                                             currentSnapshot->trackCount,
-                                             currentSnapshot->draftTrackCount,
-                                             &color);
+                                  Logic::HoverInspectKind::HoldBody ||
+                              inspect.kind ==
+                                  Logic::HoverInspectKind::PolylineHoldBody) ) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                               "%s: %d",
+                                               TR("ui.canvas.track").data(),
+                                               inspect.track + 1);
                         }
                         if ( inspect.showAudioPreview ) {
                             ImGui::TextWrapped(
@@ -3652,7 +3571,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     }
 
                     if ( currentSnapshot->isSnapped ) {
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                        const auto timeText = formatCanvasTime(
                             currentSnapshot->snappedTime, currentSnapshot);
                         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
                                            "%s: %s",
@@ -3674,7 +3593,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 currentSnapshot->snappedDenominator);
                         }
                     } else {
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                        const auto timeText = formatCanvasTime(
                             currentSnapshot->hoveredTime, currentSnapshot);
                         ImGui::Text("%s: %s",
                                     TR("ui.canvas.time").data(),
@@ -3687,10 +3606,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     currentSnapshot->hoveredBeatIndex);
                     }
 
-                    renderHoverTrack(nullptr,
-                                     currentSnapshot->hoveredTrack,
-                                     currentSnapshot->trackCount,
-                                     currentSnapshot->draftTrackCount);
+                    if ( currentSnapshot->hoveredTrack >=
+                         currentSnapshot->trackCount ) {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.bgm_track").data(),
+                                    currentSnapshot->hoveredTrack -
+                                        currentSnapshot->trackCount + 1);
+                    } else {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.track").data(),
+                                    currentSnapshot->hoveredTrack + 1);
+                    }
 
                     ImGui::Spacing();
                     ImGui::Separator();
@@ -3734,7 +3660,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         for ( auto it = currentSnapshot->hitboxes.rbegin();
               it != currentSnapshot->hitboxes.rend();
               ++it ) {
-            const auto hitbox = Common::Render::scaleInteractionHitbox(
+            const auto hitbox = Logic::scaleInteractionHitbox(
                 *it,
                 currentSnapshot->interactionHitboxScaleX,
                 currentSnapshot->interactionHitboxScaleY);
@@ -3979,7 +3905,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     (currentSnapshot->currentTool == Logic::EditTool::Move ||
                      currentSnapshot->currentTool ==
                          Logic::EditTool::Marquee) ) {
-            glm::vec2 autoPanDelta =
+            const glm::vec2 autoPanDelta =
                 currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying
                     ? objectDragAutoPanDelta(
                           { localMousePos.x, localMousePos.y },
@@ -3989,8 +3915,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                           std::max(0.0F,
                                    visual.previewConfig.edgeScrollSensitivity))
                     : glm::vec2{ 0.0F, 0.0F };
-            autoPanDelta.x = clampObjectDragHorizontalAutoPanDelta(
-                autoPanDelta.x, targetWidth, laneProjection);
             const bool autoPanned = std::abs(autoPanDelta.x) > 0.001F ||
                                     std::abs(autoPanDelta.y) > 0.001F;
             if ( autoPanned ) {

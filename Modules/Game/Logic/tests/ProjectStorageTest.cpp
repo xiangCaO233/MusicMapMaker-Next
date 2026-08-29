@@ -91,7 +91,6 @@ MMM::Project makeProject()
         MMM::ProjectDraftLaneGroup{
             .m_mainAudioResourceId = "main",
             .m_notePayload         = "draft-payload",
-            .m_trackCount          = 7,
             .m_runtimeRevision     = 17U,
         },
     };
@@ -177,14 +176,11 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                  "beatmaps should round trip") &&
            check(loaded.m_project.m_draftLaneGroups.size() == 1,
                  "draft lane groups should round trip") &&
-           check(
-               loaded.m_project.m_draftLaneGroups.front()
-                           .m_mainAudioResourceId == "main" &&
-                   loaded.m_project.m_draftLaneGroups.front().m_notePayload ==
-                       "draft-payload" &&
-                   loaded.m_project.m_draftLaneGroups.front().m_trackCount == 7,
-               "draft lane group identity, payload and count should round "
-               "trip") &&
+           check(loaded.m_project.m_draftLaneGroups.front()
+                             .m_mainAudioResourceId == "main" &&
+                     loaded.m_project.m_draftLaneGroups.front().m_notePayload ==
+                         "draft-payload",
+                 "draft lane group identity and payload should round trip") &&
            check(loaded.m_project.m_draftLaneGroups.front().m_runtimeRevision ==
                      0U,
                  "draft lane runtime revision should not persist") &&
@@ -234,21 +230,6 @@ bool testSplitWithoutDraftFile(const std::filesystem::path& root)
                  "split project without draft file should load") &&
            check(loaded.m_project.m_draftLaneGroups.empty(),
                  "missing draft file should produce an empty group list");
-}
-
-/// @brief 验证旧草稿轨组缺少轨道数字段时按未声明状态载入。
-/// @return 反序列化成功且轨道数量保持零值兼容标记时返回 true。
-bool testLegacyDraftGroupWithoutTrackCount()
-{
-    const auto legacyJson = nlohmann::json{
-        { "m_mainAudioResourceId", "main" },
-        { "m_notePayload", "legacy-draft" },
-    };
-    const auto group = legacyJson.get<MMM::ProjectDraftLaneGroup>();
-    return check(group.m_mainAudioResourceId == "main" &&
-                     group.m_notePayload == "legacy-draft" &&
-                     group.m_trackCount == 0,
-                 "legacy draft group should leave track count undeclared");
 }
 
 /// @brief 验证资源扫描不会把内部配置目录中的文件识别为谱面。
@@ -325,7 +306,6 @@ int main()
 
     const bool success = !filesystemError && testSplitRoundTrip(root) &&
                          testSplitWithoutDraftFile(oldSplitRoot) &&
-                         testLegacyDraftGroupWithoutTrackCount() &&
                          testInternalDirectoryIsNotScanned(root) &&
                          testLegacyFallbackAndRemoval(fallbackRoot);
     std::filesystem::remove_all(root, filesystemError);

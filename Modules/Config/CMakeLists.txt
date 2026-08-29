@@ -101,12 +101,6 @@ mmm_add_test_executable(Config AutoSaveConfigTest tests/AutoSaveConfigTest.cpp)
 target_link_libraries(AutoSaveConfigTest PRIVATE Config Log)
 add_test(NAME AutoSaveConfigTest COMMAND AutoSaveConfigTest)
 
-# 工具栏可见性测试覆盖分组字段往返、旧配置默认值和部分配置兼容性。
-mmm_add_test_executable(Config ToolbarVisibilityConfigTest
-                        tests/ToolbarVisibilityConfigTest.cpp)
-target_link_libraries(ToolbarVisibilityConfigTest PRIVATE Config Log)
-add_test(NAME ToolbarVisibilityConfigTest COMMAND ToolbarVisibilityConfigTest)
-
 # 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
 mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)

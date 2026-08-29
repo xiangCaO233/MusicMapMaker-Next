@@ -1,6 +1,6 @@
 #include "ui/imgui/manager/ToolbarView.h"
-
 #include "audio/AudioManager.h"
+#include "canvas/TimelineCanvas.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/ColorPaletteFile.h"
@@ -13,15 +13,11 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "ui/ICanvasView.h"
-#include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
-#include "ui/imgui/manager/SoundEffectToolTrackLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
-#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -359,38 +355,13 @@ std::string normalizePaletteExportPath(const std::string& path)
 
 ToolbarView::ToolbarView(const std::string& name) : IUIView(name) {}
 
-/// @brief 绑定工具栏使用的编辑器应用服务观察指针。
-void ToolbarView::setEditorApplicationService(
-    IEditorApplicationService* service)
-{
-    m_editorApplicationService = service;
-}
-
-Config::EditorConfig ToolbarView::currentEditorConfig() const
-{
-    return m_editorApplicationService
-               ? m_editorApplicationService->editorConfig()
-               : Config::AppConfig::instance().getEditorConfig();
-}
-
-void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
-{
-    if ( m_editorApplicationService ) {
-        m_editorApplicationService->updateEditorConfig(config);
-    }
-}
-
 void ToolbarView::update(UIManager* sourceManager)
 {
-    setEditorApplicationService(
-        sourceManager ? sourceManager->getEditorApplicationService() : nullptr);
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     // 从逻辑引擎同步当前工具状态
-    if ( m_editorApplicationService ) {
-        m_currentTool = m_editorApplicationService->currentTool();
-    }
+    m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
     if ( m_currentTool != Logic::EditTool::Layout ) {
         m_showLayoutPopup = false;
     }
@@ -398,29 +369,8 @@ void ToolbarView::update(UIManager* sourceManager)
     // 样式锁定
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     auto& aesthetics     = editorSettings.aesthetics;
-    const auto& toolbarVisibility   = editorSettings.toolbarVisibility;
-    const auto& stateToolVisibility = toolbarVisibility.stateTools;
-    const auto& independentButtonVisibility =
-        toolbarVisibility.independentButtons;
     const bool showToolLabels  = editorSettings.showToolLabels;
     const bool fixedToolWindow = editorSettings.fixedToolWindow;
-
-    if ( !stateToolVisibility.layout ) m_showLayoutPopup = false;
-    if ( !independentButtonVisibility.notePalette ) m_showColorPopup = false;
-    if ( !independentButtonVisibility.magnet ) m_showMagnetPopup = false;
-    if ( !independentButtonVisibility.beatLineDisplay ) {
-        m_showBeatLinePopup = false;
-    }
-    if ( !independentButtonVisibility.soundEffectTool ) {
-        m_showSoundEffectTool = false;
-    }
-    if ( !independentButtonVisibility.playbackSpeed ) {
-        m_showSpeedPopup = false;
-    }
-    if ( !independentButtonVisibility.trackCount ) m_showKeyPopup = false;
-    if ( !independentButtonVisibility.beatDivisor ) {
-        m_showDivisorPopup = false;
-    }
 
     float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
 
@@ -480,10 +430,12 @@ void ToolbarView::update(UIManager* sourceManager)
 
         const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
         auto&       engine      = Logic::EditorEngine::instance();
-        const auto  editorCfg   = currentEditorConfig();
+        const auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
         m_beatLineDisplayModeHistory.observe(
             editorCfg.visual.beatLineDisplayMode);
+        const bool shouldPlayAdjustmentFeedback =
+            editorCfg.settings.stopPlaybackOnScroll;
 
         auto tooltipWithShortcut =
             [](const char*                    tooltip,
@@ -506,9 +458,7 @@ void ToolbarView::update(UIManager* sourceManager)
             }
             auto newConfig = editorCfg;
             applyChange(newConfig);
-            if ( m_editorApplicationService ) {
-                m_editorApplicationService->updateEditorConfig(newConfig);
-            }
+            engine.setEditorConfig(newConfig);
             return true;
         };
 
@@ -598,9 +548,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                 showToolLabels) ) {
                 auto newConfig = editorCfg;
                 applyChange(newConfig);
-                if ( m_editorApplicationService ) {
-                    m_editorApplicationService->updateEditorConfig(newConfig);
-                }
+                engine.setEditorConfig(newConfig);
             }
             ImGui::PopID();
             std::string tooltipText = tooltipWithShortcut(tooltip, binding);
@@ -630,336 +578,317 @@ void ToolbarView::update(UIManager* sourceManager)
                 std::string tooltipText = tooltipWithShortcut(tooltip, binding);
                 drawTooltip(tooltipText.c_str());
                 ImGui::PopStyleColor(3);
+                advanceItem();
             };
+
+        const bool playbackPlaying = engine.isPlaybackPlaying();
+        drawRuntimeToggleButton(
+            playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
+            playbackPlaying,
+            TR("ui.toolbar.play_pause").data(),
+            TR("ui.toolbar.short.play_pause").data(),
+            shortcutConfig.togglePlayback,
+            [](bool shouldPlay) {
+                MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ shouldPlay });
+            });
 
         const bool isLayoutEditing = m_currentTool == Logic::EditTool::Layout;
         ImGui::BeginDisabled(isLayoutEditing);
-        if ( stateToolVisibility.move ) {
-            drawToolButton(ICON_MMM_HAND,
-                           Logic::EditTool::Move,
-                           TR("ui.toolbar.move").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.move").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
-        if ( stateToolVisibility.marquee ) {
-            drawToolButton(ICON_MMM_SQUARE_SELECT,
-                           Logic::EditTool::Marquee,
-                           TR("ui.toolbar.marquee").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.marquee").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
-        if ( stateToolVisibility.draw ) {
-            drawToolButton(ICON_MMM_PEN,
-                           Logic::EditTool::Draw,
-                           TR("ui.toolbar.draw").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.draw").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
-        if ( stateToolVisibility.colorBrush ) {
-            drawToolButton(ICON_MMM_PAINT_BRUSH,
-                           Logic::EditTool::ColorBrush,
-                           TR("ui.toolbar.color_brush").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.color_brush").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
-        if ( stateToolVisibility.colorEraser ) {
-            drawToolButton(ICON_MMM_ERASER,
-                           Logic::EditTool::ColorEraser,
-                           TR("ui.toolbar.color_eraser").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.color_eraser").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
+        drawToolButton(ICON_MMM_HAND,
+                       Logic::EditTool::Move,
+                       TR("ui.toolbar.move").data(),
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.move").data(),
+                       showToolLabels,
+                       sourceManager);
+        advanceItem();
+        drawToolButton(ICON_MMM_SQUARE_SELECT,
+                       Logic::EditTool::Marquee,
+                       TR("ui.toolbar.marquee").data(),
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.marquee").data(),
+                       showToolLabels,
+                       sourceManager);
+        advanceItem();
+        drawToolButton(ICON_MMM_PEN,
+                       Logic::EditTool::Draw,
+                       TR("ui.toolbar.draw").data(),
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.draw").data(),
+                       showToolLabels,
+                       sourceManager);
+        advanceItem();
+        drawToolButton(ICON_MMM_PAINT_BRUSH,
+                       Logic::EditTool::ColorBrush,
+                       TR("ui.toolbar.color_brush").data(),
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.color_brush").data(),
+                       showToolLabels,
+                       sourceManager);
+        advanceItem();
+        drawToolButton(ICON_MMM_ERASER,
+                       Logic::EditTool::ColorEraser,
+                       TR("ui.toolbar.color_eraser").data(),
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.color_eraser").data(),
+                       showToolLabels,
+                       sourceManager);
+        advanceItem();
         ImGui::EndDisabled();
 
-        if ( stateToolVisibility.layout ) {
-            drawLayoutButton(btnSize, btnHeight, showToolLabels);
-            advanceItem();
-        }
+        ImVec2 sepPos = ImGui::GetCursorScreenPos();
+        float  sepH   = 2.0f * dpiScale;
+        ImGui::GetWindowDrawList()->AddLine(
+            { sepPos.x + 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
+            { sepPos.x + btnSize - 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
+            IM_COL32(100, 100, 100, 150),
+            1.0f * dpiScale);
+        ImGui::Dummy(ImVec2(btnSize, sepH));
+        advanceItem();
 
-        const bool hasVisibleStateTool =
-            stateToolVisibility.move || stateToolVisibility.marquee ||
-            stateToolVisibility.draw || stateToolVisibility.colorBrush ||
-            stateToolVisibility.colorEraser || stateToolVisibility.layout;
-        const bool hasVisibleUpperIndependentButton =
-            independentButtonVisibility.notePalette ||
-            independentButtonVisibility.magnet ||
-            independentButtonVisibility.scrollTimingMapping ||
-            independentButtonVisibility.beatLineDisplay ||
-            independentButtonVisibility.soundEffectTool;
-        if ( hasVisibleStateTool && hasVisibleUpperIndependentButton ) {
-            ImVec2 sepPos = ImGui::GetCursorScreenPos();
-            float  sepH   = 2.0f * dpiScale;
-            ImGui::GetWindowDrawList()->AddLine(
-                { sepPos.x + 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
-                { sepPos.x + btnSize - 4.0f * dpiScale,
-                  sepPos.y + sepH * 0.5f },
-                IM_COL32(100, 100, 100, 150),
-                1.0f * dpiScale);
-            ImGui::Dummy(ImVec2(btnSize, sepH));
-            advanceItem();
-        }
+        drawLayoutButton(btnSize, btnHeight, showToolLabels);
+        advanceItem();
 
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
         applyProjectPalettePreference();
 
-        if ( independentButtonVisibility.notePalette ) {
-            pushBtnStyle(m_showColorPopup);
-            if ( ::MMM::UI::FeedbackButton("##ToolbarNoteColor",
-                                           ImVec2(btnSize, btnHeight)) ) {
-                m_showColorPopup = !m_showColorPopup;
-                if ( m_showColorPopup ) {
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showBeatLinePopup   = false;
-                    m_showMagnetPopup     = false;
-                    m_showSoundEffectTool = false;
+        pushBtnStyle(m_showColorPopup);
+        if ( ::MMM::UI::FeedbackButton("##ToolbarNoteColor",
+                                       ImVec2(btnSize, btnHeight)) ) {
+            m_showColorPopup = !m_showColorPopup;
+            if ( m_showColorPopup ) {
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
+            }
+        }
+        {
+            ImDrawList*  drawList   = ImGui::GetWindowDrawList();
+            ImVec2       minPos     = ImGui::GetItemRectMin();
+            ImVec2       maxPos     = ImGui::GetItemRectMax();
+            const float  swatchSize = showToolLabels
+                                          ? std::floor(btnSize * 0.62f)
+                                          : std::floor(btnSize * 0.72f);
+            const ImVec2 swatchMin  = {
+                minPos.x + (btnSize - swatchSize) * 0.5f,
+                minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
+                                           : (btnHeight - swatchSize) * 0.5f),
+            };
+            const ImVec2 swatchMax = { swatchMin.x + swatchSize,
+                                       swatchMin.y + swatchSize };
+            drawList->AddRectFilled(
+                swatchMin,
+                swatchMax,
+                ImGui::ColorConvertFloat4ToU32(toImVec4(
+                    m_paletteColors[colorSlotIndex(m_activeColorSlot)])),
+                rounding);
+            drawList->AddRect(swatchMin,
+                              swatchMax,
+                              ImGui::GetColorU32(ImGuiCol_Text),
+                              rounding,
+                              0,
+                              std::floor(1.0f * dpiScale));
+            if ( showToolLabels ) {
+                if ( ImFont* labelFont = skinCfg.getFont("menu") ) {
+                    const char* label =
+                        TR("ui.toolbar.short.note_palette").data();
+                    const float  labelFontSize = std::floor(std::min(
+                        btnSize * 0.38f, ImGui::GetFontSize() * 0.72f));
+                    const ImVec2 labelSize     = labelFont->CalcTextSizeA(
+                        labelFontSize,
+                        std::numeric_limits<float>::max(),
+                        0.0f,
+                        label);
+                    const ImVec2 labelPos = {
+                        minPos.x + (btnSize - labelSize.x) * 0.5f,
+                        maxPos.y - labelSize.y - std::floor(3.0f * dpiScale),
+                    };
+                    drawList->AddText(labelFont,
+                                      labelFontSize,
+                                      labelPos,
+                                      ImGui::GetColorU32(ImGuiCol_Text),
+                                      label);
                 }
             }
-            {
-                ImDrawList*  drawList   = ImGui::GetWindowDrawList();
-                ImVec2       minPos     = ImGui::GetItemRectMin();
-                ImVec2       maxPos     = ImGui::GetItemRectMax();
-                const float  swatchSize = showToolLabels
-                                              ? std::floor(btnSize * 0.62f)
-                                              : std::floor(btnSize * 0.72f);
-                const ImVec2 swatchMin  = {
-                    minPos.x + (btnSize - swatchSize) * 0.5f,
-                    minPos.y + (showToolLabels
-                                    ? std::floor(5.0f * dpiScale)
-                                    : (btnHeight - swatchSize) * 0.5f),
-                };
-                const ImVec2 swatchMax = { swatchMin.x + swatchSize,
-                                           swatchMin.y + swatchSize };
-                drawList->AddRectFilled(
-                    swatchMin,
-                    swatchMax,
-                    ImGui::ColorConvertFloat4ToU32(toImVec4(
-                        m_paletteColors[colorSlotIndex(m_activeColorSlot)])),
-                    rounding);
-                drawList->AddRect(swatchMin,
-                                  swatchMax,
-                                  ImGui::GetColorU32(ImGuiCol_Text),
-                                  rounding,
-                                  0,
-                                  std::floor(1.0f * dpiScale));
-                if ( showToolLabels ) {
-                    if ( ImFont* labelFont = skinCfg.getFont("menu") ) {
-                        const char* label =
-                            TR("ui.toolbar.short.note_palette").data();
-                        const float  labelFontSize = std::floor(std::min(
-                            btnSize * 0.38f, ImGui::GetFontSize() * 0.72f));
-                        const ImVec2 labelSize     = labelFont->CalcTextSizeA(
-                            labelFontSize,
-                            std::numeric_limits<float>::max(),
-                            0.0f,
-                            label);
-                        const ImVec2 labelPos = {
-                            minPos.x + (btnSize - labelSize.x) * 0.5f,
-                            maxPos.y - labelSize.y -
-                                std::floor(3.0f * dpiScale),
-                        };
-                        drawList->AddText(labelFont,
-                                          labelFontSize,
-                                          labelPos,
-                                          ImGui::GetColorU32(ImGuiCol_Text),
-                                          label);
-                    }
-                }
+        }
+        m_lastColorBtnY = ImGui::GetItemRectMin().y;
+        drawTooltip(TR("ui.toolbar.note_palette").data());
+        ImGui::PopStyleColor(3);
+        advanceItem();
+
+        drawToggleButton(ICON_MMM_ARROWS_UP_DOWN,
+                         editorCfg.settings.reverseScroll,
+                         TR("ui.toolbar.reverse_scroll").data(),
+                         TR("ui.toolbar.short.reverse_scroll").data(),
+                         shortcutConfig.toggleReverseScroll,
+                         [](Config::EditorConfig& config) {
+                             config.settings.reverseScroll =
+                                 !config.settings.reverseScroll;
+                         });
+
+        pushBtnStyle(true);
+        ImGui::PushID("MagnetTool");
+        if ( drawIconButton(ICON_MMM_MAGNET,
+                            "##ToolbarMagnetTool",
+                            TR("ui.toolbar.short.magnet_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showMagnetPopup = !m_showMagnetPopup;
+            if ( m_showMagnetPopup ) {
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showBeatLinePopup   = false;
+                m_showSoundEffectTool = false;
             }
-            m_lastColorBtnY = ImGui::GetItemRectMin().y;
-            drawTooltip(TR("ui.toolbar.note_palette").data());
-            ImGui::PopStyleColor(3);
-            advanceItem();
+        }
+        m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        drawTooltip(TR("ui.toolbar.magnet_tool").data());
+        ImGui::PopStyleColor(3);
+        advanceItem();
+
+        drawToggleButton(ICON_MMM_ARROW_DOWN,
+                         editorCfg.settings.snapFloor,
+                         TR("ui.toolbar.snap_floor").data(),
+                         TR("ui.toolbar.short.snap_floor").data(),
+                         shortcutConfig.toggleSnapFloor,
+                         [](Config::EditorConfig& config) {
+                             config.settings.snapFloor =
+                                 !config.settings.snapFloor;
+                         });
+
+        drawToggleButton(ICON_MMM_EYE,
+                         !editorCfg.visual.enableLinearScrollMapping,
+                         TR("ui.toolbar.scroll_timing_mapping").data(),
+                         TR("ui.toolbar.short.scroll_timing_mapping").data(),
+                         shortcutConfig.toggleScrollTimingMapping,
+                         [](Config::EditorConfig& config) {
+                             config.visual.enableLinearScrollMapping =
+                                 !config.visual.enableLinearScrollMapping;
+                         });
+
+        pushBtnStyle(true);
+        ImGui::PushID("BeatLineDisplayMode");
+        if ( drawIconButton(ICON_MMM_BARS,
+                            "##ToolbarBeatLineDisplayMode",
+                            TR("ui.toolbar.short.draw_beat_lines").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showBeatLinePopup = !m_showBeatLinePopup;
+            if ( m_showBeatLinePopup ) {
+                m_showColorPopup      = false;
+                m_showDivisorPopup    = false;
+                m_showKeyPopup        = false;
+                m_showSpeedPopup      = false;
+                m_showMagnetPopup     = false;
+                m_showSoundEffectTool = false;
+            }
+        }
+        m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        {
+            const std::string tooltipText =
+                tooltipWithShortcut(TR("ui.toolbar.draw_beat_lines").data(),
+                                    shortcutConfig.toggleBeatLines);
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
+
+        drawToggleButton(ICON_MMM_STOP,
+                         editorCfg.settings.stopPlaybackOnScroll,
+                         TR("ui.toolbar.stop_on_scroll").data(),
+                         TR("ui.toolbar.short.stop_on_scroll").data(),
+                         shortcutConfig.toggleStopPlaybackOnScroll,
+                         [](Config::EditorConfig& config) {
+                             config.settings.stopPlaybackOnScroll =
+                                 !config.settings.stopPlaybackOnScroll;
+                         });
+
+        pushBtnStyle(true);
+        ImGui::PushID("SoundEffectTool");
+        if ( drawIconButton(ICON_MMM_HIT_SFX,
+                            "##ToolbarSoundEffectTool",
+                            TR("ui.toolbar.short.key_sound_tool").data(),
+                            btnSize,
+                            btnHeight,
+                            showToolLabels) ) {
+            m_showSoundEffectTool = !m_showSoundEffectTool;
+            if ( m_showSoundEffectTool ) {
+                m_soundEffectGainDraftInitialized = false;
+                m_showLayoutPopup                 = false;
+                m_showColorPopup                  = false;
+                m_showDivisorPopup                = false;
+                m_showKeyPopup                    = false;
+                m_showSpeedPopup                  = false;
+                m_showBeatLinePopup               = false;
+                m_showMagnetPopup                 = false;
+            }
+        }
+        m_lastSoundEffectToolBtnY = ImGui::GetItemRectMin().y;
+        ImGui::PopID();
+        {
+            std::string tooltipText = TR("ui.toolbar.key_sound_tool").data();
+            const auto  shortcutText =
+                ShortcutUtils::formatShortcut(shortcutConfig.toggleHitSfx);
+            if ( !shortcutText.empty() ) {
+                tooltipText += "\n";
+                tooltipText +=
+                    TR("ui.toolbar.key_sound_tool_shortcut_hint").data();
+                tooltipText += " (";
+                tooltipText += shortcutText;
+                tooltipText += ")";
+            }
+            drawTooltip(tooltipText.c_str());
+        }
+        ImGui::PopStyleColor(3);
+        advanceItem();
+
+        drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
+                         editorCfg.visual.enableHitEffects,
+                         TR("ui.toolbar.hit_effects").data(),
+                         TR("ui.toolbar.short.hit_effects").data(),
+                         shortcutConfig.toggleHitEffects,
+                         [](Config::EditorConfig& config) {
+                             config.visual.enableHitEffects =
+                                 !config.visual.enableHitEffects;
+                         });
+
+        drawRuntimeToggleButton(
+            ICON_MMM_LINK,
+            engine.isSyncSameMainAudioCanvasesEnabled(),
+            TR("ui.toolbar.sync_same_main_audio").data(),
+            TR("ui.toolbar.short.sync_same_main_audio").data(),
+            shortcutConfig.toggleSyncSameMainAudio,
+            [&engine](bool enabled) {
+                engine.setSyncSameMainAudioCanvases(enabled);
+            });
+
+        float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
+        float bottomStartY = ImGui::GetCursorPosY() +
+                             ImGui::GetContentRegionAvail().y - bottomButtonsH;
+        if ( bottomStartY > ImGui::GetCursorPosY() ) {
+            ImGui::SetCursorPosY(bottomStartY);
         }
 
-        if ( independentButtonVisibility.magnet ) {
-            pushBtnStyle(true);
-            ImGui::PushID("MagnetTool");
-            if ( drawIconButton(ICON_MMM_MAGNET,
-                                "##ToolbarMagnetTool",
-                                TR("ui.toolbar.short.magnet_tool").data(),
-                                btnSize,
-                                btnHeight,
-                                showToolLabels) ) {
-                m_showMagnetPopup = !m_showMagnetPopup;
-                if ( m_showMagnetPopup ) {
-                    m_showColorPopup      = false;
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showBeatLinePopup   = false;
-                    m_showSoundEffectTool = false;
-                }
-            }
-            m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
-            ImGui::PopID();
-            drawTooltip(TR("ui.toolbar.magnet_tool").data());
-            ImGui::PopStyleColor(3);
-            advanceItem();
-        }
-
-        if ( independentButtonVisibility.scrollTimingMapping ) {
-            drawToggleButton(
-                ICON_MMM_EYE,
-                !editorCfg.visual.enableLinearScrollMapping,
-                TR("ui.toolbar.scroll_timing_mapping").data(),
-                TR("ui.toolbar.short.scroll_timing_mapping").data(),
-                shortcutConfig.toggleScrollTimingMapping,
-                [](Config::EditorConfig& config) {
-                    config.visual.enableLinearScrollMapping =
-                        !config.visual.enableLinearScrollMapping;
-                });
-        }
-
-        if ( independentButtonVisibility.beatLineDisplay ) {
-            pushBtnStyle(true);
-            ImGui::PushID("BeatLineDisplayMode");
-            if ( drawIconButton(ICON_MMM_BARS,
-                                "##ToolbarBeatLineDisplayMode",
-                                TR("ui.toolbar.short.draw_beat_lines").data(),
-                                btnSize,
-                                btnHeight,
-                                showToolLabels) ) {
-                m_showBeatLinePopup = !m_showBeatLinePopup;
-                if ( m_showBeatLinePopup ) {
-                    m_showColorPopup      = false;
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showMagnetPopup     = false;
-                    m_showSoundEffectTool = false;
-                }
-            }
-            m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
-            ImGui::PopID();
-            {
-                const std::string tooltipText =
-                    tooltipWithShortcut(TR("ui.toolbar.draw_beat_lines").data(),
-                                        shortcutConfig.toggleBeatLines);
-                drawTooltip(tooltipText.c_str());
-            }
-            ImGui::PopStyleColor(3);
-            advanceItem();
-        }
-
-        if ( independentButtonVisibility.soundEffectTool ) {
-            pushBtnStyle(true);
-            ImGui::PushID("SoundEffectTool");
-            if ( drawIconButton(ICON_MMM_HIT_SFX,
-                                "##ToolbarSoundEffectTool",
-                                TR("ui.toolbar.short.key_sound_tool").data(),
-                                btnSize,
-                                btnHeight,
-                                showToolLabels) ) {
-                m_showSoundEffectTool = !m_showSoundEffectTool;
-                if ( m_showSoundEffectTool ) {
-                    m_soundEffectGainDraftInitialized = false;
-                    m_showLayoutPopup                 = false;
-                    m_showColorPopup                  = false;
-                    m_showDivisorPopup                = false;
-                    m_showKeyPopup                    = false;
-                    m_showSpeedPopup                  = false;
-                    m_showBeatLinePopup               = false;
-                    m_showMagnetPopup                 = false;
-                }
-            }
-            m_lastSoundEffectToolBtnY = ImGui::GetItemRectMin().y;
-            ImGui::PopID();
-            {
-                std::string tooltipText =
-                    TR("ui.toolbar.key_sound_tool").data();
-                const auto shortcutText =
-                    ShortcutUtils::formatShortcut(shortcutConfig.toggleHitSfx);
-                if ( !shortcutText.empty() ) {
-                    tooltipText += "\n";
-                    tooltipText +=
-                        TR("ui.toolbar.key_sound_tool_shortcut_hint").data();
-                    tooltipText += " (";
-                    tooltipText += shortcutText;
-                    tooltipText += ")";
-                }
-                drawTooltip(tooltipText.c_str());
-            }
-            ImGui::PopStyleColor(3);
-            advanceItem();
-        }
-
-        const int bottomButtonCount =
-            static_cast<int>(independentButtonVisibility.playback) +
-            static_cast<int>(independentButtonVisibility.playbackSpeed) +
-            static_cast<int>(independentButtonVisibility.trackCount) +
-            static_cast<int>(independentButtonVisibility.beatDivisor);
-        float bottomButtonsH = 0.0f;
-        if ( independentButtonVisibility.playback ) {
-            bottomButtonsH += btnHeight;
-        }
-        bottomButtonsH +=
-            btnSize *
-            static_cast<float>(
-                static_cast<int>(independentButtonVisibility.playbackSpeed) +
-                static_cast<int>(independentButtonVisibility.trackCount) +
-                static_cast<int>(independentButtonVisibility.beatDivisor));
-        if ( bottomButtonCount > 1 ) {
-            bottomButtonsH +=
-                itemSpacing * static_cast<float>(bottomButtonCount - 1);
-        }
-        if ( bottomButtonCount > 0 ) {
-            float bottomStartY = ImGui::GetCursorPosY() +
-                                 ImGui::GetContentRegionAvail().y -
-                                 bottomButtonsH;
-            if ( bottomStartY > ImGui::GetCursorPosY() ) {
-                ImGui::SetCursorPosY(bottomStartY);
-            }
-        }
-
-        int  renderedBottomButtonCount = 0;
-        auto advanceBottomButton       = [&]() {
-            ++renderedBottomButtonCount;
-            if ( renderedBottomButtonCount < bottomButtonCount ) {
-                advanceItem();
-            }
+        auto applyPlaybackSpeed = [&engine](double speed) {
+            engine.pushCommand(
+                Logic::CmdSetPlaybackSpeed{ std::clamp(speed, 0.25, 2.0) });
         };
 
-        if ( independentButtonVisibility.playback ) {
-            const bool playbackPlaying =
-                m_editorApplicationService &&
-                m_editorApplicationService->isPlaybackPlaying();
-            drawRuntimeToggleButton(
-                playbackPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
-                playbackPlaying,
-                TR("ui.toolbar.play_pause").data(),
-                TR("ui.toolbar.short.play_pause").data(),
-                shortcutConfig.togglePlayback,
-                [](bool shouldPlay) {
-                    MenuUtil::dispatchCommand(
-                        Logic::CmdSetPlayState{ shouldPlay });
-                });
-            advanceBottomButton();
-        }
-
-        if ( independentButtonVisibility.playbackSpeed ||
-             independentButtonVisibility.trackCount ) {
+        {
             std::lock_guard<std::recursive_mutex> sessionLock(
                 engine.getSessionMutex());
             auto session = engine.getActiveSession();
@@ -976,7 +905,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 ImGui::BeginDisabled();
             }
 
-            if ( independentButtonVisibility.playbackSpeed ) {
+            {
                 pushBtnStyle(m_showSpeedPopup);
                 ImFont* contentFont = skinCfg.getFont("content");
                 if ( contentFont ) {
@@ -1008,59 +937,100 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                    float wheel = ImGui::GetIO().MouseWheel;
+                    if ( std::abs(wheel) > 0.1f ) {
+                        constexpr std::array<double, 4> presets = {
+                            0.25, 0.5, 0.75, 1.0
+                        };
+                        size_t bestIdx = 0;
+                        double minDiff = std::abs(currentSpeed - presets[0]);
+                        for ( size_t i = 1; i < presets.size(); ++i ) {
+                            double diff = std::abs(currentSpeed - presets[i]);
+                            if ( diff < minDiff ) {
+                                minDiff = diff;
+                                bestIdx = i;
+                            }
+                        }
+
+                        if ( wheel > 0.0f && bestIdx + 1 < presets.size() ) {
+                            ++bestIdx;
+                        } else if ( wheel < 0.0f && bestIdx > 0 ) {
+                            --bestIdx;
+                        }
+
+                        double newSpeed = presets[bestIdx];
+                        if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
+                            applyPlaybackSpeed(newSpeed);
+                            if ( shouldPlayAdjustmentFeedback ) {
+                                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            }
+                        }
+                    }
                     drawTooltip(TR("ui.toolbar.playback_speed").data());
                 }
 
                 if ( contentFont ) ImGui::PopFont();
                 ImGui::PopStyleColor(3);
-                advanceBottomButton();
+            }
+            advanceItem();
+
+            pushBtnStyle(m_showKeyPopup);
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) {
+                ImGui::PushFont(contentFont, contentFont->LegacySize);
             }
 
-            if ( independentButtonVisibility.trackCount ) {
-                pushBtnStyle(m_showKeyPopup);
-                ImFont* contentFont = skinCfg.getFont("content");
-                if ( contentFont ) {
-                    ImGui::PushFont(contentFont, contentFont->LegacySize);
-                }
+            char keyBuf[64];
+            if ( hasBeatmap ) {
+                snprintf(keyBuf,
+                         sizeof(keyBuf),
+                         "%dK###ToolbarKeyCount",
+                         currentTracks);
+            } else {
+                snprintf(keyBuf, sizeof(keyBuf), "--###ToolbarKeyCount");
+            }
 
-                char keyBuf[64];
-                if ( hasBeatmap ) {
-                    snprintf(keyBuf,
-                             sizeof(keyBuf),
-                             "%dK###ToolbarKeyCount",
-                             currentTracks);
-                } else {
-                    snprintf(keyBuf, sizeof(keyBuf), "--###ToolbarKeyCount");
+            if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
+                m_showKeyPopup = !m_showKeyPopup;
+                if ( m_showKeyPopup ) {
+                    m_showDivisorPopup    = false;
+                    m_showSpeedPopup      = false;
+                    m_showBeatLinePopup   = false;
+                    m_showMagnetPopup     = false;
+                    m_showSoundEffectTool = false;
                 }
+            }
+            m_lastKeyBtnY = ImGui::GetItemRectMin().y;
 
-                if ( ::MMM::UI::FeedbackButton(keyBuf,
-                                               ImVec2(btnSize, btnSize)) ) {
-                    m_showKeyPopup = !m_showKeyPopup;
-                    if ( m_showKeyPopup ) {
-                        m_showDivisorPopup    = false;
-                        m_showSpeedPopup      = false;
-                        m_showBeatLinePopup   = false;
-                        m_showMagnetPopup     = false;
-                        m_showSoundEffectTool = false;
+            if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                float wheel = ImGui::GetIO().MouseWheel;
+                if ( std::abs(wheel) > 0.1f ) {
+                    int delta     = (wheel > 0) ? 1 : -1;
+                    int newTracks = std::clamp(currentTracks + delta, 1, 32);
+                    if ( newTracks != currentTracks ) {
+                        auto meta = session->getContext()
+                                        .currentBeatmap->m_baseMapMetadata;
+                        meta.track_count = newTracks;
+                        engine.pushCommand(
+                            Logic::CmdUpdateBeatmapMetadata{ meta });
+                        if ( shouldPlayAdjustmentFeedback ) {
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        }
                     }
                 }
-                m_lastKeyBtnY = ImGui::GetItemRectMin().y;
-
-                if ( hasBeatmap && ImGui::IsItemHovered() ) {
-                    drawTooltip(TR("ui.settings.beatmap.tracks").data());
-                }
-
-                if ( contentFont ) ImGui::PopFont();
-                ImGui::PopStyleColor(3);
-                advanceBottomButton();
+                drawTooltip(TR("ui.settings.beatmap.tracks").data());
             }
+
+            if ( contentFont ) ImGui::PopFont();
+            ImGui::PopStyleColor(3);
 
             if ( !hasBeatmap ) {
                 ImGui::EndDisabled();
             }
         }
+        advanceItem();
 
-        if ( independentButtonVisibility.beatDivisor ) {
+        {
             int currentDivisor = editorCfg.settings.beatDivisor;
             pushBtnStyle(m_showDivisorPopup);
             ImFont* contentFont = skinCfg.getFont("content");
@@ -1085,11 +1055,27 @@ void ToolbarView::update(UIManager* sourceManager)
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
             if ( ImGui::IsItemHovered() ) {
+                float wheel = ImGui::GetIO().MouseWheel;
+                if ( std::abs(wheel) > 0.1f ) {
+                    int delta = (wheel > 0) ? 1 : -1;
+                    if ( ImGui::GetIO().KeyShift )
+                        delta *= static_cast<int>(
+                            editorCfg.settings.scrollSpeedMultiplier);
+                    int newDivisor = std::clamp(currentDivisor + delta, 1, 64);
+                    if ( newDivisor != currentDivisor ) {
+                        auto newConfig                 = editorCfg;
+                        newConfig.settings.beatDivisor = newDivisor;
+                        engine.setEditorConfig(newConfig);
+                        if ( shouldPlayAdjustmentFeedback ) {
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        }
+                    }
+                }
+
                 drawTooltip(TR("ui.toolbar.beat_divisor").data());
             }
             if ( contentFont ) ImGui::PopFont();
             ImGui::PopStyleColor(3);
-            advanceBottomButton();
         }
 
         if ( pushedIconFont ) ImGui::PopFont();
@@ -1162,7 +1148,7 @@ void ToolbarView::update(UIManager* sourceManager)
                             ImVec2(itemSpacing, itemSpacing));
 
         if ( ImGui::Begin("##BeatDivisorPopup", nullptr, popupFlags) ) {
-            auto editorCfg      = currentEditorConfig();
+            auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             int  currentDivisor = editorCfg.settings.beatDivisor;
 
             ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor").data());
@@ -1173,7 +1159,7 @@ void ToolbarView::update(UIManager* sourceManager)
                      "##DivisorSlider", &currentDivisor, 1, 64) ) {
                 auto newConfig                 = editorCfg;
                 newConfig.settings.beatDivisor = currentDivisor;
-                updateEditorConfig(newConfig);
+                Logic::EditorEngine::instance().setEditorConfig(newConfig);
             }
             if ( ImGui::IsItemHovered() ) {
                 Utils::renderTooltip(
@@ -1214,7 +1200,7 @@ void ToolbarView::update(UIManager* sourceManager)
                          buf, ImVec2(presetButtonWidth, presetButtonHeight)) ) {
                     auto newConfig                 = editorCfg;
                     newConfig.settings.beatDivisor = commonDivisors[i];
-                    updateEditorConfig(newConfig);
+                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
             }
             ImGui::PopStyleVar();
@@ -1460,7 +1446,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     auto& engine = Logic::EditorEngine::instance();
     bool  hasBeatmap{ false };
     int   playerTrackCount{ 0 };
-    int   draftTrackCount{ 0 };
     int   bgmTrackCount{ 0 };
     {
         std::lock_guard<std::recursive_mutex> sessionLock(
@@ -1471,9 +1456,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 session->getContext().currentBeatmap->m_baseMapMetadata;
             hasBeatmap       = true;
             playerTrackCount = std::max(0, metadata.track_count);
-            draftTrackCount =
-                std::max(0, session->getContext().draftTrackCount);
-            bgmTrackCount = std::max(0, metadata.bgm_track_count);
+            bgmTrackCount    = std::max(0, metadata.bgm_track_count);
         }
     }
 
@@ -1484,12 +1467,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         std::floor(aesthetics.windowRounding * dpiScale);
     const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
     const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
-    const auto  trackLayout   = calculateSoundEffectToolTrackLayout(
-        playerTrackCount, draftTrackCount, bgmTrackCount);
-    const int playerRows = trackLayout.playerRows;
-    const int draftRows  = trackLayout.draftRows;
-    const int bgmRows    = trackLayout.bgmRows;
-    const int totalRows  = trackLayout.totalRows;
+    const int   playerRows    = std::max(1, playerTrackCount);
+    const int   bgmRows       = std::max(1, bgmTrackCount);
+    const int   totalRows     = 7 + playerRows + bgmRows;
 
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
@@ -1544,7 +1524,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     ImGui::Separator();
 
     auto&      audio        = Audio::AudioManager::instance();
-    const auto editorConfig = currentEditorConfig();
+    const auto editorConfig = engine.getEditorConfig();
     if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
         m_unboundHitSoundGainDraft =
             editorConfig.settings.sfxConfig.unboundHitSfxGain;
@@ -1613,7 +1593,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                                 const char* id,
                                 bool        muted,
                                 float       gain,
-                                float       maximumGain,
                                 const auto& applyMute,
                                 const auto& applyGain,
                                 const auto& persistGain) {
@@ -1629,10 +1608,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         drawMuteStateButton(muted, gain, applyMute);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(gainSliderWidth);
-        const float maximumGainPercent = maximumGain * 100.0F;
-        float gainPercent = std::clamp(gain * 100.0F, 0.0F, maximumGainPercent);
+        float gainPercent = std::clamp(gain * 100.0F, 0.0F, 200.0F);
         if ( ::MMM::UI::FeedbackSliderFloat(
-                 "##Gain", &gainPercent, 0.0F, maximumGainPercent, "%.0f%%") ) {
+                 "##Gain", &gainPercent, 0.0F, 200.0F, "%.0f%%") ) {
             applyGain(gainPercent * 0.01F);
         }
         if ( ImGui::IsItemDeactivatedAfterEdit() ) {
@@ -1645,16 +1623,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     };
 
     const int    hitSoundHeaderRow  = 0;
-    const int    allHitSoundRow     = 1;
-    const int    unboundHitSoundRow = 2;
-    const int    boundHitSoundRow   = 3;
-    const int    playerHeaderRow    = 4;
-    const int    playerMasterRow    = 5;
-    const int    playerTrackBegin   = 6;
-    const int    draftHeaderRow     = playerTrackBegin + playerRows;
-    const int    draftMasterRow     = draftHeaderRow + 1;
-    const int    draftTrackBegin    = draftMasterRow + 1;
-    const int    bgmHeaderRow       = draftTrackBegin + draftRows;
+    const int    unboundHitSoundRow = 1;
+    const int    boundHitSoundRow   = 2;
+    const int    playerHeaderRow    = 3;
+    const int    playerMasterRow    = 4;
+    const int    playerTrackBegin   = 5;
+    const int    bgmHeaderRow       = playerTrackBegin + playerRows;
     const int    bgmMasterRow       = bgmHeaderRow + 1;
     const int    bgmTrackBegin      = bgmMasterRow + 1;
     const ImVec2 contentStart       = ImGui::GetCursorPos();
@@ -1681,29 +1655,16 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
             continue;
         }
-        if ( row == allHitSoundRow ) {
-            drawMixRow(
-                TR("ui.key_sound_tool.all_hit_sounds").data(),
-                "AllHitSounds",
-                audio.isSFXGainMuted(),
-                audio.getSFXGain(),
-                1.0F,
-                [&audio](bool muted) { audio.setSFXGainMute(muted); },
-                [&audio](float gain) { audio.setSFXGain(gain, false); },
-                [&audio](float gain) { audio.setSFXGain(gain); });
-            continue;
-        }
         if ( row == unboundHitSoundRow ) {
             drawMixRow(
                 TR("ui.key_sound_tool.unbound_hit_sound").data(),
                 "UnboundHitSound",
                 !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
                 m_unboundHitSoundGainDraft,
-                2.0F,
-                [this, &engine](bool muted) {
-                    auto config = currentEditorConfig();
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.enableUnboundHitSfx = !muted;
-                    updateEditorConfig(config);
+                    engine.setEditorConfig(config);
                 },
                 [this, &engine](float gain) {
                     m_unboundHitSoundGainDraft = gain;
@@ -1712,10 +1673,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                         .gain  = gain,
                     });
                 },
-                [this, &engine](float gain) {
-                    auto config = currentEditorConfig();
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.unboundHitSfxGain = gain;
-                    updateEditorConfig(config);
+                    engine.setEditorConfig(config);
                 });
             continue;
         }
@@ -1725,11 +1686,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "BoundHitSound",
                 !editorConfig.settings.sfxConfig.enableBoundHitSfx,
                 m_boundHitSoundGainDraft,
-                2.0F,
-                [this, &engine](bool muted) {
-                    auto config = currentEditorConfig();
+                [&engine](bool muted) {
+                    auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.enableBoundHitSfx = !muted;
-                    updateEditorConfig(config);
+                    engine.setEditorConfig(config);
                 },
                 [this, &engine](float gain) {
                     m_boundHitSoundGainDraft = gain;
@@ -1738,10 +1698,10 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                         .gain  = gain,
                     });
                 },
-                [this, &engine](float gain) {
-                    auto config = currentEditorConfig();
+                [&engine](float gain) {
+                    auto config = engine.getEditorConfig();
                     config.settings.sfxConfig.boundHitSfxGain = gain;
-                    updateEditorConfig(config);
+                    engine.setEditorConfig(config);
                 });
             continue;
         }
@@ -1753,14 +1713,14 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             drawMuteOnlyRow(TR("ui.key_sound_tool.area_master").data(),
                             "PlayerArea",
                             !editorConfig.settings.sfxConfig.enableHitSfx,
-                            [this, &engine](bool muted) {
-                                auto config = currentEditorConfig();
+                            [&engine](bool muted) {
+                                auto config = engine.getEditorConfig();
                                 config.settings.sfxConfig.enableHitSfx = !muted;
-                                updateEditorConfig(config);
+                                engine.setEditorConfig(config);
                             });
             continue;
         }
-        if ( row < draftHeaderRow ) {
+        if ( row < bgmHeaderRow ) {
             const int track = row - playerTrackBegin;
             if ( track >= playerTrackCount ) {
                 ImGui::TextDisabled(
@@ -1784,7 +1744,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "MixState",
                 audio.isPlayerKeySoundTrackMuted(trackIndex),
                 audio.getPlayerKeySoundTrackGain(trackIndex),
-                2.0F,
                 [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Player,
@@ -1795,67 +1754,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 [&engine, trackIndex](float gain) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
                         .area       = Logic::KeySoundTrackArea::Player,
-                        .trackIndex = trackIndex,
-                        .gain       = gain,
-                    });
-                },
-                [](float) {});
-            ImGui::PopID();
-            ImGui::PopID();
-            continue;
-        }
-        if ( row == draftHeaderRow ) {
-            ImGui::SeparatorText(TR("ui.key_sound_tool.draft_area").data());
-            continue;
-        }
-        if ( row == draftMasterRow ) {
-            if ( !hasBeatmap || draftTrackCount == 0 ) ImGui::BeginDisabled();
-            drawMuteOnlyRow(
-                TR("ui.key_sound_tool.area_master").data(),
-                "DraftArea",
-                audio.isDraftKeySoundAreaMuted(),
-                [&engine](bool muted) {
-                    engine.pushCommand(
-                        Logic::CmdSetDraftKeySoundAreaMute{ .muted = muted });
-                });
-            if ( !hasBeatmap || draftTrackCount == 0 ) ImGui::EndDisabled();
-            continue;
-        }
-        if ( row < bgmHeaderRow ) {
-            const int track = row - draftTrackBegin;
-            if ( track >= draftTrackCount ) {
-                ImGui::TextDisabled(
-                    "%s",
-                    TR(hasBeatmap ? "ui.key_sound_tool.no_draft_tracks"
-                                  : "ui.key_sound_tool.no_beatmap")
-                        .data());
-                continue;
-            }
-
-            ImGui::PushID("DraftTrack");
-            ImGui::PushID(track);
-            char label[64];
-            std::snprintf(label,
-                          sizeof(label),
-                          TR("ui.key_sound_tool.draft_track").data(),
-                          track + 1);
-            const auto trackIndex = static_cast<std::uint32_t>(track);
-            drawMixRow(
-                label,
-                "MixState",
-                audio.isDraftKeySoundTrackMuted(trackIndex),
-                audio.getDraftKeySoundTrackGain(trackIndex),
-                2.0F,
-                [&engine, trackIndex](bool muted) {
-                    engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
-                        .area       = Logic::KeySoundTrackArea::Draft,
-                        .trackIndex = trackIndex,
-                        .muted      = muted,
-                    });
-                },
-                [&engine, trackIndex](float gain) {
-                    engine.pushCommand(Logic::CmdSetKeySoundTrackGain{
-                        .area       = Logic::KeySoundTrackArea::Draft,
                         .trackIndex = trackIndex,
                         .gain       = gain,
                     });
@@ -1875,7 +1773,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 TR("ui.key_sound_tool.area_master").data(),
                 "BgmArea",
                 audio.isBgmKeySoundAreaMuted(),
-                [this, &engine](bool muted) {
+                [&engine](bool muted) {
                     engine.pushCommand(
                         Logic::CmdSetBgmKeySoundAreaMute{ .muted = muted });
                 });
@@ -1906,7 +1804,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 "MixState",
                 audio.isBgmKeySoundTrackMuted(trackIndex),
                 audio.getBgmKeySoundTrackGain(trackIndex),
-                2.0F,
                 [&engine, trackIndex](bool muted) {
                     engine.pushCommand(Logic::CmdSetKeySoundTrackMute{
                         .area       = Logic::KeySoundTrackArea::Bgm,
@@ -2079,13 +1976,13 @@ void ToolbarView::pushPaletteToSelection()
 void ToolbarView::pushBeatLinePaletteToRenderer()
 {
     auto& engine                         = Logic::EditorEngine::instance();
-    auto  config                         = currentEditorConfig();
+    auto  config                         = engine.getEditorConfig();
     config.visual.overrideBeatLineColors = m_overrideBeatLinePalette;
     for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
         config.visual.beatLineColors[i] =
             toStoredColor(m_beatLinePaletteColors[i]);
     }
-    updateEditorConfig(config);
+    engine.setEditorConfig(config);
 }
 
 void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
@@ -2198,7 +2095,7 @@ void ToolbarView::openPaletteExportFilePicker()
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
                                            "mmpalette" } };
-        const nfdresult_t result     = NativeFileDialog::saveFile(
+        const nfdresult_t result     = NFD_SaveDialogU8(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
         if ( result == NFD_OKAY && outPath != nullptr ) {
             exportCurrentPaletteToPath(outPath);
@@ -2250,8 +2147,8 @@ void ToolbarView::openPaletteImportFilePicker()
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
                                            "mmpalette" } };
-        const nfdresult_t result     = NativeFileDialog::openFile(
-            &outPath, filters, 1, defaultPath.c_str());
+        const nfdresult_t result =
+            NFD_OpenDialogU8(&outPath, filters, 1, defaultPath.c_str());
         if ( result == NFD_OKAY && outPath != nullptr ) {
             preparePaletteImportFromPath(outPath);
             NFD_FreePathU8(outPath);
@@ -3100,9 +2997,11 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             if ( tool == Logic::EditTool::ColorBrush ) {
                 pushPaletteToBrush();
             }
-            MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
+            Logic::EditorEngine::instance().pushCommand(
+                Logic::CmdChangeTool{ tool });
             if ( sourceManager ) {
-                auto* timeline = sourceManager->getCanvasView("TimelineWindow");
+                auto* timeline = sourceManager->getView<Canvas::TimelineCanvas>(
+                    "TimelineWindow");
                 if ( timeline && timeline->wasFocusedLastFrame() ) {
                     timeline->requestFocus();
                 }
@@ -3157,7 +3056,8 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
             m_showSoundEffectTool = false;
         }
         m_currentTool = nextTool;
-        MenuUtil::dispatchCommand(Logic::CmdChangeTool{ nextTool });
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::CmdChangeTool{ nextTool });
     }
     m_lastLayoutBtnY = ImGui::GetItemRectMin().y;
     ImGui::PopID();
@@ -3216,7 +3116,7 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
 
         auto editorConfig  = appConfig.getEditorConfig();
         auto persistConfig = [&]() {
-            updateEditorConfig(editorConfig);
+            Logic::EditorEngine::instance().setEditorConfig(editorConfig);
             appConfig.save();
         };
 
@@ -3363,7 +3263,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
             }
             auto updatedConfig = appConfig.getEditorConfig();
             updatedConfig.visual.beatLineDisplayMode = candidate;
-            updateEditorConfig(updatedConfig);
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
             m_beatLineDisplayModeHistory.observe(candidate);
             appConfig.save();
             m_beatLinePopupConfigDirty = false;
@@ -3398,7 +3298,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.beatLineCursorVisibleRatio =
                     visiblePercent * 0.01f;
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 m_beatLinePopupConfigDirty = true;
             }
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3420,7 +3320,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 updatedConfig.visual.beatLineCursorFadeRatio =
                     fadePercent * 0.01f;
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 m_beatLinePopupConfigDirty = true;
             }
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3522,7 +3422,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                      TR("ui.toolbar.layout_disable_vertical_object_drag")
                          .data(),
                      &dragSettings.disableVerticalObjectDrag) ) {
-                updateEditorConfig(appConfig.getEditorConfig());
+                Logic::EditorEngine::instance().setEditorConfig(
+                    appConfig.getEditorConfig());
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -3543,7 +3444,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
         const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
             auto updatedConfig   = appConfig.getEditorConfig();
             updatedConfig.visual = visual;
-            updateEditorConfig(updatedConfig);
+            Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
         };
         const auto saveVisualAfterEdit = [&]() {
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3564,7 +3465,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 auto updatedConfig = appConfig.getEditorConfig();
                 resetConfig(updatedConfig);
                 appConfig.getEditorConfig() = updatedConfig;
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
                 m_layoutVisualConfigDirty = false;
             }
@@ -3806,7 +3707,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
                     updatedConfig.visual.background.spectrum.enabled = visible;
                 }
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
 
@@ -3861,7 +3762,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     updatedConfig.visual.background.spectrum.baselineRatio =
                         defaults.baselineRatio;
                 }
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -3887,7 +3788,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         .editableCanvasComponentsForKeyCount(keyCount)
                         .placement(type)
                         .color = toStoredColor(editableColor);
-                    updateEditorConfig(updatedConfig);
+                    Logic::EditorEngine::instance().setEditorConfig(
+                        updatedConfig);
                     m_layoutComponentColorDirty = true;
                 }
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -3922,7 +3824,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                         updatedConfig.visual
                             .canvasComponentsForKeyCount(keyCount)
                             .backgroundSpectrum.visible;
-                    updateEditorConfig(updatedConfig);
+                    Logic::EditorEngine::instance().setEditorConfig(
+                        updatedConfig);
                 };
             const auto saveSpectrumAfterEdit = [&]() {
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
@@ -4094,7 +3997,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .syncKpsTrackSizes = syncKpsTrackSizes;
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -4114,7 +4017,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncKpsTrackRelativePositions(
                         syncKpsTrackRelativePositions);
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {
@@ -4135,7 +4038,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncAllKpsComponentPositions(
                         syncAllKpsComponentPositions);
-                updateEditorConfig(updatedConfig);
+                Logic::EditorEngine::instance().setEditorConfig(updatedConfig);
                 appConfig.save();
             }
             if ( ImGui::IsItemHovered() ) {

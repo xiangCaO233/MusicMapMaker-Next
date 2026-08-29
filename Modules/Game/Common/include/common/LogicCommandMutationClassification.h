@@ -77,8 +77,6 @@ namespace MMM::Logic
                 return ::MMM::BeatmapMutationFlags::Objects;
             } else if constexpr ( std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                   std::is_same_v<T, CmdUpdateTimelineEvents> ||
-                                  std::is_same_v<T,
-                                                 CmdUpdateBpmWithKeepSpeedSv> ||
                                   std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                   std::is_same_v<T, CmdCreateTimelineEvent> ||
                                   std::is_same_v<T, CmdCreateTimelineEvents> ||

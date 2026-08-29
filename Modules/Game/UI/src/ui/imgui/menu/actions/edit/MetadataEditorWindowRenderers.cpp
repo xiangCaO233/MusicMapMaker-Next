@@ -1,5 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "MetadataEditorWindowRenderers.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -14,7 +15,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Note.h"
 #include "mmm/project/Project.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/core.h>
 #include <imgui.h>
@@ -2258,9 +2258,9 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 for ( auto& [fingerprint, group] : groups ) {
                     ++groupIdx;
                     const auto minTimeText =
-                        MMM::UI::Utils::formatCanvasTime(group.minTime);
+                        Canvas::formatCanvasTime(group.minTime);
                     const auto maxTimeText =
-                        MMM::UI::Utils::formatCanvasTime(group.maxTime);
+                        Canvas::formatCanvasTime(group.maxTime);
                     std::string headerStr =
                         TR_FMT("ui.edit.note_metadata.group_header",
                                groupIdx,

@@ -1,4 +1,6 @@
 #include "ui/imgui/FloatingManagerUI.h"
+#include "canvas/Basic2DCanvas.h"
+#include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/ui/UISubViewToggleEvent.h"
@@ -6,7 +8,6 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include "ui/ICanvasView.h"
 #include "ui/ISubView.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -764,7 +765,8 @@ void FloatingManagerUI::captureCanvasDockSizeProtection(
             continue;
         }
 
-        auto* canvas = sourceManager->getCanvasView(entry->cameraId);
+        auto* canvas =
+            sourceManager->getView<Canvas::Basic2DCanvas>(entry->cameraId);
         if ( !canvas ) {
             continue;
         }
@@ -772,7 +774,8 @@ void FloatingManagerUI::captureCanvasDockSizeProtection(
         captureDockNode(canvas->getDockId());
     }
 
-    auto* timeline = sourceManager->getCanvasView("TimelineWindow");
+    auto* timeline =
+        sourceManager->getView<Canvas::TimelineCanvas>("TimelineWindow");
     if ( timeline ) {
         captureDockNode(timeline->getDockId());
     }

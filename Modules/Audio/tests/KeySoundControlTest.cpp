@@ -33,8 +33,6 @@ bool testDefaults()
     const bool valid =
         !controls.isPlayerAreaMuted() && !controls.isPlayerTrackMuted(12U) &&
         nearlyEqual(controls.getPlayerTrackGain(12U), 1.0F) &&
-        !controls.isDraftAreaMuted() && !controls.isDraftTrackMuted(12U) &&
-        nearlyEqual(controls.getDraftTrackGain(12U), 1.0F) &&
         !controls.isBgmAreaMuted() &&
         nearlyEqual(controls.getBgmAreaGain(), 1.0F) &&
         !controls.isBgmTrackMuted(7U) &&
@@ -128,51 +126,6 @@ bool testGainComposition()
     return controls.effectiveBgmTrackGain(2U) == 0.0F;
 }
 
-/// @brief 验证草稿区总控和逐轨增益独立于玩家区控制。
-/// @return 草稿事件只服从草稿区、对应草稿轨和共享音效类别时返回 true。
-bool testDraftAreaIsolation()
-{
-    MMM::Audio::KeySoundControlBank controls;
-    const auto                      draft = MMM::Audio::KeySoundPlaybackControl{
-        .enabled          = true,
-        .area             = MMM::Audio::KeySoundPlaybackArea::Draft,
-        .playerTrackIndex = 2U,
-        .effectGroup      = MMM::Audio::KeySoundEffectGroup::Bound,
-    };
-    const auto player = MMM::Audio::KeySoundPlaybackControl{
-        .enabled          = true,
-        .playerTrackIndex = 2U,
-        .effectGroup      = MMM::Audio::KeySoundEffectGroup::Bound,
-    };
-
-    controls.setDraftTrackGain(2U, 0.5F);
-    controls.setEffectGroupGain(MMM::Audio::KeySoundEffectGroup::Bound, 1.5F);
-    if ( !nearlyEqual(controls.effectivePlayerGain(draft), 0.75F) ||
-         !nearlyEqual(controls.effectivePlayerGain(player), 1.5F) ) {
-        XERROR("Draft track gain leaked into player Key sounds");
-        return false;
-    }
-
-    controls.setPlayerAreaMuted(true);
-    if ( controls.effectivePlayerGain(player) != 0.0F ||
-         !nearlyEqual(controls.effectivePlayerGain(draft), 0.75F) ) {
-        XERROR("Player area mute leaked into draft Key sounds");
-        return false;
-    }
-    controls.setPlayerAreaMuted(false);
-    controls.setDraftTrackMuted(2U, true);
-    if ( controls.effectivePlayerGain(draft) != 0.0F ||
-         controls.effectivePlayerGain(player) == 0.0F ) {
-        XERROR("Draft track mute leaked into player Key sounds");
-        return false;
-    }
-    controls.setDraftTrackMuted(2U, false);
-    controls.setDraftAreaMuted(true);
-    return controls.effectivePlayerGain(draft) == 0.0F &&
-           controls.effectivePlayerGain(player) != 0.0F &&
-           controls.isDraftAreaMuted();
-}
-
 /// @brief 验证未绑定与已绑定打击音的静音和增益互不影响。
 bool testEffectGroupIsolation()
 {
@@ -222,8 +175,6 @@ bool testOutOfRangeTracks()
         std::numeric_limits<std::uint32_t>::max();
     controls.setPlayerTrackMuted(INVALID_TRACK, true);
     controls.setPlayerTrackGain(INVALID_TRACK, 0.0F);
-    controls.setDraftTrackMuted(INVALID_TRACK, true);
-    controls.setDraftTrackGain(INVALID_TRACK, 0.0F);
     controls.setBgmTrackMuted(INVALID_TRACK, true);
     controls.setBgmTrackGain(INVALID_TRACK, 0.0F);
     controls.setPlayerTrackControl(INVALID_TRACK,
@@ -234,8 +185,6 @@ bool testOutOfRangeTracks()
         !controls.isPlayerTrackMuted(INVALID_TRACK) &&
         nearlyEqual(controls.getPlayerTrackGain(INVALID_TRACK), 1.0F) &&
         !snapshot.muted && nearlyEqual(snapshot.gain, 1.0F) &&
-        !controls.isDraftTrackMuted(INVALID_TRACK) &&
-        nearlyEqual(controls.getDraftTrackGain(INVALID_TRACK), 1.0F) &&
         !controls.isBgmTrackMuted(INVALID_TRACK) &&
         nearlyEqual(controls.getBgmTrackGain(INVALID_TRACK), 1.0F) &&
         nearlyEqual(controls.effectiveBgmTrackGain(INVALID_TRACK), 1.0F);
@@ -312,8 +261,8 @@ bool testConcurrentCompleteSnapshots()
 int main()
 {
     const bool passed = testDefaults() && testMutePreservesGainAndClamping() &&
-                        testGainComposition() && testDraftAreaIsolation() &&
-                        testEffectGroupIsolation() && testOutOfRangeTracks() &&
+                        testGainComposition() && testEffectGroupIsolation() &&
+                        testOutOfRangeTracks() &&
                         testConcurrentCompleteSnapshots();
     return passed ? 0 : 1;
 }

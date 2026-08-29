@@ -37,12 +37,6 @@ FileManagerView::FileManagerView(const std::string& subViewName)
             [this](const Event::ProjectSavedEvent&) {
                 m_pendingDirectoryRefreshes.enqueue(true);
             });
-    m_projectDirectoryRefreshedSubId =
-        Event::EventBus::instance()
-            .subscribe<Event::ProjectDirectoryRefreshedEvent>(
-                [this](const Event::ProjectDirectoryRefreshedEvent&) {
-                    m_pendingDirectoryRefreshes.enqueue(true);
-                });
 }
 
 FileManagerView::~FileManagerView()
@@ -52,9 +46,6 @@ FileManagerView::~FileManagerView()
         m_saveResultSubId);
     Event::EventBus::instance().unsubscribe<Event::ProjectSavedEvent>(
         m_projectSavedSubId);
-    Event::EventBus::instance()
-        .unsubscribe<Event::ProjectDirectoryRefreshedEvent>(
-            m_projectDirectoryRefreshedSubId);
 }
 
 FileManagerView::EmptyProjectViewMetrics

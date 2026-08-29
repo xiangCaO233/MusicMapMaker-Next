@@ -1,7 +1,6 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
-#include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 
 #include <algorithm>
@@ -139,12 +138,12 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
         auto itBodyH = snapshot->uvMap.find(
             static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
         if ( itBodyH != snapshot->uvMap.end() ) {
-            float drawH = h * (itBodyH->second.w /
+            float drawH      = h * (itBodyH->second.w /
                                snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
-            float drawW = std::abs(note.m_dtrack) * singleTrackW;
+            float drawW      = std::abs(note.m_dtrack) * singleTrackW;
             float startTrack = std::min(0.0f, (float)note.m_dtrack);
             float bodyX      = x + (w - singleTrackW) * 0.5f +
-                               startTrack * singleTrackW + singleTrackW * 0.5f;
+                          startTrack * singleTrackW + singleTrackW * 0.5f;
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
             batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
@@ -171,8 +170,8 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                                   : TextureID::FlickArrowRight;
         glm::vec2 arrowSize = getDrawSize(snapshot, arrowId, w, h);
         float     arrowX    = x + (w - singleTrackW) * 0.5f +
-                              note.m_dtrack * singleTrackW +
-                              (singleTrackW - arrowSize.x) * 0.5f;
+                       note.m_dtrack * singleTrackW +
+                       (singleTrackW - arrowSize.x) * 0.5f;
         batcher.setTexture(arrowId);
         batcher.pushFilledQuad(arrowX,
                                y + arrowSize.y * 0.5f,

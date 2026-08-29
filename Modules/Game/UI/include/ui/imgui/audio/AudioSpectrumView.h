@@ -19,10 +19,10 @@ class GraphicEqualizer;
 class AudioBuffer;
 }  // namespace ice
 
-namespace MMM::Common::Render
+namespace MMM::Logic
 {
 struct RenderSnapshot;
-}  // namespace MMM::Common::Render
+}  // namespace MMM::Logic
 
 namespace MMM::Graphic
 {
@@ -118,11 +118,12 @@ private:
     /// @param totalTime 音频总时长，单位为秒。
     /// @param visualTime 当前全局视觉时间，单位为秒。
     /// @param snapshot 当前活动画布同步快照，可以为空。
-    void renderChannelInteractionOverlay(
-        const char* seekId, int channelIndex, ImVec2 groupMin, ImVec2 groupMax,
-        double viewStart, double viewEnd, float globalVisualOffset,
-        double totalTime, double visualTime,
-        const Common::Render::RenderSnapshot* snapshot);
+    void renderChannelInteractionOverlay(const char* seekId, int channelIndex,
+                                         ImVec2 groupMin, ImVec2 groupMax,
+                                         double viewStart, double viewEnd,
+                                         float  globalVisualOffset,
+                                         double totalTime, double visualTime,
+                                         const Logic::RenderSnapshot* snapshot);
 
     std::shared_ptr<ice::GraphicEqualizer> m_previewEQ;
     std::unique_ptr<ice::AudioBuffer>      m_processBuffer;

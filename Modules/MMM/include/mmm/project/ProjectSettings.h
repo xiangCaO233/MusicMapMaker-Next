@@ -324,9 +324,6 @@ struct ProjectWorkspaceState {
     /// @brief 上次是否打开了时间点批量编辑表格。
     bool m_timingPointsTableOpen{ false };
 
-    /// @brief 上次是否打开了批注表。
-    bool m_annotationTableOpen{ false };
-
     /// @brief 上次是否打开了重叠检测工具窗口。
     bool m_overlapCheckOpen{ false };
 
@@ -365,7 +362,6 @@ struct ProjectWorkspaceState {
             { "m_bpmMeasurementAudioTrackId",
               workspace.m_bpmMeasurementAudioTrackId },
             { "m_timingPointsTableOpen", workspace.m_timingPointsTableOpen },
-            { "m_annotationTableOpen", workspace.m_annotationTableOpen },
             { "m_overlapCheckOpen", workspace.m_overlapCheckOpen },
             { "m_metadataEditorOpen", workspace.m_metadataEditorOpen },
             { "m_noteMetadataEditorOpen", workspace.m_noteMetadataEditorOpen }
@@ -417,8 +413,6 @@ struct ProjectWorkspaceState {
             j.value("m_bpmMeasurementAudioTrackId", std::string{});
         workspace.m_timingPointsTableOpen =
             j.value("m_timingPointsTableOpen", false);
-        workspace.m_annotationTableOpen =
-            j.value("m_annotationTableOpen", false);
         workspace.m_overlapCheckOpen   = j.value("m_overlapCheckOpen", false);
         workspace.m_metadataEditorOpen = j.value("m_metadataEditorOpen", false);
         workspace.m_noteMetadataEditorOpen =
@@ -434,9 +428,6 @@ struct ProjectSettings {
 
     /// @brief 覆盖全局编辑器行为 (若为 nullopt 则继承全局 .config/mmm 配置)
     std::optional<Config::EditorSettings> m_editorOverride;
-
-    /// @brief 覆盖软件级谱面自动备份配置；空值表示继承软件配置。
-    std::optional<Config::AutoBackupConfig> m_autoBackupOverride;
 
     /// @brief 项目中最后一次打开的谱面名称 (BeatmapEntry::m_name)
     std::string m_lastOpenedBeatmap;
@@ -459,10 +450,6 @@ struct ProjectSettings {
             editorOverride.defaultColorPaletteSchemeName =
                 Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
             editorOverrideJson = editorOverride;
-            editorOverrideJson.erase("showToolLabels");
-            editorOverrideJson.erase("fixedToolWindow");
-            editorOverrideJson.erase("showManagerLabels");
-            editorOverrideJson.erase("toolbarVisibility");
             editorOverrideJson.erase("autoUploadPgoProfiles");
             editorOverrideJson.erase("pgoProfileUploadConsentAsked");
             editorOverrideJson.erase("rtcDiagnosticLogging");
@@ -470,7 +457,6 @@ struct ProjectSettings {
         j = nlohmann::json{
             { "m_visualOverride", settings.m_visualOverride },
             { "m_editorOverride", editorOverrideJson },
-            { "m_autoBackupOverride", settings.m_autoBackupOverride },
             { "m_lastOpenedBeatmap", settings.m_lastOpenedBeatmap },
             { "m_colorPaletteSchemeName", settings.m_colorPaletteSchemeName },
             { "m_workspace", settings.m_workspace }
@@ -490,20 +476,11 @@ struct ProjectSettings {
         if ( auto it = j.find("m_editorOverride");
              it != j.end() && !it->is_null() ) {
             settings.m_editorOverride = it->get<Config::EditorSettings>();
-            Config::preserveGlobalToolbarDisplaySettings(
-                *settings.m_editorOverride, Config::EditorSettings{});
             settings.m_editorOverride->autoUploadPgoProfiles        = false;
             settings.m_editorOverride->pgoProfileUploadConsentAsked = false;
             settings.m_editorOverride->rtcDiagnosticLogging         = false;
         } else {
             settings.m_editorOverride = std::nullopt;
-        }
-
-        if ( auto it = j.find("m_autoBackupOverride");
-             it != j.end() && !it->is_null() ) {
-            settings.m_autoBackupOverride = it->get<Config::AutoBackupConfig>();
-        } else {
-            settings.m_autoBackupOverride = std::nullopt;
         }
 
         settings.m_lastOpenedBeatmap =

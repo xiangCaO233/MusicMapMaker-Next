@@ -5,7 +5,6 @@ add_library(
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
-  src/ui/utils/NativeFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
@@ -74,7 +73,6 @@ add_library(
   src/ui/imgui/menu/items/MainMenuItemUtils.cpp
   src/ui/imgui/menu/items/MainMenuRecentProjectsItem.cpp
   src/ui/imgui/menu/items/MainMenuSeparatorItem.cpp
-  src/ui/imgui/menu/items/MainMenuToolbarVisibilityItem.cpp
   src/ui/imgui/menu/items/MainMenuTools.cpp
   src/ui/imgui/menu/items/MainMenuToggleItem.cpp
   src/ui/imgui/menu/items/MainMenuViewMenu.cpp
@@ -120,6 +118,7 @@ target_include_directories(
   UI
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Logic/include
+  PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Canvas/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Audio/include)
 
 target_link_libraries(
@@ -216,14 +215,6 @@ target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
 add_test(NAME CollaborationSelectableButtonTest
          COMMAND CollaborationSelectableButtonTest)
 
-# 保存反馈测试覆盖原生文件选择器或耗时导出后的长帧首次绘制。
-mmm_add_test_executable(UI SaveResultFeedbackTest
-                        tests/SaveResultFeedbackTest.cpp)
-target_include_directories(SaveResultFeedbackTest
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(SaveResultFeedbackTest PRIVATE UI)
-add_test(NAME SaveResultFeedbackTest COMMAND SaveResultFeedbackTest)
-
 # 协作入口策略测试确保只有房主开启房间要求预先打开项目。
 mmm_add_test_executable(UI CollaborationEntryPolicyTest
                         tests/CollaborationEntryPolicyTest.cpp)
@@ -248,14 +239,6 @@ mmm_add_test_executable(UI ProjectAudioToolLayoutTest
 target_include_directories(ProjectAudioToolLayoutTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectAudioToolLayoutTest COMMAND ProjectAudioToolLayoutTest)
-
-# 音效工具轨道布局测试覆盖草稿区自动扩充后控件行同步增加。
-mmm_add_test_executable(UI SoundEffectToolTrackLayoutTest
-                        tests/SoundEffectToolTrackLayoutTest.cpp)
-target_include_directories(SoundEffectToolTrackLayoutTest
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME SoundEffectToolTrackLayoutTest
-         COMMAND SoundEffectToolTrackLayoutTest)
 
 # 项目音频工具搜索测试覆盖精确、子串、顺序模糊和 UTF-8 文件名匹配。
 mmm_add_test_executable(UI ProjectAudioToolSearchTest

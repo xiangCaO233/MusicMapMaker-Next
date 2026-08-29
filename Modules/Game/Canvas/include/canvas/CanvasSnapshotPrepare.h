@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/render/RenderSnapshotBuffer.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -13,10 +13,10 @@ namespace MMM::Canvas
 /// @brief UI 并行准备阶段生成的画布快照消费结果。
 struct PreparedCanvasSnapshot {
     /// @brief 当前帧应展示的渲染快照。
-    Common::Render::RenderSnapshot* snapshot{ nullptr };
+    Logic::RenderSnapshot* snapshot{ nullptr };
 
     /// @brief 当前帧应用偏移后的快照指针。
-    Common::Render::RenderSnapshot* offsetSnapshot{ nullptr };
+    Logic::RenderSnapshot* offsetSnapshot{ nullptr };
 
     /// @brief 当前帧实际应用到动态顶点的 Y 偏移。
     float appliedYOffset{ 0.0f };
@@ -35,8 +35,8 @@ inline double currentSteadySeconds()
 /// @param snapshot 待修改的渲染快照。
 /// @param yOffset 需要叠加到动态顶点上的 Y 偏移。
 /// @warning 后台线程路径：只允许在快照仍由 UI 侧持有、尚未归还逻辑线程前调用。
-inline void applyDynamicVertexYOffset(Common::Render::RenderSnapshot* snapshot,
-                                      float                           yOffset)
+inline void applyDynamicVertexYOffset(Logic::RenderSnapshot* snapshot,
+                                      float                  yOffset)
 {
     if ( !snapshot || std::abs(yOffset) <= 0.0001f ) {
         return;
@@ -72,9 +72,9 @@ inline void applyDynamicVertexYOffset(Common::Render::RenderSnapshot* snapshot,
 /// @warning 后台线程路径：只允许消费 BeatmapSyncBuffer
 /// 并修改当前读快照的动态顶点。
 inline PreparedCanvasSnapshot prepareCanvasSnapshot(
-    Common::Render::RenderSnapshotBuffer* syncBuffer,
-    Common::Render::RenderSnapshot*       lastOffsetSnapshot,
-    float lastAppliedYOffset, bool scaleByRenderScaleY)
+    Logic::BeatmapSyncBuffer* syncBuffer,
+    Logic::RenderSnapshot* lastOffsetSnapshot, float lastAppliedYOffset,
+    bool scaleByRenderScaleY)
 {
     PreparedCanvasSnapshot prepared;
     if ( !syncBuffer ) {

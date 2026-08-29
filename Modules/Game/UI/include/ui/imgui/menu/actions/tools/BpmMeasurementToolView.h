@@ -61,23 +61,6 @@ public:
     void requestAutomaticMeasurement(const std::string& audioTrackId,
                                      bool               keepWindowVisible);
 
-    /// @brief 判断当前是否存在由外部流程启动的后台自动测量。
-    /// @return 后台自动测量尚未结束清理时返回 true。
-    /// @warning UI 热路径：每帧读取 UI 线程状态，不执行同步或资源访问。
-    bool isBackgroundAutomaticMeasurementActive() const
-    {
-        return m_backgroundAutomaticMeasurement;
-    }
-
-    /// @brief 获取当前自动测量的后台分析进度。
-    /// @return 归一化到 0 到 1 的分析进度。
-    /// @warning UI 热路径原子：UI
-    /// 每帧读取，后台分析线程写入；进度不参与数据同步。
-    float getAutomaticMeasurementProgress() const
-    {
-        return m_analysisProgress.load(std::memory_order_relaxed);
-    }
-
     /// @brief 获取当前选中的项目音频资源 ID。
     /// @return 当前选中的音频资源 ID，未选择时为空。
     const std::string& getSelectedAudioTrackId() const

@@ -1,36 +1,26 @@
 #pragma once
 
 #ifdef _WIN32
-#    include <ctime>
-#    include <string>
-// MinGW 的 dbghelp.h 依赖 windows.h 类型定义，并且 SDK 文件名区分大小写。
-// clang-format off
 #    include <windows.h>
 #    include <dbghelp.h>
-// clang-format on
+#    include <shlobj.h>
+#    include <string>
+#    include <ctime>
 
 namespace MMM
 {
 
 /// @brief 崩溃回调函数
-inline LONG WINAPI
-mmm_unhandled_exception_filter(EXCEPTION_POINTERS* pExceptionPointers)
+inline LONG WINAPI mmm_unhandled_exception_filter(EXCEPTION_POINTERS* pExceptionPointers)
 {
     // 获取当前时间作为文件名一部分
-    std::time_t t = std::time(nullptr);
+    std::time_t t  = std::time(nullptr);
     char        timeStr[64];
-    std::strftime(
-        timeStr, sizeof(timeStr), "%Y%m%d_%H%M%S", std::localtime(&t));
+    std::strftime(timeStr, sizeof(timeStr), "%Y%m%d_%H%M%S", std::localtime(&t));
 
     std::string dumpPath = "crash_" + std::string(timeStr) + ".dmp";
 
-    HANDLE hDumpFile = CreateFileA(dumpPath.c_str(),
-                                   GENERIC_WRITE,
-                                   0,
-                                   NULL,
-                                   CREATE_ALWAYS,
-                                   FILE_ATTRIBUTE_NORMAL,
-                                   NULL);
+    HANDLE hDumpFile = CreateFileA(dumpPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if ( hDumpFile != INVALID_HANDLE_VALUE ) {
         MINIDUMP_EXCEPTION_INFORMATION dumpInfo;
@@ -50,10 +40,7 @@ mmm_unhandled_exception_filter(EXCEPTION_POINTERS* pExceptionPointers)
     }
 
     // 弹出提示（可选）
-    MessageBoxA(NULL,
-                ("Application crashed! Dump saved to: " + dumpPath).c_str(),
-                "Fatal Error",
-                MB_OK | MB_ICONERROR);
+    MessageBoxA(NULL, ("Application crashed! Dump saved to: " + dumpPath).c_str(), "Fatal Error", MB_OK | MB_ICONERROR);
 
     // 返回 EXCEPTION_EXECUTE_HANDLER 表示异常已处理，程序将静默退出
     return EXCEPTION_EXECUTE_HANDLER;

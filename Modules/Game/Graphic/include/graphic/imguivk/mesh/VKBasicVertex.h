@@ -1,60 +1,112 @@
 #pragma once
 
-#include "common/render/CanvasRenderTypes.h"
-
+#include "vulkan/vulkan.hpp"
 #include <array>
 #include <cstddef>
-#include <vulkan/vulkan.hpp>
 
-namespace MMM::Graphic::Vertex
+namespace MMM
+{
+namespace Graphic
 {
 
-/// @brief 图形模块沿用的画布顶点位置别名。
-using Position = Common::Render::CanvasPosition;
+namespace Vertex
+{
+/**
+ * @brief 3D 空间坐标结构体
+ */
+struct Position {
+    float x;
+    float y;
+    float z{ 0.f };
+};
 
-/// @brief 图形模块沿用的画布顶点颜色别名。
-using Color = Common::Render::CanvasColor;
+/**
+ * @brief RGBA 颜色结构体
+ */
+struct Color {
+    float r{ 1.f };
+    float g{ 1.f };
+    float b{ 1.f };
+    float a{ 1.f };
+};
 
-/// @brief 图形模块沿用的画布纹理坐标别名。
-using TexUV = Common::Render::CanvasTexCoord;
+/**
+ * @brief 贴图UV结构体
+ */
+struct TexUV {
+    float u{ 0.f };
+    float v{ 0.f };
+};
 
-/// @brief Vulkan 顶点输入使用的共享画布顶点别名。
-using VKBasicVertex = Common::Render::CanvasVertex;
+/**
+ * @brief Vulkan 顶点数据结构体
+ *
+ * 包含位置和颜色信息，对应 Shader 中的输入属性。
+ */
+struct VKBasicVertex {
+    Position pos{};
+    Color    color{};
+    TexUV    uv{};
+};
 
-/// @brief 共享顶点必须保持既有九个 float 的紧凑 GPU 上传布局。
-static_assert(sizeof(VKBasicVertex) == sizeof(float) * 9U);
-/// @brief 位置属性必须从顶点首地址开始。
-static_assert(offsetof(VKBasicVertex, pos) == 0U);
-/// @brief 颜色属性必须紧随三个位置分量。
-static_assert(offsetof(VKBasicVertex, color) == sizeof(float) * 3U);
-/// @brief UV 属性必须紧随位置和颜色分量。
-static_assert(offsetof(VKBasicVertex, uv) == sizeof(float) * 7U);
-
-/// @brief 画布顶点输入绑定描述。
+/**
+ * @brief 顶点输入绑定描述 (Vertex Binding Description)
+ *
+ * 定义了数据在内存中的排列方式（Stride）和读取频率（InputRate）。
+ */
 inline constexpr vk::VertexInputBindingDescription VKVERTEX_BIND_DESC =
     vk::VertexInputBindingDescription()
+        // 对应的Shader 中的绑定点 bind = 0(默认)
         .setBinding(0)
+        // 每个顶点的步长（字节数）
         .setStride(sizeof(VKBasicVertex))
+        // 按顶点步进
         .setInputRate(vk::VertexInputRate::eVertex);
 
-/// @brief 画布顶点输入属性描述列表。
+/**
+ * @brief 顶点输入属性描述列表 (Vertex Attribute Descriptions)
+ *
+ * 定义了 Shader 中每个 location 对应的数据格式和偏移量。
+ * 包含 Position (loc=0) 和 Color (loc=1)。
+ */
 inline constexpr std::array<vk::VertexInputAttributeDescription, 3>
     VKVERTEX_ATTR_DESC = {
+        // 属性 0: Position (location = 0)
         vk::VertexInputAttributeDescription()
+            // 对应的Shader 中的绑定点 bind = 0(默认)
             .setBinding(0)
+            // Shader 中的 layout(location = 0)
             .setLocation(0)
+            // 3个 float
             .setFormat(vk::Format::eR32G32B32Sfloat)
+            // 偏移量
             .setOffset(offsetof(VKBasicVertex, pos)),
+
+        // 属性 1: Color (location = 1)
         vk::VertexInputAttributeDescription()
             .setBinding(0)
+            // Shader 中的 layout(location = 1)
             .setLocation(1)
+            // 4个 float
             .setFormat(vk::Format::eR32G32B32A32Sfloat)
+            // 偏移量
             .setOffset(offsetof(VKBasicVertex, color)),
+
+        // 属性 2: TexUV(location = 2)
         vk::VertexInputAttributeDescription()
             .setBinding(0)
+            // Shader 中的 layout(location = 2)
             .setLocation(2)
+            // 2个 float
             .setFormat(vk::Format::eR32G32Sfloat)
+            // 偏移量
             .setOffset(offsetof(VKBasicVertex, uv)),
     };
 
-}  // namespace MMM::Graphic::Vertex
+}  // namespace Vertex
+
+
+
+}  // namespace Graphic
+
+}  // namespace MMM

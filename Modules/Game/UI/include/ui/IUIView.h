@@ -8,7 +8,6 @@
 namespace MMM::UI
 {
 class UIManager;
-class ICanvasView;
 class IParallelUiPreparable;
 
 /// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互反馈。
@@ -46,9 +45,6 @@ public:
 
     /// @brief 安全转换为 IRenderableView
     virtual class IRenderableView* asRenderableView() { return nullptr; }
-
-    /// @brief 安全转换为画布能力接口。
-    virtual ICanvasView* asCanvasView() { return nullptr; }
 
     /// @brief 安全转换为可并行准备 UI 数据的接口
     virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }

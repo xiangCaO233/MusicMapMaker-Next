@@ -48,10 +48,8 @@ int getMirrorTrackCount(const SessionContext& ctx)
 }
 
 /// @brief 对单个 NoteComponent 应用轨道镜像变换。
-void mirrorNoteComponent(NoteComponent& note, int playerTrackCount,
-                         int draftTrackCount)
+void mirrorNoteComponent(NoteComponent& note, int trackCount)
 {
-    const auto trackCount = note.m_isDraft ? draftTrackCount : playerTrackCount;
     if ( trackCount <= 0 ) return;
 
     const auto mirrorTrack = [trackCount, isDraft = note.m_isDraft](int track) {
@@ -1866,7 +1864,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
         const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
         auto        newNote = oldNote;
 
-        mirrorNoteComponent(newNote, trackCount, m_ctx.draftTrackCount);
+        mirrorNoteComponent(newNote, trackCount);
 
         entries.push_back({ entity, oldNote, newNote });
     }
@@ -2081,8 +2079,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
 
             if ( cmd.m_mirrored ) {
-                mirrorNoteComponent(
-                    newNote, mirrorTrackCount, m_ctx.draftTrackCount);
+                mirrorNoteComponent(newNote, mirrorTrackCount);
             }
 
             if ( !isPlaceableCreatedNote(newNote) ) {
@@ -2381,68 +2378,6 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
     }
     auto action = std::make_unique<BatchTimelineAction>(
         std::move(entries), "Batch Timeline Update");
-    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
-    m_ctx.isBpmEventsDirty = true;
-}
-
-void ActionController::handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd)
-{
-    auto& registry = m_ctx.timelineRegistry;
-    if ( !registry.valid(cmd.bpmEntity) ||
-         !registry.all_of<TimelineComponent>(cmd.bpmEntity) ) {
-        return;
-    }
-
-    const auto bpmBefore = registry.get<TimelineComponent>(cmd.bpmEntity);
-    if ( bpmBefore.m_effect != ::MMM::TimingEffect::BPM ) {
-        return;
-    }
-
-    auto bpmAfter        = bpmBefore;
-    bpmAfter.m_timestamp = cmd.newTime;
-    bpmAfter.m_value     = cmd.newBpm;
-    if ( std::abs(bpmAfter.m_timestamp - bpmBefore.m_timestamp) > 1e-6 ) {
-        clearMalodyTimingBeatMetadata(bpmAfter.m_metadata);
-    }
-
-    std::vector<BatchTimelineAction::Entry> entries;
-    entries.reserve(2U);
-    entries.push_back({ cmd.bpmEntity, bpmBefore, std::move(bpmAfter) });
-
-    entt::entity companionScrollEntity = entt::null;
-    const auto   timelines = registry.view<const TimelineComponent>();
-    for ( const auto entity : timelines ) {
-        const auto& timeline = timelines.get<const TimelineComponent>(entity);
-        if ( timeline.m_effect == ::MMM::TimingEffect::SCROLL &&
-             std::abs(timeline.m_timestamp - cmd.newTime) <= 1e-6 &&
-             (companionScrollEntity == entt::null ||
-              entt::to_integral(entity) >
-                  entt::to_integral(companionScrollEntity)) ) {
-            companionScrollEntity = entity;
-        }
-    }
-
-    if ( companionScrollEntity != entt::null ) {
-        const auto scrollBefore =
-            registry.get<TimelineComponent>(companionScrollEntity);
-        auto scrollAfter        = scrollBefore;
-        scrollAfter.m_timestamp = cmd.newTime;
-        scrollAfter.m_value     = cmd.scrollValue;
-        if ( std::abs(scrollAfter.m_timestamp - scrollBefore.m_timestamp) >
-             1e-12 ) {
-            clearMalodyTimingBeatMetadata(scrollAfter.m_metadata);
-        }
-        entries.push_back(
-            { companionScrollEntity, scrollBefore, std::move(scrollAfter) });
-    } else {
-        TimelineComponent newScroll{ cmd.newTime,
-                                     ::MMM::TimingEffect::SCROLL,
-                                     cmd.scrollValue };
-        entries.push_back({ entt::null, std::nullopt, std::move(newScroll) });
-    }
-
-    auto action = std::make_unique<BatchTimelineAction>(std::move(entries),
-                                                        "BPM Keep Speed SV");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
 }
@@ -3024,11 +2959,11 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         return bestSnappedTime;
     };
 
-    const auto alignTimeRange = [&](double& timestamp, double& duration) {
-        const double alignedStart = getAlignedTime(timestamp);
-        const double alignedEnd   = getAlignedTime(timestamp + duration);
-        timestamp                 = alignedStart;
-        duration                  = std::max(0.0, alignedEnd - alignedStart);
+    auto alignNote = [&](NoteComponent& nc) {
+        double alignedStart = getAlignedTime(nc.m_timestamp);
+        double alignedEnd   = getAlignedTime(nc.m_timestamp + nc.m_duration);
+        nc.m_timestamp      = alignedStart;
+        nc.m_duration       = std::max(0.0, alignedEnd - alignedStart);
     };
 
     std::unordered_set<entt::entity> toAlign;
@@ -3090,81 +3025,70 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     std::unordered_map<entt::entity, NoteComponent> newNotes = originalNotes;
 
-    // 对齐普通音符和实际存在的折线子实体。
+    // 对齐非折线音符和子音符。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type != ::MMM::NoteType::POLYLINE ) {
-            (void)entity;
-            alignTimeRange(newNote.m_timestamp, newNote.m_duration);
+            bool shouldAlign = false;
+            if ( m_ctx.noteRegistry.all_of<InteractionComponent>(entity) &&
+                 m_ctx.noteRegistry.get<InteractionComponent>(entity)
+                     .isSelected ) {
+                shouldAlign = true;
+            } else if ( newNote.m_isSubNote &&
+                        newNote.m_parentPolyline != entt::null ) {
+                if ( toAlign.count(newNote.m_parentPolyline) ) {
+                    shouldAlign = true;
+                }
+            } else {
+                shouldAlign = true;
+            }
+
+            if ( shouldAlign ) {
+                alignNote(newNote);
+            }
         }
     }
 
-    // 父折线自身持有完整子节点数据。独立子实体可能因导入来源而缺失，
-    // 因此必须以父折线为基准对齐，不能只用找到的子实体重建列表。
+    // 同步父折线中的子音符顺序。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            struct AlignedSubNote {
-                NoteComponent::SubNote note;
-                entt::entity           childEntity{ entt::null };
-                std::size_t            originalSubIndex{ 0U };
+            struct ChildInfo {
+                entt::entity entity;
+                double       timestamp;
+                int          originalSubIndex;
             };
-
-            std::vector<entt::entity> childEntities(
-                newNote.m_subNotes.size(),
-                static_cast<entt::entity>(entt::null));
+            std::vector<ChildInfo> children;
             for ( const auto& [otherEnt, otherNote] : newNotes ) {
                 if ( otherNote.m_isSubNote &&
-                     otherNote.m_parentPolyline == entity &&
-                     otherNote.m_subIndex >= 0 ) {
-                    const auto subIndex =
-                        static_cast<std::size_t>(otherNote.m_subIndex);
-                    if ( subIndex < childEntities.size() &&
-                         childEntities[subIndex] == entt::null ) {
-                        childEntities[subIndex] = otherEnt;
-                    }
+                     otherNote.m_parentPolyline == entity ) {
+                    children.push_back({ otherEnt,
+                                         otherNote.m_timestamp,
+                                         otherNote.m_subIndex });
                 }
-            }
-
-            std::vector<AlignedSubNote> alignedSubNotes;
-            alignedSubNotes.reserve(newNote.m_subNotes.size());
-            for ( std::size_t index = 0U; index < newNote.m_subNotes.size();
-                  ++index ) {
-                auto       alignedSubNote = newNote.m_subNotes[index];
-                const auto childEntity    = childEntities[index];
-                if ( childEntity != entt::null ) {
-                    const auto& childNote    = newNotes.at(childEntity);
-                    alignedSubNote.timestamp = childNote.m_timestamp;
-                    alignedSubNote.duration  = childNote.m_duration;
-                } else {
-                    alignTimeRange(alignedSubNote.timestamp,
-                                   alignedSubNote.duration);
-                }
-                alignedSubNotes.push_back(
-                    { std::move(alignedSubNote), childEntity, index });
             }
 
             std::stable_sort(
-                alignedSubNotes.begin(),
-                alignedSubNotes.end(),
-                [](const AlignedSubNote& lhs, const AlignedSubNote& rhs) {
-                    if ( std::abs(lhs.note.timestamp - rhs.note.timestamp) <
-                         1e-9 ) {
-                        return lhs.originalSubIndex < rhs.originalSubIndex;
+                children.begin(),
+                children.end(),
+                [](const ChildInfo& a, const ChildInfo& b) {
+                    if ( std::abs(a.timestamp - b.timestamp) < 1e-9 ) {
+                        return a.originalSubIndex < b.originalSubIndex;
                     }
-                    return lhs.note.timestamp < rhs.note.timestamp;
+                    return a.timestamp < b.timestamp;
                 });
 
             std::vector<NoteComponent::SubNote> newSubNotesList;
             newSubNotesList.reserve(newNote.m_subNotes.size());
-            for ( std::size_t index = 0U; index < alignedSubNotes.size();
-                  ++index ) {
-                auto& alignedSubNote = alignedSubNotes[index];
-                newSubNotesList.push_back(alignedSubNote.note);
-                if ( alignedSubNote.childEntity != entt::null ) {
-                    auto& childNote = newNotes.at(alignedSubNote.childEntity);
-                    childNote.m_timestamp = alignedSubNote.note.timestamp;
-                    childNote.m_duration  = alignedSubNote.note.duration;
-                    childNote.m_subIndex  = static_cast<int>(index);
-                }
+
+            for ( size_t i = 0; i < children.size(); ++i ) {
+                entt::entity childEnt = children[i].entity;
+                int          oldIdx   = children[i].originalSubIndex;
+
+                NoteComponent::SubNote updatedSub = newNote.m_subNotes[oldIdx];
+                updatedSub.timestamp = newNotes[childEnt].m_timestamp;
+                updatedSub.duration  = newNotes[childEnt].m_duration;
+
+                newSubNotesList.push_back(updatedSub);
+                newNotes[childEnt].m_subIndex = static_cast<int>(i);
             }
 
             newNote.m_subNotes = std::move(newSubNotesList);
@@ -3177,9 +3101,8 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     }
 
     // 生成 BatchNoteAction 条目。
-    entries.reserve(originalNotes.size());
-    for ( const auto& [entity, originalNote] : originalNotes ) {
-        entries.push_back({ entity, originalNote, newNotes.at(entity) });
+    for ( auto entity : toAlign ) {
+        entries.push_back({ entity, originalNotes[entity], newNotes[entity] });
     }
 
     if ( !entries.empty() ) {

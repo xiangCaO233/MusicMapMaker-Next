@@ -20,9 +20,6 @@ add_library(
   src/logic/EditorClipboard.cpp
   src/logic/EditorClipboardProtocol.cpp
   src/logic/BeatmapLoadDiagnosticPublisher.cpp
-  src/logic/BeatmapBackupService.cpp
-  src/logic/ImdPackageExportService.cpp
-  src/logic/MczAudioOriginAlignment.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
@@ -36,6 +33,7 @@ add_library(
   src/logic/EditorEngine.cpp
   src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/audio/PlaybackVisualClock.cpp
+  src/logic/BeatmapSyncBuffer.cpp
   src/logic/PreviewDensity.cpp
   src/logic/ecs/system/render/NoteRenderSystem.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Layout.cpp
@@ -49,19 +47,19 @@ add_library(
   src/logic/ecs/system/render/BackgroundSpectrumRenderSystem.cpp
   src/logic/ecs/system/NoteTransformSystem.cpp
   src/logic/ecs/system/ScrollCache.cpp
-  src/logic/ecs/system/HitFXSystem.cpp
-  src/logic/BeatmapSyncBuffer.cpp)
+  src/logic/ecs/system/HitFXSystem.cpp)
 
 target_link_libraries(
   Logic
   PUBLIC Log
          MMM
          Common
+         UI
+         Graphic
          3rd_concurrentqueue
          3rd_entt
          3rd_glm
          3rd_miniz
-         3rd_stb
          Audio
          Config
          Runtime)
@@ -85,14 +83,6 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
                         tests/ProjectCompatibilityTest.cpp)
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
-
-# 谱面自动备份测试覆盖原生快照写入、单谱面数量轮转和路径隔离。
-mmm_add_test_executable(Logic BeatmapBackupServiceTest
-                        tests/BeatmapBackupServiceTest.cpp)
-target_link_libraries(BeatmapBackupServiceTest PRIVATE Logic Log)
-add_test(NAME BeatmapBackupServiceTest
-         COMMAND BeatmapBackupServiceTest
-                 "${CMAKE_BINARY_DIR}/test_output/beatmap_backup_service")
 
 mmm_add_test_executable(Logic ObjectPlacementSnapTest
                         tests/ObjectPlacementSnapTest.cpp)
@@ -127,24 +117,10 @@ mmm_add_test_executable(Logic MalodyExportModeTest
 target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
 add_test(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
 
-# MCZ 音频原点对齐测试覆盖正负相位、整数拍前导和安全失败。
-mmm_add_test_executable(Logic MczAudioOriginAlignmentTest
-                        tests/MczAudioOriginAlignmentTest.cpp)
-target_link_libraries(MczAudioOriginAlignmentTest PRIVATE Logic Log)
-add_test(NAME MczAudioOriginAlignmentTest COMMAND MczAudioOriginAlignmentTest)
-
 mmm_add_test_executable(Logic AudioTimelineDescriptorTest
                         tests/AudioTimelineDescriptorTest.cpp)
 target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
 add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
-
-# IMD 资源包测试覆盖同名前缀、时间线拼装 MP3、zip 内容和 IMD 回读。
-mmm_add_test_executable(Logic ImdPackageExportServiceTest
-                        tests/ImdPackageExportServiceTest.cpp)
-target_link_libraries(ImdPackageExportServiceTest PRIVATE Logic Log)
-add_test(NAME ImdPackageExportServiceTest
-         COMMAND ImdPackageExportServiceTest
-                 "${CMAKE_BINARY_DIR}/test_output/imd_package_export_service")
 
 mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
                         tests/ProjectDirectoryWatcherTest.cpp)
@@ -196,16 +172,11 @@ target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
 add_test(NAME NoteBoundSampleLabelRenderTest
          COMMAND NoteBoundSampleLabelRenderTest)
 
-# 音符渲染测试覆盖草稿物件独立配色与播放中的顶层重叠提示。
+# 重叠键遮罩测试确保播放快照仍会生成顶层重叠提示。
 mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
                         tests/NoteOverlapMaskRenderTest.cpp)
 target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
-add_test(
-  NAME NoteOverlapMaskRenderTest
-  COMMAND
-    NoteOverlapMaskRenderTest
-    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
-    "${CMAKE_SOURCE_DIR}/assets/translations")
+add_test(NAME NoteOverlapMaskRenderTest COMMAND NoteOverlapMaskRenderTest)
 
 # 交互拾取包围盒测试覆盖独立横纵缩放、中心保持和非法值回退。
 mmm_add_test_executable(Logic InteractionHitboxScaleTest
