@@ -114,16 +114,26 @@ set(MMM_TEST_RESOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
     CACHE PATH "Shared test resource directory.")
 
+if(APPLE AND CMAKE_GENERATOR MATCHES "Ninja")
+  # macOS 测试链接会消费业务库中的 ThinLTO bitcode，限制并发以预留 Runner 网络保活所需资源。
+  set_property(GLOBAL APPEND PROPERTY JOB_POOLS macos_test_link_pool=1)
+endif()
+
 function(mmm_set_test_target MODULE_NAME TARGET_NAME)
   set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
   set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                   "${TEST_RUNTIME_DIR}")
 
   if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    # macOS 测试目标数量较多，仅禁用最终可执行文件的 ThinLTO 链接，避免高负载下 Runner 与 GitHub 失联。
+    # macOS 测试目标仍需从业务库的 ThinLTO bitcode 生成本机代码；先禁用跨模块优化。
     target_link_options(
       ${TARGET_NAME} PRIVATE
       "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-lto>")
+    if(CMAKE_GENERATOR MATCHES "Ninja")
+      # 串行化高负载测试链接，避免多个 ld 同时耗尽 CPU 与内存，导致 Runner 与 GitHub 失联。
+      set_property(TARGET ${TARGET_NAME} PROPERTY JOB_POOL_LINK
+                                                  macos_test_link_pool)
+    endif()
   endif()
 
   foreach(CONFIG_NAME Debug Release RelWithDebInfo MinSizeRel)
