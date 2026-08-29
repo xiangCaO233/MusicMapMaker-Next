@@ -63,6 +63,34 @@ requireCommand() {
     fi
 }
 
+verifyNinjaState() {
+    local ninjaOutput
+
+    # 自托管 Runner 被取消时，Ninja 可能只写入半条依赖记录。首次加载会自动截断至
+    # 最后一条完整记录；再次加载必须静默，确保恢复已经落盘且不会污染后续 CI 日志。
+    if ! ninjaOutput="$(ninja -C "$1" -n 2>&1 >/dev/null)"; then
+        printf "%s\n" "${ninjaOutput}" >&2
+        return 1
+    fi
+
+    if [[ "${ninjaOutput}" == *"premature end of file; recovering"* ]]; then
+        printf "warning: recovered interrupted Ninja dependency log in %s\n" "$1" >&2
+        if ! ninjaOutput="$(ninja -C "$1" -n 2>&1 >/dev/null)"; then
+            printf "%s\n" "${ninjaOutput}" >&2
+            return 1
+        fi
+    fi
+
+    if [[ -n "${ninjaOutput}" ]]; then
+        printf "%s\n" "${ninjaOutput}" >&2
+    fi
+
+    if [[ "${ninjaOutput}" == *"premature end of file; recovering"* ]]; then
+        printf "error: Ninja dependency log remains truncated after recovery\n" >&2
+        return 1
+    fi
+}
+
 projectPath() {
     local inputPath="$1"
 
@@ -261,6 +289,16 @@ requireCommand "${cxxCompiler}"
 
 buildDir="$(projectPath "${buildDir}")"
 
+# cancel-in-progress 可能在上一个 Ninja 进程退出前启动下一轮；按构建目录串行化，
+# 避免两个进程并发写入同一个 .ninja_deps。锁文件放在构建目录外，防止 --fresh 删除已持有的锁。
+requireCommand flock
+requireCommand sha256sum
+ninjaLockDir="${projectRoot}/.git/mmm-ci-ninja-locks"
+mkdir -p "${ninjaLockDir}"
+ninjaLockName="$(printf "%s" "${buildDir}" | sha256sum | awk '{ print $1 }')"
+exec 8>"${ninjaLockDir}/${ninjaLockName}.lock"
+flock 8
+
 if (( freshBuild )); then
     if [[ -z "${buildDir}" || "${buildDir}" == "/" || "${buildDir}" == "${projectRoot}" ]]; then
         printf "error: refusing to remove unsafe build directory: %s\n" "${buildDir}" >&2
@@ -296,6 +334,11 @@ cmake -U "Vulkan_*" \
 
 if (( configureOnly )); then
     exit 0
+fi
+
+if [[ -f "${buildDir}/build.ninja" ]]; then
+    requireCommand ninja
+    verifyNinjaState "${buildDir}"
 fi
 
 if (( prebuiltTargets )); then
