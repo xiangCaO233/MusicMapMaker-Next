@@ -4140,7 +4140,7 @@ bool testPolylineDragMovesBetweenDraftAndPlayer()
     return structureMatches(true, -2, -1);
 }
 
-/// @brief 验证大折线停留在非法玩家落点后完整回弹并重建可见性索引。
+/// @brief 验证大折线跨越草稿与玩家边界后完整回弹并重建可见性索引。
 /// @return 根折线、子实体、拖拽态与渲染缓存均恢复且不产生撤销记录时返回 true。
 bool testRejectedPolylineDragRestoresVisibility()
 {
@@ -4221,17 +4221,18 @@ bool testRejectedPolylineDragRestoresVisibility()
     tool.handleUpdateDrag(context,
                           MMM::Logic::CmdUpdateDrag{
                               "Basic2DCanvas",
-                              550.0F,
+                              50.0F,
                               0.0F,
                               true,
                           });
     const auto& preview =
         context.noteRegistry.get<const MMM::Logic::NoteComponent>(rootEntity);
-    if ( preview.m_subNotes.back().trackIndex +
-             preview.m_subNotes.back().dtrack <
-         context.trackCount ) {
+    if ( preview.m_trackIndex != -1 || !preview.m_isDraft ||
+         preview.m_subNotes.front().trackIndex != -1 ||
+         preview.m_subNotes[1].trackIndex != 0 ) {
         XERROR(
-            "Polyline invalid-drop regression did not reach an illegal span");
+            "Polyline invalid-drop regression did not cross the draft "
+            "boundary");
         return false;
     }
 

@@ -385,20 +385,25 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
     };
 }
 
-/// @brief 判断音符及其折线子物件是否完整位于玩家轨道区。
-/// @param note 待检查音符。
+/// @brief 判断音符及其折线子物件是否完整位于同一个可持久化轨道域。
+/// @param note 待检查音符；根轨道决定草稿域或玩家域。
 /// @param trackCount 玩家轨道数。
-/// @return 所有轨道和 Flick 终点都合法时返回 true。
-bool noteFitsPlayerArea(const NoteComponent& note, std::int32_t trackCount)
+/// @return 所有节点和 Flick 终点均未跨越轨道域边界时返回 true。
+bool noteFitsTrackDomain(const NoteComponent& note, std::int32_t trackCount)
 {
     if ( trackCount <= 0 ) return false;
-    const auto fits = [trackCount](::MMM::NoteType type,
-                                   std::int32_t    track,
-                                   std::int32_t    dtrack) {
+    const bool draftDomain = note.m_trackIndex < 0;
+    const auto fits        = [trackCount, draftDomain](::MMM::NoteType type,
+                                                       std::int32_t    track,
+                                                       std::int32_t    dtrack) {
+        const auto endTrack = static_cast<std::int64_t>(track) + dtrack;
+        if ( draftDomain ) {
+            return track < 0 &&
+                   (type != ::MMM::NoteType::FLICK || endTrack < 0);
+        }
         if ( track < 0 || track >= trackCount ) return false;
-        if ( type != ::MMM::NoteType::FLICK ) return true;
-        const auto endTrack = track + dtrack;
-        return endTrack >= 0 && endTrack < trackCount;
+        return type != ::MMM::NoteType::FLICK ||
+               (endTrack >= 0 && endTrack < trackCount);
     };
     if ( !fits(note.m_type, note.m_trackIndex, note.m_dtrack) ) return false;
     return std::all_of(note.m_subNotes.begin(),
@@ -1345,12 +1350,10 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             ctx.noteRegistry.try_get<const NoteComponent>(entity);
         if ( !current || current->m_isSubNote ) continue;
 
-        if ( current->m_trackIndex < 0 ) continue;
-
         if ( current->m_trackIndex < ctx.trackCount ) {
-            if ( !noteFitsPlayerArea(*current, ctx.trackCount) ) {
+            if ( !noteFitsTrackDomain(*current, ctx.trackCount) ) {
                 rejectionReason =
-                    "玩家物件拖动结果超出玩家轨道区，已取消本次操作";
+                    "物件拖动结果跨越草稿与玩家轨道边界，已取消本次操作";
                 break;
             }
             continue;
