@@ -334,8 +334,14 @@ void renderBeatGridTexts(Batcher&                                batcher,
         }
 
         if ( std::isfinite(nextBpmTime) && nextBpmTime > bpmTime ) {
-            completedGridCount += static_cast<std::int64_t>(
-                std::llround((nextBpmTime - bpmTime) / gridDuration));
+            // 每条新 BPM 红线都从新拍开始；不足一拍的旧段也必须占用一拍。
+            const double beatDuration =
+                gridDuration * static_cast<double>(divisor);
+            const double segmentDuration = nextBpmTime - bpmTime;
+            const auto   completedBeats  = static_cast<std::int64_t>(
+                std::ceil(segmentDuration / beatDuration - 1e-6));
+            completedGridCount +=
+                std::max<std::int64_t>(completedBeats, 1) * divisor;
         }
     }
 }

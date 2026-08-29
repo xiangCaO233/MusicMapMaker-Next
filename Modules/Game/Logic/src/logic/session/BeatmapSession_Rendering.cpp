@@ -1216,31 +1216,6 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         }
                     }
 
-                    int64_t totalBeatsPrefix = 0;
-                    for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-                        const auto* bpmEv = bpmEvents[i];
-                        if ( !bpmEv || bpmEv == activeBpm ) break;
-
-                        double nextTime = (i + 1 < bpmEvents.size())
-                                              ? bpmEvents[i + 1]->m_timestamp
-                                              : activeBpm->m_timestamp;
-                        double dur      = nextTime - bpmEv->m_timestamp;
-                        if ( dur < 0 ) dur = 0;
-
-                        double bVal = bpmEv->m_value;
-                        if ( bVal <= 0.0 ) {
-                            bVal = 120.0;
-                            if ( m_ctx->currentBeatmap &&
-                                 m_ctx->currentBeatmap->m_baseMapMetadata
-                                         .preference_bpm > 0.0 ) {
-                                bVal = m_ctx->currentBeatmap->m_baseMapMetadata
-                                           .preference_bpm;
-                            }
-                        }
-                        totalBeatsPrefix += static_cast<int64_t>(
-                            std::round(dur / (60.0 / bVal)));
-                    }
-
                     double  rel           = time - activeBpm->m_timestamp;
                     int64_t beatsInActive = static_cast<int64_t>(
                         std::floor(rel / beatDuration + 1e-6));
@@ -1248,11 +1223,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex = isBeforeFirstBpm
-                                          ? static_cast<int>(beatsInActive)
-                                          : static_cast<int>(totalBeatsPrefix +
-                                                             beatsInActive + 1);
-                    point.numerator = bestNum;
+                    point.beatIndex =
+                        isBeforeFirstBpm
+                            ? static_cast<int>(beatsInActive)
+                            : SessionUtils::calculateBeatIndex(
+                                  time, bpmEvents, snapshotFallbackBpm);
+                    point.numerator   = bestNum;
                     point.denominator = bestDen;
                     point.beatStartTime =
                         activeBpm->m_timestamp +
