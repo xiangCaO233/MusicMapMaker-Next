@@ -1,10 +1,13 @@
 #pragma once
 
 #ifdef _WIN32
-#    include <DbgHelp.h>
-#    include <Windows.h>
 #    include <ctime>
 #    include <string>
+// MinGW 的 dbghelp.h 依赖 windows.h 类型定义，并且 SDK 文件名区分大小写。
+// clang-format off
+#    include <windows.h>
+#    include <dbghelp.h>
+// clang-format on
 
 namespace MMM
 {
