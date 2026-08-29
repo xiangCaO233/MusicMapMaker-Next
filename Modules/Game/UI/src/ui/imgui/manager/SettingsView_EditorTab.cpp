@@ -6,7 +6,6 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/EditorEngine.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -17,13 +16,8 @@ namespace MMM::UI
 /// @brief 渲染编辑器设置页。
 void SettingsView::drawEditorSettings()
 {
-    auto& editorConfig = Config::AppConfig::instance().getEditorConfig();
-    auto& settings     = editorConfig.settings;
-    auto& visual       = editorConfig.visual;
-    auto& engine       = Logic::EditorEngine::instance();
-    bool  syncSameMainAudioCanvases =
-        engine.isSyncSameMainAudioCanvasesEnabled();
-    bool changed = false;
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    bool  changed  = false;
 
     m_contentVBox.clear();
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
@@ -115,49 +109,6 @@ void SettingsView::drawEditorSettings()
                            changed |= ::MMM::UI::FeedbackCheckbox(
                                "##ReverseScroll", &settings.reverseScroll);
                        });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.editor.snap_floor").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                changed |= ::MMM::UI::FeedbackCheckbox("##SnapFloor",
-                                                       &settings.snapFloor);
-                if ( ImGui::IsItemHovered() ) {
-                    Utils::renderTooltip(
-                        TR("ui.settings.editor.snap_floor_tooltip").data(),
-                        Utils::TooltipDir::Right);
-                }
-            });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.editor.stop_playback_on_scroll").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                changed |= ::MMM::UI::FeedbackCheckbox(
-                    "##StopPlaybackOnScroll", &settings.stopPlaybackOnScroll);
-            });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.hit_effects").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           changed |= ::MMM::UI::FeedbackCheckbox(
-                               "##HitEffects", &visual.enableHitEffects);
-                       });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.editor.sync_same_main_audio").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                if ( ::MMM::UI::FeedbackCheckbox("##SyncSameMainAudioCanvases",
-                                                 &syncSameMainAudioCanvases) ) {
-                    engine.setSyncSameMainAudioCanvases(
-                        syncSameMainAudioCanvases);
-                }
-            });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.editor.scroll_snap").data(),

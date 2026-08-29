@@ -191,12 +191,6 @@ struct AudioResourceMutationResultEvent : public ProjectLifecycleEvent {
     std::string m_errorMessage;
 };
 
-/// @brief 外部文件系统变更完成项目目录重扫后的通知事件。
-struct ProjectDirectoryRefreshedEvent : public ProjectLifecycleEvent {
-    /// @brief 本次重扫是否改变了项目内谱面或音频资源列表。
-    bool m_resourcesChanged{ false };
-};
-
 /// @brief 当前项目描述文件保存完成事件。
 struct ProjectSavedEvent : public ProjectLifecycleEvent {
     /// @brief 保存成功的项目描述文件路径，使用 UTF-8 字符串。
@@ -243,8 +237,6 @@ EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectSaveResultEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::AudioResourceMutationResultEvent,
-                       MMM::Event::ProjectLifecycleEvent);
-EVENT_REGISTER_PARENTS(MMM::Event::ProjectDirectoryRefreshedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSavedEvent,
                        MMM::Event::ProjectLifecycleEvent);

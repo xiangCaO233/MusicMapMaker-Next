@@ -1,6 +1,6 @@
 #pragma once
 
-namespace MMM::UI::Utils
+namespace MMM::Canvas
 {
 
 /// @brief 判断当前快照是否允许显示谱面专属信息。
@@ -28,4 +28,4 @@ namespace MMM::UI::Utils
            isWindowHovered && isCanvasHovered && !isPlaying;
 }
 
-}  // namespace MMM::UI::Utils
+}  // namespace MMM::Canvas

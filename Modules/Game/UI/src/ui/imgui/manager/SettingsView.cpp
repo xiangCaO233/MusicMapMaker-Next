@@ -87,7 +87,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 46> labels{
+        const std::array<const char*, 38> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.default_creator").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
@@ -123,18 +123,6 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.software.auto_save.on_imgui_focus_lost")
                 .data(),
             TR_CACHE("ui.settings.software.auto_save.on_native_focus_lost")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.mode").data(),
-            TR_CACHE("ui.settings.software.auto_backup.interval_unit").data(),
-            TR_CACHE("ui.settings.software.auto_backup.interval").data(),
-            TR_CACHE("ui.settings.software.auto_backup.max_count").data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_object_modified")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_beatmap_switch")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_imgui_focus_lost")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_native_focus_lost")
                 .data(),
             TR_CACHE("ui.settings.software.time_format").data(),
             TR_CACHE("ui.settings.software.recent_limit").data(),
@@ -178,24 +166,10 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Project: {
-        const std::array<const char*, 13> labels{
+        const std::array<const char*, 3> labels{
             TR_CACHE("ui.settings.project.info").data(),
             TR_CACHE("ui.settings.project.path").data(),
-            TR_CACHE("ui.settings.project.no_project").data(),
-            TR_CACHE("ui.settings.project.note_palette").data(),
-            TR_CACHE("ui.settings.project.auto_backup.override").data(),
-            TR_CACHE("ui.settings.software.auto_backup.mode").data(),
-            TR_CACHE("ui.settings.software.auto_backup.interval_unit").data(),
-            TR_CACHE("ui.settings.software.auto_backup.interval").data(),
-            TR_CACHE("ui.settings.software.auto_backup.max_count").data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_object_modified")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_beatmap_switch")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_imgui_focus_lost")
-                .data(),
-            TR_CACHE("ui.settings.software.auto_backup.on_native_focus_lost")
-                .data()
+            TR_CACHE("ui.settings.project.no_project").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
@@ -223,12 +197,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 21> labels{
+        const std::array<const char*, 17> labels{
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
-            TR_CACHE("ui.settings.editor.snap_floor").data(),
-            TR_CACHE("ui.settings.editor.stop_playback_on_scroll").data(),
-            TR_CACHE("ui.settings.editor.hit_effects").data(),
-            TR_CACHE("ui.settings.editor.sync_same_main_audio").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
                 .data(),
@@ -524,7 +494,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                 categorySize * 8.0f + categorySpacing * 7.0f;
+                                  categorySize * 8.0f + categorySpacing * 7.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -769,8 +739,8 @@ void SettingsView::drawContent()
             if ( iconFont ) ImGui::PushFont(iconFont, iconFont->LegacySize);
             ImFont* drawIconFont = iconFont ? iconFont : ImGui::GetFont();
             ImVec2  iconSize     = ImGui::CalcTextSize(iconStr);
-            ImVec2  iconPos      = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                                     rect.y + (rect.height - iconSize.y) * 0.5f };
+            ImVec2  iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
+                                rect.y + (rect.height - iconSize.y) * 0.5f };
             ImGui::GetWindowDrawList()->AddText(
                 drawIconFont,
                 ImGui::GetFontSize(),
@@ -793,9 +763,9 @@ void SettingsView::drawContent()
                 ImGui::PushFont(menuFont, menuFont->LegacySize);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = { sepX + textLeftPadding,
-                                           rect.y +
-                                               (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

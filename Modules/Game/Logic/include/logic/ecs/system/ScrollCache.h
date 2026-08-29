@@ -1,6 +1,5 @@
 #pragma once
 
-#include "common/render/ScrollRenderData.h"
 #include <cstddef>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -25,8 +24,30 @@ struct TimelineComponent;
 namespace MMM::Logic::System
 {
 
-/// @brief 预计算滚动积分段兼容别名。
-using ScrollSegment = Common::Render::ScrollSegment;
+/**
+ * @brief 预计算的积分段，用于通过二分查找实现 O(log T) 的极速时间坐标映射
+ */
+struct ScrollSegment {
+    double       time;
+    double       absY;
+    double       speed;
+    uint32_t     effects{ 0 };  /// @brief 该时间戳上包含的效果类型 (位掩码)
+    entt::entity bpmEntity{ entt::null };
+    entt::entity scrollEntity{ entt::null };
+    entt::entity jumpEntity{ entt::null };  /// @brief Jump 效果实体
+    entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
+    double       bpmValue{ 0.0 };
+    double       scrollValue{ 0.0 };
+    double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒。
+    double       hsValue{ 1.0 };    /// @brief HS 原始参数。
+    double       hs{ 1.0 };         /// @brief 当前区间生效的 HS 倍率。
+
+    /// @brief 当前区间生效的 BPM；与仅在红线处有效的 bpmValue 区分。
+    double activeBpmValue{ 0.0 };
+
+    /// @brief 当前区间生效的 SV；与仅在绿线处有效的 scrollValue 区分。
+    double activeScrollValue{ 1.0 };
+};
 
 /// @brief 指定时间所在滚动段的节奏状态。
 struct ScrollTimingState {
@@ -37,14 +58,10 @@ struct ScrollTimingState {
     double sv{ 1.0 };
 };
 
-inline constexpr std::uint32_t SCROLL_EFFECT_BPM =
-    Common::Render::SCROLL_EFFECT_BPM;
-inline constexpr std::uint32_t SCROLL_EFFECT_SCROLL =
-    Common::Render::SCROLL_EFFECT_SCROLL;
-inline constexpr std::uint32_t SCROLL_EFFECT_JUMP =
-    Common::Render::SCROLL_EFFECT_JUMP;
-inline constexpr std::uint32_t SCROLL_EFFECT_HS =
-    Common::Render::SCROLL_EFFECT_HS;
+constexpr uint32_t SCROLL_EFFECT_BPM    = 1 << 0;
+constexpr uint32_t SCROLL_EFFECT_SCROLL = 1 << 1;
+constexpr uint32_t SCROLL_EFFECT_JUMP   = 1 << 2;
+constexpr uint32_t SCROLL_EFFECT_HS     = 1 << 3;
 
 /**
  * @brief 全局流速映射缓存类

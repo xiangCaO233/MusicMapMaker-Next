@@ -1,9 +1,9 @@
 #pragma once
 
-namespace MMM::Common::Render
+namespace MMM::Logic
 {
 struct RenderSnapshot;
-}  // namespace MMM::Common::Render
+}  // namespace MMM::Logic
 
 namespace MMM::Canvas
 {
@@ -17,8 +17,9 @@ namespace MMM::Canvas
 /// @param scrolled 输出是否需要自动滚动。
 /// @return 自动滚动后的目标显示时间，单位秒。
 /// @warning UI 热路径：框选拖拽期间每帧调用；只读取不可变快照和视觉配置。
-double marqueeAutoScrollTargetTime(
-    const Common::Render::RenderSnapshot& snapshot, float viewportHeight,
-    float mouseY, float deltaTime, bool isAccelerated, bool& scrolled);
+double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
+                                   float viewportHeight, float mouseY,
+                                   float deltaTime, bool isAccelerated,
+                                   bool& scrolled);
 
 }  // namespace MMM::Canvas

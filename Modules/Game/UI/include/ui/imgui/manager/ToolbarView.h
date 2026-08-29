@@ -2,7 +2,6 @@
 
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
-#include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
@@ -14,7 +13,6 @@
 
 namespace MMM::UI
 {
-class IEditorApplicationService;
 
 /**
  * @brief 编辑工具栏视图
@@ -35,14 +33,7 @@ public:
     /// @brief 在皮肤切换完成后刷新仍依赖皮肤的当前调色盘。
     void refreshPaletteAfterSkinChange();
 
-    /// @brief 绑定编辑器应用服务观察指针。
-    /// @param service 服务由 UIManager 持有，生命周期覆盖 ToolbarView。
-    void setEditorApplicationService(IEditorApplicationService* service);
-
 private:
-    /// @brief 编辑器状态读取与简单命令提交服务。
-    IEditorApplicationService* m_editorApplicationService{ nullptr };
-
     /// @brief 当前调色盘选择来源。
     enum class PaletteSelectionKind {
         InheritSoftwareDefault,  ///< 继承软件默认调色方案。
@@ -204,14 +195,6 @@ private:
     /// @param height 按钮高度。
     /// @param showLabel 是否显示短标签。
     void drawLayoutButton(float width, float height, bool showLabel);
-
-    /// @brief 获取当前逻辑编辑器配置，服务缺失时回退本地用户配置。
-    /// @warning UI 热路径：只复制已有配置值，不执行文件 I/O。
-    [[nodiscard]] Config::EditorConfig currentEditorConfig() const;
-
-    /// @brief 将编辑器配置同步到逻辑线程。
-    /// @warning UI 热路径低频分支：只在用户变更控件时调用。
-    void updateEditorConfig(const Config::EditorConfig& config) const;
 
     /// @brief 绘制布局组件显隐管理弹层。
     /// @param dpiScale 当前 DPI 缩放。

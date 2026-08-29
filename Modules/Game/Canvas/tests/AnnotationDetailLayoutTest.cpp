@@ -53,15 +53,6 @@ bool testWheelOnlyScrollsMarkdown()
            !atBottom.consumed && near(atBottom.scrollY, 120.0F);
 }
 
-/// @brief 验证批注栏只拦截已由详情或弹窗消费的滚轮。
-bool testUnconsumedGutterWheelPassesToCanvas()
-{
-    return MMM::Canvas::shouldPassAnnotationWheelToCanvas(true, false, false) &&
-           !MMM::Canvas::shouldPassAnnotationWheelToCanvas(true, false, true) &&
-           !MMM::Canvas::shouldPassAnnotationWheelToCanvas(true, true, false) &&
-           !MMM::Canvas::shouldPassAnnotationWheelToCanvas(false, false, false);
-}
-
 /// @brief 验证方向键选择会循环经过同一时间戳的全部批注。
 bool testDirectionKeysCycleItems()
 {
@@ -78,7 +69,6 @@ int main()
 {
     return testCardsAvoidOverlap() && testCardsShiftAwayFromBottom() &&
                    testWheelOnlyScrollsMarkdown() &&
-                   testUnconsumedGutterWheelPassesToCanvas() &&
                    testDirectionKeysCycleItems()
                ? 0
                : 1;

@@ -70,10 +70,6 @@ public:
     /// @param cmd 命令数据。
     void handleCommand(const CmdUpdateTimelineEvents& cmd);
 
-    /// @brief 原子更新 BPM 与同时间戳保持预设流速 SV。
-    /// @param cmd BPM 和 Scroll 的目标状态。
-    void handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd);
-
     /// @brief 处理删除时间轴事件的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteTimelineEvent& cmd);

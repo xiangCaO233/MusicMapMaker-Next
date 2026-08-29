@@ -305,7 +305,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                basemeta.song_file_hint.filename();
     };
 
-    /// @brief 与首红线对应并锚定歌曲时间零点的主 SOUND 节点。
+    /// @brief 与首红线 delay 成对编码歌曲相位的主 SOUND 节点。
     const json* wrappedMainSoundNode = nullptr;
     /// @brief 首红线相对主音频零点的规范化相位，单位为毫秒。
     double wrappedFirstTimingPhaseMs = 0.0;
@@ -323,16 +323,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 const double sampleBeat = beatToDouble(node["beat"]);
                 const double sampleOffset =
                     readMalodyJsonDouble(node, "offset", 0.0);
-                // 规范文件会按首红线所在半拍选择零 offset 或与 delay
-                // 相同的回卷 offset；旧文件也可能始终使用后一种形态。
-                // 两种值都只在资源与首 timing 拍号匹配时按主音轨逆变换。
-                const bool hasCanonicalMainOffset =
-                    std::abs(sampleOffset) <= 0.51;
-                const bool hasLegacyPairedOffset =
-                    std::abs(sampleOffset - firstBpmEvent.delayMs) <= 0.51;
+                // Malody 自动测速把“音频零点减首拍相位”按首拍长回卷到
+                // 非负区间，并把结果同时写入 time.delay 与主 SOUND.offset。
+                // 两个字段成对且资源匹配时才可按歌曲相位逆变换。
                 if ( std::abs(sampleBeat - firstBpmEvent.beat) <= 1e-6 &&
                      sampleOffset >= -1e-6 &&
-                     (hasCanonicalMainOffset || hasLegacyPairedOffset) ) {
+                     std::abs(sampleOffset - firstBpmEvent.delayMs) <= 0.51 ) {
                     wrappedMainSoundNode = &node;
                     wrappedFirstTimingPhaseMs =
                         std::fmod(-firstBpmEvent.delayMs, firstBeatLengthMs);
@@ -348,35 +344,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
             }
         }
-    }
-
-    /// @brief 成对首拍的正相位进位在导入时从所有普通内容拍号中移除。
-    const double malodyContentBeatShift =
-        wrappedMainSoundNode != nullptr && wrappedFirstTimingPhaseMs > 1e-6
-            ? 1.0
-            : 0.0;
-    if ( malodyContentBeatShift != 0.0 && !bpmEvents.empty() ) {
-        const std::size_t wrappedFirstBpmSourceOrder =
-            bpmEvents.front().sourceOrder;
-        for ( std::size_t index = 1; index < bpmEvents.size(); ++index ) {
-            bpmEvents[index].beat -= malodyContentBeatShift;
-        }
-        for ( auto& event : rawEvents ) {
-            const bool isWrappedFirstBpm =
-                event.isBpm &&
-                event.bpmSourceOrder == wrappedFirstBpmSourceOrder;
-            if ( !isWrappedFirstBpm ) {
-                event.beat -= malodyContentBeatShift;
-            }
-        }
-        std::stable_sort(rawEvents.begin(),
-                         rawEvents.end(),
-                         [](const RawEvent& a, const RawEvent& b) {
-                             if ( a.beat != b.beat ) {
-                                 return a.beat < b.beat;
-                             }
-                             return a.isBpm && !b.isBpm;
-                         });
     }
 
     // 2.5 预扫描：通过统计学特征自动识别轨道数 (针对 Mode 7 / 坐标模式)
@@ -511,9 +478,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             const double firstBpm   = ev.bpm > 0.0 ? ev.bpm : getInitialBpm();
             const double beatLength = 60000.0 / firstBpm;
             if ( wrappedMainSoundNode != nullptr ) {
-                // 成对编码的首 timing 只保留一拍内相位；beat 上的整拍
-                // 前导由后续内容承担，避免首红线停留在数拍之后。
-                ev.timestamp = wrappedFirstTimingPhaseMs;
+                ev.timestamp = ev.beat * beatLength + wrappedFirstTimingPhaseMs;
             } else {
                 ev.timestamp = ev.beat * beatLength + ev.delayMs;
             }
@@ -531,6 +496,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         anchorTime                                 = ev.timestamp;
         anchorBpm                                  = ev.bpm;
     }
+
+    /// @brief 正相位回卷时 note[] 内容在 Malody 拍轴上的整拍补偿。
+    const double malodyNoteBeatShift =
+        wrappedMainSoundNode != nullptr && !bpmEvents.empty() &&
+                bpmEvents.front().timestamp > 1e-6 &&
+                wrappedFirstTimingPhaseMs > 1e-6
+            ? 1.0
+            : 0.0;
 
     auto getBpmAtBeat = [&](double beat) {
         double curBpm =
@@ -641,7 +614,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 isAutomaticSample && &n == wrappedMainSoundNode;
             double startBeat = beatToDouble(n["beat"]);
             if ( !isWrappedMainSample ) {
-                startBeat -= malodyContentBeatShift;
+                startBeat -= malodyNoteBeatShift;
             }
             double startTime = getAbsTime(startBeat);
 
@@ -860,7 +833,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             } else if ( n.contains("endbeat") ) {
                 // 处理长条 Hold
                 double endBeat =
-                    beatToDouble(n["endbeat"]) - malodyContentBeatShift;
+                    beatToDouble(n["endbeat"]) - malodyNoteBeatShift;
                 double endTime   = getAbsTime(endBeat);
                 Hold&  hold      = beatMap.m_noteData.holds.emplace_back();
                 hold.m_type      = NoteType::HOLD;

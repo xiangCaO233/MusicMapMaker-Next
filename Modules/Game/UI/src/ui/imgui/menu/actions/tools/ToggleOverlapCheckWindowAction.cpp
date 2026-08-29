@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -8,7 +9,6 @@
 #include "ui/Icons.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
@@ -542,8 +542,7 @@ private:
         }
 
         ImGui::TableNextColumn();
-        const auto timeText =
-            MMM::UI::Utils::formatCanvasTime(result.timestamp);
+        const auto timeText = Canvas::formatCanvasTime(result.timestamp);
         ImGui::TextUnformatted(timeText.c_str());
 
         ImGui::TableNextColumn();
@@ -570,7 +569,7 @@ private:
         ImGui::PopStyleColor(2);
         if ( ImGui::IsItemHovered() ) {
             const auto targetTimeText =
-                MMM::UI::Utils::formatCanvasTime(result.timestamp);
+                Canvas::formatCanvasTime(result.timestamp);
             ImGui::SetTooltip(
                 "%s", TR_FMT("canvas.preview.jump_to", targetTimeText).c_str());
         }

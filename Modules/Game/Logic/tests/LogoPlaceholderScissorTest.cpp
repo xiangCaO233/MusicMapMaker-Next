@@ -43,7 +43,6 @@ bool testLogoUsesFullViewportScissor()
         VIEWPORT_HEIGHT * 0.8f,
         4,
         0,
-        4,
         config);
 
     for ( const auto& command : snapshot.cmds ) {
@@ -52,9 +51,11 @@ bool testLogoUsesFullViewportScissor()
             continue;
         }
         const auto& scissor = command.scissor;
-        return scissor.x == 0 && scissor.y == 0 &&
-               scissor.width == static_cast<std::uint32_t>(VIEWPORT_WIDTH) &&
-               scissor.height == static_cast<std::uint32_t>(VIEWPORT_HEIGHT);
+        return scissor.offset.x == 0 && scissor.offset.y == 0 &&
+               scissor.extent.width ==
+                   static_cast<std::uint32_t>(VIEWPORT_WIDTH) &&
+               scissor.extent.height ==
+                   static_cast<std::uint32_t>(VIEWPORT_HEIGHT);
     }
 
     XERROR("LogoPlaceholderScissorTest: missing Logo draw command");

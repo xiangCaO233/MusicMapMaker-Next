@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -16,7 +17,6 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -486,8 +486,7 @@ void AudioSpectrumView::buildChannelGeometry(
 void AudioSpectrumView::renderChannelInteractionOverlay(
     const char* seekId, int channelIndex, ImVec2 groupMin, ImVec2 groupMax,
     double viewStart, double viewEnd, float globalVisualOffset,
-    double totalTime, double visualTime,
-    const Common::Render::RenderSnapshot* snapshot)
+    double totalTime, double visualTime, const Logic::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
@@ -594,7 +593,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     if ( isInteractionActive || isInteractionHovered ) {
 
         const auto timeText =
-            MMM::UI::Utils::formatCanvasTime(hoverVisualTime, snapshot);
+            Canvas::formatCanvasTime(hoverVisualTime, snapshot);
         ImGui::SetTooltip("%s", timeText.c_str());
 
         const float hoverLineX = groupMin.x + relX * width;

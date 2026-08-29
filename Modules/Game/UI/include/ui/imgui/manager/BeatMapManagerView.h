@@ -1,9 +1,7 @@
 #pragma once
 
-#include "event/core/EventBus.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
-#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -15,15 +13,14 @@ namespace MMM::UI
 class BeatMapManagerView : public ISubView
 {
 public:
-    /// @brief 创建谱面管理器并订阅项目目录刷新事件。
-    /// @param subViewName 子视图名称。
-    BeatMapManagerView(const std::string& subViewName);
-    BeatMapManagerView(BeatMapManagerView&&)                 = delete;
-    BeatMapManagerView(const BeatMapManagerView&)            = delete;
+    BeatMapManagerView(const std::string& subViewName) : ISubView(subViewName)
+    {
+    }
+    BeatMapManagerView(BeatMapManagerView&&)                 = default;
+    BeatMapManagerView(const BeatMapManagerView&)            = default;
     BeatMapManagerView& operator=(BeatMapManagerView&&)      = delete;
     BeatMapManagerView& operator=(const BeatMapManagerView&) = delete;
-    /// @brief 取消目录刷新订阅并销毁谱面管理器。
-    ~BeatMapManagerView() override;
+    ~BeatMapManagerView() override                           = default;
 
     /// @brief 内部绘制逻辑 (Clay/ImGui)
     /// @param layoutContext 当前 Clay/ImGui 布局上下文。
@@ -119,14 +116,6 @@ private:
 
     /// @brief 谱面排序缓存是否需要重建。
     bool m_beatmapSortCacheDirty{ true };
-
-    /// @brief 外部目录重扫后等待 UI 线程消费的谱面缓存刷新标记。
-    /// @warning 目录重扫由逻辑线程写入、UI 热路径读取；为避免跨线程直接修改
-    /// 排序缓存，只使用单个原子脏标记传递低频刷新请求。
-    std::atomic<bool> m_projectDirectoryRefreshPending{ false };
-
-    /// @brief 项目目录重扫事件订阅 ID。
-    Event::SubscriptionID m_projectDirectoryRefreshedSubId{ 0 };
 
     // --- 谱面管理相关 ---
     std::string m_manageBeatmapPath;

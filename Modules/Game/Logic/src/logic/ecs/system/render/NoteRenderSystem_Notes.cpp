@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -28,19 +27,6 @@ constexpr double MAX_UI_INTERPOLATION_SECONDS = 0.1;
 
 /// @brief 音符可见性 AbsY 索引桶尺寸。
 constexpr double NOTE_ABSY_BUCKET_SIZE = 2048.0;
-
-/// @brief 草稿音符颜色键在热路径复用，避免逐帧构造长字符串。
-const std::string DRAFT_NOTE_TAP_COLOR_KEY{ "draft_notes.note_tap" };
-/// @brief 草稿 Hold 头部颜色键。
-const std::string DRAFT_NOTE_HEAD_COLOR_KEY{ "draft_notes.note_head" };
-/// @brief 草稿 Hold 主体颜色键。
-const std::string DRAFT_NOTE_HOLD_COLOR_KEY{ "draft_notes.note_hold" };
-/// @brief 草稿 Hold 尾部颜色键。
-const std::string DRAFT_NOTE_END_COLOR_KEY{ "draft_notes.note_end" };
-/// @brief 草稿 Polyline 节点颜色键。
-const std::string DRAFT_NOTE_NODE_COLOR_KEY{ "draft_notes.note_node" };
-/// @brief 草稿 Flick 箭头颜色键。
-const std::string DRAFT_NOTE_ARROW_COLOR_KEY{ "draft_notes.note_flick_arrow" };
 
 /// @brief 单个音符在 AbsY 空间覆盖的保守区间。
 struct NoteAbsYRangeEntry {
@@ -355,23 +341,6 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     ctx.colorArrow   = {
         color_arrow.r, color_arrow.g, color_arrow.b, color_arrow.a
     };
-
-    const auto draftColor = [&skin](const std::string& key,
-                                    glm::vec4          fallback) {
-        const auto& colors = skin.getData().colors;
-        const auto  it     = colors.find(key);
-        if ( it == colors.end() ) return fallback;
-        return glm::vec4{
-            it->second.r, it->second.g, it->second.b, it->second.a
-        };
-    };
-    ctx.colorDraftTap  = draftColor(DRAFT_NOTE_TAP_COLOR_KEY, ctx.colorTap);
-    ctx.colorDraftHead = draftColor(DRAFT_NOTE_HEAD_COLOR_KEY, ctx.colorHead);
-    ctx.colorDraftHold = draftColor(DRAFT_NOTE_HOLD_COLOR_KEY, ctx.colorHold);
-    ctx.colorDraftEnd  = draftColor(DRAFT_NOTE_END_COLOR_KEY, ctx.colorEnd);
-    ctx.colorDraftNode = draftColor(DRAFT_NOTE_NODE_COLOR_KEY, ctx.colorNode);
-    ctx.colorDraftArrow =
-        draftColor(DRAFT_NOTE_ARROW_COLOR_KEY, ctx.colorArrow);
 
     return ctx;
 }
@@ -1057,32 +1026,19 @@ void NoteRenderSystem::renderNoteBaseLayer(
                         renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
-        // 草稿物件始终使用皮肤草稿色，避免玩家调色盘覆盖区域辨识度。
+        // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
-            note.m_isDraft
-                ? ctx.colorDraftTap
-                : resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
+            resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
         glm::vec4 curColorHead =
-            note.m_isDraft
-                ? ctx.colorDraftHead
-                : resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
+            resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
         glm::vec4 curColorHoldBody =
-            note.m_isDraft
-                ? ctx.colorDraftHold
-                : resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
+            resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
         glm::vec4 curColorHoldEnd =
-            note.m_isDraft
-                ? ctx.colorDraftEnd
-                : resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
+            resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
         glm::vec4 curColorNode =
-            note.m_isDraft
-                ? ctx.colorDraftNode
-                : resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
+            resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
         glm::vec4 curColorArrow =
-            note.m_isDraft
-                ? ctx.colorDraftArrow
-                : resolveNoteColor(
-                      note, NoteColorSlot::FlickArrow, ctx.colorArrow);
+            resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
         const auto objectKind    = note.m_isDraft ? ChartObjectKind::DraftNote
                                                   : ChartObjectKind::PlayerNote;
@@ -1281,30 +1237,17 @@ void NoteRenderSystem::renderNoteGlowLayer(
             glowIdx  = -1;
         }
         glm::vec4 glowNote =
-            note.m_isDraft
-                ? ctx.colorDraftTap
-                : resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
+            resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
         glm::vec4 glowHead =
-            note.m_isDraft
-                ? ctx.colorDraftHead
-                : resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
+            resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
         glm::vec4 glowBody =
-            note.m_isDraft
-                ? ctx.colorDraftHold
-                : resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
+            resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
         glm::vec4 glowEnd =
-            note.m_isDraft
-                ? ctx.colorDraftEnd
-                : resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
+            resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
         glm::vec4 glowNode =
-            note.m_isDraft
-                ? ctx.colorDraftNode
-                : resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
+            resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
         glm::vec4 glowArrow =
-            note.m_isDraft
-                ? ctx.colorDraftArrow
-                : resolveNoteColor(
-                      note, NoteColorSlot::FlickArrow, ctx.colorArrow);
+            resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
         if ( note.m_type == ::MMM::NoteType::NOTE )
             NoteRenderSystem::renderTap(
@@ -2009,34 +1952,20 @@ void NoteRenderSystem::renderBrushPreview(
     tempNote.m_duration     = brush.duration;
     tempNote.m_trackIndex   = brush.track;
     tempNote.m_dtrack       = brush.dtrack;
-    tempNote.m_isDraft      = brush.track < 0;
     tempNote.m_customColors = brush.customColors;
 
     glm::vec4 previewNote =
-        tempNote.m_isDraft
-            ? ctx.colorDraftTap
-            : resolveNoteColor(tempNote, NoteColorSlot::Tap, ctx.colorTap);
+        resolveNoteColor(tempNote, NoteColorSlot::Tap, ctx.colorTap);
     glm::vec4 previewHead =
-        tempNote.m_isDraft
-            ? ctx.colorDraftHead
-            : resolveNoteColor(tempNote, NoteColorSlot::Head, ctx.colorHead);
+        resolveNoteColor(tempNote, NoteColorSlot::Head, ctx.colorHead);
     glm::vec4 previewBody =
-        tempNote.m_isDraft
-            ? ctx.colorDraftHold
-            : resolveNoteColor(tempNote, NoteColorSlot::Hold, ctx.colorHold);
+        resolveNoteColor(tempNote, NoteColorSlot::Hold, ctx.colorHold);
     glm::vec4 previewEnd =
-        tempNote.m_isDraft
-            ? ctx.colorDraftEnd
-            : resolveNoteColor(tempNote, NoteColorSlot::End, ctx.colorEnd);
+        resolveNoteColor(tempNote, NoteColorSlot::End, ctx.colorEnd);
     glm::vec4 previewNode =
-        tempNote.m_isDraft
-            ? ctx.colorDraftNode
-            : resolveNoteColor(tempNote, NoteColorSlot::Node, ctx.colorNode);
+        resolveNoteColor(tempNote, NoteColorSlot::Node, ctx.colorNode);
     glm::vec4 previewArrow =
-        tempNote.m_isDraft
-            ? ctx.colorDraftArrow
-            : resolveNoteColor(
-                  tempNote, NoteColorSlot::FlickArrow, ctx.colorArrow);
+        resolveNoteColor(tempNote, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
     previewNote.a *= 0.5f;
     previewHead.a *= 0.5f;

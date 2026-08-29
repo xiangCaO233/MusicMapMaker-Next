@@ -28,19 +28,14 @@ void SettingsView::drawProjectSettings()
 
     m_contentVBox.clear();
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
-    size_t rowIndex                        = 0;
-    size_t sectionIndex                    = 0;
-    bool   changed                         = false;
-    bool   autoBackupOverrideToggleChanged = false;
-    bool   useProjectAutoBackupConfig =
-        project->m_settings.m_autoBackupOverride.has_value();
-    const float labelW = getCurrentTabLabelWidth(
-        Config::AppConfig::instance().getWindowContentScale());
+    size_t rowIndex     = 0;
+    size_t sectionIndex = 0;
+    bool   changed      = false;
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "PRJ_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -108,6 +103,8 @@ void SettingsView::drawProjectSettings()
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.project.info").data(), true) ) {
         std::string projPath = Config::pathToUtf8(project->m_projectRoot);
+        const float labelW   = getCurrentTabLabelWidth(
+            Config::AppConfig::instance().getWindowContentScale());
         addSettingItem(
             *sec,
             rowIndex,
@@ -220,189 +217,12 @@ void SettingsView::drawProjectSettings()
             });
     }
 
-    if ( auto* sec = addHeader(
-             TR_CACHE("ui.settings.project.auto_backup").data(), true) ) {
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.project.auto_backup.override").data(),
-            labelW,
-            [&](Clay_BoundingBox, bool) {
-                if ( ::MMM::UI::FeedbackCheckbox(
-                         "##ProjectAutoBackupOverride",
-                         &useProjectAutoBackupConfig) ) {
-                    autoBackupOverrideToggleChanged = true;
-                    changed                         = true;
-                }
-            });
-
-        if ( !project->m_settings.m_autoBackupOverride ) {
-            addSettingItem(
-                *sec,
-                rowIndex,
-                TR_CACHE("ui.settings.software.auto_backup.mode").data(),
-                labelW,
-                [&](Clay_BoundingBox r, bool) {
-                    const auto hint = TR_CACHE(
-                        "ui.settings.project.auto_backup.inherit_hint");
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    ImGui::TextWrapped("%s", hint.data());
-                },
-                false,
-                false);
-        } else {
-            auto& backup = *project->m_settings.m_autoBackupOverride;
-            addRadioSetting(
-                *sec,
-                rowIndex,
-                sectionIndex,
-                TR_CACHE("ui.settings.software.auto_backup.mode").data(),
-                labelW,
-                { { TR_CACHE("ui.settings.software.auto_backup.mode.disabled")
-                        .data(),
-                    (int)Config::AutoSaveMode::Disabled },
-                  { TR_CACHE("ui.settings.software.auto_backup.mode.timed")
-                        .data(),
-                    (int)Config::AutoSaveMode::Timed },
-                  { TR_CACHE("ui.settings.software.auto_backup.mode.event")
-                        .data(),
-                    (int)Config::AutoSaveMode::EventTriggered } },
-                (int&)backup.mode,
-                changed,
-                false);
-
-            if ( backup.mode == Config::AutoSaveMode::Timed ) {
-                addRadioSetting(
-                    *sec,
-                    rowIndex,
-                    sectionIndex,
-                    TR_CACHE("ui.settings.software.auto_backup.interval_unit")
-                        .data(),
-                    labelW,
-                    { { TR_CACHE("ui.settings.software.auto_backup.interval_"
-                                 "unit.seconds")
-                            .data(),
-                        (int)Config::AutoSaveIntervalUnit::Seconds },
-                      { TR_CACHE("ui.settings.software.auto_backup.interval_"
-                                 "unit.minutes")
-                            .data(),
-                        (int)Config::AutoSaveIntervalUnit::Minutes } },
-                    (int&)backup.intervalUnit,
-                    changed,
-                    false);
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE("ui.settings.software.auto_backup.interval")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox r, bool) {
-                        ImGui::SetNextItemWidth(r.width);
-                        changed |= ::MMM::UI::FeedbackSliderInt(
-                            "##ProjectAutoBackupInterval",
-                            &backup.intervalValue,
-                            5,
-                            60);
-                    },
-                    false,
-                    false);
-            } else if ( backup.mode == Config::AutoSaveMode::EventTriggered ) {
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE(
-                        "ui.settings.software.auto_backup.on_object_modified")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox, bool) {
-                        changed |= ::MMM::UI::FeedbackCheckbox(
-                            "##ProjectAutoBackupObjectModified",
-                            &backup.onObjectModified);
-                    },
-                    false,
-                    false);
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE(
-                        "ui.settings.software.auto_backup.on_beatmap_switch")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox, bool) {
-                        changed |= ::MMM::UI::FeedbackCheckbox(
-                            "##ProjectAutoBackupBeatmapSwitch",
-                            &backup.onBeatmapSwitch);
-                    },
-                    false,
-                    false);
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE("ui.settings.software.auto_backup.on_imgui_focus_"
-                             "lost")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox, bool) {
-                        changed |= ::MMM::UI::FeedbackCheckbox(
-                            "##ProjectAutoBackupImGuiFocusLost",
-                            &backup.onImGuiWindowFocusLost);
-                    },
-                    false,
-                    false);
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE("ui.settings.software.auto_backup.on_native_focus_"
-                             "lost")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox, bool) {
-                        changed |= ::MMM::UI::FeedbackCheckbox(
-                            "##ProjectAutoBackupNativeFocusLost",
-                            &backup.onNativeWindowFocusLost);
-                    },
-                    false,
-                    false);
-            }
-
-            if ( backup.mode != Config::AutoSaveMode::Disabled ) {
-                addSettingItem(
-                    *sec,
-                    rowIndex,
-                    TR_CACHE("ui.settings.software.auto_backup.max_count")
-                        .data(),
-                    labelW,
-                    [&](Clay_BoundingBox r, bool) {
-                        ImGui::SetNextItemWidth(r.width);
-                        changed |= ::MMM::UI::FeedbackSliderInt(
-                            "##ProjectAutoBackupMaxCount",
-                            &backup.maxBackupCount,
-                            Config::AUTO_BACKUP_COUNT_MIN,
-                            Config::AUTO_BACKUP_COUNT_MAX);
-                    },
-                    false,
-                    false);
-            }
-        }
-    }
-
     ImVec2 startPos = ImGui::GetCursorScreenPos();
     ImVec2 sz       = m_contentVBox.renderInCurrent(
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
-    if ( autoBackupOverrideToggleChanged ) {
-        if ( useProjectAutoBackupConfig ) {
-            project->m_settings.m_autoBackupOverride =
-                Config::AppConfig::instance().getEditorSettings().autoBackup;
-        } else {
-            project->m_settings.m_autoBackupOverride.reset();
-        }
-    }
-
     if ( changed ) {
-        engine.setProjectAutoBackupOverride(
-            project->m_settings.m_autoBackupOverride);
         engine.saveProject();
     }
 }

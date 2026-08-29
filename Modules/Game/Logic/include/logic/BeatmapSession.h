@@ -12,7 +12,6 @@
 
 namespace MMM::Config
 {
-struct AutoBackupConfig;
 struct AutoSaveConfig;
 struct EditorConfig;
 }  // namespace MMM::Config
@@ -86,9 +85,8 @@ public:
 
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
     /// @warning 逻辑热路径：每个逻辑 update
-    /// 执行；普通路径禁止文件系统访问、完整排序、try/catch 和可避免的
-    /// shared_ptr 拷贝。自动保存、自动备份与元数据尾随保存只允许在配置到期或
-    /// 空闲事件分支触发，不得扩散到普通更新帧。
+    /// 执行；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+    /// 元数据尾随保存只允许在空闲超时分支触发，不得扩散到普通更新帧。
     /// @param dt 帧间隔时间 (秒)
     /// @param config 全局编辑器配置
     /// @param isActiveSession 当前会话是否是前台活跃会话。
@@ -118,21 +116,19 @@ public:
     /// 扩大为全部 needsRealtimeUpdate 状态以免重新引入 UI 锁饥饿。
     bool needsUnlimitedPolling() const;
 
-    /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存与自动备份。
-    /// @param trigger 触发自动持久化的编辑器事件。
+    /// @brief 跨线程请求一次由指定编辑器事件触发的自动保存。
+    /// @param trigger 触发自动保存的编辑器事件。
     /// @warning UI 线程或 Session 切换路径低频写入，逻辑线程每次 update
     /// 只交换一个原子位掩码；用于避免在 UI/GLFW 回调中执行文件 I/O。
     void requestAutoSave(AutoSaveTrigger trigger);
 
-    /// @brief 判断后台会话是否仍需轮询自动保存或自动备份。
-    /// @param saveConfig 当前软件全局自动保存配置。
-    /// @param backupConfig 项目覆盖后的有效自动备份配置。
-    /// @return 存在事件请求，或定时模式下存在待持久化内容时返回 true。
+    /// @brief 判断后台会话是否仍需轮询自动保存期限或事件请求。
+    /// @param config 当前软件全局自动保存配置。
+    /// @return 存在事件请求，或定时模式下谱面未保存时返回 true。
     /// @warning 逻辑调度热路径：仅读取原子位、布尔状态和撤销栈脏标记，
     /// 不访问文件系统或遍历 ECS。
     [[nodiscard]] bool needsAutoSavePolling(
-        const Config::AutoSaveConfig&   saveConfig,
-        const Config::AutoBackupConfig& backupConfig) const;
+        const Config::AutoSaveConfig& config) const;
 
     /// @brief 判断会话是否仍需低频轮询元数据尾随保存。
     /// @return 存在等待空闲期的元数据保存时返回 true。
@@ -181,15 +177,6 @@ private:
     /// 修改的低频分支允许同步谱面并访问文件系统。
     void flushConfiguredAutoSave(double currentSysTime, bool isEditingBusy,
                                  const Config::AutoSaveConfig& config);
-
-    /// @brief 消费有效项目配置允许的事件请求并推进谱面自动备份。
-    /// @param currentSysTime 当前单调系统时间（秒）。
-    /// @param isEditingBusy 当前会话是否仍处于连续交互或命令堆积状态。
-    /// @param config 项目覆盖后的有效自动备份配置。
-    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅到期且有新修改的
-    /// 低频分支允许同步谱面、写文件并轮转备份。
-    void flushConfiguredAutoBackup(double currentSysTime, bool isEditingBusy,
-                                   const Config::AutoBackupConfig& config);
 
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
@@ -260,10 +247,6 @@ private:
     void handleCommand(const CmdSetCollaborationClipboardIsolation& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmapAs& cmd);
-    /// @brief 导出当前谱面的 RM/IMD 资源包。
-    /// @param cmd 目标 zip 路径。
-    /// @warning 用户触发的低频路径：会执行完整音频混合和压缩。
-    void handleCommand(const CmdExportImdPackage& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
     /// @brief 更新谱面元数据，并在主音轨提示变化时同步首个 Main BGM 采样。
     /// @param cmd 新的谱面基础元数据。
@@ -327,11 +310,6 @@ private:
     /// 执行一次 relaxed exchange；事件仅用于唤醒保存调度，不承载其它数据。
     std::atomic_uint8_t m_requestedAutoSaveTriggers{ 0U };
 
-    /// @brief UI 与谱面切换路径提交、逻辑线程消费的自动备份事件位。
-    /// @warning 多个低频生产者执行 relaxed fetch_or，逻辑线程每 update
-    /// 执行一次 relaxed exchange；事件不承载谱面数据或生命周期。
-    std::atomic_uint8_t m_requestedAutoBackupTriggers{ 0U };
-
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
@@ -359,18 +337,6 @@ private:
 
     /// @brief 最近一次用于生成截止时间的定时间隔秒数。
     double m_timedAutoSaveIntervalSeconds{ 0.0 };
-
-    /// @brief 是否有已启用的编辑器事件正在等待会话空闲后自动备份。
-    bool m_triggeredAutoBackupPending{ false };
-
-    /// @brief 谱面自上次成功备份后是否又产生了持久化内容变化。
-    bool m_autoBackupDirty{ false };
-
-    /// @brief 当前定时自动备份周期的下一次截止时间（单调秒）。
-    double m_timedAutoBackupDeadline{ 0.0 };
-
-    /// @brief 最近一次用于生成备份截止时间的定时间隔秒数。
-    double m_timedAutoBackupIntervalSeconds{ 0.0 };
 
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
     /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给

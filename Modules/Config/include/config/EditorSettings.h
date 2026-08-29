@@ -410,54 +410,6 @@ void to_json(nlohmann::json& json, const AutoSaveConfig& config);
 /// @brief 从 JSON 读取自动保存配置并约束定时间隔。
 void from_json(const nlohmann::json& json, AutoSaveConfig& config);
 
-/// @brief 单个谱面允许保留的最少自动备份数量。
-inline constexpr int AUTO_BACKUP_COUNT_MIN = 1;
-
-/// @brief 单个谱面允许保留的最多自动备份数量。
-inline constexpr int AUTO_BACKUP_COUNT_MAX = 100;
-
-/// @brief 谱面自动备份配置。
-struct AutoBackupConfig {
-    /// @brief 自动备份调度模式。
-    AutoSaveMode mode{ AutoSaveMode::Disabled };
-
-    /// @brief 定时间隔单位。
-    AutoSaveIntervalUnit intervalUnit{ AutoSaveIntervalUnit::Minutes };
-
-    /// @brief 定时间隔数值；读取配置时限制为 5~60。
-    int intervalValue{ 5 };
-
-    /// @brief 任意谱面内容修改提交后是否触发自动备份。
-    bool onObjectModified{ true };
-
-    /// @brief 切换活动谱面时是否触发自动备份。
-    bool onBeatmapSwitch{ true };
-
-    /// @brief ImGui 根窗口丢失焦点时是否触发自动备份。
-    bool onImGuiWindowFocusLost{ true };
-
-    /// @brief 程序原生窗口丢失焦点或最小化时是否触发自动备份。
-    bool onNativeWindowFocusLost{ true };
-
-    /// @brief 每个谱面保留的备份数量，超出后删除最旧备份。
-    int maxBackupCount{ 10 };
-
-    /// @brief 将配置的 5~60 定时间隔换算为秒。
-    /// @return 可供逻辑调度器使用的秒数。
-    [[nodiscard]] double intervalSeconds() const
-    {
-        const int safeValue = std::clamp(intervalValue, 5, 60);
-        return intervalUnit == AutoSaveIntervalUnit::Minutes
-                   ? static_cast<double>(safeValue) * 60.0
-                   : static_cast<double>(safeValue);
-    }
-};
-
-/// @brief 将自动备份配置序列化为 JSON。
-void to_json(nlohmann::json& json, const AutoBackupConfig& config);
-/// @brief 从 JSON 读取自动备份配置并约束间隔与保留数量。
-void from_json(const nlohmann::json& json, AutoBackupConfig& config);
-
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
     Clock,         ///< 时:分:秒.毫秒
@@ -606,85 +558,6 @@ void to_json(nlohmann::json& json, const CollaborationServerSettings& settings);
 void from_json(const nlohmann::json&        json,
                CollaborationServerSettings& settings);
 
-/// @brief 工具栏状态机工具的按钮可见性配置。
-struct ToolbarStateToolVisibility {
-    /// @brief 是否显示抓取工具按钮。
-    bool move{ true };
-
-    /// @brief 是否显示框选工具按钮。
-    bool marquee{ true };
-
-    /// @brief 是否显示绘制工具按钮。
-    bool draw{ true };
-
-    /// @brief 是否显示配色笔刷工具按钮。
-    bool colorBrush{ false };
-
-    /// @brief 是否显示配色橡皮工具按钮。
-    bool colorEraser{ false };
-
-    /// @brief 是否显示布局工具按钮。
-    bool layout{ true };
-};
-
-/// @brief 将状态机工具可见性配置序列化为 JSON。
-void to_json(nlohmann::json&                   json,
-             const ToolbarStateToolVisibility& visibility);
-/// @brief 从 JSON 读取状态机工具可见性配置。
-void from_json(const nlohmann::json&       json,
-               ToolbarStateToolVisibility& visibility);
-
-/// @brief 工具栏独立按钮的可见性配置。
-struct ToolbarIndependentButtonVisibility {
-    /// @brief 是否显示音符调色盘按钮。
-    bool notePalette{ false };
-
-    /// @brief 是否显示磁铁工具按钮。
-    bool magnet{ true };
-
-    /// @brief 是否显示滚动时间视觉映射按钮。
-    bool scrollTimingMapping{ true };
-
-    /// @brief 是否显示分拍线显示模式按钮。
-    bool beatLineDisplay{ true };
-
-    /// @brief 是否显示音效工具按钮。
-    bool soundEffectTool{ true };
-
-    /// @brief 是否显示播放与暂停按钮。
-    bool playback{ true };
-
-    /// @brief 是否显示播放速度按钮。
-    bool playbackSpeed{ false };
-
-    /// @brief 是否显示轨道数量按钮。
-    bool trackCount{ false };
-
-    /// @brief 是否显示分拍数量按钮。
-    bool beatDivisor{ false };
-};
-
-/// @brief 将独立按钮可见性配置序列化为 JSON。
-void to_json(nlohmann::json&                           json,
-             const ToolbarIndependentButtonVisibility& visibility);
-/// @brief 从 JSON 读取独立按钮可见性配置。
-void from_json(const nlohmann::json&               json,
-               ToolbarIndependentButtonVisibility& visibility);
-
-/// @brief 工具栏全部按钮的分组可见性配置。
-struct ToolbarVisibilityConfig {
-    /// @brief 状态机型编辑工具按钮集合。
-    ToolbarStateToolVisibility stateTools;
-
-    /// @brief 不切换编辑状态机的独立按钮集合。
-    ToolbarIndependentButtonVisibility independentButtons;
-};
-
-/// @brief 将工具栏按钮可见性配置序列化为 JSON。
-void to_json(nlohmann::json& json, const ToolbarVisibilityConfig& visibility);
-/// @brief 从 JSON 读取工具栏按钮可见性配置。
-void from_json(const nlohmann::json& json, ToolbarVisibilityConfig& visibility);
-
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -827,9 +700,6 @@ struct EditorSettings {
     /// @brief 对所有项目生效的软件全局自动保存配置。
     AutoSaveConfig autoSave;
 
-    /// @brief 项目未覆盖时使用的软件全局谱面自动备份配置。
-    AutoBackupConfig autoBackup;
-
     /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
     bool autoAddStoreModeExtForMalodyExport{ false };
 
@@ -858,8 +728,9 @@ struct EditorSettings {
     bool enableBmsEditing{ true };
 
     /// @brief 当前构建是否发布项目级草稿轨功能。
-    /// @details 内部发布门禁，不序列化也不向设置界面开放。
-    bool enableDraftLanes{ true };
+    /// @details
+    /// 内部发布门禁，不序列化也不向设置界面开放；底层草稿数据继续保留。
+    bool enableDraftLanes{ false };
 
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
@@ -900,9 +771,6 @@ struct EditorSettings {
     /// @brief 是否在工具栏图标下方显示简短标签。
     bool showToolLabels{ false };
 
-    /// @brief 工具栏各按钮的显示与隐藏配置。
-    ToolbarVisibilityConfig toolbarVisibility;
-
     /// @brief 是否将工具窗口固定在主窗口右侧。
     bool fixedToolWindow{ true };
 
@@ -923,12 +791,6 @@ struct EditorSettings {
     /// @brief 编辑器自定义快捷键配置。
     ShortcutConfig shortcutConfig;
 };
-
-/// @brief 将全软件工具栏显示配置从源设置复制到目标设置。
-/// @param target 需要保留全局工具栏显示状态的目标设置。
-/// @param source AppConfig 中的全软件设置。
-void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
-                                          const EditorSettings& source);
 
 /// @brief 将编辑器设置序列化为 JSON。
 void to_json(nlohmann::json& json, const EditorSettings& settings);

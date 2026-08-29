@@ -1,6 +1,5 @@
 #include "ui/imgui/menu/actions/tools/BpmPlaybackRouting.h"
 #include "ui/imgui/WindowIdUtils.h"
-#include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 
 #include <string_view>
 
@@ -13,7 +12,6 @@ using MMM::UI::resolveBpmPlaybackRoute;
 using MMM::UI::resolveBpmSpaceShortcutDisposition;
 using MMM::UI::shouldDirectlyControlBpmAudioTransport;
 using MMM::UI::shouldDispatchBpmPlaybackToEditor;
-using MMM::UI::shouldStartBpmAutomaticMeasurement;
 using MMM::UI::shouldToggleBpmPlaybackFromSpace;
 using MMM::UI::WindowIdUtils::stableWindowId;
 
@@ -56,8 +54,6 @@ int main()
     ok &= shouldToggleBpmPlaybackFromSpace(false, false);
     ok &= !shouldToggleBpmPlaybackFromSpace(true, false);
     ok &= !shouldToggleBpmPlaybackFromSpace(false, true);
-    ok &= shouldStartBpmAutomaticMeasurement(false);
-    ok &= !shouldStartBpmAutomaticMeasurement(true);
 
     constexpr std::string_view DOUBLE_MARKER_WINDOW =
         "BPM测量工具###BpmMeasurementToolWindow###BpmMeasurementTool";

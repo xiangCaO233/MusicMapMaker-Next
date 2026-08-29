@@ -52,8 +52,6 @@ public:
         bool   isSubNote;
         /// @brief 物件命中时触发的可选采样绑定；为空时使用内置音效。
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
-        /// @brief 事件是否来自项目级草稿轨道区。
-        bool isDraft{ false };
 
         bool operator<(const HitEvent& other) const
         {
@@ -77,36 +75,22 @@ public:
 
     /// @brief 触发音效（仅音效，带预测支持）。
     /// @param ev 待播放的物件打击事件。
-    /// @param playerTrackCount 当前谱面的玩家轨道数。
-    /// @param draftTrackCount 当前项目共享草稿轨道数。
+    /// @param trackCount 当前谱面的总轨道数。
     /// @param config 当前编辑器配置。
     /// @warning 逻辑预测播放热路径：每个待触发物件调用一次，只允许固定计算和
     /// 音效池调度，禁止文件访问或阻塞等待。
-    void triggerAudio(const HitEvent& ev, std::int32_t playerTrackCount,
-                      std::int32_t                draftTrackCount,
+    void triggerAudio(const HitEvent& ev, std::int32_t trackCount,
                       const Config::EditorConfig& config);
 
     /// @brief 计算物件中心对应的双声道增益包络。
     /// @param ev 待定位的物件打击事件。
-    /// @param playerTrackCount 当前谱面的玩家轨道数。
+    /// @param trackCount 当前谱面的总轨道数。
     /// @param enabled 是否启用立体打击音效。
-    /// @param draftTrackCount 当前项目共享草稿轨道数；负值时兼容为玩家轨道数。
     /// @return 普通物件为固定增益，Flick
     /// 为起点到滑动终点的线性增益包络；关闭时保持原始立体声。
     /// @warning 逻辑预测播放热路径：仅执行常量时间算术，不得访问 ECS 或分配。
     [[nodiscard]] static Audio::StereoGainEnvelope stereoGainEnvelopeForEvent(
-        const HitEvent& ev, std::int32_t playerTrackCount, bool enabled,
-        std::int32_t draftTrackCount = -1);
-
-    /// @brief 将事件绝对轨道换算为所属区域内的零基轨道。
-    /// @param ev 待换算的正式或草稿打击事件。
-    /// @param playerTrackCount 玩家轨道数量。
-    /// @param draftTrackCount 草稿轨道数量；负值时兼容为玩家轨道数。
-    /// @return 正式事件保留原轨道，草稿事件按草稿区宽度平移到 0 开始。
-    /// @warning 逻辑与渲染热路径：只执行一次常量时间加法。
-    [[nodiscard]] static std::int32_t areaTrackIndexForEvent(
-        const HitEvent& ev, std::int32_t playerTrackCount,
-        std::int32_t draftTrackCount = -1) noexcept;
+        const HitEvent& ev, std::int32_t trackCount, bool enabled);
 
     /// @brief 解析打击事件实际使用的音效资源标识。
     /// @param ev 待解析的打击事件。
@@ -193,7 +177,6 @@ public:
      * @param topY 轨道区域上边界
      * @param bottomY 轨道区域下边界
      * @param singleTrackW 单个轨道宽度
-     * @param renderDraftEffects 是否只绘制草稿区特效；否则只绘制玩家区特效
      */
     /// @warning 渲染热路径：快照生成阶段执行。
     /// 只遍历当前活跃特效表并追加几何。
@@ -201,8 +184,7 @@ public:
     void generateSnapshot(Batcher& batcher, double animateTime,
                           const Config::EditorConfig& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
-                          float topY, float bottomY, float singleTrackW,
-                          bool renderDraftEffects = false);
+                          float topY, float bottomY, float singleTrackW);
 
     /**
      * @brief 清空当前所有正在播放的特效与 KPS 滚动窗口。
@@ -224,10 +206,8 @@ private:
         double startTime{ 0.0 };
         /// @brief Hold 物件持续时间；非 Hold 的寿命由视觉配置控制。
         double holdDuration{ 0.0 };
-        /// @brief 物件起始绝对轨道，草稿轨使用负值。
+        /// @brief 物件起始轨道。
         int trackIndex{ 0 };
-        /// @brief 特效是否来自项目级草稿轨道区。
-        bool isDraft{ false };
         /// @brief 物件横跨轨道数。
         int trackSpan{ 1 };
         /// @brief 用于定位 Flick 等物件打击点的轨道偏移。
@@ -258,7 +238,7 @@ private:
 
     /// @brief 更新逐轨 KPS 的一秒滚动窗口。
     /// @param animateTime 当前动画时间。
-    /// @param events 本帧实际消费的 HitEffect 事件；草稿事件不计入玩家 KPS。
+    /// @param events 本帧实际消费的 HitEffect 事件。
     /// @param trackCount 当前谱面轨道数量。
     /// @warning 逻辑热路径：每个 Session update 执行；只处理新增和过期事件。
     void updateKps(double animateTime, const std::vector<HitEvent>& events,

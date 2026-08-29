@@ -2,8 +2,8 @@
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
-#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -16,11 +16,11 @@
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
-#include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -100,7 +100,7 @@ PreviewDensityRailLayout calculatePreviewDensityRailLayout(
 
 PreviewCanvas::PreviewCanvas(
     const std::string& name, uint32_t w, uint32_t h,
-    std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
+    std::shared_ptr<Logic::BeatmapSyncBuffer> syncBuffer)
     : IUIView(name)
     , IRenderableView(name)
     , m_canvasName(name)
@@ -392,8 +392,8 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
 
     if ( isHovered || interactionFrame ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        const auto timeText = MMM::UI::Utils::formatCanvasTimePair(
-            *targetTime, duration, m_currentSnapshot);
+        const auto timeText =
+            formatCanvasTimePair(*targetTime, duration, m_currentSnapshot);
         ImGui::SetTooltip("%s", timeText.c_str());
     }
     if ( interactionFrame ) {
@@ -512,7 +512,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&
          m_currentSnapshot->isPreviewDragging ) {
-        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+        const auto timeText = formatCanvasTime(
             m_currentSnapshot->previewHoverTime, m_currentSnapshot);
         ImGui::SetTooltip("%s",
                           TR_FMT("canvas.preview.jump_to", timeText).c_str());
@@ -704,27 +704,25 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                               255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                               255, 255, 255, 255 };
     m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Common::Render::TextureID::None), white, 4, 4);
+        static_cast<uint32_t>(Logic::TextureID::None), white, 4, 4);
 
     auto& skin   = Config::SkinManager::instance();
-    auto  addTex = [&](Common::Render::TextureID id, const std::string& key) {
+    auto  addTex = [&](Logic::TextureID id, const std::string& key) {
         auto p = skin.getAssetPath(key);
         if ( !p.empty() )
             m_textureAtlas->addTexture(static_cast<uint32_t>(id), p);
     };
 
-    addTex(Common::Render::TextureID::Note, "note.note");
-    addTex(Common::Render::TextureID::Node, "note.node");
-    addTex(Common::Render::TextureID::HoldEnd, "note.holdend");
-    addTex(Common::Render::TextureID::HoldBodyVertical,
-           "note.holdbodyvertical");
-    addTex(Common::Render::TextureID::HoldBodyHorizontal,
-           "note.holdbodyhorizontal");
-    addTex(Common::Render::TextureID::FlickArrowLeft, "note.arrowleft");
-    addTex(Common::Render::TextureID::FlickArrowRight, "note.arrowright");
-    addTex(Common::Render::TextureID::Track, "panel.track.background");
-    addTex(Common::Render::TextureID::JudgeArea, "panel.track.judgearea");
-    addTex(Common::Render::TextureID::Logo, "logo");
+    addTex(Logic::TextureID::Note, "note.note");
+    addTex(Logic::TextureID::Node, "note.node");
+    addTex(Logic::TextureID::HoldEnd, "note.holdend");
+    addTex(Logic::TextureID::HoldBodyVertical, "note.holdbodyvertical");
+    addTex(Logic::TextureID::HoldBodyHorizontal, "note.holdbodyhorizontal");
+    addTex(Logic::TextureID::FlickArrowLeft, "note.arrowleft");
+    addTex(Logic::TextureID::FlickArrowRight, "note.arrowright");
+    addTex(Logic::TextureID::Track, "panel.track.background");
+    addTex(Logic::TextureID::JudgeArea, "panel.track.judgearea");
+    addTex(Logic::TextureID::Logo, "logo");
 
     // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
@@ -737,10 +735,10 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->build(4096);
 
     m_atlasUVs.clear();
-    for ( uint32_t i = static_cast<uint32_t>(Common::Render::TextureID::None);
-          i <= static_cast<uint32_t>(Common::Render::TextureID::Logo);
+    for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
+          i <= static_cast<uint32_t>(Logic::TextureID::Logo);
           ++i ) {
-        if ( i == static_cast<uint32_t>(Common::Render::TextureID::Background) )
+        if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )
             continue;
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
@@ -796,8 +794,8 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
-    Common::Render::CanvasScissor lastScissor;
+    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
+    vk::Rect2D        lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -816,9 +814,7 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -847,8 +843,8 @@ void PreviewCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
-    vk::DescriptorSet             lastBound = VK_NULL_HANDLE;
-    Common::Render::CanvasScissor lastScissor;
+    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
+    vk::Rect2D        lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
         vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
@@ -867,9 +863,7 @@ void PreviewCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

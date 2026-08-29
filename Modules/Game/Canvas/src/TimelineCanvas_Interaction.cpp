@@ -2,12 +2,12 @@
 
 #include "canvas/MarqueeAutoScroll.h"
 #include "canvas/TimelineTimingTooltip.h"
-#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/ShortcutUtils.h"
@@ -36,19 +36,18 @@ constexpr float TIMING_MARKER_PADDING = 5.0f;
 uint32_t getTimingEffectMask(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
-    case ::MMM::TimingEffect::BPM: return Common::Render::SCROLL_EFFECT_BPM;
+    case ::MMM::TimingEffect::BPM: return Logic::System::SCROLL_EFFECT_BPM;
     case ::MMM::TimingEffect::SCROLL:
-        return Common::Render::SCROLL_EFFECT_SCROLL;
-    case ::MMM::TimingEffect::JUMP: return Common::Render::SCROLL_EFFECT_JUMP;
-    case ::MMM::TimingEffect::HS: return Common::Render::SCROLL_EFFECT_HS;
+        return Logic::System::SCROLL_EFFECT_SCROLL;
+    case ::MMM::TimingEffect::JUMP: return Logic::System::SCROLL_EFFECT_JUMP;
+    case ::MMM::TimingEffect::HS: return Logic::System::SCROLL_EFFECT_HS;
     }
     return 0;
 }
 
 /// @brief 取 Timeline 元素中指定类型的实体。
-entt::entity getTimingEntity(
-    const Common::Render::TimelineInteractiveElement& element,
-    ::MMM::TimingEffect                               effect)
+entt::entity getTimingEntity(const Logic::TimelineInteractiveElement& element,
+                             ::MMM::TimingEffect                      effect)
 {
     switch ( effect ) {
     case ::MMM::TimingEffect::BPM: return element.bpmEntity;
@@ -60,8 +59,8 @@ entt::entity getTimingEntity(
 }
 
 /// @brief 取 Timeline 元素中指定类型的原始值。
-double getTimingValue(const Common::Render::TimelineInteractiveElement& element,
-                      ::MMM::TimingEffect                               effect)
+double getTimingValue(const Logic::TimelineInteractiveElement& element,
+                      ::MMM::TimingEffect                      effect)
 {
     switch ( effect ) {
     case ::MMM::TimingEffect::BPM: return element.bpmValue;
@@ -73,10 +72,9 @@ double getTimingValue(const Common::Render::TimelineInteractiveElement& element,
 }
 
 /// @brief 取 Timeline 元素中指定类型的 marker 几何范围。
-const Common::Render::TimelineInteractiveElement::MarkerGeometry&
-getTimingMarkerGeometry(
-    const Common::Render::TimelineInteractiveElement& element,
-    ::MMM::TimingEffect                               effect)
+const Logic::TimelineInteractiveElement::MarkerGeometry&
+getTimingMarkerGeometry(const Logic::TimelineInteractiveElement& element,
+                        ::MMM::TimingEffect                      effect)
 {
     switch ( effect ) {
     case ::MMM::TimingEffect::BPM: return element.bpmMarker;
@@ -155,8 +153,7 @@ double sanitizeTimelineClipboardBpm(double bpm, double fallbackBpm)
 }
 
 /// @brief 取得 Timeline 快照中的有效回退 BPM。
-double timelineClipboardFallbackBpm(
-    const Common::Render::RenderSnapshot& snapshot)
+double timelineClipboardFallbackBpm(const Logic::RenderSnapshot& snapshot)
 {
     return sanitizeTimelineClipboardBpm(snapshot.fallbackBpm, 120.0);
 }
@@ -165,7 +162,7 @@ double timelineClipboardFallbackBpm(
 /// @param snapshot 当前渲染快照。
 /// @return 按时间排序并去重后的 BPM/beat 锚点列表。
 TimelineClipboardBeatTimeline buildTimelineClipboardBeatTimeline(
-    const Common::Render::RenderSnapshot& snapshot)
+    const Logic::RenderSnapshot& snapshot)
 {
     struct BpmEvent {
         double time{ 0.0 };   ///< BPM 时间点，单位秒
@@ -176,7 +173,7 @@ TimelineClipboardBeatTimeline buildTimelineClipboardBeatTimeline(
     std::vector<BpmEvent> bpmEvents;
     bpmEvents.reserve(snapshot.scrollSegments.size());
     for ( const auto& segment : snapshot.scrollSegments ) {
-        if ( (segment.effects & Common::Render::SCROLL_EFFECT_BPM) == 0 ||
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ||
              !std::isfinite(segment.time) ) {
             continue;
         }
@@ -314,7 +311,7 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
         segments.begin(),
         segments.end(),
         m_currentSnapshot->currentTime,
-        [](double val, const Common::Render::ScrollSegment& seg) {
+        [](double val, const Logic::System::ScrollSegment& seg) {
             return val < seg.time;
         });
     double currentAbsY = 0.0;
@@ -330,11 +327,11 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
     }
 
     double targetAbsY = currentAbsY + (judgmentLineY - compensatedMouseY);
-    auto itTime = std::lower_bound(segments.begin(),
-                                   segments.end(),
-                                   targetAbsY,
-                                   [](const Common::Render::ScrollSegment& seg,
-                                      double val) { return seg.absY < val; });
+    auto   itTime = std::lower_bound(segments.begin(),
+                                     segments.end(),
+                                     targetAbsY,
+                                     [](const Logic::System::ScrollSegment& seg,
+                                        double val) { return seg.absY < val; });
 
     if ( itTime == segments.begin() ) {
         if ( std::abs(segments[0].speed) < 1e-6 ) {
@@ -377,7 +374,7 @@ double TimelineCanvas::canvasYAtTime(const ImVec2& size, double time) const
             segments.begin(),
             segments.end(),
             queryTime,
-            [](double val, const Common::Render::ScrollSegment& seg) {
+            [](double val, const Logic::System::ScrollSegment& seg) {
                 return val < seg.time;
             });
 
@@ -437,7 +434,7 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
     std::vector<BpmSnapPoint> bpmPoints;
     bpmPoints.reserve(m_currentSnapshot->scrollSegments.size());
     for ( const auto& segment : m_currentSnapshot->scrollSegments ) {
-        if ( (segment.effects & Common::Render::SCROLL_EFFECT_BPM) == 0 ) {
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
             continue;
         }
 
@@ -549,7 +546,7 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
     std::vector<BpmSnapPoint> bpmPoints;
     bpmPoints.reserve(m_currentSnapshot->scrollSegments.size());
     for ( const auto& segment : m_currentSnapshot->scrollSegments ) {
-        if ( (segment.effects & Common::Render::SCROLL_EFFECT_BPM) == 0 ) {
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
             continue;
         }
 

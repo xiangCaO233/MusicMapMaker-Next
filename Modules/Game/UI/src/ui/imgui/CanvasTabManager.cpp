@@ -1,12 +1,13 @@
 #include "ui/imgui/CanvasTabManager.h"
+#include "canvas/Basic2DCanvas.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "ui/ICanvasView.h"
-#include "ui/ICanvasWorkspaceService.h"
+#include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 
@@ -16,10 +17,12 @@ namespace MMM::UI
 CanvasTabManager::CanvasTabManager(const std::string& name) : IUIView(name) {}
 
 void CanvasTabManager::handlePendingProjectSwitch(
-    UIManager* sourceManager, const std::vector<CanvasWorkspaceEntry>& entries)
+    UIManager* sourceManager, const std::vector<Logic::SessionEntry>& entries)
 {
-    auto* workspace = sourceManager->getCanvasWorkspaceService();
-    if ( !workspace || !workspace->hasPendingProjectSwitch() ) {
+    auto& engine = Logic::EditorEngine::instance();
+    /// @brief 项目控制器单例，用于查询当前项目切换流程。
+    auto& projectController = Logic::ProjectController::instance();
+    if ( !projectController.hasPendingProjectSwitch() ) {
         m_projectSwitchClosingCanvas.clear();
         m_capturedProjectSwitchWorkspace = false;
         return;
@@ -27,13 +30,12 @@ void CanvasTabManager::handlePendingProjectSwitch(
 
     if ( !m_capturedProjectSwitchWorkspace ) {
         sourceManager->captureProjectWorkspaceState();
-        workspace->saveProject();
+        engine.saveProject();
         m_capturedProjectSwitchWorkspace = true;
     }
 
     if ( entries.empty() ) {
-        workspace->createLogoPlaceholderSession(
-            TR("canvas.welcome").toString());
+        engine.createSession(nullptr, TR("canvas.welcome").data(), true);
         return;
     }
 
@@ -55,8 +57,8 @@ void CanvasTabManager::handlePendingProjectSwitch(
     }
 
     if ( !m_projectSwitchClosingCanvas.empty() ) {
-        auto* canvas =
-            sourceManager->getCanvasView(m_projectSwitchClosingCanvas);
+        auto* canvas = sourceManager->getView<Canvas::Basic2DCanvas>(
+            m_projectSwitchClosingCanvas);
         if ( canvas && canvas->consumeCloseCancelled() ) {
             XINFO(
                 "CanvasTabManager: Project switch cancelled while closing "
@@ -74,7 +76,8 @@ void CanvasTabManager::handlePendingProjectSwitch(
             continue;
         }
 
-        auto* canvas = sourceManager->getCanvasView(entry.cameraId);
+        auto* canvas =
+            sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
         if ( !canvas ) {
             continue;
         }
@@ -91,22 +94,20 @@ void CanvasTabManager::handlePendingProjectSwitch(
 
 /// @brief 消费逻辑层的画布聚焦请求并转发给对应 Basic2DCanvas。
 void CanvasTabManager::focusPendingSessionCanvas(
-    UIManager* sourceManager, const std::vector<CanvasWorkspaceEntry>& entries)
+    UIManager* sourceManager, const std::vector<Logic::SessionEntry>& entries)
 {
-    auto* workspace = sourceManager->getCanvasWorkspaceService();
-    if ( !workspace ) {
-        return;
-    }
-    int32_t focusIndex = workspace->consumePendingFocusIndex();
+    auto&   engine     = Logic::EditorEngine::instance();
+    int32_t focusIndex = engine.consumePendingFocusSessionIndex();
     if ( focusIndex < 0 ||
          focusIndex >= static_cast<int32_t>(entries.size()) ) {
         return;
     }
 
-    const auto& entry  = entries[static_cast<size_t>(focusIndex)];
-    auto*       canvas = sourceManager->getCanvasView(entry.cameraId);
+    const auto& entry = entries[static_cast<size_t>(focusIndex)];
+    auto*       canvas =
+        sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
     if ( !canvas ) {
-        workspace->requestEntryFocus(focusIndex);
+        engine.requestSessionFocus(focusIndex);
         return;
     }
 
@@ -115,30 +116,24 @@ void CanvasTabManager::focusPendingSessionCanvas(
 
 void CanvasTabManager::update(UIManager* sourceManager)
 {
-    auto* workspace = sourceManager->getCanvasWorkspaceService();
-    if ( !workspace ) {
-        XERROR("CanvasTabManager: Canvas workspace service is not configured");
-        return;
+    auto& engine  = Logic::EditorEngine::instance();
+    auto  entries = engine.getSessionEntries();
+
+    std::unordered_set<std::string> activeCameraIds;
+    activeCameraIds.reserve(entries.size());
+    for ( const auto& entry : entries ) {
+        activeCameraIds.insert(entry.cameraId);
     }
-    workspace->fillEntries(m_workspaceEntries);
-    const auto& entries = m_workspaceEntries;
 
-    for ( auto initializedIt = m_initializedCanvases.begin();
-          initializedIt != m_initializedCanvases.end(); ) {
-        bool isActive = false;
-        for ( const auto& entry : entries ) {
-            if ( entry.cameraId == *initializedIt ) {
-                isActive = true;
-                break;
-            }
+    std::vector<std::string> staleCanvases;
+    for ( const auto& cameraId : m_initializedCanvases ) {
+        if ( !activeCameraIds.contains(cameraId) ) {
+            staleCanvases.push_back(cameraId);
         }
-        if ( isActive ) {
-            ++initializedIt;
-            continue;
-        }
-
-        sourceManager->unregisterView(*initializedIt);
-        initializedIt = m_initializedCanvases.erase(initializedIt);
+    }
+    for ( const auto& cameraId : staleCanvases ) {
+        sourceManager->unregisterView(cameraId);
+        m_initializedCanvases.erase(cameraId);
     }
 
     // 1. 同步：检查是否有新的 Session 需要创建 Canvas
@@ -149,11 +144,14 @@ void CanvasTabManager::update(UIManager* sourceManager)
             XINFO("CanvasTabManager: Creating Basic2DCanvas for cameraId={}",
                   entry.cameraId);
 
-            auto newCanvas = workspace->createMainCanvas(entry, 200, 200);
+            auto newCanvas = std::make_unique<Canvas::Basic2DCanvas>(
+                entry.cameraId,
+                200,
+                200,
+                engine.getSyncBuffer(entry.cameraId),
+                entry.cameraId);
             if ( !entry.restoreDockFromWorkspace ) {
-                if ( auto* canvas = newCanvas->asCanvasView() ) {
-                    canvas->requestDockToCenter();
-                }
+                newCanvas->requestDockToCenter();
             }
 
             sourceManager->registerView(entry.cameraId, std::move(newCanvas));
@@ -179,7 +177,8 @@ void CanvasTabManager::update(UIManager* sourceManager)
         const auto& entry = entries[i];
         if ( m_initializedCanvases.find(entry.cameraId) !=
              m_initializedCanvases.end() ) {
-            auto* canvas = sourceManager->getCanvasView(entry.cameraId);
+            auto* canvas =
+                sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
             if ( !canvas ) {
                 // Canvas 已经不存在（已被 UIManager
                 // 垃圾回收/注销），说明用户关闭了该 Tab
@@ -195,15 +194,15 @@ void CanvasTabManager::update(UIManager* sourceManager)
                 if ( isProjectSwitchClose ) {
                     m_projectSwitchClosingCanvas.clear();
                 }
-                workspace->closeSession(i, !isProjectSwitchClose);
+                engine.closeSession(i, !isProjectSwitchClose);
 
                 // 如果所有画布都被关闭了，我们需要恢复默认的 Logo 占位画布
-                if ( workspace->getEntryCount() == 0 ) {
+                if ( engine.getSessionCount() == 0 ) {
                     XINFO(
                         "CanvasTabManager: All sessions closed. Creating "
                         "initial Logo placeholder session.");
-                    workspace->createLogoPlaceholderSession(
-                        TR("canvas.welcome").toString());
+                    engine.createSession(
+                        nullptr, TR("canvas.welcome").data(), true);
                 }
                 sessionClosed = true;
                 break;  // 逻辑会话列表已变动，跳出并在下一帧继续处理

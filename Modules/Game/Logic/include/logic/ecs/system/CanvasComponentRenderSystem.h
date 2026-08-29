@@ -1,6 +1,5 @@
 #pragma once
 
-#include "common/render/RenderSnapshot.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include <array>
 #include <cstdint>
@@ -8,7 +7,7 @@
 
 namespace MMM::Logic
 {
-using RenderSnapshot = Common::Render::RenderSnapshot;
+struct RenderSnapshot;
 struct TimelineComponent;
 }  // namespace MMM::Logic
 

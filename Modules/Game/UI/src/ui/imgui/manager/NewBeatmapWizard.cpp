@@ -15,7 +15,6 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cctype>
-#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -849,22 +848,15 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_manual").data();
     const char* autoBpmLabel =
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
-    auto* bpmTool = sourceManager->getView<BpmMeasurementToolView>(
-        BPM_MEASUREMENT_TOOL_VIEW_NAME);
-    const bool backgroundAutomaticMeasurementActive =
-        bpmTool && bpmTool->isBackgroundAutomaticMeasurementActive();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
-                               ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
                      autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
 
-    if ( backgroundAutomaticMeasurementActive ) {
-        ImGui::BeginDisabled();
-    }
     ImGui::SetNextItemWidth(comboWidth);
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapAudioSelect",
                                        audioPreview.c_str()) ) {
@@ -888,14 +880,13 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
     auto openBpmTool = [&](bool autoMeasure) {
-        auto*      tool    = bpmTool;
-        const bool wasOpen = tool && tool->isOpen() &&
-                             !tool->isBackgroundAutomaticMeasurementActive();
+        auto* tool = sourceManager->getView<BpmMeasurementToolView>(
+            BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        const bool wasOpen = tool && tool->isOpen();
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
-            tool    = toolView.get();
-            bpmTool = tool;
+            tool = toolView.get();
             sourceManager->registerView(BPM_MEASUREMENT_TOOL_VIEW_NAME,
                                         std::move(toolView));
         }
@@ -930,17 +921,6 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::EndDisabled();
-    }
-    if ( backgroundAutomaticMeasurementActive ) {
-        ImGui::EndDisabled();
-        const float progress =
-            std::clamp(bpmTool->getAutomaticMeasurementProgress(), 0.0f, 1.0f);
-        const std::string progressText =
-            fmt::format("{} {:.0f}%",
-                        TR("ui.tools.bpm_measure.auto_analyzing").data(),
-                        progress * 100.0f);
-        ImGui::ProgressBar(
-            progress, ImVec2(-FLT_MIN, 0.0f), progressText.c_str());
     }
     if ( hasSelectableMainAudio ) {
         ImGui::TextDisabled(

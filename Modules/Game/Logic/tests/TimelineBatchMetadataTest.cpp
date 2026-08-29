@@ -214,120 +214,6 @@ bool testBatchUpdateIsAtomic()
     return true;
 }
 
-/// @brief 验证 BPM 编辑与新增保速 SV 合并为一次撤销。
-/// @return 新建、撤销和重做均同时处理 BPM 与 SV 时返回 true。
-bool testBpmKeepSpeedCreatesSvAtomically()
-{
-    MMM::Logic::SessionContext   context;
-    MMM::Logic::ActionController controller(context);
-    controller.handleCommand(MMM::Logic::CmdCreateTimelineEvent{
-        5.0, MMM::TimingEffect::BPM, 120.0 });
-    const entt::entity bpmEntity =
-        findTimelineEntity(context, MMM::TimingEffect::BPM);
-    if ( bpmEntity == entt::null ) return false;
-
-    controller.handleCommand(MMM::Logic::CmdUpdateBpmWithKeepSpeedSv{
-        .bpmEntity   = bpmEntity,
-        .newTime     = 6.0,
-        .newBpm      = 180.0,
-        .scrollValue = 2.0 / 3.0,
-    });
-    const entt::entity scrollEntity =
-        findTimelineEntity(context, MMM::TimingEffect::SCROLL);
-    if ( scrollEntity == entt::null ) {
-        XERROR("BPM keep-speed command did not create an SV");
-        return false;
-    }
-    const auto& bpm =
-        context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
-            bpmEntity);
-    const auto& scroll =
-        context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
-            scrollEntity);
-    if ( !near(bpm.m_timestamp, 6.0) || !near(bpm.m_value, 180.0) ||
-         !near(scroll.m_timestamp, 6.0) || !near(scroll.m_value, 2.0 / 3.0) ) {
-        XERROR("BPM keep-speed command produced incorrect BPM or SV fields");
-        return false;
-    }
-
-    context.actionStack.undo(context);
-    if ( !context.timelineRegistry.valid(bpmEntity) ||
-         context.timelineRegistry.valid(scrollEntity) ||
-         !near(context.timelineRegistry
-                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
-                   .m_timestamp,
-               5.0) ||
-         !near(context.timelineRegistry
-                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
-                   .m_value,
-               120.0) ) {
-        XERROR("One undo did not restore BPM and remove created keep-speed SV");
-        return false;
-    }
-
-    context.actionStack.redo(context);
-    return context.timelineRegistry.valid(scrollEntity) &&
-           near(context.timelineRegistry
-                    .get<const MMM::Logic::TimelineComponent>(bpmEntity)
-                    .m_value,
-                180.0) &&
-           near(context.timelineRegistry
-                    .get<const MMM::Logic::TimelineComponent>(scrollEntity)
-                    .m_value,
-                2.0 / 3.0);
-}
-
-/// @brief 验证 BPM 编辑与已有同时间戳 SV 更新合并为一次撤销。
-/// @return 更新、撤销和重做均同时处理 BPM 与 SV 时返回 true。
-bool testBpmKeepSpeedUpdatesSvAtomically()
-{
-    MMM::Logic::SessionContext          context;
-    MMM::Logic::ActionController        controller(context);
-    MMM::Logic::CmdCreateTimelineEvents createCommand;
-    createCommand.events.push_back({ 5.0, MMM::TimingEffect::BPM, 120.0 });
-    constexpr double NEAR_DESTINATION_SV_TIME = 7.0000005;
-    createCommand.events.push_back(
-        { NEAR_DESTINATION_SV_TIME, MMM::TimingEffect::SCROLL, 1.5 });
-    controller.handleCommand(createCommand);
-
-    const entt::entity bpmEntity =
-        findTimelineEntity(context, MMM::TimingEffect::BPM);
-    const entt::entity scrollEntity =
-        findTimelineEntity(context, MMM::TimingEffect::SCROLL);
-    controller.handleCommand(MMM::Logic::CmdUpdateBpmWithKeepSpeedSv{
-        .bpmEntity   = bpmEntity,
-        .newTime     = 7.0,
-        .newBpm      = 240.0,
-        .scrollValue = 0.5,
-    });
-
-    const auto fieldsMatch = [&](double bpmTime,
-                                 double bpmValue,
-                                 double scrollTime,
-                                 double scrollValue) {
-        const auto& bpm =
-            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
-                bpmEntity);
-        const auto& scroll =
-            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
-                scrollEntity);
-        return near(bpm.m_timestamp, bpmTime) && near(bpm.m_value, bpmValue) &&
-               near(scroll.m_timestamp, scrollTime) &&
-               near(scroll.m_value, scrollValue);
-    };
-    if ( !fieldsMatch(7.0, 240.0, 7.0, 0.5) ) {
-        XERROR("BPM keep-speed command did not update existing destination SV");
-        return false;
-    }
-    context.actionStack.undo(context);
-    if ( !fieldsMatch(5.0, 120.0, NEAR_DESTINATION_SV_TIME, 1.5) ) {
-        XERROR("One undo did not restore BPM and existing SV");
-        return false;
-    }
-    context.actionStack.redo(context);
-    return fieldsMatch(7.0, 240.0, 7.0, 0.5);
-}
-
 /// @brief 验证未进入撤销栈的元数据编辑仍会参与未保存状态判断。
 /// @return 标脏、保存和清空语义符合预期时返回 true。
 bool testNonUndoableDirtyState()
@@ -366,8 +252,6 @@ bool testNonUndoableDirtyState()
 int main()
 {
     return testBatchCreatePreservesMetadata() && testBatchUpdateIsAtomic() &&
-                   testBpmKeepSpeedCreatesSvAtomically() &&
-                   testBpmKeepSpeedUpdatesSvAtomically() &&
                    testNonUndoableDirtyState()
                ? 0
                : 1;

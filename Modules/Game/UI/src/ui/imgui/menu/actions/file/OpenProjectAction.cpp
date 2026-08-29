@@ -76,6 +76,7 @@ public:
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
+        (void)context;
         (void)activation;
         MenuUtil::openProjectFolderPicker();
     }
