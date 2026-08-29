@@ -249,6 +249,14 @@ target_include_directories(ProjectAudioToolLayoutTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectAudioToolLayoutTest COMMAND ProjectAudioToolLayoutTest)
 
+# 音效工具轨道布局测试覆盖草稿区自动扩充后控件行同步增加。
+mmm_add_test_executable(UI SoundEffectToolTrackLayoutTest
+                        tests/SoundEffectToolTrackLayoutTest.cpp)
+target_include_directories(SoundEffectToolTrackLayoutTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SoundEffectToolTrackLayoutTest
+         COMMAND SoundEffectToolTrackLayoutTest)
+
 # 项目音频工具搜索测试覆盖精确、子串、顺序模糊和 UTF-8 文件名匹配。
 mmm_add_test_executable(UI ProjectAudioToolSearchTest
                         tests/ProjectAudioToolSearchTest.cpp)

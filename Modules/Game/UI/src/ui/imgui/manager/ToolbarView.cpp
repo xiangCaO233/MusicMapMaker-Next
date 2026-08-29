@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/ToolbarView.h"
+
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -18,6 +19,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/manager/SoundEffectToolTrackLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -1458,6 +1460,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     auto& engine = Logic::EditorEngine::instance();
     bool  hasBeatmap{ false };
     int   playerTrackCount{ 0 };
+    int   draftTrackCount{ 0 };
     int   bgmTrackCount{ 0 };
     {
         std::lock_guard<std::recursive_mutex> sessionLock(
@@ -1468,7 +1471,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 session->getContext().currentBeatmap->m_baseMapMetadata;
             hasBeatmap       = true;
             playerTrackCount = std::max(0, metadata.track_count);
-            bgmTrackCount    = std::max(0, metadata.bgm_track_count);
+            draftTrackCount =
+                std::max(0, session->getContext().draftTrackCount);
+            bgmTrackCount = std::max(0, metadata.bgm_track_count);
         }
     }
 
@@ -1479,10 +1484,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         std::floor(aesthetics.windowRounding * dpiScale);
     const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
     const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
-    const int   playerRows    = std::max(1, playerTrackCount);
-    const int   draftRows     = std::max(1, playerTrackCount);
-    const int   bgmRows       = std::max(1, bgmTrackCount);
-    const int   totalRows     = 10 + playerRows + draftRows + bgmRows;
+    const auto  trackLayout   = calculateSoundEffectToolTrackLayout(
+        playerTrackCount, draftTrackCount, bgmTrackCount);
+    const int playerRows = trackLayout.playerRows;
+    const int draftRows  = trackLayout.draftRows;
+    const int bgmRows    = trackLayout.bgmRows;
+    const int totalRows  = trackLayout.totalRows;
 
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
@@ -1802,7 +1809,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             continue;
         }
         if ( row == draftMasterRow ) {
-            if ( !hasBeatmap || playerTrackCount == 0 ) ImGui::BeginDisabled();
+            if ( !hasBeatmap || draftTrackCount == 0 ) ImGui::BeginDisabled();
             drawMuteOnlyRow(
                 TR("ui.key_sound_tool.area_master").data(),
                 "DraftArea",
@@ -1811,12 +1818,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                     engine.pushCommand(
                         Logic::CmdSetDraftKeySoundAreaMute{ .muted = muted });
                 });
-            if ( !hasBeatmap || playerTrackCount == 0 ) ImGui::EndDisabled();
+            if ( !hasBeatmap || draftTrackCount == 0 ) ImGui::EndDisabled();
             continue;
         }
         if ( row < bgmHeaderRow ) {
             const int track = row - draftTrackBegin;
-            if ( track >= playerTrackCount ) {
+            if ( track >= draftTrackCount ) {
                 ImGui::TextDisabled(
                     "%s",
                     TR(hasBeatmap ? "ui.key_sound_tool.no_draft_tracks"
