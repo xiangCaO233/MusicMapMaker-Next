@@ -1177,7 +1177,7 @@ return {
 	["ui.timeline.event_editor.title"] = "{} Event Details",
 	["ui.timeline.event_editor.timestamp"] = "Timestamp (s)",
 	["ui.timeline.event_editor.bpm"] = "BPM",
-	["ui.timeline.event_editor.keep_preferred_bpm_speed_sv"] = "Create/update same-time keep-speed SV",
+	["ui.timeline.event_editor.keep_preferred_bpm_speed_sv"] = "Keep canvas speed",
 	["ui.timeline.event_editor.keep_preferred_bpm_speed_sv_tooltip"] = "Calculates SV as preferred BPM divided by this BPM; updates an existing same-time green line or creates one.",
 	["ui.timeline.event_editor.scroll"] = "Multiplier",
 	["ui.timeline.event_editor.scroll_hint"] = "e.g. 1.0, 1.5, 2.0",
