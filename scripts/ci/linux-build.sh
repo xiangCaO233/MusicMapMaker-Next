@@ -272,7 +272,11 @@ fi
 export CC="${ccCompiler}"
 export CXX="${cxxCompiler}"
 
-cmake -G "${CMAKE_GENERATOR:-Ninja}" \
+# 原生 Linux 构建必须使用系统 Vulkan，避免 Runner 注入的 Windows SDK 污染头文件搜索路径。
+unset VULKAN_SDK VK_SDK_PATH
+
+cmake -U "Vulkan_*" \
+    -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
