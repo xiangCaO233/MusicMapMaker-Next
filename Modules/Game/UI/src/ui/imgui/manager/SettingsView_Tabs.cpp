@@ -148,14 +148,19 @@ void SettingsView::addRadioSetting(
             optId.c_str(),
             Sizing::Fixed(itemW),
             Sizing::Fixed(ImGui::GetFrameHeight()),
-            [optLabel = optLabel, optValue = optValue, &current, &changed](
-                Clay_BoundingBox r, bool) {
+            [optLabel = optLabel,
+             optValue = optValue,
+             optionId = optId,
+             &current,
+             &changed](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::PushID(optionId.c_str());
                 if ( ::MMM::UI::FeedbackRadioButton(optLabel.c_str(),
                                                     current == optValue) ) {
                     current = optValue;
                     changed = true;
                 }
+                ImGui::PopID();
             });
 
         currentLineW += itemW + 12.0f;
