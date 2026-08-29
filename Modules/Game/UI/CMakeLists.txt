@@ -5,6 +5,7 @@ add_library(
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
+  src/ui/utils/NativeFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp

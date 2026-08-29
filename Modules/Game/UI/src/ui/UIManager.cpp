@@ -33,6 +33,7 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
@@ -377,6 +378,7 @@ UIManager::UIManager()
 
 UIManager::~UIManager()
 {
+    NativeFileDialog::bindMainWindow(nullptr);
     auto& eventBus = Event::EventBus::instance();
     if ( m_projectOpenStartedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
@@ -408,6 +410,8 @@ UIManager::~UIManager()
 void UIManager::setNativeWindow(Graphic::NativeWindow* window)
 {
     m_nativeWindow = window;
+    NativeFileDialog::bindMainWindow(window ? window->getWindowHandle()
+                                            : nullptr);
 }
 
 Graphic::NativeWindow* UIManager::getNativeWindow() const

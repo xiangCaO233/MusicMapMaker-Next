@@ -19,6 +19,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -2190,7 +2191,7 @@ void ToolbarView::openPaletteExportFilePicker()
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
                                            "mmpalette" } };
-        const nfdresult_t result     = NFD_SaveDialogU8(
+        const nfdresult_t result     = NativeFileDialog::saveFile(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
         if ( result == NFD_OKAY && outPath != nullptr ) {
             exportCurrentPaletteToPath(outPath);
@@ -2242,8 +2243,8 @@ void ToolbarView::openPaletteImportFilePicker()
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "MusicMapMaker Color Palette",
                                            "mmpalette" } };
-        const nfdresult_t result =
-            NFD_OpenDialogU8(&outPath, filters, 1, defaultPath.c_str());
+        const nfdresult_t result     = NativeFileDialog::openFile(
+            &outPath, filters, 1, defaultPath.c_str());
         if ( result == NFD_OKAY && outPath != nullptr ) {
             preparePaletteImportFromPath(outPath);
             NFD_FreePathU8(outPath);

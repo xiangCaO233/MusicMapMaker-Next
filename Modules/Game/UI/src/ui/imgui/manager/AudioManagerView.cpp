@@ -20,6 +20,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
@@ -1797,8 +1798,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         nfdu8filteritem_t filters[1] = {
                             { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
                         };
-                        nfdresult_t result =
-                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+                        nfdresult_t result = NativeFileDialog::openFile(
+                            &outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             Event::EventBus::instance().publish(

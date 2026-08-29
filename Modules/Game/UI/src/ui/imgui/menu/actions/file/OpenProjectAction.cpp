@@ -77,7 +77,7 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        MenuUtil::openProjectFolderPicker(context.sourceManager);
+        MenuUtil::openProjectFolderPicker();
     }
 
     /// @brief 消费 Ctrl+O 快捷键。

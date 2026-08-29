@@ -17,6 +17,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -218,7 +219,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -381,10 +382,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -719,8 +720,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result =
-                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+                        nfdresult_t       result = NativeFileDialog::openFile(
+                            &outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredAsciiFont = outPath;
@@ -824,8 +825,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result =
-                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+                        nfdresult_t       result = NativeFileDialog::openFile(
+                            &outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredCjkFont = outPath;

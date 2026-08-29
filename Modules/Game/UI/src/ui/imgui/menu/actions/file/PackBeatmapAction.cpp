@@ -14,6 +14,7 @@
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -1995,7 +1996,7 @@ void PackBeatmapAction::openPackageOutputFilePicker()
         const char*  packageFilter =
             getNativePackageOutputFilterText(m_package.selectedFileType);
         nfdu8filteritem_t filters[1] = { { "Beatmap Package", packageFilter } };
-        nfdresult_t       result     = NFD_SaveDialogU8(
+        nfdresult_t       result     = NativeFileDialog::saveFile(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
 
         if ( result == NFD_OKAY ) {
@@ -2007,7 +2008,7 @@ void PackBeatmapAction::openPackageOutputFilePicker()
             } else {
                 requestPackBeatmapTo(std::move(filePath));
             }
-            NFD_FreePath(outPath);
+            NFD_FreePathU8(outPath);
         }
     } else {
         IGFD::FileDialogConfig fdConfig;
@@ -2043,7 +2044,7 @@ void PackBeatmapAction::openImdPackageOutputFilePicker()
         ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "RM/IMD 资源包", "zip" } };
-        const nfdresult_t result     = NFD_SaveDialogU8(
+        const nfdresult_t result     = NativeFileDialog::saveFile(
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
         if ( result == NFD_OKAY ) {
             auto outputPath = Config::utf8ToPath(outPath);
@@ -2058,7 +2059,7 @@ void PackBeatmapAction::openImdPackageOutputFilePicker()
             } else {
                 requestExportImdPackageTo(std::move(filePath));
             }
-            NFD_FreePath(outPath);
+            NFD_FreePathU8(outPath);
         }
         return;
     }
