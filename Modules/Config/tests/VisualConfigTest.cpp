@@ -234,21 +234,21 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
-/// @brief 验证草稿轨发布门禁不会暴露到用户配置。
-/// @return 开关不被序列化且外部配置无法启用时返回 true。
+/// @brief 验证已发布的草稿轨门禁不会暴露到用户配置。
+/// @return 开关不被序列化且外部配置无法禁用时返回 true。
 bool testDraftLaneReleaseGateIsInternal()
 {
     MMM::Config::EditorSettings source;
-    source.enableDraftLanes = true;
+    source.enableDraftLanes = false;
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::EditorSettings>();
     const auto           external = nlohmann::json{
-        { "enableDraftLanes", true }
+        { "enableDraftLanes", false }
     }.get<MMM::Config::EditorSettings>();
-    if ( encoded.contains("enableDraftLanes") || restored.enableDraftLanes ||
-         external.enableDraftLanes ) {
-        XERROR("Draft lane release gate leaked into user config");
+    if ( encoded.contains("enableDraftLanes") || !restored.enableDraftLanes ||
+         !external.enableDraftLanes ) {
+        XERROR("Draft lane release gate did not remain internally enabled");
         return false;
     }
     return true;
