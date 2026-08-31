@@ -860,6 +860,18 @@ double getStoredValue(::MMM::TimingEffect, double displayValue,
     return displayValue;
 }
 
+/// @brief 判断 Timeline 编辑值是否满足界面提交约束。
+/// @param effect Timeline 类型。
+/// @param value 待提交的显示值。
+/// @return 数值有限，且 BPM 不小于零时返回 true。
+/// @warning UI 热路径：仅执行常量时间数值判断，不得增加状态查询。
+bool isValidTimingEditorValue(::MMM::TimingEffect effect, double value)
+{
+    // 其他特效沿用既有有符号值语义，只有 BPM 禁止负数。
+    return std::isfinite(value) &&
+           (effect != ::MMM::TimingEffect::BPM || value >= 0.0);
+}
+
 /// @brief 从创建弹窗索引获取 Timing 类型
 ::MMM::TimingEffect getCreateEffect(int createType)
 {
@@ -1114,6 +1126,10 @@ void TimelineCanvas::renderEventEditorPopup()
 
         const float actionButtonWidth =
             calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
+        // BPM 为负数时禁用应用，零值仍按用户要求作为合法输入。
+        const bool editValueValid =
+            isValidTimingEditorValue(editEffect, m_editValue);
+        if ( !editValueValid ) ImGui::BeginDisabled();
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.timeline.event_editor.apply").data(),
                  ImVec2(actionButtonWidth, 0)) ) {
@@ -1137,6 +1153,7 @@ void TimelineCanvas::renderEventEditorPopup()
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
+        if ( !editValueValid ) ImGui::EndDisabled();
 
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton(
@@ -1305,11 +1322,15 @@ void TimelineCanvas::renderEventCreationPopup()
 
         const float actionButtonWidth =
             calcButtonRowWidth(2, std::floor(100.0f * dpiScale));
+        // 创建弹窗与修改弹窗共享同一约束，避免入口行为不一致。
+        const bool createValueValid =
+            isValidTimingEditorValue(createEffect, m_createValue);
+        if ( !createValueValid ) ImGui::BeginDisabled();
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.timeline.event_creator.create").data(),
                  ImVec2(actionButtonWidth, 0)) ) {
-            ::MMM::TimingEffect type = getCreateEffect(m_createType);
-            double finalValue        = getStoredValue(type, m_createValue);
+            const auto type       = createEffect;
+            double     finalValue = getStoredValue(type, m_createValue);
 
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
@@ -1327,6 +1348,7 @@ void TimelineCanvas::renderEventCreationPopup()
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }
+        if ( !createValueValid ) ImGui::EndDisabled();
 
         if ( editingDisabled ) {
             ImGui::EndDisabled();
@@ -2110,9 +2132,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     return getElementEffect(elements[elementIndex]) ==
                            ::MMM::TimingEffect::BPM;
                 });
+            // 批量替换 BPM 时仅排除负数，零值与单项编辑保持一致。
             const bool replacementValueValid =
                 std::isfinite(m_tableSearchReplacementValue) &&
-                (!replacementTouchesBpm || m_tableSearchReplacementValue > 0.0);
+                (!replacementTouchesBpm ||
+                 m_tableSearchReplacementValue >= 0.0);
             const bool canReplaceSearchResults =
                 hasValidSearchValue && !visibleElementIndices.empty() &&
                 replacementValueValid;
@@ -2640,7 +2664,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 "保持画布速度联动中，修改 BPM 后自动刷新");
                         }
                     }
-                    if ( displayValueChanged && !isBoundScroll ) {
+                    // 表格输入在发布命令前过滤负 BPM，防止非法值短暂写入快照。
+                    const bool displayValueValid =
+                        isValidTimingEditorValue(effect, vVal);
+                    if ( displayValueChanged && !isBoundScroll &&
+                         displayValueValid ) {
                         double finalValue = getStoredValue(effect, vVal, ent);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(

@@ -328,6 +328,114 @@ bool testBpmKeepSpeedUpdatesSvAtomically()
     return fieldsMatch(7.0, 240.0, 7.0, 0.5);
 }
 
+/// @brief 验证所有创建与修改命令都会拒绝负 BPM，并允许零 BPM。
+/// @return 单项、批量与保速联动入口均保持非负 BPM 时返回 true。
+bool testNegativeBpmMutationsAreRejected()
+{
+    // 使用独立空会话覆盖命令层，不依赖 ImGui 或渲染快照。
+    // ActionController 是全部 BPM 编辑入口最终共享的持久化边界。
+    MMM::Logic::SessionContext   context;
+    MMM::Logic::ActionController controller(context);
+
+    // 单项创建是最底层入口；负 BPM 不应生成实体或撤销记录。
+    // 该断言同时确保非法命令不会把会话标记成可撤销变更。
+    controller.handleCommand(MMM::Logic::CmdCreateTimelineEvent{
+        1.0, MMM::TimingEffect::BPM, -120.0 });
+    // 空 Registry 证明动作未执行，而非执行后又被数值计算回退。
+    // 空撤销栈证明非法输入未产生隐藏的无效操作。
+    if ( findTimelineEntity(context, MMM::TimingEffect::BPM) != entt::null ||
+         context.actionStack.getUndoStackSize() != 0U ) {
+        XERROR("Single Timeline creation accepted a negative BPM");
+        return false;
+    }
+
+    // 批量创建混合负数与零值；只应保留合法的零 BPM。
+    // 零值用于锁定用户要求的下边界，避免实现误改为严格大于零。
+    MMM::Logic::CmdCreateTimelineEvents createCommand;
+    createCommand.events.push_back({ 2.0, MMM::TimingEffect::BPM, -1.0 });
+    createCommand.events.push_back({ 3.0, MMM::TimingEffect::BPM, 0.0 });
+    controller.handleCommand(createCommand);
+    // 查找结果必须对应零值项，因为负数项应在构造 BatchAction 前被过滤。
+    // 单条撤销记录确认批量命令仍保持原子提交语义。
+    const entt::entity bpmEntity =
+        findTimelineEntity(context, MMM::TimingEffect::BPM);
+    if ( bpmEntity == entt::null ||
+         !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                   .m_value,
+               0.0) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Batch Timeline creation did not enforce the zero BPM boundary");
+        return false;
+    }
+
+    // 先写入正常 BPM，随后验证表格使用的单项更新无法写入负数。
+    // 非法更新必须保留原值，也不得额外压入撤销动作。
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 3.0, 120.0 });
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 3.0, -120.0 });
+    // 组件值必须停留在前一条合法更新写入的 120。
+    // 动作栈只包含批量创建与合法单项更新两条记录。
+    if ( !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                   .m_value,
+               120.0) ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Single Timeline update accepted a negative BPM");
+        return false;
+    }
+
+    // 批量更新同样不得绕过约束；全非法批次应直接成为无操作。
+    // 这覆盖时间线表格搜索替换最终下发的批量命令路径。
+    MMM::Logic::CmdUpdateTimelineEvents updateCommand;
+    updateCommand.events.push_back({ bpmEntity, 4.0, -60.0 });
+    controller.handleCommand(updateCommand);
+    // 全非法批次没有可执行条目，因此既不改值也不更新时间戳。
+    // 撤销栈数量不变可证明未生成空 BatchAction。
+    if ( !near(context.timelineRegistry
+                   .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                   .m_value,
+               120.0) ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Batch Timeline update accepted a negative BPM");
+        return false;
+    }
+
+    // 保速联动会同时修改 BPM 与 SV；负 BPM 必须在创建 SV 前整体拒绝。
+    // 原 BPM、时间和动作栈数量均应保持不变。
+    controller.handleCommand(MMM::Logic::CmdUpdateBpmWithKeepSpeedSv{
+        .bpmEntity   = bpmEntity,
+        .newTime     = 5.0,
+        .newBpm      = -30.0,
+        .scrollValue = 4.0,
+    });
+    // 保速命令必须在组装 BPM 与 Scroll 条目前整体返回。
+    // 因此测试同时确认没有额外创建同时间点的 Scroll 实体。
+    const auto& bpmAfterRejectedBinding =
+        context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+            bpmEntity);
+    if ( !near(bpmAfterRejectedBinding.m_timestamp, 3.0) ||
+         !near(bpmAfterRejectedBinding.m_value, 120.0) ||
+         findTimelineEntity(context, MMM::TimingEffect::SCROLL) != entt::null ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Keep-speed Timeline update accepted a negative BPM");
+        return false;
+    }
+
+    // 最后写入零 BPM，确认所有负数拒绝逻辑没有误伤合法边界值。
+    // 成功更新应只新增一条撤销记录。
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 3.0, 0.0 });
+    // 零值应真实持久化到组件，而不是仅在输入框中暂存。
+    // 第三条撤销记录证明边界值按正常更新流程提交。
+    return near(context.timelineRegistry
+                    .get<const MMM::Logic::TimelineComponent>(bpmEntity)
+                    .m_value,
+                0.0) &&
+           context.actionStack.getUndoStackSize() == 3U;
+}
+
 /// @brief 验证未进入撤销栈的元数据编辑仍会参与未保存状态判断。
 /// @return 标脏、保存和清空语义符合预期时返回 true。
 bool testNonUndoableDirtyState()
@@ -368,6 +476,7 @@ int main()
     return testBatchCreatePreservesMetadata() && testBatchUpdateIsAtomic() &&
                    testBpmKeepSpeedCreatesSvAtomically() &&
                    testBpmKeepSpeedUpdatesSvAtomically() &&
+                   testNegativeBpmMutationsAreRejected() &&
                    testNonUndoableDirtyState()
                ? 0
                : 1;

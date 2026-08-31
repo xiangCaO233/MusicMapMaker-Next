@@ -514,15 +514,25 @@ void replaceTimelineComponents(SessionContext&                       ctx,
     }
 }
 
+/// @brief 判断 Timeline 数值是否满足可编辑域约束。
+/// @param effect Timeline 类型。
+/// @param value 待写入数值。
+/// @return 数值有限，且 BPM 不小于零时返回 true。
+bool isValidTimelineValue(::MMM::TimingEffect effect, double value)
+{
+    // 非 BPM 特效允许负值；BPM 的统一底线仅排除负数。
+    return std::isfinite(value) &&
+           (effect != ::MMM::TimingEffect::BPM || value >= 0.0);
+}
+
 /// @brief 归一化批量替换后的 Timeline 列表。
 std::vector<TimelineComponent> normalizeReplacementTimelines(
     std::vector<TimelineComponent> timelines)
 {
     std::erase_if(timelines, [](const auto& timeline) {
+        // 批量替换同样经过统一数值约束，防止绕过普通编辑命令。
         return !std::isfinite(timeline.m_timestamp) ||
-               !std::isfinite(timeline.m_value) ||
-               (timeline.m_effect == ::MMM::TimingEffect::BPM &&
-                timeline.m_value <= 0.0);
+               !isValidTimelineValue(timeline.m_effect, timeline.m_value);
     });
 
     std::stable_sort(
@@ -2293,12 +2303,10 @@ void ActionController::handleCommand(const CmdPaste& cmd)
                                                  pasteBeat + item.relativeBeat,
                                                  pasteFallbackBpm);
             }
+            // 粘贴创建也必须遵循非负 BPM 约束，零值仍可保留。
             if ( !std::isfinite(targetTime) ||
-                 !std::isfinite(newTimeline.m_value) ) {
-                continue;
-            }
-            if ( newTimeline.m_effect == ::MMM::TimingEffect::BPM &&
-                 newTimeline.m_value <= 0.0 ) {
+                 !isValidTimelineValue(newTimeline.m_effect,
+                                       newTimeline.m_value) ) {
                 continue;
             }
 
@@ -2322,7 +2330,9 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
 {
     if ( m_ctx.timelineRegistry.valid(cmd.entity) ) {
         auto oldTl = m_ctx.timelineRegistry.get<TimelineComponent>(cmd.entity);
-        auto newTl = oldTl;
+        // 单项编辑是表格与弹窗的最终入口，非法 BPM 不得进入撤销栈。
+        if ( !isValidTimelineValue(oldTl.m_effect, cmd.newValue) ) return;
+        auto newTl        = oldTl;
         newTl.m_timestamp = cmd.newTime;
         newTl.m_value     = cmd.newValue;
         if ( cmd.metadataOverride ) {
@@ -2355,6 +2365,10 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
 
         const auto oldTimeline =
             m_ctx.timelineRegistry.get<TimelineComponent>(update.entity);
+        // 批量编辑逐项过滤负 BPM，避免一项非法值污染整个动作。
+        if ( !isValidTimelineValue(oldTimeline.m_effect, update.newValue) ) {
+            continue;
+        }
         auto newTimeline        = oldTimeline;
         newTimeline.m_timestamp = update.newTime;
         newTimeline.m_value     = update.newValue;
@@ -2395,6 +2409,11 @@ void ActionController::handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd)
 
     const auto bpmBefore = registry.get<TimelineComponent>(cmd.bpmEntity);
     if ( bpmBefore.m_effect != ::MMM::TimingEffect::BPM ) {
+        return;
+    }
+    // 保速联动仍是 BPM 修改入口，负数不得连带生成或修改 SV。
+    if ( !isValidTimelineValue(::MMM::TimingEffect::BPM, cmd.newBpm) ||
+         !isValidTimelineValue(::MMM::TimingEffect::SCROLL, cmd.scrollValue) ) {
         return;
     }
 
@@ -2460,6 +2479,8 @@ void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)
 
 void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
 {
+    // 所有单项创建入口统一拒绝负 BPM 与非有限数值。
+    if ( !isValidTimelineValue(cmd.type, cmd.value) ) return;
     TimelineComponent newTl{ cmd.time, cmd.type, cmd.value };
     auto              action = std::make_unique<TimelineAction>(
         TimelineAction::Type::Create, entt::null, std::nullopt, newTl);
@@ -2476,6 +2497,8 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
     std::vector<BatchTimelineAction::Entry> entries;
     entries.reserve(cmd.events.size());
     for ( const auto& event : cmd.events ) {
+        // 批量创建只跳过非法项，合法的零 BPM 与其他事件继续提交。
+        if ( !isValidTimelineValue(event.type, event.value) ) continue;
         entries.push_back(
             { entt::null,
               std::nullopt,
@@ -2483,6 +2506,7 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
                   event.time, event.type, event.value, event.metadata } });
     }
 
+    if ( entries.empty() ) return;
     auto action =
         std::make_unique<BatchTimelineAction>(std::move(entries), "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
