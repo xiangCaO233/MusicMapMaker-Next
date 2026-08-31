@@ -316,6 +316,7 @@ unset VULKAN_SDK VK_SDK_PATH
 cmake -U "Vulkan_*" \
     -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
+    -DBUILD_TESTING=ON \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \

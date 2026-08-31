@@ -35,6 +35,6 @@ $mainLfsIncludes = '3rdpty/prebuilts/headers/**,3rdpty/prebuilts/binaries/window
 Invoke-Native git lfs pull "--include=$mainLfsIncludes" '--exclude='
 
 Remove-Item -Recurse -Force -LiteralPath build_msvc -ErrorAction SilentlyContinue
-Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF -S . -B build_msvc
+Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF -S . -B build_msvc
 Invoke-Native cmake --build build_msvc --parallel $ciBuildJobs
 Invoke-Native ctest --test-dir build_msvc --output-on-failure

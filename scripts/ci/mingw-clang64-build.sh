@@ -32,6 +32,7 @@ git lfs pull
 rm -rf build_clang
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DBUILD_TESTING=ON \
     -DMMM_PGO_INSTRUMENT=ON \
     -DMMM_PGO_USE=OFF \
     -S . \

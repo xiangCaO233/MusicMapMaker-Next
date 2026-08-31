@@ -108,7 +108,15 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
 
 include("project-configure")
 
-enable_testing()
+# 项目测试默认不参与常规构建，避免大量测试可执行文件显著增加链接时间；需要测试时显式开启。
+option(BUILD_TESTING "Build and register MusicMapMaker tests." OFF)
+
+if(BUILD_TESTING)
+  enable_testing()
+else()
+  # 清理旧配置遗留的 CTest 入口，避免关闭开关后继续读取已禁用的测试。
+  file(REMOVE "${CMAKE_BINARY_DIR}/CTestTestfile.cmake")
+endif()
 
 set(MMM_TEST_RESOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
@@ -149,8 +157,13 @@ function(mmm_set_test_target MODULE_NAME TARGET_NAME)
   endif()
 endfunction()
 
+# 统一声明项目测试目标；关闭测试时保留显式目标但排除出默认构建，便于各模块继续集中配置依赖。
 function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
-  add_executable(${TARGET_NAME} ${ARGN})
+  if(BUILD_TESTING)
+    add_executable(${TARGET_NAME} ${ARGN})
+  else()
+    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${ARGN})
+  endif()
   mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
 endfunction()
 

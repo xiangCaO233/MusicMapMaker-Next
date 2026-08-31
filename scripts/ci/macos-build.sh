@@ -334,6 +334,7 @@ export MACOSX_DEPLOYMENT_TARGET="${deploymentTarget}"
 cmakeArgs=(
     -G "${CMAKE_GENERATOR:-Ninja}"
     -DCMAKE_BUILD_TYPE="${buildType}"
+    -DBUILD_TESTING=ON
     -DCMAKE_OSX_ARCHITECTURES="${targetArch}"
     -DCMAKE_OSX_SYSROOT="${macosSdk}"
     -DSOURCES_BUILD="${sourcesBuild}"
