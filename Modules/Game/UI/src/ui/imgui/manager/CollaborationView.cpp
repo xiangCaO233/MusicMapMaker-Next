@@ -1326,6 +1326,11 @@ void CollaborationView::drawChatSection()
     const bool canSend = m_room->localPeerId() != 0;
     ImGui::BeginDisabled(!canSend);
     ImGui::SetNextItemWidth(inputWidth);
+    // 发送动作发生在输入框绘制之后，因此延迟到下一帧请求焦点。
+    if ( m_shouldFocusChatInput && canSend ) {
+        ImGui::SetKeyboardFocusHere();
+        m_shouldFocusChatInput = false;
+    }
     const bool enterPressed =
         ImGui::InputTextWithHint("##CollaborationChatInput",
                                  TR("ui.collaboration.chat.hint").data(),
@@ -1338,7 +1343,9 @@ void CollaborationView::drawChatSection()
     ImGui::EndDisabled();
 
     if ( canSend && (enterPressed || buttonPressed) ) {
-        const auto result = m_room->sendChatMessage(m_chatInput.data());
+        // 无论发送是否被拒绝，都让用户可以连续输入或立即修正后重试。
+        m_shouldFocusChatInput = true;
+        const auto result      = m_room->sendChatMessage(m_chatInput.data());
         m_chatSendFailed =
             result != Network::Collaboration::SubmitChatMessageResult::Accepted;
         if ( !m_chatSendFailed ) {
