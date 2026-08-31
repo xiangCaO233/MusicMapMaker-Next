@@ -18,6 +18,10 @@ concurrency:
   group: self-hosted-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Checkout 与分支同步阶段禁止隐式下载 LFS；预编译构建脚本按工具链精确拉取。
+  GIT_LFS_SKIP_SMUDGE: "1"
+
 jobs:
   mmm-debian-ci:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ci-build')
@@ -56,7 +60,6 @@ jobs:
           git checkout --force -B ci origin/ci
           git reset --hard origin/ci
           git submodule update --init --recursive
-          git lfs pull
 
       - name: ci->Windows MSVC Clang Cross Build
         run: |
@@ -133,7 +136,8 @@ jobs:
         with:
           # 自托管 macOS Runner 保留被 Git 忽略的 build_ci_macos_arm64 增量缓存。
           clean: false
-          lfs: true
+          # LFS 对象由 macOS 构建脚本按 AppleClang 标签拉取。
+          lfs: false
           submodules: recursive
 
       - name: ci->macOS AppleClang ARM64 Build

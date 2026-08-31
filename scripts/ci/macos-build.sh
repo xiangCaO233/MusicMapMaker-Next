@@ -311,6 +311,17 @@ if [[ -z "${prebuiltToolchain}" || -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ "${sourcesBuild}" == "OFF" ]]; then
+    bash "${scriptDir}/pull-lfs-for-build.sh" \
+        --platform macos \
+        --arch "${targetArch}" \
+        --toolchain "${prebuiltToolchain}" \
+        --compiler-tag "${compilerTag}" \
+        --build-type "${buildType}" \
+        --linkage "${projectLinkage}" \
+        --include-tests
+fi
+
 disableClangLto="OFF"
 if [[ "${sourcesBuild}" = "ON" ]]; then
     disableClangLto="ON"

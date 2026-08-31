@@ -276,6 +276,17 @@ if [[ -z "${prebuiltToolchain}" || -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ "${sourcesBuild}" == "OFF" ]]; then
+    bash "${scriptDir}/pull-lfs-for-build.sh" \
+        --platform linux \
+        --arch "$(uname -m)" \
+        --toolchain "${prebuiltToolchain}" \
+        --compiler-tag "${compilerTag}" \
+        --build-type "${buildType}" \
+        --linkage "${projectLinkage}" \
+        --include-tests
+fi
+
 if [[ "${pgoInstrument}" == "auto" ]]; then
     pgoInstrument="OFF"
     if [[ "${buildType}" == "RelWithDebInfo" && "${prebuiltToolchain}" == "clang" ]]; then

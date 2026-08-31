@@ -177,6 +177,16 @@ if [[ -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ "${sourcesBuild}" == "OFF" ]]; then
+    bash "${scriptDir}/../pull-lfs-for-build.sh" \
+        --platform windows \
+        --arch x86_64 \
+        --toolchain msvc \
+        --compiler-tag "${compilerTag}" \
+        --build-type "${buildType}" \
+        --linkage "${projectLinkage}"
+fi
+
 buildDir="$(projectPath "${buildDir}")"
 toolchainFile="$(projectPath "${toolchainFile}")"
 

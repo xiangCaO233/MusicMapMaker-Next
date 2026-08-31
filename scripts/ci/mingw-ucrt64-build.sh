@@ -25,13 +25,22 @@ detectCiBuildJobs() {
 }
 
 ciBuildJobs="$(detectCiBuildJobs)"
+scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 git submodule update --init --recursive
-git lfs pull
+bash "${scriptDir}/pull-lfs-for-build.sh" \
+    --platform windows \
+    --arch x86_64 \
+    --toolchain mingw \
+    --compiler-tag ucrt64 \
+    --build-type RelWithDebInfo \
+    --linkage static \
+    --include-tests
 
 rm -rf build_gcc
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DSOURCES_BUILD=OFF \
     -DBUILD_TESTING=ON \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
