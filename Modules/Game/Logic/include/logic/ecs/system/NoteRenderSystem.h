@@ -246,6 +246,8 @@ private:
                           const Config::EditorConfig& config, float x, float y,
                           float w, float h, float aspect, glm::vec4 color);
 
+    /// @param topY 轨道裁剪区上边界。
+    /// @param bottomY 轨道裁剪区下边界。
     /// @warning 热路径：单个 Hold
     /// 几何生成时执行；循环范围必须由可见时间段限制。
     static void renderHold(Batcher& batcher, const NoteComponent& note,
@@ -254,8 +256,8 @@ private:
                            float singleTrackW, glm::vec4 headColor,
                            glm::vec4 bodyColor, glm::vec4 endColor,
                            const ScrollCache* cache, double currentAbsY,
-                           float judgmentLineY, float renderScaleY,
-                           HoverPart glowPart = HoverPart::None);
+                           float judgmentLineY, float renderScaleY, float topY,
+                           float bottomY, HoverPart glowPart = HoverPart::None);
 
     /// @warning 热路径：单个 Flick 几何生成时执行；不得触发排序或全量 ECS
     /// 查询。

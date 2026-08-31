@@ -202,6 +202,13 @@ mmm_add_test_executable(Logic NoteDragGhostRenderTest
 target_link_libraries(NoteDragGhostRenderTest PRIVATE Logic Log)
 add_test(NAME NoteDragGhostRenderTest COMMAND NoteDragGhostRenderTest)
 
+# 极大 SV 渲染测试确保超长 Hold 在进入 Batcher 前裁剪到画布范围。 独立目标直接检查 CPU 顶点，避免回归结果依赖具体 Vulkan
+# 驱动。
+mmm_add_test_executable(Logic ExtremeSvHoldRenderTest
+                        tests/ExtremeSvHoldRenderTest.cpp)
+target_link_libraries(ExtremeSvHoldRenderTest PRIVATE Logic Log)
+add_test(NAME ExtremeSvHoldRenderTest COMMAND ExtremeSvHoldRenderTest)
+
 # 多选拖动测试确保宽折线不会阻塞以单键为焦点的草稿区虚影更新。
 mmm_add_test_executable(Logic GroupedDraftDragPreviewTest
                         tests/GroupedDraftDragPreviewTest.cpp)

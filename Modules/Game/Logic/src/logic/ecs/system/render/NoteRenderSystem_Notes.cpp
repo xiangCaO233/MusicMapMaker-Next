@@ -1171,7 +1171,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.cache,
                 ctx.currentAbsY,
                 judgmentLineY,
-                renderScaleY);
+                renderScaleY,
+                topY,
+                bottomY);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
                 batcher,
@@ -1374,6 +1376,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 ctx.currentAbsY,
                 judgmentLineY,
                 renderScaleY,
+                topY,
+                bottomY,
                 glowPart);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
@@ -2112,7 +2116,9 @@ void NoteRenderSystem::renderBrushPreview(
                                      ctx.cache,
                                      ctx.currentAbsY,
                                      judgmentLineY,
-                                     renderScaleY);
+                                     renderScaleY,
+                                     0.0f,
+                                     judgmentLineY * 2.0f);
     } else if ( brush.type == ::MMM::NoteType::FLICK ) {
         NoteRenderSystem::renderFlick(
             batcher,
