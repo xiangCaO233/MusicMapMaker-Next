@@ -718,6 +718,9 @@ struct EditorSettings {
     /// @brief 重叠物件检测的时间窗口，单位毫秒。
     float overlapTimeWindowMs{ 5.0f };
 
+    /// @brief 是否允许悬浮右侧工具栏数值按钮时使用滚轮直接调整。
+    bool enableToolbarValueWheelAdjustment{ false };
+
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
 

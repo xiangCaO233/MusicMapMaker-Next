@@ -746,8 +746,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                    ? std::floor(5.0f * dpiScale)
-                                    : (btnHeight - swatchSize) * 0.5f),
+                                     ? std::floor(5.0f * dpiScale)
+                                     : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1008,6 +1008,41 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                    if ( editorCfg.settings
+                             .enableToolbarValueWheelAdjustment ) {
+                        const float wheel = ImGui::GetIO().MouseWheel;
+                        if ( std::abs(wheel) > 0.1F ) {
+                            constexpr std::array<double, 8> presets{
+                                0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0
+                            };
+                            std::size_t bestIndex = 0;
+                            double      minimumDifference =
+                                std::abs(currentSpeed - presets.front());
+                            for ( std::size_t index = 1; index < presets.size();
+                                  ++index ) {
+                                const double difference =
+                                    std::abs(currentSpeed - presets[index]);
+                                if ( difference < minimumDifference ) {
+                                    minimumDifference = difference;
+                                    bestIndex         = index;
+                                }
+                            }
+
+                            if ( wheel > 0.0F &&
+                                 bestIndex + 1 < presets.size() ) {
+                                ++bestIndex;
+                            } else if ( wheel < 0.0F && bestIndex > 0 ) {
+                                --bestIndex;
+                            }
+
+                            const double newSpeed = presets[bestIndex];
+                            if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
+                                engine.pushCommand(
+                                    Logic::CmdSetPlaybackSpeed{ newSpeed });
+                                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            }
+                        }
+                    }
                     drawTooltip(TR("ui.toolbar.playback_speed").data());
                 }
 
@@ -1047,6 +1082,24 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_lastKeyBtnY = ImGui::GetItemRectMin().y;
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                    if ( editorCfg.settings
+                             .enableToolbarValueWheelAdjustment ) {
+                        const float wheel = ImGui::GetIO().MouseWheel;
+                        if ( std::abs(wheel) > 0.1F ) {
+                            const int newTracks = std::clamp(
+                                currentTracks + (wheel > 0.0F ? 1 : -1), 1, 32);
+                            if ( newTracks != currentTracks ) {
+                                auto metadata =
+                                    session->getContext()
+                                        .currentBeatmap->m_baseMapMetadata;
+                                metadata.track_count = newTracks;
+                                engine.pushCommand(
+                                    Logic::CmdUpdateBeatmapMetadata{
+                                        metadata });
+                                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            }
+                        }
+                    }
                     drawTooltip(TR("ui.settings.beatmap.tracks").data());
                 }
 
@@ -1085,6 +1138,25 @@ void ToolbarView::update(UIManager* sourceManager)
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
             if ( ImGui::IsItemHovered() ) {
+                if ( editorCfg.settings.enableToolbarValueWheelAdjustment ) {
+                    const auto& io    = ImGui::GetIO();
+                    const float wheel = io.MouseWheel;
+                    if ( std::abs(wheel) > 0.1F ) {
+                        int step = wheel > 0.0F ? 1 : -1;
+                        if ( io.KeyShift ) {
+                            step *= static_cast<int>(
+                                editorCfg.settings.scrollSpeedMultiplier);
+                        }
+                        const int newDivisor =
+                            std::clamp(currentDivisor + step, 1, 64);
+                        if ( newDivisor != currentDivisor ) {
+                            auto newConfig                 = editorCfg;
+                            newConfig.settings.beatDivisor = newDivisor;
+                            updateEditorConfig(newConfig);
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        }
+                    }
+                }
                 drawTooltip(TR("ui.toolbar.beat_divisor").data());
             }
             if ( contentFont ) ImGui::PopFont();
@@ -1192,7 +1264,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                            ImGui::CalcTextSize(previewBuf).x);
             }
             const ImGuiStyle& popupStyle = ImGui::GetStyle();
-            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
+            const float compactPaddingX  = std::min(popupStyle.FramePadding.x,
                                                    std::floor(4.0f * dpiScale));
             const float presetButtonWidth =
                 std::ceil(std::max(std::floor(40.0f * dpiScale),
@@ -1241,11 +1313,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1514,7 +1586,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     float targetX = toolbarWindow->Pos.x - std::floor(4.0F * dpiScale);
     float targetY = m_lastSoundEffectToolBtnY;
     targetX       = std::max(targetX, viewportLeft + popupWidth + edgePadding);
-    targetY = std::clamp(targetY,
+    targetY       = std::clamp(targetY,
                          viewportTop + edgePadding,
                          std::max(viewportTop + edgePadding,
                                   viewportBottom - popupHeight - edgePadding));
@@ -1977,7 +2049,7 @@ void ToolbarView::loadSoftwareDefaultPalette()
     if ( !schemeName.empty() &&
          schemeName != Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
         const auto& paletteConfig = settings.colorPalettes;
-        auto it = std::find_if(paletteConfig.schemes.begin(),
+        auto        it            = std::find_if(paletteConfig.schemes.begin(),
                                paletteConfig.schemes.end(),
                                [&](const Config::ColorPaletteScheme& scheme) {
                                    return scheme.name == schemeName;
@@ -2885,7 +2957,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##PaletteColorHex",
+        bool hexChanged       = ImGui::InputText("##PaletteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -3356,7 +3428,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
         auto& appConfig  = Config::AppConfig::instance();
         auto  mode       = appConfig.getVisualConfig().beatLineDisplayMode;
         auto  selectMode = [&](Config::BeatLineDisplayMode candidate,
-                               const char*                 labelKey) {
+                              const char*                 labelKey) {
             if ( !::MMM::UI::FeedbackRadioButton(TR(labelKey).data(),
                                                  mode == candidate) ) {
                 return;

@@ -180,8 +180,8 @@ bool testNonHoldHitEffectDurationConfig()
         nlohmann::json::object().get<MMM::Config::VisualConfig>();
     const auto tooShort = nlohmann::json{ { "nonHoldHitEffectDuration", 0.0F } }
                               .get<MMM::Config::VisualConfig>();
-    const auto tooLong  = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
-                              .get<MMM::Config::VisualConfig>();
+    const auto tooLong = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
+                             .get<MMM::Config::VisualConfig>();
     if ( !near(restored.nonHoldHitEffectDuration, 0.48F) ||
          !near(
              legacy.nonHoldHitEffectDuration,
@@ -210,6 +210,26 @@ bool testPolylineEditingConfigRoundTrip()
     if ( encoded.value("enablePolylineEditing", true) ||
          restored.enablePolylineEditing || !legacy.enablePolylineEditing ) {
         XERROR("Polyline editing config did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证工具栏悬浮滚轮开关可持久化且旧配置默认关闭。
+/// @return 开启状态往返不变且缺失字段保持关闭时返回 true。
+bool testToolbarValueWheelAdjustmentRoundTrip()
+{
+    MMM::Config::EditorSettings source;
+    source.enableToolbarValueWheelAdjustment = true;
+
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( !encoded.value("enableToolbarValueWheelAdjustment", false) ||
+         !restored.enableToolbarValueWheelAdjustment ||
+         legacy.enableToolbarValueWheelAdjustment ) {
+        XERROR("Toolbar hover-wheel config did not preserve disabled default");
         return false;
     }
     return true;
@@ -244,7 +264,7 @@ bool testDraftLaneReleaseGateIsInternal()
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::EditorSettings>();
     const auto           external = nlohmann::json{
-        { "enableDraftLanes", false }
+                  { "enableDraftLanes", false }
     }.get<MMM::Config::EditorSettings>();
     if ( encoded.contains("enableDraftLanes") || !restored.enableDraftLanes ||
          !external.enableDraftLanes ) {
@@ -681,6 +701,7 @@ int main()
                    testInteractionHitboxScaleConfig() &&
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
+                   testToolbarValueWheelAdjustmentRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
                    testDraftLaneReleaseGateIsInternal() &&
                    testVerticalObjectDragConfigRoundTrip() &&

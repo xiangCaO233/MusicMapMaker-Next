@@ -739,6 +739,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "disabledPluginIds", settings.disabledPluginIds },
         { "selectedSkinDirectory", settings.selectedSkinDirectory },
         { "beatDivisor", settings.beatDivisor },
+        { "enableToolbarValueWheelAdjustment",
+          settings.enableToolbarValueWheelAdjustment },
         { "overlapTimeWindowMs", settings.overlapTimeWindowMs },
         { "reverseScroll", settings.reverseScroll },
         { "scrollSnap", settings.scrollSnap },
@@ -837,7 +839,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("disabledPluginIds", std::vector<std::string>());
     settings.selectedSkinDirectory =
         json.value("selectedSkinDirectory", std::string("mmm-default"));
-    settings.beatDivisor         = json.value("beatDivisor", 4);
+    settings.beatDivisor = json.value("beatDivisor", 4);
+    settings.enableToolbarValueWheelAdjustment =
+        json.value("enableToolbarValueWheelAdjustment", false);
     settings.overlapTimeWindowMs = json.value("overlapTimeWindowMs", 5.0f);
     settings.reverseScroll       = json.value("reverseScroll", false);
     settings.scrollSnap          = json.value("scrollSnap", false);

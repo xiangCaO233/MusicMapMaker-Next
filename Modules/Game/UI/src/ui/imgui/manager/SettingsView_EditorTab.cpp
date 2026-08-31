@@ -37,7 +37,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -137,6 +137,23 @@ void SettingsView::drawEditorSettings()
             [&](Clay_BoundingBox r, bool) {
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##StopPlaybackOnScroll", &settings.stopPlaybackOnScroll);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.toolbar_value_wheel_adjustment")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##ToolbarValueWheelAdjustment",
+                    &settings.enableToolbarValueWheelAdjustment);
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(TR("ui.settings.editor.toolbar_value_"
+                                            "wheel_adjustment_tooltip")
+                                             .data(),
+                                         Utils::TooltipDir::Right);
+                }
             });
         addSettingItem(*sec,
                        rowIndex,

@@ -851,6 +851,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.timelineProfessionalMode =
         source.settings.timelineProfessionalMode;
     target.settings.showPreviewWindow = source.settings.showPreviewWindow;
+    target.settings.enableToolbarValueWheelAdjustment =
+        source.settings.enableToolbarValueWheelAdjustment;
     Config::preserveGlobalToolbarDisplaySettings(target.settings,
                                                  source.settings);
     target.settings.enablePolylineEditing =
