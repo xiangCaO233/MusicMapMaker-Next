@@ -91,6 +91,23 @@ MainMenuEdit::MainMenuEdit()
         createAddSelectedObjectAnnotationAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
+        "ui.timeline.menu.professional_mode",
+        MainMenuItemTextKind::TranslationKey,
+        createTimelineProfessionalModeToggleAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_BARS,
+        "ui.timeline.menu.open_timing_table",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenTimingPointsTableAction()));
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_COMMENT,
+        "ui.annotation.menu.open_table",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenAnnotationTableAction()));
+    registerItem(std::make_unique<MainMenuSeparatorItem>());
+    registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.bms_editing",
         MainMenuItemTextKind::TranslationKey,
         createBmsEditingToggleAction()));

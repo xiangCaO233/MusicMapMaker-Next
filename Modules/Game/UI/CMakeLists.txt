@@ -33,6 +33,7 @@ add_library(
   src/ui/imgui/menu/actions/edit/PolylineEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/RedoAction.cpp
   src/ui/imgui/menu/actions/edit/SelectAllAction.cpp
+  src/ui/imgui/menu/actions/edit/TimelineCanvasMenuActions.cpp
   src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp
   src/ui/imgui/menu/actions/edit/UndoAction.cpp
   src/ui/imgui/menu/actions/file/CloseProjectAction.cpp

@@ -134,14 +134,12 @@ private:
     void handleDrops(UI::UIManager* sourceManager);
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。
-    /// @param sourceManager 用于打开共享的批注表窗口。
     /// @param currentSnapshot 当前主画布渲染快照。
     /// @param targetWidth 画布宽度。
     /// @param targetHeight 画布高度。
     /// @warning UI 热路径：每帧执行；只允许常量级输入处理和可见物件遍历，
     /// 禁止文件系统访问、完整谱面扫描或阻塞操作。
     void handleInteractions(
-        UI::UIManager*                        sourceManager,
         const Common::Render::RenderSnapshot* currentSnapshot,
         float targetWidth, float targetHeight);
     /// @brief 在移动工具下绘制当前悬浮物件的独立音频试听按钮。
@@ -160,7 +158,6 @@ private:
         float canvasScreenX, float canvasScreenY, float targetWidth,
         float targetHeight, float pointerX, float pointerY);
     /// @brief 绘制批注标记区、悬浮详情和时间戳批注编辑弹窗。
-    /// @param sourceManager 用于访问共享 Timeline 窗口中的批注表状态。
     /// @param currentSnapshot 当前主画布渲染快照。
     /// @param canvasScreenX 画布左上角屏幕横坐标。
     /// @param canvasScreenY 画布左上角屏幕纵坐标。
@@ -173,7 +170,6 @@ private:
     /// @warning UI 热路径：只遍历当前快照已裁剪的可见批注标记；不访问 ECS、
     /// 文件系统或完整谱面。
     AnnotationGutterInteractionResult renderAnnotationGutter(
-        UI::UIManager*                        sourceManager,
         const Common::Render::RenderSnapshot& currentSnapshot,
         float canvasScreenX, float canvasScreenY, float targetWidth,
         float targetHeight, float pointerX, float pointerY, bool canvasHovered);

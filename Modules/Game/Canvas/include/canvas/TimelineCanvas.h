@@ -86,9 +86,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void reloadTextures(vk::PhysicalDevice& physicalDevice,
-                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                        vk::Queue& queue) override;
+    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                               vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -117,6 +117,7 @@ public:
     {
         m_isAnnotationTableWindowOpen = open;
     }
+
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
     void requestFocus() override;

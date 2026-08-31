@@ -1413,14 +1413,19 @@ void TimelineCanvas::renderAnnotationTableWindow()
     auto&         engine      = Logic::EditorEngine::instance();
     const int32_t activeIndex = engine.getActiveSessionIndex();
     const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-    if ( !activeEntry || activeEntry->isLogoPlaceholder || !m_currentSnapshot ||
-         !m_currentSnapshot->hasBeatmap ) {
+    if ( !activeEntry || activeEntry->isLogoPlaceholder ||
+         !activeEntry->session ) {
         closeTableWindow();
         return;
     }
-
+    if ( !m_currentSnapshot ) return;
     const std::string_view currentBeatmapKey =
         getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+    if ( !activeEntry->beatmapPathKey.empty() &&
+         currentBeatmapKey != activeEntry->beatmapPathKey ) {
+        return;
+    }
+    if ( !m_currentSnapshot->hasBeatmap ) return;
     if ( currentBeatmapKey.empty() ) {
         closeTableWindow();
         return;
@@ -1717,14 +1722,19 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     auto&         engine      = Logic::EditorEngine::instance();
     const int32_t activeIndex = engine.getActiveSessionIndex();
     const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-    if ( !activeEntry || activeEntry->isLogoPlaceholder || !m_currentSnapshot ||
-         !m_currentSnapshot->hasBeatmap ) {
+    if ( !activeEntry || activeEntry->isLogoPlaceholder ||
+         !activeEntry->session ) {
         closeTableWindow();
         return;
     }
-
+    if ( !m_currentSnapshot ) return;
     const std::string_view currentBeatmapKey =
         getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+    if ( !activeEntry->beatmapPathKey.empty() &&
+         currentBeatmapKey != activeEntry->beatmapPathKey ) {
+        return;
+    }
+    if ( !m_currentSnapshot->hasBeatmap ) return;
     if ( currentBeatmapKey.empty() ) {
         closeTableWindow();
         return;
@@ -1911,8 +1921,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                     ? parseTimingTableDouble(searchValueText)
-                                     : std::nullopt;
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =

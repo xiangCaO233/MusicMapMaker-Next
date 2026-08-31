@@ -55,6 +55,16 @@ createEditSelectedObjectVolumeAction();
 std::unique_ptr<IMainMenuItemActionHandler>
 createAddSelectedObjectAnnotationAction();
 
+/// @brief 创建 Timeline 专业模式开关处理器。
+std::unique_ptr<IMainMenuToggleItemActionHandler>
+createTimelineProfessionalModeToggleAction();
+
+/// @brief 创建打开 Timeline Timing 表动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenTimingPointsTableAction();
+
+/// @brief 创建打开谱面批注表动作处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenAnnotationTableAction();
+
 /// @brief 创建播放暂停切换动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createTogglePlaybackAction();
 

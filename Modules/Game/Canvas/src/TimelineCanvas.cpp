@@ -241,7 +241,7 @@ ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
     const float luminance = 0.2126f * gearColor.x * gearColor.x +
                             0.7152f * gearColor.y * gearColor.y +
                             0.0722f * gearColor.z * gearColor.z;
-    const int   alpha     = hovered ? 242 : 218;
+    const int alpha = hovered ? 242 : 218;
     if ( luminance < 0.18f ) {
         return IM_COL32(248, 250, 255, alpha);
     }
@@ -346,7 +346,7 @@ void TimelineCanvas::commitAudioTimeSliderScrub()
 
 /// @brief 更新 Timeline 窗口、画布交互与叠加控件。
 /// @param sourceManager UI 管理器。
-/// @warning UI 热路径：窗口可见时每帧调用，只做绘制和输入处理。
+/// @warning UI 热路径：每帧调用；主窗口隐藏时仅维护独立表格窗口。
 /// 禁止引入文件系统访问、阻塞操作或全量排序。
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
@@ -354,6 +354,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showTimelineWindow ) {
         commitAudioTimeSliderScrub();
+        renderTimingPointsTableWindow();
+        renderAnnotationTableWindow();
         return;
     }
 
@@ -383,6 +385,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         m_hasTimingInteractionFocus       = false;
         editorSettings.showTimelineWindow = false;
         appConfig.save();
+        renderTimingPointsTableWindow();
+        renderAnnotationTableWindow();
         return;
     }
 
@@ -411,10 +415,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             const bool sliderDeactivatedAfterEdit =
                 ImGui::IsItemDeactivatedAfterEdit();
             if ( sliderChanged ) {
-                float  visualOffset = Config::AppConfig::instance()
-                                          .getVisualConfig()
-                                          .getEffectiveVisualOffset();
-                double targetTime   = static_cast<double>(time);
+                float visualOffset = Config::AppConfig::instance()
+                                         .getVisualConfig()
+                                         .getEffectiveVisualOffset();
+                double targetTime = static_cast<double>(time);
                 if ( ImGui::GetIO().KeyShift ) {
                     targetTime = std::clamp(snapTimeToBeatLine(targetTime),
                                             0.0,
@@ -586,8 +590,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Common::Render::TimelineInteractiveElement& el) {
-                    bool isNearTime  = hoveredSnapped &&
-                                       std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime = hoveredSnapped &&
+                                      std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     return isNearTime || isNearPixel;
                 };
@@ -836,63 +840,15 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     }
                 }
             }
-            // 绘制右上角时间点面板汉堡按钮
-            ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f,
-                                       canvasPos.y + 10.0f);
-            ImGui::SetCursorScreenPos(menuBtnPos);
-
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImGui::GetStyleColorVec4(ImGuiCol_Button));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonHovered,
-                ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonActive,
-                ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
-            UI::Utils::pushFixedButtonStyleVars();
-            if ( ::MMM::UI::FeedbackButton(UI::ICON_MMM_BARS,
-                                           ImVec2(30.0f, 30.0f)) ) {
-                ImGui::OpenPopup("TimelineOptionsMenu");
-            }
-            UI::Utils::popFixedButtonStyleVars();
-            ImGui::PopStyleVar();
-            ImGui::PopStyleColor(3);
-
-            if ( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip("%s", TR("ui.timeline.menu.tooltip").data());
-            }
-
-            if ( ImGui::BeginPopup("TimelineOptionsMenu") ) {
-                const bool professionalMode =
-                    editorSettings.timelineProfessionalMode;
-                if ( ::MMM::UI::FeedbackMenuItem(
-                         TR("ui.timeline.menu.professional_mode").data(),
-                         nullptr,
-                         professionalMode) ) {
-                    editorSettings.timelineProfessionalMode = !professionalMode;
-                    appConfig.save();
-                }
-                if ( ::MMM::UI::FeedbackMenuItem(
-                         TR("ui.timeline.menu.open_timing_table").data(),
-                         nullptr,
-                         m_isTableWindowOpen) ) {
-                    if ( !m_isTableWindowOpen ) {
-                        ::MMM::UI::PlayPopupOpenFeedback();
-                    }
-                    m_isTableWindowOpen = true;
-                }
-                ImGui::EndPopup();
-            }
-
             // 5. 渲染弹窗
 
             renderEventEditorPopup();
             renderEventCreationPopup();
-            renderTimingPointsTableWindow();
-            renderAnnotationTableWindow();
         }
     }
+
+    renderTimingPointsTableWindow();
+    renderAnnotationTableWindow();
 
     if ( m_speedTooltipTimer > 0.0f ) {
         m_speedTooltipTimer -= ImGui::GetIO().DeltaTime;
@@ -984,8 +940,13 @@ bool TimelineCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
     (void)snapshot;
+    const bool needsTableSnapshot =
+        m_isTableWindowOpen || m_isAnnotationTableWindowOpen;
     return m_syncBuffer && m_isOpen &&
-           Config::AppConfig::instance().getEditorSettings().showTimelineWindow;
+           (Config::AppConfig::instance()
+                .getEditorSettings()
+                .showTimelineWindow ||
+            needsTableSnapshot);
 }
 
 /// @brief 在线程池中拉取并准备时间线快照。
@@ -1085,7 +1046,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     const bool professionalMode = Config::AppConfig::instance()
                                       .getEditorSettings()
                                       .timelineProfessionalMode;
-    float      paddingX         = 30.0f;
+    float paddingX = 30.0f;
 
     /// @brief Timeline marker 的绘制矩形参数。
     struct MarkerDrawRect {
@@ -1106,7 +1067,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);
             noteX                     = laneWidth * static_cast<float>(lane) +
-                                        (laneWidth - noteW) * 0.5f;
+                    (laneWidth - noteW) * 0.5f;
         }
 
         float noteH = noteW * 0.36f;
@@ -1197,9 +1158,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     for ( const auto& target : collectVisibleTimingTargets() ) {
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered  = target.entity == m_hoveredTimingEntity;
-        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
-                              m_timingEraseTargetEntities.end();
+        const bool hovered = target.entity == m_hoveredTimingEntity;
+        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
+                             m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;
