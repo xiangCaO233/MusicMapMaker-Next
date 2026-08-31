@@ -9,8 +9,9 @@
 
 namespace MMM::Logic
 {
+struct CanvasLaneProjection;
 struct TimelineComponent;
-}
+}  // namespace MMM::Logic
 
 namespace MMM::Logic::System
 {
@@ -159,7 +160,8 @@ private:
                             Batcher& batcher, float leftX, float clipLeftX,
                             float clipRightX, float rightX, float topY,
                             float bottomY, float singleTrackW,
-                            float renderScaleY);
+                            float                       renderScaleY,
+                            const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
@@ -202,7 +204,8 @@ private:
         const NoteRenderContext&         ctx,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
         float leftX, float topY, float bottomY, float singleTrackW,
-        float renderScaleY, const Config::EditorConfig& config);
+        float renderScaleY, const Config::EditorConfig& config,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：音符基础层每次快照生成时执行；依赖预排序输入，禁止每帧完整排序。
@@ -212,7 +215,8 @@ private:
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
-        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels);
+        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：悬浮发光层每次快照生成时执行；只扫描当前可见实体列表，禁止完整
@@ -222,7 +226,8 @@ private:
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float currentTime,
         float judgmentLineY, float leftX, float clipLeftX, float rightX,
-        float topY, float bottomY, float singleTrackW, float renderScaleY);
+        float topY, float bottomY, float singleTrackW, float renderScaleY,
+        const CanvasLaneProjection* laneProjection);
 
     /// @brief 生成并绘制当前快照中的重叠物件顶层遮罩。
     /// @warning

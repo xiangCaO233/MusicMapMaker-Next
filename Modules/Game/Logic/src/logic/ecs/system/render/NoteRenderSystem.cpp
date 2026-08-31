@@ -555,11 +555,13 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
-        float noteRenderClipLeftX  = leftX;
-        float noteRenderClipRightX = rightX;
-        float noteRenderRightX     = rightX;
+        float                       noteRenderClipLeftX  = leftX;
+        float                       noteRenderClipRightX = rightX;
+        float                       noteRenderRightX     = rightX;
+        CanvasLaneProjection        noteLaneProjection;
+        const CanvasLaneProjection* noteLaneProjectionPtr = nullptr;
         if ( isMainCanvas ) {
-            const auto laneProjection =
+            noteLaneProjection =
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
                                               bgmTrackCount,
@@ -571,12 +573,13 @@ void NoteRenderSystem::generateSnapshot(
                                               config.settings.enableDraftLanes,
                                               draftTrackCount,
                                               true);
+            noteLaneProjectionPtr = &noteLaneProjection;
             noteRenderClipLeftX =
-                std::clamp(laneProjection.draftLeftX, 0.0F, viewportWidth);
+                std::clamp(noteLaneProjection.draftLeftX, 0.0F, viewportWidth);
             noteRenderClipRightX =
-                std::clamp(laneProjection.bgmRightX, 0.0F, viewportWidth);
+                std::clamp(noteLaneProjection.bgmRightX, 0.0F, viewportWidth);
             if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
-                noteRenderRightX = laneProjection.bgmRightX;
+                noteRenderRightX = noteLaneProjection.bgmRightX;
             }
             batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
         } else {
@@ -597,7 +600,8 @@ void NoteRenderSystem::generateSnapshot(
                                       topY,
                                       bottomY,
                                       singleTrackW,
-                                      renderScaleY);
+                                      renderScaleY,
+                                      noteLaneProjectionPtr);
         if ( isMainCanvas ) {
             const auto laneProjection =
                 calculateCanvasLaneProjection(viewportWidth,

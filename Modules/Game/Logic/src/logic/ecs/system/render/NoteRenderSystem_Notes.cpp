@@ -8,6 +8,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
@@ -41,6 +42,32 @@ const std::string DRAFT_NOTE_END_COLOR_KEY{ "draft_notes.note_end" };
 const std::string DRAFT_NOTE_NODE_COLOR_KEY{ "draft_notes.note_node" };
 /// @brief 草稿 Flick 箭头颜色键。
 const std::string DRAFT_NOTE_ARROW_COLOR_KEY{ "draft_notes.note_flick_arrow" };
+
+/// @brief 解析音符主体当前应使用的轨道左边界。
+/// @param note 待渲染音符。
+/// @param interaction 音符交互状态；未参与交互时可为空。
+/// @param laneProjection 主画布统一轨道投影；非主画布时为空。
+/// @param fallbackLeftX 玩家轨道区左边界。
+/// @param singleTrackWidth 单轨宽度。
+/// @return 拖动时返回目标区域真实边界，否则返回连续玩家轨道坐标。
+/// @warning 渲染热路径：基础层、发光层与命中盒均会调用，只允许常量坐标换算。
+float resolveNoteTrackLeftX(const NoteComponent&        note,
+                            const InteractionComponent* interaction,
+                            const CanvasLaneProjection* laneProjection,
+                            float fallbackLeftX, float singleTrackWidth)
+{
+    if ( interaction && interaction->isDragging && laneProjection ) {
+        const auto address = CanvasLaneAddress::fromAbsoluteTrack(
+            note.m_trackIndex,
+            laneProjection->playerLaneCount,
+            laneProjection->draftLaneCount);
+        if ( const auto bounds = laneProjection->bounds(address) ) {
+            return bounds->leftX;
+        }
+    }
+    return fallbackLeftX +
+           static_cast<float>(note.m_trackIndex) * singleTrackWidth;
+}
 
 /// @brief 单个音符在 AbsY 空间覆盖的保守区间。
 struct NoteAbsYRangeEntry {
@@ -180,7 +207,8 @@ void NoteRenderSystem::renderNotes(
     const std::string& cameraId, double currentTime, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config, Batcher& batcher,
     float leftX, float clipLeftX, float clipRightX, float rightX, float topY,
-    float bottomY, float singleTrackW, float renderScaleY)
+    float bottomY, float singleTrackW, float renderScaleY,
+    const CanvasLaneProjection* laneProjection)
 {
     // 1. 准备上下文与颜色
     NoteRenderSystem::NoteRenderContext ctx =
@@ -232,7 +260,8 @@ void NoteRenderSystem::renderNotes(
                                                bottomY,
                                                singleTrackW,
                                                renderScaleY,
-                                               config);
+                                               config,
+                                               laneProjection);
         for ( std::size_t index = hitboxStart;
               index < snapshot->hitboxes.size();
               ++index ) {
@@ -266,7 +295,8 @@ void NoteRenderSystem::renderNotes(
         trackCount,
         generatePolylineHitboxes,
         config.visual.showBoundSampleLabels &&
-            SessionUtils::isMainCanvasCameraId(cameraId));
+            SessionUtils::isMainCanvasCameraId(cameraId),
+        laneProjection);
 
     // 4. 发光层渲染
     NoteRenderSystem::renderNoteGlowLayer(registry,
@@ -282,7 +312,8 @@ void NoteRenderSystem::renderNotes(
                                           topY,
                                           bottomY,
                                           singleTrackW,
-                                          renderScaleY);
+                                          renderScaleY,
+                                          laneProjection);
 
     // 5. 笔刷预览渲染
     if ( snapshot->brush.isActive && !snapshot->brush.createsAudioSample ) {
@@ -804,7 +835,8 @@ void NoteRenderSystem::generateNoteHitboxes(
     const NoteRenderSystem::NoteRenderContext& ctx,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
     float leftX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY, const Config::EditorConfig& config)
+    float renderScaleY, const Config::EditorConfig& config,
+    const CanvasLaneProjection* laneProjection)
 {
     // 第一遍：连接体，优先级较低。
     for ( auto entity : noteEntities ) {
@@ -915,8 +947,12 @@ void NoteRenderSystem::generateNoteHitboxes(
         float maxY = std::max(screenY, endY) + ctx.noteH;
         if ( minY > bottomY || maxY < topY ) continue;
 
-        float headX = leftX + note.m_trackIndex * singleTrackW +
-                      (singleTrackW - ctx.noteW) * 0.5f;
+        const auto* interaction =
+            registry.try_get<const InteractionComponent>(entity);
+        const float headX =
+            resolveNoteTrackLeftX(
+                note, interaction, laneProjection, leftX, singleTrackW) +
+            (singleTrackW - ctx.noteW) * 0.5f;
 
         if ( !note.m_isSubNote && note.m_type != ::MMM::NoteType::POLYLINE ) {
             // 所有非 Polyline 音符的 Head
@@ -992,7 +1028,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
     const std::vector<entt::entity>& noteEntities, Batcher& batcher,
     float currentTime, float judgmentLineY, float leftX, float rightX,
     float topY, float bottomY, float singleTrackW, float renderScaleY,
-    int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels)
+    int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels,
+    const CanvasLaneProjection* laneProjection)
 {
     std::vector<entt::entity> visibleEntities;
     for ( auto entity : noteEntities ) {
@@ -1038,11 +1075,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const auto&  note      = registry.get<const NoteComponent>(entity);
 
         // 处理拖拽/剪切时的视觉反馈；选中反馈由发光层按当前颜色绘制。
-        float alphaMul = 1.0f;
-        if ( auto* ic = registry.try_get<InteractionComponent>(entity) ) {
-            if ( ic->isDragging || ic->isCut ) {
-                alphaMul = 0.5f;
-            }
+        float       alphaMul = 1.0f;
+        const auto* interaction =
+            registry.try_get<const InteractionComponent>(entity);
+        if ( interaction && (interaction->isDragging || interaction->isCut) ) {
+            alphaMul = 0.5f;
         }
 
         float screenY =
@@ -1050,12 +1087,13 @@ void NoteRenderSystem::renderNoteBaseLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
-        float trackX  = leftX + note.m_trackIndex * singleTrackW;
+        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                                  note.m_timestamp + note.m_duration,
+                                  ctx.cache->getAbsY(note.m_timestamp),
+                                  note.m_timestamp)) *
+                              renderScaleY;
+        const float trackX  = resolveNoteTrackLeftX(
+            note, interaction, laneProjection, leftX, singleTrackW);
 
         // 草稿物件始终使用皮肤草稿色，避免玩家调色盘覆盖区域辨识度。
         glm::vec4 curColorNote =
@@ -1240,7 +1278,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, float currentTime,
     float judgmentLineY, float leftX, float clipLeftX, float rightX, float topY,
-    float bottomY, float singleTrackW, float renderScaleY)
+    float bottomY, float singleTrackW, float renderScaleY,
+    const CanvasLaneProjection* laneProjection)
 {
     std::vector<entt::entity> glowEntities;
     glowEntities.reserve(noteEntities.size());
@@ -1268,12 +1307,13 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
-                                 note.m_timestamp + note.m_duration,
-                                 ctx.cache->getAbsY(note.m_timestamp),
-                                 note.m_timestamp)) *
-                             renderScaleY;
-        float     trackX   = leftX + note.m_trackIndex * singleTrackW;
+        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                                  note.m_timestamp + note.m_duration,
+                                  ctx.cache->getAbsY(note.m_timestamp),
+                                  note.m_timestamp)) *
+                              renderScaleY;
+        const float trackX  = resolveNoteTrackLeftX(
+            note, &ic, laneProjection, leftX, singleTrackW);
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
         if ( ic.isSelected ) {
