@@ -202,6 +202,12 @@ mmm_add_test_executable(Logic NoteDragGhostRenderTest
 target_link_libraries(NoteDragGhostRenderTest PRIVATE Logic Log)
 add_test(NAME NoteDragGhostRenderTest COMMAND NoteDragGhostRenderTest)
 
+# 多选拖动测试确保宽折线不会阻塞以单键为焦点的草稿区虚影更新。
+mmm_add_test_executable(Logic GroupedDraftDragPreviewTest
+                        tests/GroupedDraftDragPreviewTest.cpp)
+target_link_libraries(GroupedDraftDragPreviewTest PRIVATE Logic Log)
+add_test(NAME GroupedDraftDragPreviewTest COMMAND GroupedDraftDragPreviewTest)
+
 # 音符渲染测试覆盖草稿物件独立配色与播放中的顶层重叠提示。
 mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
                         tests/NoteOverlapMaskRenderTest.cpp)

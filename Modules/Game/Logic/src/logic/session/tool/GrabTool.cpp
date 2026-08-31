@@ -701,7 +701,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                     ctx.sampleRegistry.get<InteractionComponent>(entity)
                         .isDragging = true;
                 }
-                m_usesUnifiedObjectDrag = !m_initialSampleStates.empty();
+                // 草稿轨启用时从首帧使用统一轨道域，允许多选虚影临时跨越区域边界。
+                const bool previewsAcrossDraftBoundary =
+                    SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
+                    ctx.lastConfig.settings.enableDraftLanes;
+                m_usesUnifiedObjectDrag = !m_initialSampleStates.empty() ||
+                                          previewsAcrossDraftBoundary;
             }
         } else {
             // 模式 B: 只拖动当前物件
