@@ -6,32 +6,50 @@
 namespace
 {
 
-/// @brief 验证 MCZ 候选枚举和最终写包校验均接受 WAV 音频。
-/// @return 两条共享规则均接受 WAV 时返回 true。
-bool testMczAcceptsWavAudio()
+/// @brief 验证 MCZ 候选枚举和最终写包校验仅接受声明的图片格式。
+/// @return PNG、JPG、JPEG、WebP 均通过且 BMP 被拒绝时返回 true。
+bool testMczKeepsImageAllowlist()
 {
     const auto& types =
         MMM::getPackageSupportedFileTypes(MMM::PackageFileType::Mcz);
-    if ( !MMM::isPackageResourceExtensionSupported(
-             types, MMM::PackageResourceType::Audio, ".wav") ) {
-        XERROR("MCZ audio rules rejected WAV");
+    for ( const auto extension : MMM::MCZ_PACKAGE_IMAGE_EXTENSIONS ) {
+        if ( !MMM::isPackageResourceExtensionSupported(
+                 types, MMM::PackageResourceType::Image, extension) ||
+             !MMM::isPackageCandidateExtensionSupported(types, extension) ) {
+            XERROR("MCZ image rules rejected supported format: {}", extension);
+            return false;
+        }
+    }
+
+    if ( MMM::isPackageResourceExtensionSupported(
+             types, MMM::PackageResourceType::Image, ".bmp") ||
+         MMM::isPackageCandidateExtensionSupported(types, ".bmp") ) {
+        XERROR("MCZ image rules unexpectedly accepted BMP");
         return false;
     }
-    if ( !MMM::isPackageCandidateExtensionSupported(types, ".WAV") ) {
-        XERROR("MCZ candidate rules rejected uppercase WAV");
-        return false;
-    }
-    return true;
+
+    return MMM::isPackageCandidateExtensionSupported(types, ".JPEG") &&
+           MMM::isPackageCandidateExtensionSupported(types, ".WEBP");
 }
 
-/// @brief 验证 MCZ 仍会拒绝未声明支持的音频格式。
-/// @return FLAC 未被误纳入 MCZ 时返回 true。
-bool testMczRejectsUnsupportedAudio()
+/// @brief 验证 MCZ 音频仅允许 WAV、OGG 和 MP3。
+/// @return 三种允许格式均通过且 FLAC 被拒绝时返回 true。
+bool testMczKeepsAudioAllowlist()
 {
     const auto& types =
         MMM::getPackageSupportedFileTypes(MMM::PackageFileType::Mcz);
+    for ( const auto extension : MMM::MCZ_PACKAGE_AUDIO_EXTENSIONS ) {
+        if ( !MMM::isPackageResourceExtensionSupported(
+                 types, MMM::PackageResourceType::Audio, extension) ||
+             !MMM::isPackageCandidateExtensionSupported(types, extension) ) {
+            XERROR("MCZ audio rules rejected supported format: {}", extension);
+            return false;
+        }
+    }
+
     if ( MMM::isPackageResourceExtensionSupported(
-             types, MMM::PackageResourceType::Audio, ".flac") ) {
+             types, MMM::PackageResourceType::Audio, ".flac") ||
+         MMM::isPackageCandidateExtensionSupported(types, ".flac") ) {
         XERROR("MCZ audio rules unexpectedly accepted FLAC");
         return false;
     }
@@ -42,7 +60,7 @@ bool testMczRejectsUnsupportedAudio()
 
 int main()
 {
-    return testMczAcceptsWavAudio() && testMczRejectsUnsupportedAudio()
+    return testMczKeepsImageAllowlist() && testMczKeepsAudioAllowlist()
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
 }

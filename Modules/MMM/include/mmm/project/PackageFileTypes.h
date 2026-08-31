@@ -61,8 +61,8 @@ inline constexpr std::array<std::string_view, 1> MCZ_PACKAGE_VIDEO_EXTENSIONS{
 };
 
 /// @brief MCZ 支持的图片扩展名。
-inline constexpr std::array<std::string_view, 2> MCZ_PACKAGE_IMAGE_EXTENSIONS{
-    ".png", ".jpg"
+inline constexpr std::array<std::string_view, 4> MCZ_PACKAGE_IMAGE_EXTENSIONS{
+    ".png", ".jpg", ".jpeg", ".webp"
 };
 
 /// @brief MCZ 支持的谱面扩展名。
