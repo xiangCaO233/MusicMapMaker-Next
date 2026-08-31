@@ -805,7 +805,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     const double snapshotPlaybackSpeed =
         Audio::AudioManager::instance().getPlaybackSpeed();
 
-    const bool  hasBeatmap = (m_ctx->currentBeatmap != nullptr);
+    const bool hasBeatmap = (m_ctx->currentBeatmap != nullptr);
+    // 快照只保存不可解引用的地址令牌，用于 UI 排除会话切换后的旧快照。
+    const std::uintptr_t snapshotBeatmapInstanceId =
+        reinterpret_cast<std::uintptr_t>(m_ctx->currentBeatmap.get());
     std::string snapshotBackgroundPath;
     bool        snapshotBackgroundIsVideo        = false;
     double      snapshotBackgroundVideoStartTime = 0.0;
@@ -932,6 +935,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->currentBeatIndex   = snapshotCurrentBeatIndex;
         snapshot->currentSv          = snapshotCurrentSv;
         snapshot->hasBeatmap         = hasBeatmap;
+        snapshot->beatmapInstanceId  = snapshotBeatmapInstanceId;
         snapshot->annotationRevision = m_ctx->annotationRenderCacheRevision;
         snapshot->lastActionMessage  = m_ctx->lastActionMessage;
         if ( cameraId == "Preview" ) {

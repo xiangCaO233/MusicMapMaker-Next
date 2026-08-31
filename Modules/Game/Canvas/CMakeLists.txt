@@ -124,3 +124,11 @@ mmm_add_test_executable(Canvas AnnotationDetailLayoutTest
 target_include_directories(AnnotationDetailLayoutTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AnnotationDetailLayoutTest COMMAND AnnotationDetailLayoutTest)
+
+# Timeline 独立表格快照状态是无图形依赖的纯状态机，覆盖菜单打开后的异步等待。
+mmm_add_test_executable(Canvas TimelineTableSnapshotStateTest
+                        tests/TimelineTableSnapshotStateTest.cpp)
+target_include_directories(TimelineTableSnapshotStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME TimelineTableSnapshotStateTest
+         COMMAND TimelineTableSnapshotStateTest)

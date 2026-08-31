@@ -3,6 +3,7 @@
 #endif
 
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimingTableFraction.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
@@ -25,6 +26,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <fmt/format.h>
 #include <imgui_internal.h>
 #include <mutex>
@@ -651,6 +653,26 @@ std::string_view getTimingPointsTableBeatmapKey(
         return snapshot.beatmapPathKey;
     }
     return snapshot.beatmapName;
+}
+
+/// @brief 判定 Timeline 表格当前取得的快照是否属于活动谱面。
+/// @param activeSession 当前活动会话观察指针。
+/// @param snapshot Timeline 当前快照观察指针。
+/// @return 无活动谱面时关闭，快照尚未追上时等待，身份一致时可绘制。
+/// @warning UI 热路径：每个打开的表格每帧调用，不复制共享所有权。
+TimelineTableSnapshotStatus getTimelineTableSnapshotStatus(
+    const Logic::BeatmapSession*          activeSession,
+    const Common::Render::RenderSnapshot* snapshot)
+{
+    const auto* activeBeatmap =
+        activeSession ? activeSession->getContext().currentBeatmap.get()
+                      : nullptr;
+    return resolveTimelineTableSnapshotStatus(
+        activeBeatmap != nullptr,
+        reinterpret_cast<std::uintptr_t>(activeBeatmap),
+        snapshot != nullptr,
+        snapshot && snapshot->hasBeatmap,
+        snapshot ? snapshot->beatmapInstanceId : 0);
 }
 
 /// @brief 获取批注表目标类型对应的翻译键。
@@ -1410,22 +1432,31 @@ void TimelineCanvas::renderAnnotationTableWindow()
         resetTable();
     };
 
-    auto&         engine      = Logic::EditorEngine::instance();
-    const int32_t activeIndex = engine.getActiveSessionIndex();
-    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-    if ( !activeEntry || activeEntry->isLogoPlaceholder ||
-         !activeEntry->session ) {
+    auto&                       engine = Logic::EditorEngine::instance();
+    TimelineTableSnapshotStatus snapshotStatus;
+    {
+        // 会话锁保证读取 currentBeatmap 地址令牌时不会与谱面切换并发。
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        const int32_t activeIndex = engine.getActiveSessionIndex();
+        const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+        if ( !activeEntry || activeEntry->isLogoPlaceholder ||
+             !activeEntry->session ) {
+            closeTableWindow();
+            return;
+        }
+        snapshotStatus = getTimelineTableSnapshotStatus(
+            activeEntry->session.get(), m_currentSnapshot);
+    }
+    if ( snapshotStatus == TimelineTableSnapshotStatus::Close ) {
         closeTableWindow();
         return;
     }
-    if ( !m_currentSnapshot ) return;
-    const std::string_view currentBeatmapKey =
-        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
-    if ( !activeEntry->beatmapPathKey.empty() &&
-         currentBeatmapKey != activeEntry->beatmapPathKey ) {
+    if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
         return;
     }
-    if ( !m_currentSnapshot->hasBeatmap ) return;
+    const std::string_view currentBeatmapKey =
+        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
     if ( currentBeatmapKey.empty() ) {
         closeTableWindow();
         return;
@@ -1719,22 +1750,31 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         finishKeepSpeedBinding();
     };
 
-    auto&         engine      = Logic::EditorEngine::instance();
-    const int32_t activeIndex = engine.getActiveSessionIndex();
-    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-    if ( !activeEntry || activeEntry->isLogoPlaceholder ||
-         !activeEntry->session ) {
+    auto&                       engine = Logic::EditorEngine::instance();
+    TimelineTableSnapshotStatus snapshotStatus;
+    {
+        // 会话锁保证读取 currentBeatmap 地址令牌时不会与谱面切换并发。
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        const int32_t activeIndex = engine.getActiveSessionIndex();
+        const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+        if ( !activeEntry || activeEntry->isLogoPlaceholder ||
+             !activeEntry->session ) {
+            closeTableWindow();
+            return;
+        }
+        snapshotStatus = getTimelineTableSnapshotStatus(
+            activeEntry->session.get(), m_currentSnapshot);
+    }
+    if ( snapshotStatus == TimelineTableSnapshotStatus::Close ) {
         closeTableWindow();
         return;
     }
-    if ( !m_currentSnapshot ) return;
-    const std::string_view currentBeatmapKey =
-        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
-    if ( !activeEntry->beatmapPathKey.empty() &&
-         currentBeatmapKey != activeEntry->beatmapPathKey ) {
+    if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
         return;
     }
-    if ( !m_currentSnapshot->hasBeatmap ) return;
+    const std::string_view currentBeatmapKey =
+        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
     if ( currentBeatmapKey.empty() ) {
         closeTableWindow();
         return;

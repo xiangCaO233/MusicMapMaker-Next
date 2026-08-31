@@ -583,6 +583,8 @@ struct RenderSnapshot {
 
     // 是否已加载谱面
     bool hasBeatmap{ false };
+    /// @brief 当前快照对应的谱面实例标识，仅用于进程内比较，禁止解引用。
+    std::uintptr_t beatmapInstanceId{ 0 };
     /// @brief 当前快照对应谱面的项目内或绝对路径键。
     std::string beatmapPathKey;
     std::string beatmapName;
@@ -753,6 +755,7 @@ struct RenderSnapshot {
         erasingObjectKind = ChartObjectKind::PlayerNote;
         erasingSubIndex   = -1;
         hasBeatmap        = false;
+        beatmapInstanceId = 0;
         beatmapPathKey.clear();
         beatmapName.clear();
         isDirty = false;
