@@ -132,7 +132,7 @@ float collaborationTimeToCanvasY(const Common::Render::RenderSnapshot& snapshot,
         collaborationAbsYAtTime(snapshot, snapshot.currentTime);
     const double targetAbsY = collaborationAbsYAtTime(snapshot, time);
     const double scale      = std::isfinite(snapshot.renderScaleY) &&
-                                      std::abs(snapshot.renderScaleY) > 1e-6F
+                                 std::abs(snapshot.renderScaleY) > 1e-6F
                                   ? static_cast<double>(snapshot.renderScaleY)
                                   : 1.0;
     return judgmentLineY -
@@ -416,8 +416,8 @@ void Basic2DCanvas::updateCollaborationViewports(
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     const auto  viewportRenderMode = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .collaborationViewportRenderMode;
+                                        .getEditorSettings()
+                                        .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
 
@@ -512,8 +512,7 @@ void Basic2DCanvas::updateCollaborationViewports(
         canvasSize.x,
         m_currentSnapshot->trackCount,
         m_currentSnapshot->bgmTrackCount,
-        layout.left,
-        layout.right,
+        layout,
         m_currentSnapshot->canvasHorizontalOffsetX,
         true,
         m_currentSnapshot->bmsEditingEnabled,
@@ -521,10 +520,10 @@ void Basic2DCanvas::updateCollaborationViewports(
         m_currentSnapshot->draftTrackCount,
         true);
     if ( !localLaneProjection.valid ) return;
+    // 独立辅助区可以互换顺序或留出空隙，统一取所有区域外包边界。
+    const auto contentBounds   = localLaneProjection.contentBounds();
     const auto horizontalRange = projectCollaborationViewportHorizontalRange(
-        localLaneProjection.player.leftX,
-        localLaneProjection.bgmRightX,
-        canvasSize.x);
+        contentBounds.leftX, contentBounds.rightX, canvasSize.x);
     if ( !horizontalRange ) return;
 
     /// @brief 判断远端视口是否需要绘制上方或下方离屏提示。
@@ -689,7 +688,7 @@ void Basic2DCanvas::updateCollaborationViewports(
                                       indicatorSlot,
                                       indicatorCounts[directionIndex])
                                       .value_or(centerX);
-        const float arrowX      = canvasScreenPosition.x + arrowLocalX;
+        const float arrowX = canvasScreenPosition.x + arrowLocalX;
         drawList->AddTriangleFilled({ arrowX, tipY },
                                     { arrowX - 8.0F, baseY },
                                     { arrowX + 8.0F, baseY },

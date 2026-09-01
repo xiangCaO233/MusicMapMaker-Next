@@ -8,6 +8,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/NoteLaneGeometry.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -44,29 +45,21 @@ const std::string DRAFT_NOTE_NODE_COLOR_KEY{ "draft_notes.note_node" };
 const std::string DRAFT_NOTE_ARROW_COLOR_KEY{ "draft_notes.note_flick_arrow" };
 
 /// @brief 解析音符主体当前应使用的轨道左边界。
-/// @param note 待渲染音符。
-/// @param interaction 音符交互状态；未参与交互时可为空。
+/// @param note 待解析音符。
 /// @param laneProjection 主画布统一轨道投影；非主画布时为空。
-/// @param fallbackLeftX 玩家轨道区左边界。
-/// @param singleTrackWidth 单轨宽度。
-/// @return 拖动时返回目标区域真实边界，否则返回连续玩家轨道坐标。
+/// @param fallbackLeftX 兼容玩家轨道区左边界。
+/// @param singleTrackWidth 兼容玩家单轨宽度。
+/// @return 音符所属草稿、玩家或 BGM 轨道的真实左边界。
 /// @warning 渲染热路径：基础层、发光层与命中盒均会调用，只允许常量坐标换算。
 float resolveNoteTrackLeftX(const NoteComponent&        note,
-                            const InteractionComponent* interaction,
                             const CanvasLaneProjection* laneProjection,
                             float fallbackLeftX, float singleTrackWidth)
 {
-    if ( interaction && interaction->isDragging && laneProjection ) {
-        const auto address = CanvasLaneAddress::fromAbsoluteTrack(
-            note.m_trackIndex,
-            laneProjection->playerLaneCount,
-            laneProjection->draftLaneCount);
-        if ( const auto bounds = laneProjection->bounds(address) ) {
-            return bounds->leftX;
-        }
-    }
-    return fallbackLeftX +
-           static_cast<float>(note.m_trackIndex) * singleTrackWidth;
+    return resolveNoteLaneGeometry(note.m_trackIndex,
+                                   laneProjection,
+                                   fallbackLeftX,
+                                   singleTrackWidth)
+        .leftX;
 }
 
 /// @brief 单个音符在 AbsY 空间覆盖的保守区间。
@@ -168,38 +161,37 @@ static double getCarrierEndAnchorTime(const NoteComponent& note,
 /// @brief 在草稿或玩家轨道物件锚点上方绘制绑定音效标签。
 /// @warning
 /// 主画布热路径：只处理调用方已剔除的物件锚点，不得访问文件系统或分配堆内存。
-static void renderBoundSampleLabelAt(Batcher& batcher, const ScrollCache* cache,
-                                     double currentAbsY, float noteH,
-                                     const ::MMM::AudioSampleBinding& binding,
-                                     double timestamp, int32_t trackIndex,
-                                     int32_t trackCount, float judgmentLineY,
-                                     float leftX, float topY, float bottomY,
-                                     float singleTrackW, float renderScaleY,
-                                     float noteScaleY, glm::vec4 color)
+static void renderBoundSampleLabelAt(
+    Batcher& batcher, const ScrollCache* cache, double currentAbsY, float noteH,
+    const ::MMM::AudioSampleBinding& binding, double timestamp,
+    int32_t trackIndex, float judgmentLineY, float leftX, float topY,
+    float bottomY, float singleTrackW, float renderScaleY, float noteScaleY,
+    glm::vec4 color, const CanvasLaneProjection* laneProjection)
 {
-    if ( binding.m_audioResourceId.empty() || trackIndex < -trackCount ||
-         trackIndex >= trackCount ) {
-        return;
-    }
+    if ( binding.m_audioResourceId.empty() ) return;
+    const auto lane = resolveNoteLaneGeometry(
+        trackIndex, laneProjection, leftX, singleTrackW);
+    const float laneScale   = lane.width / singleTrackW;
+    const float scaledNoteH = noteH * laneScale;
 
     const float screenY =
         judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                             timestamp, currentAbsY, timestamp)) *
                             renderScaleY;
-    if ( screenY + noteH * 0.5F < topY || screenY - noteH * 0.5F > bottomY ) {
+    if ( screenY + scaledNoteH * 0.5F < topY ||
+         screenY - scaledNoteH * 0.5F > bottomY ) {
         return;
     }
 
-    renderAudioObjectLabel(
-        batcher,
-        binding.m_audioResourceId,
-        binding.m_volume,
-        leftX + static_cast<float>(trackIndex) * singleTrackW,
-        screenY - noteH * 0.5F,
-        singleTrackW,
-        noteScaleY,
-        color,
-        batcher.snapshot->snapshotSysTime);
+    renderAudioObjectLabel(batcher,
+                           binding.m_audioResourceId,
+                           binding.m_volume,
+                           lane.leftX,
+                           screenY - scaledNoteH * 0.5F,
+                           lane.width,
+                           noteScaleY,
+                           color,
+                           batcher.snapshot->snapshotSysTime);
 }
 
 void NoteRenderSystem::renderNotes(
@@ -324,7 +316,8 @@ void NoteRenderSystem::renderNotes(
                                              judgmentLineY,
                                              leftX,
                                              singleTrackW,
-                                             renderScaleY);
+                                             renderScaleY,
+                                             laneProjection);
     }
 
     // 6. 顶层重叠遮罩；播放时同样生成，并随动态内容使用统一的 UI 补间偏移。
@@ -340,7 +333,8 @@ void NoteRenderSystem::renderNotes(
                                          topY,
                                          bottomY,
                                          singleTrackW,
-                                         renderScaleY);
+                                         renderScaleY,
+                                         laneProjection);
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
@@ -843,6 +837,25 @@ void NoteRenderSystem::generateNoteHitboxes(
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
         if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
+        // 命中盒按根节点与终点各自的真实轨道宽度和中心解析。
+        const float fallbackLeftX  = leftX;
+        const float fallbackTrackW = singleTrackW;
+        const float fallbackNoteW  = ctx.noteW;
+        const float fallbackNoteH  = ctx.noteH;
+        const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
+        auto        laneContext    = ctx;
+        laneContext.noteW          = laneGeometry.noteW;
+        laneContext.noteH          = laneGeometry.noteH;
+        const auto& ctx            = laneContext;
+        const float singleTrackW   = laneGeometry.width;
+        const float leftX =
+            laneGeometry.leftX -
+            static_cast<float>(note.m_trackIndex) * singleTrackW;
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
@@ -876,12 +889,18 @@ void NoteRenderSystem::generateNoteHitboxes(
 
         if ( !note.m_isSubNote ) {
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
-                float startTrack =
-                    std::min((float)note.m_trackIndex,
-                             (float)note.m_trackIndex + note.m_dtrack);
-                float drawW = std::abs(note.m_dtrack) * singleTrackW;
-                float bodyX =
-                    leftX + startTrack * singleTrackW + singleTrackW * 0.5f;
+                const auto flickEndpoint =
+                    resolveNoteLaneGeometry(note.m_trackIndex + note.m_dtrack,
+                                            laneProjection,
+                                            fallbackLeftX,
+                                            fallbackTrackW,
+                                            fallbackNoteW,
+                                            fallbackNoteH);
+                // 连接体命中范围覆盖根节点与终点的真实中心及中间间隙。
+                const float drawW =
+                    std::abs(flickEndpoint.centerX() - laneGeometry.centerX());
+                const float bodyX =
+                    std::min(laneGeometry.centerX(), flickEndpoint.centerX());
 
                 float drawH   = ctx.noteH;
                 auto  itBodyH = snapshot->uvMap.find(
@@ -931,6 +950,25 @@ void NoteRenderSystem::generateNoteHitboxes(
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
         if ( !SessionUtils::isNoteEditable(note, config.settings) ) continue;
+        // 命中盒按根节点与终点各自的真实轨道宽度和中心解析。
+        const float fallbackLeftX  = leftX;
+        const float fallbackTrackW = singleTrackW;
+        const float fallbackNoteW  = ctx.noteW;
+        const float fallbackNoteH  = ctx.noteH;
+        const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
+        auto        laneContext    = ctx;
+        laneContext.noteW          = laneGeometry.noteW;
+        laneContext.noteH          = laneGeometry.noteH;
+        const auto& ctx            = laneContext;
+        const float singleTrackW   = laneGeometry.width;
+        const float leftX =
+            laneGeometry.leftX -
+            static_cast<float>(note.m_trackIndex) * singleTrackW;
         float screenY =
             judgmentLineY -
             static_cast<float>(ctx.cache->getDisplayDelta(
@@ -947,11 +985,8 @@ void NoteRenderSystem::generateNoteHitboxes(
         float maxY = std::max(screenY, endY) + ctx.noteH;
         if ( minY > bottomY || maxY < topY ) continue;
 
-        const auto* interaction =
-            registry.try_get<const InteractionComponent>(entity);
         const float headX =
-            resolveNoteTrackLeftX(
-                note, interaction, laneProjection, leftX, singleTrackW) +
+            resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW) +
             (singleTrackW - ctx.noteW) * 0.5f;
 
         if ( !note.m_isSubNote && note.m_type != ::MMM::NoteType::POLYLINE ) {
@@ -965,12 +1000,19 @@ void NoteRenderSystem::generateNoteHitboxes(
                                            ctx.noteH });
 
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
+                const auto flickEndpoint =
+                    resolveNoteLaneGeometry(note.m_trackIndex + note.m_dtrack,
+                                            laneProjection,
+                                            fallbackLeftX,
+                                            fallbackTrackW,
+                                            fallbackNoteW,
+                                            fallbackNoteH);
                 TextureID arrowId = (note.m_dtrack < 0)
                                         ? TextureID::FlickArrowLeft
                                         : TextureID::FlickArrowRight;
                 auto  it = snapshot->uvMap.find(static_cast<uint32_t>(arrowId));
-                float arrowW = ctx.noteW;
-                float arrowH = ctx.noteH;
+                float arrowW = flickEndpoint.noteW;
+                float arrowH = flickEndpoint.noteH;
                 if ( it != snapshot->uvMap.end() ) {
                     float baseWRatio =
                         snapshot->uvMap.at(uint32_t(TextureID::Note)).z;
@@ -978,13 +1020,11 @@ void NoteRenderSystem::generateNoteHitboxes(
                         snapshot->uvMap.at(uint32_t(TextureID::Note)).w;
                     float wRatio = it->second.z / baseWRatio;
                     float hRatio = it->second.w / baseHRatio;
-                    arrowW       = ctx.noteW * wRatio;
-                    arrowH       = ctx.noteH * hRatio;
+                    arrowW       = flickEndpoint.noteW * wRatio;
+                    arrowH       = flickEndpoint.noteH * hRatio;
                 }
 
-                float arrowX =
-                    leftX + (note.m_trackIndex + note.m_dtrack) * singleTrackW +
-                    (singleTrackW - arrowW) * 0.5f;
+                const float arrowX = flickEndpoint.centerX() - arrowW * 0.5F;
 
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::FlickArrow,
@@ -1073,6 +1113,25 @@ void NoteRenderSystem::renderNoteBaseLayer(
         entt::entity entity    = *it;
         const auto&  transform = registry.get<const TransformComponent>(entity);
         const auto&  note      = registry.get<const NoteComponent>(entity);
+        // 根节点与跨区域端点都保留玩家连续投影作为 Preview 回退参数。
+        const float fallbackLeftX  = leftX;
+        const float fallbackTrackW = singleTrackW;
+        const float fallbackNoteW  = ctx.noteW;
+        const float fallbackNoteH  = ctx.noteH;
+        const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
+        auto        laneContext    = ctx;
+        laneContext.noteW          = laneGeometry.noteW;
+        laneContext.noteH          = laneGeometry.noteH;
+        const auto& ctx            = laneContext;
+        const float singleTrackW   = laneGeometry.width;
+        const float leftX =
+            laneGeometry.leftX -
+            static_cast<float>(note.m_trackIndex) * singleTrackW;
 
         // 处理拖拽/剪切时的视觉反馈；选中反馈由发光层按当前颜色绘制。
         float       alphaMul = 1.0f;
@@ -1092,8 +1151,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                   ctx.cache->getAbsY(note.m_timestamp),
                                   note.m_timestamp)) *
                               renderScaleY;
-        const float trackX  = resolveNoteTrackLeftX(
-            note, interaction, laneProjection, leftX, singleTrackW);
+        const float trackX =
+            resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
 
         // 草稿物件始终使用皮肤草稿色，避免玩家调色盘覆盖区域辨识度。
         glm::vec4 curColorNote =
@@ -1174,7 +1233,14 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 renderScaleY,
                 topY,
                 bottomY);
-        else if ( note.m_type == ::MMM::NoteType::FLICK )
+        else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+            const auto flickEndpoint =
+                resolveNoteLaneGeometry(note.m_trackIndex + note.m_dtrack,
+                                        laneProjection,
+                                        fallbackLeftX,
+                                        fallbackTrackW,
+                                        fallbackNoteW,
+                                        fallbackNoteH);
             NoteRenderSystem::renderFlick(
                 batcher,
                 note,
@@ -1184,11 +1250,13 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 screenY,
                 ctx.noteW,
                 ctx.noteH,
-                singleTrackW,
+                flickEndpoint.centerX(),
+                flickEndpoint.noteW,
+                flickEndpoint.noteH,
                 curColorHead,
                 curColorHoldBody,
                 curColorArrow);
-        else if ( note.m_type == ::MMM::NoteType::POLYLINE )
+        } else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(ctx.cache,
                                              batcher,
                                              note,
@@ -1197,11 +1265,10 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              ctx.currentAbsY,
                                              ctx.currentTime,
                                              judgmentLineY,
-                                             leftX,
-                                             rightX,
+                                             fallbackLeftX,
                                              topY,
                                              bottomY,
-                                             singleTrackW,
+                                             fallbackTrackW,
                                              renderScaleY,
                                              curColorHead,
                                              curColorHoldBody,
@@ -1209,7 +1276,10 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              curColorNode,
                                              curColorArrow,
                                              entity,
-                                             generateHitboxes);
+                                             generateHitboxes,
+                                             HoverPart::None,
+                                             -1,
+                                             laneProjection);
     }
 
     if ( showBoundSampleLabels ) {
@@ -1227,7 +1297,6 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              *note.m_sampleBinding,
                                              note.m_timestamp,
                                              note.m_trackIndex,
-                                             trackCount,
                                              judgmentLineY,
                                              leftX,
                                              topY,
@@ -1235,7 +1304,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              singleTrackW,
                                              renderScaleY,
                                              config.visual.noteScaleY,
-                                             labelColor);
+                                             labelColor,
+                                             laneProjection);
                 }
                 continue;
             }
@@ -1256,7 +1326,6 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                          *binding,
                                          subNote.timestamp,
                                          subNote.trackIndex,
-                                         trackCount,
                                          judgmentLineY,
                                          leftX,
                                          topY,
@@ -1264,7 +1333,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                          singleTrackW,
                                          renderScaleY,
                                          config.visual.noteScaleY,
-                                         labelColor);
+                                         labelColor,
+                                         laneProjection);
             }
         }
     }
@@ -1304,7 +1374,26 @@ void NoteRenderSystem::renderNoteGlowLayer(
         const auto&  transform = registry.get<const TransformComponent>(entity);
         const auto&  note      = registry.get<const NoteComponent>(entity);
         const auto&  ic = registry.get<const InteractionComponent>(entity);
-        float        screenY =
+        // 发光层逐端点复用基础层投影，避免描边回到根节点的连续轨宽。
+        const float fallbackLeftX  = leftX;
+        const float fallbackTrackW = singleTrackW;
+        const float fallbackNoteW  = ctx.noteW;
+        const float fallbackNoteH  = ctx.noteH;
+        const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
+        auto        laneContext    = ctx;
+        laneContext.noteW          = laneGeometry.noteW;
+        laneContext.noteH          = laneGeometry.noteH;
+        const auto& ctx            = laneContext;
+        const float singleTrackW   = laneGeometry.width;
+        const float leftX =
+            laneGeometry.leftX -
+            static_cast<float>(note.m_trackIndex) * singleTrackW;
+        float screenY =
             judgmentLineY -
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
@@ -1314,8 +1403,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                   ctx.cache->getAbsY(note.m_timestamp),
                                   note.m_timestamp)) *
                               renderScaleY;
-        const float trackX  = resolveNoteTrackLeftX(
-            note, &ic, laneProjection, leftX, singleTrackW);
+        const float trackX =
+            resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
         if ( ic.isSelected ) {
@@ -1379,7 +1468,14 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 topY,
                 bottomY,
                 glowPart);
-        else if ( note.m_type == ::MMM::NoteType::FLICK )
+        else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+            const auto flickEndpoint =
+                resolveNoteLaneGeometry(note.m_trackIndex + note.m_dtrack,
+                                        laneProjection,
+                                        fallbackLeftX,
+                                        fallbackTrackW,
+                                        fallbackNoteW,
+                                        fallbackNoteH);
             NoteRenderSystem::renderFlick(
                 glowBatcher,
                 note,
@@ -1389,12 +1485,14 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 screenY,
                 ctx.noteW,
                 ctx.noteH,
-                singleTrackW,
+                flickEndpoint.centerX(),
+                flickEndpoint.noteW,
+                flickEndpoint.noteH,
                 glowHead,
                 glowBody,
                 glowArrow,
                 glowPart);
-        else if ( note.m_type == ::MMM::NoteType::POLYLINE )
+        } else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(ctx.cache,
                                              glowBatcher,
                                              note,
@@ -1403,11 +1501,10 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              ctx.currentAbsY,
                                              ctx.currentTime,
                                              judgmentLineY,
-                                             leftX,
-                                             rightX,
+                                             fallbackLeftX,
                                              topY,
                                              bottomY,
-                                             singleTrackW,
+                                             fallbackTrackW,
                                              renderScaleY,
                                              glowHead,
                                              glowBody,
@@ -1417,7 +1514,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              entity,
                                              false,
                                              glowPart,
-                                             glowIdx);
+                                             glowIdx,
+                                             laneProjection);
     }
     glowBatcher.flush();
 }
@@ -1428,7 +1526,8 @@ void NoteRenderSystem::renderOverlapMasks(
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
     float leftX, float clipLeftX, float clipRightX, float topY, float bottomY,
-    float singleTrackW, float renderScaleY)
+    float singleTrackW, float renderScaleY,
+    const CanvasLaneProjection* laneProjection)
 {
     if ( !snapshot || !ctx.cache || noteEntities.size() < 2 ) return;
 
@@ -1517,6 +1616,14 @@ void NoteRenderSystem::renderOverlapMasks(
                                    time, ctx.currentAbsY, time)) *
                                    renderScaleY;
     };
+    // 遮罩必须复用音符所在区域的真实单轨几何，而不是玩家轨道宽度。
+    const auto laneForTrack = [&](std::int32_t track) {
+        return resolveNoteLaneGeometry(
+            track, laneProjection, leftX, singleTrackW);
+    };
+    const auto laneScaleForTrack = [&](std::int32_t track) {
+        return laneForTrack(track).width / singleTrackW;
+    };
 
     auto sameOwner = [](const OverlapItem& a, const OverlapItem& b) {
         return a.owner != entt::null && a.owner == b.owner;
@@ -1546,11 +1653,12 @@ void NoteRenderSystem::renderOverlapMasks(
     };
 
     auto appendPointMask = [&](double time, int track, float scale, int count) {
-        float w = ctx.noteW * scale;
-        float h = ctx.noteH * scale;
-        float x = leftX + static_cast<float>(track) * singleTrackW +
-                  (singleTrackW - w) * 0.5f;
-        float y = timeToY(time) - h * 0.5f;
+        const auto  lane      = laneForTrack(track);
+        const float laneScale = lane.width / singleTrackW;
+        const float w         = ctx.noteW * laneScale * scale;
+        const float h         = ctx.noteH * laneScale * scale;
+        const float x         = lane.leftX + (lane.width - w) * 0.5F;
+        const float y         = timeToY(time) - h * 0.5F;
         appendMask(x, y, w, h, count);
     };
 
@@ -1673,13 +1781,17 @@ void NoteRenderSystem::renderOverlapMasks(
 
                 int uniqueCount = countUniqueOwners(trackNotes, i, j);
                 if ( uniqueCount >= 2 ) {
-                    float y0 = timeToY(minTime);
-                    float y1 = timeToY(maxTime);
-                    float x  = leftX + trackNotes[i]->track * singleTrackW +
-                               (singleTrackW - ctx.noteW) * 0.5f;
-                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h  = std::abs(y0 - y1) + ctx.noteH;
-                    appendMask(x, y, ctx.noteW, h, uniqueCount);
+                    const auto  lane       = laneForTrack(trackNotes[i]->track);
+                    const float laneScale  = lane.width / singleTrackW;
+                    const float maskWidth  = ctx.noteW * laneScale;
+                    const float maskHeight = ctx.noteH * laneScale;
+                    const float y0         = timeToY(minTime);
+                    const float y1         = timeToY(maxTime);
+                    const float x =
+                        lane.leftX + (lane.width - maskWidth) * 0.5F;
+                    const float y = std::min(y0, y1) - maskHeight * 0.5F;
+                    const float h = std::abs(y0 - y1) + maskHeight;
+                    appendMask(x, y, maskWidth, h, uniqueCount);
                 }
             }
 
@@ -1712,14 +1824,15 @@ void NoteRenderSystem::renderOverlapMasks(
                 }
 
                 if ( owners.size() >= 2 ) {
-                    float w  = ctx.noteW * maxScale;
-                    float h0 = ctx.noteH * maxScale;
-                    float y0 = timeToY(minTime);
-                    float y1 = timeToY(maxTime);
-                    float x  = leftX + trackPoints[i].track * singleTrackW +
-                               (singleTrackW - w) * 0.5f;
-                    float y  = std::min(y0, y1) - h0 * 0.5f;
-                    float h  = std::abs(y0 - y1) + h0;
+                    const auto  lane      = laneForTrack(trackPoints[i].track);
+                    const float laneScale = lane.width / singleTrackW;
+                    const float w         = ctx.noteW * laneScale * maxScale;
+                    const float h0        = ctx.noteH * laneScale * maxScale;
+                    const float y0        = timeToY(minTime);
+                    const float y1        = timeToY(maxTime);
+                    const float x = lane.leftX + (lane.width - w) * 0.5F;
+                    const float y = std::min(y0, y1) - h0 * 0.5F;
+                    const float h = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1755,15 +1868,14 @@ void NoteRenderSystem::renderOverlapMasks(
 
         auto flushOpenMask = [&]() {
             if ( !hasOpenMask ) return;
-            float y0 = timeToY(openStart);
-            float y1 = timeToY(openEnd);
-            float x  = leftX + track * singleTrackW +
-                       (singleTrackW - verticalBodySize.x) * 0.5f;
-            appendMask(x,
-                       std::min(y0, y1),
-                       verticalBodySize.x,
-                       std::abs(y0 - y1),
-                       openCount);
+            const auto  lane      = laneForTrack(track);
+            const float laneScale = lane.width / singleTrackW;
+            const float bodyWidth = verticalBodySize.x * laneScale;
+            const float y0        = timeToY(openStart);
+            const float y1        = timeToY(openEnd);
+            const float x = lane.leftX + (lane.width - bodyWidth) * 0.5F;
+            appendMask(
+                x, std::min(y0, y1), bodyWidth, std::abs(y0 - y1), openCount);
             hasOpenMask = false;
             openCount   = 0;
         };
@@ -1824,14 +1936,18 @@ void NoteRenderSystem::renderOverlapMasks(
                 std::min(flickBodyMaxTrack(a), flickBodyMaxTrack(b));
             if ( overlapMax <= overlapMin ) continue;
 
-            float y0 = timeToY(a.startTime);
-            float y1 = timeToY(b.startTime);
-            float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                       singleTrackW * 0.5f;
-            float w =
-                static_cast<float>(overlapMax - overlapMin) * singleTrackW;
-            float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;
-            float h = std::abs(y0 - y1) + horizontalBodySize.y;
+            const auto  startLane   = laneForTrack(overlapMin);
+            const auto  endLane     = laneForTrack(overlapMax);
+            const float startCenter = startLane.leftX + startLane.width * 0.5F;
+            const float endCenter   = endLane.leftX + endLane.width * 0.5F;
+            const float bodyHeight =
+                horizontalBodySize.y * laneScaleForTrack(overlapMin);
+            const float y0 = timeToY(a.startTime);
+            const float y1 = timeToY(b.startTime);
+            const float x  = std::min(startCenter, endCenter);
+            const float w  = std::abs(endCenter - startCenter);
+            const float y  = std::min(y0, y1) - bodyHeight * 0.5F;
+            const float h  = std::abs(y0 - y1) + bodyHeight;
             appendMask(x, y, w, h, 2);
         }
     }
@@ -2021,6 +2137,7 @@ void NoteRenderSystem::renderOverlapMasks(
     if ( snapshot->overlapMasks.empty() ) return;
 
     Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
+    // 草稿区可能独立位于玩家区左侧，遮罩裁剪必须覆盖统一可见范围。
     overlayBatcher.setScissor(
         clipLeftX, topY, clipRightX - clipLeftX, bottomY - topY);
     overlayBatcher.setTexture(TextureID::None);
@@ -2034,12 +2151,28 @@ void NoteRenderSystem::renderOverlapMasks(
 }
 
 void NoteRenderSystem::renderBrushPreview(
-    RenderSnapshot* snapshot, const NoteRenderSystem::NoteRenderContext& ctx,
+    RenderSnapshot*                            snapshot,
+    const NoteRenderSystem::NoteRenderContext& baseContext,
     const Config::EditorConfig& config, Batcher& batcher, float judgmentLineY,
-    float leftX, float singleTrackW, float renderScaleY)
+    float fallbackLeftX, float fallbackTrackWidth, float renderScaleY,
+    const CanvasLaneProjection* laneProjection)
 {
     const auto& brush = snapshot->brush;
     if ( !brush.isActive ) return;
+
+    // 笔刷预览按目标草稿/玩家区域物化局部尺寸，不依赖主轨道宽度。
+    const auto laneGeometry  = resolveNoteLaneGeometry(brush.track,
+                                                       laneProjection,
+                                                       fallbackLeftX,
+                                                       fallbackTrackWidth,
+                                                       baseContext.noteW,
+                                                       baseContext.noteH);
+    auto       ctx           = baseContext;
+    ctx.noteW                = laneGeometry.noteW;
+    ctx.noteH                = laneGeometry.noteH;
+    const float singleTrackW = laneGeometry.width;
+    const float leftX =
+        laneGeometry.leftX - static_cast<float>(brush.track) * singleTrackW;
 
     double noteAbsY = ctx.cache->getAbsY(brush.time);
     float  screenY =
@@ -2057,7 +2190,6 @@ void NoteRenderSystem::renderBrushPreview(
     tempNote.m_dtrack       = brush.dtrack;
     tempNote.m_isDraft      = brush.track < 0;
     tempNote.m_customColors = brush.customColors;
-
     glm::vec4 previewNote =
         tempNote.m_isDraft
             ? ctx.colorDraftTap
@@ -2120,6 +2252,13 @@ void NoteRenderSystem::renderBrushPreview(
                                      0.0f,
                                      judgmentLineY * 2.0f);
     } else if ( brush.type == ::MMM::NoteType::FLICK ) {
+        const auto flickEndpoint =
+            resolveNoteLaneGeometry(brush.track + brush.dtrack,
+                                    laneProjection,
+                                    fallbackLeftX,
+                                    fallbackTrackWidth,
+                                    baseContext.noteW,
+                                    baseContext.noteH);
         NoteRenderSystem::renderFlick(
             batcher,
             tempNote,
@@ -2129,7 +2268,9 @@ void NoteRenderSystem::renderBrushPreview(
             screenY,
             ctx.noteW,
             ctx.noteH,
-            singleTrackW,
+            flickEndpoint.centerX(),
+            flickEndpoint.noteW,
+            flickEndpoint.noteH,
             previewHead,
             previewBody,
             previewArrow);
@@ -2140,7 +2281,6 @@ void NoteRenderSystem::renderBrushPreview(
             tempNote.m_trackIndex = tempNote.m_subNotes.front().trackIndex;
         }
 
-        float rightX  = leftX + snapshot->trackCount * singleTrackW;
         float topY    = 0.0f;
         float bottomY = judgmentLineY * 2.0f;  // 简单包围盒
 
@@ -2152,17 +2292,21 @@ void NoteRenderSystem::renderBrushPreview(
                                          ctx.currentAbsY,
                                          ctx.currentTime,
                                          judgmentLineY,
-                                         leftX,
-                                         rightX,
+                                         fallbackLeftX,
                                          topY,
                                          bottomY,
-                                         singleTrackW,
+                                         fallbackTrackWidth,
                                          renderScaleY,
                                          previewHead,
                                          previewBody,
                                          previewEnd,
                                          previewNode,
-                                         previewArrow);
+                                         previewArrow,
+                                         entt::null,
+                                         false,
+                                         HoverPart::None,
+                                         -1,
+                                         laneProjection);
     } else {
         // 兜底调试绘制。
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;

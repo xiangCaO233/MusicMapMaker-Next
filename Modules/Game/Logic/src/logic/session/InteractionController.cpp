@@ -67,8 +67,14 @@ struct SelectionScreenContext {
     /// @brief 轨道区左边界。
     float leftX{ 0.0f };
 
-    /// @brief 单轨宽度。
+    /// @brief 玩家单轨宽度，Preview 与兼容计算继续使用。
     float singleTrackW{ 0.0f };
+
+    /// @brief 主画布草稿、玩家与 BGM 区域统一横向投影。
+    CanvasLaneProjection laneProjection;
+
+    /// @brief 当前上下文是否应按统一区域投影解析横坐标。
+    bool usesLaneProjection{ false };
 
     /// @brief 当前视口纵向渲染缩放。
     float renderScaleY{ 1.0f };
@@ -191,8 +197,7 @@ void detachMarqueeSelection(SessionContext& ctx)
         calculateCanvasLaneProjection(camera->second.viewportWidth,
                                       ctx.trackCount,
                                       ctx.bgmTrackCount,
-                                      ctx.lastConfig.visual.trackLayout.left,
-                                      ctx.lastConfig.visual.trackLayout.right,
+                                      ctx.lastConfig.visual.trackLayout,
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
@@ -316,7 +321,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -390,6 +395,21 @@ SelectionScreenContext makeSelectionScreenContext(
         cameraIt->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
     screen.leftX        = leftX;
     screen.singleTrackW = singleTrackW;
+    if ( SessionUtils::isMainCanvasCameraId(cameraId) ) {
+        // 主画布框选必须与独立草稿/BGM 区域使用同一投影。
+        screen.laneProjection = calculateCanvasLaneProjection(
+            cameraIt->second.viewportWidth,
+            ctx.trackCount,
+            ctx.bgmTrackCount,
+            ctx.lastConfig.visual.trackLayout,
+            cameraIt->second.horizontalOffsetX,
+            true,
+            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.draftTrackCount,
+            true);
+        screen.usesLaneProjection = screen.laneProjection.valid;
+    }
     screen.renderScaleY =
         calculateMarqueeRenderScaleY(ctx, cameraIt->second, cameraId);
     screen.noteW = singleTrackW * ctx.lastConfig.visual.noteScaleX;
@@ -397,7 +417,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                         std::abs(screen.renderScaleY) > 1e-6f;
+                   std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -446,13 +466,40 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1 = screen.judgmentLineY -
-                      static_cast<float>(startAbsY - screen.currentAbsY) *
-                          screen.renderScaleY;
-    const float  y2 =
+    const float  y1        = screen.judgmentLineY -
+                     static_cast<float>(startAbsY - screen.currentAbsY) *
+                         screen.renderScaleY;
+    const float y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
+}
+
+/// @brief 框选计算使用的单轨横向几何。
+struct SelectionLaneGeometry {
+    /// @brief 当前轨道左边界。
+    float leftX{ 0.0F };
+    /// @brief 当前区域单轨宽度。
+    float width{ 0.0F };
+};
+
+/// @brief 按绝对轨道解析框选对象所在区域。
+/// @warning 逻辑热路径：每个候选对象固定次数调用，只做常量级投影查询。
+SelectionLaneGeometry selectionLaneGeometry(
+    const SelectionScreenContext& screen, std::int32_t absoluteTrack)
+{
+    if ( screen.usesLaneProjection ) {
+        const auto address = CanvasLaneAddress::fromAbsoluteTrack(
+            absoluteTrack,
+            screen.laneProjection.playerLaneCount,
+            screen.laneProjection.draftLaneCount);
+        if ( const auto bounds = screen.laneProjection.bounds(address) ) {
+            return { bounds->leftX, bounds->rightX - bounds->leftX };
+        }
+    }
+    return { screen.leftX +
+                 static_cast<float>(absoluteTrack) * screen.singleTrackW,
+             screen.singleTrackW };
 }
 
 /// @brief 计算某个轨道时间点上的纹理矩形。
@@ -463,10 +510,13 @@ SelectionRect makeTextureRect(const SelectionScreenContext& screen,
 {
     if ( !screen.valid || !screen.uvMap ) return {};
 
-    const glm::vec2 size =
-        getTextureDrawSize(*screen.uvMap, id, screen.noteW, screen.noteH);
-    const float x = screen.leftX + track * screen.singleTrackW +
-                    (screen.singleTrackW - size.x) * 0.5f;
+    const auto lane =
+        selectionLaneGeometry(screen, static_cast<std::int32_t>(track));
+    const float     laneScale = lane.width / screen.singleTrackW;
+    const glm::vec2 size      = getTextureDrawSize(
+        *screen.uvMap, id, screen.noteW * laneScale, screen.noteH * laneScale);
+    // 纹理矩形以真实区域单轨居中，框选命中与渲染完全对齐。
+    const float x = lane.leftX + (lane.width - size.x) * 0.5F;
     const float y = timeToScreenY(screen, time, anchorTime);
     return makeRect(x, y - size.y * 0.5f, x + size.x, y + size.y * 0.5f);
 }
@@ -480,15 +530,15 @@ void includeCarrierRect(SelectionRect&                target,
 {
     if ( !screen.valid || !screen.uvMap ) return;
 
+    const auto  startLane = selectionLaneGeometry(screen, trackIndex);
+    const float laneScale = startLane.width / screen.singleTrackW;
     if ( type == ::MMM::NoteType::HOLD && duration > 0.0 ) {
         const glm::vec2 bodySize =
             getTextureDrawSize(*screen.uvMap,
                                TextureID::HoldBodyVertical,
-                               screen.noteW,
-                               screen.noteH);
-        const float x  = screen.leftX +
-                         static_cast<float>(trackIndex) * screen.singleTrackW +
-                         (screen.singleTrackW - bodySize.x) * 0.5f;
+                               screen.noteW * laneScale,
+                               screen.noteH * laneScale);
+        const float x = startLane.leftX + (startLane.width - bodySize.x) * 0.5F;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
             screen,
@@ -496,22 +546,21 @@ void includeCarrierRect(SelectionRect&                target,
             carrierEndAnchorTime(screen, type, timestamp, duration));
         includeRect(target, makeRect(x, sy, x + bodySize.x, ey));
     } else if ( type == ::MMM::NoteType::FLICK && dtrack != 0 ) {
+        const auto endLane = selectionLaneGeometry(screen, trackIndex + dtrack);
         const glm::vec2 bodySize =
             getTextureDrawSize(*screen.uvMap,
                                TextureID::HoldBodyHorizontal,
-                               screen.noteW,
-                               screen.noteH);
-        const float startTrack =
-            std::min(static_cast<float>(trackIndex),
-                     static_cast<float>(trackIndex + dtrack));
-        const float x = screen.leftX + startTrack * screen.singleTrackW +
-                        screen.singleTrackW * 0.5f;
-        const float y = timeToScreenY(screen, timestamp, timestamp);
+                               screen.noteW * laneScale,
+                               screen.noteH * laneScale);
+        // Flick 主体跨越两个真实轨道中心，支持跨区域拖动后的命中。
+        const float startCenter = startLane.leftX + startLane.width * 0.5F;
+        const float endCenter   = endLane.leftX + endLane.width * 0.5F;
+        const float y           = timeToScreenY(screen, timestamp, timestamp);
         includeRect(target,
-                    makeRect(x,
-                             y - bodySize.y * 0.5f,
-                             x + std::abs(dtrack) * screen.singleTrackW,
-                             y + bodySize.y * 0.5f));
+                    makeRect(std::min(startCenter, endCenter),
+                             y - bodySize.y * 0.5F,
+                             std::max(startCenter, endCenter),
+                             y + bodySize.y * 0.5F));
     }
 }
 
@@ -524,19 +573,28 @@ void includePolylineTransitionRect(SelectionRect&                target,
 {
     if ( !screen.valid || !screen.uvMap ) return;
 
-    const glm::vec2 bodySize = getTextureDrawSize(
-        *screen.uvMap, TextureID::HoldBodyVertical, screen.noteW, screen.noteH);
-    const float currentEndTrack = static_cast<float>(current.trackIndex) +
-                                  (current.type == ::MMM::NoteType::FLICK
-                                       ? static_cast<float>(current.dtrack)
-                                       : 0.0f);
-    const float currentX        = screen.leftX +
-                                  currentEndTrack * screen.singleTrackW +
-                                  (screen.singleTrackW - bodySize.x) * 0.5f;
+    const auto currentEndTrack =
+        current.trackIndex +
+        (current.type == ::MMM::NoteType::FLICK ? current.dtrack : 0);
+    const auto  currentLane  = selectionLaneGeometry(screen, currentEndTrack);
+    const auto  nextLane     = selectionLaneGeometry(screen, next.trackIndex);
+    const float currentScale = currentLane.width / screen.singleTrackW;
+    const float nextScale    = nextLane.width / screen.singleTrackW;
+    const glm::vec2 currentBodySize =
+        getTextureDrawSize(*screen.uvMap,
+                           TextureID::HoldBodyVertical,
+                           screen.noteW * currentScale,
+                           screen.noteH * currentScale);
+    const glm::vec2 nextBodySize =
+        getTextureDrawSize(*screen.uvMap,
+                           TextureID::HoldBodyVertical,
+                           screen.noteW * nextScale,
+                           screen.noteH * nextScale);
+    // 连接段两端分别按所属区域的真实宽度居中。
+    const float currentX =
+        currentLane.leftX + (currentLane.width - currentBodySize.x) * 0.5F;
     const float nextX =
-        screen.leftX +
-        static_cast<float>(next.trackIndex) * screen.singleTrackW +
-        (screen.singleTrackW - bodySize.x) * 0.5f;
+        nextLane.leftX + (nextLane.width - nextBodySize.x) * 0.5F;
     const double currentEndTime =
         carrierEndTime(current.type, current.timestamp, current.duration);
     const double currentEndAnchorTime = carrierEndAnchorTime(
@@ -544,11 +602,12 @@ void includePolylineTransitionRect(SelectionRect&                target,
     const float sy =
         timeToScreenY(screen, currentEndTime, currentEndAnchorTime);
     const float ey = timeToScreenY(screen, next.timestamp, next.timestamp);
-    includeRect(target,
-                makeRect(std::min(currentX, nextX),
-                         std::min(sy, ey),
-                         std::max(currentX, nextX) + bodySize.x,
-                         std::max(sy, ey)));
+    includeRect(
+        target,
+        makeRect(std::min(currentX, nextX),
+                 std::min(sy, ey),
+                 std::max(currentX + currentBodySize.x, nextX + nextBodySize.x),
+                 std::max(sy, ey)));
 }
 
 /// @brief 计算普通物件的屏幕选择包围盒。
@@ -718,12 +777,12 @@ SelectionRect makeSampleScreenRect(const SampleComponent&        sample,
     SelectionRect rect;
     if ( !screen.valid ) return rect;
 
-    const float laneWidth  = screen.singleTrackW;
+    const auto lane = selectionLaneGeometry(
+        screen, static_cast<std::int32_t>(sample.m_track));
+    const float laneWidth  = lane.width;
     const float bodyWidth  = std::max(12.0F, laneWidth * 0.78F);
     const float bodyHeight = std::clamp(laneWidth * 0.24F, 16.0F, 28.0F);
-    const float bodyX      = screen.leftX +
-                             static_cast<float>(sample.m_track) * laneWidth +
-                             (laneWidth - bodyWidth) * 0.5F;
+    const float bodyX      = lane.leftX + (laneWidth - bodyWidth) * 0.5F;
     const float anchorY =
         timeToScreenY(screen, sample.m_timestamp, sample.m_timestamp);
     includeRect(rect,
@@ -735,9 +794,8 @@ SelectionRect makeSampleScreenRect(const SampleComponent&        sample,
     const double effectiveTime = sample.effectiveTime();
     const float  effectiveY =
         timeToScreenY(screen, effectiveTime, effectiveTime);
-    const float handleSize = std::clamp(laneWidth * 0.12F, 8.0F, 14.0F);
-    const float handleCenterX =
-        screen.leftX + (static_cast<float>(sample.m_track) + 0.82F) * laneWidth;
+    const float handleSize    = std::clamp(laneWidth * 0.12F, 8.0F, 14.0F);
+    const float handleCenterX = lane.leftX + 0.82F * laneWidth;
     includeRect(rect,
                 makeRect(handleCenterX - handleSize * 0.5F,
                          effectiveY - handleSize * 0.5F,
@@ -856,13 +914,13 @@ bool collectMarqueeBoxCandidates(
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedTopY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const double absB   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedBottomY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA          = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedTopY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const double absB = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedBottomY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -977,13 +1035,13 @@ bool collectMarqueeBoxSampleCandidates(
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedTopY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const double absB   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedBottomY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const auto   ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA          = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedTopY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const double absB = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedBottomY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -1221,9 +1279,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         return;
     }
 
-    const auto* project = m_ctx.collaborationProject
-                              ? m_ctx.collaborationProject.get()
-                              : EditorEngine::instance().getCurrentProject();
+    const auto* project     = m_ctx.collaborationProject
+                                  ? m_ctx.collaborationProject.get()
+                                  : EditorEngine::instance().getCurrentProject();
     const auto& beatmapPath = m_ctx.currentBeatmap->m_baseMapMetadata.map_path;
     const auto* resource =
         project ? ProjectResourceService::findAudioResourceForReference(
@@ -1248,8 +1306,7 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         camera.viewportWidth,
         m_ctx.trackCount,
         m_ctx.bgmTrackCount,
-        m_ctx.lastConfig.visual.trackLayout.left,
-        m_ctx.lastConfig.visual.trackLayout.right,
+        m_ctx.lastConfig.visual.trackLayout,
         camera.horizontalOffsetX,
         true,
         m_ctx.lastConfig.settings.enableBmsEditing,
@@ -1314,9 +1371,9 @@ void InteractionController::handleCommand(
         return;
     }
 
-    const auto* project = m_ctx.collaborationProject
-                              ? m_ctx.collaborationProject.get()
-                              : EditorEngine::instance().getCurrentProject();
+    const auto*                 project = m_ctx.collaborationProject
+                                              ? m_ctx.collaborationProject.get()
+                                              : EditorEngine::instance().getCurrentProject();
     const std::filesystem::path beatmapPath =
         m_ctx.currentBeatmap ? m_ctx.currentBeatmap->m_baseMapMetadata.map_path
                              : std::filesystem::path{};

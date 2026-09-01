@@ -87,8 +87,7 @@ constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
         calculateCanvasLaneProjection(camera->second.viewportWidth,
                                       ctx.trackCount,
                                       ctx.bgmTrackCount,
-                                      ctx.lastConfig.visual.trackLayout.left,
-                                      ctx.lastConfig.visual.trackLayout.right,
+                                      ctx.lastConfig.visual.trackLayout,
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
@@ -876,9 +875,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
-    bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
-                               m_ctx->brushState.isActive ||
-                               m_ctx->eraserState.isActive;
+    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+                         m_ctx->brushState.isActive ||
+                         m_ctx->eraserState.isActive;
     const bool isVisualAnimationActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;

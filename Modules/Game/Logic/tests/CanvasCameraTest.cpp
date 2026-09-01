@@ -478,8 +478,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -885,6 +885,60 @@ bool testUnifiedLaneProjection()
     return true;
 }
 
+/// @brief 验证草稿、批注与 BGM 区域使用独立 X 和宽度投影。
+/// @return 区域边界、轨道拾取、空隙和相机偏移均符合配置时返回 true。
+bool testIndependentAuxiliaryLaneProjection()
+{
+    MMM::Config::TrackLayout layout;
+    layout.left             = 0.1F;
+    layout.right            = 0.5F;
+    layout.draftLanes.left  = -0.4F;
+    layout.draftLanes.width = 0.05F;
+    layout.annotation.left  = 0.6F;
+    layout.annotation.width = 0.04F;
+    layout.bgmLanes.left    = 0.75F;
+    layout.bgmLanes.width   = 0.08F;
+
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 2, layout, 20.0F, true, true, true);
+    const auto draft =
+        projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, 2U });
+    const auto bgm = projection.bounds({ MMM::Logic::CanvasLaneKind::Bgm, 1U });
+    const auto draftHit       = projection.laneAt(-275.0F);
+    const auto bgmHit         = projection.laneAt(875.0F);
+    const auto draftVisible   = projection.visibleDraftRange(-330.0F, -220.0F);
+    const auto bgmVisible     = projection.visibleBgmRange(800.0F, 930.0F);
+    const auto contentBounds  = projection.contentBounds();
+    const auto nearestGapLane = projection.nearestLane(700.0F);
+
+    if ( !projection.valid || !near(projection.draftLaneWidth, 50.0) ||
+         !near(projection.draftLeftX, -380.0) ||
+         !near(projection.draftRightX, -180.0) || !draft ||
+         !near(draft->leftX, -280.0) || !near(draft->rightX, -230.0) ||
+         !near(projection.annotationLeftX, 620.0) ||
+         !near(projection.annotationRightX, 660.0) ||
+         !near(projection.bgmLaneWidth, 80.0) ||
+         !near(projection.bgmLeftX, 770.0) ||
+         !near(projection.bgmRightX, 1010.0) || !bgm ||
+         !near(bgm->leftX, 850.0) || !near(bgm->rightX, 930.0) ||
+         !near(contentBounds.leftX, -380.0) ||
+         !near(contentBounds.rightX, 1010.0) ) {
+        XERROR("Independent auxiliary lane geometry was not projected");
+        return false;
+    }
+    // 独立区域之间允许留空；命中与可见范围必须分别按自身宽度计算。
+    return draftHit && draftHit->kind == MMM::Logic::CanvasLaneKind::Draft &&
+           draftHit->index == 2U && bgmHit &&
+           bgmHit->kind == MMM::Logic::CanvasLaneKind::Bgm &&
+           bgmHit->index == 1U && !projection.laneAt(700.0F) &&
+           !projection.laneAt(630.0F) && !projection.nearestLane(630.0F) &&
+           nearestGapLane &&
+           nearestGapLane->kind == MMM::Logic::CanvasLaneKind::Bgm &&
+           nearestGapLane->index == 0U && draftVisible &&
+           draftVisible->first == 1U && draftVisible->second == 4U &&
+           bgmVisible && bgmVisible->first == 0U && bgmVisible->second == 2U;
+}
+
 /// @brief 验证草稿持久轨道数量独立于玩家键数并始终保留最左追加轨。
 /// @return 追加轨映射、扩轨后原轨道屏幕位置和反向地址均保持稳定时返回 true。
 bool testDynamicDraftAppendLaneProjection()
@@ -1166,7 +1220,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                       .view<const MMM::Logic::NoteComponent>();
+                                    .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -1258,25 +1312,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.013,
-            .duration   = 0.241,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 1.254,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.254,
-            .duration   = 0.246,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
     };
 
@@ -2885,25 +2939,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -4387,7 +4441,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -4461,11 +4515,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -4784,6 +4838,7 @@ int main()
                    testBrushCreatesDraftNote() &&
                    testTrackProjectionUsesCameraOffset() &&
                    testUnifiedLaneProjection() &&
+                   testIndependentAuxiliaryLaneProjection() &&
                    testDynamicDraftAppendLaneProjection() &&
                    testDraftLaneReleaseGateHidesDraftArea() &&
                    testProjectDraftLaneSharingAndIsolation() &&

@@ -1,8 +1,11 @@
 #pragma once
 
+#include "config/visual/TrackLayoutConfig.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -154,6 +157,9 @@ struct CanvasLaneProjection {
     /// @brief 草稿轨道区右边界。
     float draftRightX{ 0.0F };
 
+    /// @brief 单条草稿轨道宽度。
+    float draftLaneWidth{ 0.0F };
+
     /// @brief 玩家轨道区投影。
     CanvasTrackProjection player;
 
@@ -175,6 +181,9 @@ struct CanvasLaneProjection {
     /// @brief BGM 轨道区右边界。
     float bgmRightX{ 0.0F };
 
+    /// @brief 单条 BGM 轨道宽度。
+    float bgmLaneWidth{ 0.0F };
+
     /// @brief 投影是否有效。
     bool valid{ false };
 
@@ -187,9 +196,10 @@ struct CanvasLaneProjection {
         if ( !valid ) return std::nullopt;
         if ( address.kind == CanvasLaneKind::Draft ) {
             if ( address.index >= draftLaneCount ) return std::nullopt;
-            const float left = draftLeftX + static_cast<float>(address.index) *
-                                                player.singleTrackWidth;
-            return CanvasLaneBounds{ left, left + player.singleTrackWidth };
+            // 草稿轨独立宽度用于渲染、拾取与拖动的同一边界。
+            const float left =
+                draftLeftX + static_cast<float>(address.index) * draftLaneWidth;
+            return CanvasLaneBounds{ left, left + draftLaneWidth };
         }
         if ( address.kind == CanvasLaneKind::Player ) {
             if ( address.index >= playerLaneCount ) return std::nullopt;
@@ -199,9 +209,22 @@ struct CanvasLaneProjection {
             return CanvasLaneBounds{ left, left + player.singleTrackWidth };
         }
         if ( address.index >= bgmLaneCount ) return std::nullopt;
-        const float left = bgmLeftX + static_cast<float>(address.index) *
-                                          player.singleTrackWidth;
-        return CanvasLaneBounds{ left, left + player.singleTrackWidth };
+        // BGM 轨道不再借用玩家单轨宽度。
+        const float left =
+            bgmLeftX + static_cast<float>(address.index) * bgmLaneWidth;
+        return CanvasLaneBounds{ left, left + bgmLaneWidth };
+    }
+
+    /// @brief 获取玩家、草稿、批注与 BGM 区域共同覆盖的横向范围。
+    /// @return 不依赖各区域左右顺序的最小外包边界。
+    [[nodiscard]] CanvasLaneBounds contentBounds() const
+    {
+        // 独立布局允许任意重排，不能再把 Draft/BGM 固定视为左右端点。
+        return {
+            std::min({ draftLeftX, player.leftX, annotationLeftX, bgmLeftX }),
+            std::max(
+                { draftRightX, player.rightX, annotationRightX, bgmRightX })
+        };
     }
 
     /// @brief 将横坐标换算为统一轨道地址。
@@ -209,33 +232,73 @@ struct CanvasLaneProjection {
     /// @return 位于玩家区或当前 BGM 区时返回对应地址。
     [[nodiscard]] std::optional<CanvasLaneAddress> laneAt(float x) const
     {
-        if ( !valid || !std::isfinite(x) || x < draftLeftX || x >= bgmRightX ) {
+        if ( !valid || !std::isfinite(x) ) return std::nullopt;
+        // 批注区优先排除，独立移动后也不会误判为重叠轨道。
+        if ( x >= annotationLeftX && x < annotationRightX ) {
             return std::nullopt;
         }
-        if ( x < player.leftX ) {
-            const auto index = static_cast<std::uint32_t>(
-                std::floor((x - draftLeftX) / player.singleTrackWidth));
-            if ( index < draftLaneCount ) {
-                return CanvasLaneAddress{ CanvasLaneKind::Draft, index };
-            }
-            return std::nullopt;
-        }
-        if ( x < player.rightX ) {
+        // 玩家区优先于辅助轨，保证错误重叠配置下主编辑区仍可操作。
+        if ( player.contains(x) ) {
             const auto index = static_cast<std::uint32_t>(
                 std::floor((x - player.leftX) / player.singleTrackWidth));
             if ( index < playerLaneCount ) {
                 return CanvasLaneAddress{ CanvasLaneKind::Player, index };
             }
-            return std::nullopt;
         }
-        if ( x < annotationRightX ) return std::nullopt;
-
-        const auto index = static_cast<std::uint32_t>(
-            std::floor((x - bgmLeftX) / player.singleTrackWidth));
-        if ( index < bgmLaneCount ) {
-            return CanvasLaneAddress{ CanvasLaneKind::Bgm, index };
+        // 草稿区与 BGM 区分别按自身宽度换算，允许区域之间存在空隙。
+        if ( x >= draftLeftX && x < draftRightX ) {
+            const auto index = static_cast<std::uint32_t>(
+                std::floor((x - draftLeftX) / draftLaneWidth));
+            if ( index < draftLaneCount ) {
+                return CanvasLaneAddress{ CanvasLaneKind::Draft, index };
+            }
+        }
+        if ( x >= bgmLeftX && x < bgmRightX ) {
+            const auto index = static_cast<std::uint32_t>(
+                std::floor((x - bgmLeftX) / bgmLaneWidth));
+            if ( index < bgmLaneCount ) {
+                return CanvasLaneAddress{ CanvasLaneKind::Bgm, index };
+            }
         }
         return std::nullopt;
+    }
+
+    /// @brief 将空隙或区域外横坐标吸附到最近的合法轨道。
+    /// @param x 画布局部逻辑横坐标。
+    /// @return 最近轨道；批注区、非有限坐标或无轨道时返回空。
+    [[nodiscard]] std::optional<CanvasLaneAddress> nearestLane(float x) const
+    {
+        if ( const auto direct = laneAt(x) ) return direct;
+        if ( !valid || !std::isfinite(x) ||
+             (x >= annotationLeftX && x < annotationRightX) ) {
+            return std::nullopt;
+        }
+
+        std::optional<CanvasLaneAddress> nearest;
+        float      distance = std::numeric_limits<float>::infinity();
+        const auto consider = [&](CanvasLaneKind kind,
+                                  std::uint32_t  count,
+                                  float          left,
+                                  float          right) {
+            if ( count == 0U || right <= left ) return;
+            const float candidateDistance =
+                x < left ? left - x : (x >= right ? x - right : 0.0F);
+            if ( candidateDistance >= distance ) return;
+            // 区域内部空隙理论上不存在；这里仍按最近端点做防御性处理。
+            const std::uint32_t index =
+                x < left ? 0U : (x >= right ? count - 1U : 0U);
+            nearest  = CanvasLaneAddress{ kind, index };
+            distance = candidateDistance;
+        };
+        // 平距时沿用拾取优先级：玩家、草稿、BGM。
+        consider(CanvasLaneKind::Player,
+                 playerLaneCount,
+                 player.leftX,
+                 player.rightX);
+        consider(
+            CanvasLaneKind::Draft, draftLaneCount, draftLeftX, draftRightX);
+        consider(CanvasLaneKind::Bgm, bgmLaneCount, bgmLeftX, bgmRightX);
+        return nearest;
     }
 
     /// @brief 计算视口内可见的草稿轨道索引半开区间。
@@ -256,14 +319,14 @@ struct CanvasLaneProjection {
             return std::nullopt;
         }
 
-        const auto begin = static_cast<std::uint32_t>(std::clamp(
-            std::floor((viewportLeft - draftLeftX) / player.singleTrackWidth),
-            0.0F,
-            static_cast<float>(draftLaneCount)));
-        const auto end   = static_cast<std::uint32_t>(std::clamp(
-            std::ceil((viewportRight - draftLeftX) / player.singleTrackWidth),
-            0.0F,
-            static_cast<float>(draftLaneCount)));
+        const auto begin = static_cast<std::uint32_t>(
+            std::clamp(std::floor((viewportLeft - draftLeftX) / draftLaneWidth),
+                       0.0F,
+                       static_cast<float>(draftLaneCount)));
+        const auto end = static_cast<std::uint32_t>(
+            std::clamp(std::ceil((viewportRight - draftLeftX) / draftLaneWidth),
+                       0.0F,
+                       static_cast<float>(draftLaneCount)));
         if ( begin >= end ) return std::nullopt;
         return std::pair{ begin, end };
     }
@@ -286,14 +349,14 @@ struct CanvasLaneProjection {
             return std::nullopt;
         }
 
-        const auto begin = static_cast<std::uint32_t>(std::clamp(
-            std::floor((viewportLeft - bgmLeftX) / player.singleTrackWidth),
-            0.0F,
-            static_cast<float>(bgmLaneCount)));
-        const auto end   = static_cast<std::uint32_t>(std::clamp(
-            std::ceil((viewportRight - bgmLeftX) / player.singleTrackWidth),
-            0.0F,
-            static_cast<float>(bgmLaneCount)));
+        const auto begin = static_cast<std::uint32_t>(
+            std::clamp(std::floor((viewportLeft - bgmLeftX) / bgmLaneWidth),
+                       0.0F,
+                       static_cast<float>(bgmLaneCount)));
+        const auto end = static_cast<std::uint32_t>(
+            std::clamp(std::ceil((viewportRight - bgmLeftX) / bgmLaneWidth),
+                       0.0F,
+                       static_cast<float>(bgmLaneCount)));
         if ( begin >= end ) return std::nullopt;
         return std::pair{ begin, end };
     }
@@ -357,19 +420,36 @@ struct CanvasLaneProjection {
 /// @warning 逻辑与渲染热路径可能每帧调用；只允许常量级数值运算。
 [[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
     float viewportWidth, std::int32_t playerTrackCount,
-    std::int32_t persistentBgmTrackCount, float layoutLeft, float layoutRight,
+    std::int32_t persistentBgmTrackCount, const Config::TrackLayout& layout,
     float horizontalOffsetX, bool includeAppendLane = true,
     bool includeBgmLanes = true, bool includeDraftLanes = false,
     std::int32_t persistentDraftTrackCount = -1,
     bool         includeDraftAppendLane    = false)
 {
     CanvasLaneProjection result;
+    // 玩家矩形继续由 TrackLayout 四边控制，辅助区只复用其纵向范围。
     result.player = calculatePlayerTrackProjection(viewportWidth,
                                                    playerTrackCount,
-                                                   layoutLeft,
-                                                   layoutRight,
+                                                   layout.left,
+                                                   layout.right,
                                                    horizontalOffsetX);
     if ( !result.player.valid ) return result;
+
+    // 自定义位置使用归一化世界坐标，并与玩家区应用同一个相机偏移。
+    const auto resolveLeft = [viewportWidth, horizontalOffsetX](
+                                 const std::optional<float>& value,
+                                 float                       fallback) {
+        return value && std::isfinite(*value)
+                   ? viewportWidth * *value + horizontalOffsetX
+                   : fallback;
+    };
+    // 自定义宽度按视口等比例缩放；非法或非正数仍保持旧版推导值。
+    const auto resolveWidth = [viewportWidth](const std::optional<float>& value,
+                                              float fallback) {
+        const float width =
+            value && std::isfinite(*value) ? viewportWidth * *value : fallback;
+        return std::isfinite(width) && width > 0.0F ? width : fallback;
+    };
 
     result.playerLaneCount = static_cast<std::uint32_t>(playerTrackCount);
     const auto persistentDraftCount = static_cast<std::uint32_t>(
@@ -381,10 +461,17 @@ struct CanvasLaneProjection {
             ? persistentDraftCount +
                   static_cast<std::uint32_t>(includeDraftAppendLane)
             : std::uint32_t{ 0 };
-    result.draftRightX = result.player.leftX;
-    result.draftLeftX =
-        result.draftRightX - static_cast<float>(result.draftLaneCount) *
-                                 result.player.singleTrackWidth;
+    // 草稿区的单轨宽度与左边界可分别覆盖；缺省时仍紧贴玩家区左侧。
+    result.draftLaneWidth =
+        resolveWidth(layout.draftLanes.width, result.player.singleTrackWidth);
+    const float legacyDraftLeft =
+        result.player.leftX -
+        static_cast<float>(result.draftLaneCount) * result.draftLaneWidth;
+    result.draftLeftX = resolveLeft(layout.draftLanes.left, legacyDraftLeft);
+    result.draftRightX =
+        result.draftLeftX +
+        static_cast<float>(result.draftLaneCount) * result.draftLaneWidth;
+
     const auto persistentCount =
         includeBgmLanes ? static_cast<std::uint32_t>(std::max(
                               std::int32_t{ 0 }, persistentBgmTrackCount))
@@ -393,20 +480,55 @@ struct CanvasLaneProjection {
         includeBgmLanes
             ? persistentCount + static_cast<std::uint32_t>(includeAppendLane)
             : std::uint32_t{ 0 };
-    result.annotationLeftX = result.player.rightX;
-    result.annotationRightX =
-        result.annotationLeftX + CanvasLaneProjection::ANNOTATION_GUTTER_WIDTH;
-    result.bgmLeftX = result.annotationRightX;
+    // 批注区宽度表示整个沟槽，默认值继续保持固定 26 逻辑像素。
+    result.annotationLeftX =
+        resolveLeft(layout.annotation.left, result.player.rightX);
+    const float annotationWidth = resolveWidth(
+        layout.annotation.width, CanvasLaneProjection::ANNOTATION_GUTTER_WIDTH);
+    result.annotationRightX = result.annotationLeftX + annotationWidth;
+    // BGM 区按自身单轨宽度排列，默认位置仍从批注区右侧开始。
+    result.bgmLaneWidth =
+        resolveWidth(layout.bgmLanes.width, result.player.singleTrackWidth);
+    result.bgmLeftX =
+        resolveLeft(layout.bgmLanes.left, result.annotationRightX);
     result.bgmRightX =
-        result.bgmLeftX + static_cast<float>(result.bgmLaneCount) *
-                              result.player.singleTrackWidth;
+        result.bgmLeftX +
+        static_cast<float>(result.bgmLaneCount) * result.bgmLaneWidth;
+
+    // 独立区域允许空隙和重叠，但每个区间自身必须有限且非负向。
     result.valid =
         std::isfinite(result.draftLeftX) && std::isfinite(result.draftRightX) &&
-        std::isfinite(result.annotationLeftX) &&
+        result.draftLaneWidth > 0.0F && std::isfinite(result.annotationLeftX) &&
         std::isfinite(result.annotationRightX) &&
+        result.annotationRightX >= result.annotationLeftX &&
         std::isfinite(result.bgmLeftX) && std::isfinite(result.bgmRightX) &&
-        result.bgmRightX >= result.bgmLeftX;
+        result.bgmLaneWidth > 0.0F && result.bgmRightX >= result.bgmLeftX;
     return result;
+}
+
+/// @brief 使用旧版左右边界参数计算兼容投影。
+/// @warning 仅供未迁移调用点和测试使用；新代码应传入完整 TrackLayout。
+[[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
+    float viewportWidth, std::int32_t playerTrackCount,
+    std::int32_t persistentBgmTrackCount, float layoutLeft, float layoutRight,
+    float horizontalOffsetX, bool includeAppendLane = true,
+    bool includeBgmLanes = true, bool includeDraftLanes = false,
+    std::int32_t persistentDraftTrackCount = -1,
+    bool         includeDraftAppendLane    = false)
+{
+    Config::TrackLayout layout;
+    layout.left  = layoutLeft;
+    layout.right = layoutRight;
+    return calculateCanvasLaneProjection(viewportWidth,
+                                         playerTrackCount,
+                                         persistentBgmTrackCount,
+                                         layout,
+                                         horizontalOffsetX,
+                                         includeAppendLane,
+                                         includeBgmLanes,
+                                         includeDraftLanes,
+                                         persistentDraftTrackCount,
+                                         includeDraftAppendLane);
 }
 
 /// @brief 在逻辑视口宽度变化时等比例换算横向相机偏移。

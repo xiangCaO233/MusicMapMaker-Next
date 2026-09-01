@@ -49,6 +49,13 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying,
     MMM::Config::EditorConfig config;
     config.visual.trackLayout.left  = useAuxiliaryLaneLayout ? 0.5F : 0.1F;
     config.visual.trackLayout.right = useAuxiliaryLaneLayout ? 0.9F : 0.5F;
+    if ( useAuxiliaryLaneLayout ) {
+        // 自定义草稿区与玩家区宽度不同，用于验证遮罩不再沿用玩家几何。
+        config.visual.trackLayout.draftLanes.left  = -0.21F;
+        config.visual.trackLayout.draftLanes.width = 0.06F;
+        config.visual.trackLayout.bgmLanes.left    = 0.92F;
+        config.visual.trackLayout.bgmLanes.width   = 0.08F;
+    }
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;
     config.settings.enableDraftLanes = useAuxiliaryLaneLayout;
@@ -222,6 +229,25 @@ bool testDraftTapUsesDedicatedSkinColor()
     return true;
 }
 
+/// @brief 验证草稿重叠遮罩使用独立区域宽度和裁剪范围。
+/// @return 遮罩出现在自定义草稿轨并按其单轨宽度缩放时返回 true。
+bool testDraftOverlapMaskUsesIndependentWidth()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    renderOverlappingTaps(snapshot, false, -1, true);
+    if ( snapshot.overlapMasks.empty() || snapshot.overlayCmds.empty() ) {
+        return false;
+    }
+    const auto&               mask = snapshot.overlapMasks.front();
+    MMM::Config::EditorConfig defaults;
+    const float               expectedWidth =
+        VIEWPORT_WIDTH * 0.06F * defaults.visual.noteScaleX;
+    // 右侧草稿轨仍位于玩家区左侧，并且遮罩未被玩家区 Scissor 裁掉。
+    return mask.x < VIEWPORT_WIDTH * 0.1F &&
+           std::abs(mask.w - expectedWidth) < 1e-4F &&
+           snapshot.overlayCmds.front().scissor.x == 0;
+}
+
 /// @brief 验证播放状态不会抑制重叠键的顶层遮罩。
 /// @return 静止与播放快照均生成等价遮罩及覆盖层命令时返回 true。
 bool testOverlapMaskRemainsVisibleDuringPlayback()
@@ -256,7 +282,7 @@ bool testOverlapMaskUsesAuxiliaryLaneScissor()
 {
     MMM::Logic::RenderSnapshot draftSnapshot;
     MMM::Logic::RenderSnapshot boundarySnapshot;
-    renderOverlappingTaps(draftSnapshot, false, -3, true);
+    renderOverlappingTaps(draftSnapshot, false, -1, true);
     renderOverlappingTaps(boundarySnapshot, false, 3, true);
 
     if ( draftSnapshot.overlapMasks.empty() ||
@@ -306,6 +332,7 @@ int main(int argc, char* argv[])
         return 1;
     }
     return testDraftTapUsesDedicatedSkinColor() &&
+                   testDraftOverlapMaskUsesIndependentWidth() &&
                    testOverlapMaskRemainsVisibleDuringPlayback() &&
                    testOverlapMaskUsesAuxiliaryLaneScissor()
                ? 0

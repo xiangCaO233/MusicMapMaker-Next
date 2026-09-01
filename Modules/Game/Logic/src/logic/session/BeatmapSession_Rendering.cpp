@@ -497,7 +497,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio    = config.visual.previewConfig.areaRatio;
+    float areaRatio = config.visual.previewConfig.areaRatio;
 
     if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
          areaRatio <= 0.0001f ) {
@@ -564,9 +564,9 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 
     float judgmentLineY =
         previewCamera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY   = cache->getAbsY(ctx.animateTime);
-    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
-                           static_cast<double>(renderScaleY);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
+    double deltaY      = (judgmentLineY - ctx.lastMousePos.y) /
+                    static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -825,9 +825,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         if ( !metadata.main_cover_path.empty() ) {
             std::filesystem::path bgPath;
-            auto* project = m_ctx->collaborationProject
-                                ? m_ctx->collaborationProject.get()
-                                : engine.getCurrentProject();
+            auto*                 project      = m_ctx->collaborationProject
+                                                     ? m_ctx->collaborationProject.get()
+                                                     : engine.getCurrentProject();
             std::filesystem::path resourcePath = metadata.main_cover_path;
             const auto resourceKey = Config::pathToUtf8(resourcePath);
             if ( const auto iterator =
@@ -1019,7 +1019,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -1088,8 +1088,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         camera.viewportWidth,
                         m_ctx->trackCount,
                         m_ctx->bgmTrackCount,
-                        config.visual.trackLayout.left,
-                        config.visual.trackLayout.right,
+                        config.visual.trackLayout,
                         camera.horizontalOffsetX,
                         true,
                         config.settings.enableBmsEditing,
@@ -1291,8 +1290,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     const auto& note = *inspectNote;
                     const auto  hoveredPart =
                         useDragState
-                            ? m_ctx->draggedPart
-                            : static_cast<HoverPart>(inter->hoveredPart);
+                             ? m_ctx->draggedPart
+                             : static_cast<HoverPart>(inter->hoveredPart);
                     const int32_t hoveredSubIndex =
                         useDragState ? m_ctx->draggedSubIndex
                                      : inter->hoveredSubIndex;
@@ -1388,10 +1387,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.body = makeBeatPoint(note.m_timestamp,
                                                          note.m_trackIndex);
                         } else {
-                            inspect.kind  = HoverInspectKind::FlickHead;
-                            inspect.head  = makeBeatPoint(note.m_timestamp,
-                                                          note.m_trackIndex);
-                            inspect.track = note.m_trackIndex;
+                            inspect.kind      = HoverInspectKind::FlickHead;
+                            inspect.head      = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                            inspect.track     = note.m_trackIndex;
                             inspect.showTrack = true;
                         }
                         inspect.showDtrack = true;

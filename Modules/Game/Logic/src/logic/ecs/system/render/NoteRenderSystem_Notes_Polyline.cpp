@@ -2,6 +2,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/NoteLaneGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -61,11 +62,11 @@ void NoteRenderSystem::renderPolyline(
     const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
     const Config::EditorConfig& config, RenderSnapshot* snapshot,
     double currentAbsY, double currentTime, float judgmentLineY, float leftX,
-    float rightX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY, glm::vec4 colorHead, glm::vec4 colorHoldBody,
-    glm::vec4 colorHoldEnd, glm::vec4 colorNode, glm::vec4 colorArrow,
-    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-    int glowSubIndex)
+    float topY, float bottomY, float singleTrackW, float renderScaleY,
+    glm::vec4 colorHead, glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd,
+    glm::vec4 colorNode, glm::vec4 colorArrow, entt::entity entity,
+    bool generateHitboxes, HoverPart glowPart, int glowSubIndex,
+    const CanvasLaneProjection* laneProjection)
 {
     if ( !cache ) return;
 
@@ -92,7 +93,8 @@ void NoteRenderSystem::renderPolyline(
                      entity,
                      generateHitboxes,
                      glowPart,
-                     glowSubIndex);
+                     glowSubIndex,
+                     laneProjection);
 
     // 2. 绘制中间节点
     drawPolylineNodes(batcher,
@@ -114,7 +116,8 @@ void NoteRenderSystem::renderPolyline(
                       entity,
                       generateHitboxes,
                       glowPart,
-                      glowSubIndex);
+                      glowSubIndex,
+                      laneProjection);
 
     // 3. 绘制起始磁头
     drawPolylineHead(batcher,
@@ -136,7 +139,8 @@ void NoteRenderSystem::renderPolyline(
                      entity,
                      generateHitboxes,
                      glowPart,
-                     glowSubIndex);
+                     glowSubIndex,
+                     laneProjection);
 
     // 4. 绘制尾部装饰 (Flick箭头或Hold结束线)
     drawPolylineDecoration(batcher,
@@ -159,7 +163,8 @@ void NoteRenderSystem::renderPolyline(
                            entity,
                            generateHitboxes,
                            glowPart,
-                           glowSubIndex);
+                           glowSubIndex,
+                           laneProjection);
 }
 
 void NoteRenderSystem::drawPolylineBody(
@@ -168,7 +173,8 @@ void NoteRenderSystem::drawPolylineBody(
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
-    HoverPart glowPart, int glowSubIndex)
+    HoverPart glowPart, int glowSubIndex,
+    const CanvasLaneProjection* laneProjection)
 {
     if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::HoldBody )
@@ -194,7 +200,15 @@ void NoteRenderSystem::drawPolylineBody(
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
         double minDelta =
             (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-        double padDelta = noteH / static_cast<double>(renderScaleY);
+        const auto startLane = resolveNoteLaneGeometry(
+            sub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
+        const std::int32_t subEndTrack = sub.type == ::MMM::NoteType::FLICK
+                                             ? sub.trackIndex + sub.dtrack
+                                             : sub.trackIndex;
+        const auto         endLane     = resolveNoteLaneGeometry(
+            subEndTrack, laneProjection, leftX, singleTrackW, noteW, noteH);
+        const double padDelta = std::max(startLane.noteH, endLane.noteH) /
+                                static_cast<double>(renderScaleY);
 
         if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
                                                  subEndTime,
@@ -209,22 +223,23 @@ void NoteRenderSystem::drawPolylineBody(
         float subStartY = judgmentLineY -
                           static_cast<float>(displayDeltaStart) * renderScaleY;
 
-        float subEndTrack = (float)sub.trackIndex;
-        float subEndY     = subStartY;
+        float subEndY = subStartY;
 
         // 子物件自身 Body (水平 Flick 或 垂直 Hold)
         if ( sub.type == ::MMM::NoteType::FLICK && sub.dtrack != 0 ) {
-            subEndTrack  = (float)sub.trackIndex + sub.dtrack;
             auto itBodyH = snapshot->uvMap.find(
                 static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
             if ( itBodyH != snapshot->uvMap.end() ) {
-                float drawH =
-                    noteH * (itBodyH->second.w /
-                             snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
-                float drawW      = std::abs(sub.dtrack) * singleTrackW;
-                float startTrack = std::min((float)sub.trackIndex, subEndTrack);
-                float bodyX =
-                    leftX + startTrack * singleTrackW + singleTrackW * 0.5f;
+                const float drawH =
+                    startLane.noteH *
+                    (itBodyH->second.w /
+                     snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
+                // Flick
+                // 连接体跨越两个真实轨道中心，独立区域间隙也属于连接范围。
+                const float drawW =
+                    std::abs(endLane.centerX() - startLane.centerX());
+                const float bodyX =
+                    std::min(startLane.centerX(), endLane.centerX());
 
                 glm::vec4 finalBodyColor = colorHold;
                 if ( snapshot->erasingEntities.count(entity) &&
@@ -256,10 +271,12 @@ void NoteRenderSystem::drawPolylineBody(
                       static_cast<float>(cache->getDisplayDelta(
                           subEndTime, currentAbsY, subEndAnchorTime)) *
                           renderScaleY;
-            glm::vec2 bodySize = getDrawSize(
-                snapshot, TextureID::HoldBodyVertical, noteW, noteH);
-            float bodyX = leftX + sub.trackIndex * singleTrackW +
-                          (singleTrackW - bodySize.x) * 0.5f;
+            const glm::vec2 bodySize = getDrawSize(snapshot,
+                                                   TextureID::HoldBodyVertical,
+                                                   startLane.noteW,
+                                                   startLane.noteH);
+            const float     bodyX =
+                startLane.leftX + (startLane.width - bodySize.x) * 0.5F;
 
             glm::vec4 finalBodyColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
@@ -305,12 +322,26 @@ void NoteRenderSystem::drawPolylineBody(
                 static_cast<float>(cache->getDisplayDelta(
                     next.timestamp, currentAbsY, next.timestamp)) *
                     renderScaleY;
-            glm::vec2 bodySize = getDrawSize(
-                snapshot, TextureID::HoldBodyVertical, noteW, noteH);
-            float curBodyX  = leftX + subEndTrack * singleTrackW +
-                              (singleTrackW - bodySize.x) * 0.5f;
-            float nextBodyX = leftX + next.trackIndex * singleTrackW +
-                              (singleTrackW - bodySize.x) * 0.5f;
+            const auto      nextLane = resolveNoteLaneGeometry(next.trackIndex,
+                                                          laneProjection,
+                                                          leftX,
+                                                          singleTrackW,
+                                                          noteW,
+                                                          noteH);
+            const glm::vec2 curBodySize =
+                getDrawSize(snapshot,
+                            TextureID::HoldBodyVertical,
+                            endLane.noteW,
+                            endLane.noteH);
+            const glm::vec2 nextBodySize =
+                getDrawSize(snapshot,
+                            TextureID::HoldBodyVertical,
+                            nextLane.noteW,
+                            nextLane.noteH);
+            const float curBodyX =
+                endLane.leftX + (endLane.width - curBodySize.x) * 0.5F;
+            const float nextBodyX =
+                nextLane.leftX + (nextLane.width - nextBodySize.x) * 0.5F;
 
             glm::vec4 finalTransColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
@@ -339,16 +370,17 @@ void NoteRenderSystem::drawPolylineBody(
             float x2 = nextBodyX;
 
             batcher.pushFreeQuad({ x1, sy },
-                                 { x1 + bodySize.x, sy },
-                                 { x2 + bodySize.x, ey },
+                                 { x1 + curBodySize.x, sy },
+                                 { x2 + nextBodySize.x, ey },
                                  { x2, ey },
                                  finalTransColor);
 
             if ( generateHitboxes && entity != entt::null ) {
-                float xmin = std::min(curBodyX, nextBodyX);
-                float xmax = std::max(curBodyX, nextBodyX) + bodySize.x;
-                float ymin = std::min(subEndY, nextStartY);
-                float ymax = std::max(subEndY, nextStartY);
+                const float xmin = std::min(curBodyX, nextBodyX);
+                const float xmax = std::max(curBodyX + curBodySize.x,
+                                            nextBodyX + nextBodySize.x);
+                float       ymin = std::min(subEndY, nextStartY);
+                float       ymax = std::max(subEndY, nextStartY);
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                static_cast<int>(i),
@@ -368,7 +400,7 @@ void NoteRenderSystem::drawPolylineNodes(
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorNode, const Config::EditorConfig& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-    int glowSubIndex)
+    int glowSubIndex, const CanvasLaneProjection* laneProjection)
 {
     if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::PolylineNode )
@@ -390,7 +422,9 @@ void NoteRenderSystem::drawPolylineNodes(
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
         double minDelta =
             (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-        double padDelta = noteH / static_cast<double>(renderScaleY);
+        const auto lane = resolveNoteLaneGeometry(
+            sub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
+        const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
 
         if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
                                                  sub.timestamp,
@@ -404,10 +438,9 @@ void NoteRenderSystem::drawPolylineNodes(
 
         float subStartY = judgmentLineY -
                           static_cast<float>(displayDeltaStart) * renderScaleY;
-        glm::vec2 nodeSize =
-            getDrawSize(snapshot, TextureID::Node, noteW, noteH);
-        float nodeX = leftX + sub.trackIndex * singleTrackW +
-                      (singleTrackW - nodeSize.x) * 0.5f;
+        const glm::vec2 nodeSize =
+            getDrawSize(snapshot, TextureID::Node, lane.noteW, lane.noteH);
+        const float nodeX = lane.leftX + (lane.width - nodeSize.x) * 0.5F;
 
         glm::vec4 finalNodeColor = colorNode;
         if ( snapshot->erasingEntities.count(entity) &&
@@ -446,7 +479,7 @@ void NoteRenderSystem::drawPolylineHead(
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorHead, const Config::EditorConfig& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-    int glowSubIndex)
+    int glowSubIndex, const CanvasLaneProjection* laneProjection)
 {
     if ( glowPart != HoverPart::None &&
          !(glowPart == HoverPart::PolylineNode && glowSubIndex == 0) )
@@ -464,7 +497,9 @@ void NoteRenderSystem::drawPolylineHead(
         (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double minDelta =
         (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-    double padDelta = noteH / static_cast<double>(renderScaleY);
+    const auto lane = resolveNoteLaneGeometry(
+        firstSub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
+    const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
 
     if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp,
                                              firstSub.timestamp,
@@ -478,9 +513,9 @@ void NoteRenderSystem::drawPolylineHead(
 
     float headY =
         judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
-    glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
-    float     headX    = leftX + firstSub.trackIndex * singleTrackW +
-                         (singleTrackW - headSize.x) * 0.5f;
+    const glm::vec2 headSize =
+        getDrawSize(snapshot, TextureID::Note, lane.noteW, lane.noteH);
+    const float headX = lane.leftX + (lane.width - headSize.x) * 0.5F;
 
     glm::vec4 finalHeadColor = colorHead;
     if ( snapshot->erasingEntities.count(entity) &&
@@ -515,7 +550,8 @@ void NoteRenderSystem::drawPolylineDecoration(
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
     const Config::EditorConfig& config, entt::entity entity,
-    bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
+    bool generateHitboxes, HoverPart glowPart, int glowSubIndex,
+    const CanvasLaneProjection* laneProjection)
 {
     if ( note.m_subNotes.empty() ) return;
 
@@ -536,7 +572,12 @@ void NoteRenderSystem::drawPolylineDecoration(
         (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double minDelta =
         (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-    double padDelta = noteH / static_cast<double>(renderScaleY);
+    const std::int32_t decorationTrack = last.type == ::MMM::NoteType::FLICK
+                                             ? last.trackIndex + last.dtrack
+                                             : last.trackIndex;
+    const auto         lane            = resolveNoteLaneGeometry(
+        decorationTrack, laneProjection, leftX, singleTrackW, noteW, noteH);
+    const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
 
     if ( !NoteRenderSystem::isCarrierVisible(targetTime,
                                              targetTime,
@@ -558,10 +599,9 @@ void NoteRenderSystem::drawPolylineDecoration(
              glowPart == HoverPart::FlickArrow ) {
             TextureID arrowId = (last.dtrack < 0) ? TextureID::FlickArrowLeft
                                                   : TextureID::FlickArrowRight;
-            glm::vec2 arrowSize = getDrawSize(snapshot, arrowId, noteW, noteH);
-            float     lEndTrack = (float)last.trackIndex + last.dtrack;
-            float     arrowX    = leftX + lEndTrack * singleTrackW +
-                                  (singleTrackW - arrowSize.x) * 0.5f;
+            const glm::vec2 arrowSize =
+                getDrawSize(snapshot, arrowId, lane.noteW, lane.noteH);
+            const float arrowX = lane.leftX + (lane.width - arrowSize.x) * 0.5F;
 
             glm::vec4 finalArrowColor = colorArrow;
             if ( snapshot->erasingEntities.count(entity) &&
@@ -596,10 +636,9 @@ void NoteRenderSystem::drawPolylineDecoration(
                             static_cast<float>(cache->getDisplayDelta(
                                 targetTime, currentAbsY, targetAnchorTime)) *
                                 renderScaleY;
-            glm::vec2 endSize =
-                getDrawSize(snapshot, TextureID::HoldEnd, noteW, noteH);
-            float endX = leftX + last.trackIndex * singleTrackW +
-                         (singleTrackW - endSize.x) * 0.5f;
+            const glm::vec2 endSize = getDrawSize(
+                snapshot, TextureID::HoldEnd, lane.noteW, lane.noteH);
+            const float endX = lane.leftX + (lane.width - endSize.x) * 0.5F;
 
             glm::vec4 finalEndColor = colorHoldEnd;
             if ( snapshot->erasingEntities.count(entity) &&

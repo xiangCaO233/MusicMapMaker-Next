@@ -157,6 +157,45 @@ bool testHandleHitTesting()
                Handle::None;
 }
 
+/// @brief 验证辅助区域只能横向移动和调整宽度。
+/// @return 规整、左右缩放、移动及命中结果均符合预期时返回 true。
+bool testHorizontalRegionEditing()
+{
+    using Bounds = MMM::Canvas::HorizontalRegionBounds;
+    using Handle = MMM::Canvas::HorizontalRegionDragHandle;
+    const Bounds start{ 0.2F, 0.4F };
+    // 左右缩放各自固定对侧边界，移动只改变 X 且保持总宽度。
+    const auto resizedLeft =
+        MMM::Canvas::resizeHorizontalRegion(start, Handle::Left, 0.1F);
+    const auto resizedRight =
+        MMM::Canvas::resizeHorizontalRegion(start, Handle::Right, 0.9F);
+    const auto moved   = MMM::Canvas::moveHorizontalRegion(start, -0.35F);
+    const auto invalid = MMM::Canvas::sanitizeHorizontalRegionBounds(
+        { std::numeric_limits<float>::quiet_NaN(), -2.0F });
+    if ( !near(resizedLeft.left, 0.1F) ||
+         !near(resizedLeft.right(), start.right()) ||
+         !near(resizedRight.left, start.left) ||
+         !near(resizedRight.right(), 0.9F) || !near(moved.left, -0.15F) ||
+         !near(moved.width, start.width) || !std::isfinite(invalid.left) ||
+         invalid.width < 0.005F ) {
+        return false;
+    }
+
+    // 纵向范围只用于命中，区域类型本身没有 Y、Top 或 Bottom 可写字段。
+    return MMM::Canvas::hitTestHorizontalRegion(
+               start, 20.0F, 80.0F, 20.0F, 50.0F, 100.0F, 3.0F, 6.0F) ==
+               Handle::Left &&
+           MMM::Canvas::hitTestHorizontalRegion(
+               start, 20.0F, 80.0F, 60.0F, 50.0F, 100.0F, 3.0F, 6.0F) ==
+               Handle::Right &&
+           MMM::Canvas::hitTestHorizontalRegion(
+               start, 20.0F, 80.0F, 40.0F, 50.0F, 100.0F, 3.0F, 6.0F) ==
+               Handle::Move &&
+           MMM::Canvas::hitTestHorizontalRegion(
+               start, 20.0F, 80.0F, 40.0F, 5.0F, 100.0F, 3.0F, 6.0F) ==
+               Handle::None;
+}
+
 /// @brief 验证组件锚点规整与边缘拖动会保持组件完整可见。
 /// @return 锚点、边界和移动结果均合法时返回 true。
 bool testCanvasComponentPlacement()
@@ -630,8 +669,11 @@ int main()
     if ( !testHandleHitTesting() ) {
         return 5;
     }
-    if ( !testCanvasComponentPlacement() ) {
+    if ( !testHorizontalRegionEditing() ) {
         return 6;
+    }
+    if ( !testCanvasComponentPlacement() ) {
+        return 7;
     }
     if ( !testCanvasComponentResize() ) {
         return 7;

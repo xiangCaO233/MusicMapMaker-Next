@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace MMM::Canvas
@@ -219,6 +220,125 @@ enum class TrackLayoutDragHandle {
         std::abs(pointerY - bottom),
         pointerX >= left - edgeHitRadius && pointerX <= right + edgeHitRadius);
     return closest;
+}
+
+/// @brief 可独立调整的主画布辅助区域。
+enum class AuxiliaryLayoutRegion : std::uint8_t {
+    None = 0,    ///< 未选中辅助区域。
+    Draft,       ///< 草稿轨道区。
+    Annotation,  ///< 批注区。
+    Bgm,         ///< BGM 轨道区。
+};
+
+/// @brief 辅助区域横向拖动句柄。
+enum class HorizontalRegionDragHandle : std::uint8_t {
+    None = 0,  ///< 未命中辅助区域。
+    Left,      ///< 调整左边界与宽度。
+    Right,     ///< 调整右边界与宽度。
+    Move,      ///< 仅移动 X 位置。
+};
+
+/// @brief 已解析的辅助区域归一化横向边界。
+struct HorizontalRegionBounds {
+    /// @brief 左边界比例。
+    float left{ 0.0F };
+    /// @brief 区域总宽度比例。
+    float width{ 0.1F };
+    /// @brief 返回右边界比例。
+    [[nodiscard]] float right() const { return left + width; }
+};
+
+/// @brief 规整辅助区域横向边界。
+/// @param bounds 待规整边界。
+/// @return 保持正宽度且数值有限的边界。
+[[nodiscard]] inline HorizontalRegionBounds sanitizeHorizontalRegionBounds(
+    HorizontalRegionBounds bounds)
+{
+    // 区域可以位于当前视口之外，以便相机横向移动后继续访问。
+    constexpr float minPosition = -4.0F;
+    constexpr float maxPosition = 4.0F;
+    constexpr float minWidth    = 0.005F;
+    constexpr float maxWidth    = 4.0F;
+    if ( !std::isfinite(bounds.left) ) bounds.left = 0.0F;
+    if ( !std::isfinite(bounds.width) ) bounds.width = 0.1F;
+    bounds.left  = std::clamp(bounds.left, minPosition, maxPosition);
+    bounds.width = std::clamp(bounds.width, minWidth, maxWidth);
+    return bounds;
+}
+
+/// @brief 横向缩放辅助区域，不修改任何纵向配置。
+/// @param start 拖动开始时的边界。
+/// @param handle 左侧或右侧句柄。
+/// @param pointerX 当前归一化横坐标。
+/// @return 缩放后的有效边界。
+[[nodiscard]] inline HorizontalRegionBounds resizeHorizontalRegion(
+    HorizontalRegionBounds start, HorizontalRegionDragHandle handle,
+    float pointerX)
+{
+    start = sanitizeHorizontalRegionBounds(start);
+    if ( !std::isfinite(pointerX) ) return start;
+    constexpr float minWidth = 0.005F;
+    if ( handle == HorizontalRegionDragHandle::Left ) {
+        // 右边界固定，左边界不会越过最小宽度。
+        const float right = start.right();
+        start.left        = std::min(pointerX, right - minWidth);
+        start.width       = right - start.left;
+    } else if ( handle == HorizontalRegionDragHandle::Right ) {
+        // 左边界固定，只更新区域总宽度。
+        start.width = std::max(minWidth, pointerX - start.left);
+    }
+    return sanitizeHorizontalRegionBounds(start);
+}
+
+/// @brief 横向移动辅助区域并保持宽度。
+/// @param start 拖动开始时的边界。
+/// @param deltaX 归一化横向位移。
+/// @return 仅左边界变化的有效边界。
+[[nodiscard]] inline HorizontalRegionBounds moveHorizontalRegion(
+    HorizontalRegionBounds start, float deltaX)
+{
+    start = sanitizeHorizontalRegionBounds(start);
+    if ( !std::isfinite(deltaX) ) return start;
+    start.left += deltaX;
+    return sanitizeHorizontalRegionBounds(start);
+}
+
+/// @brief 在像素空间命中辅助区域横向句柄。
+/// @param bounds 归一化横向边界。
+/// @param top 顶部像素边界，来自主轨道区。
+/// @param bottom 底部像素边界，来自主轨道区。
+/// @param pointerX 指针像素横坐标。
+/// @param pointerY 指针像素纵坐标。
+/// @param viewportWidth 逻辑视口宽度。
+/// @param edgeHitRadius 边缘命中半径。
+/// @param moveHandleRadius 中心移动句柄半径。
+/// @return 最近的横向句柄；纵向边界只参与命中，不可编辑。
+[[nodiscard]] inline HorizontalRegionDragHandle hitTestHorizontalRegion(
+    HorizontalRegionBounds bounds, float top, float bottom, float pointerX,
+    float pointerY, float viewportWidth, float edgeHitRadius,
+    float moveHandleRadius)
+{
+    bounds = sanitizeHorizontalRegionBounds(bounds);
+    if ( viewportWidth <= 0.0F || pointerY < top - edgeHitRadius ||
+         pointerY > bottom + edgeHitRadius ) {
+        return HorizontalRegionDragHandle::None;
+    }
+    const float left   = bounds.left * viewportWidth;
+    const float right  = bounds.right() * viewportWidth;
+    const float center = (left + right) * 0.5F;
+    // 边缘优先于中心，窄区域仍可稳定缩放。
+    if ( std::abs(pointerX - left) <= edgeHitRadius ) {
+        return HorizontalRegionDragHandle::Left;
+    }
+    if ( std::abs(pointerX - right) <= edgeHitRadius ) {
+        return HorizontalRegionDragHandle::Right;
+    }
+    const float centerY = (top + bottom) * 0.5F;
+    if ( std::abs(pointerX - center) <= moveHandleRadius &&
+         std::abs(pointerY - centerY) <= moveHandleRadius ) {
+        return HorizontalRegionDragHandle::Move;
+    }
+    return HorizontalRegionDragHandle::None;
 }
 
 }  // namespace MMM::Canvas

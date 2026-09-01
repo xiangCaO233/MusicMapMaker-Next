@@ -331,6 +331,18 @@ private:
     Config::TrackLayout m_trackLayoutDragStart;
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
+    /// @brief 当前独立横向拖动的辅助区域。
+    AuxiliaryLayoutRegion m_auxiliaryLayoutRegion{
+        AuxiliaryLayoutRegion::None
+    };
+    /// @brief 当前辅助区域的横向拖动句柄。
+    HorizontalRegionDragHandle m_horizontalRegionDragHandle{
+        HorizontalRegionDragHandle::None
+    };
+    /// @brief 辅助区域拖动开始时的已解析归一化边界。
+    HorizontalRegionBounds m_horizontalRegionDragStart;
+    /// @brief 辅助区域拖动开始时的归一化横坐标。
+    float m_horizontalRegionPointerStart{ 0.0F };
     /// @brief 当前快照中可见物件的合并布局包围框。
     std::vector<NoteLayoutInstance> m_noteLayoutInstances;
     /// @brief 重建物件布局包围框时复用的实体到数组下标映射。

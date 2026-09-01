@@ -293,6 +293,15 @@ bool testNarrowLaneLabelMarquee()
     return true;
 }
 
+/// @brief 返回自动采样测试沿用的兼容玩家轨道布局。
+MMM::Config::TrackLayout defaultSampleTrackLayout()
+{
+    MMM::Config::TrackLayout layout;
+    layout.left  = 0.1F;
+    layout.right = 0.5F;
+    return layout;
+}
+
 /// @brief 为单个零 offset 自动采样生成测试快照。
 /// @param snapshot 输出快照。
 /// @param resourceId 音频资源 ID。
@@ -303,11 +312,12 @@ bool testNarrowLaneLabelMarquee()
 /// @param erasing 是否启用待删除预览。
 /// @param hovered 是否启用悬浮状态。
 /// @param selected 是否启用选中状态。
-void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
-                        std::string_view resourceId, double snapshotSysTime,
-                        bool withAsciiFont, float noteScaleX = 1.2F,
-                        float noteScaleY = 1.2F, bool erasing = false,
-                        bool hovered = false, bool selected = false)
+void renderSingleSample(
+    MMM::Logic::RenderSnapshot& snapshot, std::string_view resourceId,
+    double snapshotSysTime, bool withAsciiFont, float noteScaleX = 1.2F,
+    float noteScaleY = 1.2F, bool erasing = false, bool hovered = false,
+    bool                            selected = false,
+    const MMM::Config::TrackLayout& layout   = defaultSampleTrackLayout())
 {
     entt::registry timelineRegistry;
     const auto     bpmEntity = timelineRegistry.create();
@@ -355,8 +365,8 @@ void renderSingleSample(MMM::Logic::RenderSnapshot& snapshot,
         static_cast<std::uint32_t>(MMM::Logic::TextureID::Note), NOTE_UV);
     if ( withAsciiFont ) configureAsciiFont(snapshot);
 
-    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
-        800.0F, 4, 1, 0.1F, 0.5F, 0.0F);
+    const auto projection =
+        MMM::Logic::calculateCanvasLaneProjection(800.0F, 4, 1, layout, 0.0F);
     MMM::Logic::System::Batcher batcher(&snapshot);
     MMM::Logic::System::SampleRenderSystem::renderSamples(sampleRegistry,
                                                           sortedEntities,
@@ -480,6 +490,33 @@ bool testSampleBodyMatchesTapTextureAndSize()
         return false;
     }
     return true;
+}
+
+/// @brief 验证 BGM 采样本体跟随独立轨道 X 与宽度。
+/// @return 本体在自定义 BGM 轨道内居中且尺寸按其宽度缩放时返回 true。
+bool testSampleUsesIndependentBgmLaneWidth()
+{
+    MMM::Config::TrackLayout layout;
+    layout.left           = 0.1F;
+    layout.right          = 0.5F;
+    layout.bgmLanes.left  = 0.7F;
+    layout.bgmLanes.width = 0.05F;
+    MMM::Logic::RenderSnapshot snapshot;
+    renderSingleSample(snapshot,
+                       "independent.wav",
+                       0.0,
+                       false,
+                       0.75F,
+                       0.75F,
+                       false,
+                       false,
+                       false,
+                       layout);
+    if ( snapshot.vertices.size() < 4U ) return false;
+    const float left  = snapshot.vertices[0].pos.x;
+    const float right = snapshot.vertices[1].pos.x;
+    // 800×0.05=40 像素单轨，0.75 横向缩放后本体宽 30 像素。
+    return near(left, 565.0F) && near(right - left, 30.0F);
 }
 
 /// @brief 验证 BGM 画笔按下后立即绘制半透明自动采样并跟随笔刷位置。
@@ -771,6 +808,7 @@ int main()
     return testLaneLayoutVisuals() && testDraftLaneLabels() &&
                    testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
+                   testSampleUsesIndependentBgmLaneWidth() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&
                    testSampleInteractionGlow() && testSampleLabelMarquee() &&
                    testSampleLabelScaleAndFixedLaneWidth() &&

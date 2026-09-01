@@ -481,20 +481,60 @@ void from_json(const nlohmann::json& j, SpectrumDetailLevel& level)
     }
 }
 
+/// @brief 将辅助横向区域覆盖值序列化为配置对象。
+/// @param j 输出 JSON 对象。
+/// @param layout 待保存的横向区域布局。
+void to_json(nlohmann::json& j, const HorizontalRegionLayout& layout)
+{
+    // 空字段保留“按旧布局动态推导”的迁移语义，不写入 JSON。
+    j = nlohmann::json::object();
+    if ( layout.left && std::isfinite(*layout.left) ) {
+        j["left"] = *layout.left;
+    }
+    if ( layout.width && std::isfinite(*layout.width) ) {
+        j["width"] = *layout.width;
+    }
+}
+
+/// @brief 从配置对象读取辅助横向区域覆盖值。
+/// @param j 输入 JSON 对象。
+/// @param layout 接收合法覆盖值的横向区域布局。
+void from_json(const nlohmann::json& j, HorizontalRegionLayout& layout)
+{
+    // 非对象或非法数值按字段回退为空，避免一项损坏拖累另一个覆盖值。
+    layout = {};
+    if ( !j.is_object() ) return;
+    if ( const auto it = j.find("left"); it != j.end() && it->is_number() ) {
+        const float value = it->get<float>();
+        if ( std::isfinite(value) ) layout.left = value;
+    }
+    if ( const auto it = j.find("width"); it != j.end() && it->is_number() ) {
+        const float value = it->get<float>();
+        if ( std::isfinite(value) && value > 0.0F ) layout.width = value;
+    }
+}
+
 void to_json(nlohmann::json& j, const TrackLayout& layout)
 {
+    // 辅助区作为嵌套对象保存，旧版本缺少这些键时仍可无损加载。
     j = nlohmann::json{ { "left", layout.left },
                         { "top", layout.top },
                         { "right", layout.right },
-                        { "bottom", layout.bottom } };
+                        { "bottom", layout.bottom },
+                        { "draftLanes", layout.draftLanes },
+                        { "annotation", layout.annotation },
+                        { "bgmLanes", layout.bgmLanes } };
 }
 
 void from_json(const nlohmann::json& j, TrackLayout& layout)
 {
-    layout.left   = j.value("left", 0.2f);
-    layout.top    = j.value("top", 0.05f);
-    layout.right  = j.value("right", 0.8f);
-    layout.bottom = j.value("bottom", 0.95f);
+    layout.left       = j.value("left", 0.2f);
+    layout.top        = j.value("top", 0.05f);
+    layout.right      = j.value("right", 0.8f);
+    layout.bottom     = j.value("bottom", 0.95f);
+    layout.draftLanes = j.value("draftLanes", HorizontalRegionLayout{});
+    layout.annotation = j.value("annotation", HorizontalRegionLayout{});
+    layout.bgmLanes   = j.value("bgmLanes", HorizontalRegionLayout{});
 }
 
 void to_json(nlohmann::json& j, const KeyCountLayoutConfig& config)

@@ -160,7 +160,8 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    const ::MMM::Logic::NoteComponent& note,
                                    const Config::EditorConfig&        config,
                                    RenderSnapshot* snapshot, float x, float y,
-                                   float w, float h, float singleTrackW,
+                                   float w, float h, float endpointCenterX,
+                                   float endpointW, float endpointH,
                                    glm::vec4 headColor, glm::vec4 bodyColor,
                                    glm::vec4 arrowColor, HoverPart glowPart)
 {
@@ -175,10 +176,10 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
         if ( itBodyH != snapshot->uvMap.end() ) {
             float drawH = h * (itBodyH->second.w /
                                snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
-            float drawW = std::abs(note.m_dtrack) * singleTrackW;
-            float startTrack = std::min(0.0f, (float)note.m_dtrack);
-            float bodyX      = x + (w - singleTrackW) * 0.5f +
-                               startTrack * singleTrackW + singleTrackW * 0.5f;
+            // 连接体直接跨越根节点与真实终点中心，保留独立区域之间的间隙。
+            const float headCenterX = x + w * 0.5F;
+            const float drawW       = std::abs(endpointCenterX - headCenterX);
+            const float bodyX       = std::min(headCenterX, endpointCenterX);
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
             batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
@@ -201,12 +202,12 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
     // 3. 箭头。
     if ( note.m_dtrack != 0 &&
          (glowPart == HoverPart::None || glowPart == HoverPart::FlickArrow) ) {
-        TextureID arrowId   = (note.m_dtrack < 0) ? TextureID::FlickArrowLeft
-                                                  : TextureID::FlickArrowRight;
-        glm::vec2 arrowSize = getDrawSize(snapshot, arrowId, w, h);
-        float     arrowX    = x + (w - singleTrackW) * 0.5f +
-                              note.m_dtrack * singleTrackW +
-                              (singleTrackW - arrowSize.x) * 0.5f;
+        TextureID arrowId = (note.m_dtrack < 0) ? TextureID::FlickArrowLeft
+                                                : TextureID::FlickArrowRight;
+        // 箭头尺寸和中心均取终点轨道，避免沿根节点轨宽连续外推。
+        glm::vec2 arrowSize =
+            getDrawSize(snapshot, arrowId, endpointW, endpointH);
+        const float arrowX = endpointCenterX - arrowSize.x * 0.5F;
         batcher.setTexture(arrowId);
         batcher.pushFilledQuad(arrowX,
                                y + arrowSize.y * 0.5f,

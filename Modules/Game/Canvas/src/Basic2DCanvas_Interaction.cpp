@@ -1634,6 +1634,9 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
+    // 横向辅助区与主轨道拖动共享一次保存终点。
+    m_auxiliaryLayoutRegion      = AuxiliaryLayoutRegion::None;
+    m_horizontalRegionDragHandle = HorizontalRegionDragHandle::None;
     m_noteScaleDragTarget.reset();
     m_noteScaleDragHandle = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragTarget.reset();
@@ -1654,6 +1657,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 {
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
         if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+              m_horizontalRegionDragHandle !=
+                  HorizontalRegionDragHandle::None ||
               m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
@@ -1670,9 +1675,51 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                : 0;
     auto       layout    = sanitizeTrackLayout(
         appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
-    const float cameraOffsetX        = currentSnapshot.canvasHorizontalOffsetX;
-    const float worldPointerX        = pointerX - cameraOffsetX;
-    float       judgmentLinePosition = sanitizeJudgmentLinePosition(
+    const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
+    const float worldPointerX = pointerX - cameraOffsetX;
+    // 辅助区布局使用零相机偏移解析为世界坐标，便于直接写回归一化值。
+    const auto auxiliaryProjection =
+        Logic::calculateCanvasLaneProjection(targetWidth,
+                                             keyCount,
+                                             currentSnapshot.bgmTrackCount,
+                                             layout,
+                                             0.0F,
+                                             true,
+                                             true,
+                                             true,
+                                             currentSnapshot.draftTrackCount,
+                                             true);
+    const auto regionBounds = [&](AuxiliaryLayoutRegion region) {
+        if ( !auxiliaryProjection.valid || targetWidth <= 0.0F ) {
+            return HorizontalRegionBounds{};
+        }
+        // 草稿/BGM 句柄覆盖完整轨道组；写回时再折算为单轨宽度。
+        switch ( region ) {
+        case AuxiliaryLayoutRegion::Draft:
+            return HorizontalRegionBounds{
+                auxiliaryProjection.draftLeftX / targetWidth,
+                (auxiliaryProjection.draftRightX -
+                 auxiliaryProjection.draftLeftX) /
+                    targetWidth,
+            };
+        case AuxiliaryLayoutRegion::Annotation:
+            return HorizontalRegionBounds{
+                auxiliaryProjection.annotationLeftX / targetWidth,
+                (auxiliaryProjection.annotationRightX -
+                 auxiliaryProjection.annotationLeftX) /
+                    targetWidth,
+            };
+        case AuxiliaryLayoutRegion::Bgm:
+            return HorizontalRegionBounds{
+                auxiliaryProjection.bgmLeftX / targetWidth,
+                (auxiliaryProjection.bgmRightX - auxiliaryProjection.bgmLeftX) /
+                    targetWidth,
+            };
+        case AuxiliaryLayoutRegion::None: break;
+        }
+        return HorizontalRegionBounds{};
+    };
+    float judgmentLinePosition = sanitizeJudgmentLinePosition(
         appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
     const float dpiScale                 = appConfig.getWindowContentScale();
     const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
@@ -1765,6 +1812,38 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                            moveHandleRadius);
     }
 
+    AuxiliaryLayoutRegion hoveredAuxiliaryRegion = AuxiliaryLayoutRegion::None;
+    HorizontalRegionDragHandle hoveredHorizontalHandle =
+        HorizontalRegionDragHandle::None;
+    if ( m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ) {
+        // 拖动期间锁定最初区域，避免重叠句柄导致目标切换。
+        hoveredAuxiliaryRegion  = m_auxiliaryLayoutRegion;
+        hoveredHorizontalHandle = m_horizontalRegionDragHandle;
+    } else if ( auxiliaryProjection.valid && isHovered &&
+                hoveredHandle == TrackLayoutDragHandle::None &&
+                !hoveredNote.has_value() && !hoveredComponent.has_value() ) {
+        constexpr std::array regions{
+            AuxiliaryLayoutRegion::Annotation,
+            AuxiliaryLayoutRegion::Draft,
+            AuxiliaryLayoutRegion::Bgm,
+        };
+        for ( const auto region : regions ) {
+            const auto hit =
+                hitTestHorizontalRegion(regionBounds(region),
+                                        layout.top * targetHeight,
+                                        layout.bottom * targetHeight,
+                                        worldPointerX,
+                                        pointerY,
+                                        targetWidth,
+                                        edgeHitRadius,
+                                        moveHandleRadius);
+            if ( hit == HorizontalRegionDragHandle::None ) continue;
+            hoveredAuxiliaryRegion  = region;
+            hoveredHorizontalHandle = hit;
+            break;
+        }
+    }
+
     const Logic::CanvasComponentDragHandle hoveredResizeHandle =
         hoveredNoteHandle != Logic::CanvasComponentDragHandle::None
             ? hoveredNoteHandle
@@ -1781,6 +1860,12 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     } else if ( hoveredResizeHandle ==
                 Logic::CanvasComponentDragHandle::Move ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else if ( hoveredHorizontalHandle == HorizontalRegionDragHandle::Left ||
+                hoveredHorizontalHandle == HorizontalRegionDragHandle::Right ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    } else if ( hoveredHorizontalHandle == HorizontalRegionDragHandle::Move ) {
+        // 辅助区域严格限制为 X 方向移动。
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     } else if ( hoveredHandle == TrackLayoutDragHandle::Left ||
                 hoveredHandle == TrackLayoutDragHandle::Right ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -1871,6 +1956,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 centerX - pointerX,
                 centerY - pointerY,
             };
+        } else if ( hoveredHorizontalHandle !=
+                    HorizontalRegionDragHandle::None ) {
+            // 仅在首次按下时物化当前推导边界，保持旧配置迁移兼容。
+            m_auxiliaryLayoutRegion      = hoveredAuxiliaryRegion;
+            m_horizontalRegionDragHandle = hoveredHorizontalHandle;
+            m_horizontalRegionDragStart  = regionBounds(hoveredAuxiliaryRegion);
+            m_horizontalRegionPointerStart = worldPointerX / targetWidth;
         } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
             m_trackLayoutDragHandle   = hoveredHandle;
             m_trackLayoutDragStart    = layout;
@@ -2228,6 +2320,66 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
+         m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        const float            normalizedX     = worldPointerX / targetWidth;
+        HorizontalRegionBounds candidateBounds = m_horizontalRegionDragStart;
+        if ( m_horizontalRegionDragHandle ==
+             HorizontalRegionDragHandle::Move ) {
+            candidateBounds = moveHorizontalRegion(
+                m_horizontalRegionDragStart,
+                normalizedX - m_horizontalRegionPointerStart);
+        } else {
+            candidateBounds =
+                resizeHorizontalRegion(m_horizontalRegionDragStart,
+                                       m_horizontalRegionDragHandle,
+                                       normalizedX);
+        }
+
+        Config::TrackLayout             candidate   = layout;
+        Config::HorizontalRegionLayout* target      = nullptr;
+        float                           storedWidth = candidateBounds.width;
+        // 草稿与 BGM 配置保存单轨宽度，批注区保存整个区域宽度。
+        switch ( m_auxiliaryLayoutRegion ) {
+        case AuxiliaryLayoutRegion::Draft:
+            target = &candidate.draftLanes;
+            storedWidth /= static_cast<float>(
+                std::max(auxiliaryProjection.draftLaneCount, 1U));
+            break;
+        case AuxiliaryLayoutRegion::Annotation:
+            target = &candidate.annotation;
+            break;
+        case AuxiliaryLayoutRegion::Bgm:
+            target = &candidate.bgmLanes;
+            storedWidth /= static_cast<float>(
+                std::max(auxiliaryProjection.bgmLaneCount, 1U));
+            break;
+        case AuxiliaryLayoutRegion::None: break;
+        }
+        if ( target ) {
+            constexpr float layoutEpsilon = 1e-6F;
+            const bool      changed =
+                !target->left || !target->width ||
+                std::abs(*target->left - candidateBounds.left) >
+                    layoutEpsilon ||
+                std::abs(*target->width - storedWidth) > layoutEpsilon;
+            if ( changed ) {
+                // 首次修改同时物化 X 与宽度，从此不再受玩家轨道宽度影响。
+                target->left  = candidateBounds.left;
+                target->width = storedWidth;
+                appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
+                    keyCount) = candidate;
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
+                        appConfig.getEditorConfig() }));
+                m_layoutConfigurationChanged = true;
+                layout                       = candidate;
+            }
+        }
+    }
+
+    if ( !m_noteScaleDragTarget.has_value() &&
+         !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         const float         normalizedX = worldPointerX / targetWidth;
@@ -2350,6 +2502,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
           m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
@@ -2360,6 +2513,18 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
     judgmentLinePosition = sanitizeJudgmentLinePosition(
         appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
+    // 写回配置后重新投影，确保本帧句柄紧随拖动结果。
+    const auto displayAuxiliaryProjection =
+        Logic::calculateCanvasLaneProjection(targetWidth,
+                                             keyCount,
+                                             currentSnapshot.bgmTrackCount,
+                                             layout,
+                                             cameraOffsetX,
+                                             true,
+                                             true,
+                                             true,
+                                             currentSnapshot.draftTrackCount,
+                                             true);
     const ImVec2 canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2 canvasMax{ canvasScreenX + targetWidth,
                             canvasScreenY + targetHeight };
@@ -2413,6 +2578,49 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     auto        handleColor      = [&](TrackLayoutDragHandle handle) {
         return hoveredHandle == handle ? highlightedColor : edgeColor;
     };
+
+    // 三个辅助区使用不同颜色，矩形纵向边界始终绑定主轨道区。
+    const auto drawAuxiliaryRegion = [&](AuxiliaryLayoutRegion region,
+                                         float                 left,
+                                         float                 right,
+                                         ImU32                 color) {
+        if ( !displayAuxiliaryProjection.valid || right <= left ) return;
+        const ImVec2 minimum{ canvasScreenX + left, layoutMin.y };
+        const ImVec2 maximum{ canvasScreenX + right, layoutMax.y };
+        const bool   active      = hoveredAuxiliaryRegion == region;
+        const ImU32  activeColor = active ? highlightedColor : color;
+        drawList->AddRectFilled(
+            minimum, maximum, color & IM_COL32(255, 255, 255, 30));
+        drawList->AddRect(
+            minimum, maximum, activeColor, 0.0F, 0, edgeThickness);
+        const ImVec2 center{ (minimum.x + maximum.x) * 0.5F,
+                             (minimum.y + maximum.y) * 0.5F };
+        drawList->AddCircleFilled(
+            center, std::max(4.0F, 5.0F * dpiScale), activeColor);
+        // 左右短横线明确表示只能沿 X 方向缩放和移动。
+        const float tick = std::max(5.0F, 7.0F * dpiScale);
+        drawList->AddLine({ minimum.x, center.y - tick },
+                          { minimum.x, center.y + tick },
+                          activeColor,
+                          edgeThickness);
+        drawList->AddLine({ maximum.x, center.y - tick },
+                          { maximum.x, center.y + tick },
+                          activeColor,
+                          edgeThickness);
+    };
+    drawAuxiliaryRegion(AuxiliaryLayoutRegion::Draft,
+                        displayAuxiliaryProjection.draftLeftX,
+                        displayAuxiliaryProjection.draftRightX,
+                        IM_COL32(96, 220, 255, 220));
+    drawAuxiliaryRegion(AuxiliaryLayoutRegion::Annotation,
+                        displayAuxiliaryProjection.annotationLeftX,
+                        displayAuxiliaryProjection.annotationRightX,
+                        IM_COL32(255, 190, 72, 230));
+    drawAuxiliaryRegion(AuxiliaryLayoutRegion::Bgm,
+                        displayAuxiliaryProjection.bgmLeftX,
+                        displayAuxiliaryProjection.bgmRightX,
+                        IM_COL32(176, 112, 255, 230));
+
     drawList->AddLine({ layoutMin.x, layoutMin.y },
                       { layoutMin.x, layoutMax.y },
                       handleColor(TrackLayoutDragHandle::Left),
@@ -2673,8 +2881,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         targetWidth,
         currentSnapshot.trackCount,
         currentSnapshot.bgmTrackCount,
-        layout.left,
-        layout.right,
+        layout,
         currentSnapshot.canvasHorizontalOffsetX,
         true,
         currentSnapshot.bmsEditingEnabled,
@@ -3067,8 +3274,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             targetWidth,
             currentSnapshot->trackCount,
             currentSnapshot->bgmTrackCount,
-            layout.left,
-            layout.right,
+            layout,
             currentSnapshot->canvasHorizontalOffsetX,
             true,
             currentSnapshot->bmsEditingEnabled,
@@ -3126,16 +3332,16 @@ void Basic2DCanvasInteraction::handleInteractions(
         targetWidth,
         currentSnapshot->trackCount,
         currentSnapshot->bgmTrackCount,
-        layout.left,
-        layout.right,
+        layout,
         currentSnapshot->canvasHorizontalOffsetX,
         true,
         currentSnapshot->bmsEditingEnabled,
         currentSnapshot->draftLanesEnabled,
         currentSnapshot->draftTrackCount,
         true);
-    const float trackLeftX  = laneProjection.draftLeftX;
-    const float trackRightX = laneProjection.bgmRightX;
+    const auto  contentBounds = laneProjection.contentBounds();
+    const float trackLeftX    = contentBounds.leftX;
+    const float trackRightX   = contentBounds.rightX;
     const float normY =
         targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
     const bool isMouseInTrackLayout =
@@ -3148,6 +3354,7 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     if ( !isLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
           m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value() ||
           m_layoutConfigurationChanged) ) {
@@ -3204,6 +3411,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                     Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             }
             if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+                 m_horizontalRegionDragHandle !=
+                     HorizontalRegionDragHandle::None ||
                  m_noteScaleDragTarget.has_value() ||
                  m_canvasComponentDragTarget.has_value() ||
                  m_layoutConfigurationChanged ) {

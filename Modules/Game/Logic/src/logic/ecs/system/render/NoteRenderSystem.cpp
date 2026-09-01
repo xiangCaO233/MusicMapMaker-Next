@@ -1,8 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
-#include "logic/ecs/components/InteractionComponent.h"
-#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
@@ -70,50 +68,6 @@ glm::vec4 laneColor(const std::string& key, glm::vec4 fallback)
     const auto color = Config::SkinManager::instance().getColor(key);
     if ( isMissingSkinColor(color) ) return fallback;
     return { color.r, color.g, color.b, color.a };
-}
-
-/// @brief 判断当前拖动中的玩家物件是否已进入 BGM 轨道区。
-/// @param registry 玩家物件注册表。
-/// @param playerTrackCount 玩家轨道数量。
-/// @return 至少一个拖动物件或其 Flick 端点进入 BGM 区时返回 true。
-/// @warning 主画布快照热路径：仅在拖动期间遍历已固定的局部实体列表，
-/// 禁止退化为完整 Registry 扫描。
-bool hasDraggedNoteAcrossPlayerBoundary(entt::registry& registry,
-                                        std::int32_t    playerTrackCount)
-{
-    if ( playerTrackCount <= 0 ) return false;
-    const auto* pinned = registry.ctx().find<DragRenderPinnedEntities>();
-    if ( !pinned || !pinned->entities ) return false;
-
-    const auto crossesBoundary = [playerTrackCount](::MMM::NoteType type,
-                                                    std::int32_t    track,
-                                                    std::int32_t    dtrack) {
-        std::int64_t rightTrack = track;
-        if ( type == ::MMM::NoteType::FLICK ) {
-            rightTrack = std::max<std::int64_t>(
-                rightTrack, static_cast<std::int64_t>(track) + dtrack);
-        }
-        return rightTrack >= playerTrackCount;
-    };
-
-    for ( const auto entity : *pinned->entities ) {
-        const auto* note = registry.try_get<const NoteComponent>(entity);
-        if ( !note ) continue;
-        const auto* interaction =
-            registry.try_get<const InteractionComponent>(entity);
-        if ( !interaction || !interaction->isDragging ) continue;
-        if ( crossesBoundary(
-                 note->m_type, note->m_trackIndex, note->m_dtrack) ) {
-            return true;
-        }
-        for ( const auto& subNote : note->m_subNotes ) {
-            if ( crossesBoundary(
-                     subNote.type, subNote.trackIndex, subNote.dtrack) ) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 /// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
@@ -317,19 +271,29 @@ void NoteRenderSystem::generateSnapshot(
                                       tempBY,
                                       tempSTW);
         if ( isMainCanvas && config.settings.enableDraftLanes ) {
+            const auto laneProjection =
+                calculateCanvasLaneProjection(viewportWidth,
+                                              trackCount,
+                                              bgmTrackCount,
+                                              config.visual.trackLayout,
+                                              snapshot->canvasHorizontalOffsetX,
+                                              true,
+                                              config.settings.enableBmsEditing,
+                                              true,
+                                              draftTrackCount,
+                                              true);
             const auto visibleDraftTrackCount =
-                std::max(0, draftTrackCount) + 1;
-            const float draftLeftX =
-                tempLX - static_cast<float>(visibleDraftTrackCount) * tempSTW;
+                static_cast<std::int32_t>(laneProjection.draftLaneCount);
+            // 草稿打击特效与草稿背景共用独立的 X 和单轨宽度。
             hitFXSystem->generateSnapshot(batcher,
                                           renderTime,
                                           config,
                                           visibleDraftTrackCount,
                                           judgmentLineY,
-                                          draftLeftX,
+                                          laneProjection.draftLeftX,
                                           tempTY,
                                           tempBY,
-                                          tempSTW,
+                                          laneProjection.draftLaneWidth,
                                           true);
         }
     }
@@ -479,8 +443,7 @@ void NoteRenderSystem::generateSnapshot(
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
                                               bgmTrackCount,
-                                              config.visual.trackLayout.left,
-                                              config.visual.trackLayout.right,
+                                              config.visual.trackLayout,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
@@ -513,11 +476,11 @@ void NoteRenderSystem::generateSnapshot(
                     0.42F,
                     false);
             }
-            const float visibleLeft =
-                std::max(0.0F, laneProjection.annotationLeftX);
-            const float visibleRight =
-                std::min(viewportWidth, laneProjection.bgmRightX);
-            if ( visibleRight > visibleLeft ) {
+            const auto drawAuxiliaryBeatLineRegion = [&](float regionLeft,
+                                                         float regionRight) {
+                const float visibleLeft  = std::max(0.0F, regionLeft);
+                const float visibleRight = std::min(viewportWidth, regionRight);
+                if ( visibleRight <= visibleLeft ) return;
                 batcher.setScissor(visibleLeft,
                                    topY,
                                    visibleRight - visibleLeft,
@@ -537,8 +500,24 @@ void NoteRenderSystem::generateSnapshot(
                                                 revealBeatLinesNearCursor,
                                                 0.28F,
                                                 false);
-                batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
+            };
+            // 批注与 BGM 相交时绘制一次并集，分离时分别绘制，避免拍线穿越空隙。
+            const bool auxiliaryRegionsOverlap =
+                laneProjection.annotationLeftX < laneProjection.bgmRightX &&
+                laneProjection.bgmLeftX < laneProjection.annotationRightX;
+            if ( auxiliaryRegionsOverlap ) {
+                drawAuxiliaryBeatLineRegion(
+                    std::min(laneProjection.annotationLeftX,
+                             laneProjection.bgmLeftX),
+                    std::max(laneProjection.annotationRightX,
+                             laneProjection.bgmRightX));
+            } else {
+                drawAuxiliaryBeatLineRegion(laneProjection.annotationLeftX,
+                                            laneProjection.annotationRightX);
+                drawAuxiliaryBeatLineRegion(laneProjection.bgmLeftX,
+                                            laneProjection.bgmRightX);
             }
+            batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         }
 
         if ( shouldDrawTimingLines ) {
@@ -565,22 +544,22 @@ void NoteRenderSystem::generateSnapshot(
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
                                               bgmTrackCount,
-                                              config.visual.trackLayout.left,
-                                              config.visual.trackLayout.right,
+                                              config.visual.trackLayout,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
                                               config.settings.enableDraftLanes,
                                               draftTrackCount,
                                               true);
-            noteLaneProjectionPtr = &noteLaneProjection;
+            noteLaneProjectionPtr    = &noteLaneProjection;
+            const auto contentBounds = noteLaneProjection.contentBounds();
+            // 草稿与 BGM 区域
+            // 可被移动到任意一侧，音符与遮罩裁剪统一覆盖真实外包范围。
             noteRenderClipLeftX =
-                std::clamp(noteLaneProjection.draftLeftX, 0.0F, viewportWidth);
+                std::clamp(contentBounds.leftX, 0.0F, viewportWidth);
             noteRenderClipRightX =
-                std::clamp(noteLaneProjection.bgmRightX, 0.0F, viewportWidth);
-            if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
-                noteRenderRightX = noteLaneProjection.bgmRightX;
-            }
+                std::clamp(contentBounds.rightX, 0.0F, viewportWidth);
+            noteRenderRightX = contentBounds.rightX;
             batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
         } else {
             batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
@@ -607,8 +586,7 @@ void NoteRenderSystem::generateSnapshot(
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
                                               bgmTrackCount,
-                                              config.visual.trackLayout.left,
-                                              config.visual.trackLayout.right,
+                                              config.visual.trackLayout,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
@@ -642,17 +620,17 @@ void NoteRenderSystem::generateSnapshot(
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
                                               bgmTrackCount,
-                                              config.visual.trackLayout.left,
-                                              config.visual.trackLayout.right,
+                                              config.visual.trackLayout,
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
                                               config.settings.enableDraftLanes,
                                               draftTrackCount,
                                               true);
-            const float clipLeft = std::max(0.0F, laneProjection.draftLeftX);
+            const auto  contentBounds = laneProjection.contentBounds();
+            const float clipLeft      = std::max(0.0F, contentBounds.leftX);
             const float clipRight =
-                std::min(viewportWidth, laneProjection.bgmRightX);
+                std::min(viewportWidth, contentBounds.rightX);
             batcher.setScissor(clipLeft,
                                -viewportHeight * 0.5F,
                                std::max(0.0F, clipRight - clipLeft),
@@ -1318,8 +1296,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
             calculateCanvasLaneProjection(viewportWidth,
                                           trackCount,
                                           bgmTrackCount,
-                                          config.visual.trackLayout.left,
-                                          config.visual.trackLayout.right,
+                                          config.visual.trackLayout,
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
                                           config.settings.enableBmsEditing,
@@ -1350,7 +1327,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                 laneProjection.draftLeftX,
                 topY,
                 bottomY,
-                singleTrackW,
+                laneProjection.draftLaneWidth,
                 trackTint);
             batcher.setTexture(TextureID::None);
             batcher.pushQuad(
@@ -1370,7 +1347,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                 static_cast<std::int32_t>(laneProjection.draftLaneCount),
                 laneProjection.draftLeftX,
                 judgmentLineY,
-                singleTrackW,
+                laneProjection.draftLaneWidth,
                 laneProjection.draftRightX - laneProjection.draftLeftX,
                 config,
                 judgmentTint);

@@ -216,15 +216,14 @@ void SampleRenderSystem::renderLaneLayout(
                     labelBuffer.data(),
                     static_cast<std::size_t>(result.out - labelBuffer.data()));
             }
-            renderMarqueeCanvasAsciiText(
-                batcher,
-                labelText,
-                bounds->leftX + 4.0F,
-                topY + 4.0F,
-                LANE_LABEL_FONT_PIXEL_HEIGHT,
-                projection.player.singleTrackWidth - 8.0F,
-                draftLabel,
-                batcher.snapshot->snapshotSysTime);
+            renderMarqueeCanvasAsciiText(batcher,
+                                         labelText,
+                                         bounds->leftX + 4.0F,
+                                         topY + 4.0F,
+                                         LANE_LABEL_FONT_PIXEL_HEIGHT,
+                                         projection.draftLaneWidth - 8.0F,
+                                         draftLabel,
+                                         batcher.snapshot->snapshotSysTime);
         }
     }
 
@@ -255,7 +254,7 @@ void SampleRenderSystem::renderLaneLayout(
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(bounds->leftX,
                          bottomY,
-                         projection.player.singleTrackWidth,
+                         projection.bgmLaneWidth,
                          bottomY - topY,
                          index % 2 == 0 ? background : alternate);
         batcher.pushQuad(bounds->leftX, bottomY, 1.5F, bottomY - topY, border);
@@ -281,7 +280,7 @@ void SampleRenderSystem::renderLaneLayout(
                                      bounds->leftX + 4.0F,
                                      topY + 4.0F,
                                      LANE_LABEL_FONT_PIXEL_HEIGHT,
-                                     projection.player.singleTrackWidth - 8.0F,
+                                     projection.bgmLaneWidth - 8.0F,
                                      label,
                                      batcher.snapshot->snapshotSysTime);
     }
@@ -312,7 +311,7 @@ void SampleRenderSystem::renderSamples(
         projection.visibleBgmRange(0.0F, viewportWidth);
 
     const double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
-    const double topAbsY = currentAbsY + (judgmentLineY - topY) /
+    const double topAbsY     = currentAbsY + (judgmentLineY - topY) /
                                              static_cast<double>(renderScaleY);
     const double bottomAbsY =
         currentAbsY +
@@ -347,11 +346,11 @@ void SampleRenderSystem::renderSamples(
     const auto textColor = audioObjectLabelColor();
     const auto noteTextureIt =
         snapshot->uvMap.find(static_cast<std::uint32_t>(TextureID::Note));
-    const bool  hasNoteTexture = noteTextureIt != snapshot->uvMap.end() &&
-                                 std::isfinite(noteTextureIt->second.z) &&
-                                 std::isfinite(noteTextureIt->second.w) &&
-                                 noteTextureIt->second.z > 1e-6F &&
-                                 noteTextureIt->second.w > 1e-6F;
+    const bool hasNoteTexture = noteTextureIt != snapshot->uvMap.end() &&
+                                std::isfinite(noteTextureIt->second.z) &&
+                                std::isfinite(noteTextureIt->second.w) &&
+                                noteTextureIt->second.z > 1e-6F &&
+                                noteTextureIt->second.w > 1e-6F;
     const float noteTextureAspect =
         hasNoteTexture ? noteTextureIt->second.z / noteTextureIt->second.w
                        : 1.0F;
@@ -432,7 +431,8 @@ void SampleRenderSystem::renderSamples(
                                 effectiveTime, currentAbsY, effectiveTime)) *
                                 renderScaleY;
 
-        const float laneWidth = projection.player.singleTrackWidth;
+        // 跨区拖动时直接使用当前地址边界，视觉和命中宽度保持一致。
+        const float laneWidth = bounds->rightX - bounds->leftX;
         const float bodyWidth = laneWidth * config.visual.noteScaleX;
         const float bodyHeight =
             (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
@@ -594,7 +594,8 @@ void SampleRenderSystem::renderSamples(
                 static_cast<float>(cache->getDisplayDelta(
                     sample.m_timestamp, currentAbsY, sample.m_timestamp)) *
                     renderScaleY;
-            const float laneWidth = projection.player.singleTrackWidth;
+            // 发光层沿用实际目标轨道宽度，避免拖动预览错位。
+            const float laneWidth = bounds->rightX - bounds->leftX;
             const float bodyWidth = laneWidth * config.visual.noteScaleX;
             const float bodyHeight =
                 (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
@@ -630,7 +631,8 @@ void SampleRenderSystem::renderSamples(
         return;
     }
 
-    const float laneWidth = projection.player.singleTrackWidth;
+    // 画笔预览使用目标 BGM 轨道的独立宽度。
+    const float laneWidth = brushBounds->rightX - brushBounds->leftX;
     const float bodyWidth = laneWidth * config.visual.noteScaleX;
     const float bodyHeight =
         (laneWidth / noteTextureAspect) * config.visual.noteScaleY;

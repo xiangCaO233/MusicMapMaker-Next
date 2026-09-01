@@ -121,9 +121,10 @@ bool glyphGeometryEqual(const std::vector<GlyphVertex>& lhs,
 /// @param cameraId 目标画布 ID。
 /// @param snapshotSysTime 标签滚动使用的单调时钟秒数。
 /// @param noteScaleX 物件横向缩放。
+/// @param useDraftLane 是否在自定义草稿轨道渲染绑定物件。
 void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
                     std::string_view cameraId, double snapshotSysTime,
-                    float noteScaleX = 1.2F)
+                    float noteScaleX = 1.2F, bool useDraftLane = false)
 {
     entt::registry noteRegistry;
     entt::registry sampleRegistry;
@@ -139,8 +140,13 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
         });
 
     MMM::Config::EditorConfig config;
-    config.visual.trackLayout.left      = 0.1F;
-    config.visual.trackLayout.right     = 0.5F;
+    config.visual.trackLayout.left  = 0.1F;
+    config.visual.trackLayout.right = 0.5F;
+    if ( useDraftLane ) {
+        config.visual.trackLayout.draftLanes.left  = -0.21F;
+        config.visual.trackLayout.draftLanes.width = 0.06F;
+        config.settings.enableDraftLanes           = true;
+    }
     config.visual.noteScaleX            = noteScaleX;
     config.visual.noteScaleY            = 1.0F;
     config.visual.showBoundSampleLabels = enabled;
@@ -157,7 +163,8 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
     MMM::Logic::NoteComponent note;
     note.m_timestamp     = 0.0;
     note.m_type          = MMM::NoteType::NOTE;
-    note.m_trackIndex    = 0;
+    note.m_trackIndex    = useDraftLane ? -1 : 0;
+    note.m_isDraft       = useDraftLane;
     note.m_sampleBinding = MMM::AudioSampleBinding{
         .m_audioResourceId = "very_long_bound_effect_resource_name.wav",
         .m_volume          = 0.75F,
@@ -227,6 +234,31 @@ bool testBoundLabelToggleAndMainCanvasScope()
     return true;
 }
 
+/// @brief 验证草稿绑定音效标签使用独立草稿轨道范围。
+/// @return 标签字形存在且全部限制在自定义右侧草稿轨内时返回 true。
+bool testDraftBoundLabelUsesIndependentLane()
+{
+    MMM::Logic::RenderSnapshot snapshot;
+    renderBoundTap(snapshot, true, "Basic2DCanvas", 0.0, 1.2F, true);
+    constexpr float draftLaneLeft  = 24.0F;
+    constexpr float draftLaneRight = 72.0F;
+    bool            foundGlyph     = false;
+    for ( const auto& vertex : snapshot.vertices ) {
+        if ( vertex.uv.u < 0.6F || vertex.uv.v < 0.69F ||
+             vertex.pos.y < 200.0F || vertex.pos.y > 350.0F ) {
+            continue;
+        }
+        foundGlyph = true;
+        if ( vertex.pos.x < draftLaneLeft + 2.0F - 1e-4F ||
+             vertex.pos.x > draftLaneRight - 2.0F + 1e-4F ) {
+            XERROR("Draft bound label escaped lane: x={}", vertex.pos.x);
+            return false;
+        }
+    }
+    if ( !foundGlyph ) XERROR("Draft bound label did not render glyphs");
+    return foundGlyph;
+}
+
 /// @brief 验证玩家物件标签复用采样标签的滚动与固定轨道裁剪语义。
 /// @return 单调时钟推动文本且横向物件缩放不改变标签范围时返回 true。
 bool testBoundLabelMarqueeAndFixedLaneWidth()
@@ -272,6 +304,7 @@ bool testBoundLabelMarqueeAndFixedLaneWidth()
 int main()
 {
     return testBoundLabelToggleAndMainCanvasScope() &&
+                   testDraftBoundLabelUsesIndependentLane() &&
                    testBoundLabelMarqueeAndFixedLaneWidth()
                ? 0
                : 1;

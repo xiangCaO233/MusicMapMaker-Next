@@ -617,6 +617,13 @@ bool testKeyCountLayoutIsolationAndMigration()
     auto& fourTrackLayout = source.editableTrackLayoutForKeyCount(4);
     fourTrackLayout.left  = 0.21F;
     fourTrackLayout.right = 0.61F;
+    // 三类辅助区域均应按 Key 数独立保存横向覆盖值。
+    fourTrackLayout.draftLanes.left                   = -0.18F;
+    fourTrackLayout.draftLanes.width                  = 0.07F;
+    fourTrackLayout.annotation.left                   = 0.64F;
+    fourTrackLayout.annotation.width                  = 0.045F;
+    fourTrackLayout.bgmLanes.left                     = 0.72F;
+    fourTrackLayout.bgmLanes.width                    = 0.09F;
     source.editableJudgmentLinePositionForKeyCount(4) = 0.74F;
     auto& fourComponents = source.editableCanvasComponentsForKeyCount(4);
     fourComponents.beatNumber.visible = true;
@@ -656,11 +663,33 @@ bool testKeyCountLayoutIsolationAndMigration()
               { { "beatNumber", { { "anchorX", 0.29F } } } } },
         }
             .get<MMM::Config::VisualConfig>();
+    const auto malformed =
+        nlohmann::json{
+            { "draftLanes", { { "left", "bad" }, { "width", -0.1F } } },
+            { "annotation", nlohmann::json::array() },
+            { "bgmLanes", { { "left", nullptr }, { "width", 0.0F } } },
+        }
+            .get<MMM::Config::TrackLayout>();
 
     if ( source.keyCountLayouts.size() != 2U ||
          restored.keyCountLayouts.size() != 2U ||
          !near(restoredFourTrack.left, 0.21F) ||
          !near(restoredFourTrack.right, 0.61F) ||
+         !restoredFourTrack.draftLanes.left ||
+         !near(*restoredFourTrack.draftLanes.left, -0.18F) ||
+         !restoredFourTrack.draftLanes.width ||
+         !near(*restoredFourTrack.draftLanes.width, 0.07F) ||
+         !restoredFourTrack.annotation.left ||
+         !near(*restoredFourTrack.annotation.left, 0.64F) ||
+         !restoredFourTrack.annotation.width ||
+         !near(*restoredFourTrack.annotation.width, 0.045F) ||
+         !restoredFourTrack.bgmLanes.left ||
+         !near(*restoredFourTrack.bgmLanes.left, 0.72F) ||
+         !restoredFourTrack.bgmLanes.width ||
+         !near(*restoredFourTrack.bgmLanes.width, 0.09F) ||
+         restoredSevenTrack.draftLanes.left ||
+         restoredSevenTrack.annotation.width ||
+         restoredSevenTrack.bgmLanes.left ||
          !near(restoredSevenTrack.left, 0.31F) ||
          !near(restoredSevenTrack.right, 0.91F) ||
          !near(restoredLegacyTrack.left, 0.11F) ||
@@ -676,6 +705,15 @@ bool testKeyCountLayoutIsolationAndMigration()
          !near(materialized.judgeline_pos, 0.88F) ||
          !near(materialized.canvasComponents.beatNumber.anchorX, 0.67F) ||
          !legacy.keyCountLayouts.empty() ||
+         legacy.trackLayout.draftLanes.left ||
+         legacy.trackLayout.draftLanes.width ||
+         legacy.trackLayout.annotation.left ||
+         legacy.trackLayout.annotation.width ||
+         legacy.trackLayout.bgmLanes.left ||
+         legacy.trackLayout.bgmLanes.width || malformed.draftLanes.left ||
+         malformed.draftLanes.width || malformed.annotation.left ||
+         malformed.annotation.width || malformed.bgmLanes.left ||
+         malformed.bgmLanes.width ||
          !near(legacy.trackLayoutForKeyCount(4).left, 0.17F) ||
          !near(legacy.judgmentLinePositionForKeyCount(7), 0.79F) ||
          !near(legacy.canvasComponentsForKeyCount(9).beatNumber.anchorX,

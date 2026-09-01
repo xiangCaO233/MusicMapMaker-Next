@@ -344,8 +344,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         camera.viewportWidth,
         ctx.trackCount,
         ctx.bgmTrackCount,
-        ctx.lastConfig.visual.trackLayout.left,
-        ctx.lastConfig.visual.trackLayout.right,
+        ctx.lastConfig.visual.trackLayout,
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
@@ -356,18 +355,10 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
 
     CanvasLaneAddress address;
     if ( isMainCanvas ) {
-        const auto lane = projection.laneAt(cmd.mouseX);
-        if ( lane ) {
-            address = *lane;
-        } else if ( cmd.mouseX < projection.player.leftX ) {
-            address = { CanvasLaneKind::Draft, 0 };
-        } else if ( projection.bgmLaneCount > 0 ) {
-            address = { CanvasLaneKind::Bgm,
-                        projection.bgmLaneCount - std::uint32_t{ 1 } };
-        } else {
-            address = { CanvasLaneKind::Player,
-                        projection.playerLaneCount - std::uint32_t{ 1 } };
-        }
+        // 独立区域之间的空隙按真实几何吸附；批注区保持上一拖动目标。
+        const auto lane = projection.nearestLane(cmd.mouseX);
+        if ( !lane ) return std::nullopt;
+        address = *lane;
     } else {
         address = {
             CanvasLaneKind::Player,
@@ -376,12 +367,19 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         };
     }
 
+    const auto absoluteTrack = address.absoluteTrack(projection.playerLaneCount,
+                                                     projection.draftLaneCount);
+    const auto laneBounds    = projection.bounds(address);
+    if ( !laneBounds ) return std::nullopt;
+    // 返回与绝对轨道公式兼容的区域原点，草稿/BGM 拖动不会再借用玩家宽度。
+    const float laneWidth = laneBounds->rightX - laneBounds->leftX;
+    const float domainOrigin =
+        laneBounds->leftX - static_cast<float>(absoluteTrack) * laneWidth;
     return UnifiedDragTarget{
         .time             = targetTime,
-        .absoluteTrack    = address.absoluteTrack(projection.playerLaneCount,
-                                                  projection.draftLaneCount),
-        .leftX            = projection.player.leftX,
-        .singleTrackWidth = projection.player.singleTrackWidth,
+        .absoluteTrack    = absoluteTrack,
+        .leftX            = domainOrigin,
+        .singleTrackWidth = laneWidth,
     };
 }
 
@@ -394,8 +392,8 @@ bool noteFitsTrackDomain(const NoteComponent& note, std::int32_t trackCount)
     if ( trackCount <= 0 ) return false;
     const bool draftDomain = note.m_trackIndex < 0;
     const auto fits        = [trackCount, draftDomain](::MMM::NoteType type,
-                                                       std::int32_t    track,
-                                                       std::int32_t    dtrack) {
+                                                std::int32_t    track,
+                                                std::int32_t    dtrack) {
         const auto endTrack = static_cast<std::int64_t>(track) + dtrack;
         if ( draftDomain ) {
             return track < 0 &&
@@ -1008,9 +1006,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
