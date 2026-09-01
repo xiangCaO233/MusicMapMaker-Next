@@ -1,12 +1,14 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/GrabTool.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,12 +32,14 @@ void configureDragContext(MMM::Logic::SessionContext& context)
     // 鼠标固定在判定线上，因此所有预览帧只比较横向轨道变化。
     context.currentTime = 1.0;
     context.animateTime = 1.0;
-    // 玩家区固定为 [100, 500)，每轨宽 100 逻辑像素。
-    // 该布局让 350 精确命中玩家轨 2，50 精确命中草稿轨 -1。
+    // 玩家区固定为 [100, 500)，每轨宽 100；Draft 独立为 [-150, 50)，每轨宽 40。
+    // 两区保留 50 像素间隙，350 命中玩家轨 2，30 命中最右 Draft 轨 -1。
     // 判定线位于 300，和后续更新命令的 mouseY 保持一致。
-    context.lastConfig.visual.trackLayout.left  = 0.1F;
-    context.lastConfig.visual.trackLayout.right = 0.5F;
-    context.lastConfig.visual.judgeline_pos     = 0.5F;
+    context.lastConfig.visual.trackLayout.left             = 0.1F;
+    context.lastConfig.visual.trackLayout.right            = 0.5F;
+    context.lastConfig.visual.trackLayout.draftLanes.left  = -0.15F;
+    context.lastConfig.visual.trackLayout.draftLanes.width = 0.04F;
+    context.lastConfig.visual.judgeline_pos                = 0.5F;
     // 同时启用草稿轨与折线编辑，确保两个选中物件都进入整组拖动状态。
     // 这里正是生产环境触发统一轨道求解器的配置组合。
     context.lastConfig.settings.enableDraftLanes      = true;
@@ -59,6 +63,19 @@ void configureDragContext(MMM::Logic::SessionContext& context)
     cache.rebuild(context.timelineRegistry,
                   context.lastConfig,
                   context.currentBeatmap.get());
+}
+
+/// @brief 检查实体 Transform 是否位于统一投影给出的真实轨道左边界。
+/// @param context 当前会话。
+/// @param entity 待检查音符实体。
+/// @param expectedX 预期横坐标。
+/// @return 横向误差小于测试容差时返回 true。
+bool transformXNear(const MMM::Logic::SessionContext& context,
+                    entt::entity entity, float expectedX)
+{
+    const auto& transform =
+        context.noteRegistry.get<const MMM::Logic::TransformComponent>(entity);
+    return std::abs(transform.m_pos.x - expectedX) < 1e-4F;
 }
 
 /// @brief 创建横跨四条玩家轨道的选中折线。
@@ -92,6 +109,8 @@ entt::entity createSelectedWidePolyline(MMM::Logic::SessionContext& context)
     context.noteRegistry.emplace<MMM::Logic::NoteComponent>(entity, polyline);
     context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
         entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    // Transform 断言用于覆盖独立宽度区域间的即时坐标接缝。
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
     return entity;
 }
 
@@ -113,7 +132,69 @@ entt::entity createSelectedAnchorTap(MMM::Logic::SessionContext& context)
         });
     context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
         entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    // Transform 断言用于覆盖独立宽度区域间的即时坐标接缝。
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
     return entity;
+}
+
+/// @brief 创建头部在右侧、其余节点向左展开的单个宽折线。
+/// @param context 当前会话。
+/// @return 未预选中的折线根实体，用于触发单物件拖动分支。
+entt::entity createStandaloneBoundaryPolyline(
+    MMM::Logic::SessionContext& context)
+{
+    // 根节点位于玩家轨 2，向左的节点与 Flick 终点覆盖到玩家轨 0。
+    // 将根节点拖到玩家轨 0 时，左侧端点必须先临时进入草稿区。
+    MMM::Logic::NoteComponent polyline{
+        .m_type       = MMM::NoteType::POLYLINE,
+        .m_timestamp  = 1.0,
+        .m_trackIndex = 2,
+    };
+    // 首节点与根位置一致，确保鼠标锚点使用折线头而非内部节点。
+    // 末段向左 Flick 再扩一轨，用于触发旧玩家域的负端点钳制。
+    polyline.m_subNotes = {
+        MMM::Logic::NoteComponent::SubNote{
+            .type = MMM::NoteType::NOTE, .timestamp = 1.0, .trackIndex = 2 },
+        MMM::Logic::NoteComponent::SubNote{
+            .type = MMM::NoteType::NOTE, .timestamp = 1.25, .trackIndex = 1 },
+        MMM::Logic::NoteComponent::SubNote{ .type       = MMM::NoteType::FLICK,
+                                            .timestamp  = 1.5,
+                                            .trackIndex = 1,
+                                            .dtrack     = -1 },
+    };
+
+    // InteractionComponent 保持未选中，确保 handleStartDrag 进入 Mode B。
+    const auto entity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(entity, polyline);
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
+    return entity;
+}
+
+/// @brief 检查单个宽折线是否完整应用指定统一轨道增量。
+/// @param context 当前会话。
+/// @param entity 折线根实体。
+/// @param deltaTrack 相对初态的预期轨道增量。
+/// @return 根、节点、Flick 终点与草稿标记均一致时返回 true。
+bool standalonePreviewMatchesDelta(const MMM::Logic::SessionContext& context,
+                                   entt::entity entity, std::int32_t deltaTrack)
+{
+    const auto& polyline =
+        context.noteRegistry.get<const MMM::Logic::NoteComponent>(entity);
+    // 三个子节点的初始轨道为 2、1、1；dtrack 始终保持 -1。
+    // 根轨控制 Draft 标记，子节点则允许在预览阶段分处两个区域。
+    // 每帧都从初态应用统一增量，防止累计拖动误差掩盖钳制问题。
+    if ( polyline.m_trackIndex != 2 + deltaTrack ||
+         polyline.m_isDraft != (polyline.m_trackIndex < 0) ||
+         polyline.m_subNotes.size() != 3U ||
+         polyline.m_subNotes[0].trackIndex != 2 + deltaTrack ||
+         polyline.m_subNotes[1].trackIndex != 1 + deltaTrack ||
+         polyline.m_subNotes[2].trackIndex != 1 + deltaTrack ) {
+        return false;
+    }
+    // 末端断言可防止只移动 Flick 起点而遗漏其横向覆盖范围。
+    return polyline.m_subNotes[2].trackIndex + polyline.m_subNotes[2].dtrack ==
+           deltaTrack;
 }
 
 /// @brief 检查多选组是否按单键锚点的统一轨道增量更新。
@@ -155,6 +236,58 @@ bool previewMatchesDelta(const MMM::Logic::SessionContext& context,
            3 + deltaTrack;
 }
 
+/// @brief 验证未预选中的单个宽折线不会被玩家域钳制。
+/// @return 玩家区内跨边界预览和完整草稿区提交都连续时返回 true。
+bool testStandalonePolylineDoesNotBlockDraftPreview()
+{
+    // 独立 Session 隔离多选用例，保证实体从未预选状态进入 Mode B。
+    MMM::Logic::SessionContext context;
+    configureDragContext(context);
+    const auto polylineEntity = createStandaloneBoundaryPolyline(context);
+
+    // 模拟直接按住未选中折线的头部，生产路径会进入单物件 Mode B。
+    context.hoveredEntity     = polylineEntity;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+    context.hoveredPart =
+        static_cast<std::int32_t>(MMM::Logic::HoverPart::PolylineNode);
+    context.hoveredSubIndex = 0;
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(context,
+                         MMM::Logic::CmdStartDrag{
+                             polylineEntity,
+                             "Basic2DCanvas",
+                             false,
+                             MMM::Logic::ChartObjectKind::PlayerNote,
+                         });
+
+    // 玩家轨 0 的中心为 150；根节点从轨 2 左移两轨后，末端临时落到草稿轨 -2。
+    tool.handleUpdateDrag(
+        context,
+        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 150.0F, 300.0F, true });
+    if ( !standalonePreviewMatchesDelta(context, polylineEntity, -2) ||
+         !transformXNear(context, polylineEntity, 100.0F) ) {
+        XERROR("Standalone Polyline preview was clamped inside player lanes");
+        return false;
+    }
+
+    // 继续移入最右草稿轨后，整条折线均位于草稿域，可以正常提交。
+    tool.handleUpdateDrag(
+        context,
+        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
+    if ( !standalonePreviewMatchesDelta(context, polylineEntity, -3) ||
+         !transformXNear(context, polylineEntity, 10.0F) ) {
+        XERROR("Standalone Polyline preview did not enter draft lanes");
+        return false;
+    }
+    // 完整进入 Draft 后再松开，避免把临时跨域状态误当作可持久化谱面。
+    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    // 单物件提交仍只生成一条撤销记录，并清理全部即时渲染固定项。
+    return standalonePreviewMatchesDelta(context, polylineEntity, -3) &&
+           context.actionStack.getUndoStackSize() == 1U &&
+           !context.isDragging && context.dragRenderPinnedEntities.empty();
+}
+
 /// @brief 验证宽折线不会阻塞以单键为焦点的跨区拖动虚影。
 /// @return 玩家区、草稿区及返回玩家区的每次更新均连续时返回 true。
 bool testWidePolylineDoesNotBlockDraftPreview()
@@ -188,16 +321,19 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 350.0F, 300.0F, true });
-    if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -1) ) {
+    // 分域状态下组件轨号与两个根实体的缓存 Transform 必须同时正确。
+    if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -1) ||
+         !transformXNear(context, tapEntity, 300.0F) ||
+         !transformXNear(context, polylineEntity, 10.0F) ) {
         XERROR(
-            "Wide Polyline blocked the selected Tap preview in player lanes");
+            "Wide Polyline blocked or misprojected the split-domain preview");
         return false;
     }
 
-    // 50 对应最靠近玩家区的草稿轨 -1；整组此时完整进入草稿区。
+    // 30 对应独立布局最靠近玩家区的草稿轨 -1；整组此时完整进入草稿区。
     tool.handleUpdateDrag(
         context,
-        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 50.0F, 300.0F, true });
+        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
     if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -4) ) {
         XERROR("Grouped preview did not follow the Tap into draft lanes");
         return false;
@@ -215,11 +351,13 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     // 再次进入有效草稿位置并松开，整组应提交为一个撤销动作。
     tool.handleUpdateDrag(
         context,
-        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 50.0F, 300.0F, true });
+        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
     tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
     // 提交后组件仍保留最终草稿坐标，并且拖动生命周期状态必须完全清理。
     // 单次整组移动只允许生成一条撤销记录，保持操作原子性。
     if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -4) ||
+         !transformXNear(context, tapEntity, 10.0F) ||
+         !transformXNear(context, polylineEntity, -110.0F) ||
          context.actionStack.getUndoStackSize() != 1U || context.isDragging ||
          !context.dragRenderPinnedEntities.empty() ) {
         XERROR("Grouped draft drag did not commit atomically");
@@ -233,9 +371,12 @@ bool testWidePolylineDoesNotBlockDraftPreview()
 }
 }  // namespace
 
-/// @brief 运行多选组拖入草稿区的即时虚影回归测试。
+/// @brief 运行单物件与多选组跨入草稿区的即时虚影回归测试。
 /// @return 测试通过时返回 0。
 int main()
 {
-    return testWidePolylineDoesNotBlockDraftPreview() ? 0 : 1;
+    const bool standalonePassed =
+        testStandalonePolylineDoesNotBlockDraftPreview();
+    const bool groupedPassed = testWidePolylineDoesNotBlockDraftPreview();
+    return standalonePassed && groupedPassed ? 0 : 1;
 }

@@ -276,8 +276,10 @@ struct UnifiedDragTarget {
     std::int32_t absoluteTrack{ 0 };
     /// @brief 玩家轨道投影左边界。
     float leftX{ 0.0F };
-    /// @brief 单轨逻辑宽度。
+    /// @brief 单轨逻辑宽度，供非主画布兼容连续玩家域。
     float singleTrackWidth{ 0.0F };
+    /// @brief 本帧主画布的完整轨道投影，供每个实体独立解析横坐标。
+    CanvasLaneProjection projection;
 };
 
 /// @brief 将当前鼠标位置换算为统一画布时间与绝对轨道。
@@ -380,6 +382,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         .absoluteTrack    = absoluteTrack,
         .leftX            = domainOrigin,
         .singleTrackWidth = laneWidth,
+        .projection       = projection,
     };
 }
 
@@ -642,6 +645,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                 ctx.noteRegistry.all_of<NoteComponent>(draggedEntity) ) {
         auto&      registry        = ctx.noteRegistry;
         const bool primarySelected = isEntitySelected(registry, draggedEntity);
+        // 与旧整体移动判定保持一致；HoldEnd/FlickArrow 默认仍属于局部编辑。
+        const bool groupCompatiblePart =
+            ctx.draggedPart == HoverPart::None ||
+            ctx.draggedPart == HoverPart::Head ||
+            ctx.draggedPart == HoverPart::HoldBody ||
+            ctx.draggedPart == HoverPart::PolylineNode;
 
         if ( primarySelected ) {
             // 模式 A: 拖动整个选中组
@@ -677,11 +686,6 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                 }
             }
 
-            const bool groupCompatiblePart =
-                ctx.draggedPart == HoverPart::None ||
-                ctx.draggedPart == HoverPart::Head ||
-                ctx.draggedPart == HoverPart::HoldBody ||
-                ctx.draggedPart == HoverPart::PolylineNode;
             if ( groupCompatiblePart ) {
                 auto sampleView =
                     ctx.sampleRegistry
@@ -699,12 +703,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                     ctx.sampleRegistry.get<InteractionComponent>(entity)
                         .isDragging = true;
                 }
-                // 草稿轨启用时从首帧使用统一轨道域，允许多选虚影临时跨越区域边界。
-                const bool previewsAcrossDraftBoundary =
-                    SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
-                    ctx.lastConfig.settings.enableDraftLanes;
-                m_usesUnifiedObjectDrag = !m_initialSampleStates.empty() ||
-                                          previewsAcrossDraftBoundary;
+                // 混合选中的自动采样仍要求整组进入统一轨道域。
+                m_usesUnifiedObjectDrag = !m_initialSampleStates.empty();
             }
         } else {
             // 模式 B: 只拖动当前物件
@@ -736,6 +736,29 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
                 }
             }
         }
+
+        // 未选中 Polyline 的各部件通常移动整条折线，仅内部 HoldBody
+        // 保留子段编辑。
+        bool movesWholeObjects = groupCompatiblePart;
+        if ( !primarySelected ) {
+            const auto* note =
+                registry.try_get<const NoteComponent>(draggedEntity);
+            if ( note && note->m_type == ::MMM::NoteType::POLYLINE ) {
+                const bool editsInternalBody =
+                    ctx.draggedPart == HoverPart::HoldBody &&
+                    ctx.draggedSubIndex > 0;
+                movesWholeObjects = !editsInternalBody;
+            }
+        }
+        // 主画布启用草稿轨后，整体单物件和多选组都从首帧使用统一轨道域。
+        // 宽 Flick/Polyline 因而能在鼠标仍位于玩家区时产生跨边界虚影。
+        // 局部端点和内部主体编辑不满足该门槛，继续走既有专用更新路径。
+        const bool previewsAcrossDraftBoundary =
+            movesWholeObjects &&
+            SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
+            ctx.lastConfig.settings.enableDraftLanes;
+        m_usesUnifiedObjectDrag =
+            m_usesUnifiedObjectDrag || previewsAcrossDraftBoundary;
 
         // 兼容旧代码 (保留主拖拽物件的初始备份)
         if ( m_initialStates.count(draggedEntity) ) {
@@ -954,9 +977,21 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         }
         if ( auto* transform =
                  ctx.noteRegistry.try_get<TransformComponent>(entity) ) {
-            transform->m_pos.x =
-                target->leftX + static_cast<float>(note->m_trackIndex) *
-                                    target->singleTrackWidth;
+            // 选中组可同时跨越 Draft/Player/BGM，不能广播鼠标目标域几何。
+            // 每个根实体都按移动后的绝对轨道重新寻址，保证独立区域宽度生效。
+            // 子节点继续由根折线数据同步，此处只维护实体自身的缓存坐标。
+            const auto address = CanvasLaneAddress::fromAbsoluteTrack(
+                note->m_trackIndex,
+                target->projection.playerLaneCount,
+                target->projection.draftLaneCount);
+            if ( const auto bounds = target->projection.bounds(address) ) {
+                transform->m_pos.x = bounds->leftX;
+            } else {
+                // Preview 等连续玩家域保持原公式，避免改变非主画布拖动语义。
+                transform->m_pos.x =
+                    target->leftX + static_cast<float>(note->m_trackIndex) *
+                                        target->singleTrackWidth;
+            }
         }
     }
 
