@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <span>
 
 namespace MMM::Canvas
 {
@@ -247,6 +248,44 @@ struct HorizontalRegionBounds {
     /// @brief 返回右边界比例。
     [[nodiscard]] float right() const { return left + width; }
 };
+
+/// @brief 宽度缩放边缘的一维像素吸附结果。
+struct HorizontalResizeSnapResult {
+    /// @brief 应用于缩放句柄的像素横坐标。
+    float position{ 0.0F };
+    /// @brief 是否命中有效目标边缘。
+    bool snapped{ false };
+    /// @brief 命中的目标边缘像素横坐标。
+    float target{ 0.0F };
+};
+
+/// @brief 将宽度缩放句柄吸附到距离最近的其他组件边缘。
+/// @param position 尚未吸附的句柄像素横坐标。
+/// @param targets 手势开始时冻结的目标边缘像素坐标。
+/// @param threshold 最大吸附距离，单位逻辑像素。
+/// @return 最近目标位于阈值内时返回其坐标，否则保持原坐标。
+/// @warning UI 布局热路径：宽度缩放期间每帧扫描冻结目标；禁止分配或阻塞。
+[[nodiscard]] inline HorizontalResizeSnapResult snapHorizontalResizeEdge(
+    float position, std::span<const float> targets, float threshold)
+{
+    HorizontalResizeSnapResult result{ .position = position };
+    if ( !std::isfinite(position) ) return result;
+    // 非有限或负阈值按零处理，精确重合仍可以稳定吸附。
+    threshold = std::isfinite(threshold) ? std::max(0.0F, threshold) : 0.0F;
+    float bestDistance = std::numeric_limits<float>::infinity();
+    for ( const float target : targets ) {
+        if ( !std::isfinite(target) ) continue;
+        const float distance = std::abs(position - target);
+        if ( distance <= threshold && distance < bestDistance ) {
+            // 严格采用更近目标，等距时保持目标缓存中的稳定优先级。
+            result.position = target;
+            result.snapped  = true;
+            result.target   = target;
+            bestDistance    = distance;
+        }
+    }
+    return result;
+}
 
 /// @brief 规整辅助区域横向边界。
 /// @param bounds 待规整边界。

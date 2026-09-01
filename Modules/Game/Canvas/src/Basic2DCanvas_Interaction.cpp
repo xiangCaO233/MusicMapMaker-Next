@@ -37,6 +37,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <iterator>
@@ -1728,6 +1729,73 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const float componentSnapDistance =
         std::max(CANVAS_COMPONENT_SNAP_DISTANCE,
                  CANVAS_COMPONENT_SNAP_DISTANCE * dpiScale);
+    // 宽度手势开始时冻结其他布局区、可见组件与画布两侧边缘，避免目标随缩放抖动。
+    // 目标全部采用世界像素，后续主轨道区与辅助区域可以共享一维吸附算法。
+    // 此收集器只在鼠标按下首帧调用，连续拖动不会重复遍历组件快照。
+    const auto collectHorizontalResizeSnapTargets =
+        [&](bool includeTrackLayout, AuxiliaryLayoutRegion excludedRegion) {
+            // 新手势不继承上次命中的参考线，避免按下瞬间出现残留视觉反馈。
+            m_canvasComponentSnapGuideX.reset();
+            m_canvasComponentSnapGuideY.reset();
+            // 横向缩放仅保留 X 目标；Y 缓存同时清空以隔离整体移动状态。
+            m_canvasComponentSnapTargetsX.clear();
+            m_canvasComponentSnapTargetsY.clear();
+            // 每个可见组件最多贡献左右两条线，十个固定槽覆盖画布和四个区域。
+            // 预留容量把手势开始时的动态分配限制为至多一次。
+            const std::size_t targetCount =
+                currentSnapshot.canvasComponentInstances.size() * 2U + 10U;
+            m_canvasComponentSnapTargetsX.reserve(targetCount);
+            const auto appendWorldEdges = [&](float left, float right) {
+                // 无效或反向边界不能参与距离比较，否则会抢占正常目标。
+                if ( !std::isfinite(left) || !std::isfinite(right) ||
+                     right < left ) {
+                    return;
+                }
+                // 缩放只匹配左右边缘，不引入中心线吸附。
+                // 重复边缘允许保留，最近目标算法在等距时维持首次出现的优先级。
+                m_canvasComponentSnapTargetsX.push_back(left);
+                m_canvasComponentSnapTargetsX.push_back(right);
+            };
+
+            // 画布边缘换算到相机平移前的世界坐标，与轨道配置采用同一坐标系。
+            // 因此相机横移后，屏幕两侧仍是稳定可见的吸附目标。
+            appendWorldEdges(-cameraOffsetX, targetWidth - cameraOffsetX);
+            if ( includeTrackLayout ) {
+                // 调整辅助区域时，玩家主轨道区的两侧都属于其他组件边缘。
+                appendWorldEdges(layout.left * targetWidth,
+                                 layout.right * targetWidth);
+            }
+            // 固定顺序同时定义等距情况下 Draft、批注、BGM 的稳定优先级。
+            constexpr std::array auxiliaryRegions{
+                AuxiliaryLayoutRegion::Draft,
+                AuxiliaryLayoutRegion::Annotation,
+                AuxiliaryLayoutRegion::Bgm,
+            };
+            for ( const auto region : auxiliaryRegions ) {
+                // 活动区域必须排除，防止句柄重新吸附到自身拖动起点。
+                if ( region == excludedRegion ) continue;
+                // 推导式旧配置也在按下时物化为固定目标，拖动期间不会跟随主区变化。
+                const auto bounds = regionBounds(region);
+                appendWorldEdges(bounds.left * targetWidth,
+                                 bounds.right() * targetWidth);
+            }
+
+            // 使用当前键数配置过滤隐藏组件，避免吸附到用户看不见的文字边界。
+            const auto& components =
+                appConfig.getVisualConfig().canvasComponentsForKeyCount(
+                    keyCount);
+            for ( const auto& instance :
+                  currentSnapshot.canvasComponentInstances ) {
+                // 快照可能仍含上一帧实例，配置可见性是最终筛选依据。
+                if ( !components.placement(instance.type).visible ) continue;
+                const auto bounds = canvasComponentContentBounds(instance);
+                // 自定义组件固定在画布局部坐标，减去相机偏移后参与世界边缘比较。
+                // 保存参考线时会重新加回偏移，保证屏幕位置和被吸附组件一致。
+                appendWorldEdges(bounds.left - cameraOffsetX,
+                                 bounds.right - cameraOffsetX);
+            }
+        };
+    // 整体移动沿用二维边缘与中心吸附，宽度缩放则进入下面两个专用状态。
     const bool movingCanvasComponent =
         m_canvasComponentDragTarget.has_value() &&
         m_canvasComponentDragHandle == Logic::CanvasComponentDragHandle::Move;
@@ -1735,7 +1803,17 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         !m_noteScaleDragTarget.has_value() &&
         !m_canvasComponentDragTarget.has_value() &&
         m_trackLayoutDragHandle == TrackLayoutDragHandle::Move;
-    if ( (!movingCanvasComponent && !movingTrackLayout) ||
+    // 辅助区域只有左右句柄改变宽度，中心 Move 不应复用冻结目标。
+    const bool resizingHorizontalRegion =
+        m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
+        m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Right;
+    // 主轨道上下、判定线和 Move 都不属于横向宽度吸附。
+    const bool resizingTrackWidth =
+        m_trackLayoutDragHandle == TrackLayoutDragHandle::Left ||
+        m_trackLayoutDragHandle == TrackLayoutDragHandle::Right;
+    // 仅活动吸附手势可以保留参考线；松开鼠标会在提交配置前立即清理。
+    if ( (!movingCanvasComponent && !movingTrackLayout &&
+          !resizingHorizontalRegion && !resizingTrackWidth) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
@@ -1963,6 +2041,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_horizontalRegionDragHandle = hoveredHorizontalHandle;
             m_horizontalRegionDragStart  = regionBounds(hoveredAuxiliaryRegion);
             m_horizontalRegionPointerStart = worldPointerX / targetWidth;
+            if ( hoveredHorizontalHandle == HorizontalRegionDragHandle::Left ||
+                 hoveredHorizontalHandle ==
+                     HorizontalRegionDragHandle::Right ) {
+                // Move 不改变宽度，因此无需冻结边缘目标。
+                // 活动区域自身不作为吸附目标，另一侧边缘仍由缩放函数固定。
+                collectHorizontalResizeSnapTargets(true,
+                                                   hoveredAuxiliaryRegion);
+            }
         } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
             m_trackLayoutDragHandle   = hoveredHandle;
             m_trackLayoutDragStart    = layout;
@@ -1970,6 +2056,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 worldPointerX / targetWidth,
                 pointerY / targetHeight,
             };
+            if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+                 hoveredHandle == TrackLayoutDragHandle::Right ) {
+                // 上下边与判定线不改变宽度，继续保持原始无吸附行为。
+                // 主轨道区缩放时只收集其他区域与组件，避免吸附到自身固定边。
+                collectHorizontalResizeSnapTargets(false,
+                                                   AuxiliaryLayoutRegion::None);
+            }
         }
     }
 
@@ -2322,7 +2415,19 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
          !m_canvasComponentDragTarget.has_value() &&
          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-        const float            normalizedX     = worldPointerX / targetWidth;
+        // 默认结果保留原始指针，Move 句柄因此无需单独分支关闭吸附。
+        HorizontalResizeSnapResult edgeSnap{ .position = worldPointerX };
+        if ( m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
+             m_horizontalRegionDragHandle ==
+                 HorizontalRegionDragHandle::Right ) {
+            // 统一使用逻辑像素阈值，DPI 放大时保持相同的可感知吸附范围。
+            // 最近目标由纯函数选择，配置写回仍交给原有辅助区缩放与规整逻辑。
+            edgeSnap = snapHorizontalResizeEdge(worldPointerX,
+                                                m_canvasComponentSnapTargetsX,
+                                                componentSnapDistance);
+        }
+        // 吸附发生在像素空间，写回配置前再恢复归一化横坐标。
+        const float            normalizedX = edgeSnap.position / targetWidth;
         HorizontalRegionBounds candidateBounds = m_horizontalRegionDragStart;
         if ( m_horizontalRegionDragHandle ==
              HorizontalRegionDragHandle::Move ) {
@@ -2334,6 +2439,24 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 resizeHorizontalRegion(m_horizontalRegionDragStart,
                                        m_horizontalRegionDragHandle,
                                        normalizedX);
+        }
+        if ( m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
+             m_horizontalRegionDragHandle ==
+                 HorizontalRegionDragHandle::Right ) {
+            // 最小宽度规整可能阻止边缘到达目标，仅实际对齐时显示参考线。
+            const float resizedEdge = (m_horizontalRegionDragHandle ==
+                                               HorizontalRegionDragHandle::Left
+                                           ? candidateBounds.left
+                                           : candidateBounds.right()) *
+                                      targetWidth;
+            // 每帧先清空旧命中，移出阈值后参考线会立即消失。
+            m_canvasComponentSnapGuideX.reset();
+            m_canvasComponentSnapGuideY.reset();
+            if ( edgeSnap.snapped &&
+                 std::abs(resizedEdge - edgeSnap.target) <= 0.25F ) {
+                // 参考线使用画布局部坐标，所以把世界目标重新加回相机偏移。
+                m_canvasComponentSnapGuideX = edgeSnap.target + cameraOffsetX;
+            }
         }
 
         Config::TrackLayout             candidate   = layout;
@@ -2382,7 +2505,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-        const float         normalizedX = worldPointerX / targetWidth;
+        // 非左右句柄保持未吸附的原始世界坐标。
+        HorizontalResizeSnapResult widthSnap{ .position = worldPointerX };
+        if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::Left ||
+             m_trackLayoutDragHandle == TrackLayoutDragHandle::Right ) {
+            // 冻结列表已经排除主轨道自身，只会匹配真正的其他组件边缘。
+            widthSnap = snapHorizontalResizeEdge(worldPointerX,
+                                                 m_canvasComponentSnapTargetsX,
+                                                 componentSnapDistance);
+        }
+        const float         normalizedX = widthSnap.position / targetWidth;
         const float         normalizedY = pointerY / targetHeight;
         Config::TrackLayout candidate   = m_trackLayoutDragStart;
         if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::JudgmentLine ) {
@@ -2479,6 +2611,25 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
             case TrackLayoutDragHandle::JudgmentLine: break;
             case TrackLayoutDragHandle::None: break;
+            }
+
+            if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::Left ||
+                 m_trackLayoutDragHandle == TrackLayoutDragHandle::Right ) {
+                // 布局最小跨度或视口边界钳制后，仅对真实重合的边缘保留参考线。
+                const float resizedEdge =
+                    (m_trackLayoutDragHandle == TrackLayoutDragHandle::Left
+                         ? candidate.left
+                         : candidate.right) *
+                    targetWidth;
+                // 钳制失败或指针离开阈值时不保留上一帧参考线。
+                m_canvasComponentSnapGuideX.reset();
+                m_canvasComponentSnapGuideY.reset();
+                if ( widthSnap.snapped &&
+                     std::abs(resizedEdge - widthSnap.target) <= 0.25F ) {
+                    // 配置边缘采用世界坐标，参考线采用画布局部坐标。
+                    m_canvasComponentSnapGuideX =
+                        widthSnap.target + cameraOffsetX;
+                }
             }
 
             constexpr float layoutEpsilon = 1e-6f;

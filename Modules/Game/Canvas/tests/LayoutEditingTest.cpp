@@ -116,6 +116,53 @@ bool testTrackLayoutSnapping()
            near(snapped.bottom - snapped.top, 0.6f);
 }
 
+/// @brief 验证宽度句柄只在阈值内吸附到最近的组件边缘。
+/// @return 主轨道区与辅助区域都采用吸附坐标且越界目标被忽略时返回 true。
+bool testHorizontalResizeEdgeSnapping()
+{
+    // 固定 1000 像素视口，便于把像素目标精确换算为归一化边界。
+    constexpr float viewportWidth = 1000.0F;
+    // 同时放入远端、近端和非有限值，覆盖过滤与距离选择。
+    // 200 与 700 确保远端不会抢占，402 与 405 用于比较最近距离。
+    // NaN 必须被跳过，不能污染 bestDistance 或返回坐标。
+    const std::array targets{
+        200.0F, 402.0F, 405.0F, 700.0F, std::numeric_limits<float>::quiet_NaN(),
+    };
+    // 398 距 402 四像素且距 405 七像素，应选择更近的 402。
+    // 393 距最近目标九像素，应处于八像素阈值之外并保持原坐标。
+    const auto snapped =
+        MMM::Canvas::snapHorizontalResizeEdge(398.0F, targets, 8.0F);
+    const auto outside =
+        MMM::Canvas::snapHorizontalResizeEdge(393.0F, targets, 8.0F);
+    // 命中必须同时报告替换坐标和目标线，未命中不能改写指针。
+    if ( !snapped.snapped || !near(snapped.position, 402.0F) ||
+         !near(snapped.target, 402.0F) || outside.snapped ||
+         !near(outside.position, 393.0F) ) {
+        return false;
+    }
+
+    // 主轨道右边和辅助区右边共用吸附结果，再分别交给各自的合法化函数。
+    // 吸附器仅选择像素坐标，不得绕过两类布局原有的最小宽度约束。
+    // 玩家区左边固定在 0.2，右句柄吸附后应精确落到 0.402。
+    MMM::Config::TrackLayout trackStart;
+    trackStart.left  = 0.2F;
+    trackStart.right = 0.6F;
+    const auto track = MMM::Canvas::resizeTrackLayout(
+        trackStart,
+        MMM::Canvas::TrackLayoutDragHandle::Right,
+        snapped.position / viewportWidth);
+    // 辅助区保存 left+width，吸附后右边界应与玩家区完全相同。
+    const MMM::Canvas::HorizontalRegionBounds regionStart{ 0.1F, 0.3F };
+    const auto region = MMM::Canvas::resizeHorizontalRegion(
+        regionStart,
+        MMM::Canvas::HorizontalRegionDragHandle::Right,
+        snapped.position / viewportWidth);
+    // 两种缩放都必须保持对侧左边界，防止吸附退化为整体移动。
+    return near(track.right, 0.402F) && near(region.right(), 0.402F) &&
+           near(track.left, trackStart.left) &&
+           near(region.left, regionStart.left);
+}
+
 /// @brief 验证判定线位置会被限制在画布范围内。
 /// @return 有限值、越界值和非有限值均得到合法结果时返回 true。
 bool testJudgmentLineConstraints()
@@ -705,8 +752,11 @@ int main()
     if ( !testTrackLayoutSnapping() ) {
         return 16;
     }
-    if ( !testNoteRenderScaleResize() ) {
+    if ( !testHorizontalResizeEdgeSnapping() ) {
         return 17;
+    }
+    if ( !testNoteRenderScaleResize() ) {
+        return 18;
     }
     return 0;
 }
