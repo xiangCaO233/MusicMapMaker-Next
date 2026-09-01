@@ -38,10 +38,12 @@ bash "${scriptDir}/pull-lfs-for-build.sh" \
     --include-tests
 
 rm -rf build_gcc
+# CI 构建不得写入 Runner 的用户配置目录。
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DSOURCES_BUILD=OFF \
     -DBUILD_TESTING=ON \
+    -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
     -S . \

@@ -20,6 +20,62 @@ target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
                                     fmt::fmt Log)
 target_link_libraries(Config PRIVATE 3rd_miniz)
 
+# 入口开关默认服务本机开发，自动化构建必须通过命令行显式关闭。
+if(MMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN)
+  # 与 AppPaths::baseConfigPath 保持同一优先级，确保构建期和运行期落到相同用户目录。
+  # 空值表示尚未找到可安全写入的用户配置基础目录。
+  set(_MMM_LOCAL_CONFIG_BASE "")
+  if(DEFINED ENV{MMM_CONFIG_ROOT} AND NOT "$ENV{MMM_CONFIG_ROOT}" STREQUAL "")
+    # 多客户端或测试环境可显式隔离配置根。 覆盖值本身已是基础根，后续仍统一追加应用目录名。
+    set(_MMM_LOCAL_CONFIG_BASE "$ENV{MMM_CONFIG_ROOT}")
+  elseif(
+    NOT WIN32
+    AND DEFINED ENV{XDG_CONFIG_HOME}
+    AND NOT "$ENV{XDG_CONFIG_HOME}" STREQUAL "")
+    # POSIX 平台优先遵循 XDG 配置根。 XDG_CONFIG_HOME 已包含 .config 语义，禁止再次追加该层。
+    set(_MMM_LOCAL_CONFIG_BASE "$ENV{XDG_CONFIG_HOME}")
+  elseif(
+    WIN32
+    AND DEFINED ENV{USERPROFILE}
+    AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+    # Windows 运行时固定使用用户目录下的 .config。 该布局与跨平台现有用户数据保持一致，不切换到 APPDATA。
+    set(_MMM_LOCAL_CONFIG_BASE "$ENV{USERPROFILE}/.config")
+  elseif(
+    WIN32
+    AND DEFINED ENV{HOMEDRIVE}
+    AND DEFINED ENV{HOMEPATH}
+    AND NOT "$ENV{HOMEDRIVE}$ENV{HOMEPATH}" STREQUAL "")
+    # USERPROFILE 缺失时与 AppPaths 一样回退到 HOMEDRIVE/HOMEPATH。
+    set(_MMM_LOCAL_CONFIG_BASE "$ENV{HOMEDRIVE}$ENV{HOMEPATH}/.config")
+  elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+    # 其他平台使用 HOME/.config 作为最终常规路径。 HOME 仅在专用覆盖和 XDG 均缺失后参与选择。
+    set(_MMM_LOCAL_CONFIG_BASE "$ENV{HOME}/.config")
+  endif()
+
+  # 仅在完整解析出基础根后注册会写文件的构建目标。
+  if(_MMM_LOCAL_CONFIG_BASE)
+    # 应用目录名与 AppPaths::configRootPath 的 mmm 后缀保持一致。
+    set(_MMM_LOCAL_CONFIG_ROOT "${_MMM_LOCAL_CONFIG_BASE}/mmm")
+    # ALL 保证普通本地构建会同步；Main 目标另行依赖以覆盖显式单目标构建。
+    add_custom_target(
+      SyncDefaultConfigAssets ALL
+      COMMAND
+        "${CMAKE_COMMAND}"
+        # 源根固定指向版本库资源，禁止从已安装目录反向覆盖。
+        "-DMMM_SYNC_SOURCE_ASSETS_ROOT=${CMAKE_SOURCE_DIR}/assets"
+        # 目标根在配置期冻结，避免构建子进程环境变化导致写错用户。
+        "-DMMM_SYNC_DESTINATION_CONFIG_ROOT=${_MMM_LOCAL_CONFIG_ROOT}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/SyncDefaultConfigAssets.cmake"
+      COMMENT "同步默认翻译与皮肤到本机配置目录"
+      VERBATIM)
+    # IDE 中归入 Config 分组，避免辅助目标混入主程序列表。
+    set_property(TARGET SyncDefaultConfigAssets PROPERTY FOLDER "Config")
+  else()
+    # 无法可靠确定用户目录时跳过写入，禁止退化为污染源码树或构建目录。
+    message(WARNING "无法确定本机配置目录，跳过默认翻译与皮肤同步。")
+  endif()
+endif()
+
 mmm_add_test_executable(Config FontPreferenceValidatorTest
                         tests/FontPreferenceValidatorTest.cpp)
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
@@ -129,6 +185,16 @@ add_test(
   NAME TranslationResourceMigrationTest
   COMMAND TranslationResourceMigrationTest
           "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
+
+# 构建期资源同步测试覆盖默认文件增量覆盖及用户扩展保留。 测试直接运行生产 cmake -P 脚本，不依赖默认开启的真实用户目录目标。
+add_test(
+  NAME DefaultConfigAssetSyncTest
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DMMM_TEST_SYNC_SCRIPT=${CMAKE_SOURCE_DIR}/cmake/SyncDefaultConfigAssets.cmake"
+    # 所有测试写入统一 test_output，禁止触碰源码 assets。
+    "-DMMM_TEST_OUTPUT_ROOT=${CMAKE_BINARY_DIR}/test_output" -P
+    "${CMAKE_SOURCE_DIR}/cmake/tests/DefaultConfigAssetSyncTest.cmake")
 
 # 默认中英文翻译键必须一一对应，避免界面直接回显未翻译的键名。
 mmm_add_test_executable(Config DefaultTranslationParityTest

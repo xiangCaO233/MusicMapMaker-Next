@@ -433,7 +433,9 @@ if (( freshBuild )); then
     rm -rf -- "${buildDir}"
 fi
 
+# 交叉编译不得写入宿主机的用户配置目录。
 cmake -G "${CMAKE_GENERATOR:-Ninja}" \
+    -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
     -DLLVM_MINGW_ROOT="${LLVM_MINGW_ROOT:-}" \

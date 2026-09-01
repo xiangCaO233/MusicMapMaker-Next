@@ -33,6 +33,14 @@ else()
   # Linux 可执行文件编译配置 编译MusicMapMaker-Next可执行文件
   add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
+
+# 本机显式构建应用目标时也先同步默认资源；关闭开关后目标不存在且不产生写入。
+
+# 使用目标存在性判断可让所有关闭该选项的 CI 与交叉构建保持原依赖图。
+if(TARGET SyncDefaultConfigAssets)
+  add_dependencies(MusicMapMaker-Next SyncDefaultConfigAssets)
+endif()
+
 add_gcc_debug_extract(MusicMapMaker-Next)
 add_mingw_clang_pdb(MusicMapMaker-Next)
 add_strip_command_for_release(MusicMapMaker-Next)

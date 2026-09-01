@@ -346,6 +346,8 @@ cmakeArgs=(
     -G "${CMAKE_GENERATOR:-Ninja}"
     -DCMAKE_BUILD_TYPE="${buildType}"
     -DBUILD_TESTING=ON
+    # CI 与打包构建不得写入 Runner 的用户配置目录。
+    -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF
     -DCMAKE_OSX_ARCHITECTURES="${targetArch}"
     -DCMAKE_OSX_SYSROOT="${macosSdk}"
     -DSOURCES_BUILD="${sourcesBuild}"

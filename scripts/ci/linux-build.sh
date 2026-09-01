@@ -324,10 +324,12 @@ export CXX="${cxxCompiler}"
 # 原生 Linux 构建必须使用系统 Vulkan，避免 Runner 注入的 Windows SDK 污染头文件搜索路径。
 unset VULKAN_SDK VK_SDK_PATH
 
+# CI 与预编译构建不得写入 Runner 的用户配置目录。
 cmake -U "Vulkan_*" \
     -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DBUILD_TESTING=ON \
+    -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
