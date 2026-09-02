@@ -27,7 +27,11 @@ constexpr float VIEWPORT_HEIGHT = 600.0F;
 /// @brief 为同轨同时间的两个 Tap 生成重叠遮罩快照。
 /// @param snapshot 输出快照。
 /// @param isPlaying 是否模拟播放中的渲染状态。
-void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying)
+/// @param trackIndex Tap 所在轨道。
+/// @param useAuxiliaryLaneLayout 是否启用覆盖草稿区和 BGM 区的布局。
+void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying,
+                           int  trackIndex             = 1,
+                           bool useAuxiliaryLaneLayout = false)
 {
     entt::registry noteRegistry;
     entt::registry sampleRegistry;
@@ -43,10 +47,11 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying)
         });
 
     MMM::Config::EditorConfig config;
-    config.visual.trackLayout.left  = 0.1F;
-    config.visual.trackLayout.right = 0.5F;
+    config.visual.trackLayout.left  = useAuxiliaryLaneLayout ? 0.5F : 0.1F;
+    config.visual.trackLayout.right = useAuxiliaryLaneLayout ? 0.9F : 0.5F;
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;
+    config.settings.enableDraftLanes = useAuxiliaryLaneLayout;
 
     auto& cache =
         timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
@@ -59,7 +64,8 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying)
         MMM::Logic::NoteComponent note;
         note.m_timestamp  = 1.0;
         note.m_type       = MMM::NoteType::NOTE;
-        note.m_trackIndex = 1;
+        note.m_trackIndex = trackIndex;
+        note.m_isDraft    = trackIndex < 0;
         noteRegistry.emplace<MMM::Logic::NoteComponent>(entity,
                                                         std::move(note));
         noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
@@ -77,23 +83,24 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying)
         static_cast<std::uint32_t>(MMM::Logic::TextureID::Note),
         glm::vec4{ 0.25F, 0.35F, 0.2F, 0.1F });
 
-    MMM::Logic::System::NoteRenderSystem::generateSnapshot(noteRegistry,
-                                                           sampleRegistry,
-                                                           {},
-                                                           {},
-                                                           timelineRegistry,
-                                                           {},
-                                                           &snapshot,
-                                                           "Basic2DCanvas",
-                                                           1.0,
-                                                           VIEWPORT_WIDTH,
-                                                           VIEWPORT_HEIGHT,
-                                                           500.0F,
-                                                           4,
-                                                           0,
-                                                           4,
-                                                           config,
-                                                           VIEWPORT_HEIGHT);
+    MMM::Logic::System::NoteRenderSystem::generateSnapshot(
+        noteRegistry,
+        sampleRegistry,
+        {},
+        {},
+        timelineRegistry,
+        {},
+        &snapshot,
+        "Basic2DCanvas",
+        1.0,
+        VIEWPORT_WIDTH,
+        VIEWPORT_HEIGHT,
+        500.0F,
+        4,
+        useAuxiliaryLaneLayout ? 1 : 0,
+        4,
+        config,
+        VIEWPORT_HEIGHT);
 }
 
 /// @brief 为玩家区和草稿区各生成一个带相同自定义颜色的 Tap。
@@ -243,6 +250,46 @@ bool testOverlapMaskRemainsVisibleDuringPlayback()
            std::abs(stoppedMask.h - playingMask.h) < EPSILON;
 }
 
+/// @brief 验证草稿区及玩家区边界外的重叠遮罩使用完整辅助轨裁剪范围。
+/// @return 左右越界遮罩均未被主玩家区裁剪时返回 true。
+bool testOverlapMaskUsesAuxiliaryLaneScissor()
+{
+    MMM::Logic::RenderSnapshot draftSnapshot;
+    MMM::Logic::RenderSnapshot boundarySnapshot;
+    renderOverlappingTaps(draftSnapshot, false, -3, true);
+    renderOverlappingTaps(boundarySnapshot, false, 3, true);
+
+    if ( draftSnapshot.overlapMasks.empty() ||
+         draftSnapshot.overlayCmds.empty() ||
+         boundarySnapshot.overlapMasks.empty() ||
+         boundarySnapshot.overlayCmds.empty() ) {
+        XERROR("Auxiliary lane overlap fixture did not generate overlay masks");
+        return false;
+    }
+
+    constexpr float PLAYER_LEFT_X  = VIEWPORT_WIDTH * 0.5F;
+    constexpr float PLAYER_RIGHT_X = VIEWPORT_WIDTH * 0.9F;
+    const auto&     draftMask      = draftSnapshot.overlapMasks.front();
+    const auto&     boundaryMask   = boundarySnapshot.overlapMasks.front();
+    if ( draftMask.x + draftMask.w > PLAYER_LEFT_X ) {
+        XERROR("Draft overlap fixture unexpectedly entered the player lanes");
+        return false;
+    }
+    if ( boundaryMask.x + boundaryMask.w <= PLAYER_RIGHT_X ) {
+        XERROR("Boundary overlap fixture did not cross the player lane edge");
+        return false;
+    }
+
+    const auto usesFullViewportScissor = [](const auto& snapshot) {
+        const auto& command = snapshot.overlayCmds.front();
+        return command.scissor.x == 0 &&
+               command.scissor.width ==
+                   static_cast<std::uint32_t>(VIEWPORT_WIDTH);
+    };
+    return usesFullViewportScissor(draftSnapshot) &&
+           usesFullViewportScissor(boundarySnapshot);
+}
+
 }  // namespace
 
 /// @brief 运行草稿分色与重叠键遮罩渲染回归测试。
@@ -259,7 +306,8 @@ int main(int argc, char* argv[])
         return 1;
     }
     return testDraftTapUsesDedicatedSkinColor() &&
-                   testOverlapMaskRemainsVisibleDuringPlayback()
+                   testOverlapMaskRemainsVisibleDuringPlayback() &&
+                   testOverlapMaskUsesAuxiliaryLaneScissor()
                ? 0
                : 1;
 }

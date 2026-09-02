@@ -157,8 +157,9 @@ private:
                             float judgmentLineY, int32_t trackCount,
                             const Config::EditorConfig& config,
                             Batcher& batcher, float leftX, float clipLeftX,
-                            float rightX, float topY, float bottomY,
-                            float singleTrackW, float renderScaleY);
+                            float clipRightX, float rightX, float topY,
+                            float bottomY, float singleTrackW,
+                            float renderScaleY);
 
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
@@ -231,8 +232,8 @@ private:
         entt::registry& registry, RenderSnapshot* snapshot,
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
-        float leftX, float clipLeftX, float rightX, float topY, float bottomY,
-        float singleTrackW, float renderScaleY);
+        float leftX, float clipLeftX, float clipRightX, float topY,
+        float bottomY, float singleTrackW, float renderScaleY);
 
     /// @warning 热路径：单个 Tap 几何生成时执行；不得分配 GPU
     /// 资源或访问文件系统。

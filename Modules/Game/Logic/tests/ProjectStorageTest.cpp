@@ -1,6 +1,7 @@
 #include "logic/ProjectStorage.h"
 
 #include "log/colorful-log.h"
+#include "logic/ProjectController.h"
 #include "logic/ProjectDirectoryScanner.h"
 
 #include <array>
@@ -311,6 +312,41 @@ bool testLegacyFallbackAndRemoval(const std::filesystem::path& root)
                  "migrated project should load from split storage");
 }
 
+/// @brief 验证打开项目时不会在自动保存阶段清空已持久化的草稿轨组。
+/// @param root 独立的测试项目目录。
+/// @return 内存项目和重新读取的分片均保留草稿轨组时返回 true。
+bool testOpenProjectPreservesDraftLaneGroups(const std::filesystem::path& root)
+{
+    MMM::Logic::ProjectStorage storage;
+    std::string                errorMessage;
+    if ( !storage.save(makeProject(), root, errorMessage) ) {
+        XERROR("Failed to prepare draft lane project: {}", errorMessage);
+        return false;
+    }
+
+    auto&       controller    = MMM::Logic::ProjectController::instance();
+    const auto  openResult    = controller.openProject(root);
+    const auto* openedProject = controller.currentProject();
+    const bool  memoryPreserved =
+        openResult.m_opened && openedProject &&
+        openedProject->m_draftLaneGroups.size() == 1U &&
+        openedProject->m_draftLaneGroups.front().m_notePayload ==
+            "draft-payload";
+    const auto reloaded = storage.load(root);
+    const auto closed   = controller.closeProject();
+
+    return check(memoryPreserved,
+                 "opening a project should retain draft lane groups") &&
+           check(
+               reloaded.m_success &&
+                   reloaded.m_project.m_draftLaneGroups.size() == 1U &&
+                   reloaded.m_project.m_draftLaneGroups.front().m_notePayload ==
+                       "draft-payload",
+               "opening a project should not overwrite persisted drafts") &&
+           check(closed.m_closed,
+                 "draft lane project should close after the test");
+}
+
 }  // namespace
 
 /// @brief 运行项目分片存储与旧格式迁移测试。
@@ -318,16 +354,19 @@ int main()
 {
     const auto root = createTestRoot();
     if ( root.empty() ) return 1;
-    const auto      fallbackRoot = root / "legacy";
-    const auto      oldSplitRoot = root / "old_split";
+    const auto      fallbackRoot    = root / "legacy";
+    const auto      oldSplitRoot    = root / "old_split";
+    const auto      openProjectRoot = root / "open_project";
     std::error_code filesystemError;
     std::filesystem::create_directories(fallbackRoot, filesystemError);
 
-    const bool success = !filesystemError && testSplitRoundTrip(root) &&
-                         testSplitWithoutDraftFile(oldSplitRoot) &&
-                         testLegacyDraftGroupWithoutTrackCount() &&
-                         testInternalDirectoryIsNotScanned(root) &&
-                         testLegacyFallbackAndRemoval(fallbackRoot);
+    const bool success =
+        !filesystemError && testSplitRoundTrip(root) &&
+        testSplitWithoutDraftFile(oldSplitRoot) &&
+        testLegacyDraftGroupWithoutTrackCount() &&
+        testInternalDirectoryIsNotScanned(root) &&
+        testLegacyFallbackAndRemoval(fallbackRoot) &&
+        testOpenProjectPreservesDraftLaneGroups(openProjectRoot);
     std::filesystem::remove_all(root, filesystemError);
     return success ? 0 : 1;
 }

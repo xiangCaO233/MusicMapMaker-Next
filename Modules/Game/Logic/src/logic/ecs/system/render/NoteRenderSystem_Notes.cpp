@@ -179,8 +179,8 @@ void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config, Batcher& batcher,
-    float leftX, float clipLeftX, float rightX, float topY, float bottomY,
-    float singleTrackW, float renderScaleY)
+    float leftX, float clipLeftX, float clipRightX, float rightX, float topY,
+    float bottomY, float singleTrackW, float renderScaleY)
 {
     // 1. 准备上下文与颜色
     NoteRenderSystem::NoteRenderContext ctx =
@@ -305,7 +305,7 @@ void NoteRenderSystem::renderNotes(
                                          judgmentLineY,
                                          leftX,
                                          clipLeftX,
-                                         rightX,
+                                         clipRightX,
                                          topY,
                                          bottomY,
                                          singleTrackW,
@@ -1383,7 +1383,7 @@ void NoteRenderSystem::renderOverlapMasks(
     const NoteRenderSystem::NoteRenderContext& ctx,
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
-    float leftX, float clipLeftX, float rightX, float topY, float bottomY,
+    float leftX, float clipLeftX, float clipRightX, float topY, float bottomY,
     float singleTrackW, float renderScaleY)
 {
     if ( !snapshot || !ctx.cache || noteEntities.size() < 2 ) return;
@@ -1492,7 +1492,8 @@ void NoteRenderSystem::renderOverlapMasks(
 
     auto appendMask = [&](float x, float y, float w, float h, int count) {
         if ( w <= 0.0f || h <= 0.0f || count < 2 ) return;
-        if ( x > rightX || x + w < clipLeftX || y > bottomY || y + h < topY )
+        if ( x > clipRightX || x + w < clipLeftX || y > bottomY ||
+             y + h < topY )
             return;
 
         // 这里不能预先合并成外接矩形，否则相邻遮罩之间的空区域也会被误涂红。
@@ -1976,7 +1977,8 @@ void NoteRenderSystem::renderOverlapMasks(
     if ( snapshot->overlapMasks.empty() ) return;
 
     Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
-    overlayBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
+    overlayBatcher.setScissor(
+        clipLeftX, topY, clipRightX - clipLeftX, bottomY - topY);
     overlayBatcher.setTexture(TextureID::None);
 
     const glm::vec4 overlayColor{ 1.0f, 0.0f, 0.0f, 0.35f };

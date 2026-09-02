@@ -1298,8 +1298,9 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         const auto legacyAudioResourceKeys =
             ProjectResourceService::collectLegacyAudioResourceKeys(
                 persistedProject.m_serializedProject);
-        newProject->m_metadata = loadedProject.m_metadata;
-        newProject->m_settings = loadedProject.m_settings;
+        newProject->m_metadata        = loadedProject.m_metadata;
+        newProject->m_settings        = loadedProject.m_settings;
+        newProject->m_draftLaneGroups = loadedProject.m_draftLaneGroups;
         newProject->m_excludedBeatmapPaths =
             loadedProject.m_excludedBeatmapPaths;
         newProject->m_excludedAudioPaths = loadedProject.m_excludedAudioPaths;
