@@ -555,8 +555,9 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
-        float noteRenderClipLeftX = leftX;
-        float noteRenderRightX    = rightX;
+        float noteRenderClipLeftX  = leftX;
+        float noteRenderClipRightX = rightX;
+        float noteRenderRightX     = rightX;
         if ( isMainCanvas ) {
             const auto laneProjection =
                 calculateCanvasLaneProjection(viewportWidth,
@@ -570,7 +571,10 @@ void NoteRenderSystem::generateSnapshot(
                                               config.settings.enableDraftLanes,
                                               draftTrackCount,
                                               true);
-            noteRenderClipLeftX = laneProjection.draftLeftX;
+            noteRenderClipLeftX =
+                std::clamp(laneProjection.draftLeftX, 0.0F, viewportWidth);
+            noteRenderClipRightX =
+                std::clamp(laneProjection.bgmRightX, 0.0F, viewportWidth);
             if ( hasDraggedNoteAcrossPlayerBoundary(registry, trackCount) ) {
                 noteRenderRightX = laneProjection.bgmRightX;
             }
@@ -588,6 +592,7 @@ void NoteRenderSystem::generateSnapshot(
                                       batcher,
                                       leftX,
                                       noteRenderClipLeftX,
+                                      noteRenderClipRightX,
                                       noteRenderRightX,
                                       topY,
                                       bottomY,
