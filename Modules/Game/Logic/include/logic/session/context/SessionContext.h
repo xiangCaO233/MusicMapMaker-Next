@@ -99,9 +99,13 @@ struct SessionContext {
     bool isSeekScrubbing{ false };
     /// @brief 当前会话是否拥有全局音频时间线的控制权。
     bool isActiveSession{ false };
-    /// @brief 是否作为同复合时间线后台跟随者读取全局 transport。
-    bool    isAudioTimelineSyncFollower{ false };
-    int32_t trackCount{ 12 };  ///< 当前玩家轨道总数。
+    /// @brief 是否作为同 Main 音轨时间线后台跟随者读取全局 transport。
+    bool isAudioTimelineSyncFollower{ false };
+    /// @brief 同步跟随者当前允许读取的活动完整时间线指纹。
+    /// @warning 逻辑热路径只比较该缓存；仅在同步源变化时替换字符串，避免逐
+    /// update 分配。
+    std::string m_audioTimelineSyncSourceFingerprint;
+    int32_t     trackCount{ 12 };  ///< 当前玩家轨道总数。
     /// @brief 项目共享的持久化草稿轨道数量，不包含最左侧运行时追加轨。
     int32_t draftTrackCount{ 12 };
     /// @brief 用户持久化的 BGM 轨道数量，不包含末尾运行时追加轨。

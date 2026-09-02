@@ -21,15 +21,21 @@ bool testErasedSessionIsReleased()
     std::weak_ptr<MMM::Logic::BeatmapSession> sessionObserver = session;
 
     MMM::Logic::SessionEntry entry;
-    entry.session     = session;
-    entry.cameraId    = "Canvas_0";
-    entry.displayName = "Lifetime Test";
+    entry.session                  = session;
+    entry.cameraId                 = "Canvas_0";
+    entry.displayName              = "Lifetime Test";
+    entry.audioTimelineFingerprint = "complete-timeline";
+    entry.mainAudioSyncFingerprint = "main-sync";
     registry.append(std::move(entry));
 
     {
         const auto snapshot = registry.publishedSnapshot();
         if ( snapshot->sessions.size() != 1U ||
-             snapshot->sessions.front().session != session ) {
+             snapshot->sessions.front().session != session ||
+             snapshot->sessions.front().audioTimelineFingerprint !=
+                 "complete-timeline" ||
+             snapshot->sessions.front().mainAudioSyncFingerprint !=
+                 "main-sync" ) {
             XERROR("Session registry did not publish the appended session");
             return false;
         }

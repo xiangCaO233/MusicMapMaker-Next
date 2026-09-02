@@ -29,6 +29,9 @@ struct SessionEntry {
     /// @brief 当前会话完整复合音频时间线的稳定指纹。
     std::string audioTimelineFingerprint;
 
+    /// @brief 当前会话 Main 资源序列和起播位置的画布同步指纹。
+    std::string mainAudioSyncFingerprint;
+
     /// @brief 是否为初始 Logo 占位画布，尚未加载谱面时为 true。
     bool isLogoPlaceholder{ false };
 
@@ -52,6 +55,9 @@ struct SessionSnapshotEntry {
 
     /// @brief 当前会话完整复合音频时间线指纹。
     std::string audioTimelineFingerprint;
+
+    /// @brief 当前会话 Main 资源序列和起播位置的画布同步指纹。
+    std::string mainAudioSyncFingerprint;
 
     /// @brief 该条目是否为 Logo 占位画布。
     bool isLogoPlaceholder{ false };

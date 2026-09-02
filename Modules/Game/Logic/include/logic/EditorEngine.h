@@ -592,10 +592,10 @@ private:
     /// @param sourceIndex 源 Session 在注册表中的索引。
     /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
     /// relaxed，并短暂持有 SessionRegistry 递归锁，只同步
-    /// audioTimelineFingerprint 相同的 Session。
+    /// mainAudioSyncFingerprint 相同的 Session。
     void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
-    /// @brief 发布已打开 Session 的复合时间线指纹，调用者必须持有注册表锁。
+    /// @brief 发布已打开 Session 的完整时间线和 Main 同步指纹。
     /// @warning 低频路径：只读取各会话已构建的 descriptor。
     void refreshAudioTimelineFingerprintsUnsafe();
 
@@ -605,7 +605,7 @@ private:
     void markAudioTimelineDescriptorsDirtyUnsafe(
         std::string_view resourceId = {});
 
-    /// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
+    /// @brief 刷新同主音轨候选并清理与活动源不兼容的 follower。
     /// @warning 低频路径：只在 Session 增删或主音轨路径变化后调用。
     void refreshMainAudioSyncPeerStateUnsafe();
 

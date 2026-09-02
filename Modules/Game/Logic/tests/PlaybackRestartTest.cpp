@@ -120,8 +120,8 @@ bool testZeroAndMultipleSampleDescriptors()
     return true;
 }
 
-/// @brief 验证不同指纹切换不会继承旧时间或播放态。
-bool testTimelineSwitchUsesCompleteFingerprint()
+/// @brief 验证多标签切换仅在 Main 音轨同步指纹相同时继承播放态。
+bool testTimelineSwitchUsesMainAudioSyncFingerprint()
 {
     const auto different = MMM::Logic::SessionUtils::resolveAudioTimelineSwitch(
         "timeline-a", "timeline-b", 8.0, 3.0, true, false, true);
@@ -129,7 +129,7 @@ bool testTimelineSwitchUsesCompleteFingerprint()
         "timeline-a", "timeline-a", 8.0, 3.0, true, false, true);
     if ( !near(different.m_targetTime, 3.0) || different.m_resumePlayback ||
          !near(matching.m_targetTime, 8.0) || !matching.m_resumePlayback ) {
-        XERROR("Timeline switch inherited state across different fingerprints");
+        XERROR("Timeline switch ignored the Main audio sync fingerprint");
         return false;
     }
     return true;
@@ -204,8 +204,9 @@ bool testNonFinishedStopDoesNotArmRestart()
 bool testFollowerUsesRebasedSourceClock()
 {
     MMM::Logic::SessionContext context;
-    context.audioTimelineDescriptor.m_fingerprint = "timeline";
+    context.audioTimelineDescriptor.m_fingerprint = "follower-timeline";
     context.isAudioTimelineSyncFollower           = true;
+    context.m_audioTimelineSyncSourceFingerprint  = "source-timeline";
     context.playbackVisualClock.rebase(10.0, 100.0, 1.0, true);
     const MMM::Audio::AudioTimelineClockSnapshot snapshot{
         .positionFrame         = 2000,
@@ -221,13 +222,45 @@ bool testFollowerUsesRebasedSourceClock()
     };
     if ( !MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
              context,
-             "timeline",
+             "source-timeline",
              snapshot,
              100.1,
              context.lastConfig.settings.syncConfig) ||
          !near(context.currentTime, 10.1) ||
          !near(context.playbackVisualClock.lastResolvedSteadyTime(), 100.1) ) {
         XERROR("Follower clock was overwritten by the discrete audio block");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证同步跟随者不会读取已切换到其他源的全局 transport。
+/// @return 来源完整指纹不匹配时取消跟随并复位本地连续时钟。
+bool testFollowerRejectsUnexpectedSourceTimeline()
+{
+    MMM::Logic::SessionContext context;
+    context.audioTimelineDescriptor.m_fingerprint = "follower-timeline";
+    context.isAudioTimelineSyncFollower           = true;
+    context.m_audioTimelineSyncSourceFingerprint  = "expected-source";
+    context.playbackVisualClock.rebase(10.0, 100.0, 1.0, true);
+    const MMM::Audio::AudioTimelineClockSnapshot snapshot{
+        .positionFrame         = 2000,
+        .steadyTimeNanoseconds = 100'000'000'000,
+        .sampleRate            = 1000U,
+        .playbackRate          = 1.0,
+        .state = MMM::Audio::AudioTimelinePlaybackState::Playing,
+        .valid = true,
+    };
+    if ( MMM::Logic::SessionUtils::applyAudioTimelineTransportSnapshot(
+             context,
+             "other-source",
+             snapshot,
+             100.1,
+             context.lastConfig.settings.syncConfig) ||
+         context.isAudioTimelineSyncFollower ||
+         !context.m_audioTimelineSyncSourceFingerprint.empty() ||
+         context.playbackVisualClock.initialized() ) {
+        XERROR("Follower accepted an unexpected source timeline");
         return false;
     }
     return true;
@@ -490,10 +523,11 @@ bool testSeekScrubStateEndsOnCommit()
 int main()
 {
     return testZeroAndMultipleSampleDescriptors() &&
-                   testTimelineSwitchUsesCompleteFingerprint() &&
+                   testTimelineSwitchUsesMainAudioSyncFingerprint() &&
                    testNaturalFinishSnapshotArmsRestart() &&
                    testNonFinishedStopDoesNotArmRestart() &&
                    testFollowerUsesRebasedSourceClock() &&
+                   testFollowerRejectsUnexpectedSourceTimeline() &&
                    testFinishedTimelineRewindsBeforeActivation() &&
                    testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&

@@ -298,7 +298,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -377,9 +377,9 @@ bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
     }
 
     const auto& activeFingerprint =
-        sessions[static_cast<size_t>(activeIndex)].audioTimelineFingerprint;
+        sessions[static_cast<size_t>(activeIndex)].mainAudioSyncFingerprint;
     const auto& targetFingerprint =
-        sessions[static_cast<size_t>(targetIndex)].audioTimelineFingerprint;
+        sessions[static_cast<size_t>(targetIndex)].mainAudioSyncFingerprint;
     return !activeFingerprint.empty() && activeFingerprint == targetFingerprint;
 }
 
@@ -1241,10 +1241,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -2288,8 +2288,9 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
         auto& sessions = m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
-                entry.session->getContextMutable().isAudioTimelineSyncFollower =
-                    false;
+                auto& ctx = entry.session->getContextMutable();
+                ctx.isAudioTimelineSyncFollower = false;
+                ctx.m_audioTimelineSyncSourceFingerprint.clear();
             }
         }
     }
@@ -2317,12 +2318,15 @@ void EditorEngine::refreshAudioTimelineFingerprintsUnsafe()
     for ( auto& entry : sessions ) {
         if ( entry.isLogoPlaceholder || !entry.session ) {
             entry.audioTimelineFingerprint.clear();
+            entry.mainAudioSyncFingerprint.clear();
             continue;
         }
 
         const auto& ctx = entry.session->getContext();
         entry.audioTimelineFingerprint =
             ctx.audioTimelineDescriptor.m_fingerprint;
+        entry.mainAudioSyncFingerprint =
+            ctx.audioTimelineDescriptor.m_mainAudioSyncFingerprint;
     }
     refreshMainAudioSyncPeerStateUnsafe();
     m_sessionRegistry.publishSnapshotUnsafe();
@@ -2346,12 +2350,39 @@ void EditorEngine::markAudioTimelineDescriptorsDirtyUnsafe(
     }
 }
 
-/// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
+/// @brief 刷新同主音轨候选并清理与活动源不兼容的 follower。
 void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
 {
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto&         sessions    = m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    const bool    hasActiveSyncSource =
+        activeIndex >= 0 &&
+        activeIndex < static_cast<int32_t>(sessions.size()) &&
+        sessions[static_cast<size_t>(activeIndex)].session &&
+        !sessions[static_cast<size_t>(activeIndex)]
+             .mainAudioSyncFingerprint.empty();
+    const std::string_view activeSyncFingerprint =
+        hasActiveSyncSource
+            ? std::string_view(sessions[static_cast<size_t>(activeIndex)]
+                                   .mainAudioSyncFingerprint)
+            : std::string_view{};
+
+    for ( int32_t index = 0; index < static_cast<int32_t>(sessions.size());
+          ++index ) {
+        auto& entry = sessions[static_cast<size_t>(index)];
+        if ( !entry.session ) continue;
+        auto&      ctx = entry.session->getContextMutable();
+        const bool canFollowActive =
+            hasActiveSyncSource && index != activeIndex &&
+            entry.mainAudioSyncFingerprint == activeSyncFingerprint;
+        if ( ctx.isAudioTimelineSyncFollower && !canFollowActive ) {
+            ctx.isAudioTimelineSyncFollower = false;
+            ctx.m_audioTimelineSyncSourceFingerprint.clear();
+        }
+    }
+
     for ( size_t i = 0; i < sessions.size(); ++i ) {
-        const auto& key = sessions[i].audioTimelineFingerprint;
+        const auto& key = sessions[i].mainAudioSyncFingerprint;
         if ( key.empty() || sessions[i].isLogoPlaceholder ||
              !sessions[i].session ) {
             continue;
@@ -2361,7 +2392,7 @@ void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
             if ( sessions[j].isLogoPlaceholder || !sessions[j].session ) {
                 continue;
             }
-            if ( sessions[j].audioTimelineFingerprint == key ) {
+            if ( sessions[j].mainAudioSyncFingerprint == key ) {
                 m_hasMainAudioSyncPeers.store(true, std::memory_order_relaxed);
                 return;
             }
@@ -2408,8 +2439,10 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         }
 
         auto&       sourceCtx = sourceEntry->session->getContext();
-        const auto& sourceKey = sourceEntry->audioTimelineFingerprint;
-        if ( sourceKey.empty() ) {
+        const auto& sourceKey = sourceEntry->mainAudioSyncFingerprint;
+        const auto& sourceTimelineFingerprint =
+            sourceEntry->audioTimelineFingerprint;
+        if ( sourceKey.empty() || sourceTimelineFingerprint.empty() ) {
             return;
         }
         if ( sourceCtx.isAudioTimelineSyncFollower && !sourceCtx.isPlaying ) {
@@ -2434,12 +2467,16 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             Audio::AudioManager::instance().getPlaybackSpeed();
 
         for ( const auto& entry : sessions ) {
-            if ( entry.index == sourceIndex || !entry.session ||
-                 entry.audioTimelineFingerprint != sourceKey ) {
+            if ( entry.index == sourceIndex || !entry.session ) {
                 continue;
             }
 
             auto& ctx = entry.session->getContextMutable();
+            if ( entry.mainAudioSyncFingerprint != sourceKey ) {
+                ctx.isAudioTimelineSyncFollower = false;
+                ctx.m_audioTimelineSyncSourceFingerprint.clear();
+                continue;
+            }
 
             const double sourceAnimateTarget =
                 sourceCtx.currentTime +
@@ -2479,6 +2516,15 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
                 sourceCtx.animatedTimelineZoomAnimationActive;
             ctx.isPlaying                   = false;
             ctx.isAudioTimelineSyncFollower = sourceCtx.isPlaying;
+            if ( ctx.isAudioTimelineSyncFollower ) {
+                if ( ctx.m_audioTimelineSyncSourceFingerprint !=
+                     sourceTimelineFingerprint ) {
+                    ctx.m_audioTimelineSyncSourceFingerprint =
+                        sourceTimelineFingerprint;
+                }
+            } else {
+                ctx.m_audioTimelineSyncSourceFingerprint.clear();
+            }
             ctx.playbackVisualClock.rebase(sourceCtx.currentTime,
                                            sourceClockSteadyTime,
                                            playbackRate,
@@ -2525,6 +2571,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 : std::string{};
     /// @brief 新 Session 在处理载入指令后发布完整时间线指纹。
     const std::string requestedAudioTimelineFingerprint;
+    /// @brief 新 Session 在处理载入指令后发布 Main 音轨同步指纹。
+    const std::string requestedMainAudioSyncFingerprint;
 
     if ( !isLogoPlaceholder && beatmap ) {
         if ( !requestedBeatmapKey.empty() ) {
@@ -2569,12 +2617,14 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
+                sessions[i].mainAudioSyncFingerprint =
+                    requestedMainAudioSyncFingerprint;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
                 }
@@ -2659,6 +2709,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
             : displayName;
     entry.beatmapPathKey           = requestedBeatmapKey;
     entry.audioTimelineFingerprint = requestedAudioTimelineFingerprint;
+    entry.mainAudioSyncFingerprint = requestedMainAudioSyncFingerprint;
     entry.isLogoPlaceholder        = isLogoPlaceholder;
     entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
@@ -2746,6 +2797,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     entry.displayName = displayName.empty() ? "Welcome" : displayName;
     entry.beatmapPathKey.clear();
     entry.audioTimelineFingerprint.clear();
+    entry.mainAudioSyncFingerprint.clear();
     entry.isLogoPlaceholder        = true;
     entry.restoreDockFromWorkspace = false;
 
@@ -2778,7 +2830,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             .count();
     double      previousTime       = 0.0;
     bool        previousWasPlaying = false;
-    std::string previousFingerprint;
+    std::string previousTimelineFingerprint;
+    std::string previousMainAudioSyncFingerprint;
     if ( previousIndex >= 0 &&
          previousIndex < static_cast<int32_t>(sessions.size()) &&
          sessions[previousIndex].session ) {
@@ -2788,10 +2841,13 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         }
         auto& previousCtx =
             sessions[previousIndex].session->getContextMutable();
-        previousFingerprint = sessions[previousIndex].audioTimelineFingerprint;
+        previousTimelineFingerprint =
+            sessions[previousIndex].audioTimelineFingerprint;
+        previousMainAudioSyncFingerprint =
+            sessions[previousIndex].mainAudioSyncFingerprint;
         if ( previousCtx.isPlaying &&
              audio.getLoadedAudioTimelineFingerprint() ==
-                 previousFingerprint ) {
+                 previousTimelineFingerprint ) {
             previousCtx.currentTime =
                 resolveContinuousSessionTime(previousCtx, sessionSwitchTime);
             previousWasPlaying = true;
@@ -2799,7 +2855,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         previousTime                            = previousCtx.currentTime;
         previousCtx.isPlaying                   = false;
         previousCtx.isAudioTimelineSyncFollower = false;
-        previousCtx.isActiveSession             = false;
+        previousCtx.m_audioTimelineSyncSourceFingerprint.clear();
+        previousCtx.isActiveSession = false;
     }
 
     m_sessionRegistry.setActiveIndex(index);
@@ -2815,16 +2872,19 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     ctx.isActiveSession             = true;
     ctx.isPlaying                   = false;
     ctx.isAudioTimelineSyncFollower = false;
+    ctx.m_audioTimelineSyncSourceFingerprint.clear();
     if ( ctx.isAudioTimelineDescriptorDirty ) {
         SessionUtils::rebuildAudioTimelineDescriptor(ctx, getCurrentProject());
     }
     sessions[index].audioTimelineFingerprint =
         ctx.audioTimelineDescriptor.m_fingerprint;
+    sessions[index].mainAudioSyncFingerprint =
+        ctx.audioTimelineDescriptor.m_mainAudioSyncFingerprint;
     ctx.isAudioTimelineFingerprintPublishPending = false;
 
     const auto switchDecision = SessionUtils::resolveAudioTimelineSwitch(
-        previousFingerprint,
-        sessions[index].audioTimelineFingerprint,
+        previousMainAudioSyncFingerprint,
+        sessions[index].mainAudioSyncFingerprint,
         previousTime,
         ctx.currentTime,
         previousWasPlaying,
@@ -2835,8 +2895,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
     const bool timelineReady = !sessions[index].isLogoPlaceholder &&
                                SessionUtils::activateAudioTimeline(ctx, false);
-    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
-    double minTime   = -editorConfig.visual.getEffectiveVisualOffset();
+    double     totalTime     = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    double     minTime       = -editorConfig.visual.getEffectiveVisualOffset();
     if ( minTime > totalTime ) minTime = totalTime;
     ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
     if ( timelineReady ) {
@@ -2863,10 +2923,13 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     m_sessionRegistry.publishSnapshotUnsafe();
     refreshMainAudioSyncPeerStateUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
-    XINFO("Switched active session to #{} cameraId={} fingerprint={}",
-          index,
-          sessions[index].cameraId,
-          sessions[index].audioTimelineFingerprint);
+    XINFO(
+        "Switched active session to #{} cameraId={} fingerprint={} "
+        "mainSyncFingerprint={}",
+        index,
+        sessions[index].cameraId,
+        sessions[index].audioTimelineFingerprint,
+        sessions[index].mainAudioSyncFingerprint);
 
     const auto sharedViewportSizes =
         m_renderSyncRegistry.getSharedViewportSizes();

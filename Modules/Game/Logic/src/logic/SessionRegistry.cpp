@@ -228,6 +228,7 @@ void SessionRegistry::fillIndexedSessionSnapshot(
                                  entry.session,
                                  entry.isCanvasVisible,
                                  entry.audioTimelineFingerprint,
+                                 entry.mainAudioSyncFingerprint,
                                  entry.isLogoPlaceholder });
         }
     }
@@ -332,6 +333,7 @@ void SessionRegistry::publishSnapshotUnsafe()
                                            entry.session,
                                            entry.isCanvasVisible,
                                            entry.audioTimelineFingerprint,
+                                           entry.mainAudioSyncFingerprint,
                                            entry.isLogoPlaceholder });
         }
     }

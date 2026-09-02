@@ -114,6 +114,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
     if ( !m_ctx.isActiveSession ) {
         m_ctx.isPlaying                   = false;
         m_ctx.isAudioTimelineSyncFollower = false;
+        m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
         return;
     }
 
@@ -124,7 +125,8 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
     }
 
     m_ctx.isAudioTimelineSyncFollower = false;
-    m_ctx.isPlaying                   = cmd.isPlaying;
+    m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
+    m_ctx.isPlaying = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
         if ( shouldRestartFromBeginning ) {
             m_ctx.currentTime = 0.0;
@@ -154,6 +156,7 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
     const bool isContinuingScrub = cmd.isScrubbing && m_ctx.isSeekScrubbing;
     m_ctx.restartPlaybackAfterFinishPending = false;
     m_ctx.isAudioTimelineSyncFollower       = false;
+    m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
         m_ctx.isPlaying = false;
         if ( m_ctx.isActiveSession ) {
@@ -313,6 +316,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     if ( shouldStopPlayback ) {
         m_ctx.isPlaying                   = false;
         m_ctx.isAudioTimelineSyncFollower = false;
+        m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
         if ( m_ctx.isActiveSession ) {
             auto& audio = Audio::AudioManager::instance();
             if ( audio.getLoadedAudioTimelineFingerprint() ==

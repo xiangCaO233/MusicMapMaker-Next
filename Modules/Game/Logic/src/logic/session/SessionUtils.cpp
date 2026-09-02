@@ -663,12 +663,13 @@ bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
 }
 
 AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
-    std::string_view previousFingerprint, std::string_view targetFingerprint,
-    double previousTime, double targetTime, bool previousWasPlaying,
-    bool stopPlaybackOnScroll, bool synchronizeMatchingTimelines)
+    std::string_view previousSyncFingerprint,
+    std::string_view targetSyncFingerprint, double previousTime,
+    double targetTime, bool previousWasPlaying, bool stopPlaybackOnScroll,
+    bool synchronizeMatchingTimelines)
 {
-    const bool sameTimeline = !previousFingerprint.empty() &&
-                              previousFingerprint == targetFingerprint;
+    const bool sameTimeline = !previousSyncFingerprint.empty() &&
+                              previousSyncFingerprint == targetSyncFingerprint;
     return {
         .m_targetTime = sameTimeline && synchronizeMatchingTimelines
                             ? previousTime
@@ -683,12 +684,16 @@ bool applyAudioTimelineTransportSnapshot(
     const Audio::AudioTimelineClockSnapshot& snapshot, double nowSteadySeconds,
     const Config::SyncConfig& syncConfig)
 {
-    const bool readsCurrentTransport =
-        !ctx.audioTimelineDescriptor.m_fingerprint.empty() &&
-        loadedFingerprint == ctx.audioTimelineDescriptor.m_fingerprint;
+    const std::string_view expectedFingerprint =
+        ctx.isAudioTimelineSyncFollower
+            ? std::string_view(ctx.m_audioTimelineSyncSourceFingerprint)
+            : std::string_view(ctx.audioTimelineDescriptor.m_fingerprint);
+    const bool readsCurrentTransport = !expectedFingerprint.empty() &&
+                                       loadedFingerprint == expectedFingerprint;
     if ( !readsCurrentTransport ) {
         ctx.isPlaying                   = false;
         ctx.isAudioTimelineSyncFollower = false;
+        ctx.m_audioTimelineSyncSourceFingerprint.clear();
         ctx.playbackVisualClock.reset();
         return false;
     }
@@ -714,6 +719,7 @@ bool applyAudioTimelineTransportSnapshot(
     if ( ctx.isAudioTimelineSyncFollower && snapshot.valid &&
          snapshot.state != Audio::AudioTimelinePlaybackState::Playing ) {
         ctx.isAudioTimelineSyncFollower = false;
+        ctx.m_audioTimelineSyncSourceFingerprint.clear();
         return false;
     }
     return ctx.isPlaying || ctx.isAudioTimelineSyncFollower;

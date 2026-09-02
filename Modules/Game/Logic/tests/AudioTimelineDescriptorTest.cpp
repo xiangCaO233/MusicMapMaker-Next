@@ -187,6 +187,7 @@ bool testCanonicalDescriptor()
     if ( descriptor.m_events.size() != 4U ||
          descriptor.m_diagnostics.size() != 1U ||
          descriptor.m_fingerprint.size() != 32U ||
+         descriptor.m_mainAudioSyncFingerprint.size() != 32U ||
          descriptor.m_chartEndSeconds != 12.5 ) {
         XERROR("Audio timeline descriptor did not retain all sample events");
         return false;
@@ -265,9 +266,89 @@ bool testOrderIndependentIdentity()
         8.0);
 
     if ( forwardDescriptor.m_fingerprint != reversedDescriptor.m_fingerprint ||
+         forwardDescriptor.m_mainAudioSyncFingerprint !=
+             reversedDescriptor.m_mainAudioSyncFingerprint ||
          !sameLoadEvents(forwardDescriptor.m_events,
                          reversedDescriptor.m_events) ) {
         XERROR("Audio descriptor identity depended on source event order");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证画布同步仅由 Main 资源序列及各自有效起播位置决定。
+/// @return 布局和非 Main 差异被忽略，Main 资源或位置变化被识别时返回 true。
+bool testMainAudioSyncFingerprintUsesResourcesAndPositions()
+{
+    auto project = makeProject();
+    project.m_audioResources.push_back(MMM::AudioResource{
+        .m_id   = "main-alt-id",
+        .m_path = "audio/main-alt.ogg",
+        .m_type = MMM::AudioTrackType::Main,
+    });
+
+    /// @brief 构造跨 Key 数但 Main 序列和起播位置可保持一致的谱面。
+    const auto makeSyncMap = [](int           trackCount,
+                                std::uint32_t firstMainTrack,
+                                std::uint32_t secondMainTrack,
+                                float         firstMainVolume,
+                                double        effectTimestamp) {
+        MMM::BeatMap beatMap;
+        beatMap.m_baseMapMetadata.track_count = trackCount;
+        beatMap.m_audioSamples.push_back(
+            makeSample(0.0, -577, firstMainTrack, "main-id", firstMainVolume));
+        beatMap.m_audioSamples.push_back(
+            makeSample(4000.0, 250, secondMainTrack, "main-alt-id", 0.7F));
+        beatMap.m_audioSamples.push_back(makeSample(
+            effectTimestamp, 0, secondMainTrack + 3U, "effect-id", 0.4F));
+        return beatMap;
+    };
+
+    const auto sixKeyMap        = makeSyncMap(6, 10U, 11U, 0.5F, 1000.0);
+    const auto fiveKeyMap       = makeSyncMap(5, 10U, 11U, 0.9F, 2500.0);
+    const auto sixKeyDescriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        sixKeyMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        30.0);
+    const auto fiveKeyDescriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        fiveKeyMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        45.0);
+
+    if ( sixKeyDescriptor.m_fingerprint == fiveKeyDescriptor.m_fingerprint ||
+         sixKeyDescriptor.m_mainAudioSyncFingerprint.empty() ||
+         sixKeyDescriptor.m_mainAudioSyncFingerprint !=
+             fiveKeyDescriptor.m_mainAudioSyncFingerprint ) {
+        XERROR("Compatible Main timelines did not share a canvas sync key");
+        return false;
+    }
+
+    auto movedMainMap = makeSyncMap(5, 10U, 11U, 0.9F, 2500.0);
+    movedMainMap.m_audioSamples[1].m_offsetMs += 1;
+    const auto movedMainDescriptor = MMM::Logic::buildAudioTimelineDescriptor(
+        movedMainMap,
+        project,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        45.0);
+    if ( movedMainDescriptor.m_mainAudioSyncFingerprint ==
+         fiveKeyDescriptor.m_mainAudioSyncFingerprint ) {
+        XERROR("A moved Main resource retained the old canvas sync key");
+        return false;
+    }
+
+    auto changedSequenceMap = makeSyncMap(5, 10U, 11U, 0.9F, 2500.0);
+    changedSequenceMap.m_audioSamples[1].m_audioResourceId = "main-id";
+    const auto changedSequenceDescriptor =
+        MMM::Logic::buildAudioTimelineDescriptor(
+            changedSequenceMap,
+            project,
+            MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+            45.0);
+    if ( changedSequenceDescriptor.m_mainAudioSyncFingerprint ==
+         fiveKeyDescriptor.m_mainAudioSyncFingerprint ) {
+        XERROR("A changed Main resource sequence retained the old sync key");
         return false;
     }
     return true;
@@ -677,6 +758,7 @@ bool testSilentSampleDraftIsExcludedFromPlayback()
         MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
         2.0);
     return descriptor.m_events.empty() && descriptor.m_diagnostics.empty() &&
+           descriptor.m_mainAudioSyncFingerprint.empty() &&
            descriptor.m_chartEndSeconds == 2.0;
 }
 
@@ -688,6 +770,7 @@ int main()
 {
     return testCanonicalDescriptor() && testOrderIndependentIdentity() &&
                    testNonAudioFieldsAreExcluded() &&
+                   testMainAudioSyncFingerprintUsesResourcesAndPositions() &&
                    testFingerprintSensitivity() &&
                    testDescriptorResourceReferenceLookup() &&
                    testBulkStableIdResolutionUsesFirstResource() &&

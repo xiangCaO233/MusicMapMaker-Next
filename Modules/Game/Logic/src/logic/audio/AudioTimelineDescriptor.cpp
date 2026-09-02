@@ -160,6 +160,20 @@ CanonicalBytes makeCanonicalEventBytes(
     return bytes;
 }
 
+/// @brief 构造 Main 资源画布同步所需的规范事件字节。
+/// @param event 已解析到 Main 项目资源的加载事件。
+/// @return 仅包含资源身份和有效起播位置的规范字节。
+CanonicalBytes makeMainAudioSyncEventBytes(
+    const MMM::Audio::AudioTimelineLoadEvent& event)
+{
+    CanonicalBytes bytes;
+    bytes.reserve(24U + event.resourceKey.size() + event.filePath.size());
+    appendDouble(bytes, event.effectiveStartSeconds);
+    appendString(bytes, event.resourceKey);
+    appendString(bytes, event.filePath);
+    return bytes;
+}
+
 /// @brief 将项目资源路径解析为规范化绝对路径。
 /// @param project 音频资源所属项目。
 /// @param beatmapPath 当前谱面路径，用作项目根缺失时的回退基准。
@@ -313,6 +327,34 @@ std::string buildFingerprint(const std::vector<PendingTimelineEvent>& events,
     return fingerprint;
 }
 
+/// @brief 构造只覆盖 Main 资源序列和有效起播位置的同步指纹。
+/// @param events Main 资源对应的规范同步事件。
+/// @return 无 Main 资源时返回空，否则返回稳定双 FNV-1a 指纹。
+std::string buildMainAudioSyncFingerprint(std::vector<CanonicalBytes> events)
+{
+    if ( events.empty() ) return {};
+
+    std::sort(events.begin(), events.end());
+    CanonicalBytes payload;
+    appendUnsigned(payload, static_cast<std::uint64_t>(events.size()));
+    for ( const auto& event : events ) {
+        appendUnsigned(payload, static_cast<std::uint64_t>(event.size()));
+        payload.insert(payload.end(), event.begin(), event.end());
+    }
+
+    std::uint64_t firstHash  = FNV1A_OFFSET_BASIS;
+    std::uint64_t secondHash = FNV1A_OFFSET_BASIS;
+    updateFnv1a(firstHash, "MMM.MainAudioSyncTimeline.v1.first");
+    updateFnv1a(secondHash, "MMM.MainAudioSyncTimeline.v1.second");
+    updateFnv1a(firstHash, payload);
+    updateFnv1a(secondHash, payload);
+
+    std::string fingerprint(32U, '0');
+    writeHex(firstHash, fingerprint, 0U);
+    writeHex(secondHash, fingerprint, 16U);
+    return fingerprint;
+}
+
 }  // namespace
 
 bool audioTimelineDescriptorReferencesResource(
@@ -340,6 +382,9 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
 {
     std::vector<PendingTimelineEvent> pendingEvents;
     pendingEvents.reserve(beatMap.m_audioSamples.size());
+    /// @brief 只收集 Main 资源身份和起播位置的同步事件。
+    std::vector<CanonicalBytes> mainAudioSyncEvents;
+    mainAudioSyncEvents.reserve(beatMap.m_audioSamples.size());
 
     /// @brief 与自动采样顺序一致的资源引用视图。
     std::vector<std::string_view> audioReferences;
@@ -386,6 +431,9 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
             event.filePath       = pathIterator->second;
             event.resourceConfig = resource->m_config;
         }
+        if ( resource && resource->m_type == AudioTrackType::Main ) {
+            mainAudioSyncEvents.push_back(makeMainAudioSyncEventBytes(event));
+        }
 
         pendingEvents.push_back(PendingTimelineEvent{
             .m_event             = event,
@@ -406,6 +454,8 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
     descriptor.m_chartEndSeconds = chartContentEndSeconds;
     descriptor.m_fingerprint =
         buildFingerprint(pendingEvents, chartContentEndSeconds);
+    descriptor.m_mainAudioSyncFingerprint =
+        buildMainAudioSyncFingerprint(std::move(mainAudioSyncEvents));
     descriptor.m_events.reserve(pendingEvents.size());
     descriptor.m_diagnostics.reserve(pendingEvents.size());
 

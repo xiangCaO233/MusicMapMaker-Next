@@ -176,16 +176,25 @@ struct AudioTimelineSwitchDecision {
     bool m_resumePlayback{ false };
 };
 
-/// @brief 根据完整时间线指纹决定多标签切换语义。
-/// @return 仅同指纹时同步旧时间并按配置恢复播放；不同指纹保留目标状态。
+/// @brief 根据 Main 音轨同步指纹决定多标签切换语义。
+/// @param previousSyncFingerprint 切换前会话的 Main 音轨同步指纹。
+/// @param targetSyncFingerprint 目标会话的 Main 音轨同步指纹。
+/// @param previousTime 切换前会话的连续播放位置。
+/// @param targetTime 目标会话原有播放位置。
+/// @param previousWasPlaying 切换前会话是否正在播放。
+/// @param stopPlaybackOnScroll 是否启用停止播放策略。
+/// @param synchronizeMatchingTimelines 是否启用同主音轨画布同步。
+/// @return 仅同步指纹相同时继承旧时间并按配置恢复播放。
 AudioTimelineSwitchDecision resolveAudioTimelineSwitch(
-    std::string_view previousFingerprint, std::string_view targetFingerprint,
-    double previousTime, double targetTime, bool previousWasPlaying,
-    bool stopPlaybackOnScroll, bool synchronizeMatchingTimelines);
+    std::string_view previousSyncFingerprint,
+    std::string_view targetSyncFingerprint, double previousTime,
+    double targetTime, bool previousWasPlaying, bool stopPlaybackOnScroll,
+    bool synchronizeMatchingTimelines);
 
 /// @brief 将 AudioManager transport 快照应用为会话唯一播放时钟。
 /// @param ctx 接收状态的会话。
-/// @param loadedFingerprint 当前 AudioManager 已加载指纹。
+/// @param loadedFingerprint 当前 AudioManager 已加载的完整时间线指纹；同步
+/// follower 将与源会话完整指纹缓存比较。
 /// @param snapshot 位置、状态和发布时间一致的音频时钟快照。
 /// @param nowSteadySeconds 当前逻辑帧的 steady_clock 秒数。
 /// @param syncConfig 音画校准配置。
