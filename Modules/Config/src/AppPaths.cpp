@@ -1,8 +1,10 @@
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <system_error>
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -12,6 +14,8 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+#elif defined(__APPLE__)
+#    include <mach-o/dyld.h>
 #endif
 
 namespace MMM::Config
@@ -53,6 +57,48 @@ constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
 /// @brief 默认资源包中的窗口图标相对路径。
 constexpr const char* kWindowIconRelativePath =
     "skins/mmm-default/resources/image/logo.png";
+
+/// @brief 查询当前进程可执行文件的绝对路径。
+/// @return 查询成功时返回可执行文件路径，否则返回空路径。
+std::filesystem::path currentExecutablePath()
+{
+#ifdef _WIN32
+    /// @brief 动态扩展缓冲区，兼容启用长路径后的 Windows 可执行文件路径。
+    std::wstring pathBuffer(256, L'\0');
+    while ( pathBuffer.size() <= 32768 ) {
+        const DWORD pathLength = GetModuleFileNameW(
+            nullptr, pathBuffer.data(), static_cast<DWORD>(pathBuffer.size()));
+        if ( pathLength == 0 ) return {};
+        if ( pathLength < pathBuffer.size() ) {
+            pathBuffer.resize(pathLength);
+            return std::filesystem::path(pathBuffer);
+        }
+        pathBuffer.resize(pathBuffer.size() * 2);
+    }
+    return {};
+#elif defined(__APPLE__)
+    /// @brief 先查询所需容量，避免可执行文件路径被固定缓冲区截断。
+    std::uint32_t pathLength = 0;
+    (void)_NSGetExecutablePath(nullptr, &pathLength);
+    if ( pathLength == 0 ) return {};
+
+    std::string pathBuffer(pathLength, '\0');
+    if ( _NSGetExecutablePath(pathBuffer.data(), &pathLength) != 0 ) return {};
+
+    const std::filesystem::path rawPath = utf8ToPath(pathBuffer.c_str());
+    std::error_code             canonicalError;
+    const auto                  canonicalPath =
+        std::filesystem::weakly_canonical(rawPath, canonicalError);
+    return canonicalError ? rawPath : canonicalPath;
+#elif defined(__linux__)
+    std::error_code executablePathError;
+    const auto      executablePath =
+        std::filesystem::canonical("/proc/self/exe", executablePathError);
+    return executablePathError ? std::filesystem::path{} : executablePath;
+#else
+    return {};
+#endif
+}
 
 #ifdef _WIN32
 /// @brief 读取 Windows 宽字符环境变量并转换为文件系统路径。
@@ -170,6 +216,21 @@ bool ensureDirectory(const std::filesystem::path& path)
 }
 
 }  // namespace
+
+std::filesystem::path AppPaths::executableDirectoryPath()
+{
+    const std::filesystem::path executablePath = currentExecutablePath();
+    if ( !executablePath.empty() ) {
+        const std::filesystem::path executableDirectory =
+            executablePath.parent_path();
+        if ( executableDirectory.is_absolute() ) return executableDirectory;
+    }
+
+    std::error_code       currentPathError;
+    std::filesystem::path currentPath =
+        std::filesystem::current_path(currentPathError);
+    return currentPathError ? std::filesystem::path{} : currentPath;
+}
 
 std::filesystem::path AppPaths::configRootPath()
 {

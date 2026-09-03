@@ -1,8 +1,13 @@
 #include "ui/utils/NativeFileDialog.h"
 
+#include "config/AppPaths.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
 #include <GLFW/glfw3.h>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <utility>
 
 #if defined(_WIN32)
@@ -30,6 +35,34 @@ namespace
 /// @brief 全部原生选择器共享的 GLFW 主窗口观察指针。
 /// @warning 仅由 UI 线程绑定和读取，生命周期由 GameLoop 保证。
 GLFWwindow* g_mainWindow = nullptr;
+
+/// @brief 将文件选择器默认目录规范化为现存的绝对路径。
+/// @param defaultPath 调用方提供的 UTF-8 历史目录，可为空或为相对路径。
+/// @return 可传给 NFD 的 UTF-8 绝对目录；无法解析时返回空字符串。
+[[nodiscard]] std::string resolveDefaultPath(const nfdu8char_t* defaultPath)
+{
+    const std::filesystem::path executableDirectory =
+        Config::AppPaths::executableDirectoryPath();
+    std::filesystem::path resolvedPath;
+    if ( defaultPath && defaultPath[0] != '\0' ) {
+        resolvedPath = Config::utf8ToPath(defaultPath);
+    }
+
+    if ( resolvedPath.empty() || resolvedPath == "." ) {
+        resolvedPath = executableDirectory;
+    } else if ( resolvedPath.is_relative() ) {
+        resolvedPath = executableDirectory / resolvedPath;
+    }
+
+    std::error_code directoryError;
+    if ( resolvedPath.empty() ||
+         !std::filesystem::is_directory(resolvedPath, directoryError) ||
+         directoryError ) {
+        resolvedPath = executableDirectory;
+    }
+    if ( resolvedPath.empty() || !resolvedPath.is_absolute() ) return {};
+    return Config::pathToUtf8(resolvedPath.lexically_normal());
+}
 
 /// @brief 在执行原生对话框调用前临时切换到系统普通光标。
 /// @param window GLFW 主窗口句柄，可为空。
@@ -179,10 +212,12 @@ nfdresult_t openFile(nfdu8char_t** outPath, const nfdu8filteritem_t* filters,
                      nfdfiltersize_t    filterCount,
                      const nfdu8char_t* defaultPath)
 {
+    const std::string     resolvedDefaultPath = resolveDefaultPath(defaultPath);
     nfdopendialogu8args_t args{};
     args.filterList  = filters;
     args.filterCount = filterCount;
-    args.defaultPath = defaultPath;
+    args.defaultPath =
+        resolvedDefaultPath.empty() ? nullptr : resolvedDefaultPath.c_str();
     return runDialog(args, [outPath](const nfdopendialogu8args_t& dialogArgs) {
         return NFD_OpenDialogU8_With(outPath, &dialogArgs);
     });
@@ -193,10 +228,12 @@ nfdresult_t saveFile(nfdu8char_t** outPath, const nfdu8filteritem_t* filters,
                      const nfdu8char_t* defaultPath,
                      const nfdu8char_t* defaultName)
 {
+    const std::string     resolvedDefaultPath = resolveDefaultPath(defaultPath);
     nfdsavedialogu8args_t args{};
     args.filterList  = filters;
     args.filterCount = filterCount;
-    args.defaultPath = defaultPath;
+    args.defaultPath =
+        resolvedDefaultPath.empty() ? nullptr : resolvedDefaultPath.c_str();
     args.defaultName = defaultName;
     return runDialog(args, [outPath](const nfdsavedialogu8args_t& dialogArgs) {
         return NFD_SaveDialogU8_With(outPath, &dialogArgs);
@@ -205,8 +242,10 @@ nfdresult_t saveFile(nfdu8char_t** outPath, const nfdu8filteritem_t* filters,
 
 nfdresult_t pickFolder(nfdu8char_t** outPath, const nfdu8char_t* defaultPath)
 {
+    const std::string     resolvedDefaultPath = resolveDefaultPath(defaultPath);
     nfdpickfolderu8args_t args{};
-    args.defaultPath = defaultPath;
+    args.defaultPath =
+        resolvedDefaultPath.empty() ? nullptr : resolvedDefaultPath.c_str();
     return runDialog(args, [outPath](const nfdpickfolderu8args_t& dialogArgs) {
         return NFD_PickFolderU8_With(outPath, &dialogArgs);
     });
