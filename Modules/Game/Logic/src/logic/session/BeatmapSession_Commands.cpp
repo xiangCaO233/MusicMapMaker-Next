@@ -1595,16 +1595,15 @@ bool BeatmapSession::processCommands()
              autoBackup.onObjectModified ) {
             m_triggeredAutoBackupPending = true;
         }
-        auto observer = std::atomic_load_explicit(&m_mutationObserver,
-                                                  std::memory_order_acquire);
+        auto observer = m_mutationObserver.load(std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
             SessionUtils::syncBeatmap(*m_ctx);
             const auto sequence = observer->onBeatmapMutated(
                 *m_ctx->currentBeatmap, mutationFlags);
             if ( sequence != 0 &&
                  mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
-                const auto activeObserver = std::atomic_load_explicit(
-                    &m_mutationObserver, std::memory_order_acquire);
+                const auto activeObserver =
+                    m_mutationObserver.load(std::memory_order_acquire);
                 if ( activeObserver == observer ) {
                     m_latestAcceptedLocalObjectMutationSequence.store(
                         sequence, std::memory_order_release);
@@ -2083,8 +2082,7 @@ bool BeatmapSession::processCommands()
             },
             cmd);
         if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
-            auto observer = std::atomic_load_explicit(
-                &m_mutationObserver, std::memory_order_acquire);
+            auto observer = m_mutationObserver.load(std::memory_order_acquire);
             if ( observer ) {
                 if ( authoritativeReplacement
                          ->objectEncodingBaselinePrepared ) {

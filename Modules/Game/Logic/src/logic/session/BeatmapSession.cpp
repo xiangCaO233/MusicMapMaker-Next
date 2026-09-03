@@ -404,8 +404,7 @@ void BeatmapSession::setMutationObserver(
     const bool requestSnapshot = observer != nullptr && publishCurrentSnapshot;
     m_latestAcceptedLocalObjectMutationSequence.store(
         0, std::memory_order_release);
-    std::atomic_store_explicit(
-        &m_mutationObserver, std::move(observer), std::memory_order_release);
+    m_mutationObserver.store(std::move(observer), std::memory_order_release);
     m_mutationSnapshotRequested.store(requestSnapshot,
                                       std::memory_order_relaxed);
 }
@@ -416,8 +415,7 @@ void BeatmapSession::publishRequestedMutationSnapshot()
                                                std::memory_order_relaxed) ) {
         return;
     }
-    auto observer = std::atomic_load_explicit(&m_mutationObserver,
-                                              std::memory_order_acquire);
+    auto observer = m_mutationObserver.load(std::memory_order_acquire);
     if ( !observer || !m_ctx->currentBeatmap ) return;
 
     SessionUtils::syncBeatmap(*m_ctx);

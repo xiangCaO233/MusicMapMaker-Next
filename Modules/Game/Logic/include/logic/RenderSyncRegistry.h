@@ -159,7 +159,8 @@ private:
     /// @warning 逻辑热路径原子：每个快照生成时 acquire 读取；写侧在持有
     /// m_mutex 后 release 发布新快照。shared_ptr
     /// 所有权用于解决读写并发时的快照生命周期。
-    std::shared_ptr<const PublishedAtlasUVSnapshot> m_publishedAtlasUVSnapshot;
+    std::atomic<std::shared_ptr<const PublishedAtlasUVSnapshot>>
+        m_publishedAtlasUVSnapshot;
 };
 
 }  // namespace MMM::Logic

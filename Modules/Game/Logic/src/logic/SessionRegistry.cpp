@@ -239,8 +239,7 @@ void SessionRegistry::fillIndexedSessionSnapshot(
 std::shared_ptr<const PublishedSessionSnapshot>
 SessionRegistry::publishedSnapshot() const
 {
-    auto snapshot = std::atomic_load_explicit(&m_publishedSnapshot,
-                                              std::memory_order_acquire);
+    auto snapshot = m_publishedSnapshot.load(std::memory_order_acquire);
     if ( snapshot ) {
         return snapshot;
     }
@@ -338,8 +337,7 @@ void SessionRegistry::publishSnapshotUnsafe()
         }
     }
 
-    std::atomic_store_explicit(
-        &m_publishedSnapshot,
+    m_publishedSnapshot.store(
         std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
         std::memory_order_release);
 }
