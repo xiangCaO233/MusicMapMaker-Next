@@ -132,3 +132,10 @@ target_include_directories(TimelineTableSnapshotStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME TimelineTableSnapshotStateTest
          COMMAND TimelineTableSnapshotStateTest)
+
+# Timeline 独立表格窗口状态覆盖重复菜单激活与跨显示器位置恢复。
+mmm_add_test_executable(Canvas TimelineTableWindowStateTest
+                        tests/TimelineTableWindowStateTest.cpp)
+target_include_directories(TimelineTableWindowStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME TimelineTableWindowStateTest COMMAND TimelineTableWindowStateTest)

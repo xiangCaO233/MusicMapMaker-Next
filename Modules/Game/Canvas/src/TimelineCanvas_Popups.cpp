@@ -4,6 +4,7 @@
 
 #include "canvas/TimelineCanvas.h"
 #include "canvas/TimelineTableSnapshotState.h"
+#include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimingTableFraction.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
@@ -61,8 +62,85 @@ constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
 /// @brief 时间线表格局部滚动条拖拽块最小尺寸。
 constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
 
+/// @brief 表格标题栏至少保留在显示器工作区内的逻辑像素宽度。
+constexpr float TABLE_WINDOW_MINIMUM_VISIBLE_TITLE_WIDTH = 64.0F;
+
+/// @brief 从屏幕外恢复表格窗口时保留的工作区边距。
+constexpr float TABLE_WINDOW_RECOVERY_MARGIN = 24.0F;
+
 /// @brief 时间点表格可搜索的 Timing 属性数量。
 constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 4;
+
+/// @brief 将 ImGui 坐标转换为表格窗口矩形。
+/// @param position 左上角屏幕坐标。
+/// @param size 矩形尺寸。
+/// @return 可供纯布局逻辑检查的矩形。
+/// @warning UI 热路径：仅在独立表格已聚焦或收到恢复请求时执行常量拷贝。
+TimelineTableWindowRect makeTimelineTableWindowRect(const ImVec2& position,
+                                                    const ImVec2& size)
+{
+    return { position.x, position.y, size.x, size.y };
+}
+
+/// @brief 判断当前 ImGui 表格窗口的标题栏能否从任一显示器工作区访问。
+/// @param dpiScale 当前窗口内容 DPI 缩放。
+/// @return 标题栏仍有可拖拽区域时返回 true。
+/// @warning UI 热路径：只在独立表格拥有焦点或收到恢复请求时遍历显示器列表。
+bool isCurrentTimelineTableWindowReachable(float dpiScale)
+{
+    const auto  window = makeTimelineTableWindowRect(ImGui::GetWindowPos(),
+                                                     ImGui::GetWindowSize());
+    const float titleBarHeight = ImGui::GetFrameHeight();
+    const float minimumVisibleWidth =
+        TABLE_WINDOW_MINIMUM_VISIBLE_TITLE_WIDTH * std::max(dpiScale, 1.0F);
+
+    const ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    for ( int index = 0; index < platformIo.Monitors.Size; ++index ) {
+        const ImGuiPlatformMonitor& monitor = platformIo.Monitors[index];
+        const auto                  workArea =
+            makeTimelineTableWindowRect(monitor.WorkPos, monitor.WorkSize);
+        if ( isTimelineTableWindowReachable(
+                 window, workArea, titleBarHeight, minimumVisibleWidth) ) {
+            return true;
+        }
+    }
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    if ( !mainViewport ) return false;
+    const auto mainWorkArea = makeTimelineTableWindowRect(
+        mainViewport->WorkPos, mainViewport->WorkSize);
+    return isTimelineTableWindowReachable(
+        window, mainWorkArea, titleBarHeight, minimumVisibleWidth);
+}
+
+/// @brief 必要时把当前 ImGui 表格窗口恢复到主工作区中央。
+/// @param requested 是否收到位置恢复请求。
+/// @param dpiScale 当前窗口内容 DPI 缩放。
+/// @warning UI 低频恢复路径：只在项目恢复或用户激活表格菜单项时调用；
+/// 仅对不可访问窗口执行一次位置和尺寸写入。
+void recoverCurrentTimelineTableWindow(bool requested, float dpiScale)
+{
+    if ( !requested || isCurrentTimelineTableWindowReachable(dpiScale) ) {
+        return;
+    }
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    if ( !mainViewport ) return;
+
+    const auto window    = makeTimelineTableWindowRect(ImGui::GetWindowPos(),
+                                                       ImGui::GetWindowSize());
+    const auto workArea  = makeTimelineTableWindowRect(mainViewport->WorkPos,
+                                                       mainViewport->WorkSize);
+    const auto recovered = recoverTimelineTableWindowRect(
+        window,
+        workArea,
+        TABLE_WINDOW_RECOVERY_MARGIN * std::max(dpiScale, 1.0F));
+
+    // Begin 后才能读取项目布局实际恢复出的矩形；这里只在屏幕外恢复时写入一次。
+    ImGui::SetWindowSize(ImVec2(recovered.width, recovered.height),
+                         ImGuiCond_Always);
+    ImGui::SetWindowPos(ImVec2(recovered.x, recovered.y), ImGuiCond_Always);
+}
 
 /// @brief 时间线表格拍位换算使用的 BPM 锚点。
 struct TimingTableBeatPoint {
@@ -1445,12 +1523,18 @@ void TimelineCanvas::renderAnnotationTableWindow()
         m_selectedAnnotationTableRow.reset();
     };
     if ( !m_isAnnotationTableWindowOpen ) {
+        m_shouldRecoverAnnotationTableWindow         = false;
+        m_shouldFocusAnnotationTableWindow           = false;
+        m_isAnnotationTableWindowFocusedAndReachable = false;
         resetTable();
         return;
     }
 
     auto closeTableWindow = [this, &resetTable]() {
-        m_isAnnotationTableWindowOpen = false;
+        m_isAnnotationTableWindowOpen                = false;
+        m_shouldRecoverAnnotationTableWindow         = false;
+        m_shouldFocusAnnotationTableWindow           = false;
+        m_isAnnotationTableWindowFocusedAndReachable = false;
         resetTable();
     };
 
@@ -1514,6 +1598,9 @@ void TimelineCanvas::renderAnnotationTableWindow()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
     ImGui::SetNextWindowSize(ImVec2(860.0F, 560.0F), ImGuiCond_FirstUseEver);
+    if ( m_shouldFocusAnnotationTableWindow ) {
+        ImGui::SetNextWindowFocus();
+    }
     std::string windowTitle =
         TR("ui.annotation.table.title").toString() + "###AnnotationTableWindow";
     const bool wasOpenBeforeBegin = m_isAnnotationTableWindowOpen;
@@ -1521,6 +1608,26 @@ void TimelineCanvas::renderAnnotationTableWindow()
         ImGui::Begin(windowTitle.c_str(), &m_isAnnotationTableWindowOpen);
     ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
                                                 &m_isAnnotationTableWindowOpen);
+    if ( m_isAnnotationTableWindowOpen ) {
+        recoverCurrentTimelineTableWindow(m_shouldRecoverAnnotationTableWindow,
+                                          dpiScale);
+        const bool focused =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const bool reachable = isCurrentTimelineTableWindowReachable(dpiScale);
+        const bool popupOpen = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        m_isAnnotationTableWindowFocusedAndReachable =
+            resolveTimelineTableWindowFocusedAndReachable(
+                m_isAnnotationTableWindowFocusedAndReachable,
+                reachable,
+                focused,
+                popupOpen);
+    } else {
+        m_isAnnotationTableWindowFocusedAndReachable = false;
+    }
+    m_shouldRecoverAnnotationTableWindow = false;
+    m_shouldFocusAnnotationTableWindow   = false;
     if ( opened ) {
         const bool rowsReady = refreshAnnotationTableRows(
             currentBeatmapKey, m_currentSnapshot->annotationRevision);
@@ -1750,6 +1857,9 @@ void TimelineCanvas::renderAnnotationTableWindow()
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
     if ( !m_isTableWindowOpen ) {
+        m_shouldRecoverTableWindow         = false;
+        m_shouldFocusTableWindow           = false;
+        m_isTableWindowFocusedAndReachable = false;
         m_tableBeatmapKey.clear();
         m_tableSelectionAnchorEntity = entt::null;
         m_isTableRowDragSelecting    = false;
@@ -1761,7 +1871,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     }
 
     auto closeTableWindow = [this]() {
-        m_isTableWindowOpen = false;
+        m_isTableWindowOpen                = false;
+        m_shouldRecoverTableWindow         = false;
+        m_shouldFocusTableWindow           = false;
+        m_isTableWindowFocusedAndReachable = false;
         m_tableBeatmapKey.clear();
         m_tableScrollToCurrentTimePending = false;
         m_tableSelectionAnchorEntity      = entt::null;
@@ -1834,6 +1947,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
     ImGui::SetNextWindowSize(ImVec2(820, 450), ImGuiCond_FirstUseEver);
+    if ( m_shouldFocusTableWindow ) {
+        ImGui::SetNextWindowFocus();
+    }
 
     std::string windowTitle =
         TR("ui.timeline.timing_points_table.title").toString() +
@@ -1842,6 +1958,25 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen);
     ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
                                                 &m_isTableWindowOpen);
+    if ( m_isTableWindowOpen ) {
+        recoverCurrentTimelineTableWindow(m_shouldRecoverTableWindow, dpiScale);
+        const bool focused =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const bool reachable = isCurrentTimelineTableWindowReachable(dpiScale);
+        const bool popupOpen = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        m_isTableWindowFocusedAndReachable =
+            resolveTimelineTableWindowFocusedAndReachable(
+                m_isTableWindowFocusedAndReachable,
+                reachable,
+                focused,
+                popupOpen);
+    } else {
+        m_isTableWindowFocusedAndReachable = false;
+    }
+    m_shouldRecoverTableWindow = false;
+    m_shouldFocusTableWindow   = false;
     if ( opened ) {
         const bool editingDisabled = m_currentSnapshot->isPlaying;
         if ( editingDisabled ) {

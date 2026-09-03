@@ -99,10 +99,10 @@ public:
 
     /// @brief 设置时间点批量编辑表格窗口打开状态。
     /// @param open 是否打开表格窗口。
-    void setTimingPointsTableOpen(bool open) override
-    {
-        m_isTableWindowOpen = open;
-    }
+    void setTimingPointsTableOpen(bool open) override;
+
+    /// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
+    void activateTimingPointsTable() override;
 
     /// @brief 获取批注表窗口是否打开。
     /// @return 批注表窗口当前是否打开。
@@ -113,11 +113,10 @@ public:
 
     /// @brief 设置批注表窗口打开状态。
     /// @param open 是否打开批注表窗口。
-    void setAnnotationTableOpen(bool open) override
-    {
-        m_isAnnotationTableWindowOpen = open;
-    }
+    void setAnnotationTableOpen(bool open) override;
 
+    /// @brief 激活批注表；已聚焦可见时关闭，否则恢复并聚焦。
+    void activateAnnotationTable() override;
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
     void requestFocus() override;
@@ -470,6 +469,18 @@ private:
     bool m_isTableWindowOpen{ false };
     /// @brief 批注表非模态窗口是否打开。
     bool m_isAnnotationTableWindowOpen{ false };
+    /// @brief 下一次绘制时是否检查并恢复时间点表格窗口位置。
+    bool m_shouldRecoverTableWindow{ false };
+    /// @brief 下一次绘制时是否聚焦时间点表格窗口。
+    bool m_shouldFocusTableWindow{ false };
+    /// @brief 时间点表格上一帧是否同时聚焦且可从显示器工作区访问。
+    bool m_isTableWindowFocusedAndReachable{ false };
+    /// @brief 下一次绘制时是否检查并恢复批注表窗口位置。
+    bool m_shouldRecoverAnnotationTableWindow{ false };
+    /// @brief 下一次绘制时是否聚焦批注表窗口。
+    bool m_shouldFocusAnnotationTableWindow{ false };
+    /// @brief 批注表上一帧是否同时聚焦且可从显示器工作区访问。
+    bool m_isAnnotationTableWindowFocusedAndReachable{ false };
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
     bool m_shouldFocusNextFrame{ false };
     /// @brief 时间线上一帧是否拥有 Timing 编辑焦点。

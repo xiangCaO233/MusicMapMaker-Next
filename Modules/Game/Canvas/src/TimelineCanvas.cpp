@@ -1,5 +1,6 @@
 #include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimelineTimingTooltip.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
@@ -900,6 +901,53 @@ void TimelineCanvas::requestFocus()
     m_shouldFocusNextFrame      = true;
     m_hasTimingInteractionFocus = true;
     m_wasFocusedLastFrame       = true;
+}
+
+/// @brief 设置时间点批量编辑表格窗口打开状态。
+/// @param open 是否打开表格窗口。
+void TimelineCanvas::setTimingPointsTableOpen(bool open)
+{
+    m_isTableWindowOpen                = open;
+    m_shouldRecoverTableWindow         = open;
+    m_shouldFocusTableWindow           = false;
+    m_isTableWindowFocusedAndReachable = false;
+}
+
+/// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
+void TimelineCanvas::activateTimingPointsTable()
+{
+    const auto activation = resolveTimelineTableWindowActivation(
+        m_isTableWindowOpen, m_isTableWindowFocusedAndReachable);
+    m_isTableWindowOpen        = activation.open;
+    m_shouldFocusTableWindow   = activation.requestFocus;
+    m_shouldRecoverTableWindow = activation.requestRecovery;
+    if ( !activation.open ) {
+        m_isTableWindowFocusedAndReachable = false;
+    }
+}
+
+/// @brief 设置批注表窗口打开状态。
+/// @param open 是否打开批注表窗口。
+void TimelineCanvas::setAnnotationTableOpen(bool open)
+{
+    m_isAnnotationTableWindowOpen                = open;
+    m_shouldRecoverAnnotationTableWindow         = open;
+    m_shouldFocusAnnotationTableWindow           = false;
+    m_isAnnotationTableWindowFocusedAndReachable = false;
+}
+
+/// @brief 激活批注表；已聚焦可见时关闭，否则恢复并聚焦。
+void TimelineCanvas::activateAnnotationTable()
+{
+    const auto activation = resolveTimelineTableWindowActivation(
+        m_isAnnotationTableWindowOpen,
+        m_isAnnotationTableWindowFocusedAndReachable);
+    m_isAnnotationTableWindowOpen        = activation.open;
+    m_shouldFocusAnnotationTableWindow   = activation.requestFocus;
+    m_shouldRecoverAnnotationTableWindow = activation.requestRecovery;
+    if ( !activation.open ) {
+        m_isAnnotationTableWindowFocusedAndReachable = false;
+    }
 }
 
 /// @brief 获取时间线窗口当前所在的 ImGui Dock 节点。

@@ -46,11 +46,17 @@ public:
     /// @brief 设置 Timing 表格打开状态。
     virtual void setTimingPointsTableOpen(bool) {}
 
+    /// @brief 激活 Timing 表格菜单项，并按当前可见与聚焦状态切换窗口。
+    virtual void activateTimingPointsTable() {}
+
     /// @brief 查询批注表格是否打开。
     [[nodiscard]] virtual bool isAnnotationTableOpen() const { return false; }
 
     /// @brief 设置批注表格打开状态。
     virtual void setAnnotationTableOpen(bool) {}
+
+    /// @brief 激活批注表格菜单项，并按当前可见与聚焦状态切换窗口。
+    virtual void activateAnnotationTable() {}
 };
 
 }  // namespace MMM::UI

@@ -68,10 +68,10 @@ public:
         (void)activation;
         auto* timeline = timelineCanvas(context);
         if ( !timeline || !MenuUtil::hasActiveBeatmap(false) ) return;
-        if ( !timeline->isTimingPointsTableOpen() ) {
+        timeline->activateTimingPointsTable();
+        if ( timeline->isTimingPointsTableOpen() ) {
             PlayPopupOpenFeedback();
         }
-        timeline->setTimingPointsTableOpen(true);
     }
 };
 
@@ -92,10 +92,10 @@ public:
         (void)activation;
         auto* timeline = timelineCanvas(context);
         if ( !timeline || !MenuUtil::hasActiveBeatmap(false) ) return;
-        if ( !timeline->isAnnotationTableOpen() ) {
+        timeline->activateAnnotationTable();
+        if ( timeline->isAnnotationTableOpen() ) {
             PlayPopupOpenFeedback();
         }
-        timeline->setAnnotationTableOpen(true);
     }
 };
 }  // namespace
