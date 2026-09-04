@@ -3376,6 +3376,61 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     };
 }
 
+/// @brief 仅同步后台主画布的鼠标悬停位置。
+/// @param targetWidth 画布逻辑宽度。
+/// @param targetHeight 画布逻辑高度。
+/// @warning UI 热路径：后台可见画布每帧调用；只在指针状态变化时发布一条
+/// 鼠标位置命令，禁止扩展为绘制、拾取或拖拽处理。
+void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
+                                                float targetHeight)
+{
+    ImVec2     mousePos         = ImGui::GetMousePos();
+    ImVec2     windowPos        = ImGui::GetCursorScreenPos();
+    const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
+                                  std::isfinite(mousePos.x) &&
+                                  std::isfinite(mousePos.y);
+    ImVec2 localMousePos{ 0.0F, 0.0F };
+    if ( hasValidMousePos ) {
+        localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
+    } else if ( m_lastMouseCommand.valid ) {
+        localMousePos = { m_lastMouseCommand.pos.x, m_lastMouseCommand.pos.y };
+    }
+
+    const bool isInsideCanvas =
+        hasValidMousePos && targetWidth > 0.0F && targetHeight > 0.0F &&
+        localMousePos.x >= 0.0F && localMousePos.x <= targetWidth &&
+        localMousePos.y >= 0.0F && localMousePos.y <= targetHeight;
+    const bool isHovered = isInsideCanvas && ImGui::IsWindowHovered();
+
+    constexpr float mouseEpsilon = 0.1F;
+    const bool      shouldSendMouse =
+        !m_lastMouseCommand.valid ||
+        std::abs(m_lastMouseCommand.pos.x - localMousePos.x) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.pos.y - localMousePos.y) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportWidth - targetWidth) >
+            mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportHeight - targetHeight) >
+            mouseEpsilon ||
+        m_lastMouseCommand.isHovering != isHovered ||
+        m_lastMouseCommand.isDragging;
+    if ( !shouldSendMouse ) return;
+
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                    .mouseX         = localMousePos.x,
+                                    .mouseY         = localMousePos.y,
+                                    .viewportWidth  = targetWidth,
+                                    .viewportHeight = targetHeight,
+                                    .isHovering     = isHovered,
+                                    .isDragging     = false }));
+    m_lastMouseCommand.valid          = true;
+    m_lastMouseCommand.pos            = { localMousePos.x, localMousePos.y };
+    m_lastMouseCommand.viewportWidth  = targetWidth;
+    m_lastMouseCommand.viewportHeight = targetHeight;
+    m_lastMouseCommand.isHovering     = isHovered;
+    m_lastMouseCommand.isDragging     = false;
+}
+
 /// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。

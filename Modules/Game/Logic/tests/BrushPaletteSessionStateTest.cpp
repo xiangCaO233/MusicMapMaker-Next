@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cmath>
 #include <optional>
+#include <string>
 #include <thread>
 
 namespace
@@ -115,6 +116,63 @@ bool testAudioResourceRestoredAfterSessionClose()
     return matches;
 }
 
+/// @brief 验证主画布鼠标位置按 cameraId 路由到后台 Session。
+/// @return 目标后台 Session 独立收到悬停坐标且活动 Session 未被污染时返回
+/// true。
+bool testBackgroundCanvasMousePositionRouting()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    while ( engine.getSessionCount() > 0 ) {
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+
+    const int32_t activeIndex =
+        engine.createSession(nullptr, "Pointer Active", false);
+    const int32_t backgroundIndex =
+        engine.createSession(nullptr, "Pointer Background", false);
+    const auto* activeEntry     = engine.getSessionEntry(activeIndex);
+    const auto* backgroundEntry = engine.getSessionEntry(backgroundIndex);
+    if ( !activeEntry || !activeEntry->session || !backgroundEntry ||
+         !backgroundEntry->session ) {
+        XERROR("Pointer routing sessions were not created");
+        return false;
+    }
+
+    auto              activeSession      = activeEntry->session;
+    auto              backgroundSession  = backgroundEntry->session;
+    const std::string backgroundCameraId = backgroundEntry->cameraId;
+    engine.setActiveSessionIndex(activeIndex);
+    activeSession->update(0.0, engine.getEditorConfig(), true);
+    backgroundSession->update(0.0, engine.getEditorConfig(), false);
+
+    engine.pushCommand(MMM::Logic::CmdSetMousePosition{
+        .cameraId       = backgroundCameraId,
+        .mouseX         = 321.0F,
+        .mouseY         = 234.0F,
+        .viewportWidth  = 800.0F,
+        .viewportHeight = 600.0F,
+        .isHovering     = true,
+    });
+    activeSession->update(0.0, engine.getEditorConfig(), true);
+    backgroundSession->update(0.0, engine.getEditorConfig(), false);
+
+    const auto& activeContext     = activeSession->getContext();
+    const auto& backgroundContext = backgroundSession->getContext();
+    const bool  routed            = activeContext.mouseCameraId.empty() &&
+                        backgroundContext.mouseCameraId == backgroundCameraId &&
+                        backgroundContext.isMouseInCanvas &&
+                        near(backgroundContext.lastMousePos.x, 321.0F) &&
+                        near(backgroundContext.lastMousePos.y, 234.0F);
+
+    while ( engine.getSessionCount() > 0 ) {
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+    if ( !routed ) {
+        XERROR("Background canvas mouse position was routed to active session");
+    }
+    return routed;
+}
+
 /// @brief 验证布局拖拽式高频配置写入不会产生撕裂的容器和字符串快照。
 /// @return 并发读取到的每份配置都保持内部字段一致时返回 true。
 bool testConcurrentEditorConfigSnapshots()
@@ -168,6 +226,7 @@ int main()
 {
     return testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
+                   testBackgroundCanvasMousePositionRouting() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
                : 1;

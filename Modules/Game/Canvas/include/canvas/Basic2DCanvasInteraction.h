@@ -40,6 +40,13 @@ public:
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
 
+    /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
+    /// @param targetWidth 画布逻辑宽度。
+    /// @param targetHeight 画布逻辑高度。
+    /// @warning UI 热路径：后台可见画布每帧调用；只在指针状态变化时发布一条
+    /// 鼠标位置命令，禁止扩展为绘制、拾取或拖拽处理。
+    void updateHoverState(float targetWidth, float targetHeight);
+
     /// @brief 推进并绘制交互层的临时 UI。
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();

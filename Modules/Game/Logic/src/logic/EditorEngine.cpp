@@ -2001,8 +2001,29 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                                                { v.width, v.height });
     }
 
-    // 主画布滚轮按 cameraId 路由，以允许同主音轨后台画布在 hover
-    // 状态下接收滚动，但不抢占当前活跃画布焦点。
+    // 主画布悬停坐标按 cameraId 精确路由，使后台 Session 能独立生成
+    // NearCursor 分拍线，同时不接收任何编辑手势命令。
+    if ( std::holds_alternative<CmdSetMousePosition>(cmd) ) {
+        const auto& mouse = std::get<CmdSetMousePosition>(cmd);
+        if ( SessionUtils::isMainCanvasCameraId(mouse.cameraId) ) {
+            std::lock_guard<std::recursive_mutex> lock(
+                m_sessionRegistry.mutex());
+            auto&         sessions = m_sessionRegistry.entriesUnsafe();
+            const int32_t targetIndex =
+                findSessionIndexByCameraIdUnsafe(sessions, mouse.cameraId);
+            if ( targetIndex < 0 ||
+                 targetIndex >= static_cast<int32_t>(sessions.size()) ||
+                 !sessions[static_cast<size_t>(targetIndex)].session ) {
+                return;
+            }
+            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
+                std::move(cmd));
+            return;
+        }
+    }
+
+    // 主画布滚轮按 cameraId 精确路由，确保焦点切换帧的滚动命令进入新活动
+    // Session，而不是仍落到上一帧的活动画布。
     if ( std::holds_alternative<CmdScroll>(cmd) ) {
         const auto& scroll = std::get<CmdScroll>(cmd);
         if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
@@ -2146,26 +2167,6 @@ std::string EditorEngine::makeBeatmapPathKeyForPath(
     const std::filesystem::path& beatmapPath) const
 {
     return makeBeatmapPathKey(getCurrentProject(), beatmapPath);
-}
-
-/// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
-/// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
-/// SessionRegistry 锁。
-bool EditorEngine::canHoverScrollCamera(const std::string& cameraId) const
-{
-    if ( !SessionUtils::isMainCanvasCameraId(cameraId) ) {
-        return false;
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    /// @brief 当前活动 Session 索引快照。
-    const int32_t activeIndex = m_sessionRegistry.activeIndex();
-    /// @brief 悬停目标主画布对应的 Session 索引。
-    const int32_t targetIndex =
-        findSessionIndexByCameraIdUnsafe(sessions, cameraId);
-    return canUseHoverScrollTargetUnsafe(sessions, activeIndex, targetIndex);
 }
 
 /// @brief 更新指定主画布窗口在 UI 中的可见状态。

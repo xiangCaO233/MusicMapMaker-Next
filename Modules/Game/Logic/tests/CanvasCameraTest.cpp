@@ -10,6 +10,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
@@ -1560,6 +1561,58 @@ bool testSessionSelectsKeyCountLayout()
                 config.visual.judgeline_pos) &&
            near(context.lastConfig.visual.canvasComponents.beatNumber.anchorX,
                 config.visual.canvasComponents.beatNumber.anchorX);
+}
+
+/// @brief 验证后台 Session 的主画布悬停状态会写入自身渲染快照。
+/// @return 后台快照保留独立悬停位置并可供 NearCursor 分拍线消费时返回 true。
+bool testBackgroundSessionPublishesCanvasHover()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    const auto timingEntity = context.timelineRegistry.create();
+    context.timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        timingEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 0.0,
+            .m_effect    = MMM::TimingEffect::BPM,
+            .m_value     = 120.0,
+        });
+    context.isBpmEventsDirty = true;
+    auto* cache =
+        context.timelineRegistry.ctx().find<MMM::Logic::System::ScrollCache>();
+    if ( !cache ) return false;
+    cache->rebuild(context.timelineRegistry,
+                   context.lastConfig,
+                   context.currentBeatmap.get());
+
+    auto config = context.lastConfig;
+    config.visual.beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::NearCursor;
+
+    session.pushCommand(MMM::Logic::CmdSetMousePosition{
+        .cameraId       = "Basic2DCanvas",
+        .mouseX         = 320.0F,
+        .mouseY         = 180.0F,
+        .viewportWidth  = 1000.0F,
+        .viewportHeight = 600.0F,
+        .isHovering     = true,
+    });
+    session.update(0.0, config, false);
+
+    const auto bufferIt = context.syncBuffers.find("Basic2DCanvas");
+    if ( bufferIt == context.syncBuffers.end() || !bufferIt->second ) {
+        XERROR("Background hover did not publish a main canvas snapshot");
+        return false;
+    }
+    const auto* snapshot = bufferIt->second->pullLatestSnapshot();
+    if ( !snapshot || !snapshot->isHoveringCanvas ||
+         !std::isfinite(snapshot->hoveredTime) ||
+         snapshot->dynamicVertexCount == 0U ) {
+        XERROR("Background main canvas snapshot lost its hover beat lines");
+        return false;
+    }
+    return true;
 }
 
 /// @brief 验证新建正式音符直接增量维护领域谱面和渲染统计缓存。
@@ -4849,6 +4902,7 @@ int main()
                    testPanCommandUsesLogicalPixels() &&
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
+                   testBackgroundSessionPublishesCanvasHover() &&
                    testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty() &&
                    testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&

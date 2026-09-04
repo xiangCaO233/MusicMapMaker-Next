@@ -56,15 +56,14 @@ bool isMouseHoveringCurrentWindowContent()
            mousePos.y <= contentPos.y + contentSize.y;
 }
 
-/// @brief 判断当前主画布内容区是否正在接收带修饰键的滚轮操作。
-/// @return Ctrl、Command、Alt 或组合修饰滚轮发生在当前窗口内容区时返回 true。
+/// @brief 判断当前主画布内容区是否正在接收滚轮操作。
+/// @return 未按住鼠标键且滚轮发生在当前窗口内容区时返回 true。
 /// @warning UI 热路径：主画布每帧更新时调用；只读取 ImGui 输入状态和窗口几何。
-bool isModifierWheelOverCurrentWindowContent()
+bool isWheelOverCurrentWindowContent()
 {
     const auto& io = ImGui::GetIO();
-    return std::abs(io.MouseWheel) > 0.01f &&
-           (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
-           !ImGui::IsAnyMouseDown() && isMouseHoveringCurrentWindowContent();
+    return std::abs(io.MouseWheel) > 0.01f && !ImGui::IsAnyMouseDown() &&
+           isMouseHoveringCurrentWindowContent();
 }
 
 /// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
@@ -163,8 +162,8 @@ Basic2DCanvas::~Basic2DCanvas() {}
 
 /// @brief 更新画布 ImGui 窗口和交互状态。
 /// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内，
-/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径；播放保持模式下的
-/// 修饰键滚轮只走窄交互入口，其余修饰键滚轮仅在鼠标位于内容区时切换焦点。
+/// 后台画布只同步悬停指针；滚轮发生时切换一次 Session 焦点，再交由活动画布
+/// 处理完整滚轮语义。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     auto& engine           = Logic::EditorEngine::instance();
@@ -302,26 +301,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
         bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
-        if ( !isActiveCanvas && isModifierWheelOverCurrentWindowContent() ) {
-            const bool keepCurrentPlayback =
-                !engine.getEditorConfig().settings.stopPlaybackOnScroll &&
-                engine.isPlaybackPlaying();
-            if ( keepCurrentPlayback ) {
-                if ( m_currentSnapshot ) {
-                    m_interaction->handleModifierWheel(m_currentSnapshot,
-                                                       false);
-                }
-            } else if ( myIndex != -1 ) {
-                ImGui::SetWindowFocus();
-                engine.setActiveSessionIndex(myIndex);
-                m_shouldFocusNextFrame = true;
-                isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
-                XINFO(
-                    "Basic2DCanvas: Modifier wheel switched active session to "
-                    "index {} (cameraId={})",
-                    myIndex,
-                    m_cameraId);
-            }
+        if ( !isActiveCanvas && myIndex != -1 &&
+             isWheelOverCurrentWindowContent() ) {
+            ImGui::SetWindowFocus();
+            engine.setActiveSessionIndex(myIndex);
+            m_shouldFocusNextFrame = true;
+            isActiveCanvas         = engine.getActiveCameraId() == m_cameraId;
+            XINFO(
+                "Basic2DCanvas: Wheel switched active session to index {} "
+                "(cameraId={})",
+                myIndex,
+                m_cameraId);
         }
 
         if ( isActiveCanvas ) {
@@ -332,19 +322,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                   m_logicalWidth,
                                   m_logicalHeight);
         } else {
-            /// @brief 本帧普通滚轮是否发生在当前后台主画布内容区。
-            const bool isHoverWheelScroll =
-                isMouseHoveringCurrentWindowContent() &&
-                std::abs(ImGui::GetIO().MouseWheel) > 0.01f &&
-                !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeySuper &&
-                !ImGui::GetIO().KeyAlt;
-            if ( isHoverWheelScroll &&
-                 engine.canHoverScrollCamera(m_cameraId) ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdScroll{ m_cameraId,
-                                      -ImGui::GetIO().MouseWheel,
-                                      ImGui::GetIO().KeyShift }));
-            }
+            m_interaction->updateHoverState(m_logicalWidth, m_logicalHeight);
             m_interaction->updateTransientUi();
         }
     }

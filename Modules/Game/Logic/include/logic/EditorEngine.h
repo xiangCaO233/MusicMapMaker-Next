@@ -329,13 +329,6 @@ public:
     std::string makeBeatmapPathKeyForPath(
         const std::filesystem::path& beatmapPath) const;
 
-    /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
-    /// @param cameraId 目标主画布 cameraId。
-    /// @return 目标是当前活动画布，或与当前活动画布引用同一主音轨时返回 true。
-    /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
-    /// SessionRegistry 锁。
-    bool canHoverScrollCamera(const std::string& cameraId) const;
-
     /// @brief 更新指定主画布窗口在 UI 中的可见状态。
     /// @param cameraId 目标主画布 cameraId。
     /// @param isVisible 当前 ImGui 窗口是否真实可见。

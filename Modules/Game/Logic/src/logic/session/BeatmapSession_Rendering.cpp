@@ -1006,9 +1006,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             m_ctx->lastConfig.settings.enableBmsEditing;
         snapshot->draftLanesEnabled =
             m_ctx->lastConfig.settings.enableDraftLanes;
-        snapshot->isHoveringCanvas = isActiveSession &&
-                                     m_ctx->isMouseInCanvas &&
-                                     (m_ctx->mouseCameraId == cameraId);
+        snapshot->isHoveringCanvas =
+            m_ctx->isMouseInCanvas && (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
