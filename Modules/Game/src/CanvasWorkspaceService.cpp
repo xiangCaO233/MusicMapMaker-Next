@@ -1,5 +1,6 @@
 #include "game/CanvasWorkspaceService.h"
 
+#include "canvas/AnnotationTableWindow.h"
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/PreviewCanvas.h"
 #include "canvas/TimelineCanvas.h"
@@ -103,6 +104,12 @@ std::unique_ptr<UI::IUIView> CanvasWorkspaceService::createTimelineCanvas(
         width,
         height,
         Logic::EditorEngine::instance().getSyncBuffer("Timeline"));
+}
+
+std::unique_ptr<UI::IUIView>
+CanvasWorkspaceService::createAnnotationTableWindow(const std::string& name)
+{
+    return std::make_unique<Canvas::AnnotationTableWindow>(name);
 }
 
 }  // namespace MMM::Game

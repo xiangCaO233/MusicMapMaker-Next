@@ -1211,6 +1211,7 @@ return {
 	["ui.timeline.menu.professional_mode"] = "Toggle Professional Mode",
 	["ui.timeline.menu.open_timing_table"] = "Open Timeline Table",
 	["ui.timeline.timing_points_table.title"] = "Bulk Edit Timing Points###TimingPointsTable",
+	["ui.timeline.timing_points_table.syncing"] = "Synchronizing timeline data...",
 	["ui.timeline.timing_points_table.filter.only_bpm"] = "BPM Only",
 	["ui.timeline.timing_points_table.filter.clear"] = "Clear Filters/Search",
 	["ui.timeline.timing_points_table.bulk_tools"] = "Bulk Edit Tools",

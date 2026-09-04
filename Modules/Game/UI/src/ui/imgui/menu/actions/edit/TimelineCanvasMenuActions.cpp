@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "ui/IAuxiliaryWindowView.h"
 #include "ui/ICanvasView.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
@@ -16,7 +17,10 @@ namespace
 /// @brief Timeline 视图在 UIManager 注册表中的稳定名称。
 const std::string TIMELINE_VIEW_NAME{ "TimelineWindow" };
 
-/// @brief 获取承载 Timing 表和批注表的 Timeline 画布能力接口。
+/// @brief 批注表在 UIManager 注册表中的稳定名称。
+const std::string ANNOTATION_TABLE_VIEW_NAME{ "AnnotationTableWindow" };
+
+/// @brief 获取承载 Timing 表的 Timeline 画布能力接口。
 /// @param context 当前主菜单上下文。
 /// @return Timeline 视图存在时返回观察指针，否则返回 nullptr。
 /// @warning UI 菜单热路径：仅查询本地视图注册表，不复制共享所有权。
@@ -24,6 +28,18 @@ ICanvasView* timelineCanvas(const MainMenuContext& context)
 {
     return context.sourceManager
                ? context.sourceManager->getCanvasView(TIMELINE_VIEW_NAME)
+               : nullptr;
+}
+
+/// @brief 获取独立批注表窗口能力接口。
+/// @param context 当前主菜单上下文。
+/// @return 批注表视图存在时返回观察指针，否则返回 nullptr。
+/// @warning UI 菜单热路径：仅查询本地视图注册表，不复制共享所有权。
+IAuxiliaryWindowView* annotationTable(const MainMenuContext& context)
+{
+    return context.sourceManager
+               ? context.sourceManager->getAuxiliaryWindowView(
+                     ANNOTATION_TABLE_VIEW_NAME)
                : nullptr;
 }
 
@@ -79,10 +95,10 @@ public:
 class OpenAnnotationTableAction final : public IMainMenuItemActionHandler
 {
 public:
-    /// @brief Timeline 视图具有有效活动谱面时允许打开批注表。
+    /// @brief 独立批注表视图和有效活动谱面同时存在时允许打开。
     bool isEnabled(const MainMenuContext& context) const override
     {
-        return timelineCanvas(context) && MenuUtil::hasActiveBeatmap(false);
+        return annotationTable(context) && MenuUtil::hasActiveBeatmap(false);
     }
 
     /// @brief 打开独立的批注表窗口。
@@ -90,10 +106,10 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        auto* timeline = timelineCanvas(context);
-        if ( !timeline || !MenuUtil::hasActiveBeatmap(false) ) return;
-        timeline->activateAnnotationTable();
-        if ( timeline->isAnnotationTableOpen() ) {
+        auto* window = annotationTable(context);
+        if ( !window || !MenuUtil::hasActiveBeatmap(false) ) return;
+        window->activateWindow();
+        if ( window->isWindowOpen() ) {
             PlayPopupOpenFeedback();
         }
     }

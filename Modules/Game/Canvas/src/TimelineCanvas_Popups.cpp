@@ -2,13 +2,13 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
+#include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
 #include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimingTableFraction.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
-#include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -20,7 +20,6 @@
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/ClipboardBridge.h"
-#include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -62,84 +61,72 @@ constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
 /// @brief 时间线表格局部滚动条拖拽块最小尺寸。
 constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
 
-/// @brief 表格标题栏至少保留在显示器工作区内的逻辑像素宽度。
-constexpr float TABLE_WINDOW_MINIMUM_VISIBLE_TITLE_WIDTH = 64.0F;
-
-/// @brief 从屏幕外恢复表格窗口时保留的工作区边距。
-constexpr float TABLE_WINDOW_RECOVERY_MARGIN = 24.0F;
-
 /// @brief 时间点表格可搜索的 Timing 属性数量。
 constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 4;
 
-/// @brief 将 ImGui 坐标转换为表格窗口矩形。
-/// @param position 左上角屏幕坐标。
-/// @param size 矩形尺寸。
-/// @return 可供纯布局逻辑检查的矩形。
-/// @warning UI 热路径：仅在独立表格已聚焦或收到恢复请求时执行常量拷贝。
-TimelineTableWindowRect makeTimelineTableWindowRect(const ImVec2& position,
-                                                    const ImVec2& size)
+/// @brief 在 Timeline 快照尚未到达时绘制可关闭的时间点表格窗口。
+/// @param windowOpen 窗口打开状态。
+/// @param shouldRecover 是否需要恢复窗口位置。
+/// @param shouldFocus 是否需要聚焦窗口。
+/// @param focusedAndReachable 上一帧记录的聚焦可访问状态。
+/// @warning UI 低频等待路径：只在打开请求早于首帧快照时短暂执行。
+void renderTimingTableSyncingWindow(bool& windowOpen, bool& shouldRecover,
+                                    bool& shouldFocus,
+                                    bool& focusedAndReachable)
 {
-    return { position.x, position.y, size.x, size.y };
-}
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    const float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    const ImVec2 itemSpacing{
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+    };
 
-/// @brief 判断当前 ImGui 表格窗口的标题栏能否从任一显示器工作区访问。
-/// @param dpiScale 当前窗口内容 DPI 缩放。
-/// @return 标题栏仍有可拖拽区域时返回 true。
-/// @warning UI 热路径：只在独立表格拥有焦点或收到恢复请求时遍历显示器列表。
-bool isCurrentTimelineTableWindowReachable(float dpiScale)
-{
-    const auto  window = makeTimelineTableWindowRect(ImGui::GetWindowPos(),
-                                                     ImGui::GetWindowSize());
-    const float titleBarHeight = ImGui::GetFrameHeight();
-    const float minimumVisibleWidth =
-        TABLE_WINDOW_MINIMUM_VISIBLE_TITLE_WIDTH * std::max(dpiScale, 1.0F);
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
-    const ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
-    for ( int index = 0; index < platformIo.Monitors.Size; ++index ) {
-        const ImGuiPlatformMonitor& monitor = platformIo.Monitors[index];
-        const auto                  workArea =
-            makeTimelineTableWindowRect(monitor.WorkPos, monitor.WorkSize);
-        if ( isTimelineTableWindowReachable(
-                 window, workArea, titleBarHeight, minimumVisibleWidth) ) {
-            return true;
-        }
+    ImGui::SetNextWindowSize(ImVec2(820.0F, 450.0F), ImGuiCond_FirstUseEver);
+    if ( shouldFocus ) ImGui::SetNextWindowFocus();
+
+    const std::string windowTitle =
+        TR("ui.timeline.timing_points_table.title").toString() +
+        "###TimingPointsTableWindow";
+    const bool wasOpenBeforeBegin = windowOpen;
+    const bool opened = ImGui::Begin(windowTitle.c_str(), &windowOpen);
+    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                                &windowOpen);
+    if ( windowOpen ) {
+        recoverCurrentAuxiliaryWindow(shouldRecover, dpiScale);
+        const bool focused =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const bool reachable = isCurrentAuxiliaryWindowReachable(dpiScale);
+        const bool popupOpen = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        focusedAndReachable = resolveTimelineTableWindowFocusedAndReachable(
+            focusedAndReachable, reachable, focused, popupOpen);
+    } else {
+        focusedAndReachable = false;
     }
-
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    if ( !mainViewport ) return false;
-    const auto mainWorkArea = makeTimelineTableWindowRect(
-        mainViewport->WorkPos, mainViewport->WorkSize);
-    return isTimelineTableWindowReachable(
-        window, mainWorkArea, titleBarHeight, minimumVisibleWidth);
-}
-
-/// @brief 必要时把当前 ImGui 表格窗口恢复到主工作区中央。
-/// @param requested 是否收到位置恢复请求。
-/// @param dpiScale 当前窗口内容 DPI 缩放。
-/// @warning UI 低频恢复路径：只在项目恢复或用户激活表格菜单项时调用；
-/// 仅对不可访问窗口执行一次位置和尺寸写入。
-void recoverCurrentTimelineTableWindow(bool requested, float dpiScale)
-{
-    if ( !requested || isCurrentTimelineTableWindowReachable(dpiScale) ) {
-        return;
+    shouldRecover = false;
+    shouldFocus   = false;
+    if ( opened ) {
+        ImGui::TextDisabled(
+            "%s", TR("ui.timeline.timing_points_table.syncing").data());
     }
-
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    if ( !mainViewport ) return;
-
-    const auto window    = makeTimelineTableWindowRect(ImGui::GetWindowPos(),
-                                                       ImGui::GetWindowSize());
-    const auto workArea  = makeTimelineTableWindowRect(mainViewport->WorkPos,
-                                                       mainViewport->WorkSize);
-    const auto recovered = recoverTimelineTableWindowRect(
-        window,
-        workArea,
-        TABLE_WINDOW_RECOVERY_MARGIN * std::max(dpiScale, 1.0F));
-
-    // Begin 后才能读取项目布局实际恢复出的矩形；这里只在屏幕外恢复时写入一次。
-    ImGui::SetWindowSize(ImVec2(recovered.width, recovered.height),
-                         ImGuiCond_Always);
-    ImGui::SetWindowPos(ImVec2(recovered.x, recovered.y), ImGuiCond_Always);
+    ImGui::End();
+    ImGui::PopStyleVar(6);
 }
 
 /// @brief 时间线表格拍位换算使用的 BPM 锚点。
@@ -751,22 +738,6 @@ TimelineTableSnapshotStatus getTimelineTableSnapshotStatus(
         snapshot != nullptr,
         snapshot && snapshot->hasBeatmap,
         snapshot ? snapshot->beatmapInstanceId : 0);
-}
-
-/// @brief 获取批注表目标类型对应的翻译键。
-/// @param targetKind 批注目标类型。
-/// @return 可交给翻译系统的稳定键。
-const char* annotationTableTargetLabelKey(
-    ::MMM::BeatmapAnnotationTargetKind targetKind)
-{
-    switch ( targetKind ) {
-    case ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT:
-        return "ui.annotation.target.player_object";
-    case ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE:
-        return "ui.annotation.target.audio_sample";
-    case ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP:
-    default: return "ui.annotation.target.timestamp";
-    }
 }
 
 /// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
@@ -1444,419 +1415,11 @@ void TimelineCanvas::renderEventCreationPopup()
     }
 }
 
-/// @brief 批注缓存版本变化时复制一次全量、已解析的表格行。
-/// @param beatmapKey 当前表格绑定的谱面键。
-/// @param revision 当前快照发布的批注缓存版本。
-/// @return 成功取得与快照匹配的批注数据时返回 true。
-/// @warning UI 低频刷新路径：仅版本变化时持有 Session 锁和复制全量批注，
-/// 禁止无条件每帧调用。
-bool TimelineCanvas::refreshAnnotationTableRows(std::string_view beatmapKey,
-                                                std::uint64_t    revision)
-{
-    if ( m_annotationTableBeatmapKey == beatmapKey &&
-         m_annotationTableRevision == revision ) {
-        return true;
-    }
-
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    if ( !session ) return false;
-
-    const auto& context = session->getContext();
-    if ( !context.currentBeatmap || context.isAnnotationRenderCacheDirty ||
-         context.annotationRenderCacheRevision != revision ) {
-        return false;
-    }
-
-    const auto&       metadata = context.currentBeatmap->m_baseMapMetadata;
-    const std::string currentBeatmapKey =
-        metadata.map_path.empty() ? metadata.name
-                                  : Config::pathToUtf8(metadata.map_path);
-    if ( currentBeatmapKey != beatmapKey ) return false;
-
-    std::string selectedId;
-    if ( m_selectedAnnotationTableRow &&
-         *m_selectedAnnotationTableRow < m_annotationTableRows.size() ) {
-        selectedId =
-            m_annotationTableRows[*m_selectedAnnotationTableRow].item.id;
-    }
-
-    std::vector<AnnotationTableRow> refreshedRows;
-    refreshedRows.reserve(context.currentBeatmap->m_annotations.size());
-    for ( const auto& marker : context.annotationRenderCache ) {
-        for ( const auto& item : marker.items ) {
-            refreshedRows.push_back(
-                AnnotationTableRow{ marker.timestamp, item });
-        }
-    }
-
-    m_annotationTableRows.swap(refreshedRows);
-    m_annotationTableBeatmapKey.assign(beatmapKey.data(), beatmapKey.size());
-    m_annotationTableRevision = revision;
-
-    m_selectedAnnotationTableRow.reset();
-    if ( !selectedId.empty() ) {
-        const auto selected = std::find_if(m_annotationTableRows.begin(),
-                                           m_annotationTableRows.end(),
-                                           [&](const AnnotationTableRow& row) {
-                                               return row.item.id == selectedId;
-                                           });
-        if ( selected != m_annotationTableRows.end() ) {
-            m_selectedAnnotationTableRow = static_cast<std::size_t>(
-                std::distance(m_annotationTableRows.begin(), selected));
-        }
-    }
-    if ( !m_selectedAnnotationTableRow && !m_annotationTableRows.empty() ) {
-        m_selectedAnnotationTableRow = 0U;
-    }
-    return true;
-}
-
-/// @brief 渲染可快速查看并跳转定位的批注表窗口（非模态）。
-void TimelineCanvas::renderAnnotationTableWindow()
-{
-    const auto resetTable = [this]() {
-        m_annotationTableBeatmapKey.clear();
-        m_annotationTableRevision = std::numeric_limits<std::uint64_t>::max();
-        m_annotationTableRows.clear();
-        m_selectedAnnotationTableRow.reset();
-    };
-    if ( !m_isAnnotationTableWindowOpen ) {
-        m_shouldRecoverAnnotationTableWindow         = false;
-        m_shouldFocusAnnotationTableWindow           = false;
-        m_isAnnotationTableWindowFocusedAndReachable = false;
-        resetTable();
-        return;
-    }
-
-    auto closeTableWindow = [this, &resetTable]() {
-        m_isAnnotationTableWindowOpen                = false;
-        m_shouldRecoverAnnotationTableWindow         = false;
-        m_shouldFocusAnnotationTableWindow           = false;
-        m_isAnnotationTableWindowFocusedAndReachable = false;
-        resetTable();
-    };
-
-    auto&                       engine = Logic::EditorEngine::instance();
-    TimelineTableSnapshotStatus snapshotStatus;
-    {
-        // 会话锁保证读取 currentBeatmap 地址令牌时不会与谱面切换并发。
-        std::lock_guard<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex());
-        const int32_t activeIndex = engine.getActiveSessionIndex();
-        const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-        if ( !activeEntry || activeEntry->isLogoPlaceholder ||
-             !activeEntry->session ) {
-            closeTableWindow();
-            return;
-        }
-        snapshotStatus = getTimelineTableSnapshotStatus(
-            activeEntry->session.get(), m_currentSnapshot);
-    }
-    if ( snapshotStatus == TimelineTableSnapshotStatus::Close ) {
-        closeTableWindow();
-        return;
-    }
-    if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
-        return;
-    }
-    const std::string_view currentBeatmapKey =
-        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
-    if ( currentBeatmapKey.empty() ) {
-        closeTableWindow();
-        return;
-    }
-    if ( m_annotationTableBeatmapKey.empty() ) {
-        m_annotationTableBeatmapKey.assign(currentBeatmapKey.data(),
-                                           currentBeatmapKey.size());
-    } else if ( m_annotationTableBeatmapKey != currentBeatmapKey ) {
-        closeTableWindow();
-        return;
-    }
-
-    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
-    const float dpiScale =
-        Config::AppConfig::instance().getWindowContentScale();
-    const float windowRound =
-        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
-    const float frameRound =
-        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
-    const ImVec2 itemSpacing{
-        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
-        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
-    };
-
-    ImGui::PushStyleVar(
-        ImGuiStyleVar_WindowPadding,
-        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
-               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
-
-    ImGui::SetNextWindowSize(ImVec2(860.0F, 560.0F), ImGuiCond_FirstUseEver);
-    if ( m_shouldFocusAnnotationTableWindow ) {
-        ImGui::SetNextWindowFocus();
-    }
-    std::string windowTitle =
-        TR("ui.annotation.table.title").toString() + "###AnnotationTableWindow";
-    const bool wasOpenBeforeBegin = m_isAnnotationTableWindowOpen;
-    const bool opened =
-        ImGui::Begin(windowTitle.c_str(), &m_isAnnotationTableWindowOpen);
-    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
-                                                &m_isAnnotationTableWindowOpen);
-    if ( m_isAnnotationTableWindowOpen ) {
-        recoverCurrentTimelineTableWindow(m_shouldRecoverAnnotationTableWindow,
-                                          dpiScale);
-        const bool focused =
-            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        const bool reachable = isCurrentTimelineTableWindowReachable(dpiScale);
-        const bool popupOpen = ImGui::IsPopupOpen(
-            nullptr,
-            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        m_isAnnotationTableWindowFocusedAndReachable =
-            resolveTimelineTableWindowFocusedAndReachable(
-                m_isAnnotationTableWindowFocusedAndReachable,
-                reachable,
-                focused,
-                popupOpen);
-    } else {
-        m_isAnnotationTableWindowFocusedAndReachable = false;
-    }
-    m_shouldRecoverAnnotationTableWindow = false;
-    m_shouldFocusAnnotationTableWindow   = false;
-    if ( opened ) {
-        const bool rowsReady = refreshAnnotationTableRows(
-            currentBeatmapKey, m_currentSnapshot->annotationRevision);
-        if ( !rowsReady ) {
-            ImGui::TextDisabled("%s", TR("ui.annotation.table.syncing").data());
-        } else {
-            ImGui::Text("%s",
-                        TR_FMT("ui.annotation.table.count",
-                               m_annotationTableRows.size())
-                            .c_str());
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", TR("ui.annotation.table.hint").data());
-
-            const float availableHeight = ImGui::GetContentRegionAvail().y;
-            const float detailHeight =
-                std::clamp(availableHeight * 0.38F, 150.0F, 260.0F);
-            const float tableHeight =
-                std::max(160.0F,
-                         availableHeight - detailHeight -
-                             ImGui::GetStyle().ItemSpacing.y - 4.0F);
-            constexpr ImGuiTableFlags tableFlags =
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
-                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-            if ( ImGui::BeginTable("AnnotationTableRows",
-                                   6,
-                                   tableFlags,
-                                   ImVec2(0.0F, tableHeight)) ) {
-                if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
-                    table->DisableDefaultContextMenu = true;
-                }
-                ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableSetupColumn(TR("ui.annotation.table.index").data(),
-                                        ImGuiTableColumnFlags_WidthFixed,
-                                        52.0F * dpiScale);
-                ImGui::TableSetupColumn(TR("ui.annotation.timestamp").data(),
-                                        ImGuiTableColumnFlags_WidthFixed,
-                                        125.0F * dpiScale);
-                ImGui::TableSetupColumn(TR("ui.annotation.target").data(),
-                                        ImGuiTableColumnFlags_WidthFixed,
-                                        140.0F * dpiScale);
-                ImGui::TableSetupColumn(TR("ui.annotation.author").data(),
-                                        ImGuiTableColumnFlags_WidthStretch,
-                                        0.75F);
-                ImGui::TableSetupColumn(
-                    TR("ui.annotation.table.content").data(),
-                    ImGuiTableColumnFlags_WidthStretch,
-                    1.7F);
-                const ImGuiStyle& annotationTableStyle = ImGui::GetStyle();
-                const float       annotationActionButtonWidth =
-                    std::max(
-                        ImGui::CalcTextSize(
-                            TR("ui.annotation.table.jump").data())
-                            .x,
-                        ImGui::CalcTextSize(TR("ui.common.delete").data()).x) +
-                    annotationTableStyle.FramePadding.x * 2.0F;
-                const float annotationActionColumnWidth =
-                    annotationActionButtonWidth * 2.0F +
-                    annotationTableStyle.ItemSpacing.x + 8.0F * dpiScale;
-                ImGui::TableSetupColumn(TR("ui.annotation.table.action").data(),
-                                        ImGuiTableColumnFlags_WidthFixed,
-                                        annotationActionColumnWidth);
-                ImGui::TableHeadersRow();
-
-                ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(m_annotationTableRows.size()));
-                while ( clipper.Step() ) {
-                    for ( int rowIndex = clipper.DisplayStart;
-                          rowIndex < clipper.DisplayEnd;
-                          ++rowIndex ) {
-                        const auto  index = static_cast<std::size_t>(rowIndex);
-                        const auto& row   = m_annotationTableRows[index];
-                        const bool  selected =
-                            m_selectedAnnotationTableRow == index;
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        const std::string rowLabel = fmt::format(
-                            "#{}###AnnotationTableRow_{}", index + 1U, index);
-                        const bool rowClicked = ::MMM::UI::FeedbackSelectable(
-                            rowLabel.c_str(),
-                            selected,
-                            ImGuiSelectableFlags_SpanAllColumns |
-                                ImGuiSelectableFlags_AllowOverlap,
-                            ImVec2(0.0F, ImGui::GetFrameHeight()));
-                        const bool rowDoubleClicked =
-                            ImGui::IsItemHovered() &&
-                            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-                        if ( rowClicked ) {
-                            m_selectedAnnotationTableRow = index;
-                        }
-
-                        const auto seekToRow = [&row]() {
-                            const float visualOffset =
-                                Config::AppConfig::instance()
-                                    .getVisualConfig()
-                                    .getEffectiveVisualOffset();
-                            Event::EventBus::instance().publish(
-                                Event::LogicCommandEvent(Logic::CmdSeek{
-                                    row.timestamp - visualOffset }));
-                        };
-                        if ( rowDoubleClicked ) seekToRow();
-
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::AlignTextToFramePadding();
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                            row.timestamp, m_currentSnapshot);
-                        ImGui::TextUnformatted(timeText.c_str());
-
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted(TR(annotationTableTargetLabelKey(
-                                                      row.item.targetKind))
-                                                   .data());
-                        if ( row.item.track >= 0 ) {
-                            ImGui::SameLine();
-                            ImGui::TextDisabled("#%d", row.item.track + 1);
-                        }
-                        if ( row.item.targetMissing ) {
-                            ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
-                                               "!");
-                        }
-
-                        ImGui::TableSetColumnIndex(3);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted(
-                            row.item.author.empty()
-                                ? TR("ui.annotation.unknown_author").data()
-                                : row.item.author.c_str());
-
-                        ImGui::TableSetColumnIndex(4);
-                        ImGui::AlignTextToFramePadding();
-                        const auto firstLineEnd = row.item.content.find('\n');
-                        const std::size_t firstLineLength =
-                            firstLineEnd == std::string::npos
-                                ? row.item.content.size()
-                                : firstLineEnd;
-                        ImGui::TextUnformatted(
-                            row.item.content.data(),
-                            row.item.content.data() + firstLineLength);
-
-                        ImGui::TableSetColumnIndex(5);
-                        const float actionButtonWidth =
-                            std::max(1.0F,
-                                     (ImGui::GetContentRegionAvail().x -
-                                      ImGui::GetStyle().ItemSpacing.x) /
-                                         2.0F);
-                        const std::string jumpLabel =
-                            fmt::format("{}##AnnotationTableJump_{}",
-                                        TR("ui.annotation.table.jump").view(),
-                                        index);
-                        if ( ::MMM::UI::FeedbackButton(
-                                 jumpLabel.c_str(),
-                                 ImVec2(actionButtonWidth,
-                                        ImGui::GetFrameHeight())) ) {
-                            seekToRow();
-                        }
-                        ImGui::SameLine();
-                        const std::string deleteLabel =
-                            fmt::format("{}##AnnotationTableDelete_{}",
-                                        TR("ui.common.delete").view(),
-                                        index);
-                        if ( ::MMM::UI::FeedbackButton(
-                                 deleteLabel.c_str(),
-                                 ImVec2(actionButtonWidth,
-                                        ImGui::GetFrameHeight())) ) {
-                            Event::EventBus::instance().publish(
-                                Event::LogicCommandEvent(
-                                    Logic::CmdRemoveBeatmapAnnotation{
-                                        row.item.id }));
-                        }
-                    }
-                }
-                ImGui::EndTable();
-            }
-
-            if ( m_annotationTableRows.empty() ) {
-                ImGui::TextDisabled("%s",
-                                    TR("ui.annotation.table.empty").data());
-            } else if ( m_selectedAnnotationTableRow &&
-                        *m_selectedAnnotationTableRow <
-                            m_annotationTableRows.size() ) {
-                const auto& selected =
-                    m_annotationTableRows[*m_selectedAnnotationTableRow];
-                ImGui::BeginChild("AnnotationTableDetail",
-                                  ImVec2(0.0F, detailHeight),
-                                  ImGuiChildFlags_Borders);
-                const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                    selected.timestamp, m_currentSnapshot);
-                ImGui::Text("%s: %s",
-                            TR("ui.annotation.timestamp").data(),
-                            timeText.c_str());
-                ImGui::SameLine();
-                ImGui::TextDisabled(
-                    "· %s",
-                    selected.item.author.empty()
-                        ? TR("ui.annotation.unknown_author").data()
-                        : selected.item.author.c_str());
-                ImGui::Text(
-                    "%s: %s",
-                    TR("ui.annotation.target").data(),
-                    TR(annotationTableTargetLabelKey(selected.item.targetKind))
-                        .data());
-                if ( selected.item.track >= 0 ) {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("#%d", selected.item.track + 1);
-                }
-                if ( selected.item.targetMissing ) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(
-                        ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
-                        "%s",
-                        TR("ui.annotation.target_missing").data());
-                }
-                ImGui::Separator();
-                UI::renderMarkdown(selected.item.content);
-                ImGui::EndChild();
-            }
-        }
-    }
-    ImGui::End();
-    ImGui::PopStyleVar(6);
-}
-
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）。
-/// @warning UI 热路径：打开时每帧执行；无谱面快照时只关闭窗口并清理绑定。
+/// @warning UI 热路径：打开时每帧执行；快照尚未就绪时只绘制同步提示。
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
-    if ( !m_isTableWindowOpen ) {
+    if ( !m_auxiliaryWindowState.timingPointsTableOpen ) {
         m_shouldRecoverTableWindow         = false;
         m_shouldFocusTableWindow           = false;
         m_isTableWindowFocusedAndReachable = false;
@@ -1871,10 +1434,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     }
 
     auto closeTableWindow = [this]() {
-        m_isTableWindowOpen                = false;
-        m_shouldRecoverTableWindow         = false;
-        m_shouldFocusTableWindow           = false;
-        m_isTableWindowFocusedAndReachable = false;
+        m_auxiliaryWindowState.timingPointsTableOpen = false;
+        m_shouldRecoverTableWindow                   = false;
+        m_shouldFocusTableWindow                     = false;
+        m_isTableWindowFocusedAndReachable           = false;
         m_tableBeatmapKey.clear();
         m_tableScrollToCurrentTimePending = false;
         m_tableSelectionAnchorEntity      = entt::null;
@@ -1906,6 +1469,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         return;
     }
     if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
+        bool& windowOpen = m_auxiliaryWindowState.timingPointsTableOpen;
+        renderTimingTableSyncingWindow(windowOpen,
+                                       m_shouldRecoverTableWindow,
+                                       m_shouldFocusTableWindow,
+                                       m_isTableWindowFocusedAndReachable);
         return;
     }
     const std::string_view currentBeatmapKey =
@@ -1954,15 +1522,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     std::string windowTitle =
         TR("ui.timeline.timing_points_table.title").toString() +
         "###TimingPointsTableWindow";
-    const bool wasOpenBeforeBegin = m_isTableWindowOpen;
-    const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen);
+    bool&      windowOpen = m_auxiliaryWindowState.timingPointsTableOpen;
+    const bool wasOpenBeforeBegin = windowOpen;
+    const bool opened = ImGui::Begin(windowTitle.c_str(), &windowOpen);
     ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
-                                                &m_isTableWindowOpen);
-    if ( m_isTableWindowOpen ) {
-        recoverCurrentTimelineTableWindow(m_shouldRecoverTableWindow, dpiScale);
+                                                &windowOpen);
+    if ( windowOpen ) {
+        recoverCurrentAuxiliaryWindow(m_shouldRecoverTableWindow, dpiScale);
         const bool focused =
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        const bool reachable = isCurrentTimelineTableWindowReachable(dpiScale);
+        const bool reachable = isCurrentAuxiliaryWindowReachable(dpiScale);
         const bool popupOpen = ImGui::IsPopupOpen(
             nullptr,
             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
@@ -2235,24 +1804,23 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
             ImGui::SameLine();
             if ( hasSearchValueText && !hasValidSearchValue ) {
-                ImGui::TextColored(
-                    ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
-                    "%s",
-                    TR("ui.timeline.timing_points_table.search.invalid_value")
-                        .data());
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                                   "%s",
+                                   TR("ui.timeline.timing_points_table."
+                                      "search.invalid_value")
+                                       .data());
             } else {
-                ImGui::TextUnformatted(
-                    TR_FMT(
-                        "ui.timeline.timing_points_table.search.result_count",
-                        visibleElementIndices.size(),
-                        elements.size())
-                        .c_str());
+                ImGui::TextUnformatted(TR_FMT("ui.timeline.timing_points_"
+                                              "table.search.result_count",
+                                              visibleElementIndices.size(),
+                                              elements.size())
+                                           .c_str());
             }
 
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(
-                TR("ui.timeline.timing_points_table.search.replacement_value")
-                    .data());
+            ImGui::TextUnformatted(TR("ui.timeline.timing_points_table."
+                                      "search.replacement_value")
+                                       .data());
             ImGui::SameLine();
             ImGui::SetNextItemWidth(140.0f * dpiScale);
             ImGui::InputDouble("###TimingTableSearchReplacement",
@@ -2799,7 +2367,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 "保持画布速度联动中，修改 BPM 后自动刷新");
                         }
                     }
-                    // 表格输入在发布命令前过滤负 BPM，防止非法值短暂写入快照。
+                    // 表格输入在发布命令前过滤负
+                    // BPM，防止非法值短暂写入快照。
                     const bool displayValueValid =
                         isValidTimingEditorValue(effect, vVal);
                     if ( displayValueChanged && !isBoundScroll &&

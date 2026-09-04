@@ -329,8 +329,13 @@ TimelineCanvas::TimelineCanvas(
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
-    m_targetWidth  = w;
-    m_targetHeight = h;
+    m_targetWidth   = w;
+    m_targetHeight  = h;
+    m_logicalWidth  = w;
+    m_logicalHeight = h;
+
+    // Timeline 启动时可能保持隐藏；仍需先注册视口，保证时间点表格有快照来源。
+    resizeCall(0U, 0U, w, h);
 }
 
 /// @brief 提交总时间轴最近一次连续 Seek。
@@ -356,7 +361,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     if ( !editorSettings.showTimelineWindow ) {
         commitAudioTimeSliderScrub();
         renderTimingPointsTableWindow();
-        renderAnnotationTableWindow();
         return;
     }
 
@@ -387,7 +391,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         editorSettings.showTimelineWindow = false;
         appConfig.save();
         renderTimingPointsTableWindow();
-        renderAnnotationTableWindow();
         return;
     }
 
@@ -849,7 +852,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
 
     renderTimingPointsTableWindow();
-    renderAnnotationTableWindow();
 
     if ( m_speedTooltipTimer > 0.0f ) {
         m_speedTooltipTimer -= ImGui::GetIO().DeltaTime;
@@ -907,46 +909,23 @@ void TimelineCanvas::requestFocus()
 /// @param open 是否打开表格窗口。
 void TimelineCanvas::setTimingPointsTableOpen(bool open)
 {
-    m_isTableWindowOpen                = open;
-    m_shouldRecoverTableWindow         = open;
-    m_shouldFocusTableWindow           = false;
-    m_isTableWindowFocusedAndReachable = false;
+    m_auxiliaryWindowState.timingPointsTableOpen = open;
+    m_shouldRecoverTableWindow                   = open;
+    m_shouldFocusTableWindow                     = false;
+    m_isTableWindowFocusedAndReachable           = false;
 }
 
 /// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
 void TimelineCanvas::activateTimingPointsTable()
 {
     const auto activation = resolveTimelineTableWindowActivation(
-        m_isTableWindowOpen, m_isTableWindowFocusedAndReachable);
-    m_isTableWindowOpen        = activation.open;
-    m_shouldFocusTableWindow   = activation.requestFocus;
-    m_shouldRecoverTableWindow = activation.requestRecovery;
+        m_auxiliaryWindowState.timingPointsTableOpen,
+        m_isTableWindowFocusedAndReachable);
+    m_auxiliaryWindowState.timingPointsTableOpen = activation.open;
+    m_shouldFocusTableWindow                     = activation.requestFocus;
+    m_shouldRecoverTableWindow                   = activation.requestRecovery;
     if ( !activation.open ) {
         m_isTableWindowFocusedAndReachable = false;
-    }
-}
-
-/// @brief 设置批注表窗口打开状态。
-/// @param open 是否打开批注表窗口。
-void TimelineCanvas::setAnnotationTableOpen(bool open)
-{
-    m_isAnnotationTableWindowOpen                = open;
-    m_shouldRecoverAnnotationTableWindow         = open;
-    m_shouldFocusAnnotationTableWindow           = false;
-    m_isAnnotationTableWindowFocusedAndReachable = false;
-}
-
-/// @brief 激活批注表；已聚焦可见时关闭，否则恢复并聚焦。
-void TimelineCanvas::activateAnnotationTable()
-{
-    const auto activation = resolveTimelineTableWindowActivation(
-        m_isAnnotationTableWindowOpen,
-        m_isAnnotationTableWindowFocusedAndReachable);
-    m_isAnnotationTableWindowOpen        = activation.open;
-    m_shouldFocusAnnotationTableWindow   = activation.requestFocus;
-    m_shouldRecoverAnnotationTableWindow = activation.requestRecovery;
-    if ( !activation.open ) {
-        m_isAnnotationTableWindowFocusedAndReachable = false;
     }
 }
 
@@ -988,13 +967,11 @@ bool TimelineCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
     (void)snapshot;
-    const bool needsTableSnapshot =
-        m_isTableWindowOpen || m_isAnnotationTableWindowOpen;
     return m_syncBuffer && m_isOpen &&
-           (Config::AppConfig::instance()
-                .getEditorSettings()
-                .showTimelineWindow ||
-            needsTableSnapshot);
+           shouldPrepareTimelineSnapshot(Config::AppConfig::instance()
+                                             .getEditorSettings()
+                                             .showTimelineWindow,
+                                         m_auxiliaryWindowState);
 }
 
 /// @brief 在线程池中拉取并准备时间线快照。

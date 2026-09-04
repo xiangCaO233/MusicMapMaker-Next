@@ -17,6 +17,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/IAuxiliaryWindowView.h"
 #include "ui/ICanvasView.h"
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/IEditorApplicationService.h"
@@ -61,6 +62,9 @@ constexpr const char* PROJECT_AUDIO_TOOL_VIEW_NAME = "ProjectAudioTool";
 
 /// @brief 独立设置窗口的稳定 UIManager 视图名。
 constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
+
+/// @brief 独立批注表窗口的稳定 UIManager 视图名。
+constexpr const char* ANNOTATION_TABLE_VIEW_NAME = "AnnotationTableWindow";
 
 /// @brief 主窗口标题栏宿主 ImGui 窗口名。
 constexpr std::string_view TOP_MENU_BAR_HOST_NAME = "TopMenuBarHost";
@@ -866,7 +870,10 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
 
     if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
-        workspace.m_annotationTableOpen   = timeline->isAnnotationTableOpen();
+    }
+    if ( auto* annotationTable =
+             getAuxiliaryWindowView(ANNOTATION_TABLE_VIEW_NAME) ) {
+        workspace.m_annotationTableOpen = annotationTable->isWindowOpen();
     }
 
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
@@ -966,7 +973,10 @@ void UIManager::restoreProjectWorkspaceViews(
 
     if ( auto* timeline = getCanvasView("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
-        timeline->setAnnotationTableOpen(workspace.m_annotationTableOpen);
+    }
+    if ( auto* annotationTable =
+             getAuxiliaryWindowView(ANNOTATION_TABLE_VIEW_NAME) ) {
+        annotationTable->setWindowOpen(workspace.m_annotationTableOpen);
     }
 }
 
@@ -1016,6 +1026,16 @@ ICanvasView* UIManager::getCanvasView(const std::string& name) const
 {
     const auto it = m_uiviews.find(name);
     return it == m_uiviews.end() ? nullptr : it->second->asCanvasView();
+}
+
+/// @brief 按注册名查询独立窗口能力观察指针。
+/// @warning UI 热路径：只查询本地注册表并调用能力访问器。
+IAuxiliaryWindowView* UIManager::getAuxiliaryWindowView(
+    const std::string& name) const
+{
+    const auto it = m_uiviews.find(name);
+    return it == m_uiviews.end() ? nullptr
+                                 : it->second->asAuxiliaryWindowView();
 }
 
 /// @brief 注册视图并接管其唯一所有权。

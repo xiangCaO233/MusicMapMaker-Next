@@ -1210,6 +1210,7 @@ return {
 	["ui.timeline.menu.professional_mode"] = "切换专业模式",
 	["ui.timeline.menu.open_timing_table"] = "打开时间线表格",
 	["ui.timeline.timing_points_table.title"] = "时间点批量编辑###TimingPointsTable",
+	["ui.timeline.timing_points_table.syncing"] = "正在同步时间线数据……",
 	["ui.timeline.timing_points_table.filter.only_bpm"] = "只看 BPM",
 	["ui.timeline.timing_points_table.filter.clear"] = "清空筛选/搜索",
 	["ui.timeline.timing_points_table.bulk_tools"] = "批量修改工具",

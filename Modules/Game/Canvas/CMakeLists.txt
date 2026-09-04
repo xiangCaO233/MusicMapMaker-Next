@@ -2,6 +2,9 @@
 
 add_library(
   Canvas STATIC
+  src/AnnotationTableData.cpp
+  src/AnnotationTableWindow.cpp
+  src/AuxiliaryWindowUi.cpp
   src/BackgroundVideoPlayer.cpp
   src/Basic2DCanvas.cpp
   src/Basic2DCanvas_Interaction.cpp
@@ -139,3 +142,11 @@ mmm_add_test_executable(Canvas TimelineTableWindowStateTest
 target_include_directories(TimelineTableWindowStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME TimelineTableWindowStateTest COMMAND TimelineTableWindowStateTest)
+
+# Timeline 快照唤醒状态仅覆盖主 Timeline 与自身时间点表格。
+mmm_add_test_executable(Canvas TimelineAuxiliaryWindowStateTest
+                        tests/TimelineAuxiliaryWindowStateTest.cpp)
+target_include_directories(TimelineAuxiliaryWindowStateTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME TimelineAuxiliaryWindowStateTest
+         COMMAND TimelineAuxiliaryWindowStateTest)

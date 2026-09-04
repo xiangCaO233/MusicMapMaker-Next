@@ -3,6 +3,7 @@
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "ui/utils/CanvasTimeFormatContext.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,14 +18,6 @@ namespace MMM::UI::Utils
 {
 namespace TimeFormatDetail
 {
-
-/// @brief BPM 时间线格式化段。
-struct BpmFormatPoint {
-    /// @brief 段起始时间，单位秒。
-    double time{ 0.0 };
-    /// @brief 段 BPM。
-    double bpm{ 120.0 };
-};
 
 /// @brief 将无效 BPM 归一为可用于显示的 BPM。
 inline double sanitizeBpm(double bpm)
@@ -60,10 +53,10 @@ inline std::string formatMilliseconds(double timeSeconds)
 }
 
 /// @brief 从快照滚动分段中提取完整 BPM 时间线。
-inline std::vector<BpmFormatPoint> collectBpmPoints(
+inline std::vector<CanvasTimeFormatBpmPoint> collectBpmPoints(
     const Common::Render::RenderSnapshot* snapshot)
 {
-    std::vector<BpmFormatPoint> points;
+    std::vector<CanvasTimeFormatBpmPoint> points;
     if ( !snapshot ) return points;
 
     for ( const auto& segment : snapshot->scrollSegments ) {
@@ -85,14 +78,13 @@ inline std::vector<BpmFormatPoint> collectBpmPoints(
     return points;
 }
 
-/// @brief 格式化拍号 + 分拍位。
-inline std::string formatBeatTime(
-    double timeSeconds, const Common::Render::RenderSnapshot* snapshot)
+/// @brief 使用已经归一化的 BPM 节点格式化拍号 + 分拍位。
+inline std::string formatBeatTimeWithPoints(
+    double timeSeconds, const std::vector<CanvasTimeFormatBpmPoint>& points,
+    int beatDivisor)
 {
-    auto points = collectBpmPoints(snapshot);
     if ( points.empty() ) return fmt::format("{:.3f} s", timeSeconds);
 
-    int beatDivisor = snapshot ? snapshot->currentBeatDivisor : 4;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
     auto formatWithinBpm = [&](double  pointTime,
@@ -104,8 +96,8 @@ inline std::string formatBeatTime(
         double  beatFloat    = timeInBpm / beatDuration;
         int64_t beatOffset = static_cast<int64_t>(std::floor(beatFloat + 1e-6));
         double  stepFloat  = (beatFloat - static_cast<double>(beatOffset)) *
-                             static_cast<double>(beatDivisor);
-        int     step       = static_cast<int>(std::round(stepFloat));
+                           static_cast<double>(beatDivisor);
+        int step = static_cast<int>(std::round(stepFloat));
         if ( step >= beatDivisor ) {
             ++beatOffset;
             step = 0;
@@ -126,10 +118,10 @@ inline std::string formatBeatTime(
 
     int64_t totalBeats = 0;
     for ( size_t i = 0; i < points.size(); ++i ) {
-        const auto& point       = points[i];
-        double      nextBpmTime = (i + 1 < points.size())
-                                      ? points[i + 1].time
-                                      : std::numeric_limits<double>::infinity();
+        const auto& point        = points[i];
+        double      nextBpmTime  = (i + 1 < points.size())
+                                       ? points[i + 1].time
+                                       : std::numeric_limits<double>::infinity();
         double      beatDuration = 60.0 / point.bpm;
 
         if ( timeSeconds < point.time ) {
@@ -148,6 +140,23 @@ inline std::string formatBeatTime(
     }
 
     return fmt::format("{:.3f} s", timeSeconds);
+}
+
+/// @brief 使用渲染快照格式化拍号 + 分拍位。
+inline std::string formatBeatTime(
+    double timeSeconds, const Common::Render::RenderSnapshot* snapshot)
+{
+    const auto points      = collectBpmPoints(snapshot);
+    const int  beatDivisor = snapshot ? snapshot->currentBeatDivisor : 4;
+    return formatBeatTimeWithPoints(timeSeconds, points, beatDivisor);
+}
+
+/// @brief 使用独立时间上下文格式化拍号 + 分拍位。
+inline std::string formatBeatTime(double                         timeSeconds,
+                                  const CanvasTimeFormatContext& context)
+{
+    return formatBeatTimeWithPoints(
+        timeSeconds, context.bpmPoints, context.beatDivisor);
 }
 
 /// @brief 按指定偏好格式化时间。
@@ -180,6 +189,22 @@ inline std::string formatCanvasTime(
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     return TimeFormatDetail::formatTimeWithPreference(
         timeSeconds, preference, snapshot);
+}
+
+/// @brief 按编辑器偏好和独立数据上下文格式化画布时间戳。
+/// @param timeSeconds 时间戳，单位秒。
+/// @param context 不依赖渲染快照的 BPM 与分拍上下文。
+/// @return 已格式化的时间文本。
+inline std::string formatCanvasTime(double                         timeSeconds,
+                                    const CanvasTimeFormatContext& context)
+{
+    const auto preference =
+        Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
+    if ( preference == Config::TimeFormatPreference::Beat ) {
+        return TimeFormatDetail::formatBeatTime(timeSeconds, context);
+    }
+    return TimeFormatDetail::formatTimeWithPreference(
+        timeSeconds, preference, nullptr);
 }
 
 /// @brief 按编辑器偏好格式化两个画布时间戳。

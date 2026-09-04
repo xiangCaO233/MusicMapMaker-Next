@@ -36,6 +36,7 @@ class CollaborationRoom;
 namespace MMM::UI
 {
 class ICanvasView;
+class IAuxiliaryWindowView;
 class ICanvasWorkspaceService;
 class IEditorApplicationService;
 class IRenderableView;
@@ -83,6 +84,13 @@ public:
     /// @return 视图存在并实现画布能力时返回观察指针，否则返回 nullptr。
     /// @warning UI 热路径：只查询本地注册表并调用虚拟能力访问器。
     [[nodiscard]] ICanvasView* getCanvasView(const std::string& name) const;
+
+    /// @brief 获取已注册视图暴露的独立窗口能力接口。
+    /// @param name 视图注册名。
+    /// @return 视图存在并实现独立窗口能力时返回观察指针，否则返回 nullptr。
+    /// @warning UI 热路径：只查询本地注册表并调用能力访问器。
+    [[nodiscard]] IAuxiliaryWindowView* getAuxiliaryWindowView(
+        const std::string& name) const;
 
     /// @brief 清理所有ui
     void clearAllViews();

@@ -159,6 +159,14 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         "PreviewWindow",
         workspace->createPreviewCanvas("PreviewWindow", 200, 200));
 
+    // 批注表先于 Timeline 永久注册，数据与窗口生命周期均不依赖 Timeline。
+    auto annotationTable =
+        workspace->createAnnotationTableWindow("AnnotationTableWindow");
+    if ( annotationTable ) {
+        m_uiManager.registerView("AnnotationTableWindow",
+                                 std::move(annotationTable));
+    }
+
     // 注册时间线标尺 (Timeline Window)
     m_uiManager.registerView(
         "TimelineWindow", workspace->createTimelineCanvas("Timeline", 60, 200));
