@@ -66,7 +66,7 @@ if(MMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN)
         # 目标根在配置期冻结，避免构建子进程环境变化导致写错用户。
         "-DMMM_SYNC_DESTINATION_CONFIG_ROOT=${_MMM_LOCAL_CONFIG_ROOT}" -P
         "${CMAKE_SOURCE_DIR}/cmake/SyncDefaultConfigAssets.cmake"
-      COMMENT "同步默认翻译与皮肤到本机配置目录"
+      COMMENT "同步默认翻译与内置皮肤到本机配置目录"
       VERBATIM)
     # IDE 中归入 Config 分组，避免辅助目标混入主程序列表。
     set_property(TARGET SyncDefaultConfigAssets PROPERTY FOLDER "Config")
@@ -186,7 +186,8 @@ add_test(
   COMMAND TranslationResourceMigrationTest
           "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
 
-# 构建期资源同步测试覆盖默认文件增量覆盖及用户扩展保留。 测试直接运行生产 cmake -P 脚本，不依赖默认开启的真实用户目录目标。
+# 构建期资源同步测试覆盖两套内置皮肤、默认文件增量覆盖、用户扩展以及配置和 ImGui 布局保留。 测试直接运行生产 cmake -P
+# 脚本，不依赖默认开启的真实用户目录目标。
 add_test(
   NAME DefaultConfigAssetSyncTest
   COMMAND

@@ -15,15 +15,17 @@ endif()
 set(_MMM_SOURCE_TRANSLATIONS "${MMM_SYNC_SOURCE_ASSETS_ROOT}/translations")
 # 默认皮肤源根包含入口及其字体、音频和图像资源。
 set(_MMM_SOURCE_DEFAULT_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/mmm-default")
+# IVM 内置皮肤拥有独立入口和资源树，同时复用 mmm-default 的通用资源。
+set(_MMM_SOURCE_IVM_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/ivm")
 # 目标统一落在 AppPaths 使用的 assets 子目录。
 set(_MMM_DESTINATION_ASSETS "${MMM_SYNC_DESTINATION_CONFIG_ROOT}/assets")
 
-# 默认中英文和默认皮肤入口缺失时立即失败，避免生成看似成功但无法启动的本机目录。
+# 默认中英文和两套内置皮肤入口缺失时立即失败，避免生成不完整的本机资源目录。
 foreach(
   _MMM_REQUIRED_FILE
   "${_MMM_SOURCE_TRANSLATIONS}/en_us.lua"
   "${_MMM_SOURCE_TRANSLATIONS}/zh_cn.lua"
-  "${_MMM_SOURCE_DEFAULT_SKIN}/skin.lua")
+  "${_MMM_SOURCE_DEFAULT_SKIN}/skin.lua" "${_MMM_SOURCE_IVM_SKIN}/skin.lua")
   # 任一基础入口缺失都说明源码资源不完整，不能继续部分同步。
   if(NOT EXISTS "${_MMM_REQUIRED_FILE}")
     message(
@@ -54,12 +56,15 @@ function(_mmm_sync_managed_directory SOURCE_ROOT DESTINATION_ROOT)
   # 不清理目标中的多余文件是保护用户扩展的关键约束。
 endfunction()
 
-# 两个受管根分别增量写入，用户额外语言和自定义皮肤目录不会被删除。
+# 三个受管资源根分别增量写入，所有目标都固定在 assets 下；用户配置文件和 ImGui 布局文件不属于同步输入，也不允许成为写入目标。
 _mmm_sync_managed_directory("${_MMM_SOURCE_TRANSLATIONS}"
                             "${_MMM_DESTINATION_ASSETS}/translations")
 # 默认皮肤独立写入固定名称，避免影响同级自定义皮肤。
 _mmm_sync_managed_directory("${_MMM_SOURCE_DEFAULT_SKIN}"
                             "${_MMM_DESTINATION_ASSETS}/skins/mmm-default")
+# IVM 内置皮肤同样按完整目录树同步，确保入口、字体和物件纹理同时可用。
+_mmm_sync_managed_directory("${_MMM_SOURCE_IVM_SKIN}"
+                            "${_MMM_DESTINATION_ASSETS}/skins/ivm")
 
 # 构建日志明确输出实际目标根，便于排查本机路径选择。
-message(STATUS "已同步默认翻译与皮肤到 ${MMM_SYNC_DESTINATION_CONFIG_ROOT}")
+message(STATUS "已同步默认翻译与内置皮肤到 ${MMM_SYNC_DESTINATION_CONFIG_ROOT}")

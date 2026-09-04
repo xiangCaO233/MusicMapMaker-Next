@@ -111,9 +111,9 @@ include("project-configure")
 # 项目测试默认不参与常规构建，避免大量测试可执行文件显著增加链接时间；需要测试时显式开启。
 option(BUILD_TESTING "Build and register MusicMapMaker tests." OFF)
 
-# 本机开发构建默认把仓库翻译和默认皮肤同步到应用配置目录；CI 与打包脚本必须显式关闭。
+# 本机开发构建默认把仓库翻译和内置皮肤同步到应用配置目录；CI 与打包脚本必须显式关闭。
 option(MMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN
-       "Sync translations and the default skin into the local user config." ON)
+       "Sync translations and built-in skins into the local user config." ON)
 
 if(BUILD_TESTING)
   enable_testing()

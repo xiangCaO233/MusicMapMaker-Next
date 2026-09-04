@@ -56,6 +56,8 @@ file(REMOVE_RECURSE "${_MMM_TEST_ROOT}")
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/translations")
 # 嵌套图像目录验证默认皮肤会递归同步。
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/mmm-default/resources/image")
+# IVM 皮肤使用独立嵌套资源验证完整目录树同步。
+file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/ivm/resources/image")
 # 预建翻译目标以覆盖已有用户目录升级场景。
 file(MAKE_DIRECTORY "${_MMM_CONFIG_ROOT}/assets/translations")
 # 自定义皮肤目录用于验证默认同步不会执行破坏性清理。
@@ -68,6 +70,10 @@ file(WRITE "${_MMM_SOURCE_ROOT}/translations/zh_cn.lua" "zh-v1")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v1")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/resources/image/marker.txt"
      "image-v1")
+# IVM 入口和独立纹理都必须随内置资源同步。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/skin.lua" "ivm-v1")
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/resources/image/note.txt"
+     "ivm-image-v1")
 
 # 目标目录预置旧默认文件和用户扩展，覆盖与保留语义必须同时验证。 同名旧默认文件必须被源码版本覆盖。
 file(WRITE "${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua" "stale")
@@ -76,6 +82,9 @@ file(WRITE "${_MMM_CONFIG_ROOT}/assets/translations/custom.lua" "custom")
 # 非默认皮肤必须跨多次同步持续保留。
 file(WRITE "${_MMM_CONFIG_ROOT}/assets/skins/custom-skin/skin.lua"
      "custom-skin")
+# 用户配置和 ImGui 布局位于配置根，任何资源同步都不得覆盖。
+file(WRITE "${_MMM_CONFIG_ROOT}/user_config.json" "user-config")
+file(WRITE "${_MMM_CONFIG_ROOT}/imgui.ini" "imgui-layout")
 
 # 首次同步应覆盖旧默认翻译并复制完整的默认皮肤目录树。
 _mmm_run_sync("${_MMM_SOURCE_ROOT}" "${_MMM_CONFIG_ROOT}")
@@ -88,19 +97,37 @@ _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/mmm-default/skin.lua"
 _mmm_assert_file_content(
   "${_MMM_CONFIG_ROOT}/assets/skins/mmm-default/resources/image/marker.txt"
   "image-v1" "默认皮肤嵌套资源同步")
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/ivm/skin.lua"
+                         "ivm-v1" "IVM 皮肤入口同步")
+_mmm_assert_file_content(
+  "${_MMM_CONFIG_ROOT}/assets/skins/ivm/resources/image/note.txt"
+  "ivm-image-v1" "IVM 皮肤嵌套资源同步")
 
 # 用户额外语言与自定义皮肤不属于受管默认文件，必须原样保留。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/custom.lua"
                          "custom" "保留用户额外语言")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/custom-skin/skin.lua"
                          "custom-skin" "保留用户自定义皮肤")
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/user_config.json" "user-config"
+                         "保留用户配置")
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/imgui.ini" "imgui-layout"
+                         "保留 ImGui 布局")
 
 # 第二次同步使用同路径更新内容，覆盖同时间戳旧文件的增量行为不能退化。 改变长度确保第二次内容更新不会依赖文件时间戳差异。
 file(WRITE "${_MMM_SOURCE_ROOT}/translations/en_us.lua" "en-v2-longer")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v2-longer")
+# IVM 内置入口也应随仓库版本正常增量更新。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/skin.lua" "ivm-v2-longer")
 # 重复运行同一生产脚本验证增量同步幂等边界。
 _mmm_run_sync("${_MMM_SOURCE_ROOT}" "${_MMM_CONFIG_ROOT}")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua"
                          "en-v2-longer" "增量英文翻译同步")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/mmm-default/skin.lua"
                          "skin-v2-longer" "增量默认皮肤同步")
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/ivm/skin.lua"
+                         "ivm-v2-longer" "增量 IVM 皮肤同步")
+# 第二次同步仍必须证明根目录用户状态没有被资源更新波及。
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/user_config.json" "user-config"
+                         "增量同步保留用户配置")
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/imgui.ini" "imgui-layout"
+                         "增量同步保留 ImGui 布局")
