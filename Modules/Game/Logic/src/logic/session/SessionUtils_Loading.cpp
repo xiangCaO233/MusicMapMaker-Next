@@ -16,6 +16,7 @@
 #include "logic/session/SelectionState.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <deque>
 #include <limits>
@@ -605,10 +606,11 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                       return a.m_timestamp < b.m_timestamp;
                   });
 
-        double currentBPM = 120.0;
+        double currentBPM = ::MMM::DEFAULT_NORMALIZED_BPM;
         if ( ctx.currentBeatmap &&
              ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-            currentBPM = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+            currentBPM = ::MMM::normalizeBpmValue(
+                ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
         }
         for ( const auto& tc : sortedTLs ) {
             Timing timing;
@@ -617,9 +619,10 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             timing.m_timingEffectParameter = tc.m_value;
 
             if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-                currentBPM           = tc.m_value;
-                timing.m_bpm         = currentBPM;
-                timing.m_beat_length = 60000.0 / std::max(0.1, timing.m_bpm);
+                currentBPM = ::MMM::normalizeBpmValue(tc.m_value, currentBPM);
+                timing.m_timingEffectParameter = currentBPM;
+                timing.m_bpm                   = currentBPM;
+                timing.m_beat_length           = 60000.0 / timing.m_bpm;
             } else {
                 timing.m_bpm         = currentBPM;
                 timing.m_beat_length = tc.m_value;

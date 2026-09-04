@@ -2,6 +2,7 @@
 #include "config/EditorConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -98,20 +99,25 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         // 自动计算最常见的 BPM (持续时间最长)
         std::map<double, double> bpmDurations;
         double                   lastBpmTime   = 0.0;
-        double                   currentBpmVal = -1.0;
+        double                   currentBpmVal = 0.0;
+        bool                     hasBpmEvent   = false;
         for ( const auto& entry : m_rebuildScratch ) {
             if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
-                if ( currentBpmVal > 0 ) {
+                if ( hasBpmEvent ) {
                     bpmDurations[currentBpmVal] +=
                         (entry.component->m_timestamp - lastBpmTime);
                 }
-                currentBpmVal = entry.component->m_value;
-                lastBpmTime   = entry.component->m_timestamp;
+                currentBpmVal =
+                    ::MMM::normalizeBpmValue(entry.component->m_value, refBPM);
+                lastBpmTime = entry.component->m_timestamp;
+                hasBpmEvent = true;
             }
         }
         // 加上最后一个段落到末尾的时间 (假设谱面时长)
-        bpmDurations[currentBpmVal] +=
-            (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
+        if ( hasBpmEvent ) {
+            bpmDurations[currentBpmVal] +=
+                (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
+        }
 
         double maxDuration = -1.0;
         for ( const auto& [bpm, dur] : bpmDurations ) {
@@ -120,8 +126,10 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 refBPM      = bpm;
             }
         }
+        if ( hasBpmEvent ) {
+            refBPM = ::MMM::normalizeBpmValue(refBPM);
+        }
     }
-    if ( refBPM < 1.0 ) refBPM = 120.0;
 
     double currentBPM = refBPM;
 
@@ -176,7 +184,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().effects |= SCROLL_EFFECT_BPM;
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
-            currentBPM                   = tl->m_value;
+            currentBPM = ::MMM::normalizeBpmValue(tl->m_value, refBPM);
             if ( !hasMalodyMetadata(*tl) ) {
                 // osu! 红线会重置 SV；Malody 的 BPM 不改变 effect 状态。
                 activeScrollValue = 1.0;

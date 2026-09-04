@@ -5,6 +5,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -230,9 +231,9 @@ void NoteRenderSystem::drawBeatLines(
             : judgmentLineY;
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
-                                             static_cast<double>(renderScaleY);
-    auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
+    double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
+                                          static_cast<double>(renderScaleY);
+    auto visibleRanges = cache->getTimeRangesForAbsYWindow(
         std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
 
     batcher.setTexture(TextureID::None);
@@ -397,9 +398,9 @@ void NoteRenderSystem::drawBeatLines(
             const int    numerator   = step / common;
             const int    denominator = divisor / common;
             const double lineTime    = subdivisionPreview.beatStartTime +
-                                       subdivisionPreview.beatDuration *
-                                           static_cast<double>(numerator) /
-                                           static_cast<double>(denominator);
+                                    subdivisionPreview.beatDuration *
+                                        static_cast<double>(numerator) /
+                                        static_cast<double>(denominator);
             if ( lineTime >= subdivisionPreview.beatEndTime - 1e-6 ) return;
             const float y = timeToCanvasY(lineTime);
             if ( y < visibleTop || y > visibleBottom ) return;
@@ -443,16 +444,10 @@ void NoteRenderSystem::drawBeatLines(
     }
 
     for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-        const auto* currentBPM = bpmEvents[i];
-        double      bpmTime    = currentBPM->m_timestamp;
-        double      bpmVal     = currentBPM->m_value;
-        if ( bpmVal <= 0.0 ) {
-            bpmVal = batcher.snapshot->fallbackBpm;
-        }
-
-        // 限制极端 BPM 导致的无限循环 (例如 osu! 谱面中的 6E-96 ms_per_beat)
-        if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
-        if ( bpmVal <= 0.0 ) bpmVal = 120.0;
+        const auto*  currentBPM = bpmEvents[i];
+        double       bpmTime    = currentBPM->m_timestamp;
+        const double bpmVal     = ::MMM::normalizeBpmValue(
+            currentBPM->m_value, batcher.snapshot->fallbackBpm);
 
         double nextBpmTime = (i + 1 < bpmEvents.size())
                                  ? bpmEvents[i + 1]->m_timestamp
@@ -583,7 +578,7 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float y = judgmentLineY -
+        float        y           = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs) *
                       renderScaleY;
 

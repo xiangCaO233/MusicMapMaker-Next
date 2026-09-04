@@ -18,6 +18,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -308,15 +309,15 @@ size_t calculateIntervalCombos(double startTime, double endTime,
     double totalQuarterBeats = 0.0;
     double currTime          = startTime;
 
-    double currentBpm = beatmap->m_baseMapMetadata.preference_bpm;
-    if ( currentBpm <= 0.0 ) currentBpm = 120.0;
+    double currentBpm =
+        ::MMM::normalizeBpmValue(beatmap->m_baseMapMetadata.preference_bpm);
 
     size_t nextTimingIdx = 0;
     for ( size_t i = 0; i < beatmap->m_timings.size(); ++i ) {
         const auto& timing = beatmap->m_timings[i];
         if ( timing.m_timingEffect == ::MMM::TimingEffect::BPM ) {
             if ( timing.m_timestamp <= startTime ) {
-                currentBpm = timing.m_bpm;
+                currentBpm = ::MMM::normalizeBpmValue(timing.m_bpm, currentBpm);
             } else {
                 nextTimingIdx = i;
                 break;
@@ -335,8 +336,9 @@ size_t calculateIntervalCombos(double startTime, double endTime,
                  timing.m_timestamp > currTime ) {
                 if ( timing.m_timestamp < endTime ) {
                     nextEventTime = timing.m_timestamp;
-                    nextBpm       = timing.m_bpm;
-                    foundIdx      = i + 1;
+                    nextBpm =
+                        ::MMM::normalizeBpmValue(timing.m_bpm, currentBpm);
+                    foundIdx = i + 1;
                 }
                 break;
             }
@@ -815,13 +817,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     std::string snapshotBeatmapPathKey;
     std::string snapshotBeatmapName;
     bool        snapshotIsDirty     = false;
-    double      snapshotFallbackBpm = 120.0;
+    double      snapshotFallbackBpm = ::MMM::DEFAULT_NORMALIZED_BPM;
     if ( m_ctx->currentBeatmap ) {
         const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
-        if ( metadata.preference_bpm > 0.0 &&
-             std::isfinite(metadata.preference_bpm) ) {
-            snapshotFallbackBpm = metadata.preference_bpm;
-        }
+        snapshotFallbackBpm = ::MMM::normalizeBpmValue(metadata.preference_bpm);
 
         if ( !metadata.main_cover_path.empty() ) {
             std::filesystem::path bgPath;
@@ -858,9 +857,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     if ( const auto* cache =
              m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() ) {
         const auto timingState = cache->getTimingStateAt(m_ctx->animateTime);
-        if ( std::isfinite(timingState.bpm) && timingState.bpm > 0.0 ) {
-            snapshotCurrentBpm = timingState.bpm;
-        }
+        snapshotCurrentBpm =
+            ::MMM::normalizeBpmValue(timingState.bpm, snapshotFallbackBpm);
         if ( std::isfinite(timingState.sv) ) {
             snapshotCurrentSv = timingState.sv;
         }
@@ -1172,16 +1170,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                             activeBpm == bpmEvents.front() &&
                                             time < activeBpm->m_timestamp;
 
-                    double bpmVal = activeBpm->m_value;
-                    if ( bpmVal <= 0.0 ) {
-                        bpmVal = 120.0;
-                        if ( m_ctx->currentBeatmap &&
-                             m_ctx->currentBeatmap->m_baseMapMetadata
-                                     .preference_bpm > 0.0 ) {
-                            bpmVal = m_ctx->currentBeatmap->m_baseMapMetadata
-                                         .preference_bpm;
-                        }
-                    }
+                    const double fallbackBpm =
+                        m_ctx->currentBeatmap
+                            ? m_ctx->currentBeatmap->m_baseMapMetadata
+                                  .preference_bpm
+                            : ::MMM::DEFAULT_NORMALIZED_BPM;
+                    const double bpmVal = ::MMM::normalizeBpmValue(
+                        activeBpm->m_value, fallbackBpm);
 
                     double           beatDuration   = 60.0 / bpmVal;
                     static const int denominators[] = { 1,  2,  3,  4,  5,  6,

@@ -10,6 +10,7 @@
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -231,8 +232,8 @@ void NoteRenderSystem::generateSnapshot(
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-            singleTrackW = 0;
-    float   renderScaleY = 1.0f;
+          singleTrackW = 0;
+    float renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
@@ -404,11 +405,11 @@ void NoteRenderSystem::generateSnapshot(
     if ( cameraId != "Timeline" ) {
         batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         // 先绘制拍线，使其在物件下方
-        const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
-                                           Config::BeatLineDisplayMode::Hidden;
-        bool       shouldDrawBeatLines   = !beatLinesHidden;
-        bool       shouldDrawTimingLines = false;
-        bool       revealBeatLinesNearCursor =
+        const bool beatLinesHidden = config.visual.beatLineDisplayMode ==
+                                     Config::BeatLineDisplayMode::Hidden;
+        bool shouldDrawBeatLines   = !beatLinesHidden;
+        bool shouldDrawTimingLines = false;
+        bool revealBeatLinesNearCursor =
             config.visual.beatLineDisplayMode ==
             Config::BeatLineDisplayMode::NearCursor;
 
@@ -922,14 +923,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
         batcher.setTexture(TextureID::None);
         for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-            const auto* currentBPM = bpmEvents[i];
-            double      bpmTime    = currentBPM->m_timestamp;
-            double      bpmVal     = currentBPM->m_value;
-            if ( bpmVal <= 0.0 ) {
-                bpmVal = snapshot->fallbackBpm;
-            }
-            if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
-            if ( bpmVal <= 0.0 ) bpmVal = 120.0;
+            const auto*  currentBPM = bpmEvents[i];
+            double       bpmTime    = currentBPM->m_timestamp;
+            const double bpmVal     = ::MMM::normalizeBpmValue(
+                currentBPM->m_value, snapshot->fallbackBpm);
 
             double nextBpmTime  = (i + 1 < bpmEvents.size())
                                       ? bpmEvents[i + 1]->m_timestamp
@@ -970,7 +967,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y = judgmentLineY -
+                    float y             = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
@@ -1079,7 +1076,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects == 0 ) continue;
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float y = judgmentLineY -
+        float        y           = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;

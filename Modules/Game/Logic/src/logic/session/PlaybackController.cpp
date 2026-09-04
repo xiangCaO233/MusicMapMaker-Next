@@ -7,6 +7,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -51,8 +52,8 @@ void pauseAndFreezeVisualClock(SessionContext& ctx, Audio::AudioManager& audio)
 /// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
 void cancelActiveEditingState(SessionContext& ctx)
 {
-    const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
-                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
+                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
     const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
@@ -362,18 +363,13 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
                 }
             }
 
-            const auto* currentBPM = bpmEvents[currentIdx];
-            double      bpmVal     = currentBPM->m_value;
-            double      bVal       = bpmVal;
-            if ( bVal <= 0.0 ) {
-                bVal = 120.0;
-                if ( m_ctx.currentBeatmap &&
-                     m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm >
-                         0.0 ) {
-                    bVal =
-                        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-                }
-            }
+            const auto*  currentBPM = bpmEvents[currentIdx];
+            const double fallbackBpm =
+                m_ctx.currentBeatmap
+                    ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                    : ::MMM::DEFAULT_NORMALIZED_BPM;
+            const double bVal =
+                ::MMM::normalizeBpmValue(currentBPM->m_value, fallbackBpm);
             double beatDuration = 60.0 / bVal;
             double stepDuration = isShiftAccelerated
                                       ? beatDuration

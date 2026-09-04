@@ -8,6 +8,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -34,17 +35,17 @@ std::size_t calculateIntervalCombos(double startTime, double endTime,
 {
     if ( !beatmap || endTime <= startTime ) return 0U;
 
-    double      totalQuarterBeats = 0.0;
-    double      currentTime       = startTime;
-    double      currentBpm        = beatmap->m_baseMapMetadata.preference_bpm;
-    std::size_t nextTimingIndex   = 0U;
-    if ( currentBpm <= 0.0 ) currentBpm = 120.0;
+    double totalQuarterBeats = 0.0;
+    double currentTime       = startTime;
+    double currentBpm =
+        ::MMM::normalizeBpmValue(beatmap->m_baseMapMetadata.preference_bpm);
+    std::size_t nextTimingIndex = 0U;
 
     for ( std::size_t index = 0U; index < beatmap->m_timings.size(); ++index ) {
         const auto& timing = beatmap->m_timings[index];
         if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) continue;
         if ( timing.m_timestamp <= startTime ) {
-            currentBpm = timing.m_bpm;
+            currentBpm = ::MMM::normalizeBpmValue(timing.m_bpm, currentBpm);
         } else {
             nextTimingIndex = index;
             break;
@@ -63,8 +64,9 @@ std::size_t calculateIntervalCombos(double startTime, double endTime,
                  timing.m_timestamp > currentTime ) {
                 if ( timing.m_timestamp < endTime ) {
                     nextEventTime = timing.m_timestamp;
-                    nextBpm       = timing.m_bpm;
-                    foundIndex    = index + 1U;
+                    nextBpm =
+                        ::MMM::normalizeBpmValue(timing.m_bpm, currentBpm);
+                    foundIndex = index + 1U;
                 }
                 break;
             }
@@ -185,15 +187,15 @@ void appendHitEvents(const NoteComponent&                        note,
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         for ( std::size_t index = 0U; index < note.m_subNotes.size();
               ++index ) {
-            const auto& sub = note.m_subNotes[index];
-            HitRole   role = index == 0U ? HitRole::Head
-                                         : (index + 1U == note.m_subNotes.size()
-                                                ? HitRole::Tail
-                                                : HitRole::Internal);
-            const int span = sub.type == ::MMM::NoteType::FLICK
-                                 ? std::abs(sub.dtrack) + 1
-                                 : 1;
-            auto      binding = sub.sampleBinding;
+            const auto& sub     = note.m_subNotes[index];
+            HitRole     role    = index == 0U ? HitRole::Head
+                                              : (index + 1U == note.m_subNotes.size()
+                                                     ? HitRole::Tail
+                                                     : HitRole::Internal);
+            const int   span    = sub.type == ::MMM::NoteType::FLICK
+                                      ? std::abs(sub.dtrack) + 1
+                                      : 1;
+            auto        binding = sub.sampleBinding;
             if ( !binding && role == HitRole::Head ) {
                 binding = note.m_sampleBinding;
             }
@@ -462,14 +464,8 @@ int calculateBeatIndex(double                                       time,
             continue;
         }
 
-        double bpm = currentBpm->m_value;
-        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
-            bpm = fallbackBpm;
-        }
-        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
-            bpm = 120.0;
-        }
-        bpm = std::min(bpm, 10000.0);
+        const double bpm =
+            ::MMM::normalizeBpmValue(currentBpm->m_value, fallbackBpm);
 
         const double nextBpmTime =
             i + 1 < bpmEvents.size() && bpmEvents[i + 1]
@@ -750,7 +746,7 @@ SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
         const double relativeTime = rawTime - timingTime;
         const double stepCount =
             settings.snapFloor ? std::floor(relativeTime / stepDuration + 1e-6)
-                               : std::round(relativeTime / stepDuration);
+                                 : std::round(relativeTime / stepDuration);
         double candidate = timingTime + stepCount * stepDuration;
         if ( candidate > nextTimingTime ) candidate = nextTimingTime;
         if ( !std::isfinite(candidate) ) return;
@@ -863,7 +859,7 @@ SnapResult getSnapResult(
         if ( !candidate.isSnapped ) continue;
 
         double snapAbsY = cache->getAbsY(candidate.snappedTime);
-        float snapY = judgmentLineY -
+        float  snapY    = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
         if ( !std::isfinite(snapY) || !std::isfinite(mouseY) ) continue;
 
@@ -878,7 +874,7 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it = std::lower_bound(ctx.hitEvents.begin(),
+    auto it                         = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

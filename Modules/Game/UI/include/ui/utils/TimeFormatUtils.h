@@ -3,6 +3,7 @@
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "mmm/timing/BpmNormalization.h"
 #include "ui/utils/CanvasTimeFormatContext.h"
 
 #include <algorithm>
@@ -18,13 +19,6 @@ namespace MMM::UI::Utils
 {
 namespace TimeFormatDetail
 {
-
-/// @brief 将无效 BPM 归一为可用于显示的 BPM。
-inline double sanitizeBpm(double bpm)
-{
-    if ( bpm <= 0.0 ) return 120.0;
-    return std::min(bpm, 10000.0);
-}
 
 /// @brief 格式化时:分:秒.毫秒。
 inline std::string formatClock(double timeSeconds)
@@ -61,7 +55,8 @@ inline std::vector<CanvasTimeFormatBpmPoint> collectBpmPoints(
 
     for ( const auto& segment : snapshot->scrollSegments ) {
         if ( segment.bpmEntity == entt::null ) continue;
-        points.push_back({ segment.time, sanitizeBpm(segment.bpmValue) });
+        points.push_back(
+            { segment.time, ::MMM::normalizeBpmValue(segment.bpmValue) });
     }
 
     std::sort(

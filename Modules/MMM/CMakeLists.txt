@@ -12,6 +12,11 @@ set(TEST_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 set(TEST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/test_output")
 file(MAKE_DIRECTORY "${TEST_OUTPUT_DIR}")
 
+# BPM 规范化测试覆盖有限越界值、无穷值和 NaN 回退语义。
+mmm_add_test_executable(MMM BpmNormalizationTest tests/BpmNormalizationTest.cpp)
+target_link_libraries(BpmNormalizationTest PRIVATE MMM Log)
+add_test(NAME Test_BPM_Normalization COMMAND BpmNormalizationTest)
+
 # 1. IMD Test
 mmm_add_test_executable(MMM IMDConsistencyTest tests/IMDConsistencyTest.cpp)
 target_link_libraries(IMDConsistencyTest PRIVATE MMM Log)

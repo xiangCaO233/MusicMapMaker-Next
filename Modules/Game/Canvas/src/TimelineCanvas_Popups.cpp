@@ -19,6 +19,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/BpmNormalization.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -145,19 +146,13 @@ using TimingTableBeatTimeline = std::vector<TimingTableBeatPoint>;
 /// @brief 分拍位文本输入缓存。
 using TimingTableFractionInputBuffer = std::array<char, 32>;
 
-/// @brief 规整表格拍位换算使用的 BPM。
+/// @brief 按原值方向规整表格拍位换算使用的 BPM。
 /// @param bpm 待规整 BPM。
-/// @param fallbackBpm BPM 无效时使用的回退值。
-/// @return 可用于除法换算的 BPM。
+/// @param fallbackBpm 原值为 NaN 时使用的回退值。
+/// @return 位于安全计算范围内且可用于除法换算的 BPM。
 double sanitizeTimingTableBpm(double bpm, double fallbackBpm)
 {
-    if ( std::isfinite(bpm) && bpm > 0.0 ) {
-        return std::min(bpm, 10000.0);
-    }
-    if ( std::isfinite(fallbackBpm) && fallbackBpm > 0.0 ) {
-        return std::min(fallbackBpm, 10000.0);
-    }
-    return 120.0;
+    return ::MMM::normalizeBpmValue(bpm, fallbackBpm);
 }
 
 /// @brief 取得表格拍位换算使用的快照回退 BPM。
@@ -948,12 +943,11 @@ double getDefaultCreateValue(::MMM::TimingEffect effect)
 /// @brief 获取用于“保持画布速度”计算的基准 BPM。
 double getKeepSpeedReferenceBpm()
 {
-    double refBpm = 120.0;
+    double refBpm = ::MMM::DEFAULT_NORMALIZED_BPM;
     if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
         if ( auto beatmap = session->getContext().currentBeatmap ) {
-            if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                refBpm = beatmap->m_baseMapMetadata.preference_bpm;
-            }
+            refBpm = ::MMM::normalizeBpmValue(
+                beatmap->m_baseMapMetadata.preference_bpm);
         }
     }
     return refBpm;
@@ -963,7 +957,7 @@ double getKeepSpeedReferenceBpm()
 double getKeepSpeedScrollValue(double bpm)
 {
     double refBpm      = getKeepSpeedReferenceBpm();
-    double safeBpm     = bpm > 1e-6 ? bpm : refBpm;
+    double safeBpm     = ::MMM::normalizeBpmValue(bpm, refBpm);
     double scrollSpeed = refBpm / safeBpm;
     return scrollSpeed > 1e-6 ? scrollSpeed : 1.0;
 }

@@ -19,6 +19,7 @@
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/BpmNormalization.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <array>
@@ -134,20 +135,19 @@ using ClipboardBeatTimeline = std::vector<ClipboardBeatTimelinePoint>;
 double getClipboardFallbackBpm(const SessionContext& ctx)
 {
     if ( ctx.currentBeatmap ) {
-        double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-        if ( std::isfinite(bpm) && bpm > 0.0 ) return bpm;
+        return ::MMM::normalizeBpmValue(
+            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
     }
-    return 120.0;
+    return ::MMM::DEFAULT_NORMALIZED_BPM;
 }
 
-/// @brief 规整 BPM 值，保证分拍换算不会除以零或使用非数值。
+/// @brief 按原值方向规整 BPM，保证分拍换算使用安全数值。
+/// @param bpm 待规整 BPM。
+/// @param fallbackBpm 原值为 NaN 时使用的回退 BPM。
+/// @return 位于安全计算范围内的 BPM。
 double sanitizeClipboardBpm(double bpm, double fallbackBpm)
 {
-    if ( std::isfinite(bpm) && bpm > 0.0 ) return bpm;
-    if ( std::isfinite(fallbackBpm) && fallbackBpm > 0.0 ) {
-        return fallbackBpm;
-    }
-    return 120.0;
+    return ::MMM::normalizeBpmValue(bpm, fallbackBpm);
 }
 
 /// @brief 从当前 BPM 缓存构建可双向换算的连续 beat 时间线。
@@ -766,9 +766,9 @@ std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
         timeline.m_timestamp = timing.m_timestamp / 1000.0;
         timeline.m_effect    = timing.m_timingEffect;
         timeline.m_value     = timing.m_timingEffectParameter;
-        if ( timeline.m_effect == ::MMM::TimingEffect::BPM &&
-             !(timeline.m_value > 0.0) ) {
-            timeline.m_value = timing.m_bpm;
+        if ( timeline.m_effect == ::MMM::TimingEffect::BPM ) {
+            timeline.m_value =
+                ::MMM::normalizeBpmValue(timeline.m_value, timing.m_bpm);
         }
         timeline.m_metadata = timing.m_metadata;
         timelines.push_back(std::move(timeline));
@@ -1884,7 +1884,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Mirror Selected");
+                                                        "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -2061,7 +2061,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2287,7 +2287,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -2823,10 +2823,6 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         return;
     }
 
-    const auto normalizeBpm = [](double bpm) {
-        return bpm > 0.0 && std::isfinite(bpm) ? bpm : 120.0;
-    };
-
     std::vector<NoteComponent> beforeNotes;
     std::vector<NoteComponent> afterNotes;
     if ( cmd.replaceObjects ) {
@@ -2899,10 +2895,10 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         }
     }
 
-    const double beforePreferenceBpm =
-        normalizeBpm(m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
-    const double afterPreferenceBpm =
-        normalizeBpm(cmd.sourceBeatmap->m_baseMapMetadata.preference_bpm);
+    const double beforePreferenceBpm = ::MMM::normalizeBpmValue(
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+    const double afterPreferenceBpm = ::MMM::normalizeBpmValue(
+        cmd.sourceBeatmap->m_baseMapMetadata.preference_bpm);
 
     auto action = std::make_unique<ReplaceBeatmapDataAction>(
         cmd.replaceObjects,
@@ -3015,15 +3011,11 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
             nextBpmTime = std::numeric_limits<double>::infinity();
         }
 
-        double bVal = bpmVal;
-        if ( bVal <= 0.0 ) {
-            if ( m_ctx.currentBeatmap &&
-                 m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm >
-                     0.0 ) {
-                bVal = m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-            }
-        }
-        if ( bVal <= 0.0 ) bVal = 120.0;
+        const double fallbackBpm =
+            m_ctx.currentBeatmap
+                ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                : ::MMM::DEFAULT_NORMALIZED_BPM;
+        const double bVal = ::MMM::normalizeBpmValue(bpmVal, fallbackBpm);
 
         double beatDuration = 60.0 / bVal;
 
@@ -3209,7 +3201,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Align Selected");
+                                                        "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

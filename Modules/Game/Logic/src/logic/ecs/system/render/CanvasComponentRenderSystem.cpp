@@ -6,6 +6,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -171,19 +172,13 @@ void renderJudgmentLineTime(Batcher& batcher, double currentTime,
     }
 }
 
-/// @brief 规整节拍网格文字使用的 BPM。
+/// @brief 按原值方向规整节拍网格文字使用的 BPM。
 /// @param bpm 原始 BPM。
-/// @param fallbackBpm 无效值的快照回退 BPM。
+/// @param fallbackBpm 原值为 NaN 时使用的快照回退 BPM。
 /// @return 处于安全范围内的 BPM。
 double normalizedGridTextBpm(double bpm, double fallbackBpm)
 {
-    if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
-        bpm = fallbackBpm;
-    }
-    if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
-        bpm = 120.0;
-    }
-    return std::min(bpm, 10000.0);
+    return ::MMM::normalizeBpmValue(bpm, fallbackBpm);
 }
 
 /// @brief 在每个可见节拍网格区间内绘制一个重复文字实例。
@@ -246,8 +241,8 @@ void renderBeatGridTexts(Batcher&                                batcher,
         const auto* bpmEvent = context.bpmEvents[index];
         if ( !bpmEvent ) continue;
 
-        const double bpmTime = bpmEvent->m_timestamp;
-        const double bpm = normalizedGridTextBpm(bpmEvent->m_value,
+        const double bpmTime      = bpmEvent->m_timestamp;
+        const double bpm          = normalizedGridTextBpm(bpmEvent->m_value,
                                                  batcher.snapshot->fallbackBpm);
         const double gridDuration = 60.0 / bpm / static_cast<double>(divisor);
         const double nextBpmTime =
@@ -288,10 +283,10 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                      static_cast<float>(cache->getDisplayDelta(
                                          gridStart, currentAbsY, gridStart)) *
                                          context.renderScaleY;
-                const float endY   = context.judgmentLineY -
-                                     static_cast<float>(cache->getDisplayDelta(
-                                         gridEnd, currentAbsY, gridEnd)) *
-                                         context.renderScaleY;
+                const float endY = context.judgmentLineY -
+                                   static_cast<float>(cache->getDisplayDelta(
+                                       gridEnd, currentAbsY, gridEnd)) *
+                                       context.renderScaleY;
                 const CanvasComponentBounds layoutRegion{
                     0.0f,
                     std::min(startY, endY),
@@ -489,10 +484,10 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
             sanitizeCanvasComponentPlacement(placement).fontSizeRatio *
             context.viewportHeight;
         const auto            text = selectTrackKpsText(*batcher.snapshot,
-                                                        trackIndex,
-                                                        trackKps,
-                                                        fontPixelHeight,
-                                                        trackPixelWidth);
+                                             trackIndex,
+                                             trackKps,
+                                             fontPixelHeight,
+                                             trackPixelWidth);
         CanvasComponentBounds bounds;
         if ( renderAsciiText(batcher,
                              text.data(),

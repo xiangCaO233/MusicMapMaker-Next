@@ -5,6 +5,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/BpmNormalization.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,18 +15,6 @@
 
 namespace MMM::Canvas
 {
-namespace
-{
-/// @brief 将无效 BPM 归一为独立时间格式上下文可用的数值。
-/// @param bpm 原始 BPM。
-/// @return 有效 BPM，异常值回退到 120。
-double sanitizeBpm(double bpm)
-{
-    if ( !std::isfinite(bpm) || bpm <= 0.0 ) return 120.0;
-    return std::min(bpm, 10000.0);
-}
-}  // namespace
-
 AnnotationTableDataRefreshResult AnnotationTableData::refresh()
 {
     auto& engine = Logic::EditorEngine::instance();
@@ -89,7 +78,7 @@ AnnotationTableDataRefreshResult AnnotationTableData::refresh()
         for ( const auto& segment : segments ) {
             if ( segment.bpmEntity == entt::null ) continue;
             refreshedContext.bpmPoints.push_back(
-                { segment.time, sanitizeBpm(segment.bpmValue) });
+                { segment.time, ::MMM::normalizeBpmValue(segment.bpmValue) });
         }
         std::sort(refreshedContext.bpmPoints.begin(),
                   refreshedContext.bpmPoints.end(),
