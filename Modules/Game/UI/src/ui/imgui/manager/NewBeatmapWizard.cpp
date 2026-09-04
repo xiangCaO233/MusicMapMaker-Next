@@ -9,6 +9,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/SessionUtils.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/BpmNormalization.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -406,13 +407,12 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
             continue;
         }
 
-        auto normalized           = timing;
-        normalized.m_timestamp    = timing.m_timestamp;
-        normalized.m_timingEffect = ::MMM::TimingEffect::BPM;
-        normalized.m_timingEffectParameter =
-            std::clamp<double>(bpm, 1.0, 999.0);
-        normalized.m_bpm         = normalized.m_timingEffectParameter;
-        normalized.m_beat_length = 60000.0 / normalized.m_bpm;
+        auto normalized                    = timing;
+        normalized.m_timestamp             = timing.m_timestamp;
+        normalized.m_timingEffect          = ::MMM::TimingEffect::BPM;
+        normalized.m_timingEffectParameter = ::MMM::normalizeBpmValue(bpm);
+        normalized.m_bpm                   = normalized.m_timingEffectParameter;
+        normalized.m_beat_length           = 60000.0 / normalized.m_bpm;
         bpmTimings.push_back(normalized);
     }
 
@@ -790,20 +790,20 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
     float bpm = (float)m_bpm;
-    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.settings.beatmap.bpm").data(),
-                                      &bpm,
-                                      0.1f,
-                                      0.0f,
-                                      1000.0f,
-                                      "%.2f") ) {
-        m_bpm = std::clamp<double>(bpm, 1.0, 999.0);
+    if ( ::MMM::UI::FeedbackDragFloat(
+             TR("ui.settings.beatmap.bpm").data(),
+             &bpm,
+             0.1f,
+             static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
+             static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
+             "%.2f") ) {
+        m_bpm = ::MMM::normalizeBpmValue(bpm);
         if ( m_measuredTimings.size() == 1 ) {
-            auto& timing          = m_measuredTimings.front();
-            timing.m_timingEffect = ::MMM::TimingEffect::BPM;
-            timing.m_timingEffectParameter =
-                std::clamp<double>(m_bpm, 1.0, 999.0);
-            timing.m_bpm         = timing.m_timingEffectParameter;
-            timing.m_beat_length = 60000.0 / timing.m_bpm;
+            auto& timing                   = m_measuredTimings.front();
+            timing.m_timingEffect          = ::MMM::TimingEffect::BPM;
+            timing.m_timingEffectParameter = ::MMM::normalizeBpmValue(m_bpm);
+            timing.m_bpm                   = timing.m_timingEffectParameter;
+            timing.m_beat_length           = 60000.0 / timing.m_bpm;
         } else if ( !m_measuredTimings.empty() ) {
             m_measuredTimings.clear();
         }

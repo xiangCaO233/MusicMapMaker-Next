@@ -14,6 +14,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/BpmNormalization.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -777,7 +778,7 @@ void BpmMeasurementToolView::consumePendingAnalysis()
     if ( result->autoTimingRequested ) {
         if ( result->autoTimingResult ) {
             const auto& autoTiming = *result->autoTimingResult;
-            m_bpm                  = std::clamp(autoTiming.bpm, 1.0, 999.0);
+            m_bpm                  = ::MMM::normalizeBpmValue(autoTiming.bpm);
             m_beatLengthSeconds    = 60.0 / m_bpm;
             m_firstBeatTime = clampFirstBeatTime(autoTiming.offsetMs / 1000.0,
                                                  m_beatLengthSeconds,
@@ -820,7 +821,7 @@ void BpmMeasurementToolView::ensureTimingSegments()
     }
 }
 
-/// @brief 归一化 BPM 段落列表，保持按时间排序且数值有效。
+/// @brief 归一化 BPM 段落列表，保持按时间排序且 BPM 位于 0.1–10000.0。
 void BpmMeasurementToolView::normalizeTimingSegments()
 {
     const double canvasDuration = playbackCanvasDuration();
@@ -834,7 +835,7 @@ void BpmMeasurementToolView::normalizeTimingSegments()
     }
 
     for ( auto& segment : m_timingSegments ) {
-        segment.bpm = std::clamp(segment.bpm, 1.0, 999.0);
+        segment.bpm = ::MMM::normalizeBpmValue(segment.bpm);
         segment.timestampSeconds =
             std::clamp(segment.timestampSeconds,
                        firstBeatMinSeconds(60.0 / segment.bpm),
@@ -868,8 +869,8 @@ void BpmMeasurementToolView::syncPrimaryTimingFieldsFromSegments()
     if ( m_timingSegments.empty() ) {
         return;
     }
-    m_firstBeatTime     = m_timingSegments.front().timestampSeconds;
-    m_bpm               = std::clamp(m_timingSegments.front().bpm, 1.0, 999.0);
+    m_firstBeatTime = m_timingSegments.front().timestampSeconds;
+    m_bpm           = ::MMM::normalizeBpmValue(m_timingSegments.front().bpm);
     m_beatLengthSeconds = 60.0 / m_bpm;
 }
 
@@ -907,7 +908,7 @@ std::size_t BpmMeasurementToolView::findSegmentIndexForTime(
 
 /// @brief 获取段落拍长。
 /// @param segmentIndex 段落索引。
-/// @return 单拍时长，单位为秒。
+/// @return 按 0.1–10000.0 BPM 计算的单拍时长，单位为秒。
 double BpmMeasurementToolView::segmentBeatLengthSeconds(
     std::size_t segmentIndex) const
 {
@@ -916,16 +917,16 @@ double BpmMeasurementToolView::segmentBeatLengthSeconds(
     }
     const auto& segment =
         m_timingSegments[std::min(segmentIndex, m_timingSegments.size() - 1)];
-    return 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+    return 60.0 / ::MMM::normalizeBpmValue(segment.bpm);
 }
 
-/// @brief 将当前段落列表转换为可写入谱面的 BPM Timing 列表。
+/// @brief 将当前段落列表按 0.1–10000.0 BPM 转换为可写入谱面的 Timing。
 std::vector<::MMM::Timing> BpmMeasurementToolView::makeMeasuredTimings() const
 {
     std::vector<::MMM::Timing> timings;
     timings.reserve(m_timingSegments.size());
     for ( const auto& segment : m_timingSegments ) {
-        const double  bpm = std::clamp(segment.bpm, 1.0, 999.0);
+        const double  bpm = ::MMM::normalizeBpmValue(segment.bpm);
         ::MMM::Timing timing;
         timing.m_timestamp             = segment.timestampSeconds * 1000.0;
         timing.m_timingEffect          = ::MMM::TimingEffect::BPM;
@@ -1086,30 +1087,32 @@ void BpmMeasurementToolView::renderControlPanel()
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.params").data());
 
     float bpm = static_cast<float>(m_bpm);
-    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.tools.bpm_measure.bpm").data(),
-                                      &bpm,
-                                      0.01f,
-                                      1.0f,
-                                      999.0f,
-                                      "%.3f") ) {
-        m_bpm               = std::clamp<double>(bpm, 1.0, 999.0);
+    if ( ::MMM::UI::FeedbackDragFloat(
+             TR("ui.tools.bpm_measure.bpm").data(),
+             &bpm,
+             0.01f,
+             static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
+             static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
+             "%.3f") ) {
+        m_bpm               = ::MMM::normalizeBpmValue(bpm);
         m_beatLengthSeconds = 60.0 / m_bpm;
         m_firstBeatTime     = clampFirstBeatTime(
             m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
         syncPrimaryTimingFieldsToSegments();
     }
 
-    constexpr double minBeatLength = 60.0 / 999.0;
+    constexpr double minBeatLength = 60.0 / ::MMM::MAX_NORMALIZED_BPM;
+    constexpr double maxBeatLength = 60.0 / ::MMM::MIN_NORMALIZED_BPM;
     float            beatLength    = static_cast<float>(m_beatLengthSeconds);
     if ( ::MMM::UI::FeedbackDragFloat(
              TR("ui.tools.bpm_measure.beat_length").data(),
              &beatLength,
              0.0001f,
              static_cast<float>(minBeatLength),
-             60.0f,
+             static_cast<float>(maxBeatLength),
              "%.6f") ) {
         m_beatLengthSeconds =
-            std::clamp<double>(beatLength, minBeatLength, 60.0);
+            std::clamp<double>(beatLength, minBeatLength, maxBeatLength);
         m_bpm           = 60.0 / m_beatLengthSeconds;
         m_firstBeatTime = clampFirstBeatTime(
             m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
@@ -1235,7 +1238,7 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                          &time,
                          0.001f,
                          static_cast<float>(firstBeatMinSeconds(
-                             60.0 / std::max(1.0, segment.bpm))),
+                             60.0 / ::MMM::normalizeBpmValue(segment.bpm))),
                          static_cast<float>(
                              std::max(0.001, playbackCanvasDuration())),
                          "%.3fs") ) {
@@ -1250,7 +1253,12 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                 ImGui::SetNextItemWidth(76.0f);
                 float bpm = static_cast<float>(segment.bpm);
                 if ( ::MMM::UI::FeedbackDragFloat(
-                         "##SegmentBpm", &bpm, 0.01f, 1.0f, 999.0f, "%.3f") ) {
+                         "##SegmentBpm",
+                         &bpm,
+                         0.01f,
+                         static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
+                         static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
+                         "%.3f") ) {
                     segment.bpm = bpm;
                     changed     = true;
                 }
@@ -2184,7 +2192,7 @@ void BpmMeasurementToolView::drawBeatMarkers(ImDrawList&   drawList,
     for ( std::size_t segmentIndex = 0; segmentIndex < segments.size();
           ++segmentIndex ) {
         const auto&  segment    = segments[segmentIndex];
-        const double beatLength = 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+        const double beatLength = 60.0 / ::MMM::normalizeBpmValue(segment.bpm);
         if ( beatLength <= 1e-6 ) {
             continue;
         }
@@ -2327,8 +2335,8 @@ void BpmMeasurementToolView::drawBeatSubdivisionLines(ImDrawList&   drawList,
     drawList.PushClipRect(rectMin, rectMax, true);
     for ( std::size_t segmentIndex = 0; segmentIndex < segments.size();
           ++segmentIndex ) {
-        const auto&  segment      = segments[segmentIndex];
-        const double beatLength   = 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+        const auto&  segment    = segments[segmentIndex];
+        const double beatLength = 60.0 / ::MMM::normalizeBpmValue(segment.bpm);
         const double stepDuration = beatLength / beatDivisor;
         if ( stepDuration <= 1e-6 ) {
             continue;
@@ -2740,13 +2748,13 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
     }
 
     const double minTargetTime =
-        segment.timestampSeconds +
-        static_cast<double>(m_draggedBeatIndex) * (60.0 / 999.0);
+        segment.timestampSeconds + static_cast<double>(m_draggedBeatIndex) *
+                                       (60.0 / ::MMM::MAX_NORMALIZED_BPM);
     const double clampedTargetTime = std::max(minTargetTime, targetBeatTime);
     const double beatLength = (clampedTargetTime - segment.timestampSeconds) /
                               static_cast<double>(m_draggedBeatIndex);
     if ( beatLength > 1e-6 && std::isfinite(beatLength) ) {
-        segment.bpm = std::clamp(60.0 / beatLength, 1.0, 999.0);
+        segment.bpm = ::MMM::normalizeBpmValue(60.0 / beatLength);
         syncPrimaryTimingFieldsFromSegments();
         resetMetronomeScheduler(clampedTargetTime);
     }
