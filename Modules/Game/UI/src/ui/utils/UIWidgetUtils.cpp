@@ -592,6 +592,12 @@ constexpr const char* SLIDER_CHANGE_SFX_KEY = "ui.slider";
 /// @brief 弹窗打开时播放的皮肤音频 ID。
 constexpr const char* POPUP_NOTICE_SFX_KEY = "ui.notice";
 
+/// @brief Dock 标签关闭按钮的固定危险操作悬浮色。
+constexpr ImU32 DOCK_TAB_CLOSE_HOVER_COLOR = IM_COL32(222, 48, 62, 255);
+
+/// @brief Dock 标签关闭按钮的固定危险操作按下色。
+constexpr ImU32 DOCK_TAB_CLOSE_ACTIVE_COLOR = IM_COL32(178, 34, 47, 255);
+
 /// @brief 悬浮音效的单次触发音量倍率。
 constexpr float BUTTON_HOVER_SFX_VOLUME = 0.22f;
 
@@ -1180,6 +1186,103 @@ ImGuiID getDockTabCloseButtonId(ImGuiWindow* window)
     return ImHashStr("#CLOSE", 0, window->ID);
 }
 
+/// @brief 查找当前窗口在 Dock TabBar 中的标签项。
+/// @param window 当前 ImGui 窗口。
+/// @return 匹配的标签项，不存在时返回 nullptr。
+/// @warning UI 热路径：仅在关闭按钮悬浮时遍历当前 Dock
+/// 节点的少量标签。
+ImGuiTabItem* findDockTabItem(ImGuiWindow* window)
+{
+    if ( !window || !window->DockNode || !window->DockNode->TabBar ) {
+        return nullptr;
+    }
+
+    for ( auto& tab : window->DockNode->TabBar->Tabs ) {
+        if ( tab.Window == window || tab.ID == window->TabId ) {
+            return &tab;
+        }
+    }
+    return nullptr;
+}
+
+/// @brief 为关闭按钮悬浮的 Dock 标签补齐标签与危险操作高亮。
+/// @param window 当前 ImGui 窗口。
+/// @param closeButtonId 当前 Dock 标签关闭按钮 ID。
+/// @warning UI 热路径：每帧只做 ID 比较；悬浮关闭按钮时遍历
+/// 宿主绘制顶点一次，不新增 Draw Call。
+void renderDockTabCloseHover(ImGuiWindow* window, ImGuiID closeButtonId)
+{
+    if ( !window || closeButtonId == 0 || !window->DockNode ||
+         !window->DockNode->TabBar ) {
+        return;
+    }
+
+    ImGuiContext& g       = *GImGui;
+    const bool    hovered = g.HoveredId == closeButtonId;
+    const bool    held    = g.ActiveId == closeButtonId;
+    if ( !hovered && !held ) {
+        return;
+    }
+
+    ImGuiTabBar*  tabBar = window->DockNode->TabBar;
+    ImGuiTabItem* tab    = findDockTabItem(window);
+    ImDrawList* drawList = tabBar->Window ? tabBar->Window->DrawList : nullptr;
+    if ( !tab || !drawList || tab->Width <= 1.0F ) {
+        return;
+    }
+
+    const bool  centralTab = (tab->Flags & (ImGuiTabItemFlags_Leading |
+                                           ImGuiTabItemFlags_Trailing)) == 0;
+    const float tabX =
+        tabBar->BarRect.Min.x +
+        (centralTab ? std::trunc(tab->Offset - tabBar->ScrollingAnim)
+                    : tab->Offset);
+    const float  tabHeight = g.FontSize + tabBar->FramePadding.y * 2.0F;
+    const ImRect tabRect(tabX,
+                         tabBar->BarRect.Min.y,
+                         tabX + tab->Width,
+                         tabBar->BarRect.Min.y + tabHeight);
+    const float  closeX = std::max(
+        tabRect.Min.x, tabRect.Max.x - tabBar->FramePadding.x - g.FontSize);
+    const ImRect closeRect(closeX,
+                           tabRect.Min.y + tabBar->FramePadding.y,
+                           closeX + g.FontSize,
+                           tabRect.Min.y + tabBar->FramePadding.y + g.FontSize);
+
+    const bool selected = tabBar->VisibleTabId == tab->ID;
+    const bool tabBarFocused =
+        (tabBar->Flags & ImGuiTabBarFlags_IsFocused) != 0;
+    const ImGuiCol baseColorIndex =
+        selected ? (tabBarFocused ? ImGuiCol_TabSelected
+                                  : ImGuiCol_TabDimmedSelected)
+                 : (tabBarFocused ? ImGuiCol_Tab : ImGuiCol_TabDimmed);
+    const ImU32 baseColor        = ImGui::GetColorU32(baseColorIndex);
+    const ImU32 tabHoverColor    = ImGui::GetColorU32(ImGuiCol_TabHovered);
+    const ImU32 nativeCloseColor = ImGui::GetColorU32(
+        held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+    const ImU32 dangerColor =
+        held ? DOCK_TAB_CLOSE_ACTIVE_COLOR : DOCK_TAB_CLOSE_HOVER_COLOR;
+    const ImVec2 whiteUv = drawList->_Data->TexUvWhitePixel;
+
+    for ( ImDrawVert& vertex : drawList->VtxBuffer ) {
+        if ( vertex.pos.x < tabRect.Min.x || vertex.pos.x > tabRect.Max.x ||
+             vertex.pos.y < tabRect.Min.y || vertex.pos.y > tabRect.Max.y ||
+             vertex.uv.x != whiteUv.x || vertex.uv.y != whiteUv.y ) {
+            continue;
+        }
+
+        const bool insideClose = vertex.pos.x >= closeRect.Min.x &&
+                                 vertex.pos.x <= closeRect.Max.x &&
+                                 vertex.pos.y >= closeRect.Min.y &&
+                                 vertex.pos.y <= closeRect.Max.y;
+        if ( insideClose && vertex.col == nativeCloseColor ) {
+            vertex.col = dangerColor;
+        } else if ( vertex.col == baseColor ) {
+            vertex.col = tabHoverColor;
+        }
+    }
+}
+
 /// @brief 计算 dock 节点标题栏关闭按钮 ID。
 /// @param node 当前窗口所属 DockNode。
 /// @return dock 节点关闭按钮 ID，无法计算时返回 0。
@@ -1746,11 +1849,12 @@ void FeedbackLastItem(ImGuiID id, bool clicked)
     finishLastItemFeedback(id, clicked);
 }
 
-/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一反馈。
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互与 Dock
+/// 悬浮视觉反馈。
 /// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
 /// @param pOpen 传给 ImGui::Begin 的打开状态指针。
-/// @warning UI 热路径：每帧窗口 Begin 后调用，只读取 ImGui 内部交互状态，
-/// 并触发已预加载 SFX pool。
+/// @warning UI 热路径：每帧窗口 Begin 后调用；普通帧只读取 ImGui
+/// 内部交互状态，Dock 关闭按钮悬浮时只调整宿主已有顶点颜色。
 void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen)
 {
     if ( !pOpen || !wasOpenBeforeBegin ) {
@@ -1787,6 +1891,7 @@ void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen)
             const bool clicked =
                 closeRequested && (dockNode->WantCloseTabId == window->TabId ||
                                    window->DockTabWantClose);
+            renderDockTabCloseHover(window, tabCloseId);
             applyCloseButtonFeedback(
                 tabCloseId, getWindowStorage(window), hovered, clicked);
             clickHandled = clickHandled || clicked;

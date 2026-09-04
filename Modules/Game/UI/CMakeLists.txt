@@ -217,6 +217,14 @@ target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
 add_test(NAME CollaborationSelectableButtonTest
          COMMAND CollaborationSelectableButtonTest)
 
+# Dock 标签关闭按钮测试覆盖标签悬浮色与固定红色危险高亮。
+mmm_add_test_executable(UI DockTabCloseHoverTest
+                        tests/DockTabCloseHoverTest.cpp)
+target_include_directories(DockTabCloseHoverTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(DockTabCloseHoverTest PRIVATE UI 3rd_imgui)
+add_test(NAME DockTabCloseHoverTest COMMAND DockTabCloseHoverTest)
+
 # 保存反馈测试覆盖原生文件选择器或耗时导出后的长帧首次绘制。
 mmm_add_test_executable(UI SaveResultFeedbackTest
                         tests/SaveResultFeedbackTest.cpp)
