@@ -93,7 +93,8 @@ MainMenuEdit::MainMenuEdit()
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.timeline.menu.professional_mode",
         MainMenuItemTextKind::TranslationKey,
-        createTimelineProfessionalModeToggleAction()));
+        createTimelineProfessionalModeToggleAction(),
+        ICON_MMM_SLIDERS));
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_BARS,
         "ui.timeline.menu.open_timing_table",
@@ -110,11 +111,13 @@ MainMenuEdit::MainMenuEdit()
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.bms_editing",
         MainMenuItemTextKind::TranslationKey,
-        createBmsEditingToggleAction()));
+        createBmsEditingToggleAction(),
+        ICON_MMM_KEYBOARD));
     registerItem(std::make_unique<MainMenuToggleItem>(
         "ui.edit.polyline_editing",
         MainMenuItemTextKind::TranslationKey,
-        createPolylineEditingToggleAction()));
+        createPolylineEditingToggleAction(),
+        ICON_MMM_POLYLINE));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_PLAY,

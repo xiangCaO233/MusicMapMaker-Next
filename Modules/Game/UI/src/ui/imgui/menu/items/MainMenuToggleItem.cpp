@@ -1,5 +1,6 @@
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/imgui/menu/items/MainMenuItemUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <utility>
 
@@ -10,12 +11,15 @@ namespace MMM::UI
 /// @param label 菜单项文本或翻译键。
 /// @param textKind 菜单项文本来源。
 /// @param actionHandler 勾选菜单项业务处理器。
+/// @param icon 菜单项图标文本，可为空；须在菜单项生命周期内有效。
 MainMenuToggleItem::MainMenuToggleItem(
     std::string label, MainMenuItemTextKind textKind,
-    std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler)
+    std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler,
+    const char*                                       icon)
     : m_label(std::move(label))
     , m_textKind(textKind)
     , m_actionHandler(std::move(actionHandler))
+    , m_icon(icon)
 {
 }
 
@@ -35,14 +39,16 @@ void MainMenuToggleItem::update(MainMenuContext& context)
 void MainMenuToggleItem::render(MainMenuContext& context)
 {
     bool* value = m_actionHandler ? m_actionHandler->value(context) : nullptr;
-    if ( !value ) {
-        ::MMM::UI::FeedbackMenuItem(resolveLabel(), nullptr, false, false);
-        return;
-    }
-
-    const bool enabled = m_actionHandler->isEnabled(context);
-    if ( ::MMM::UI::FeedbackMenuItem(
-             resolveLabel(), nullptr, value, enabled) ) {
+    const bool enabled = value && m_actionHandler->isEnabled(context);
+    const bool clicked =
+        m_icon ? renderMainMenuIconItem(
+                     m_icon, resolveLabel(), nullptr, enabled, value && *value)
+               : ::MMM::UI::FeedbackMenuItem(
+                     resolveLabel(), nullptr, value, enabled);
+    if ( clicked && value ) {
+        if ( m_icon ) {
+            *value = !*value;
+        }
         m_actionHandler->execute(context, MainMenuItemActivation{});
     }
 }

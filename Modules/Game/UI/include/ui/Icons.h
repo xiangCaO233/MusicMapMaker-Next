@@ -65,6 +65,10 @@ constexpr const char* ICON_MMM_MIRROR = "\xef\x81\xbe";  ///< \uf07e arrows-h
 constexpr const char* ICON_MMM_SELECT_ALL =
     "\xef\x89\x87";  ///< \uf247 object-group
 constexpr const char* ICON_MMM_COMMENT = "\xef\x81\xb5";  ///< \uf075 comment
+/// @brief 专业模式调节滑杆图标（Nerd Font fa-sliders，U+F1DE）。
+constexpr const char* ICON_MMM_SLIDERS = "\xef\x87\x9e";
+/// @brief 折线编辑图标（Nerd Font fa-line_chart，U+F201）。
+constexpr const char* ICON_MMM_POLYLINE = "\xef\x88\x81";
 
 constexpr const char* ICON_MMM_ARROWS_UP_DOWN =
     "\xef\x81\xbd";  ///< \uf07d arrows-up-down

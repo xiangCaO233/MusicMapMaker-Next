@@ -18,9 +18,11 @@ public:
     /// @param label 菜单项文本或翻译键。
     /// @param textKind 菜单项文本来源。
     /// @param actionHandler 勾选菜单项业务处理器。
+    /// @param icon 菜单项图标文本，可为空；须在菜单项生命周期内有效。
     MainMenuToggleItem(
         std::string label, MainMenuItemTextKind textKind,
-        std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler);
+        std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler,
+        const char*                                       icon = nullptr);
 
     /// @brief 更新勾选菜单项业务处理器跨帧状态。
     /// @param context 单帧主菜单上下文。
@@ -56,6 +58,9 @@ private:
 
     /// @brief 勾选菜单项业务处理器。
     std::unique_ptr<IMainMenuToggleItemActionHandler> m_actionHandler;
+
+    /// @brief 可选图标文本，非拥有指针，指向静态字体图标常量。
+    const char* m_icon = nullptr;
 };
 
 }  // namespace MMM::UI

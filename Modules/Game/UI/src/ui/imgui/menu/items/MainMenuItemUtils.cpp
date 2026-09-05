@@ -10,10 +10,11 @@ namespace MMM::UI
 /// @param label 菜单显示文本。
 /// @param shortcut 快捷键提示文本。
 /// @param enabled 是否允许点击。
+/// @param selected 当前勾选状态。
 /// @return 菜单项被点击时返回 true。
 /// @warning UI 热路径：仅封装样式栈和 FeedbackMenuItemEx。
 bool renderMainMenuIconItem(const char* icon, const char* label,
-                            const char* shortcut, bool enabled)
+                            const char* shortcut, bool enabled, bool selected)
 {
     ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
     ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
@@ -22,8 +23,8 @@ bool renderMainMenuIconItem(const char* icon, const char* label,
     ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap, 0));
 
     const char* iconPtr = icon ? icon : "  ";
-    const bool  clicked =
-        ::MMM::UI::FeedbackMenuItemEx(label, iconPtr, shortcut, false, enabled);
+    const bool  clicked = ::MMM::UI::FeedbackMenuItemEx(
+        label, iconPtr, shortcut, selected, enabled);
 
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
