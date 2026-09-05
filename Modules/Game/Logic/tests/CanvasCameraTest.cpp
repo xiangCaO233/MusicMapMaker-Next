@@ -1,5 +1,6 @@
 #include "logic/session/CanvasCamera.h"
 #include "common/LogicCommands.h"
+#include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -85,7 +87,7 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
     context.lastConfig.visual.trackLayout.left            = 0.1F;
     context.lastConfig.visual.trackLayout.right           = 0.5F;
     context.lastConfig.visual.judgeline_pos               = 0.5F;
-    context.lastConfig.settings.enableDraftLanes          = true;
+    context.lastConfig.settings.professionalMode          = true;
     context.cameras.emplace("Basic2DCanvas",
                             MMM::Logic::CameraInfo{
                                 "Basic2DCanvas",
@@ -479,8 +481,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                  sample.m_audioResourceId == "main" &&
-                                  near(sample.m_volume, 0.7));
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -980,9 +982,9 @@ bool testDynamicDraftAppendLaneProjection()
     return true;
 }
 
-/// @brief 验证未发布草稿轨时不会绘制可访问投影、创建草稿或全选草稿物件。
+/// @brief 验证关闭专业模式时不会暴露草稿投影、创建草稿或全选草稿物件。
 /// @return 默认投影隐藏草稿区且编辑入口不会命中草稿数据时返回 true。
-bool testDraftLaneReleaseGateHidesDraftArea()
+bool testProfessionalModeHidesDraftArea()
 {
     const auto projection = MMM::Logic::calculateCanvasLaneProjection(
         1000.0F, 4, 1, 0.1F, 0.5F, 0.0F);
@@ -992,13 +994,15 @@ bool testDraftLaneReleaseGateHidesDraftArea()
          projection.laneAt(50.0F).has_value() ||
          projection.bounds({ MMM::Logic::CanvasLaneKind::Draft, 0U })
              .has_value() ) {
-        XERROR("Draft lane release gate still exposed a canvas projection");
+        XERROR(
+            "Disabled professional mode still exposed a draft canvas "
+            "projection");
         return false;
     }
 
     MMM::Logic::SessionContext context;
     configureObjectEditingCanvas(context);
-    context.lastConfig.settings.enableDraftLanes = false;
+    context.lastConfig.settings.professionalMode = false;
     const auto draftEntity = context.noteRegistry.create();
     context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
         draftEntity,
@@ -1032,7 +1036,125 @@ bool testDraftLaneReleaseGateHidesDraftArea()
         XERROR("Hidden draft lane accepted a brush gesture");
         return false;
     }
+    interaction.handleCommand(MMM::Logic::CmdSetHoveredEntity{
+        draftEntity,
+        static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+        -1,
+        MMM::Logic::ChartObjectKind::DraftNote,
+    });
+    if ( context.hoveredEntity != entt::null ) {
+        XERROR("Hidden draft object accepted a hover command");
+        return false;
+    }
+    context.lastConfig.settings.professionalMode = true;
+    interaction.handleCommand(MMM::Logic::CmdSelectAll{
+        .scope = MMM::Logic::SelectAllScope::AllTrackAreas,
+    });
+    if ( !context.selectedNoteEntities.contains(draftEntity) ) {
+        XERROR("Enabling professional mode did not restore draft selection");
+        return false;
+    }
     return true;
+}
+
+/// @brief 验证共用专业模式同步时间线与多个主画布，并保留草稿数据和独立开关。
+/// @return 往返切换正确更新草稿拾取、时间线分轨及隐藏物件交互状态时返回 true。
+bool testProfessionalModeUpdatesAllCanvases()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    context.cameras.at("Basic2DCanvas").horizontalOffsetX = 400.0F;
+    context.cameras.emplace(
+        "Basic2DCanvasSecondary",
+        MMM::Logic::CameraInfo{
+            "Basic2DCanvasSecondary", 1000.0F, 600.0F, 400.0F });
+    context.cameras.emplace(
+        "Timeline", MMM::Logic::CameraInfo{ "Timeline", 400.0F, 600.0F });
+    const auto player = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        player,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = 0,
+        });
+    const auto draft = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        draft,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::NOTE,
+            .m_timestamp  = 1.0,
+            .m_trackIndex = -1,
+            .m_isDraft    = true,
+        });
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(player);
+    context.noteRegistry.emplace<MMM::Logic::TransformComponent>(draft);
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::PlayerNote, player, true);
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::DraftNote, draft, true);
+    context.hoveredEntity     = draft;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::DraftNote;
+    context.noteRegistry.get<MMM::Logic::InteractionComponent>(draft)
+        .isHovered = true;
+
+    auto config                                = context.lastConfig;
+    config.settings.enableBmsEditing           = false;
+    config.settings.enablePolylineEditing      = true;
+    std::uint32_t professionalTimelineVertices = 0;
+    for ( const bool enabled : { true, false, true } ) {
+        config.settings.professionalMode = enabled;
+        session.pushCommand(MMM::Logic::CmdUpdateEditorConfig{ config });
+        session.update(0.0, config, true);
+        for ( const char* cameraId :
+              { "Basic2DCanvas", "Basic2DCanvasSecondary" } ) {
+            const auto buffer = context.syncBuffers.find(cameraId);
+            if ( buffer == context.syncBuffers.end() || !buffer->second )
+                return false;
+            const auto* snapshot = buffer->second->pullLatestSnapshot();
+            if ( !snapshot ) return false;
+            const bool hasDraftHitbox = std::any_of(
+                snapshot->hitboxes.begin(),
+                snapshot->hitboxes.end(),
+                [draft](const auto& hitbox) { return hitbox.entity == draft; });
+            if ( snapshot->draftLanesEnabled != enabled ||
+                 hasDraftHitbox != enabled || snapshot->bmsEditingEnabled ) {
+                XERROR(
+                    "Professional mode did not update draft visibility and "
+                    "hitboxes for {}",
+                    cameraId);
+                return false;
+            }
+        }
+        const auto timeline = context.syncBuffers.find("Timeline");
+        if ( timeline == context.syncBuffers.end() || !timeline->second )
+            return false;
+        const auto* snapshot = timeline->second->pullLatestSnapshot();
+        if ( !snapshot ) return false;
+        if ( enabled ) {
+            professionalTimelineVertices = snapshot->staticVertexCount;
+        } else if ( snapshot->staticVertexCount >=
+                        professionalTimelineVertices ||
+                    context.selectedNoteEntities.contains(draft) ||
+                    context.hoveredEntity == draft ) {
+            XERROR(
+                "Disabling professional mode retained timeline lanes or hidden "
+                "draft interaction");
+            return false;
+        }
+        if ( !context.noteRegistry.valid(draft) ||
+             !context.selectedNoteEntities.contains(player) ||
+             context.lastConfig.settings.enableBmsEditing ||
+             !context.lastConfig.settings.enablePolylineEditing ) {
+            XERROR(
+                "Professional mode changed draft data, player selection or "
+                "independent editing switches");
+            return false;
+        }
+    }
+    return context.noteRegistry.get<MMM::Logic::NoteComponent>(draft)
+               .m_trackIndex == -1;
 }
 
 /// @brief 收集会话内草稿根物件的稳定 ID。
@@ -1221,7 +1343,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                    .view<const MMM::Logic::NoteComponent>();
+                                       .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -1313,25 +1435,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.013,
-              .duration   = 0.241,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 1.254,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.254,
-              .duration   = 0.246,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
     };
 
@@ -2992,25 +3114,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::NOTE,
-              .timestamp  = 1.0,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 2.0,
-              .duration   = 0.5,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 3.0,
-              .duration   = 0.0,
-              .trackIndex = 1,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
         },
     };
 
@@ -4494,7 +4616,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after          = std::nullopt,
+                .after  = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -4568,11 +4690,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-                        .startTime  = 0.9,
-                        .endTime    = 1.1,
-                        .startTrack = 4.05F,
-                        .endTrack   = 4.95F,
-                        .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.9,
+            .endTime    = 1.1,
+            .startTrack = 4.05F,
+            .endTrack   = 4.95F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -4893,7 +5015,8 @@ int main()
                    testUnifiedLaneProjection() &&
                    testIndependentAuxiliaryLaneProjection() &&
                    testDynamicDraftAppendLaneProjection() &&
-                   testDraftLaneReleaseGateHidesDraftArea() &&
+                   testProfessionalModeHidesDraftArea() &&
+                   testProfessionalModeUpdatesAllCanvases() &&
                    testProjectDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
                    testDraftMirrorUsesDynamicDraftTrackCount() &&

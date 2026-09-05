@@ -44,10 +44,10 @@ bool applyNoteCacheMutationsIncrementally(
 /// 中二分插入，禁止完整 ECS 遍历或整谱重建。
 bool syncCreatedNoteToBeatmap(SessionContext& ctx, const NoteComponent& note);
 
-/// @brief 判断音符是否允许在当前折线编辑模式下响应编辑操作。
+/// @brief 根据共用专业模式与独立折线编辑开关判断音符是否可编辑。
 /// @param note 待判断的音符组件。
 /// @param settings 当前编辑器行为设置。
-/// @return 折线编辑开启时返回 true；关闭时仅主 Note 和 Hold 返回 true。
+/// @return 隐藏的草稿返回 false，其余物件继续遵守折线编辑限制。
 /// @warning 逻辑与渲染热路径：只读取组件类型和设置布尔值。
 bool isNoteEditable(const NoteComponent&          note,
                     const Config::EditorSettings& settings);

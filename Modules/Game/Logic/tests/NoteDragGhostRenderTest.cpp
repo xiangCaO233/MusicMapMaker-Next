@@ -151,7 +151,7 @@ void renderCrossRegionGhost(
         MMM::Config::BeatLineDisplayMode::Hidden;
     config.visual.previewConfig.drawBeatLines   = false;
     config.visual.previewConfig.drawTimingLines = false;
-    config.settings.enableDraftLanes            = true;
+    config.settings.professionalMode            = true;
     config.settings.enableBmsEditing            = includeBgm;
 
     auto& cache =
@@ -709,10 +709,10 @@ bool testCrossRegionBrushPreviewUsesEndpointProjection()
     float      arrowMin      = 0.0F;
     float      arrowMax      = 0.0F;
     const bool transition    = findTextureXRange(polylineSnapshot,
-                                              polylineSnapshot.cmds,
-                                              0.5F,
-                                              transitionMin,
-                                              transitionMax);
+                                                 polylineSnapshot.cmds,
+                                                 0.5F,
+                                                 transitionMin,
+                                                 transitionMax);
     const bool body          = findTextureXRange(
         polylineSnapshot, polylineSnapshot.cmds, 0.4F, bodyMin, bodyMax);
     const bool arrow = findTextureXRange(

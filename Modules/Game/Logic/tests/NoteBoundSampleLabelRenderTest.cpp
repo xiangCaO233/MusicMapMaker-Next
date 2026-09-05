@@ -145,7 +145,7 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
     if ( useDraftLane ) {
         config.visual.trackLayout.draftLanes.left  = -0.21F;
         config.visual.trackLayout.draftLanes.width = 0.06F;
-        config.settings.enableDraftLanes           = true;
+        config.settings.professionalMode           = true;
     }
     config.visual.noteScaleX            = noteScaleX;
     config.visual.noteScaleY            = 1.0F;

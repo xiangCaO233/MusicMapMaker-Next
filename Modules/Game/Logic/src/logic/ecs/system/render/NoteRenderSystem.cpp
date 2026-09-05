@@ -232,8 +232,8 @@ void NoteRenderSystem::generateSnapshot(
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-          singleTrackW = 0;
-    float renderScaleY = 1.0f;
+            singleTrackW = 0;
+    float   renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
@@ -271,7 +271,7 @@ void NoteRenderSystem::generateSnapshot(
                                       tempTY,
                                       tempBY,
                                       tempSTW);
-        if ( isMainCanvas && config.settings.enableDraftLanes ) {
+        if ( isMainCanvas && config.settings.professionalMode ) {
             const auto laneProjection =
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
@@ -405,11 +405,11 @@ void NoteRenderSystem::generateSnapshot(
     if ( cameraId != "Timeline" ) {
         batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         // 先绘制拍线，使其在物件下方
-        const bool beatLinesHidden = config.visual.beatLineDisplayMode ==
-                                     Config::BeatLineDisplayMode::Hidden;
-        bool shouldDrawBeatLines   = !beatLinesHidden;
-        bool shouldDrawTimingLines = false;
-        bool revealBeatLinesNearCursor =
+        const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
+                                           Config::BeatLineDisplayMode::Hidden;
+        bool       shouldDrawBeatLines   = !beatLinesHidden;
+        bool       shouldDrawTimingLines = false;
+        bool       revealBeatLinesNearCursor =
             config.visual.beatLineDisplayMode ==
             Config::BeatLineDisplayMode::NearCursor;
 
@@ -448,7 +448,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes,
+                                              config.settings.professionalMode,
                                               draftTrackCount,
                                               true);
             const float visibleDraftLeft =
@@ -549,7 +549,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes,
+                                              config.settings.professionalMode,
                                               draftTrackCount,
                                               true);
             noteLaneProjectionPtr    = &noteLaneProjection;
@@ -591,7 +591,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes,
+                                              config.settings.professionalMode,
                                               draftTrackCount,
                                               true);
             SampleRenderSystem::renderSamples(sampleRegistry,
@@ -625,7 +625,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.enableDraftLanes,
+                                              config.settings.professionalMode,
                                               draftTrackCount,
                                               true);
             const auto  contentBounds = laneProjection.contentBounds();
@@ -821,6 +821,8 @@ void NoteRenderSystem::renderMarqueeBox(
         left, bottom, w, h, cornerR, borderW, strokeCol);
 }
 
+/// @brief 根据会话配置生成时间线快照，与其他画布共享专业模式状态。
+/// @warning 逻辑渲染热路径：只读取传入的配置快照和已缓存的时间线数据。
 void NoteRenderSystem::generateTimelineSnapshot(
     RenderSnapshot*                              snapshot,
     const std::vector<const TimelineComponent*>& bpmEvents, Batcher& batcher,
@@ -838,9 +840,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     auto&      skin             = Config::SkinManager::instance();
     auto       tickCol          = skin.getColor("timeline.tick");
-    const bool professionalMode = Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .timelineProfessionalMode;
+    const bool professionalMode = config.settings.professionalMode;
 
     double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
 
@@ -967,7 +967,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y             = judgmentLineY -
+                    float y = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
@@ -1076,7 +1076,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects == 0 ) continue;
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float        y           = judgmentLineY -
+        float y = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;
@@ -1297,7 +1297,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
                                           config.settings.enableBmsEditing,
-                                          config.settings.enableDraftLanes,
+                                          config.settings.professionalMode,
                                           draftTrackCount,
                                           true);
         const float visibleDraftLeft =

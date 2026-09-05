@@ -848,9 +848,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
 {
     target.settings.defaultCreator     = source.settings.defaultCreator;
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
-    target.settings.timelineProfessionalMode =
-        source.settings.timelineProfessionalMode;
-    target.settings.showPreviewWindow = source.settings.showPreviewWindow;
+    target.settings.professionalMode   = source.settings.professionalMode;
+    target.settings.showPreviewWindow  = source.settings.showPreviewWindow;
     target.settings.enableToolbarValueWheelAdjustment =
         source.settings.enableToolbarValueWheelAdjustment;
     Config::preserveGlobalToolbarDisplaySettings(target.settings,
@@ -858,7 +857,6 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.enablePolylineEditing =
         source.settings.enablePolylineEditing;
     target.settings.enableBmsEditing = source.settings.enableBmsEditing;
-    target.settings.enableDraftLanes = source.settings.enableDraftLanes;
     target.settings.disableVerticalObjectDrag =
         source.settings.disableVerticalObjectDrag;
     target.settings.autoUploadPgoProfiles =

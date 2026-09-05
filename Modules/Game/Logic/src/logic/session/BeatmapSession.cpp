@@ -91,7 +91,7 @@ constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.enableDraftLanes,
+                                      ctx.lastConfig.settings.professionalMode,
                                       ctx.draftTrackCount,
                                       true);
     const auto lane = lanes.laneAt(mouseX);
@@ -873,9 +873,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
-    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
-                         m_ctx->brushState.isActive ||
-                         m_ctx->eraserState.isActive;
+    bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+                               m_ctx->brushState.isActive ||
+                               m_ctx->eraserState.isActive;
     const bool isVisualAnimationActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;

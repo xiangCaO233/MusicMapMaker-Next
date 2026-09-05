@@ -226,7 +226,7 @@ void NoteRenderSystem::renderNotes(
         noteEntities,
         noteSeen);
 
-    if ( !config.settings.enableDraftLanes ) {
+    if ( !config.settings.professionalMode ) {
         std::erase_if(noteEntities, [&registry](entt::entity entity) {
             const auto* note = registry.try_get<const NoteComponent>(entity);
             return note && note->m_isDraft;

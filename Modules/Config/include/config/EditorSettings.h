@@ -854,15 +854,15 @@ struct EditorSettings {
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 
+    /// @brief 各画布共用的专业模式，统一控制时间线专业分轨与草稿区显示和编辑。
+    /// @details 由 AppConfig 全局持久化，BMS 与折线编辑开关保持独立。
+    bool professionalMode{ false };
+
     /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
     bool enablePolylineEditing{ true };
 
     /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
     bool enableBmsEditing{ true };
-
-    /// @brief 当前构建是否发布项目级草稿轨功能。
-    /// @details 内部发布门禁，不序列化也不向设置界面开放。
-    bool enableDraftLanes{ true };
 
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
@@ -890,9 +890,6 @@ struct EditorSettings {
 
     /// @brief 是否显示时间线窗口。
     bool showTimelineWindow{ true };
-
-    /// @brief 时间线窗口是否启用专业分轨显示模式。
-    bool timelineProfessionalMode{ false };
 
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };

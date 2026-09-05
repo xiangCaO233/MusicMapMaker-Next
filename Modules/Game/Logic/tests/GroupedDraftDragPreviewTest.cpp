@@ -42,7 +42,7 @@ void configureDragContext(MMM::Logic::SessionContext& context)
     context.lastConfig.visual.judgeline_pos                = 0.5F;
     // 同时启用草稿轨与折线编辑，确保两个选中物件都进入整组拖动状态。
     // 这里正是生产环境触发统一轨道求解器的配置组合。
-    context.lastConfig.settings.enableDraftLanes      = true;
+    context.lastConfig.settings.professionalMode      = true;
     context.lastConfig.settings.enablePolylineEditing = true;
     // 主画布身份用于开启跨域预览，固定尺寸用于稳定轨道投影。
     // 横向偏移保持为零，避免测试结果依赖相机平移状态。

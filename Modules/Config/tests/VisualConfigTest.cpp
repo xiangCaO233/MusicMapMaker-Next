@@ -180,8 +180,8 @@ bool testNonHoldHitEffectDurationConfig()
         nlohmann::json::object().get<MMM::Config::VisualConfig>();
     const auto tooShort = nlohmann::json{ { "nonHoldHitEffectDuration", 0.0F } }
                               .get<MMM::Config::VisualConfig>();
-    const auto tooLong = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
-                             .get<MMM::Config::VisualConfig>();
+    const auto tooLong  = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
+                              .get<MMM::Config::VisualConfig>();
     if ( !near(restored.nonHoldHitEffectDuration, 0.48F) ||
          !near(
              legacy.nonHoldHitEffectDuration,
@@ -254,24 +254,44 @@ bool testBmsEditingConfigRoundTrip()
     return true;
 }
 
-/// @brief 验证已发布的草稿轨门禁不会暴露到用户配置。
-/// @return 开关不被序列化且外部配置无法禁用时返回 true。
-bool testDraftLaneReleaseGateIsInternal()
+/// @brief 验证共用专业模式往返、旧时间线配置迁移及独立编辑开关。
+/// @return 专业模式迁移正确且不会覆盖 BMS、折线编辑偏好时返回 true。
+bool testProfessionalModeConfigMigration()
 {
-    MMM::Config::EditorSettings source;
-    source.enableDraftLanes = false;
-
-    const nlohmann::json encoded  = source;
-    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
-    const auto           external = nlohmann::json{
-                  { "enableDraftLanes", false }
-    }.get<MMM::Config::EditorSettings>();
-    if ( encoded.contains("enableDraftLanes") || !restored.enableDraftLanes ||
-         !external.enableDraftLanes ) {
-        XERROR("Draft lane release gate did not remain internally enabled");
-        return false;
+    for ( const bool enabled : { false, true } ) {
+        MMM::Config::EditorSettings source;
+        source.professionalMode      = enabled;
+        source.enableBmsEditing      = !enabled;
+        source.enablePolylineEditing = !enabled;
+        const nlohmann::json encoded = source;
+        const auto restored = encoded.get<MMM::Config::EditorSettings>();
+        const auto legacy   = nlohmann::json{
+            { "timelineProfessionalMode", enabled },
+            { "enableDraftLanes", !enabled }
+        }.get<MMM::Config::EditorSettings>();
+        const auto explicitSetting = nlohmann::json{
+            { "professionalMode", enabled },
+            { "timelineProfessionalMode", !enabled }
+        }.get<MMM::Config::EditorSettings>();
+        if ( encoded.at("professionalMode") != enabled ||
+             encoded.contains("timelineProfessionalMode") ||
+             encoded.contains("enableDraftLanes") ||
+             restored.professionalMode != enabled ||
+             legacy.professionalMode != enabled ||
+             explicitSetting.professionalMode != enabled ||
+             restored.enableBmsEditing != !enabled ||
+             restored.enablePolylineEditing != !enabled ) {
+            XERROR(
+                "Global professional mode migration or independent editing "
+                "preferences failed");
+            return false;
+        }
     }
-    return true;
+    const auto defaults =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    return !MMM::Config::EditorSettings{}.professionalMode &&
+           !defaults.professionalMode && defaults.enableBmsEditing &&
+           defaults.enablePolylineEditing;
 }
 
 /// @brief 验证禁止垂直移动设置可持久化且旧配置保持自由拖动。
@@ -741,7 +761,7 @@ int main()
                    testPolylineEditingConfigRoundTrip() &&
                    testToolbarValueWheelAdjustmentRoundTrip() &&
                    testBmsEditingConfigRoundTrip() &&
-                   testDraftLaneReleaseGateIsInternal() &&
+                   testProfessionalModeConfigMigration() &&
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testSelectedVolumeShortcutRoundTrip() &&

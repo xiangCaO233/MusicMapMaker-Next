@@ -187,15 +187,15 @@ void appendHitEvents(const NoteComponent&                        note,
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         for ( std::size_t index = 0U; index < note.m_subNotes.size();
               ++index ) {
-            const auto& sub     = note.m_subNotes[index];
-            HitRole     role    = index == 0U ? HitRole::Head
-                                              : (index + 1U == note.m_subNotes.size()
-                                                     ? HitRole::Tail
-                                                     : HitRole::Internal);
-            const int   span    = sub.type == ::MMM::NoteType::FLICK
-                                      ? std::abs(sub.dtrack) + 1
-                                      : 1;
-            auto        binding = sub.sampleBinding;
+            const auto& sub = note.m_subNotes[index];
+            HitRole   role = index == 0U ? HitRole::Head
+                                         : (index + 1U == note.m_subNotes.size()
+                                                ? HitRole::Tail
+                                                : HitRole::Internal);
+            const int span = sub.type == ::MMM::NoteType::FLICK
+                                 ? std::abs(sub.dtrack) + 1
+                                 : 1;
+            auto      binding = sub.sampleBinding;
             if ( !binding && role == HitRole::Head ) {
                 binding = note.m_sampleBinding;
             }
@@ -417,9 +417,12 @@ bool applyNoteCacheMutationsIncrementally(
     return true;
 }
 
+/// @brief 根据共用专业模式与独立折线编辑开关判断音符是否可编辑。
+/// @warning 逻辑与渲染热路径：只读取组件属性和配置布尔值。
 bool isNoteEditable(const NoteComponent&          note,
                     const Config::EditorSettings& settings)
 {
+    if ( note.m_isDraft && !settings.professionalMode ) return false;
     if ( settings.enablePolylineEditing ) return true;
     return !note.m_isSubNote && (note.m_type == ::MMM::NoteType::NOTE ||
                                  note.m_type == ::MMM::NoteType::HOLD);
@@ -746,7 +749,7 @@ SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
         const double relativeTime = rawTime - timingTime;
         const double stepCount =
             settings.snapFloor ? std::floor(relativeTime / stepDuration + 1e-6)
-                                 : std::round(relativeTime / stepDuration);
+                               : std::round(relativeTime / stepDuration);
         double candidate = timingTime + stepCount * stepDuration;
         if ( candidate > nextTimingTime ) candidate = nextTimingTime;
         if ( !std::isfinite(candidate) ) return;
@@ -859,7 +862,7 @@ SnapResult getSnapResult(
         if ( !candidate.isSnapped ) continue;
 
         double snapAbsY = cache->getAbsY(candidate.snappedTime);
-        float  snapY    = judgmentLineY -
+        float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
         if ( !std::isfinite(snapY) || !std::isfinite(mouseY) ) continue;
 
@@ -874,7 +877,7 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it                         = std::lower_bound(ctx.hitEvents.begin(),
+    auto it = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

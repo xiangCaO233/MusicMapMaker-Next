@@ -1208,7 +1208,7 @@ return {
 	["ui.timeline.timing_points_table_btn"] = "Timing",
 	["ui.timeline.timing_points_table_btn_tooltip"] = "Open Timing Points Table (Bulk Edit)",
 	["ui.timeline.menu.tooltip"] = "Timeline Options",
-	["ui.timeline.menu.professional_mode"] = "Toggle Professional Mode",
+	["ui.edit.professional_mode"] = "Toggle Professional Mode",
 	["ui.timeline.menu.open_timing_table"] = "Open Timeline Table",
 	["ui.timeline.timing_points_table.title"] = "Bulk Edit Timing Points###TimingPointsTable",
 	["ui.timeline.timing_points_table.syncing"] = "Synchronizing timeline data...",

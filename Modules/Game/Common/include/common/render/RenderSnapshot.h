@@ -546,7 +546,7 @@ struct RenderSnapshot {
     int32_t bgmTrackCount{ 0 };
     /// @brief 当前快照是否显示并允许交互 BGM 轨道区。
     bool bmsEditingEnabled{ true };
-    /// @brief 当前快照是否发布项目级草稿轨道区。
+    /// @brief 当前快照是否按全局专业模式显示并允许交互草稿轨道区。
     bool   draftLanesEnabled{ false };
     float  renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点

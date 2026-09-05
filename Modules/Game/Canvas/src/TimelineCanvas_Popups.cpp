@@ -1299,9 +1299,8 @@ void TimelineCanvas::renderEventCreationPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
-        const bool professionalMode = Config::AppConfig::instance()
-                                          .getEditorSettings()
-                                          .timelineProfessionalMode;
+        const bool professionalMode =
+            Config::AppConfig::instance().getEditorSettings().professionalMode;
         if ( !professionalMode ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_creator.type").data());
             if ( ::MMM::UI::FeedbackRadioButton("BPM", &m_createType, 0) ) {
@@ -1681,8 +1680,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                                ? parseTimingTableDouble(searchValueText)
-                                                : std::nullopt;
+                                     ? parseTimingTableDouble(searchValueText)
+                                     : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =

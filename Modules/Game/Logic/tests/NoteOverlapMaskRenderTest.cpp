@@ -58,7 +58,7 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying,
     }
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;
-    config.settings.enableDraftLanes = useAuxiliaryLaneLayout;
+    config.settings.professionalMode = useAuxiliaryLaneLayout;
 
     auto& cache =
         timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
@@ -132,7 +132,7 @@ void renderPlayerAndDraftTaps(MMM::Logic::RenderSnapshot& snapshot)
     config.visual.trackLayout.right = 0.9F;
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;
-    config.settings.enableDraftLanes = true;
+    config.settings.professionalMode = true;
 
     auto& cache =
         timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();

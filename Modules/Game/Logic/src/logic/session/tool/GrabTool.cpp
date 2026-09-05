@@ -350,7 +350,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
-        isMainCanvas && ctx.lastConfig.settings.enableDraftLanes,
+        isMainCanvas && ctx.lastConfig.settings.professionalMode,
         ctx.draftTrackCount,
         isMainCanvas);
     if ( !projection.valid ) return std::nullopt;
@@ -395,8 +395,8 @@ bool noteFitsTrackDomain(const NoteComponent& note, std::int32_t trackCount)
     if ( trackCount <= 0 ) return false;
     const bool draftDomain = note.m_trackIndex < 0;
     const auto fits        = [trackCount, draftDomain](::MMM::NoteType type,
-                                                std::int32_t    track,
-                                                std::int32_t    dtrack) {
+                                                       std::int32_t    track,
+                                                       std::int32_t    dtrack) {
         const auto endTrack = static_cast<std::int64_t>(track) + dtrack;
         if ( draftDomain ) {
             return track < 0 &&
@@ -756,7 +756,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         const bool previewsAcrossDraftBoundary =
             movesWholeObjects &&
             SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
-            ctx.lastConfig.settings.enableDraftLanes;
+            ctx.lastConfig.settings.professionalMode;
         m_usesUnifiedObjectDrag =
             m_usesUnifiedObjectDrag || previewsAcrossDraftBoundary;
 
@@ -1041,9 +1041,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /

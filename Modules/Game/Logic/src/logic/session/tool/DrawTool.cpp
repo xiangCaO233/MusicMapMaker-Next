@@ -199,7 +199,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.lastConfig.settings.professionalMode,
             ctx.draftTrackCount,
             true);
         projectedDraftLaneCount = laneProjection.draftLaneCount;
@@ -259,8 +259,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -482,8 +482,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -505,8 +505,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-                 : 120.0);
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;
@@ -529,7 +529,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.lastConfig.settings.professionalMode,
             ctx.draftTrackCount,
             true);
         projectedDraftLaneCount = laneProjection.draftLaneCount;
@@ -573,10 +573,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-              ? currentLane->absoluteTrack(
+            ? currentLane->absoluteTrack(
                   static_cast<std::uint32_t>(ctx.trackCount),
                   projectedDraftLaneCount)
-              : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
+            : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     const bool editsDraft   = ctx.brushState.track < 0;
     const int  minimumTrack = editsDraft ? -(ctx.draftTrackCount + 1) : 0;
     const int  maximumTrack = editsDraft ? -1 : ctx.trackCount - 1;

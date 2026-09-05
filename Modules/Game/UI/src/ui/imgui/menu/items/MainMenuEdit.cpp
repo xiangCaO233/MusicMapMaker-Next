@@ -91,9 +91,9 @@ MainMenuEdit::MainMenuEdit()
         createAddSelectedObjectAnnotationAction()));
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     registerItem(std::make_unique<MainMenuToggleItem>(
-        "ui.timeline.menu.professional_mode",
+        "ui.edit.professional_mode",
         MainMenuItemTextKind::TranslationKey,
-        createTimelineProfessionalModeToggleAction(),
+        createProfessionalModeToggleAction(),
         ICON_MMM_SLIDERS));
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_BARS,

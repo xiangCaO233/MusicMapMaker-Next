@@ -1,4 +1,3 @@
-#include "config/AppConfig.h"
 #include "ui/IAuxiliaryWindowView.h"
 #include "ui/ICanvasView.h"
 #include "ui/UIManager.h"
@@ -42,30 +41,6 @@ IAuxiliaryWindowView* annotationTable(const MainMenuContext& context)
                      ANNOTATION_TABLE_VIEW_NAME)
                : nullptr;
 }
-
-/// @brief Timeline 专业模式开关动作。
-class TimelineProfessionalModeToggleAction final
-    : public IMainMenuToggleItemActionHandler
-{
-public:
-    /// @brief 获取 Timeline 专业模式配置。
-    bool* value(MainMenuContext& context) override
-    {
-        (void)context;
-        return &Config::AppConfig::instance()
-                    .getEditorSettings()
-                    .timelineProfessionalMode;
-    }
-
-    /// @brief 保存专业模式配置变化。
-    void execute(MainMenuContext&              context,
-                 const MainMenuItemActivation& activation) override
-    {
-        (void)context;
-        (void)activation;
-        Config::AppConfig::instance().save();
-    }
-};
 
 /// @brief 打开 Timeline Timing 表动作。
 class OpenTimingPointsTableAction final : public IMainMenuItemActionHandler
@@ -115,13 +90,6 @@ public:
     }
 };
 }  // namespace
-
-/// @brief 创建 Timeline 专业模式开关处理器。
-std::unique_ptr<IMainMenuToggleItemActionHandler>
-createTimelineProfessionalModeToggleAction()
-{
-    return std::make_unique<TimelineProfessionalModeToggleAction>();
-}
 
 /// @brief 创建打开 Timeline Timing 表动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenTimingPointsTableAction()

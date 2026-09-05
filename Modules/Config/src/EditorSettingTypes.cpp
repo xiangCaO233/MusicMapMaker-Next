@@ -728,6 +728,7 @@ void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
     target.toolbarVisibility = source.toolbarVisibility;
 }
 
+/// @brief 序列化全局编辑设置，仅写入共用的专业模式字段。
 void to_json(nlohmann::json& json, const EditorSettings& settings)
 {
     json = nlohmann::json{
@@ -802,7 +803,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "stopPlaybackOnScroll", settings.stopPlaybackOnScroll },
         { "snapFloor", settings.snapFloor },
         { "showTimelineWindow", settings.showTimelineWindow },
-        { "timelineProfessionalMode", settings.timelineProfessionalMode },
+        { "professionalMode", settings.professionalMode },
         { "showPreviewWindow", settings.showPreviewWindow },
         { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
@@ -817,6 +818,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
     };
 }
 
+/// @brief 读取全局编辑设置，并兼容旧版时间线专业模式字段。
 void from_json(const nlohmann::json& json, EditorSettings& settings)
 {
     settings.syncConfig = json.value("syncConfig", SyncConfig());
@@ -932,8 +934,10 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.stopPlaybackOnScroll = json.value("stopPlaybackOnScroll", false);
     settings.snapFloor            = json.value("snapFloor", false);
     settings.showTimelineWindow   = json.value("showTimelineWindow", true);
-    settings.timelineProfessionalMode =
-        json.value("timelineProfessionalMode", false);
+    settings.professionalMode =
+        json.contains("professionalMode")
+            ? json.value("professionalMode", false)
+            : json.value("timelineProfessionalMode", false);
     settings.showPreviewWindow     = json.value("showPreviewWindow", true);
     settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
     settings.showToolLabels        = json.value("showToolLabels", false);

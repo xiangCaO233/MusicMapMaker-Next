@@ -18,6 +18,7 @@
 #include "logic/ProjectResourceService.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/CanvasCamera.h"
@@ -2234,8 +2235,57 @@ void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
         *m_ctx, backgroundMetadata, m_ctx->collaborationProject.get());
 }
 
+/// @brief 应用全局编辑配置，并结束已隐藏草稿区的交互状态。
+/// @warning
+/// 配置变更低频路径：草稿清理仅访问已选索引与当前交互实体，禁止整谱扫描。
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
+    if ( !cmd.config.settings.professionalMode ) {
+        const bool hasSelectedDraft = std::any_of(
+            m_ctx->selectedNoteEntities.begin(),
+            m_ctx->selectedNoteEntities.end(),
+            [this](entt::entity entity) {
+                const auto* note =
+                    m_ctx->noteRegistry.try_get<const NoteComponent>(entity);
+                return note && note->m_isDraft;
+            });
+        if ( m_ctx->isDragging &&
+             (m_ctx->draggedObjectKind == ChartObjectKind::DraftNote ||
+              hasSelectedDraft) ) {
+            m_interaction->handleCommand(CmdEndDrag{});
+        }
+        if ( m_ctx->brushState.isActive && m_ctx->brushState.track < 0 ) {
+            m_interaction->handleCommand(CmdEndBrush{});
+        }
+        for ( auto it = m_ctx->selectedNoteEntities.begin();
+              it != m_ctx->selectedNoteEntities.end(); ) {
+            const auto* note =
+                m_ctx->noteRegistry.try_get<const NoteComponent>(*it);
+            if ( !note || !note->m_isDraft ) {
+                ++it;
+                continue;
+            }
+            if ( auto* interaction =
+                     m_ctx->noteRegistry.try_get<InteractionComponent>(*it) ) {
+                *interaction = InteractionComponent{};
+            }
+            it = m_ctx->selectedNoteEntities.erase(it);
+        }
+        if ( m_ctx->hoveredObjectKind == ChartObjectKind::DraftNote ) {
+            if ( auto* interaction =
+                     m_ctx->noteRegistry.try_get<InteractionComponent>(
+                         m_ctx->hoveredEntity) ) {
+                interaction->isHovered = false;
+                interaction->hoveredPart =
+                    static_cast<std::uint8_t>(HoverPart::None);
+                interaction->hoveredSubIndex = -1;
+            }
+            m_ctx->hoveredEntity     = entt::null;
+            m_ctx->hoveredObjectKind = ChartObjectKind::PlayerNote;
+            m_ctx->hoveredPart     = static_cast<std::int32_t>(HoverPart::None);
+            m_ctx->hoveredSubIndex = -1;
+        }
+    }
     const bool disablePolylineEditing =
         m_ctx->lastConfig.settings.enablePolylineEditing &&
         !cmd.config.settings.enablePolylineEditing;

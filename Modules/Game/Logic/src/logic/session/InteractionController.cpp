@@ -201,7 +201,7 @@ void detachMarqueeSelection(SessionContext& ctx)
                                       camera->second.horizontalOffsetX,
                                       true,
                                       ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.enableDraftLanes,
+                                      ctx.lastConfig.settings.professionalMode,
                                       ctx.draftTrackCount,
                                       true);
     const auto lane = projection.laneAt(ctx.lastMainCanvasMousePos.x);
@@ -321,7 +321,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -405,7 +405,7 @@ SelectionScreenContext makeSelectionScreenContext(
             cameraIt->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.enableDraftLanes,
+            ctx.lastConfig.settings.professionalMode,
             ctx.draftTrackCount,
             true);
         screen.usesLaneProjection = screen.laneProjection.valid;
@@ -417,7 +417,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                   std::abs(screen.renderScaleY) > 1e-6f;
+                         std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -466,10 +466,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1        = screen.judgmentLineY -
-                     static_cast<float>(startAbsY - screen.currentAbsY) *
-                         screen.renderScaleY;
-    const float y2 =
+    const float  y1 = screen.judgmentLineY -
+                      static_cast<float>(startAbsY - screen.currentAbsY) *
+                          screen.renderScaleY;
+    const float  y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -914,13 +914,13 @@ bool collectMarqueeBoxCandidates(
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA          = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedTopY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const double absB = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedBottomY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -1035,13 +1035,13 @@ bool collectMarqueeBoxSampleCandidates(
 
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA          = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedTopY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const double absB = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedBottomY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const auto   ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     if ( ranges.empty() ) {
         collectTimeRangeCandidates(
@@ -1217,7 +1217,7 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
                                                m_ctx.lastConfig.settings) ||
                  note.m_isSubNote ||
                  (note.m_isDraft &&
-                  !m_ctx.lastConfig.settings.enableDraftLanes) ||
+                  !m_ctx.lastConfig.settings.professionalMode) ||
                  (cmd.scope == SelectAllScope::CurrentTrackArea &&
                   note.m_isDraft != (*laneKind == CanvasLaneKind::Draft)) ) {
                 continue;
@@ -1279,9 +1279,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         return;
     }
 
-    const auto* project     = m_ctx.collaborationProject
-                                  ? m_ctx.collaborationProject.get()
-                                  : EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const auto& beatmapPath = m_ctx.currentBeatmap->m_baseMapMetadata.map_path;
     const auto* resource =
         project ? ProjectResourceService::findAudioResourceForReference(
@@ -1310,7 +1310,7 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         camera.horizontalOffsetX,
         true,
         m_ctx.lastConfig.settings.enableBmsEditing,
-        m_ctx.lastConfig.settings.enableDraftLanes,
+        m_ctx.lastConfig.settings.professionalMode,
         m_ctx.draftTrackCount,
         true);
     const auto lane = projection.laneAt(cmd.mouseX);
@@ -1371,9 +1371,9 @@ void InteractionController::handleCommand(
         return;
     }
 
-    const auto*                 project = m_ctx.collaborationProject
-                                              ? m_ctx.collaborationProject.get()
-                                              : EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const std::filesystem::path beatmapPath =
         m_ctx.currentBeatmap ? m_ctx.currentBeatmap->m_baseMapMetadata.map_path
                              : std::filesystem::path{};
