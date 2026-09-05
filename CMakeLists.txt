@@ -136,6 +136,19 @@ function(mmm_set_test_target MODULE_NAME TARGET_NAME)
   set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                   "${TEST_RUNTIME_DIR}")
 
+  # 测试会调用正式配置保存入口；每个目标必须隔离配置与 ImGui 状态，禁止落入个人目录。
+  set(TEST_CONFIG_ROOT
+      "${CMAKE_BINARY_DIR}/test_output/config/${MODULE_NAME}/${TARGET_NAME}")
+  target_sources(${TARGET_NAME}
+                 PRIVATE "${CMAKE_SOURCE_DIR}/tests/TestConfigIsolation.cpp")
+  target_compile_definitions(${TARGET_NAME}
+                             PRIVATE MMM_TEST_CONFIG_ROOT="${TEST_CONFIG_ROOT}")
+  # CTest 启动器覆盖继承环境中的配置根；直接执行测试时由公共启动代码提供同一路径。
+  set_property(
+    TARGET ${TARGET_NAME}
+    PROPERTY TEST_LAUNCHER
+             "${CMAKE_COMMAND};-E;env;MMM_CONFIG_ROOT=${TEST_CONFIG_ROOT}")
+
   if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # macOS 测试目标仍需从业务库的 ThinLTO bitcode 生成本机代码；先禁用跨模块优化。
     target_link_options(

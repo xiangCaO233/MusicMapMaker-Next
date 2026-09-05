@@ -99,6 +99,20 @@ add_test(
     "$<TARGET_FILE:AppPathsProfileOverrideTest>"
     "${CMAKE_BINARY_DIR}/test_output/collaboration_profile")
 
+# 同一只读探针分别验证 CTest 启动器与直接执行二进制时的默认配置隔离。
+add_test(
+  NAME TestConfigIsolationTest
+  COMMAND
+    AppPathsProfileOverrideTest
+    "${CMAKE_BINARY_DIR}/test_output/config/Config/AppPathsProfileOverrideTest")
+# 绕过目标启动器并清空显式覆盖，确保调试器或手动执行测试也不会使用个人配置。
+add_test(
+  NAME TestConfigIsolationDirectTest
+  COMMAND
+    "${CMAKE_COMMAND}" -E env --unset=MMM_CONFIG_ROOT
+    "$<TARGET_FILE:AppPathsProfileOverrideTest>"
+    "${CMAKE_BINARY_DIR}/test_output/config/Config/AppPathsProfileOverrideTest")
+
 # 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
 mmm_add_test_executable(Config FrameLimitUtilsTest
                         tests/FrameLimitUtilsTest.cpp)
