@@ -439,6 +439,8 @@ return {
 	["ui.settings.editor"] = "Editor Config",
 	["ui.settings.editor.short"] = "Editor",
 	["ui.settings.editor.behavior"] = "Behavior",
+	["ui.settings.editor.default_palette"] = "Software Default Color Palette",
+	["ui.settings.editor.default_palette_tooltip"] = "Used by new projects and beatmaps without .mmm project settings. Existing projects can inherit the software default in project settings.",
 	["ui.settings.editor.reverse_scroll"] = "Reverse Scroll Direction",
 	["ui.settings.editor.snap_floor"] = "Snap Downward",
 	["ui.settings.editor.snap_floor_tooltip"] = "Always snap to the beat line before the mouse position",

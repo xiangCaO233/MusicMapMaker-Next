@@ -438,6 +438,8 @@ return {
 	["ui.settings.editor"] = "编辑器配置",
 	["ui.settings.editor.short"] = "编辑",
 	["ui.settings.editor.behavior"] = "基础行为",
+	["ui.settings.editor.default_palette"] = "软件默认配色方案",
+	["ui.settings.editor.default_palette_tooltip"] = "新建项目和没有 .mmm 项目配置的谱面默认使用此方案；已有项目可在项目设置中选择继承软件默认。",
 	["ui.settings.editor.reverse_scroll"] = "反转鼠标滚轮方向",
 	["ui.settings.editor.snap_floor"] = "吸附向下取整",
 	["ui.settings.editor.snap_floor_tooltip"] = "开启后总是吸附到早于鼠标位置的分拍线",

@@ -57,18 +57,18 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     source.m_projectAudioToolBrushVolume        = 0.75F;
     source.m_projectAudioToolPlacements         = {
         MMM::ProjectAudioToolItemPlacement{
-                    .m_audioResourceId = "main",
-                    .m_x               = 12.5F,
-                    .m_y               = 30.0F,
-                    .m_width           = 260.0F,
-                    .m_height          = 120.0F,
-                    .m_zOrder          = 4,
+            .m_audioResourceId = "main",
+            .m_x               = 12.5F,
+            .m_y               = 30.0F,
+            .m_width           = 260.0F,
+            .m_height          = 120.0F,
+            .m_zOrder          = 4,
         },
         MMM::ProjectAudioToolItemPlacement{
-                    .m_audioResourceId = "effect",
-                    .m_x               = 80.0F,
-                    .m_y               = 50.0F,
-                    .m_zOrder          = 5,
+            .m_audioResourceId = "effect",
+            .m_x               = 80.0F,
+            .m_y               = 50.0F,
+            .m_zOrder          = 5,
         },
     };
 
@@ -111,8 +111,8 @@ bool testProjectAudioToolWorkspaceRoundTrip()
                  "legacy project audio placements should keep automatic size");
 }
 
-/// @brief 验证新项目和缺少方案字段的项目默认使用皮肤配色。
-/// @return 新旧结构均默认为皮肤方案且显式继承值仍保留时返回 true。
+/// @brief 验证新项目继承软件配色且旧项目保持皮肤配色。
+/// @return 新项目继承软件方案、旧项目保持兼容且显式继承值仍保留时返回 true。
 bool testProjectColorPaletteDefaults()
 {
     const MMM::ProjectSettings defaults;
@@ -121,8 +121,8 @@ bool testProjectColorPaletteDefaults()
         json{ { "m_colorPaletteSchemeName", "" } }.get<MMM::ProjectSettings>();
     const std::string_view skinDefault =
         MMM::Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-    return check(defaults.m_colorPaletteSchemeName == skinDefault,
-                 "new projects should default to the skin palette") &&
+    return check(defaults.m_colorPaletteSchemeName.empty(),
+                 "new projects should inherit the software palette") &&
            check(legacy.m_colorPaletteSchemeName == skinDefault,
                  "projects without a palette field should use the skin "
                  "palette") &&
@@ -827,8 +827,8 @@ bool testSingleAudioExporterCompatibility(
         const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
         const auto         binding =
             reloaded.m_allNotes.empty()
-                        ? std::optional<MMM::AudioSampleBinding>{}
-                        : reloaded.m_allNotes.front().get().getSampleBinding();
+                ? std::optional<MMM::AudioSampleBinding>{}
+                : reloaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(
             binding.has_value() && binding->m_audioResourceId == "hit.wav",
             "osu! should round-trip a playable sample file");

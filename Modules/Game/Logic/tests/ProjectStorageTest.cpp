@@ -347,6 +347,30 @@ bool testOpenProjectPreservesDraftLaneGroups(const std::filesystem::path& root)
                  "draft lane project should close after the test");
 }
 
+/// @brief 验证无项目配置的目录首次打开和保存后均继承软件默认配色。
+/// @param root 独立的测试项目目录。
+/// @return 打开、持久化和关闭均符合预期时返回 true。
+bool testOpenWithoutConfigurationInheritsPalette(
+    const std::filesystem::path& root)
+{
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    if ( error ) return false;
+    auto&       controller = MMM::Logic::ProjectController::instance();
+    const auto  opened     = controller.openProject(root);
+    const auto* project    = controller.currentProject();
+    const bool  inherits = opened.m_opened && project &&
+                           project->m_settings.m_colorPaletteSchemeName.empty();
+    const auto  reloaded = MMM::Logic::ProjectStorage{}.load(root);
+    const auto  closed   = controller.closeProject();
+    return check(inherits,
+                 "unconfigured projects should inherit the software palette") &&
+           check(reloaded.m_success && reloaded.m_project.m_settings
+                                           .m_colorPaletteSchemeName.empty(),
+                 "saving should preserve software palette inheritance") &&
+           check(closed.m_closed, "palette test project should close");
+}
+
 }  // namespace
 
 /// @brief 运行项目分片存储与旧格式迁移测试。
@@ -366,7 +390,8 @@ int main()
         testLegacyDraftGroupWithoutTrackCount() &&
         testInternalDirectoryIsNotScanned(root) &&
         testLegacyFallbackAndRemoval(fallbackRoot) &&
-        testOpenProjectPreservesDraftLaneGroups(openProjectRoot);
+        testOpenProjectPreservesDraftLaneGroups(openProjectRoot) &&
+        testOpenWithoutConfigurationInheritsPalette(root / "no_configuration");
     std::filesystem::remove_all(root, filesystemError);
     return success ? 0 : 1;
 }

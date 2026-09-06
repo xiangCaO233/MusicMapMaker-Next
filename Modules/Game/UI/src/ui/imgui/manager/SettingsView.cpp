@@ -223,7 +223,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 22> labels{
+        const std::array<const char*, 23> labels{
+            TR_CACHE("ui.settings.editor.default_palette").data(),
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.snap_floor").data(),
             TR_CACHE("ui.settings.editor.stop_playback_on_scroll").data(),
@@ -526,7 +527,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                 categorySize * 8.0f + categorySpacing * 7.0f;
+                                  categorySize * 8.0f + categorySpacing * 7.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -771,8 +772,8 @@ void SettingsView::drawContent()
             if ( iconFont ) ImGui::PushFont(iconFont, iconFont->LegacySize);
             ImFont* drawIconFont = iconFont ? iconFont : ImGui::GetFont();
             ImVec2  iconSize     = ImGui::CalcTextSize(iconStr);
-            ImVec2  iconPos      = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                                     rect.y + (rect.height - iconSize.y) * 0.5f };
+            ImVec2  iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
+                                rect.y + (rect.height - iconSize.y) * 0.5f };
             ImGui::GetWindowDrawList()->AddText(
                 drawIconFont,
                 ImGui::GetFontSize(),
@@ -795,9 +796,9 @@ void SettingsView::drawContent()
                 ImGui::PushFont(menuFont, menuFont->LegacySize);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = { sepX + textLeftPadding,
-                                           rect.y +
-                                               (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

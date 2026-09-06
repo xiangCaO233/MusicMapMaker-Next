@@ -37,7 +37,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -105,6 +105,50 @@ void SettingsView::drawEditorSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.editor.behavior").data(), true) ) {
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.default_palette").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                auto& defaultScheme = settings.defaultColorPaletteSchemeName;
+                const bool skinSelected =
+                    defaultScheme.empty() ||
+                    defaultScheme ==
+                        Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                const char* preview =
+                    skinSelected
+                        ? TR("ui.toolbar.note_palette.skin_default_scheme")
+                              .data()
+                        : defaultScheme.c_str();
+                ImGui::SetNextItemWidth(r.width);
+                if ( FeedbackBeginCombo("##EditorDefaultPalette", preview) ) {
+                    if ( FeedbackSelectable(
+                             TR("ui.toolbar.note_palette.skin_default_scheme")
+                                 .data(),
+                             skinSelected) ) {
+                        defaultScheme =
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        changed = true;
+                    }
+                    for ( const auto& scheme :
+                          settings.colorPalettes.schemes ) {
+                        if ( FeedbackSelectable(
+                                 scheme.name.c_str(),
+                                 defaultScheme == scheme.name) ) {
+                            defaultScheme = scheme.name;
+                            changed       = true;
+                        }
+                    }
+                    FeedbackEndCombo();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.editor.default_palette_tooltip").data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
+
         // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(*sec,
