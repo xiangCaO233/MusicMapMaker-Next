@@ -365,13 +365,13 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                              right >= canvasWidth - edgeEpsilon &&
-                              bottom >= canvasHeight - edgeEpsilon;
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                            canvasScreenY + canvasHeight };
+                               canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -632,7 +632,7 @@ double marqueeAutoScrollTargetTime(
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -795,7 +795,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
     const UI::MarkdownRenderOptions markdownOptions{
         .wrapWidth        = contentWidth,
         .compact          = true,
-        .interactiveLinks = true,
+        .interactiveLinks = false,
         .style            = &markdownStyle,
     };
 
@@ -867,14 +867,23 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
-                             pointerX <= cardRightX && pointerY >= cardTopY &&
-                             pointerY <= cardBottomY;
+        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
+                              pointerX <= cardRightX && pointerY >= cardTopY &&
+                              pointerY <= cardBottomY;
         if ( hovered && !result.marker ) {
             result.marker    = entry.marker;
             result.itemIndex = entry.itemIndex;
         }
 
+        const int   firstVertex = drawList->VtxBuffer.Size;
+        const float opacity     = annotationDetailOpacity(pointerX,
+                                                          pointerY,
+                                                          cardLeftX,
+                                                          cardTopY,
+                                                          cardRightX,
+                                                          cardBottomY,
+                                                          canvasHovered,
+                                                          fontSize * 2.0F);
         const float sourceX =
             annotationConnectorSourceX(*entry.item, projection, markerCenterX);
         const float cardEdgeX   = placeRight ? cardLeftX : cardRightX;
@@ -1006,6 +1015,18 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                 { scrollbarX, thumbTop + thumbHeight },
                 hovered ? scrollbarHoverColor : scrollbarColor,
                 2.0F);
+        }
+        // 统一衰减卡片、正文和连线，避免不透明文字继续遮挡音符。
+        if ( opacity < 1.0F ) {
+            for ( int vertexIndex = firstVertex;
+                  vertexIndex < drawList->VtxBuffer.Size;
+                  ++vertexIndex ) {
+                auto&      color = drawList->VtxBuffer[vertexIndex].col;
+                const auto alpha =
+                    static_cast<ImU32>((color >> IM_COL32_A_SHIFT) * opacity);
+                color =
+                    (color & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
+            }
         }
     }
     drawList->PopClipRect();
@@ -1253,11 +1274,11 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
             }));
     }
 
-    const bool pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
-                                     pointerX <= m_audioPreviewOverlay.right &&
-                                     pointerY >= m_audioPreviewOverlay.top &&
-                                     pointerY <= m_audioPreviewOverlay.bottom;
-    const float bridgePadding = std::max(retentionPadding, gap);
+    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                      pointerX <= m_audioPreviewOverlay.right &&
+                                      pointerY >= m_audioPreviewOverlay.top &&
+                                      pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding       = std::max(retentionPadding, gap);
     const float bridgeLeft =
         std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
     const float bridgeTop =
@@ -3042,9 +3063,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                               pointerX >= projection.annotationLeftX &&
-                               pointerX <= projection.annotationRightX &&
-                               pointerY >= topY && pointerY <= bottomY;
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
 
     const Common::Render::AnnotationRenderMarker* hoveredMarker = nullptr;
     std::optional<std::size_t>                    hoveredDetailIndex;
@@ -3161,105 +3182,120 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         m_annotationHoverDetailIndex = std::min(
             m_annotationHoverDetailIndex, hoveredMarker->items.size() - 1U);
 
-        ImGui::SetNextWindowSizeConstraints(ImVec2(360.0F, 0.0F),
-                                            ImVec2(620.0F, 720.0F));
-        ImGui::BeginTooltip();
-        if ( detailSelectionChanged ) ImGui::SetScrollY(0.0F);
-        const float tooltipMaxScrollY = ImGui::GetScrollMaxY();
-        const float wheel             = ImGui::GetIO().MouseWheel;
-        if ( !detailWheelConsumed && std::abs(wheel) > 0.01F ) {
-            const auto wheelResult =
-                updateAnnotationDetailWheel(wheel,
-                                            ImGui::GetScrollY(),
-                                            tooltipMaxScrollY,
-                                            ImGui::GetFontSize() * 4.0F);
-            if ( wheelResult.consumed ) {
-                ImGui::SetScrollY(wheelResult.scrollY);
-                detailWheelConsumed = true;
+        if ( detailCardHovered ) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(TR("ui.annotation.detail_edit_hint").data());
+            ImGui::EndTooltip();
+        } else {
+            ImGui::SetNextWindowSizeConstraints(ImVec2(360.0F, 0.0F),
+                                                ImVec2(620.0F, 720.0F));
+            ImGui::BeginTooltip();
+            if ( detailSelectionChanged ) ImGui::SetScrollY(0.0F);
+            const float tooltipMaxScrollY = ImGui::GetScrollMaxY();
+            const float wheel             = ImGui::GetIO().MouseWheel;
+            if ( !detailWheelConsumed && std::abs(wheel) > 0.01F ) {
+                const auto wheelResult =
+                    updateAnnotationDetailWheel(wheel,
+                                                ImGui::GetScrollY(),
+                                                tooltipMaxScrollY,
+                                                ImGui::GetFontSize() * 4.0F);
+                if ( wheelResult.consumed ) {
+                    ImGui::SetScrollY(wheelResult.scrollY);
+                    detailWheelConsumed = true;
+                }
             }
-        }
-        if ( !detailCardHovered && hoveredMarker->items.size() > 1U &&
-             !ImGui::GetIO().WantTextInput ) {
-            int direction = 0;
-            if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
-                 ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
-                direction = -1;
-            } else if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
-                        ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
-                direction = 1;
+            if ( !detailCardHovered && hoveredMarker->items.size() > 1U &&
+                 !ImGui::GetIO().WantTextInput ) {
+                int direction = 0;
+                if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
+                     ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+                    direction = -1;
+                } else if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+                    direction = 1;
+                }
+                if ( direction != 0 ) {
+                    m_annotationHoverDetailIndex =
+                        stepAnnotationDetailItem(hoveredMarker->items.size(),
+                                                 m_annotationHoverDetailIndex,
+                                                 direction);
+                    ImGui::SetScrollY(0.0F);
+                }
             }
-            if ( direction != 0 ) {
-                m_annotationHoverDetailIndex =
-                    stepAnnotationDetailItem(hoveredMarker->items.size(),
-                                             m_annotationHoverDetailIndex,
-                                             direction);
-                ImGui::SetScrollY(0.0F);
+            const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                hoveredMarker->timestamp, &currentSnapshot);
+            ImGui::Text("%s · %s · %zu",
+                        TR("ui.annotation.marker_title").data(),
+                        timeText.c_str(),
+                        hoveredMarker->items.size());
+            ImGui::Separator();
+            for ( std::size_t index = 0U; index < hoveredMarker->items.size();
+                  ++index ) {
+                const auto&            item = hoveredMarker->items[index];
+                const std::string_view author =
+                    item.author.empty()
+                        ? TR("ui.annotation.unknown_author").view()
+                        : std::string_view(item.author);
+                const ImVec4 color = index == m_annotationHoverDetailIndex
+                                         ? ImVec4(0.45F, 0.78F, 1.0F, 1.0F)
+                                         : ImVec4(0.72F, 0.74F, 0.78F, 1.0F);
+                ImGui::TextColored(color,
+                                   "%zu. %.*s",
+                                   index + 1U,
+                                   static_cast<int>(author.size()),
+                                   author.data());
+                const auto             firstLineEnd = item.content.find('\n');
+                const std::string_view firstLine(
+                    item.content.data(),
+                    firstLineEnd == std::string::npos ? item.content.size()
+                                                      : firstLineEnd);
+                ImGui::SameLine();
+                ImGui::TextWrapped("— %.*s",
+                                   static_cast<int>(firstLine.size()),
+                                   firstLine.data());
             }
+            if ( hoveredMarker->items.size() > 1U ) {
+                ImGui::TextDisabled("%s",
+                                    TR("ui.annotation.wheel_hint").data());
+            } else if ( tooltipMaxScrollY > 0.01F ) {
+                ImGui::TextDisabled("%s",
+                                    TR("ui.annotation.scroll_hint").data());
+            }
+            ImGui::Separator();
+            const auto& detail =
+                hoveredMarker->items[m_annotationHoverDetailIndex];
+            const char* targetLabel =
+                annotationTargetLabelKey(detail.targetKind);
+            ImGui::Text("%s: %s",
+                        TR("ui.annotation.target").data(),
+                        TR(targetLabel).data());
+            if ( detail.track >= 0 ) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("#%d", detail.track + 1);
+            }
+            if ( detail.targetMissing ) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                                   "%s",
+                                   TR("ui.annotation.target_missing").data());
+            }
+            ImGui::Text("%s: %s",
+                        TR("ui.annotation.author").data(),
+                        detail.author.empty()
+                            ? TR("ui.annotation.unknown_author").data()
+                            : detail.author.c_str());
+            ImGui::Separator();
+            UI::renderMarkdown(detail.content);
+            ImGui::EndTooltip();
         }
-        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-            hoveredMarker->timestamp, &currentSnapshot);
-        ImGui::Text("%s · %s · %zu",
-                    TR("ui.annotation.marker_title").data(),
-                    timeText.c_str(),
-                    hoveredMarker->items.size());
-        ImGui::Separator();
-        for ( std::size_t index = 0U; index < hoveredMarker->items.size();
-              ++index ) {
-            const auto&            item = hoveredMarker->items[index];
-            const std::string_view author =
-                item.author.empty() ? TR("ui.annotation.unknown_author").view()
-                                    : std::string_view(item.author);
-            const ImVec4 color = index == m_annotationHoverDetailIndex
-                                     ? ImVec4(0.45F, 0.78F, 1.0F, 1.0F)
-                                     : ImVec4(0.72F, 0.74F, 0.78F, 1.0F);
-            ImGui::TextColored(color,
-                               "%zu. %.*s",
-                               index + 1U,
-                               static_cast<int>(author.size()),
-                               author.data());
-            const auto             firstLineEnd = item.content.find('\n');
-            const std::string_view firstLine(item.content.data(),
-                                             firstLineEnd == std::string::npos
-                                                 ? item.content.size()
-                                                 : firstLineEnd);
-            ImGui::SameLine();
-            ImGui::TextWrapped(
-                "— %.*s", static_cast<int>(firstLine.size()), firstLine.data());
-        }
-        if ( hoveredMarker->items.size() > 1U ) {
-            ImGui::TextDisabled("%s", TR("ui.annotation.wheel_hint").data());
-        } else if ( tooltipMaxScrollY > 0.01F ) {
-            ImGui::TextDisabled("%s", TR("ui.annotation.scroll_hint").data());
-        }
-        ImGui::Separator();
-        const auto& detail = hoveredMarker->items[m_annotationHoverDetailIndex];
-        const char* targetLabel = annotationTargetLabelKey(detail.targetKind);
-        ImGui::Text("%s: %s",
-                    TR("ui.annotation.target").data(),
-                    TR(targetLabel).data());
-        if ( detail.track >= 0 ) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("#%d", detail.track + 1);
-        }
-        if ( detail.targetMissing ) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
-                               "%s",
-                               TR("ui.annotation.target_missing").data());
-        }
-        ImGui::Text("%s: %s",
-                    TR("ui.annotation.author").data(),
-                    detail.author.empty()
-                        ? TR("ui.annotation.unknown_author").data()
-                        : detail.author.c_str());
-        ImGui::Separator();
-        UI::renderMarkdown(detail.content);
-        ImGui::EndTooltip();
 
         if ( !currentSnapshot.isPlaying &&
              currentSnapshot.acceptsInteraction ) {
             if ( !detailLinkHovered &&
-                 ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+                 (detailCardHovered
+                      ? ImGui::GetIO().KeyShift &&
+                            ImGui::IsMouseClicked(ImGuiMouseButton_Right, false)
+                      : ImGui::IsMouseClicked(ImGuiMouseButton_Left, false)) ) {
                 const auto& selected =
                     hoveredMarker->items[m_annotationHoverDetailIndex];
                 m_annotationEditor.annotationId = selected.id;
@@ -3272,7 +3308,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                      m_annotationEditor.content.size() - 1U),
                             m_annotationEditor.content.data());
                 m_annotationEditor.requestOpen = true;
-            } else if ( !detailLinkHovered &&
+            } else if ( !detailCardHovered && !detailLinkHovered &&
                         ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
                 m_annotationEditor.annotationId.clear();
                 m_annotationEditor.author.clear();
@@ -3370,9 +3406,11 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const bool annotationHovered = gutterHovered || detailCardHovered;
     const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
     return {
-        .blocksCanvas        = annotationHovered || editorPopupOpen,
+        .blocksCanvas = annotationBlocksCanvas(
+            gutterHovered, detailCardHovered, editorPopupOpen),
         .passesWheelToCanvas = shouldPassAnnotationWheelToCanvas(
             annotationHovered, editorPopupOpen, detailWheelConsumed),
+        .wheelConsumed = detailWheelConsumed,
     };
 }
 
@@ -3389,7 +3427,7 @@ void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0F, 0.0F };
+    ImVec2     localMousePos{ 0.0F, 0.0F };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -3446,7 +3484,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -4449,9 +4487,10 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- 交互：鼠标滚轮控制时间跳转与属性修改 ---
-    const auto& io    = ImGui::GetIO();
-    float       wheel = io.MouseWheel;
-    const bool  isModifierWheelHovered =
+    const auto& io = ImGui::GetIO();
+    float       wheel =
+        annotationGutterInteraction.wheelConsumed ? 0.0F : io.MouseWheel;
+    const bool isModifierWheelHovered =
         isInsideCanvas && (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
         !ImGui::IsAnyMouseDown() &&
         ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);

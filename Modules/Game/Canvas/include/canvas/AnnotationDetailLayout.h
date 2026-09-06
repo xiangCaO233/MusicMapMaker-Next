@@ -8,6 +8,29 @@
 namespace MMM::Canvas
 {
 
+/// @brief 根据指针到卡片边缘的距离连续降低透明度，卡片内保留四分之一可见度。
+/// @warning UI 热路径：每张可见卡片每帧只做常量级计算，不分配内存。
+inline float annotationDetailOpacity(float pointerX, float pointerY, float left,
+                                     float top, float right, float bottom,
+                                     bool canvasHovered, float proximity)
+{
+    if ( !canvasHovered ) return 1.0F;
+    const float dx = std::max({ left - pointerX, 0.0F, pointerX - right });
+    const float dy = std::max({ top - pointerY, 0.0F, pointerY - bottom });
+    const float distance = std::sqrt(dx * dx + dy * dy);
+    return 0.25F +
+           0.75F * std::clamp(distance / std::max(1.0F, proximity), 0.0F, 1.0F);
+}
+
+/// @brief 卡片穿透画布输入；仅批注栏和编辑弹窗阻止画布交互。
+/// @warning UI 热路径：每帧仅执行常量级布尔判断。
+constexpr bool annotationBlocksCanvas(bool gutterHovered,
+                                      bool detailCardHovered,
+                                      bool editorPopupOpen)
+{
+    return (gutterHovered && !detailCardHovered) || editorPopupOpen;
+}
+
 /// @brief 单张批注详情卡片的纵向布局输入与结果。
 struct AnnotationDetailCardPlacement {
     /// @brief 卡片期望对齐的批注标记中心 Y 坐标。

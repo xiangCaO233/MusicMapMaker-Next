@@ -70,13 +70,31 @@ bool testDirectionKeysCycleItems()
            MMM::Canvas::stepAnnotationDetailItem(3U, 0U, -1) == 2U &&
            MMM::Canvas::stepAnnotationDetailItem(3U, 2U, 1) == 0U;
 }
+/// @brief 验证卡片悬停穿透、编辑弹窗拦截以及靠近时连续淡化。
+bool testCardInputAndProximity()
+{
+    using namespace MMM::Canvas;
+    return !annotationBlocksCanvas(false, true, false) &&
+           !annotationBlocksCanvas(true, true, false) &&
+           annotationBlocksCanvas(true, false, false) &&
+           annotationBlocksCanvas(false, true, true) &&
+           near(annotationDetailOpacity(50, 50, 0, 0, 100, 100, true, 20),
+                0.25F) &&
+           near(annotationDetailOpacity(110, 50, 0, 0, 100, 100, true, 20),
+                0.625F) &&
+           near(annotationDetailOpacity(120, 50, 0, 0, 100, 100, true, 20),
+                1.0F) &&
+           near(annotationDetailOpacity(50, 50, 0, 0, 100, 100, false, 20),
+                1.0F);
+}
 }  // namespace
 
 /// @brief 运行批注详情卡片布局回归测试。
 /// @return 全部布局断言通过时返回 0。
 int main()
 {
-    return testCardsAvoidOverlap() && testCardsShiftAwayFromBottom() &&
+    return testCardInputAndProximity() && testCardsAvoidOverlap() &&
+                   testCardsShiftAwayFromBottom() &&
                    testWheelOnlyScrollsMarkdown() &&
                    testUnconsumedGutterWheelPassesToCanvas() &&
                    testDirectionKeysCycleItems()

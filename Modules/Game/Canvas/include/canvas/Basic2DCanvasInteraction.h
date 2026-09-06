@@ -68,6 +68,8 @@ private:
         bool blocksCanvas{ false };
         /// @brief 是否允许未消费的滚轮继续传给画布。
         bool passesWheelToCanvas{ false };
+        /// @brief 详情正文是否已消费本帧滚轮，避免画布重复滚动。
+        bool wheelConsumed{ false };
     };
 
     struct PendingDrop {

@@ -80,6 +80,7 @@ return {
 	["ui.annotation.author"] = "批注人",
 	["ui.annotation.timestamp"] = "时间戳",
 	["ui.annotation.editor_title"] = "批注",
+	["ui.annotation.detail_edit_hint"] = "Shift + 右键编辑批注",
 	["ui.annotation.gutter_hint"] = "右键在此时间戳添加批注",
 	["ui.annotation.creator_required"] = "未设置默认 Creator，无法添加批注。请先在设置中填写默认 Creator。",
 	["ui.annotation.markdown_hint"] = "支持 Markdown 标题、列表、引用和代码块；不执行 HTML 或脚本。",

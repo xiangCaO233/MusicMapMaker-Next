@@ -81,6 +81,7 @@ return {
 	["ui.annotation.author"] = "Author",
 	["ui.annotation.timestamp"] = "Timestamp",
 	["ui.annotation.editor_title"] = "Annotation",
+	["ui.annotation.detail_edit_hint"] = "Shift + right-click to edit annotation",
 	["ui.annotation.gutter_hint"] = "Right-click to annotate this timestamp",
 	["ui.annotation.creator_required"] = "The default Creator is not set, so an annotation cannot be added. Set the default Creator in Settings first.",
 	["ui.annotation.markdown_hint"] = "Supports Markdown headings, lists, quotes, and code blocks. HTML and scripts are not executed.",
