@@ -21,6 +21,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
@@ -509,9 +510,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                         ImGuiFileDialog::Instance()->GetCurrentPath();
                     engine.setEditorConfig(config);
 
-                    Event::OpenProjectEvent ev;
-                    ev.m_projectPath = Config::utf8ToPath(folderPath);
-                    Event::EventBus::instance().publish(ev);
+                    MenuUtil::submitProjectFolderSelection(
+                        Config::utf8ToPath(folderPath));
                 }
                 ImGuiFileDialog::Instance()->Close();
             }

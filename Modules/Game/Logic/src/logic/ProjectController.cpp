@@ -80,7 +80,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
 {
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool ok = (byte >= 'a' && byte <= 'z') ||
+        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -751,12 +751,13 @@ ProjectController::ProjectController()
     auto& eventBus            = Event::EventBus::instance();
     m_openProjectSubscription = eventBus.subscribe<Event::OpenProjectEvent>(
         [this](const Event::OpenProjectEvent& event) {
-            requestOpenProject(event.m_projectPath);
+            requestOpenProject(event.m_projectPath, event.m_origin);
         });
     m_openTemporaryProjectSubscription =
         eventBus.subscribe<Event::OpenTemporaryProjectPackageEvent>(
             [this](const Event::OpenTemporaryProjectPackageEvent& event) {
-                requestOpenTemporaryProjectPackage(event.m_packagePath);
+                requestOpenTemporaryProjectPackage(event.m_packagePath,
+                                                   event.m_origin);
             });
     m_closeProjectSubscription =
         eventBus.subscribe<Event::ProjectCloseRequestedEvent>(
@@ -849,7 +850,7 @@ const Project* ProjectController::currentProject() const
 /// @brief 请求打开项目，必要时等待 UI 完成旧画布关闭。
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 void ProjectController::requestOpenProject(
-    const std::filesystem::path& projectPath)
+    const std::filesystem::path& projectPath, Event::ProjectOpenOrigin origin)
 {
     if ( projectPath.empty() ) {
         return;
@@ -871,10 +872,12 @@ void ProjectController::requestOpenProject(
     m_projectCloseReady        = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
+        m_switchOrigin                 = origin;
         m_pendingProjectSwitchPath     = projectPath;
         m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
         m_pendingProjectSwitchCreationOptions.reset();
     } else {
+        m_requestedOrigin          = origin;
         m_requestedProjectPath     = projectPath;
         m_requestedProjectOpenMode = ProjectOpenMode::Normal;
     }
@@ -884,7 +887,7 @@ void ProjectController::requestOpenProject(
 /// @brief 请求打开谱面包为临时只读项目。
 /// @param packagePath 要解压阅览的谱面包路径。
 void ProjectController::requestOpenTemporaryProjectPackage(
-    const std::filesystem::path& packagePath)
+    const std::filesystem::path& packagePath, Event::ProjectOpenOrigin origin)
 {
     if ( packagePath.empty() ) {
         return;
@@ -905,10 +908,12 @@ void ProjectController::requestOpenTemporaryProjectPackage(
     m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
+        m_switchOrigin                 = origin;
         m_pendingProjectSwitchPath     = packagePath;
         m_pendingProjectSwitchOpenMode = ProjectOpenMode::TemporaryPackage;
         m_pendingProjectSwitchCreationOptions.reset();
     } else {
+        m_requestedOrigin          = origin;
         m_requestedProjectPath     = packagePath;
         m_requestedProjectOpenMode = ProjectOpenMode::TemporaryPackage;
     }
@@ -942,10 +947,12 @@ void ProjectController::requestCreateProject(
         m_requestedProjectPath.clear();
         m_requestedProjectOpenMode = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions.reset();
-        m_pendingProjectSwitchPath            = projectPath;
-        m_pendingProjectSwitchOpenMode        = ProjectOpenMode::Normal;
+        m_switchOrigin                 = Event::ProjectOpenOrigin::Unknown;
+        m_pendingProjectSwitchPath     = projectPath;
+        m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
         m_pendingProjectSwitchCreationOptions = options;
     } else {
+        m_requestedOrigin                 = Event::ProjectOpenOrigin::Unknown;
         m_requestedProjectPath            = projectPath;
         m_requestedProjectOpenMode        = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions = options;
@@ -1012,6 +1019,7 @@ void ProjectController::completePendingProjectSwitch()
     if ( m_pendingProjectSwitchPath.empty() ) return;
 
     m_pendingProjectPath            = m_pendingProjectSwitchPath;
+    m_pendingOrigin                 = m_switchOrigin;
     m_pendingProjectOpenMode        = m_pendingProjectSwitchOpenMode;
     m_pendingProjectCreationOptions = m_pendingProjectSwitchCreationOptions;
     m_pendingProjectSwitchPath.clear();
@@ -1057,6 +1065,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     std::filesystem::path requestedPath;
     /// @brief 本轮消费到的项目打开模式。
     ProjectOpenMode requestedOpenMode = ProjectOpenMode::Normal;
+    /// @brief 本轮请求的用户入口，不受后续请求覆盖。
+    Event::ProjectOpenOrigin requestedOrigin{
+        Event::ProjectOpenOrigin::Unknown
+    };
     /// @brief 本轮消费到的项目创建初始设置。
     std::optional<ProjectCreationOptions> requestedCreationOptions;
     /// @brief 本轮是否消费到项目关闭请求。
@@ -1077,6 +1089,7 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         }
         if ( !m_requestedProjectPath.empty() ) {
             requestedPath            = m_requestedProjectPath;
+            requestedOrigin          = m_requestedOrigin;
             requestedOpenMode        = m_requestedProjectOpenMode;
             requestedCreationOptions = m_requestedProjectCreationOptions;
             m_requestedProjectPath.clear();
@@ -1114,6 +1127,7 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             m_pendingProjectCreationOptions.reset();
             m_pendingProjectClose                 = false;
             m_pendingProjectSwitchPath            = requestedPath;
+            m_switchOrigin                        = requestedOrigin;
             m_pendingProjectSwitchOpenMode        = requestedOpenMode;
             m_pendingProjectSwitchCreationOptions = requestedCreationOptions;
             shouldPublishCanvasClose              = true;
@@ -1125,6 +1139,7 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
                 Config::pathToUtf8(requestedPath));
         } else {
             action.m_projectPathToOpen      = requestedPath;
+            action.m_origin                 = requestedOrigin;
             action.m_projectCreationOptions = requestedCreationOptions;
             action.m_projectOpenMode        = requestedOpenMode;
         }
@@ -1145,6 +1160,7 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         if ( action.m_projectPathToOpen.empty() &&
              !m_pendingProjectPath.empty() ) {
             action.m_projectPathToOpen      = m_pendingProjectPath;
+            action.m_origin                 = m_pendingOrigin;
             action.m_projectOpenMode        = m_pendingProjectOpenMode;
             action.m_projectCreationOptions = m_pendingProjectCreationOptions;
             m_pendingProjectPath.clear();

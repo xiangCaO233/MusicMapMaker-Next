@@ -2,6 +2,7 @@
 
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "logic/EditorClipboard.h"
 #include "logic/ProjectTypes.h"
 #include "logic/RenderSyncRegistry.h"
@@ -553,17 +554,22 @@ private:
 
     /// @brief 打开项目目录并加载其中的所有资源。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void openProject(const std::filesystem::path& projectPath,
-                     const std::optional<ProjectCreationOptions>&
-                         creationOptions = std::nullopt);
+    void openProject(
+        const std::filesystem::path&                 projectPath,
+        const std::optional<ProjectCreationOptions>& creationOptions =
+            std::nullopt,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 打开谱面包为临时只读项目。
     /// @param packagePath 需要临时阅览的谱面包路径。
-    void openTemporaryProjectPackage(const std::filesystem::path& packagePath);
+    void openTemporaryProjectPackage(
+        const std::filesystem::path& packagePath,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 应用项目控制器打开项目后的逻辑副作用。
     /// @param openResult 项目控制器返回的打开结果。
-    void finishOpenProject(const OpenProjectResult& openResult);
+    /// @return 指定的谱面成功创建会话时返回 true。
+    bool finishOpenProject(const OpenProjectResult& openResult);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）

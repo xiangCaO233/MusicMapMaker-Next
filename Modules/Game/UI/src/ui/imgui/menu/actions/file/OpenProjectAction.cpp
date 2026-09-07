@@ -77,7 +77,7 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        MenuUtil::openProjectFolderPicker();
+        MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin::FileMenu);
     }
 
     /// @brief 消费 Ctrl+O 快捷键。
@@ -88,7 +88,8 @@ public:
     {
         ImGuiIO& io = ImGui::GetIO();
         if ( io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_O) ) {
-            execute(context, MainMenuItemActivation{});
+            MenuUtil::openProjectFolderPicker(
+                Event::ProjectOpenOrigin::Shortcut);
             return true;
         }
         return false;

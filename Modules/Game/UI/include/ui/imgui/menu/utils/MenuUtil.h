@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 
 #include <filesystem>
@@ -23,7 +24,10 @@ public:
 
     /// @brief 打开项目目录选择器并发布打开项目事件。
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。
-    static void openProjectFolderPicker();
+    static void openProjectFolderPicker(
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
+    /// @brief 提交当前项目选择器结果，保留菜单或快捷键入口。
+    static void submitProjectFolderSelection(const std::filesystem::path& path);
 
     /// @brief 打开音频导入选择器并发布导入事件。
     /// @warning 用户触发的低频路径：原生选择器可能阻塞。

@@ -264,6 +264,11 @@ add_test(NAME BeatmapLoadDiagnosticPublisherTest
 # 协作观察者绑定测试确保访客不会把收到的房主快照回传为本地编辑。
 mmm_add_test_executable(Logic BeatmapMutationObserverBindingTest
                         tests/BeatmapMutationObserverBindingTest.cpp)
+# 验证用户入口随项目切换请求传递，不受取消或覆盖请求污染。
+mmm_add_test_executable(Logic ProjectOpenOriginTest
+                        tests/ProjectOpenOriginTest.cpp)
+target_link_libraries(ProjectOpenOriginTest PRIVATE Logic Log)
+add_test(NAME ProjectOpenOriginTest COMMAND ProjectOpenOriginTest)
 target_link_libraries(BeatmapMutationObserverBindingTest PRIVATE Logic Log)
 add_test(NAME BeatmapMutationObserverBindingTest
          COMMAND BeatmapMutationObserverBindingTest)

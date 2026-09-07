@@ -1,4 +1,5 @@
 #pragma once
+#include "event/project/ProjectOpenInteractionEvent.h"
 
 #include "common/LogicCommands.h"
 #include "event/core/EventBus.h"
@@ -108,6 +109,8 @@ public:
 
         /// @brief 本次打开项目的来源模式。
         ProjectOpenMode m_projectOpenMode{ ProjectOpenMode::Normal };
+        /// @brief 随项目切换传递的用户入口。
+        Event::ProjectOpenOrigin m_origin{ Event::ProjectOpenOrigin::Unknown };
     };
 
     /// @brief 获取当前项目。
@@ -120,12 +123,15 @@ public:
 
     /// @brief 请求打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void requestOpenProject(const std::filesystem::path& projectPath);
+    void requestOpenProject(
+        const std::filesystem::path& projectPath,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 请求打开谱面包为临时只读项目。
     /// @param packagePath 要解压阅览的谱面包路径。
     void requestOpenTemporaryProjectPackage(
-        const std::filesystem::path& packagePath);
+        const std::filesystem::path& packagePath,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要创建的项目根目录。
@@ -319,6 +325,18 @@ private:
 
     /// @brief 已确认可由逻辑线程直接打开的项目路径。
     std::filesystem::path m_pendingProjectPath;
+    /// @brief 已确认请求的用户入口。
+    Event::ProjectOpenOrigin m_pendingOrigin{
+        Event::ProjectOpenOrigin::Unknown
+    };
+    /// @brief 待消费请求的用户入口。
+    Event::ProjectOpenOrigin m_requestedOrigin{
+        Event::ProjectOpenOrigin::Unknown
+    };
+    /// @brief 等待旧画布关闭的请求入口。
+    Event::ProjectOpenOrigin m_switchOrigin{
+        Event::ProjectOpenOrigin::Unknown
+    };
 
     /// @brief 已确认可由逻辑线程直接打开的项目模式。
     ProjectOpenMode m_pendingProjectOpenMode{ ProjectOpenMode::Normal };

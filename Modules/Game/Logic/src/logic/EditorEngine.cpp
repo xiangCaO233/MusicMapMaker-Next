@@ -298,7 +298,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -1241,10 +1241,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1296,7 +1296,8 @@ void EditorEngine::restoreProjectWorkspace(
 /// @param creationOptions 新建项目初始设置；普通打开时为空。
 void EditorEngine::openProject(
     const std::filesystem::path&                 projectPath,
-    const std::optional<ProjectCreationOptions>& creationOptions)
+    const std::optional<ProjectCreationOptions>& creationOptions,
+    Event::ProjectOpenOrigin                     origin)
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
@@ -1344,6 +1345,11 @@ void EditorEngine::openProject(
          !openPathError ) {
         XINFO("忽略当前项目目录的重复打开请求：{}",
               Config::pathToUtf8(actualProjectPath));
+        Event::ProjectOpenInteractionEvent event;
+        event.m_origin    = origin;
+        event.m_completed = true;
+        event.m_path      = Config::pathToUtf8(projectPath);
+        Event::EventBus::instance().publish(event);
         return;
     }
 
@@ -1367,13 +1373,19 @@ void EditorEngine::openProject(
     if ( !openResult.m_opened ) {
         return;
     }
-    finishOpenProject(openResult);
+    const bool beatmapOpened = finishOpenProject(openResult);
+    Event::ProjectOpenInteractionEvent event;
+    event.m_origin        = origin;
+    event.m_completed     = true;
+    event.m_path          = Config::pathToUtf8(projectPath);
+    event.m_beatmapOpened = beatmapOpened;
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 打开谱面包为临时只读项目。
 /// @param packagePath 需要临时阅览的谱面包路径。
 void EditorEngine::openTemporaryProjectPackage(
-    const std::filesystem::path& packagePath)
+    const std::filesystem::path& packagePath, Event::ProjectOpenOrigin origin)
 {
     publishProjectOpenStarted(packagePath, true);
     publishProjectOpenProgress(
@@ -1412,12 +1424,19 @@ void EditorEngine::openTemporaryProjectPackage(
                                     filesystemError);
         return;
     }
-    finishOpenProject(openResult);
+    const bool beatmapOpened = finishOpenProject(openResult);
+    Event::ProjectOpenInteractionEvent event;
+    event.m_origin        = origin;
+    event.m_completed     = true;
+    event.m_path          = Config::pathToUtf8(packagePath);
+    event.m_readOnly      = true;
+    event.m_beatmapOpened = beatmapOpened;
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 应用项目控制器打开项目后的逻辑副作用。
 /// @param openResult 项目控制器返回的打开结果。
-void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
+bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 {
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
@@ -1478,6 +1497,8 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
           openResult.m_projectTitle,
           openResult.m_beatmapCount);
 
+    /// @brief 指定谱面是否实际创建会话，避免解析失败误报完成。
+    bool beatmapOpened = false;
     // 如果指定了谱面路径，则通过 createSession 加载它
     if ( !openResult.m_targetBeatmapPath.empty() ) {
         publishProjectOpenProgress(
@@ -1492,7 +1513,8 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
                    Config::pathToUtf8(openResult.m_targetBeatmapPath));
         } else {
             auto map = std::make_shared<BeatMap>(std::move(loadedMap));
-            createSession(map, map->m_baseMapMetadata.name);
+            beatmapOpened =
+                createSession(map, map->m_baseMapMetadata.name) >= 0;
         }
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
@@ -1510,6 +1532,7 @@ void EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         Config::pathToUtf8(openResult.m_actualProjectPath);
     loadedEvent.m_beatmapCount = openResult.m_beatmapCount;
     Event::EventBus::instance().publish(loadedEvent);
+    return beatmapOpened;
 }
 
 bool EditorEngine::closeProject()
@@ -2618,10 +2641,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
                 sessions[i].mainAudioSyncFingerprint =
@@ -2896,8 +2919,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
     const bool timelineReady = !sessions[index].isLogoPlaceholder &&
                                SessionUtils::activateAudioTimeline(ctx, false);
-    double     totalTime     = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
-    double     minTime       = -editorConfig.visual.getEffectiveVisualOffset();
+    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    double minTime   = -editorConfig.visual.getEffectiveVisualOffset();
     if ( minTime > totalTime ) minTime = totalTime;
     ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
     if ( timelineReady ) {
@@ -3211,10 +3234,12 @@ void EditorEngine::loop()
              !projectAction.m_projectPathToOpen.empty() ) {
             if ( projectAction.m_projectOpenMode ==
                  ProjectController::ProjectOpenMode::TemporaryPackage ) {
-                openTemporaryProjectPackage(projectAction.m_projectPathToOpen);
+                openTemporaryProjectPackage(projectAction.m_projectPathToOpen,
+                                            projectAction.m_origin);
             } else {
                 openProject(projectAction.m_projectPathToOpen,
-                            projectAction.m_projectCreationOptions);
+                            projectAction.m_projectCreationOptions,
+                            projectAction.m_origin);
             }
         }
 

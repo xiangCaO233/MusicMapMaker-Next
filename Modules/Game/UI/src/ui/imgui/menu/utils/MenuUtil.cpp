@@ -232,8 +232,26 @@ void MenuUtil::dispatchCommand(const Logic::LogicCommand& cmd)
 
 /// @brief 打开项目目录选择器并发布打开项目事件。
 /// @warning 用户触发的低频路径：原生选择器可能阻塞。
-void MenuUtil::openProjectFolderPicker()
+/// @brief 唯一项目目录选择器的入口状态；仅由 UI 线程低频访问。
+static Event::ProjectOpenOrigin projectFolderPickerOrigin{
+    Event::ProjectOpenOrigin::Unknown
+};
+
+void MenuUtil::submitProjectFolderSelection(const std::filesystem::path& path)
 {
+    Event::OpenProjectEvent event;
+    event.m_projectPath = path;
+    event.m_origin      = projectFolderPickerOrigin;
+    Event::EventBus::instance().publish(event);
+    projectFolderPickerOrigin = Event::ProjectOpenOrigin::Unknown;
+}
+
+void MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin origin)
+{
+    projectFolderPickerOrigin = origin;
+    Event::ProjectOpenInteractionEvent interaction;
+    interaction.m_origin = origin;
+    Event::EventBus::instance().publish(interaction);
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         ::MMM::UI::PlayPopupOpenFeedback();
@@ -242,9 +260,7 @@ void MenuUtil::openProjectFolderPicker()
             NativeFileDialog::pickFolder(&outPath, nullptr);
 
         if ( result == NFD_OKAY ) {
-            Event::OpenProjectEvent ev;
-            ev.m_projectPath = Config::utf8ToPath(outPath);
-            Event::EventBus::instance().publish(ev);
+            submitProjectFolderSelection(Config::utf8ToPath(outPath));
             NFD_FreePathU8(outPath);
         } else if ( result == NFD_ERROR ) {
             XERROR("NFD Error: {}", NFD_GetError());
@@ -300,8 +316,8 @@ void MenuUtil::openAudioImportPicker()
     fdConfig.countSelectionMax = 1;
     fdConfig.fileName          = "";
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                 ImGuiFileDialogFlags_HideColumnType |
-                                 ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                     ImGuiFileDialogFlags_HideColumnType |
+                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
     const bool wasOpen =
         ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
@@ -383,11 +399,11 @@ std::string MenuUtil::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title    = !meta.title_unicode.empty()
-                           ? meta.title_unicode
-                           : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount = meta.track_count;
-            version  = meta.version.empty() ? "default" : meta.version;
+            title            = !meta.title_unicode.empty()
+                                   ? meta.title_unicode
+                                   : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount         = meta.track_count;
+            version          = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),

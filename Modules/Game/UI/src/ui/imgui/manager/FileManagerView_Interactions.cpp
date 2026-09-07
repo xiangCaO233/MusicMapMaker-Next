@@ -68,11 +68,7 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
         }
 
         if ( isTemporaryPackagePath(p) ) {
-            XINFO("Package dropped: {}", Config::pathToUtf8(p));
-
-            Event::OpenTemporaryProjectPackageEvent ev;
-            ev.m_packagePath = p;
-            Event::EventBus::instance().publish(ev);
+            // 文件夹和谱包由主窗口级路由统一处理，避免重复项目切换。
             continue;
         }
 
@@ -81,6 +77,7 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
         const bool isDirectory =
             std::filesystem::is_directory(p, filesystemError) &&
             !filesystemError;
+        if ( isDirectory ) continue;
         std::filesystem::path projectPath = isDirectory ? p : p.parent_path();
 
         XINFO("File dropped on FileManager: {}, opening project: {}",
