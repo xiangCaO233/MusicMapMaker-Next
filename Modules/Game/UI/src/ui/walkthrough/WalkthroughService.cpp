@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/walkthrough/WalkthroughModel.h"
+#include <algorithm>
 #include <concurrentqueue.h>
 #include <fstream>
 #include <iterator>
@@ -25,10 +26,11 @@ std::string readFile(const std::filesystem::path& path)
 }
 }  // namespace
 struct Service::Impl {
-    std::vector<Topic>    m_topics;            ///< 通过校验的主题。
-    Progress              m_progress;          ///< 独立的学习状态。
-    std::filesystem::path m_path;              ///< 专用进度文件。
-    std::string           m_error;             ///< 最近错误。
+    std::vector<Chapter>  m_chapters;  ///< 已排序章节，保留空章节入口区域。
+    std::vector<Topic>    m_topics;    ///< 通过校验的主题。
+    Progress              m_progress;  ///< 独立的学习状态。
+    std::filesystem::path m_path;      ///< 专用进度文件。
+    std::string           m_error;     ///< 最近错误。
     bool                  m_writable{ true };  ///< 损坏进度文件禁止自动覆盖。
     Event::SubscriptionID m_subscription{};    ///< 业务结果订阅。
     moodycamel::ConcurrentQueue<Event::ProjectOpenInteractionEvent>
@@ -103,7 +105,13 @@ Service::Service(const std::filesystem::path& progressPath,
     : m_impl(std::make_unique<Impl>())
 {
     m_impl->m_path = progressPath;
+    if ( auto chapters = parseChapters(BUILTIN_CHAPTERS) )
+        m_impl->m_chapters = std::move(*chapters);
+    else
+        m_impl->m_error = chapters.error();
     m_impl->add(BUILTIN_WALKTHROUGH);
+    for ( const auto* placeholder : BUILTIN_PLACEHOLDERS )
+        m_impl->add(placeholder);
     std::error_code error;
     if ( std::filesystem::is_directory(customDirectory, error) ) {
         std::filesystem::directory_iterator it(customDirectory, error), end;
@@ -111,6 +119,27 @@ Service::Service(const std::filesystem::path& progressPath,
               it.increment(error) ) {
             if ( it->path().extension() == ".json" )
                 m_impl->add(readFile(it->path()));
+        }
+    }
+    // 仅加载时排序；相同阶段保留声明顺序，旧主题和未知章节仍可访问。
+    std::stable_sort(
+        m_impl->m_topics.begin(),
+        m_impl->m_topics.end(),
+        [](const Topic& a, const Topic& b) { return a.m_order < b.m_order; });
+    for ( const auto& topic : m_impl->m_topics ) {
+        if ( std::none_of(m_impl->m_chapters.begin(),
+                          m_impl->m_chapters.end(),
+                          [&](const Chapter& chapter) {
+                              return chapter.m_id == topic.m_chapter;
+                          }) ) {
+            Chapter chapter;
+            chapter.m_id = topic.m_chapter;
+            chapter.m_title.m_translations["en_us"] =
+                topic.m_chapter == "other" ? "Other" : topic.m_chapter;
+            chapter.m_title.m_translations["zh_cn"] =
+                topic.m_chapter == "other" ? "其他" : topic.m_chapter;
+            chapter.m_order = 100000;
+            m_impl->m_chapters.push_back(std::move(chapter));
         }
     }
     error.clear();
@@ -136,6 +165,10 @@ Service::~Service()
 {
     Event::EventBus::instance().unsubscribe<Event::ProjectOpenInteractionEvent>(
         m_impl->m_subscription);
+}
+const std::vector<Chapter>& Service::chapters() const
+{
+    return m_impl->m_chapters;
 }
 void Service::update()
 {

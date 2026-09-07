@@ -13,6 +13,29 @@ int main(int argc, char** argv)
 {
     using namespace MMM::UI::Walkthrough;
     if ( argc != 2 ) return 1;
+    const auto chapters = parseChapters(BUILTIN_CHAPTERS);
+    if ( !chapters || chapters->size() != 2 ||
+         (*chapters)[0].m_id != "creation" ||
+         (*chapters)[1].m_id != "personalization" )
+        return 21;
+    if ( parseChapters(R"([{"id":"a","title":"A"},{"id":"a","title":"B"}])") ||
+         parseChapters(R"([{"id":"a","title":"A","order":1.5}])") )
+        return 22;
+    if (
+        parseTopic(
+            R"({"id":"bad","title":"Bad","order":-1,"placeholder":true})") ||
+        parseTopic(R"({"id":"bad","title":"Bad","placeholder":"true"})") ||
+        parseTopic(
+            R"({"id":"bad","title":"Bad","placeholder":true,"branches":[{}]})") ||
+        parseTopic(R"({"id":"bad","title":"Bad","branches":[]})") )
+        return 23;
+    for ( const auto* input : BUILTIN_PLACEHOLDERS ) {
+        const auto placeholder = parseTopic(input);
+        if ( !placeholder || !placeholder->m_placeholder ||
+             !placeholder->m_branches.empty() ||
+             placeholder->m_chapter != "creation" )
+            return 24;
+    }
     const auto topic = parseTopic(BUILTIN_WALKTHROUGH);
     if ( !topic || topic->m_branches.size() != 5 || !topic->m_anyBranch )
         return 2;
@@ -62,7 +85,17 @@ int main(int argc, char** argv)
              std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto path = directory / "progress.json";
     {
-        Service service(path, directory / "walkthroughs");
+        Service     service(path, directory / "walkthroughs");
+        const auto& topics = service.topics();
+        if ( topics.size() != 4 || service.chapters().size() != 2 ||
+             topics[0].m_id != "mmm.open-project" ||
+             topics[1].m_id != "mmm.create-project" ||
+             topics[2].m_id != "mmm.create-beatmap" ||
+             topics[3].m_id != "mmm.compose-beatmap" ||
+             topics[0].m_order != topics[1].m_order ||
+             topics[1].m_order >= topics[2].m_order ||
+             topics[2].m_order >= topics[3].m_order )
+            return 25;
         MMM::Event::ProjectOpenInteractionEvent event;
         event.m_origin    = MMM::Event::ProjectOpenOrigin::PackageDrop;
         event.m_completed = true;

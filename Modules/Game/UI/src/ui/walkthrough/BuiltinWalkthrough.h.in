@@ -1,3 +1,11 @@
 #pragma once
 /// @brief 内置演练声明随程序编译分发，不覆盖用户目录中的自定义主题。
 inline constexpr const char* BUILTIN_WALKTHROUGH = R"MMM_WALK(@MMM_BUILTIN_WALKTHROUGH@)MMM_WALK";
+/// @brief 有序章节目录，包含尚未添加主题的章节。
+inline constexpr const char* BUILTIN_CHAPTERS = R"MMM_WALK(@MMM_WALKTHROUGH_chapters@)MMM_WALK";
+/// @brief 内置占位主题声明，不伪造步骤或学习完成状态。
+inline constexpr const char* BUILTIN_PLACEHOLDERS[] = {
+    R"MMM_WALK(@MMM_WALKTHROUGH_create-project@)MMM_WALK",
+    R"MMM_WALK(@MMM_WALKTHROUGH_create-beatmap@)MMM_WALK",
+    R"MMM_WALK(@MMM_WALKTHROUGH_compose-beatmap@)MMM_WALK"
+};

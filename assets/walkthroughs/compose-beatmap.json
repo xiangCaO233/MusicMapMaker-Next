@@ -1,0 +1,8 @@
+{
+  "id": "mmm.compose-beatmap",
+  "chapter": "creation",
+  "order": 30,
+  "placeholder": true,
+  "title": {"zh_cn": "创作谱面", "en_us": "Compose a beatmap"},
+  "branches": []
+}

@@ -1,0 +1,4 @@
+[
+  {"id": "creation", "order": 10, "title": {"zh_cn": "创作", "en_us": "Creation"}},
+  {"id": "personalization", "order": 20, "title": {"zh_cn": "个性化", "en_us": "Personalization"}}
+]

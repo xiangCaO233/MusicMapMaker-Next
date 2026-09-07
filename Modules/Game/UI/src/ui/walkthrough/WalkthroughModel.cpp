@@ -23,6 +23,15 @@ std::string field(const nlohmann::json& object, const char* name)
     return it != object.end() && it->is_string() ? it->get<std::string>()
                                                  : std::string{};
 }
+/// @brief 无异常读取有限非负整数顺序，缺失时保留默认值。
+bool readOrder(const nlohmann::json& object, int& result)
+{
+    const auto it = object.find("order");
+    if ( it == object.end() ) return true;
+    if ( !it->is_number_integer() || *it < 0 || *it > 100000 ) return false;
+    result = it->get<int>();
+    return true;
+}
 /// @brief 无异常读取本地化文本。
 Text text(const nlohmann::json& object, const char* name)
 {
@@ -63,6 +72,35 @@ const std::string& Text::get(std::string_view language) const
     return m_translations.empty() ? empty : m_translations.begin()->second;
 }
 
+std::expected<std::vector<Chapter>, std::string> parseChapters(
+    std::string_view input)
+{
+    if ( input.size() > 1024 * 1024 )
+        return std::unexpected("章节目录超过 1 MiB");
+    const auto json = nlohmann::json::parse(input, nullptr, false);
+    if ( !json.is_array() || json.size() > 64 )
+        return std::unexpected("章节目录必须为有限数组");
+    std::vector<Chapter>  chapters;
+    std::set<std::string> ids;
+    for ( const auto& item : json ) {
+        if ( !item.is_object() ) return std::unexpected("章节格式错误");
+        Chapter chapter;
+        chapter.m_id    = field(item, "id");
+        chapter.m_title = text(item, "title");
+        if ( !validId(chapter.m_id) || !ids.insert(chapter.m_id).second ||
+             chapter.m_title.m_translations.empty() ||
+             !readOrder(item, chapter.m_order) )
+            return std::unexpected("章节 ID、标题或顺序无效");
+        chapters.push_back(std::move(chapter));
+    }
+    std::stable_sort(chapters.begin(),
+                     chapters.end(),
+                     [](const Chapter& a, const Chapter& b) {
+                         return a.m_order < b.m_order;
+                     });
+    return chapters;
+}
+
 std::expected<Topic, std::string> parseTopic(std::string_view input)
 {
     if ( input.size() > 1024 * 1024 ) return std::unexpected("主题超过 1 MiB");
@@ -74,6 +112,18 @@ std::expected<Topic, std::string> parseTopic(std::string_view input)
     topic.m_description = text(json, "description");
     if ( !validId(topic.m_id) || topic.m_title.m_translations.empty() )
         return std::unexpected("主题缺少有效 ID 或标题");
+    if ( json.contains("chapter") ) {
+        topic.m_chapter = field(json, "chapter");
+        if ( !validId(topic.m_chapter) ) return std::unexpected("无效章节 ID");
+    }
+    if ( !readOrder(json, topic.m_order) )
+        return std::unexpected("无效主题顺序");
+    if ( auto placeholder = json.find("placeholder");
+         placeholder != json.end() ) {
+        if ( !placeholder->is_boolean() )
+            return std::unexpected("placeholder 必须为布尔值");
+        topic.m_placeholder = placeholder->get<bool>();
+    }
     if ( auto version = json.find("version"); version != json.end() ) {
         if ( !version->is_number_integer() || *version < 1 ||
              *version > 100000 )
@@ -85,6 +135,12 @@ std::expected<Topic, std::string> parseTopic(std::string_view input)
         return std::unexpected("completion 必须为 any 或 all");
     topic.m_anyBranch   = mode != "all";
     const auto branches = json.find("branches");
+    if ( topic.m_placeholder ) {
+        if ( branches != json.end() &&
+             (!branches->is_array() || !branches->empty()) )
+            return std::unexpected("占位主题不能包含操作分支");
+        return topic;
+    }
     if ( branches == json.end() || !branches->is_array() || branches->empty() ||
          branches->size() > 32 )
         return std::unexpected("主题需要 1 至 32 个分支");

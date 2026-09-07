@@ -1,5 +1,7 @@
 {
   "id": "mmm.open-project",
+  "chapter": "creation",
+  "order": 10,
   "version": 1,
   "completion": "any",
   "title": {"zh_cn": "打开谱面项目", "en_us": "Open a beatmap project"},

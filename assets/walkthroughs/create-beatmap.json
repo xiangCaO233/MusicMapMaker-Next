@@ -1,0 +1,8 @@
+{
+  "id": "mmm.create-beatmap",
+  "chapter": "creation",
+  "order": 20,
+  "placeholder": true,
+  "title": {"zh_cn": "新建谱面", "en_us": "Create a beatmap"},
+  "branches": []
+}

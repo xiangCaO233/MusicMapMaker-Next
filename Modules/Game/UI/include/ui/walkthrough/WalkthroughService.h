@@ -9,6 +9,7 @@
 namespace MMM::UI::Walkthrough
 {
 struct Topic;
+struct Chapter;
 struct Step;
 class Progress;
 /// @brief 独立于演练窗口的主题目录、事件适配、操作注册及进度存储服务。
@@ -26,6 +27,8 @@ public:
     void update();
     /// @brief 取得已验证的主题目录。
     const std::vector<Topic>& topics() const;
+    /// @brief 取得按顺序排列的章节，包括空章节。
+    const std::vector<Chapter>& chapters() const;
     /// @brief 取得学习进度的非拥有引用。
     const Progress& progress() const;
     /// @brief 返回加载或保存失败说明。

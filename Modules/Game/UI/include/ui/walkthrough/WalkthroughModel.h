@@ -32,12 +32,24 @@ struct Branch {
     Text              m_title;  ///< 分支标题。
     std::vector<Step> m_steps;  ///< 有序步骤，可独立手动确认。
 };
+/// @brief 主题目录中的章节，允许暂时没有主题。
+struct Chapter {
+    std::string m_id;          ///< 稳定章节标识。
+    Text        m_title;       ///< 本地化章节标题。
+    int         m_order{ 0 };  ///< 章节展示顺序，数值较小者在前。
+};
+/// @brief 解析章节目录，拒绝重复标识和非法顺序。
+std::expected<std::vector<Chapter>, std::string> parseChapters(
+    std::string_view json);
 /// @brief 可由数据文件扩展的演练主题。
 struct Topic {
     std::string m_id;            ///< 稳定主题标识。
     int         m_version{ 1 };  ///< 内容修订版本，稳定步骤 ID 保留学习记录。
     Text        m_title;         ///< 主题标题。
     Text        m_description;   ///< 主题说明。
+    std::string m_chapter{ "other" };  ///< 所属章节，旧主题归入其他章节。
+    int         m_order{ 0 };  ///< 章节内学习阶段，相同值表示平级，不限制进入。
+    bool        m_placeholder{ false };  ///< 仅预留入口，尚未定义步骤。
     bool m_anyBranch{ true };  ///< true 表示任一分支完成目标，false 要求全部。
     std::vector<Branch> m_branches;  ///< 操作分支。
 };
