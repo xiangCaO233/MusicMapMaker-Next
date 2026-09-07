@@ -29,6 +29,13 @@ public:
     /// ECS 遍历、完整排序或无条件堆分配。
     void update(UIManager* sourceManager) override;
 
+    /// @brief 查询主编辑画布是否已注册，供启动页确定创建顺序。
+    /// @warning UI 线程读取既有集合，不扫描会话或创建画布。
+    [[nodiscard]] bool hasInitializedCanvas() const
+    {
+        return !m_initializedCanvases.empty();
+    }
+
     /// @brief 获取实际类型指针
     void* getActualInstance() override { return this; }
 

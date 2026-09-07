@@ -26,6 +26,7 @@
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -1219,16 +1220,6 @@ void UIManager::onUpdateUI()
 
     consumePendingProjectLifecycleUpdates();
     syncProjectWorkspaceState();
-    if ( m_openWelcome ) {
-        if ( !getView<MarkdownImageCache>("WalkthroughImages") )
-            registerView("WalkthroughImages",
-                         std::make_unique<MarkdownImageCache>());
-        if ( auto* view = getView<WelcomeView>("Welcome") )
-            view->showHome();
-        else
-            registerView("Welcome", std::make_unique<WelcomeView>());
-        m_openWelcome = false;
-    }
 
     // 清理已关闭的 IUIView
     std::vector<std::string> toRemove;
@@ -1337,6 +1328,24 @@ void UIManager::onUpdateUI()
 
         // 内部触发 ImGui 渲染和画笔收集
         it->second->update(this);
+    }
+
+    // 主画布由 CanvasTabManager 在 update 中注册，欢迎页必须排在它之后。
+    // 逻辑会话可能迟到，保留打开请求直到画布确实存在，不靠固定延时猜测就绪。
+    if ( m_openWelcome ) {
+        const auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
+        if ( !m_canvasWorkspaceService ||
+             (tabs && tabs->hasInitializedCanvas()) ) {
+            if ( !getView<MarkdownImageCache>("WalkthroughImages") )
+                registerView("WalkthroughImages",
+                             std::make_unique<MarkdownImageCache>());
+            if ( auto* view = getView<WelcomeView>("Welcome") )
+                view->showHome();
+            else
+                registerView("Welcome", std::make_unique<WelcomeView>());
+            // 新注册视图下一帧才更新，编辑器先创建窗口，欢迎页随后请求选中。
+            m_openWelcome = false;
+        }
     }
 
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
