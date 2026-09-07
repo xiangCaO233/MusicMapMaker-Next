@@ -8,6 +8,7 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
 #include <cmath>
 #include <string_view>
@@ -136,6 +137,8 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         lastFixedToolWindow    = fixedToolWindow;
         hasLastFixedToolWindow = true;
 
+        if ( auto* welcome = sourceManager->getView<WelcomeView>("Welcome") )
+            welcome->prepareForDockLayoutChange();
         ImGui::DockBuilderRemoveNode(dockspace_id);
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
         const float dockspaceWidth = viewport->WorkSize.x - sidebarWidth -

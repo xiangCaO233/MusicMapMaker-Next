@@ -1,5 +1,6 @@
 #include "ui/UIManager.h"
 #include "audio/AudioManager.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -34,9 +35,14 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/project/ProjectDropRouter.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughService.h"
+#include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
@@ -217,7 +223,8 @@ bool startsWith(std::string_view text, std::string_view prefix)
            text.substr(0, prefix.size()) == prefix;
 }
 
-/// @brief 过滤项目工作区 ImGui ini 中跨项目不稳定的多视口平台状态。
+/// @brief
+/// 过滤项目工作区中的多视口平台状态与应用级欢迎页，避免项目覆盖全局窗口。
 /// @param iniData 原始 ImGui ini 数据。
 /// @return 移除平台 viewport 段和字段后的 ImGui ini 数据。
 std::string sanitizeProjectWorkspaceIni(std::string_view iniData)
@@ -244,7 +251,8 @@ std::string sanitizeProjectWorkspaceIni(std::string_view iniData)
         if ( startsWith(lineWithoutEnd, "[Viewport][") ) {
             skipViewportSection = true;
         } else if ( startsWith(lineWithoutEnd, "[") ) {
-            skipViewportSection = false;
+            skipViewportSection = startsWith(lineWithoutEnd, "[Window][") &&
+                                  lineWithoutEnd.ends_with("###WelcomePage]");
         }
 
         if ( !skipViewportSection &&
@@ -295,8 +303,26 @@ UiFrameSnapshot captureUiFrameSnapshot()
 }
 }  // namespace
 
+void UIManager::openWelcome()
+{
+    m_openWelcome = true;
+}
+Walkthrough::Service& UIManager::walkthroughService()
+{
+    return *m_walkthrough;
+}
+
 UIManager::UIManager()
 {
+    m_walkthrough = std::make_unique<Walkthrough::Service>(
+        Config::AppPaths::configRootPath() / "walkthrough-progress.json",
+        Config::AppPaths::configRootPath() / "walkthroughs");
+    m_walkthrough->registerAction("open_folder",
+                                  [] { MenuUtil::openProjectFolderPicker(); });
+    m_projectDropRouter = std::make_unique<ProjectDropRouter>();
+    m_openWelcome       = Config::AppConfig::instance()
+                        .getEditorSettings()
+                        .m_showWelcomeOnStartup;
     CLayWrapperCore::instance().setupClayTextMeasurement();
 
     auto& eventBus = Event::EventBus::instance();
@@ -788,6 +814,8 @@ void UIManager::syncProjectWorkspaceState()
             std::string sanitizedIni =
                 sanitizeProjectWorkspaceIni(workspace.m_imguiIniData);
             if ( !sanitizedIni.empty() ) {
+                if ( auto* welcome = getView<WelcomeView>("Welcome") )
+                    welcome->prepareForDockLayoutChange();
                 ImGui::LoadIniSettingsFromMemory(sanitizedIni.data(),
                                                  sanitizedIni.size());
                 MainDockSpaceUI::markProjectWorkspaceLayoutLoaded();
@@ -1168,11 +1196,13 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    m_walkthrough->update();
     // 文件指令也只尝试此锁，且在执行前取得它；普通 UI 帧中的会话读取
     // 因而不会撞上长时间转码。后台准备任务在本函数返回前已完成。
     std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
                                        std::try_to_lock);
     const bool       fileOperationBusy = !fileOperationLock.owns_lock();
+    m_projectDropRouter->update(!fileOperationBusy);
     if ( auto* dock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
         dock->updateSaveFeedback(fileOperationBusy);
     }
@@ -1189,6 +1219,16 @@ void UIManager::onUpdateUI()
 
     consumePendingProjectLifecycleUpdates();
     syncProjectWorkspaceState();
+    if ( m_openWelcome ) {
+        if ( !getView<MarkdownImageCache>("WalkthroughImages") )
+            registerView("WalkthroughImages",
+                         std::make_unique<MarkdownImageCache>());
+        if ( auto* view = getView<WelcomeView>("Welcome") )
+            view->showHome();
+        else
+            registerView("Welcome", std::make_unique<WelcomeView>());
+        m_openWelcome = false;
+    }
 
     // 清理已关闭的 IUIView
     std::vector<std::string> toRemove;

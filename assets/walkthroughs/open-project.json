@@ -1,0 +1,29 @@
+{
+  "id": "mmm.open-project",
+  "version": 1,
+  "completion": "any",
+  "title": {"zh_cn": "打开谱面项目", "en_us": "Open a beatmap project"},
+  "description": {"zh_cn": "五种方式任选其一即可打开项目，各分支可独立练习。每一步都可以点击“已了解”，不必为了完成演练反复切换项目。实操成功会自动标记；取消或失败不会算作打开成功。", "en_us": "Choose any of five ways to open a project. Explore each branch independently, or acknowledge individual steps without switching projects. Successful operations are detected automatically; cancelled or failed opens are not."},
+  "branches": [
+    {"id": "menu", "title": {"zh_cn": "方式一：文件菜单", "en_us": "Method 1: File menu"}, "steps": [
+      {"id": "menu-picker", "title": {"zh_cn": "从文件菜单打开文件夹", "en_us": "Open the folder picker from File"}, "body": {"zh_cn": "点击顶部 **文件 → 打开项目**，唤出文件夹选择器。注意“打开项目目录”是定位当前项目，而不是选择另一个项目。演练窗口可以保持打开，不会阻止操作。", "en_us": "Choose **File → Open Project** to select a folder. The separate Open Project Folder entry reveals the current project instead. This walkthrough can stay open while you work."}, "signals": ["project.menu.picker", "project.menu.ready"]},
+      {"id": "menu-ready", "title": {"zh_cn": "选择项目目录并等待就绪", "en_us": "Select a project folder and wait for it to open"}, "body": {"zh_cn": "选择包含谱面和资源的文件夹并确认。项目就绪后，可在谱面管理中选择要查看的谱面；如果存在未保存修改，请先处理保存提示。", "en_us": "Select the folder containing your beatmaps and resources. Once ready, choose a beatmap in Beatmap Manager. Resolve any unsaved-change prompts first."}, "signals": ["project.menu.ready"]}
+    ]},
+    {"id": "shortcut", "title": {"zh_cn": "方式二：快捷键", "en_us": "Method 2: Keyboard shortcut"}, "steps": [
+      {"id": "shortcut-picker", "title": {"zh_cn": "按 Ctrl+O 唤出选择器", "en_us": "Press Ctrl+O"}, "body": {"zh_cn": "回到软件窗口，关闭其他模态对话框，然后按 **Ctrl+O**。快捷键会直接打开文件夹选择器，无需展开文件菜单。", "en_us": "Focus the app, close other modal dialogs, and press **Ctrl+O** to open the folder picker directly."}, "signals": ["project.shortcut.picker", "project.shortcut.ready"]},
+      {"id": "shortcut-ready", "title": {"zh_cn": "确认项目文件夹", "en_us": "Confirm the project folder"}, "body": {"zh_cn": "选择项目文件夹并确认。此分支与文件菜单功能相同，但会单独记录快捷键的实操结果。", "en_us": "Select and confirm a project folder. This does the same work as the File menu, but the shortcut branch tracks its own completion."}, "signals": ["project.shortcut.ready"]}
+    ]},
+    {"id": "folder-drop", "title": {"zh_cn": "方式三：拖入文件夹", "en_us": "Method 3: Drop a folder"}, "steps": [
+      {"id": "folder-prepare", "title": {"zh_cn": "在系统文件管理器中找到项目文件夹", "en_us": "Find the project folder in your file manager"}, "body": {"zh_cn": "打开系统文件管理器，找到项目文件夹。每次拖入一个文件夹；不是拖动软件内部的树状目录项。", "en_us": "Locate the project folder in your operating system's file manager. Drag one folder at a time, rather than an item from the app's own tree."}, "signals": ["project.folder_drop.ready"]},
+      {"id": "folder-ready", "title": {"zh_cn": "拖到软件窗口并松开", "en_us": "Drop it into the app"}, "body": {"zh_cn": "将文件夹拖到软件窗口中松开，包括演练窗口区域。软件会将该目录作为项目打开；有模态对话框时先关闭它。", "en_us": "Drop the folder anywhere inside the app, including this walkthrough. The directory opens as a project. Close modal dialogs before dropping."}, "signals": ["project.folder_drop.ready"]}
+    ]},
+    {"id": "beatmap-drop", "title": {"zh_cn": "方式四：拖入谱面文件", "en_us": "Method 4: Drop a beatmap onto the canvas"}, "steps": [
+      {"id": "beatmap-prepare", "title": {"zh_cn": "找到谱面文件和画布", "en_us": "Locate the beatmap and the canvas"}, "body": {"zh_cn": "在系统文件管理器中找到 **.mmm / .osu / .mc / .imd** 谱面文件。露出软件中的谱面画布或欢迎画布，不要投放到资源下拉框。", "en_us": "Locate a **.mmm / .osu / .mc / .imd** file. Expose a beatmap canvas or the welcome canvas; do not drop it onto a resource selector."}, "signals": ["project.beatmap_drop.ready"]},
+      {"id": "beatmap-ready", "title": {"zh_cn": "拖到画布，打开项目并查看谱面", "en_us": "Drop onto the canvas to open and view it"}, "body": {"zh_cn": "拖到画布后松开。软件先打开谱面所在目录的项目，项目准备完成后再打开这张谱面。只有谱面成功加载到会话，才会自动完成此步骤。", "en_us": "Drop the file onto the canvas. The app opens its containing project first, then loads this beatmap. This step completes automatically only after that beatmap loads successfully."}, "signals": ["project.beatmap_drop.ready"]}
+    ]},
+    {"id": "package-drop", "title": {"zh_cn": "方式五：临时只读打开谱包", "en_us": "Method 5: Preview a package read-only"}, "steps": [
+      {"id": "package-prepare", "title": {"zh_cn": "找到 osz / mcz / mpk 谱包", "en_us": "Find an osz / mcz / mpk package"}, "body": {"zh_cn": "在系统文件管理器中找到 **.osz / .mcz / .mpk** 文件，不需要手动解压。", "en_us": "Locate an **.osz / .mcz / .mpk** file in your file manager. No manual extraction is needed."}, "signals": ["project.package_drop.ready"]},
+      {"id": "package-ready", "title": {"zh_cn": "拖入软件，以临时只读方式查看", "en_us": "Drop into the app for a temporary read-only preview"}, "body": {"zh_cn": "将谱包拖入软件窗口。软件解压到临时缓存后以只读项目打开，不会直接修改原始谱包。需要编辑时，先按临时项目提示保存到正式目录。", "en_us": "Drop the package into the app. It is extracted into a temporary cache and opened read-only without modifying the original archive. To edit, first save it to a regular project folder using the temporary-project prompt."}, "signals": ["project.package_drop.ready"]}
+    ]}
+  ]
+}

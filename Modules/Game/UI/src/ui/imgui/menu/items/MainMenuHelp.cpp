@@ -15,6 +15,13 @@ namespace MMM::UI
 MainMenuHelp::MainMenuHelp()
 {
     registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_INFO_CIRCLE,
+        "ui.welcome.title",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenWelcomeAction()));
+    registerItem(std::make_unique<MainMenuSeparatorItem>());
+    registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_DOWNLOAD,
         "ui.help.check_update",
         MainMenuItemTextKind::TranslationKey,

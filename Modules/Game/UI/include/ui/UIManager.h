@@ -35,6 +35,11 @@ class CollaborationRoom;
 
 namespace MMM::UI
 {
+namespace Walkthrough
+{
+class Service;
+}
+class ProjectDropRouter;
 class ICanvasView;
 class IAuxiliaryWindowView;
 class ICanvasWorkspaceService;
@@ -55,6 +60,10 @@ public:
 
     /// @brief 取消项目生命周期订阅并销毁 UI 管理器。
     ~UIManager();
+    /// @brief 请求在下一帧打开欢迎页并返回主题目录，不改变启动偏好。
+    void openWelcome();
+    /// @brief 取得不依赖视图开关的演练服务。
+    Walkthrough::Service& walkthroughService();
 
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
@@ -241,6 +250,12 @@ public:
                                uint32_t taskIndex) override;
 
 private:
+    /// @brief 学习状态和事件订阅先于视图构造、后于视图销毁。
+    std::unique_ptr<Walkthrough::Service> m_walkthrough;
+    /// @brief 主窗口级拖放处理器，不依赖具体窗口是否打开。
+    std::unique_ptr<ProjectDropRouter> m_projectDropRouter;
+    /// @brief 延迟创建窗口，避免遍历视图时修改视图注册表。
+    bool m_openWelcome{ false };
     /// @brief 跨线程投递到 UI 的项目生命周期快照。
     struct ProjectUiLifecycleUpdate {
         /// @brief 本次更新类型。

@@ -6,6 +6,8 @@
 
 namespace MMM::UI
 {
+/// @brief 创建打开欢迎页主题目录的帮助菜单动作。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenWelcomeAction();
 
 /// @brief 创建检查更新动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createCheckUpdateAction();

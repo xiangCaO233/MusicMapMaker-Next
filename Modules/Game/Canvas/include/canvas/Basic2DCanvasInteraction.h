@@ -51,6 +51,10 @@ public:
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
 
+    /// @brief 处理落在当前画布上的系统文件拖放，不要求画布已获得编辑焦点。
+    /// @warning 每个可见帧检查队列；文件系统访问只发生于实际收到拖放时。
+    void handleDrops(UI::UIManager* sourceManager);
+
     /// @brief 处理当前鼠标所在主画布上的 Ctrl/Command/Alt 修饰键滚轮。
     /// @param currentSnapshot 当前渲染快照。
     /// @param allowSelectionScroll 是否允许 Ctrl 滚轮移动活动框选。
@@ -140,7 +144,6 @@ private:
     std::vector<PendingDrop> m_pendingDrops;
     Event::SubscriptionID    m_dropSubId;
 
-    void handleDrops(UI::UIManager* sourceManager);
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。
     /// @param currentSnapshot 当前主画布渲染快照。

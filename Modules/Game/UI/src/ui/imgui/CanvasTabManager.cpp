@@ -9,6 +9,7 @@
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/walkthrough/WelcomeView.h"
 
 namespace MMM::UI
 {
@@ -103,8 +104,11 @@ void CanvasTabManager::focusPendingSessionCanvas(
         return;
     }
 
-    const auto& entry  = entries[static_cast<size_t>(focusIndex)];
-    auto*       canvas = sourceManager->getCanvasView(entry.cameraId);
+    const auto& entry   = entries[static_cast<size_t>(focusIndex)];
+    const auto* welcome = sourceManager->getView<WelcomeView>("Welcome");
+    // 欢迎页存在时，逻辑层迟到的占位会话初始化不得覆盖用户当前标签选择。
+    if ( entry.isLogoPlaceholder && welcome && welcome->isOpen() ) return;
+    auto* canvas = sourceManager->getCanvasView(entry.cameraId);
     if ( !canvas ) {
         workspace->requestEntryFocus(focusIndex);
         return;

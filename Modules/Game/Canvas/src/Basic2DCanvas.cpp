@@ -19,6 +19,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -242,14 +243,19 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     ImGuiID dockId =
         m_shouldDockToCenter ? UI::MainDockSpaceUI::getCenterDockId() : 0;
     std::string windowName = fmt::format("{}###{}", title, m_canvasName);
+    const auto* welcome    = sourceManager->getView<UI::WelcomeView>("Welcome");
+    const bool  keepWelcomeFocus =
+        isLogoPlaceholder && welcome && welcome->isOpen();
     if ( m_shouldFocusNextFrame ) {
-        ImGui::SetNextWindowFocus();
+        if ( !keepWelcomeFocus ) ImGui::SetNextWindowFocus();
         m_shouldFocusNextFrame = false;
     }
     UI::LayoutContext lctx(m_layoutCtx,
                            windowName,
-                           false,
-                           ImGuiWindowFlags_NoTitleBar,
+                           true,
+                           keepWelcomeFocus
+                               ? ImGuiWindowFlags_NoFocusOnAppearing
+                               : ImGuiWindowFlags_None,
                            showClose ? &m_isOpen : nullptr,
                            dockId,
                            ImGuiCond_Always);
@@ -322,6 +328,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                   m_logicalWidth,
                                   m_logicalHeight);
         } else {
+            m_interaction->handleDrops(sourceManager);
             m_interaction->updateHoverState(m_logicalWidth, m_logicalHeight);
             m_interaction->updateTransientUi();
         }

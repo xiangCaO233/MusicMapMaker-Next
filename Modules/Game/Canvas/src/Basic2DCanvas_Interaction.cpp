@@ -365,13 +365,13 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                                   right >= canvasWidth - edgeEpsilon &&
-                                   bottom >= canvasHeight - edgeEpsilon;
+                              right >= canvasWidth - edgeEpsilon &&
+                              bottom >= canvasHeight - edgeEpsilon;
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                               canvasScreenY + canvasHeight };
+                            canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -632,7 +632,7 @@ double marqueeAutoScrollTargetTime(
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -867,9 +867,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
-                              pointerX <= cardRightX && pointerY >= cardTopY &&
-                              pointerY <= cardBottomY;
+        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
+                             pointerX <= cardRightX && pointerY >= cardTopY &&
+                             pointerY <= cardBottomY;
         if ( hovered && !result.marker ) {
             result.marker    = entry.marker;
             result.itemIndex = entry.itemIndex;
@@ -877,13 +877,13 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const int   firstVertex = drawList->VtxBuffer.Size;
         const float opacity     = annotationDetailOpacity(pointerX,
-                                                          pointerY,
-                                                          cardLeftX,
-                                                          cardTopY,
-                                                          cardRightX,
-                                                          cardBottomY,
-                                                          canvasHovered,
-                                                          fontSize * 2.0F);
+                                                      pointerY,
+                                                      cardLeftX,
+                                                      cardTopY,
+                                                      cardRightX,
+                                                      cardBottomY,
+                                                      canvasHovered,
+                                                      fontSize * 2.0F);
         const float sourceX =
             annotationConnectorSourceX(*entry.item, projection, markerCenterX);
         const float cardEdgeX   = placeRight ? cardLeftX : cardRightX;
@@ -1274,11 +1274,11 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
             }));
     }
 
-    const bool  pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
-                                      pointerX <= m_audioPreviewOverlay.right &&
-                                      pointerY >= m_audioPreviewOverlay.top &&
-                                      pointerY <= m_audioPreviewOverlay.bottom;
-    const float bridgePadding       = std::max(retentionPadding, gap);
+    const bool pointerInsideObject = pointerX >= m_audioPreviewOverlay.left &&
+                                     pointerX <= m_audioPreviewOverlay.right &&
+                                     pointerY >= m_audioPreviewOverlay.top &&
+                                     pointerY <= m_audioPreviewOverlay.bottom;
+    const float bridgePadding = std::max(retentionPadding, gap);
     const float bridgeLeft =
         std::min(m_audioPreviewOverlay.left, controlsX) - bridgePadding;
     const float bridgeTop =
@@ -1514,12 +1514,7 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
             if ( !drop.paths.empty() ) {
                 std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
                 if ( isTemporaryPackagePath(p) ) {
-                    XINFO("Package dropped on Canvas: {}",
-                          Config::pathToUtf8(p));
-
-                    Event::OpenTemporaryProjectPackageEvent ev;
-                    ev.m_packagePath = p;
-                    Event::EventBus::instance().publish(ev);
+                    // 主窗口路由负责谱包，避免重复打开。
                     continue;
                 }
 
@@ -1527,9 +1522,17 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 const bool      isDirectory =
                     std::filesystem::is_directory(p, filesystemError) &&
                     !filesystemError;
+                if ( isDirectory ) continue;
                 std::filesystem::path projectPath =
                     isDirectory ? p : p.parent_path();
                 auto ext = Config::pathToUtf8(p.extension());
+                std::transform(
+                    ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    });
+                const bool isBeatmap = ext == ".osu" || ext == ".imd" ||
+                                       ext == ".mc" || ext == ".mmm";
+                if ( !isBeatmap ) continue;
 
                 XINFO("File dropped on Canvas: {}, opening project: {}",
                       Config::pathToUtf8(p),
@@ -1537,7 +1540,9 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 
                 // 1. 打开项目
                 Event::OpenProjectEvent ev;
-                ev.m_projectPath = projectPath;
+                // 保留文件路径，让逻辑线程先打开项目再加载指定谱面。
+                ev.m_projectPath = p;
+                ev.m_origin      = Event::ProjectOpenOrigin::BeatmapDrop;
                 Event::EventBus::instance().publish(ev);
 
                 // 2. 跳转到谱面管理器
@@ -1549,23 +1554,6 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                     UI::TabToSubViewId(UI::SideBarTab::BeatMapExplorer);
                 evt.showSubView = true;
                 Event::EventBus::instance().publish(evt);
-
-                // 3. 如果是谱面文件，直接加载
-                if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
-                     ext == ".mmm" ) {
-                    XINFO("Auto-loading beatmap from drop: {}",
-                          Config::pathToUtf8(p.filename()));
-                    auto loadedMap = MMM::BeatMap::loadFromFile(p);
-                    if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
-                        XERROR("Failed to load dropped beatmap: {}",
-                               Config::pathToUtf8(p));
-                    } else {
-                        auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                            std::move(loadedMap));
-                        Logic::EditorEngine::instance().createSession(
-                            loadedBeatmap, Config::pathToUtf8(p.filename()));
-                    }
-                }
             }
         }
     }
@@ -3063,9 +3051,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                                pointerX >= projection.annotationLeftX &&
-                                pointerX <= projection.annotationRightX &&
-                                pointerY >= topY && pointerY <= bottomY;
+                               pointerX >= projection.annotationLeftX &&
+                               pointerX <= projection.annotationRightX &&
+                               pointerY >= topY && pointerY <= bottomY;
 
     const Common::Render::AnnotationRenderMarker* hoveredMarker = nullptr;
     std::optional<std::size_t>                    hoveredDetailIndex;
@@ -3427,7 +3415,7 @@ void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0F, 0.0F };
+    ImVec2 localMousePos{ 0.0F, 0.0F };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -3484,7 +3472,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {

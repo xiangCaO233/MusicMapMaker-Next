@@ -1,6 +1,24 @@
+# 内置演练声明嵌入程序，保证安装包缺少外置资源时仍可阅读；自定义主题另行加载。
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS
+           "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json")
+file(READ "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json"
+     MMM_BUILTIN_WALKTHROUGH)
+configure_file(
+  src/ui/walkthrough/BuiltinWalkthrough.h.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinWalkthrough.h" @ONLY)
+
 add_library(
   UI STATIC
   src/ui/IUIView.cpp
+  src/ui/walkthrough/WalkthroughModel.cpp
+  src/ui/walkthrough/WalkthroughService.cpp
+  src/ui/walkthrough/WalkthroughPage.cpp
+  src/ui/walkthrough/WelcomeView.cpp
+  src/ui/project/ProjectDropRouter.cpp
+  src/ui/imgui/menu/actions/help/OpenWelcomeAction.cpp
   src/ui/ITextureLoader.cpp
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
@@ -122,6 +140,7 @@ add_library(
 target_include_directories(
   UI
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Logic/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Audio/include)
 
@@ -281,7 +300,24 @@ target_include_directories(ProjectAudioToolSearchTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectAudioToolSearchTest COMMAND ProjectAudioToolSearchTest)
 
-# 新建谱面资源导入测试覆盖同名保护、项目内复用及失败路径，输出只写构建目录。
+# 欢迎页测试覆盖启动偏好、宽窄窗口排版和内嵌演练往返，不创建 GPU。
+mmm_add_test_executable(UI WelcomeViewTest tests/WelcomeViewTest.cpp)
+target_link_libraries(WelcomeViewTest PRIVATE Game)
+add_test(NAME WelcomeViewTest COMMAND WelcomeViewTest)
+
+# 演练核心测试不链接图形视图，验证窗口关闭时的事件计数与独立进度恢复。
+mmm_add_test_executable(
+  UI WalkthroughTest tests/WalkthroughTest.cpp
+  src/ui/walkthrough/WalkthroughModel.cpp
+  src/ui/walkthrough/WalkthroughService.cpp)
+target_include_directories(
+  WalkthroughTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                          ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_link_libraries(WalkthroughTest PRIVATE Event 3rd_nlohmann_json
+                                              3rd_concurrentqueue)
+add_test(NAME WalkthroughTest COMMAND WalkthroughTest
+                                      "${CMAKE_BINARY_DIR}/test_output")
+
 mmm_add_test_executable(UI ProjectResourceImportTest
                         tests/ProjectResourceImportTest.cpp)
 target_include_directories(ProjectResourceImportTest
