@@ -103,6 +103,7 @@ AudioTimelineExportResult AudioTimelineExportService::exportMixedAudio(
         }
     }
 
+    if ( options.progress ) options.progress("正在解码音频资源…");
     auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();
     std::unordered_map<std::string, std::shared_ptr<ice::AudioTrack>>
         tracksByPath;
@@ -132,6 +133,7 @@ AudioTimelineExportResult AudioTimelineExportService::exportMixedAudio(
         tracksByPath.emplace(event.filePath, std::move(track));
     }
 
+    if ( options.progress ) options.progress("正在处理音频时间线…");
     std::unordered_map<std::string,
                        std::shared_ptr<const PreparedTimelineAudio>>
         preparedByConfig;
@@ -200,6 +202,7 @@ AudioTimelineExportResult AudioTimelineExportService::exportMixedAudio(
     receiver.set_source(timeline);
     receiver.set_target_frames(targetFrames);
     receiver.set_block_frames(AUDIO_TIMELINE_EXPORT_CHUNK_FRAMES);
+    if ( options.progress ) options.progress("正在混音并转码音频…");
     if ( !receiver.start() ) {
         result.errorMessage = receiver.error_message().empty()
                                   ? "无法编码拼装后的音频"

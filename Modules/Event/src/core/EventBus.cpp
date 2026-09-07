@@ -1,4 +1,5 @@
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,13 @@
 
 namespace MMM::Event
 {
+/// @brief 在 Event 模块内提供唯一的文件操作门闩，兼容动态库链接。
+std::mutex& beatmapFileOperationGate()
+{
+    static std::mutex gate;
+    return gate;
+}
+
 namespace detail
 {
 uint64_t nextStaticTypeId()

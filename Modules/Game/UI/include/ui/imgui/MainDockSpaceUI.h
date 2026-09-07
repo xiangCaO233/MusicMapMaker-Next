@@ -20,6 +20,11 @@ namespace MMM::UI
 class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
 public:
+    /// @brief 更新并绘制不依赖会话锁的文件操作反馈。
+    /// @warning UI 每帧执行，只消费通知并绘制固定规模的反馈。
+    void updateSaveFeedback(bool fileOperationBusy);
+    /// @brief 耗时操作期间保持主停靠树存活，不访问会话状态。
+    static void    keepFileOperationDockSpaceAlive();
     static ImGuiID getCenterDockId() { return s_centerDockId; }
     static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
     /// @brief 获取解除固定时工具窗口使用的右侧停靠节点。
@@ -41,6 +46,8 @@ public:
     }
 
 private:
+    /// @brief 主停靠根节点，用于文件操作期间维持隐藏窗口的停靠关系。
+    static inline ImGuiID s_mainDockId{ 0 };
     static inline ImGuiID s_centerDockId{ 0 };
     static inline ImGuiID s_toolDockId{ 0 };
     static inline bool    s_projectWorkspaceLayoutLoaded{ false };

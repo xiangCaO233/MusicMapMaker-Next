@@ -1,5 +1,6 @@
 #include "ui/imgui/feedback/SaveResultFeedback.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
@@ -47,6 +48,36 @@ bool testLongFrameDoesNotExpireNewPackageFeedback()
 
 }  // namespace
 
+/// @brief 验证耗时操作持续绘制、结束清理以及失败反馈不被进度结束吞掉。
+bool testFileOperationProgress()
+{
+    MMM::UI::SaveResultFeedback feedback;
+    TestStatusMessageSink       sink;
+    auto&                       bus = MMM::Event::EventBus::instance();
+    bus.publish(MMM::Event::BeatmapSaveProgressEvent{ .stage = "Encoding" });
+    feedback.update(30.0F, sink);
+    ImGui::NewFrame();
+    feedback.render(1.0F, true);
+    const bool busyRendered =
+        ImGui::GetForegroundDrawList()->VtxBuffer.Size > 0;
+    ImGui::EndFrame();
+    bus.publish(MMM::Event::BeatmapSaveResultEvent{
+        .path = "test.zip", .success = false, .isExport = true });
+    bus.publish(MMM::Event::BeatmapSaveProgressEvent{ .active = false });
+    feedback.update(30.0F, sink);
+    ImGui::NewFrame();
+    feedback.render(1.0F);
+    const bool failureRendered =
+        ImGui::GetForegroundDrawList()->VtxBuffer.Size > 0;
+    ImGui::EndFrame();
+    feedback.update(4.0F, sink);
+    ImGui::NewFrame();
+    feedback.render(1.0F);
+    const bool cleared = ImGui::GetForegroundDrawList()->VtxBuffer.Size == 0;
+    ImGui::EndFrame();
+    return busyRendered && failureRendered && cleared;
+}
+
 /// @brief 运行保存与打包结果反馈的长帧回归测试。
 /// @return 测试通过时返回 0。
 int main()
@@ -62,8 +93,9 @@ int main()
     int            fontHeight = 0;
     io.Fonts->GetTexDataAsRGBA32(&fontPixels, &fontWidth, &fontHeight);
     const bool fontReady = fontPixels && fontWidth > 0 && fontHeight > 0;
-    const bool valid =
-        fontReady && testLongFrameDoesNotExpireNewPackageFeedback();
+    const bool valid     = fontReady &&
+                       testLongFrameDoesNotExpireNewPackageFeedback() &&
+                       testFileOperationProgress();
     ImGui::DestroyContext();
     return valid ? 0 : 1;
 }

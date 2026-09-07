@@ -103,7 +103,7 @@ public:
 
     /// @brief 判断会话是否存在等待逻辑线程消费的指令。
     /// @warning 逻辑热路径：后台 Session
-    /// 限频判断会调用；只读取无锁队列近似长度。
+    /// 限频判断会调用；仅逻辑线程读取延后指令与无锁队列近似长度。
     bool hasPendingCommands() const;
 
     /// @brief 判断会话是否需要跳过后台限频并立即更新。
@@ -280,6 +280,9 @@ private:
 
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
+
+    /// @brief 仅由逻辑线程访问的待重试文件指令，保持后续指令的原始顺序。
+    std::optional<LogicCommand> m_deferredFileCommand;
 
     /// @brief 当前低频谱面变化观察者。
     /// @warning 跨线程 shared_ptr 原子：只在谱面发生实际变化或首次绑定时加载，

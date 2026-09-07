@@ -1,6 +1,7 @@
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ProjectController.h"
@@ -14,9 +15,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <latch>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace
@@ -280,7 +283,7 @@ private:
     session.update(0.0, config, false);
 
     entt::entity polylineEntity = entt::null;
-    const auto view = session.getContext()
+    const auto   view           = session.getContext()
                           .noteRegistry.view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : view ) {
         const auto& note = view.get<const MMM::Logic::NoteComponent>(entity);
@@ -694,10 +697,10 @@ private:
     MMM::Config::EditorConfig  config;
     auto                       initial    = makeBeatmap();
     const auto                 appendNote = [](MMM::BeatMap& beatmap,
-                                               double        timestamp,
-                                               std::uint32_t track,
-                                               std::string   identity) {
-        auto& note             = beatmap.m_noteData.notes.emplace_back();
+                               double        timestamp,
+                               std::uint32_t track,
+                               std::string   identity) {
+        auto& note = beatmap.m_noteData.notes.emplace_back();
         note.m_timestamp       = timestamp;
         note.m_track           = track;
         note.m_collaborationId = std::move(identity);
@@ -1111,7 +1114,40 @@ private:
 /// @return 全部断言通过时返回 0。
 int main()
 {
-    return testOptionalInitialSnapshot() &&
+    /// @brief 模拟 UI 帧占用门闩，验证逻辑不会等待、丢失或倒置文件指令。
+    const auto testDeferredFileCommands = []() {
+        MMM::Logic::BeatmapSession session;
+        MMM::Config::EditorConfig  config;
+        std::vector<std::string>   stages;
+        auto                       subscription =
+            MMM::Event::EventBus::instance()
+                .subscribe<MMM::Event::BeatmapSaveProgressEvent>(
+                    [&](const auto& event) {
+                        if ( event.active ) stages.push_back(event.stage);
+                    });
+        std::latch   locked(1), release(1);
+        std::jthread uiFrame([&]() {
+            std::lock_guard lock(MMM::Event::beatmapFileOperationGate());
+            locked.count_down();
+            release.wait();
+        });
+        locked.wait();
+        session.pushCommand(
+            MMM::Logic::CmdSaveBeatmapAs{ .path = "unused.mmm" });
+        session.pushCommand(
+            MMM::Logic::CmdExportImdPackage{ .path = "unused.zip" });
+        session.update(0.0, config, false);
+        const bool deferred = session.hasPendingCommands() && stages.empty();
+        release.count_down();
+        uiFrame.join();
+        session.update(0.0, config, false);
+        MMM::Event::EventBus::instance()
+            .unsubscribe<MMM::Event::BeatmapSaveProgressEvent>(subscription);
+        return deferred && !session.hasPendingCommands() &&
+               stages.size() == 2 && stages[0] == "正在保存谱面…" &&
+               stages[1] == "正在准备资源包…";
+    };
+    return testDeferredFileCommands() && testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&

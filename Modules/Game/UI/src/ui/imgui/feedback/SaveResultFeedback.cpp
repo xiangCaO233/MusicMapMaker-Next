@@ -4,11 +4,14 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "ui/Icons.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
+#include <algorithm>
+#include <cmath>
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <imgui.h>
@@ -21,6 +24,10 @@ namespace
 {
 /// @brief 跨线程传递给 UI 帧内消费的保存反馈载荷。
 struct SaveResultPayload {
+    /// @brief 阶段通知与最终结果共用队列，保持单次操作的通知顺序。
+    bool isProgress = false;
+    /// @brief 阶段通知是否表示操作仍在执行。
+    bool active = false;
     /// @brief 目标文件路径，使用 UTF-8 字符串。
     std::string path;
 
@@ -83,6 +90,15 @@ struct SaveResultFeedback::Impl {
                               .presentation = event.presentation,
                           });
                       }))
+        , progressSubscription(
+              Event::EventBus::instance()
+                  .subscribe<Event::BeatmapSaveProgressEvent>(
+                      [this](const Event::BeatmapSaveProgressEvent& event) {
+                          queue.enqueue(
+                              SaveResultPayload{ .isProgress   = true,
+                                                 .active       = event.active,
+                                                 .errorMessage = event.stage });
+                      }))
     {
     }
 
@@ -98,8 +114,16 @@ struct SaveResultFeedback::Impl {
     /// @brief 已拼接图标的反馈气泡显示文本，避免渲染时重复分配。
     std::string displayText;
 
+    /// @brief 当前文件操作阶段，仅在 UI 线程消费和渲染。
+    std::string progressText;
+    /// @brief 是否收到尚未结束的操作通知。
+    bool progressActive = false;
+
     /// @brief 保存结果事件订阅令牌，析构时自动取消订阅。
     Event::ScopedSubscription<Event::BeatmapSaveResultEvent> subscription;
+    /// @brief 文件操作阶段订阅，先于队列析构。
+    Event::ScopedSubscription<Event::BeatmapSaveProgressEvent>
+        progressSubscription;
 };
 
 /// @brief 创建保存结果反馈并订阅保存结果事件。
@@ -113,16 +137,22 @@ SaveResultFeedback::~SaveResultFeedback() = default;
 /// @param statusMessageSink 自动保存成功时使用的状态栏消息入口。
 /// @warning UI 热路径：每帧仅消费少量事件并更新常量规模状态。
 void SaveResultFeedback::update(float               deltaSeconds,
-                                IStatusMessageSink& statusMessageSink)
+                                IStatusMessageSink& statusMessageSink,
+                                bool                fileOperationBusy)
 {
     // 当前帧间隔只属于此前已经显示的反馈；新到达的结果必须从完整时长开始，
     // 避免原生文件选择器或耗时导出造成的长帧让新反馈在首次绘制前直接过期。
-    if ( m_impl->remainingSeconds > 0.0f ) {
+    if ( !fileOperationBusy && m_impl->remainingSeconds > 0.0f ) {
         m_impl->remainingSeconds -= deltaSeconds;
     }
 
     SaveResultPayload payload;
     while ( m_impl->queue.try_dequeue(payload) ) {
+        if ( payload.isProgress ) {
+            m_impl->progressActive = payload.active;
+            m_impl->progressText   = std::move(payload.errorMessage);
+            continue;
+        }
         if ( payload.success && !m_impl->success &&
              m_impl->remainingSeconds > 0.0F ) {
             continue;
@@ -171,8 +201,46 @@ void SaveResultFeedback::update(float               deltaSeconds,
 /// @brief 渲染当前有效的保存结果反馈气泡。
 /// @param dpiScale 当前窗口内容缩放。
 /// @warning UI 热路径：仅在反馈计时器有效时提交固定数量绘制命令。
-void SaveResultFeedback::render(float dpiScale) const
+void SaveResultFeedback::render(float dpiScale, bool fileOperationBusy) const
 {
+    if ( fileOperationBusy ) {
+        const auto* viewport = ImGui::GetMainViewport();
+        auto*       drawList = ImGui::GetForegroundDrawList();
+        const char* text =
+            m_impl->progressActive && !m_impl->progressText.empty()
+                ? m_impl->progressText.c_str()
+                : "正在处理文件…";
+        const float width =
+            std::min(viewport->WorkSize.x,
+                     std::max(360.0F * dpiScale,
+                              ImGui::CalcTextSize(text).x + 40.0F * dpiScale));
+        const ImVec2 start =
+            viewport->WorkPos +
+            (viewport->WorkSize - ImVec2(width, 100.0F * dpiScale)) * 0.5F;
+        drawList->AddRectFilled(viewport->Pos,
+                                viewport->Pos + viewport->Size,
+                                IM_COL32(20, 22, 28, 245));
+        drawList->AddText(start + ImVec2(20.0F, 20.0F) * dpiScale,
+                          IM_COL32(240, 240, 240, 255),
+                          text);
+        const ImVec2 barStart = start + ImVec2(20.0F, 60.0F) * dpiScale;
+        const float  barWidth = std::max(1.0F, width - 40.0F * dpiScale);
+        const float  height   = 8.0F * dpiScale;
+        drawList->AddRectFilled(barStart,
+                                barStart + ImVec2(barWidth, height),
+                                IM_COL32(60, 65, 75, 255),
+                                height * 0.5F);
+        // 往返滑块表示尚无总工作量的阶段，时间只驱动动画，不冒充完成率。
+        const float phase =
+            static_cast<float>(0.5 + 0.5 * std::sin(ImGui::GetTime() * 3.0));
+        const float offset = phase * barWidth * 0.75F;
+        drawList->AddRectFilled(
+            barStart + ImVec2(offset, 0.0F),
+            barStart + ImVec2(offset + barWidth * 0.25F, height),
+            ImGui::GetColorU32(ImGuiCol_PlotHistogram),
+            height * 0.5F);
+        return;
+    }
     if ( m_impl->remainingSeconds <= 0.0f ) return;
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();

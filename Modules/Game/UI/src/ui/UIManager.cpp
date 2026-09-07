@@ -6,6 +6,7 @@
 #include "event/core/EventBus.h"
 #include "event/input/translators/ImGuiTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
@@ -1167,6 +1168,19 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    // 文件指令也只尝试此锁，且在执行前取得它；普通 UI 帧中的会话读取
+    // 因而不会撞上长时间转码。后台准备任务在本函数返回前已完成。
+    std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
+                                       std::try_to_lock);
+    const bool       fileOperationBusy = !fileOperationLock.owns_lock();
+    if ( auto* dock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
+        dock->updateSaveFeedback(fileOperationBusy);
+    }
+    if ( fileOperationBusy ) {
+        SetInteractionFeedbackEnabled(false);
+        MainDockSpaceUI::keepFileOperationDockSpaceAlive();
+        return;
+    }
     if ( m_editorApplicationService ) {
         m_editorApplicationService->publishRenderFps(ImGui::GetIO().Framerate);
     }

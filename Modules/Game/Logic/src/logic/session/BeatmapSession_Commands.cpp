@@ -8,6 +8,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapSaveConflictEvent.h"
+#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
@@ -1577,6 +1578,9 @@ bool writeBeatmapPackage(
 namespace MMM::Logic
 {
 
+/// @brief 按顺序消费编辑指令，文件操作遇到活动 UI 帧时保留到下轮处理。
+/// @warning 逻辑 update 调用；文件指令仅尝试门闩，禁止阻塞等待 UI。
+/// 手动文件操作是低频阻塞路径，其执行期间 UI 只绘制独立进度。
 bool BeatmapSession::processCommands()
 {
     LogicCommand                cmd;
@@ -1623,7 +1627,41 @@ bool BeatmapSession::processCommands()
                    value.replaceMetadata || value.replaceAudioSamples ||
                    value.replaceAnnotations;
         };
-    while ( m_commandQueue.try_dequeue(cmd) ) {
+    while ( m_deferredFileCommand || m_commandQueue.try_dequeue(cmd) ) {
+        if ( m_deferredFileCommand ) {
+            cmd = std::move(*m_deferredFileCommand);
+            m_deferredFileCommand.reset();
+        }
+        const bool isFileOperation =
+            std::holds_alternative<CmdSaveBeatmap>(cmd) ||
+            std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
+            std::holds_alternative<CmdPackBeatmap>(cmd) ||
+            std::holds_alternative<CmdExportImdPackage>(cmd);
+        std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
+                                           std::defer_lock);
+        if ( isFileOperation && !fileOperationLock.try_lock() ) {
+            m_deferredFileCommand = std::move(cmd);
+            break;
+        }
+        /// @brief 保证成功、失败及权限拒绝等所有退出路径均结束进度。
+        struct ProgressScope {
+            /// @brief 仅为文件指令发布阶段状态。
+            bool active;
+            /// @brief 清除本次文件指令的进度，不推测写入结果。
+            ~ProgressScope()
+            {
+                if ( active )
+                    Event::EventBus::instance().publish(
+                        Event::BeatmapSaveProgressEvent{ .active = false });
+            }
+        } progressScope{ isFileOperation };
+        if ( isFileOperation ) {
+            const bool package =
+                std::holds_alternative<CmdPackBeatmap>(cmd) ||
+                std::holds_alternative<CmdExportImdPackage>(cmd);
+            Event::EventBus::instance().publish(Event::BeatmapSaveProgressEvent{
+                .stage = package ? "正在准备资源包…" : "正在保存谱面…" });
+        }
         if ( blockCollaborationOfflineEdit(cmd) ||
              blockCollaborationUnauthorizedEdit(cmd, true) ) {
             continue;
@@ -2569,12 +2607,16 @@ void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
         resolveImdPackageCoverPath(*project, *m_ctx->currentBeatmap);
     const auto outputPath =
         resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
-    const auto result =
-        ImdPackageExportService::exportPackage(*m_ctx->currentBeatmap,
-                                               descriptor.m_events,
-                                               chartEndSeconds,
-                                               coverPath,
-                                               outputPath);
+    const auto result = ImdPackageExportService::exportPackage(
+        *m_ctx->currentBeatmap,
+        descriptor.m_events,
+        chartEndSeconds,
+        coverPath,
+        outputPath,
+        [](std::string_view stage) {
+            Event::EventBus::instance().publish(
+                Event::BeatmapSaveProgressEvent{ .stage = std::string(stage) });
+        });
     if ( !result.success ) {
         publishFailure(result.errorMessage);
         return;
@@ -2625,6 +2667,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
         return;
     }
 
+    Event::EventBus::instance().publish(Event::BeatmapSaveProgressEvent{
+        .stage = "正在转换谱面、处理音频并压缩资源…" });
     const bool success =
         writeBeatmapPackage(*project,
                             outputPath,

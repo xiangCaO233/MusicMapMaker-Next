@@ -3,7 +3,9 @@
 #include "audio/AudioManager.h"
 
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM
@@ -45,11 +47,13 @@ public:
     /// @return 导出状态、错误原因和三个包内文件名。
     /// @warning 用户触发的低频导出路径：会完整序列化谱面、混合音频、读取
     /// 背景图并压缩归档，禁止在逻辑 update 或 UI 渲染热路径调用。
+    /// @param progress 在调用线程接收低频阶段通知，不允许阻塞或直接操作 UI。
     [[nodiscard]] static ImdPackageExportResult exportPackage(
         const BeatMap&                                    beatMap,
         const std::vector<Audio::AudioTimelineLoadEvent>& audioEvents,
         double chartEndSeconds, const std::filesystem::path& coverPath,
-        const std::filesystem::path& outputPath);
+        const std::filesystem::path&                 outputPath,
+        const std::function<void(std::string_view)>& progress = {});
 };
 
 }  // namespace MMM::Logic

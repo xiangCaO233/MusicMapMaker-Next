@@ -426,7 +426,8 @@ void BeatmapSession::publishRequestedMutationSnapshot()
 /// @brief 判断会话是否存在等待逻辑线程消费的指令。
 bool BeatmapSession::hasPendingCommands() const
 {
-    return m_commandQueue.size_approx() > 0;
+    return m_deferredFileCommand.has_value() ||
+           m_commandQueue.size_approx() > 0;
 }
 
 /// @brief 判断会话是否需要跳过后台限频并立即更新。
@@ -873,9 +874,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
-    bool       isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
-                               m_ctx->brushState.isActive ||
-                               m_ctx->eraserState.isActive;
+    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+                         m_ctx->brushState.isActive ||
+                         m_ctx->eraserState.isActive;
     const bool isVisualAnimationActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;

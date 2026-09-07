@@ -227,9 +227,11 @@ ImdPackageExportResult ImdPackageExportService::exportPackage(
     const BeatMap&                                    beatMap,
     const std::vector<Audio::AudioTimelineLoadEvent>& audioEvents,
     double chartEndSeconds, const std::filesystem::path& coverPath,
-    const std::filesystem::path& outputPath)
+    const std::filesystem::path&                 outputPath,
+    const std::function<void(std::string_view)>& progress)
 {
     ImdPackageExportResult result;
+    if ( progress ) progress("正在生成 IMD 谱面…");
     if ( outputPath.empty() ) {
         result.errorMessage = "IMD 资源包输出路径为空";
         return result;
@@ -314,12 +316,14 @@ ImdPackageExportResult ImdPackageExportService::exportPackage(
                 .events          = audioEvents,
                 .chartEndSeconds = chartEndSeconds,
                 .outputPath      = audioPath,
+                .progress        = progress,
             });
     if ( !audioResult.success ) {
         result.errorMessage = "无法拼装 MP3 音频：" + audioResult.errorMessage;
         return result;
     }
 
+    if ( progress ) progress("正在压缩 RM 资源包…");
     mz_zip_archive archive{};
     if ( !mz_zip_writer_init_heap(&archive, 0, 0) ) {
         result.errorMessage = "无法初始化 IMD 资源包压缩器";

@@ -31,13 +31,16 @@ public:
     /// @brief 消费保存结果并更新反馈气泡计时器。
     /// @param deltaSeconds 自上一帧以来经过的秒数。
     /// @param statusMessageSink 自动保存成功时使用的状态栏消息入口。
+    /// @param fileOperationBusy 操作尚未释放门闩时保留最终反馈的展示时长。
     /// @warning UI 热路径：每帧仅消费少量事件并更新常量规模状态。
-    void update(float deltaSeconds, IStatusMessageSink& statusMessageSink);
+    void update(float deltaSeconds, IStatusMessageSink& statusMessageSink,
+                bool fileOperationBusy = false);
 
     /// @brief 渲染当前有效的保存结果反馈气泡。
     /// @param dpiScale 当前窗口内容缩放。
+    /// @param fileOperationBusy 文件操作占用门闩时绘制持续动画，不读取会话。
     /// @warning UI 热路径：仅在反馈计时器有效时提交固定数量绘制命令。
-    void render(float dpiScale) const;
+    void render(float dpiScale, bool fileOperationBusy = false) const;
 
 private:
     /// @brief 隐藏事件队列、订阅令牌和绘制状态的实现类型。

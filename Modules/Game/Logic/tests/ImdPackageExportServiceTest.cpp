@@ -12,6 +12,7 @@
 #include <miniz.h>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -203,8 +204,17 @@ int main(int argc, char* argv[])
             .resourceConfig        = audioConfig,
         },
     };
+    std::vector<std::string> stages;
     const auto result = MMM::Logic::ImdPackageExportService::exportPackage(
-        beatMap, audioEvents, 0.15, coverPath, packagePath);
+        beatMap,
+        audioEvents,
+        0.15,
+        coverPath,
+        packagePath,
+        [&](std::string_view stage) { stages.emplace_back(stage); });
+    ok &= check(stages.size() == 5 && stages.front() == "正在生成 IMD 谱面…" &&
+                    stages.back() == "正在压缩 RM 资源包…",
+                "export reports processing stages in order");
     if ( !result.success ) {
         XERROR("[imd-package-export] export error: {}", result.errorMessage);
     }

@@ -396,7 +396,6 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     const float deltaSeconds = ImGui::GetIO().DeltaTime;
     m_statusMessageService.update(deltaSeconds);
-    m_saveResultFeedback.update(deltaSeconds, m_statusMessageService);
     m_beatmapLoadDiagnosticFeedback.update();
     m_mainMenuview.update(sourceManager, m_statusMessageService);
 
@@ -404,7 +403,6 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     ImGuiViewport*       viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
-    m_saveResultFeedback.render(dpiScale);
 
     // --- 0. IGFD 翻译，当前因库封装暂跳过 ---
 
@@ -804,6 +802,27 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 sourceManager, dpiScale, m_statusMessageService);
         }
         ImGui::End();
+    }
+}
+
+/// @brief 在普通帧和文件操作占位帧中统一消费、绘制保存反馈。
+/// @warning UI 热路径：不读取会话状态，不等待文件操作。
+void MainDockSpaceUI::updateSaveFeedback(bool fileOperationBusy)
+{
+    m_saveResultFeedback.update(
+        ImGui::GetIO().DeltaTime, m_statusMessageService, fileOperationBusy);
+    m_saveResultFeedback.render(
+        Config::AppConfig::instance().getWindowContentScale(),
+        fileOperationBusy);
+}
+
+/// @brief 保持暂时隐藏的谱面与工具窗口的停靠树，不访问会话。
+/// @warning UI 热路径：操作期间每帧只提交一次停靠节点保活。
+void MainDockSpaceUI::keepFileOperationDockSpaceAlive()
+{
+    if ( s_mainDockId != 0 ) {
+        ImGui::DockSpace(
+            s_mainDockId, ImVec2(0, 0), ImGuiDockNodeFlags_KeepAliveOnly);
     }
 }
 
