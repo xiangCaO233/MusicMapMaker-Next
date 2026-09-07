@@ -36,6 +36,7 @@ enum class MarkdownInlineKind {
     Emphasis,
     Code,
     Link,
+    Image,  ///< 嵌入图片；目标不包含可选标题。
 };
 
 /// @brief 单个 Markdown 行内片段的零拥有解析结果。
@@ -108,7 +109,7 @@ void visitMarkdownBlocks(std::string_view markdown, Visitor&& visitor)
     while ( offset <= markdown.size() ) {
         const auto lineEnd = markdown.find('\n', offset);
         auto       line    = markdown.substr(offset,
-                                             lineEnd == std::string_view::npos
+                                    lineEnd == std::string_view::npos
                                                  ? std::string_view::npos
                                                  : lineEnd - offset);
         if ( line.ends_with('\r') ) line.remove_suffix(1U);
@@ -219,19 +220,57 @@ void visitMarkdownInline(std::string_view text, Visitor&& visitor)
             }
         }
 
-        if ( text[offset] == '[' ) {
+        const bool image = text[offset] == '!' && offset + 1U < text.size() &&
+                           text[offset + 1U] == '[';
+        const auto labelStart = offset + (image ? 2U : 1U);
+        if ( text[offset] == '[' || image ) {
             const auto labelEnd =
-                MarkdownParserDetail::findUnescaped(text, ']', offset + 1U);
+                MarkdownParserDetail::findUnescaped(text, ']', labelStart);
             if ( labelEnd != std::string_view::npos &&
                  labelEnd + 1U < text.size() && text[labelEnd + 1U] == '(' ) {
-                const auto destinationEnd = MarkdownParserDetail::findUnescaped(
-                    text, ')', labelEnd + 2U);
+                auto     destinationEnd = labelEnd + 2U;
+                unsigned depth          = 1U;
+                char     quote          = 0;
+                for ( ; destinationEnd < text.size(); ++destinationEnd ) {
+                    const char c = text[destinationEnd];
+                    if ( c == '\\' && destinationEnd + 1U < text.size() ) {
+                        ++destinationEnd;
+                        continue;
+                    }
+                    if ( quote ) {
+                        if ( c == quote ) quote = 0;
+                        continue;
+                    }
+                    if ( (c == '"' || c == '\'') &&
+                         destinationEnd > labelEnd + 2U &&
+                         (text[destinationEnd - 1U] == ' ' ||
+                          text[destinationEnd - 1U] == '\t') ) {
+                        quote = c;
+                        continue;
+                    }
+                    if ( c == '(' ) ++depth;
+                    if ( c == ')' && --depth == 0U ) break;
+                }
+                if ( destinationEnd == text.size() )
+                    destinationEnd = std::string_view::npos;
                 if ( destinationEnd != std::string_view::npos ) {
+                    auto destination =
+                        MarkdownParserDetail::trimLeft(text.substr(
+                            labelEnd + 2U, destinationEnd - labelEnd - 2U));
+                    if ( destination.starts_with('<') ) {
+                        const auto end = destination.find('>');
+                        destination    = end == std::string_view::npos
+                                             ? std::string_view{}
+                                             : destination.substr(1U, end - 1U);
+                    } else {
+                        destination = destination.substr(
+                            0, destination.find_first_of(" \t"));
+                    }
                     visitor(MarkdownInlineSpan{
-                        MarkdownInlineKind::Link,
-                        text.substr(offset + 1U, labelEnd - offset - 1U),
-                        text.substr(labelEnd + 2U,
-                                    destinationEnd - labelEnd - 2U),
+                        image ? MarkdownInlineKind::Image
+                              : MarkdownInlineKind::Link,
+                        text.substr(labelStart, labelEnd - labelStart),
+                        destination,
                     });
                     offset = destinationEnd + 1U;
                     continue;
@@ -272,7 +311,8 @@ void visitMarkdownInline(std::string_view text, Visitor&& visitor)
 
         std::size_t next = offset + 1U;
         while ( next < text.size() && text[next] != '\\' && text[next] != '`' &&
-                text[next] != '[' && text[next] != '*' && text[next] != '_' ) {
+                text[next] != '[' && text[next] != '!' && text[next] != '*' &&
+                text[next] != '_' ) {
             ++next;
         }
         visitor(MarkdownInlineSpan{

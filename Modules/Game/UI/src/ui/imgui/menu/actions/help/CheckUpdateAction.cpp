@@ -3,6 +3,8 @@
 #include "config/skin/SkinConfig.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
@@ -78,13 +80,26 @@ public:
     /// @warning UI 热路径：每帧执行；只绘制已经打开的更新弹窗。
     void renderDeferred(MainMenuContext& context) override
     {
-        (void)context;
+        if ( context.sourceManager && !m_images ) {
+            m_images = context.sourceManager->getView<MarkdownImageCache>(
+                "UpdateMarkdownImages");
+            if ( !m_images ) {
+                auto images = std::make_unique<MarkdownImageCache>();
+                m_images    = images.get();
+                context.sourceManager->registerView("UpdateMarkdownImages",
+                                                    std::move(images));
+            }
+        }
         renderUpdateCheckingPopup();
         renderUpdatePopup();
         renderUpdateSuccessPopup();
     }
 
 private:
+    /// @brief UIManager 持有图片纹理，菜单动作只保存稳定观察指针。
+    MarkdownImageCache* m_images{ nullptr };
+    /// @brief 已扫描的更新版本，避免逐帧重新安排图片任务。
+    std::string m_imageVersion;
     /// @brief 渲染更新检查中的状态弹窗。
     /// @warning UI 热路径：每帧执行；只轮询更新检查器状态。
     void renderUpdateCheckingPopup()
@@ -306,7 +321,12 @@ private:
                 ImGui::BeginChild("ChangelogScroll",
                                   ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
                                   ImGuiChildFlags_Borders);
-                renderMarkdown(info.changelog);
+                if ( m_images && m_imageVersion != info.latestVersion ) {
+                    m_images->prepareDocument(info.changelog);
+                    m_imageVersion = info.latestVersion;
+                }
+                renderMarkdown(info.changelog,
+                               MarkdownRenderOptions{ .images = m_images });
                 ImGui::EndChild();
                 ImGui::PopStyleVar();
             }

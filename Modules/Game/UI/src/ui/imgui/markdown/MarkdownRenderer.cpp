@@ -42,7 +42,7 @@ public:
     /// @brief 创建一次 Markdown 排版。
     MarkdownLayout(ImDrawList* drawList, ImVec2 origin, float width,
                    float maxHeight, const MarkdownStyle& style, bool compact,
-                   bool interactiveLinks)
+                   bool interactiveLinks, const IMarkdownImages* images)
         : m_drawList(drawList)
         , m_origin(origin)
         , m_width(std::max(1.0F, width))
@@ -50,6 +50,7 @@ public:
         , m_style(style)
         , m_compact(compact)
         , m_interactiveLinks(interactiveLinks && drawList != nullptr)
+        , m_images(images)
         , m_font(ImGui::GetFont())
         , m_baseFontSize(ImGui::GetFontSize())
     {
@@ -184,11 +185,52 @@ private:
         if ( !reserveAt(lineY, lineHeight) ) return;
 
         auto drawSpan = [&](const MarkdownInlineSpan& span) {
-            const auto kind  = forceCode ? MarkdownInlineKind::Code : span.kind;
-            ImU32      color = baseColor;
-            bool       strong = forceStrong;
-            bool       code   = false;
-            bool       link   = false;
+            if ( m_truncated ) return;
+            const auto kind = forceCode ? MarkdownInlineKind::Code : span.kind;
+            if ( kind == MarkdownInlineKind::Image ) {
+                const auto image = m_images
+                                       ? m_images->findImage(span.destination)
+                                       : MarkdownImage{};
+                if ( x > inset ) lineY += lineHeight;
+                x                     = inset;
+                const float available = std::max(1.0F, m_width - inset);
+                const float width     = image.size.x > 0
+                                            ? std::min(available, image.size.x)
+                                            : available;
+                const float height    = image.size.x > 0
+                                            ? width * image.size.y / image.size.x
+                                            : lineHeight * 3;
+                if ( !reserveAt(lineY, height) ) return;
+                const ImVec2 min{ m_origin.x + inset, m_origin.y + lineY };
+                const ImVec2 max{ min.x + width, min.y + height };
+                if ( m_drawList ) {
+                    if ( image.texture )
+                        m_drawList->AddImage(
+                            image.texture, min, max, image.uv0, image.uv1);
+                    else {
+                        m_drawList->AddRectFilled(
+                            min, max, m_style.codeBackgroundColor);
+                        const char* status =
+                            image.failed ? "图片加载失败"
+                                         : (m_images ? "图片加载中…" : "图片");
+                        m_drawList->AddText(min, m_style.mutedColor, status);
+                        m_drawList->AddText(m_font,
+                                            fontSize,
+                                            { min.x, min.y + lineHeight },
+                                            m_style.mutedColor,
+                                            span.text.data(),
+                                            span.text.data() + span.text.size(),
+                                            width);
+                    }
+                }
+                m_maxUsedWidth = std::max(m_maxUsedWidth, inset + width);
+                lineY += height;
+                return;
+            }
+            ImU32 color  = baseColor;
+            bool  strong = forceStrong;
+            bool  code   = false;
+            bool  link   = false;
             if ( kind == MarkdownInlineKind::Strong ) {
                 color  = m_style.strongColor;
                 strong = true;
@@ -400,6 +442,8 @@ private:
     bool m_compact{ false };
     /// @brief 是否允许链接点击。
     bool m_interactiveLinks{ false };
+    /// @brief 本次排版使用的非拥有图片缓存。
+    const IMarkdownImages* m_images{ nullptr };
     /// @brief 当前 ImGui 字体。
     ImFont* m_font{ nullptr };
     /// @brief 当前 ImGui 基础字号。
@@ -448,7 +492,8 @@ MarkdownLayoutResult measureMarkdown(std::string_view             markdown,
                           options.maxHeight,
                           style,
                           options.compact,
-                          false);
+                          false,
+                          options.images);
     return layout.run(markdown);
 }
 
@@ -465,7 +510,8 @@ void renderMarkdown(std::string_view             markdown,
                           options.maxHeight,
                           style,
                           options.compact,
-                          options.interactiveLinks);
+                          options.interactiveLinks,
+                          options.images);
     const auto     result = layout.run(markdown);
     ImGui::Dummy({ width, std::max(1.0F, result.size.y) });
 }
@@ -495,7 +541,8 @@ MarkdownLayoutResult renderMarkdownToDrawList(
                           maxHeight,
                           style,
                           options.compact,
-                          options.interactiveLinks);
+                          options.interactiveLinks,
+                          options.images);
     const auto     result = layout.run(markdown);
     drawList.PopClipRect();
     return result;

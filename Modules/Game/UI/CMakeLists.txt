@@ -19,6 +19,7 @@ add_library(
   src/ui/imgui/menu/MainMenuNavigationController.cpp
   src/ui/imgui/menu/MainMenuRegistry.cpp
   src/ui/imgui/markdown/MarkdownRenderer.cpp
+  src/ui/imgui/markdown/MarkdownImageCache.cpp
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp
   src/ui/imgui/menu/actions/edit/CopyAction.cpp
@@ -179,6 +180,12 @@ target_include_directories(MarkdownRendererTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
 add_test(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
+
+# 更新图片测试默认离线，覆盖相对地址、非法协议和多帧 GIF 解码。
+mmm_add_test_executable(UI MarkdownImageCacheTest
+                        tests/MarkdownImageCacheTest.cpp)
+target_link_libraries(MarkdownImageCacheTest PRIVATE UI)
+add_test(NAME MarkdownImageCacheTest COMMAND MarkdownImageCacheTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。
 mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest

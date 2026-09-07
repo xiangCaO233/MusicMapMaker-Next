@@ -6,6 +6,23 @@
 
 namespace MMM::UI
 {
+/// @brief 已加载图片的纹理视图，动画通过 UV 选择缓存图集中的当前帧。
+struct MarkdownImage {
+    ImTextureID texture{};        ///< 已上传的纹理，不转移所有权。
+    ImVec2      size{};           ///< 原始显示比例对应的像素尺寸。
+    ImVec2      uv0{ 0, 0 };      ///< 当前帧左上角。
+    ImVec2      uv1{ 1, 1 };      ///< 当前帧右下角。
+    bool        failed{ false };  ///< 加载失败时保留替代文本。
+};
+/// @brief Markdown 的非拥有图片查询接口。
+class IMarkdownImages
+{
+public:
+    /// @brief 通过接口销毁图片查询实现。
+    virtual ~IMarkdownImages() = default;
+    /// @brief 只查询缓存；禁止在排版时下载、解码或创建纹理。
+    virtual MarkdownImage findImage(std::string_view destination) const = 0;
+};
 
 /// @brief Markdown 绘制配色。
 struct MarkdownStyle {
@@ -39,6 +56,8 @@ struct MarkdownRenderOptions {
     bool interactiveLinks{ true };
     /// @brief 自定义配色；为空时使用当前 ImGui 主题生成。
     const MarkdownStyle* style{ nullptr };
+    /// @brief 可选图片缓存；为空时显示图片替代文本。
+    const IMarkdownImages* images{ nullptr };
 };
 
 /// @brief Markdown 排版结果。

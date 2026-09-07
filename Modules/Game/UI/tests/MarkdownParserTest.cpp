@@ -82,5 +82,21 @@ bool testInlineParsing()
 /// @return 所有语法断言通过时返回 0。
 int main()
 {
-    return testBlockParsing() && testInlineParsing() ? 0 : 1;
+    /// @brief 覆盖线上 changelog 的相对图片地址、GIF、标题和括号。
+    const auto images = []() {
+        unsigned count = 0;
+        bool     valid = true;
+        MMM::UI::visitMarkdownInline(
+            "![图片](/download/a.png \"标题\") "
+            "![动画](https://example.com/a(b).gif '动画标题')",
+            [&](const auto& span) {
+                if ( span.kind != MMM::UI::MarkdownInlineKind::Image ) return;
+                valid &= span.destination ==
+                         (count == 0U ? "/download/a.png"
+                                      : "https://example.com/a(b).gif");
+                ++count;
+            });
+        return valid && count == 2U;
+    };
+    return testBlockParsing() && testInlineParsing() && images() ? 0 : 1;
 }

@@ -16,6 +16,38 @@ bool openUrlInBrowser(std::string_view url)
 
 namespace
 {
+/// @brief 测试用缓存不创建 GPU 资源，只返回稳定纹理号与帧区域。
+class TestImages final : public MMM::UI::IMarkdownImages
+{
+public:
+    /// @brief 返回 2:1 图片和图集中第一帧的 UV。
+    MMM::UI::MarkdownImage findImage(std::string_view) const override
+    {
+        return {
+            ImTextureID{ 42 }, { 640, 320 }, { 0, 0 }, { 0.5F, 0.5F }, false
+        };
+    }
+};
+/// @brief 验证图片按可用宽度缩放，并实际提交图片纹理而非替代文字。
+bool testEmbeddedImage()
+{
+    TestImages images;
+    ImGui::NewFrame();
+    ImGui::Begin("EmbeddedImageTest");
+    const MMM::UI::MarkdownRenderOptions options{ .wrapWidth = 200.0F,
+                                                  .images    = &images };
+    const auto                           measured =
+        MMM::UI::measureMarkdown("![图片](/image.gif \"标题\")", options);
+    MMM::UI::renderMarkdown("![图片](/image.gif \"标题\")", options);
+    bool textured = false;
+    for ( const auto& command : ImGui::GetWindowDrawList()->CmdBuffer ) {
+        textured |=
+            command.GetTexID() == ImTextureID{ 42 } && command.ElemCount >= 6;
+    }
+    ImGui::End();
+    ImGui::Render();
+    return textured && measured.size.x == 200.0F && measured.size.y >= 100.0F;
+}
 /// @brief 创建一帧 ImGui 内容并覆盖 Markdown 的三个公共绘制入口。
 bool testMarkdownLayoutAndRendering()
 {
@@ -138,8 +170,8 @@ int main()
         return 1;
     }
 
-    const bool valid =
-        testMarkdownLayoutAndRendering() && testLongTooltipCanBeScrolled();
+    const bool valid = testMarkdownLayoutAndRendering() &&
+                       testLongTooltipCanBeScrolled() && testEmbeddedImage();
     ImGui::DestroyContext();
     return valid ? 0 : 1;
 }
