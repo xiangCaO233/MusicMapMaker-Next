@@ -30,8 +30,9 @@ void WelcomeView::showHome()
 {
     m_isOpen = true;
     m_topic.reset();
-    m_focus       = true;
-    m_scrollToTop = true;
+    m_focus          = true;
+    m_scrollToTop    = true;
+    m_restoreChapter = true;
 }
 
 void WelcomeView::renderHome(UIManager* manager)
@@ -41,7 +42,6 @@ void WelcomeView::renderHome(UIManager* manager)
     const auto& language =
         Config::AppConfig::instance().getEditorSettings().language;
     const float scale = Config::AppConfig::instance().getWindowContentScale();
-    const float width = ImGui::GetContentRegionAvail().x;
     ImGui::Dummy({ 0, 28.0F * scale });
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.8F);
     ImGui::TextWrapped("MusicMapMaker-Next");
@@ -59,62 +59,147 @@ void WelcomeView::renderHome(UIManager* manager)
     const float padding    = ImGui::GetStyle().WindowPadding.x;
     const float line       = ImGui::GetTextLineHeight();
     const float cardHeight = 2.0F * padding + 2.5F * line;
-    for ( std::size_t i = 0; i < topics.size(); ++i ) {
-        const auto& topic = topics[i];
-        std::size_t done = 0, total = 0;
-        for ( const auto& branch : topic.m_branches )
-            for ( const auto& step : branch.m_steps ) {
-                ++total;
-                done += service.progress().completed(topic, step) ? 1 : 0;
+    // 与设置项装饰一致：淡化 FrameBg 和 Border，不额外增强明暗对比。
+    const auto& style       = ImGui::GetStyle();
+    auto        panelColor  = style.Colors[ImGuiCol_FrameBg];
+    auto        borderColor = style.Colors[ImGuiCol_Border];
+    panelColor.w *= 0.35F;
+    borderColor.w *= 0.6F;
+    // 仅增强章节标签的状态区分，内容区仍保留设置项的轻量装饰。
+    auto selectedTab = ImLerp(
+        style.Colors[ImGuiCol_WindowBg], style.Colors[ImGuiCol_Text], 0.12F);
+    auto hoveredTab = ImLerp(
+        style.Colors[ImGuiCol_WindowBg], style.Colors[ImGuiCol_Text], 0.18F);
+    selectedTab.w = hoveredTab.w = 1.0F;
+    ImGui::PushStyleColor(ImGuiCol_TabSelected, selectedTab);
+    ImGui::PushStyleColor(ImGuiCol_TabHovered, hoveredTab);
+    ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline,
+                          style.Colors[ImGuiCol_CheckMark]);
+    ImGui::PushStyleVar(ImGuiStyleVar_TabBarOverlineSize, 2.0F * scale);
+    if ( ImGui::BeginTabBar("WelcomeChapters",
+                            ImGuiTabBarFlags_FittingPolicyScroll |
+                                ImGuiTabBarFlags_DrawSelectedOverline) ) {
+        for ( const auto& chapter : service.chapters() ) {
+            const auto label =
+                chapter.m_title.get(language) + "###" + chapter.m_id;
+            const auto flags = m_restoreChapter && m_chapter == chapter.m_id
+                                   ? ImGuiTabItemFlags_SetSelected
+                                   : ImGuiTabItemFlags_None;
+            if ( !ImGui::BeginTabItem(label.c_str(), nullptr, flags) ) continue;
+            if ( !m_restoreChapter || m_chapter.empty() ||
+                 flags == ImGuiTabItemFlags_SetSelected )
+                m_chapter = chapter.m_id;
+            ImGui::Dummy({ 0, padding });
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, panelColor);
+            ImGui::PushStyleColor(ImGuiCol_Border, borderColor);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,
+                                style.FrameRounding);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize,
+                                style.ChildBorderSize);
+            if ( ImGui::BeginChild("ChapterPanel",
+                                   { 0, 0 },
+                                   ImGuiChildFlags_AutoResizeY |
+                                       ImGuiChildFlags_Borders |
+                                       ImGuiChildFlags_AlwaysUseWindowPadding,
+                                   ImGuiWindowFlags_NoScrollbar |
+                                       ImGuiWindowFlags_NoScrollWithMouse) ) {
+                const float width         = ImGui::GetContentRegionAvail().x;
+                bool        hasTopics     = false;
+                int         previousOrder = -1;
+                int         stage         = 0;
+                for ( std::size_t i = 0; i < topics.size(); ++i ) {
+                    const auto& topic = topics[i];
+                    if ( topic.m_chapter != chapter.m_id ) continue;
+                    hasTopics = true;
+                    if ( previousOrder != topic.m_order ) {
+                        previousOrder = topic.m_order;
+                        ++stage;
+                        ImGui::Dummy({ 0, padding * 0.5F });
+                        ImGui::TextDisabled(
+                            "%s %d", TR("ui.welcome.stage").data(), stage);
+                    }
+                    std::size_t done = 0, total = 0;
+                    for ( const auto& branch : topic.m_branches )
+                        for ( const auto& step : branch.m_steps ) {
+                            ++total;
+                            done += service.progress().completed(topic, step)
+                                        ? 1
+                                        : 0;
+                        }
+                    const std::string badge =
+                        topic.m_placeholder
+                            ? TR("ui.welcome.coming_soon").toString()
+                            : std::to_string(done) + " / " +
+                                  std::to_string(total);
+                    const auto& title = topic.m_title.get(language);
+                    ImGui::PushID(topic.m_id.c_str());
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                                        style.FrameRounding);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
+                                        style.ChildBorderSize);
+                    ImGui::PushStyleColor(ImGuiCol_Button, panelColor);
+                    const bool chosen =
+                        FeedbackButton("##TopicCard", { width, cardHeight });
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar(2);
+                    const auto  pos    = ImGui::GetItemRectMin();
+                    const auto  end    = ImGui::GetItemRectMax();
+                    auto*       draw   = ImGui::GetWindowDrawList();
+                    const auto  accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
+                    const float iconWidth =
+                        ImGui::CalcTextSize(ICON_MMM_BOOK).x;
+                    const float textX = pos.x + padding + iconWidth + padding;
+                    const float badgeWidth =
+                        ImGui::CalcTextSize(badge.c_str()).x + padding;
+                    const float badgeX = end.x - padding - badgeWidth;
+                    draw->AddText({ pos.x + padding, pos.y + padding },
+                                  accent,
+                                  ICON_MMM_BOOK);
+                    draw->PushClipRect(
+                        { textX, pos.y },
+                        { std::max(textX, badgeX - padding), end.y },
+                        true);
+                    draw->AddText({ textX, pos.y + padding },
+                                  ImGui::GetColorU32(ImGuiCol_Text),
+                                  title.c_str());
+                    draw->PopClipRect();
+                    draw->AddRectFilled(
+                        { badgeX, pos.y + padding - 2.0F * scale },
+                        { end.x - padding,
+                          pos.y + padding + line + 2.0F * scale },
+                        ImGui::GetColorU32(ImGuiCol_Header),
+                        4.0F * scale);
+                    draw->AddText({ badgeX + padding * 0.5F, pos.y + padding },
+                                  ImGui::GetColorU32(ImGuiCol_Text),
+                                  badge.c_str());
+                    draw->PushClipRect(
+                        { textX, pos.y }, { end.x - padding, end.y }, true);
+                    draw->AddText({ textX, pos.y + padding + line * 1.5F },
+                                  ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                  TR("ui.welcome.start_learning").data());
+                    draw->PopClipRect();
+                    if ( ImGui::IsItemHovered() )
+                        ImGui::SetTooltip("%s", title.c_str());
+                    ImGui::PopID();
+                    ImGui::Dummy({ 0, 4.0F * scale });
+                    if ( chosen ) {
+                        showTopic(i);
+                    }
+                }
+                if ( !hasTopics )
+                    ImGui::TextWrapped("%s",
+                                       TR("ui.welcome.chapter_empty").data());
             }
-        const std::string badge =
-            std::to_string(done) + " / " + std::to_string(total);
-        const auto& title = topic.m_title.get(language);
-        ImGui::PushID(topic.m_id.c_str());
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0F * scale);
-        ImGui::PushStyleColor(ImGuiCol_Button,
-                              ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-        const bool chosen =
-            FeedbackButton("##TopicCard", { width, cardHeight });
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
-        const auto  pos        = ImGui::GetItemRectMin();
-        const auto  end        = ImGui::GetItemRectMax();
-        auto*       draw       = ImGui::GetWindowDrawList();
-        const auto  accent     = ImGui::GetColorU32(ImGuiCol_CheckMark);
-        const float iconWidth  = ImGui::CalcTextSize(ICON_MMM_BOOK).x;
-        const float textX      = pos.x + padding + iconWidth + padding;
-        const float badgeWidth = ImGui::CalcTextSize(badge.c_str()).x + padding;
-        const float badgeX     = end.x - padding - badgeWidth;
-        draw->AddText(
-            { pos.x + padding, pos.y + padding }, accent, ICON_MMM_BOOK);
-        draw->PushClipRect({ textX, pos.y },
-                           { std::max(textX, badgeX - padding), end.y },
-                           true);
-        draw->AddText({ textX, pos.y + padding },
-                      ImGui::GetColorU32(ImGuiCol_Text),
-                      title.c_str());
-        draw->PopClipRect();
-        draw->AddRectFilled(
-            { badgeX, pos.y + padding - 2.0F * scale },
-            { end.x - padding, pos.y + padding + line + 2.0F * scale },
-            ImGui::GetColorU32(ImGuiCol_Header),
-            4.0F * scale);
-        draw->AddText({ badgeX + padding * 0.5F, pos.y + padding },
-                      ImGui::GetColorU32(ImGuiCol_Text),
-                      badge.c_str());
-        draw->PushClipRect({ textX, pos.y }, { end.x - padding, end.y }, true);
-        draw->AddText({ textX, pos.y + padding + line * 1.5F },
-                      ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                      TR("ui.welcome.start_learning").data());
-        draw->PopClipRect();
-        if ( ImGui::IsItemHovered() ) ImGui::SetTooltip("%s", title.c_str());
-        ImGui::PopID();
-        ImGui::Dummy({ 0, 4.0F * scale });
-        if ( chosen ) {
-            showTopic(i);
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+            ImGui::EndTabItem();
         }
+        m_restoreChapter = false;
+        ImGui::EndTabBar();
     }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
     if ( !service.error().empty() )
         ImGui::TextWrapped("%s", service.error().c_str());
 }

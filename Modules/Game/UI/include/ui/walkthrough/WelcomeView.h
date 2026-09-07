@@ -4,6 +4,7 @@
 #include "ui/walkthrough/WalkthroughPage.h"
 #include <cstddef>
 #include <optional>
+#include <string>
 
 namespace MMM::UI
 {
@@ -31,8 +32,10 @@ private:
     /// @warning 可见首页每帧调用，仅访问已加载主题和进度。
     void                       renderHome(UIManager* manager);
     std::optional<std::size_t> m_topic;  ///< 当前主题；空值表示欢迎首页。
-    WalkthroughPage m_walkthrough;       ///< 内嵌正文，不拥有窗口和学习记录。
-    bool            m_focus{ true };     ///< 显式打开后请求一次窗口焦点。
+    std::string m_chapter;  ///< 当前章节稳定 ID，返回目录和切换语言时保留。
+    bool        m_restoreChapter{ true };  ///< 返回目录后仅恢复一次章节选择。
+    WalkthroughPage m_walkthrough;         ///< 内嵌正文，不拥有窗口和学习记录。
+    bool            m_focus{ true };       ///< 显式打开后请求一次窗口焦点。
     bool            m_dockToCenter{ true };  ///< 等待主停靠区域可用后停靠一次。
     bool m_scrollToTop{ true };  ///< 页面切换后重置正文滚动，不影响进度。
     bool m_saveFailed{ false };  ///< 最近一次欢迎页设置保存失败。

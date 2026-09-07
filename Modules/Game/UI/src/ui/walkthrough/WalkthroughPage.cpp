@@ -47,9 +47,21 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.75F);
     ImGui::TextWrapped("%s", topic.m_title.get(language).c_str());
     ImGui::PopFont();
+    if ( topic.m_placeholder ) {
+        ImGui::Dummy({ 0, ImGui::GetStyle().WindowPadding.y });
+        ImGui::TextWrapped("%s", TR("ui.welcome.placeholder_body").data());
+        ImGui::PopID();
+        return;
+    }
     ImGui::Dummy({ 0, 16.0F * scale });
     renderMarkdown(topic.m_description.get(language), markdownOptions);
     ImGui::Dummy({ 0, 28.0F * scale });
+    // 主题正文与欢迎目录统一沿用设置项的淡背景和中性描边。
+    const auto& style      = ImGui::GetStyle();
+    auto        background = style.Colors[ImGuiCol_FrameBg];
+    auto        border     = style.Colors[ImGuiCol_Border];
+    background.w *= 0.35F;
+    border.w *= 0.6F;
     std::size_t finishedBranches = 0;
     for ( std::size_t index = 0; index < topic.m_branches.size(); ++index ) {
         const auto& branch = topic.m_branches[index];
@@ -60,21 +72,18 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
         if ( done ) ++finishedBranches;
         const bool expanded = m_expandedBranch == index;
         ImGui::PushID(branch.m_id.c_str());
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0F * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, style.FrameRounding);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize,
-                            expanded ? 1.0F * scale : 0.0F);
-        ImGui::PushStyleColor(ImGuiCol_Border,
-                              ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,
-                              expanded
-                                  ? ImGui::GetStyleColorVec4(ImGuiCol_FrameBg)
-                                  : ImVec4{ 0, 0, 0, 0 });
-        if ( ImGui::BeginChild(
-                 "BranchCard",
-                 { 0, 0 },
-                 ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_Borders,
-                 ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoScrollWithMouse) ) {
+                            style.ChildBorderSize);
+        ImGui::PushStyleColor(ImGuiCol_Border, border);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+        if ( ImGui::BeginChild("BranchCard",
+                               { 0, 0 },
+                               ImGuiChildFlags_AutoResizeY |
+                                   ImGuiChildFlags_Borders |
+                                   ImGuiChildFlags_AlwaysUseWindowPadding,
+                               ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse) ) {
             const float line      = ImGui::GetTextLineHeight();
             const float rowHeight = line + 16.0F * scale;
             const auto  row       = ImGui::GetCursorScreenPos();

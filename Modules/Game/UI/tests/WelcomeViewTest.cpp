@@ -82,6 +82,95 @@ bool testPages()
     aesthetics.windowPadding = originalPadding;
     for ( int i = 0; i < 4; ++i )
         if ( !frame(960) ) return false;
+    // 深浅色下章节均沿用设置项的淡背景、圆角和边框参数。
+    const auto originalStyle = ImGui::GetStyle();
+    for ( const bool light : { false, true } ) {
+        if ( light )
+            ImGui::StyleColorsLight();
+        else
+            ImGui::StyleColorsDark();
+        auto& style      = ImGui::GetStyle();
+        auto  panelColor = style.Colors[ImGuiCol_FrameBg];
+        panelColor.w *= 0.35F;
+        const auto expectedColor = ImGui::GetColorU32(panelColor);
+        for ( int i = 0; i < 4; ++i ) frame(960);
+        bool foundPanel = false;
+        for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+            if ( !window->Active ||
+                 std::string_view(window->Name).find("ChapterPanel") ==
+                     std::string_view::npos )
+                continue;
+            if ( window->WindowRounding != style.FrameRounding ||
+                 window->WindowBorderSize != style.ChildBorderSize )
+                return false;
+            for ( const auto& vertex : window->DrawList->VtxBuffer )
+                if ( vertex.col == expectedColor ) foundPanel = true;
+            // ImGui 可将子窗口装饰合并到父窗口绘制列表，避免额外绘制调用。
+            if ( window->ParentWindow )
+                for ( const auto& vertex :
+                      window->ParentWindow->DrawList->VtxBuffer )
+                    if ( vertex.col == expectedColor &&
+                         window->Rect().Contains(vertex.pos) )
+                        foundPanel = true;
+        }
+        if ( !foundPanel ) {
+            XERROR("Chapter panel background missing for light={}", light);
+            return false;
+        }
+        welcome.showTopic(0);
+        for ( int i = 0; i < 4; ++i ) frame(960);
+        bool foundBranch = false;
+        for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+            if ( !window->Active ||
+                 std::string_view(window->Name).find("BranchCard") ==
+                     std::string_view::npos )
+                continue;
+            if ( window->WindowRounding != style.FrameRounding ||
+                 window->WindowBorderSize != style.ChildBorderSize )
+                return false;
+            for ( const auto* decorated :
+                  { window,
+                    static_cast<const ImGuiWindow*>(window->ParentWindow) } ) {
+                if ( !decorated ) continue;
+                for ( const auto& vertex : decorated->DrawList->VtxBuffer )
+                    if ( vertex.col == expectedColor &&
+                         window->Rect().Contains(vertex.pos) )
+                        foundBranch = true;
+            }
+        }
+        if ( !foundBranch ) {
+            XERROR("Walkthrough branch background missing for light={}", light);
+            return false;
+        }
+        welcome.showHome();
+        for ( int i = 0; i < 4; ++i ) frame(960);
+    }
+    ImGui::GetStyle() = originalStyle;
+    // 章节标签切换与正文往返不应丢失选择；空章节仍占有独立标签。
+    ImGuiTabBar* chapters = nullptr;
+    for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+        if ( std::string_view(window->Name).find("WelcomeContent") !=
+             std::string_view::npos ) {
+            chapters = ImGui::GetCurrentContext()->TabBars.GetByKey(
+                ImHashStr("WelcomeChapters", 0, window->ID));
+            if ( chapters ) break;
+        }
+    }
+    if ( !chapters || chapters->Tabs.Size != 2 ) return false;
+    if ( !(chapters->Flags & ImGuiTabBarFlags_DrawSelectedOverline) )
+        return false;
+    const auto creationTab        = chapters->Tabs[0].ID;
+    const auto personalizationTab = chapters->Tabs[1].ID;
+    chapters->NextSelectedTabId   = personalizationTab;
+    for ( int i = 0; i < 4; ++i ) frame(360);
+    if ( chapters->SelectedTabId != personalizationTab ) return false;
+    welcome.showTopic(1);
+    for ( int i = 0; i < 4; ++i ) frame(360);
+    welcome.showHome();
+    for ( int i = 0; i < 4; ++i ) frame(960);
+    if ( chapters->SelectedTabId != personalizationTab ) return false;
+    chapters->NextSelectedTabId = creationTab;
+    for ( int i = 0; i < 4; ++i ) frame(960);
     welcome.showTopic(0);
     if ( welcome.showingHome() ) return false;
     for ( int i = 0; i < 4; ++i )
@@ -108,6 +197,23 @@ bool testPages()
     welcome.showTopic(9999);
     frame(960);
     if ( !welcome.showingHome() ) return false;
+    // 占位主题可独立进入和返回，不能残留上一主题的实际分支或修改已有进度。
+    for ( std::size_t index = 1; index < service.topics().size(); ++index ) {
+        welcome.showTopic(index);
+        if ( welcome.showingHome() ) return false;
+        for ( int i = 0; i < 4; ++i )
+            if ( !frame(index == 1 ? 360 : 960) ) return false;
+        for ( const auto* window : ImGui::GetCurrentContext()->Windows )
+            if ( window->Active &&
+                 std::string_view(window->Name).find("BranchCard") !=
+                     std::string_view::npos )
+                return false;
+        welcome.showHome();
+        if ( !welcome.showingHome() ||
+             !service.progress().completed(topic, step) )
+            return false;
+        frame(960);
+    }
 
     // 模拟项目恢复时销毁旧停靠树并生成新的中心节点，主题和学习记录必须保留。
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
