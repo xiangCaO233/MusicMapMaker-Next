@@ -66,5 +66,11 @@ _mmm_sync_managed_directory("${_MMM_SOURCE_DEFAULT_SKIN}"
 _mmm_sync_managed_directory("${_MMM_SOURCE_IVM_SKIN}"
                             "${_MMM_DESTINATION_ASSETS}/skins/ivm")
 
+# 演练定义及只读示例源独立分发，用户练习副本和学习进度不属于受管资源。
+if(EXISTS "${MMM_SYNC_SOURCE_ASSETS_ROOT}/walkthroughs")
+  _mmm_sync_managed_directory("${MMM_SYNC_SOURCE_ASSETS_ROOT}/walkthroughs"
+                              "${_MMM_DESTINATION_ASSETS}/walkthroughs")
+endif()
+
 # 构建日志明确输出实际目标根，便于排查本机路径选择。
 message(STATUS "已同步默认翻译与内置皮肤到 ${MMM_SYNC_DESTINATION_CONFIG_ROOT}")
