@@ -87,6 +87,7 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.hasPolylineGesture     = false;
     ctx.brushState.holdStartTime          = -1.0;
     ctx.brushState.duration               = 0.0;
     ctx.brushState.dtrack                 = 0;
@@ -219,6 +220,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     }
 
     ctx.brushState.isActive           = true;
+    ctx.brushState.hasPolylineGesture = false;
     ctx.brushState.createsAudioSample = createsAudioSample;
     ctx.brushState.duration           = 0.0;
     ctx.brushState.dtrack             = 0;
@@ -259,8 +261,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -459,6 +461,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 {
     if ( !ctx.brushState.isActive ) return;
+    ctx.brushState.hasPolylineGesture |=
+        ctx.brushState.type == ::MMM::NoteType::FLICK ||
+        ctx.brushState.type == ::MMM::NoteType::POLYLINE;
 
     // 同 StartBrush 的逻辑
     auto itCamera = ctx.cameras.find(cmd.cameraId);
@@ -482,8 +487,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -505,8 +510,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                 : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;
@@ -573,10 +578,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-            ? currentLane->absoluteTrack(
+              ? currentLane->absoluteTrack(
                   static_cast<std::uint32_t>(ctx.trackCount),
                   projectedDraftLaneCount)
-            : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
+              : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     const bool editsDraft   = ctx.brushState.track < 0;
     const int  minimumTrack = editsDraft ? -(ctx.draftTrackCount + 1) : 0;
     const int  maximumTrack = editsDraft ? -1 : ctx.trackCount - 1;
@@ -736,6 +741,12 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                 }
             } else if ( last.type == ::MMM::NoteType::FLICK ) {
                 int targetTrack = last.trackIndex + last.dtrack;
+                // 从滑键头部或折线节点向更早时间拖动，只保留原滑键，不反向生成
+                // Hold。
+                if ( currentPosTime < last.timestamp &&
+                     currentTrack == last.trackIndex && last.dtrack != 0 ) {
+                    return;
+                }
                 if ( currentTrack != targetTrack ) {
                     // 正在横移：更新
                     // dtrack，并重置垂直参考点以防止意外触发长按。
@@ -803,6 +814,9 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.brushState.holdStartTime = -1.0;
         ctx.brushState.polylineSegments.clear();
     }
+    ctx.brushState.hasPolylineGesture |=
+        ctx.brushState.type == ::MMM::NoteType::FLICK ||
+        ctx.brushState.type == ::MMM::NoteType::POLYLINE;
 }
 
 void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
@@ -1194,8 +1208,14 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             }
         }
 
+        // 纯长条反向拖绘允许零长度 Hold；折线及滑键手势的零值段仍须清理。
+        const bool preserveZeroLengthHold =
+            !ctx.brushState.hasPolylineGesture &&
+            note.m_type == ::MMM::NoteType::HOLD && segments.size() == 1U &&
+            segments.front().type == ::MMM::NoteType::HOLD &&
+            segments.front().duration == 0.0;
         // 3.8 对合并/清洗后的最终段再次进行深度清洗与递归简化
-        {
+        if ( !preserveZeroLengthHold ) {
             bool changed = true;
             while ( changed ) {
                 changed = false;

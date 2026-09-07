@@ -297,6 +297,138 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
+/// @brief 验证反向拖动半拍、一拍的纯 Hold 在提交及撤销重做后仍为零长度长条。
+bool testDownwardBrushCreatesZeroLengthHold()
+{
+    for ( const bool polylineEnabled : { false, true } ) {
+        for ( const double offset : { 0.25, 0.5 } ) {
+            MMM::Logic::SessionContext context;
+            configureObjectEditingCanvas(context);
+            context.lastConfig.settings.enablePolylineEditing = polylineEnabled;
+            MMM::Logic::DrawTool tool;
+            tool.handleStartBrush(
+                context,
+                MMM::Logic::CmdStartBrush{ .cameraId    = "Basic2DCanvas",
+                                           .mouseX      = 150.0F,
+                                           .mouseY      = 300.0F,
+                                           .isShiftDown = true,
+                                           .isCtrlDown  = true });
+            const auto& cache = context.timelineRegistry.ctx()
+                                    .get<MMM::Logic::System::ScrollCache>();
+            const float targetY =
+                300.0F + static_cast<float>(cache.getAbsY(1.0) -
+                                            cache.getAbsY(1.0 - offset));
+            tool.handleUpdateBrush(
+                context,
+                MMM::Logic::CmdUpdateBrush{ .cameraId    = "Basic2DCanvas",
+                                            .mouseX      = 150.0F,
+                                            .mouseY      = targetY,
+                                            .isShiftDown = true,
+                                            .isCtrlDown  = true });
+            if ( context.brushState.type != MMM::NoteType::HOLD ||
+                 !near(context.brushState.duration, 0.0) )
+                return false;
+            tool.handleEndBrush(
+                context,
+                MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+            const auto valid = [&]() {
+                const auto notes =
+                    context.noteRegistry.view<MMM::Logic::NoteComponent>();
+                if ( notes.size() != 1U ) return false;
+                const auto& note =
+                    notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+                return note.m_type == MMM::NoteType::HOLD &&
+                       near(note.m_timestamp, 1.0) &&
+                       near(note.m_duration, 0.0) && note.m_subNotes.empty();
+            };
+            if ( !valid() ) return false;
+            context.actionStack.undo(context);
+            if ( context.noteRegistry.view<MMM::Logic::NoteComponent>()
+                     .size() != 0U )
+                return false;
+            context.actionStack.redo(context);
+            if ( !valid() ) return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证滑键头部及折线节点向下多次拖动不生成零长度 Hold，也不丢失滑键。
+bool testDownwardFlickAndPolylineRemainSlides()
+{
+    for ( const bool polyline : { false, true } ) {
+        for ( const double offset : { 0.25, 0.5, 1.0 } ) {
+            MMM::Logic::SessionContext context;
+            configureObjectEditingCanvas(context);
+            context.lastConfig.settings.enablePolylineEditing = true;
+            MMM::Logic::NoteComponent original;
+            original.m_type =
+                polyline ? MMM::NoteType::POLYLINE : MMM::NoteType::FLICK;
+            original.m_timestamp  = polyline ? 0.5 : 1.0;
+            original.m_trackIndex = 0;
+            original.m_dtrack     = polyline ? 0 : 1;
+            if ( polyline ) {
+                original.m_subNotes = {
+                    { MMM::NoteType::HOLD, 0.5, 0.5, 0, 0 },
+                    { MMM::NoteType::FLICK, 1.0, 0.0, 0, 1 }
+                };
+            }
+            const auto entity = context.noteRegistry.create();
+            context.noteRegistry.emplace<MMM::Logic::NoteComponent>(entity,
+                                                                    original);
+            context.hoveredEntity     = entity;
+            context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+            context.hoveredSubIndex   = polyline ? 1 : -1;
+            context.hoveredPart =
+                static_cast<uint8_t>(MMM::Logic::HoverPart::PolylineNode);
+            MMM::Logic::DrawTool tool;
+            tool.handleStartBrush(
+                context,
+                MMM::Logic::CmdStartBrush{ .cameraId    = "Basic2DCanvas",
+                                           .mouseX      = 150.0F,
+                                           .mouseY      = 300.0F,
+                                           .isShiftDown = true,
+                                           .isCtrlDown  = true });
+            const auto& cache = context.timelineRegistry.ctx()
+                                    .get<MMM::Logic::System::ScrollCache>();
+            const float targetY =
+                300.0F + static_cast<float>(cache.getAbsY(1.0) -
+                                            cache.getAbsY(1.0 - offset));
+            for ( int frame = 0; frame < 3; ++frame ) {
+                tool.handleUpdateBrush(
+                    context,
+                    MMM::Logic::CmdUpdateBrush{ .cameraId    = "Basic2DCanvas",
+                                                .mouseX      = 150.0F,
+                                                .mouseY      = targetY,
+                                                .isShiftDown = true,
+                                                .isCtrlDown  = true });
+            }
+            tool.handleEndBrush(
+                context,
+                MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+            bool found = false;
+            for ( const auto noteEntity :
+                  context.noteRegistry.view<MMM::Logic::NoteComponent>() ) {
+                const auto& note =
+                    context.noteRegistry.get<MMM::Logic::NoteComponent>(
+                        noteEntity);
+                if ( note.m_isSubNote ) continue;
+                if ( found || note.m_type != original.m_type ) return false;
+                found = true;
+                if ( polyline ) {
+                    if ( note.m_subNotes.size() != 2U ||
+                         note.m_subNotes.back().type != MMM::NoteType::FLICK ||
+                         note.m_subNotes.back().dtrack != 1 )
+                        return false;
+                } else if ( note.m_dtrack != 1 )
+                    return false;
+            }
+            if ( !found ) return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证先横移再纵向绘制的 L 形折线保持 Flick、Hold 顺序。
 /// @return 横向段位于纵向段之前时返回 true。
 bool testPolylinePreservesHorizontalFirstGestureOrder()
@@ -481,8 +613,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -1343,7 +1475,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                       .view<const MMM::Logic::NoteComponent>();
+                                    .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -1435,25 +1567,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.013,
-            .duration   = 0.241,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 1.254,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.254,
-            .duration   = 0.246,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
     };
 
@@ -3114,25 +3246,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -4616,7 +4748,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -4690,11 +4822,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -5005,6 +5137,8 @@ int main()
     return testKeyModeInteractionRestriction() &&
                    testSelectAllRespectsPointerTrackArea() &&
                    testKeyModeBrushCreatesOnlyHold() &&
+                   testDownwardBrushCreatesZeroLengthHold() &&
+                   testDownwardFlickAndPolylineRemainSlides() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&
                    testBmsEditingHidesBgmLanes() &&
                    testBrushAudioResourcePlacementRules() &&

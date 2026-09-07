@@ -284,6 +284,8 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 本次手势是否进入过滑键或折线；禁止其零长度段变成独立 Hold。
+        bool hasPolylineGesture{ false };
 
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
