@@ -28,7 +28,7 @@ public:
         };
     }
 };
-/// @brief 验证图片按可用宽度缩放，并实际提交图片纹理而非替代文字。
+/// @brief 验证图片纹理、宽度缩放与常驻标签排版，长标签必须自动换行。
 bool testEmbeddedImage()
 {
     TestImages images;
@@ -38,6 +38,12 @@ bool testEmbeddedImage()
                                                   .images    = &images };
     const auto                           measured =
         MMM::UI::measureMarkdown("![图片](/image.gif \"标题\")", options);
+    const auto unlabelled =
+        MMM::UI::measureMarkdown("![](/image.gif)", options);
+    const auto longLabel = MMM::UI::measureMarkdown(
+        "![This image label is long enough to wrap across several lines in a "
+        "narrow reading area](/image.gif)",
+        options);
     MMM::UI::renderMarkdown("![图片](/image.gif \"标题\")", options);
     bool textured = false;
     for ( const auto& command : ImGui::GetWindowDrawList()->CmdBuffer ) {
@@ -46,7 +52,9 @@ bool testEmbeddedImage()
     }
     ImGui::End();
     ImGui::Render();
-    return textured && measured.size.x == 200.0F && measured.size.y >= 100.0F;
+    return textured && measured.size.x == 200.0F && measured.size.y >= 100.0F &&
+           measured.size.y > unlabelled.size.y &&
+           longLabel.size.y > measured.size.y;
 }
 /// @brief 创建一帧 ImGui 内容并覆盖 Markdown 的三个公共绘制入口。
 bool testMarkdownLayoutAndRendering()

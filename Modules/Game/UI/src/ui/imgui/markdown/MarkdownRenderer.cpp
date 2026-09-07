@@ -192,7 +192,26 @@ private:
                                        ? m_images->findImage(span.destination)
                                        : MarkdownImage{};
                 if ( x > inset ) lineY += lineHeight;
-                x                     = inset;
+                x = inset;
+                // 图片替代文字始终作为标签展示，不再仅在加载失败时可见。
+                if ( !span.text.empty() ) {
+                    visitTextPieces(span.text, [&](std::string_view piece) {
+                        placePiece(piece,
+                                   {},
+                                   inset,
+                                   x,
+                                   lineY,
+                                   fontSize,
+                                   lineHeight,
+                                   m_style.textColor,
+                                   false,
+                                   false,
+                                   false);
+                    });
+                    if ( m_truncated ) return;
+                    lineY += lineHeight + 4.0F;
+                    x = inset;
+                }
                 const float available = std::max(1.0F, m_width - inset);
                 const float width     = image.size.x > 0
                                             ? std::min(available, image.size.x)
@@ -214,13 +233,6 @@ private:
                             image.failed ? "图片加载失败"
                                          : (m_images ? "图片加载中…" : "图片");
                         m_drawList->AddText(min, m_style.mutedColor, status);
-                        m_drawList->AddText(m_font,
-                                            fontSize,
-                                            { min.x, min.y + lineHeight },
-                                            m_style.mutedColor,
-                                            span.text.data(),
-                                            span.text.data() + span.text.size(),
-                                            width);
                     }
                 }
                 m_maxUsedWidth = std::max(m_maxUsedWidth, inset + width);

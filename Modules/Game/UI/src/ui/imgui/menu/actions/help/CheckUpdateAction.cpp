@@ -175,7 +175,21 @@ private:
 
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
-        if ( modalScope.begin(TR("ui.help.update_found").data()) ) {
+        // 更新日志包含图片时需要独立阅读空间，尺寸随主视口工作区收缩。
+        const bool showChangelog =
+            info.status == MMM::Network::UpdateStatus::kUpdateFound &&
+            !info.changelog.empty();
+        const ImVec2 workSize = ImGui::GetMainViewport()->WorkSize;
+        const ImVec2 desiredSize =
+            showChangelog
+                ? ImVec2(std::min(960.0f * dpiScale, workSize.x * 0.9f),
+                         std::min(900.0f * dpiScale, workSize.y * 0.9f))
+                : ImVec2(0.0f, 0.0f);
+        if ( modalScope.begin(TR("ui.help.update_found").data(),
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              desiredSize,
+                              !showChangelog) ) {
             info = m_updateChecker->getInfo();
 
             if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
@@ -318,8 +332,14 @@ private:
                 Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                                     ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
+                // 为底部操作按钮与分隔留出空间，其余高度全部用于阅读。
+                const float footerHeight =
+                    36.0f * dpiScale + ImGui::GetStyle().ItemSpacing.y * 5.0f +
+                    1.0f;
+                const float contentHeight = std::max(
+                    1.0f, ImGui::GetContentRegionAvail().y - footerHeight);
                 ImGui::BeginChild("ChangelogScroll",
-                                  ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
+                                  ImVec2(0.0f, contentHeight),
                                   ImGuiChildFlags_Borders);
                 if ( m_images && m_imageVersion != info.latestVersion ) {
                     m_images->prepareDocument(info.changelog);
