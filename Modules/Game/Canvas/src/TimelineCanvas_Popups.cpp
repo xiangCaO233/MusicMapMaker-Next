@@ -1002,6 +1002,51 @@ bool drawTimeEditor(const char* id, double& value,
     return changed;
 }
 
+/// @brief 按表格相同的拍号与分拍位语义编辑弹窗秒时间。
+/// @param time 弹窗草稿时间；仅显式编辑拍位时写回，避免拟合改变原时间。
+/// @param snapshot 当前谱面快照。
+/// @warning UI 热路径：仅在弹窗首次显示时构建 BPM 换算基准；打开期间复用
+/// 基准，避免每帧排序，也避免编辑 BPM 自身时定位基准随草稿变化。
+void drawPopupBeatPositionEditor(double&                               time,
+                                 const Common::Render::RenderSnapshot* snapshot)
+{
+    if ( !snapshot ) return;
+
+    /// @brief 当前模态弹窗打开时捕获的谱面节奏定位基准。
+    static TimingTableBeatTimeline timeline;
+    /// @brief 与定位基准一同捕获的缺省 BPM。
+    static double fallbackBpm = 120.0;
+    if ( ImGui::IsWindowAppearing() ) {
+        timeline    = buildTimingTableBeatTimeline(*snapshot);
+        fallbackBpm = timingTableFallbackBpm(*snapshot);
+    }
+
+    const auto fit = fitTimingTableFractionWithError(
+        timingTableTimeToBeat(timeline, time, fallbackBpm),
+        time,
+        timeline,
+        fallbackBpm);
+    int    beatIndex = fit.beatIndex;
+    double fraction  = fit.fraction;
+    ImGui::TextUnformatted("拍号");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    const bool beatChanged = ImGui::InputInt("##PopupBeat", &beatIndex, 1, 4);
+    ImGui::TextUnformatted("分拍位");
+    const bool fractionChanged =
+        drawTimingTableFractionInput("##PopupBeatFraction", fit, fraction);
+    if ( ImGui::IsItemHovered() ) {
+        ImGui::SetTooltip("支持分数（如 1/4）或小数；拟合误差 %.3f ms",
+                          fit.errorMs);
+    }
+    if ( beatChanged || fractionChanged ) {
+        const double requestedTime = timingTableBeatToTime(
+            timeline, static_cast<double>(beatIndex) + fraction, fallbackBpm);
+        if ( std::isfinite(requestedTime) ) {
+            time = std::max(0.0, requestedTime);
+        }
+    }
+}
+
 /// @brief 绘制占满弹窗内容区宽度的双精度输入框。
 /// @warning UI 热路径：仅写入 ImGui 下一控件宽度并绘制输入框。
 bool drawFullWidthInputDouble(const char* id, double& value, double step,
@@ -1127,6 +1172,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
+        drawPopupBeatPositionEditor(m_editTime, m_currentSnapshot);
 
         ::MMM::TimingEffect editEffect =
             (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
@@ -1294,6 +1340,7 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##CreateTime", m_createTimeManual, m_currentSnapshot);
+        drawPopupBeatPositionEditor(m_createTimeManual, m_currentSnapshot);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -1680,8 +1727,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                     ? parseTimingTableDouble(searchValueText)
-                                     : std::nullopt;
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =
