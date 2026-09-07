@@ -4,10 +4,16 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include "ui/IUIView.h"
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace MMM::Event
+{
+struct GLFWDropEvent;
+}
 
 namespace MMM::UI
 {
@@ -21,7 +27,7 @@ public:
     NewBeatmapWizard();
 
     /// @brief 销毁新建谱面向导。
-    virtual ~NewBeatmapWizard() = default;
+    ~NewBeatmapWizard() override;
 
     /// @brief 更新并绘制新建谱面向导弹窗。
     /// @param sourceManager 当前 UI 管理器。
@@ -34,6 +40,34 @@ public:
     void close();
 
 private:
+    /// @brief 导入后需要自动选中的资源用途。
+    enum class ResourceTarget {
+        Audio,      ///< 主音轨。
+        Cover,      ///< 封面图片。
+        Background  ///< 背景图片或视频。
+    };
+
+    /// @brief 打开遵循用户设置的资源选择器。
+    /// @warning 用户点击时调用；原生选择器会阻塞至用户完成选择。
+    void openResourcePicker(ResourceTarget target);
+    /// @brief 在向导模态层内绘制资源选择器，防止被父窗口阻挡。
+    void renderResourcePicker();
+    /// @brief 复制所选资源并将其绑定到向导字段。
+    /// @warning 仅文件选择完成时调用；执行文件复制、音频探测及项目保存。
+    void importResource(const std::filesystem::path& path);
+    /// @brief 当前资源选择器的导入用途。
+    ResourceTarget m_resourceTarget{ ResourceTarget::Audio };
+    /// @brief 最近一次导入失败的说明。
+    std::string m_resourceImportError;
+    /// @brief 消费当前下拉框收到的操作系统文件拖放。
+    /// @warning
+    /// 每帧调用，无事件时立即返回；仅实际投放时导入文件，禁止逐帧访问磁盘。
+    void handleResourceDrop(ResourceTarget target);
+    /// @brief GLFW 拖放订阅令牌，析构时解除。
+    uint64_t m_dropSubscription{ 0 };
+    /// @brief 当前帧待处理的文件拖放；GLFW 回调与向导绘制均在渲染线程执行。
+    std::vector<Event::GLFWDropEvent> m_pendingDrops;
+
     /// @brief 新谱面的创建来源。
     enum class CreateMode {
         Blank,        ///< 创建空白谱面。

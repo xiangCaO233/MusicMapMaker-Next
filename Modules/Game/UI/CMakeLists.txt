@@ -280,3 +280,11 @@ mmm_add_test_executable(UI ProjectAudioToolSearchTest
 target_include_directories(ProjectAudioToolSearchTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ProjectAudioToolSearchTest COMMAND ProjectAudioToolSearchTest)
+
+# 新建谱面资源导入测试覆盖同名保护、项目内复用及失败路径，输出只写构建目录。
+mmm_add_test_executable(UI ProjectResourceImportTest
+                        tests/ProjectResourceImportTest.cpp)
+target_include_directories(ProjectResourceImportTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ProjectResourceImportTest
+         COMMAND ProjectResourceImportTest "${CMAKE_BINARY_DIR}/test_output")
