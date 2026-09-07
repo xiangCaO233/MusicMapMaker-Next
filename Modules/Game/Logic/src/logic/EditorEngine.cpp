@@ -863,6 +863,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
+    target.settings.m_showWelcomeOnStartup =
+        source.settings.m_showWelcomeOnStartup;
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
     target.settings.autoSave             = source.settings.autoSave;
     target.settings.autoBackup           = source.settings.autoBackup;

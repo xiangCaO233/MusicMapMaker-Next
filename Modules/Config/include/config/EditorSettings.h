@@ -741,6 +741,9 @@ struct EditorSettings {
     /// @brief 最近打开项目的显示上限
     int recentProjectsLimit{ 10 };
 
+    /// @brief 启动时显示独立欢迎页；关闭页面不修改此偏好。
+    bool m_showWelcomeOnStartup{ true };
+
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 

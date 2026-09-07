@@ -749,6 +749,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "objectPlacementSnapMode", settings.objectPlacementSnapMode },
         { "commonBeatDivisorMask", settings.commonBeatDivisorMask },
         { "recentProjectsLimit", settings.recentProjectsLimit },
+        { "showWelcomeOnStartup", settings.m_showWelcomeOnStartup },
         { "language", settings.language },
         { "defaultCreator", normalizeCreatorIdentity(settings.defaultCreator) },
         { "frameLimit", settings.frameLimit },
@@ -855,7 +856,10 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("commonBeatDivisorMask", COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
         COMMON_BEAT_DIVISOR_MASK_ALL;
     settings.recentProjectsLimit = json.value("recentProjectsLimit", 10);
-    settings.language            = json.value("language", std::string("zh_cn"));
+    const auto welcome           = json.find("showWelcomeOnStartup");
+    settings.m_showWelcomeOnStartup =
+        welcome == json.end() || !welcome->is_boolean() || welcome->get<bool>();
+    settings.language = json.value("language", std::string("zh_cn"));
     settings.defaultCreator =
         normalizeCreatorIdentity(json.value("defaultCreator", std::string()));
     settings.frameLimit = json.value(
