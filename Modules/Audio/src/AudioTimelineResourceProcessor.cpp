@@ -246,6 +246,9 @@ std::shared_ptr<const PreparedTimelineAudio> prepareAudioTimelineResource(
         std::abs(speed - 1.0) > 1.0e-6 || std::abs(pitch) > 1.0e-6;
     if ( !needsEqualizer && !needsStretch ) return source;
 
+    // 离线处理需要整个不可变 PCM；流式页不能作为稳定声道视图使用。
+    // AudioManager 在加载阶段已为这些资源选择完整缓存，外部误用则显式失败。
+    if ( source->channel(0).empty() ) return {};
     auto channels = copyPreparedChannels(*source);
     applyResourceEqualizer(channels, config);
     if ( needsStretch ) {

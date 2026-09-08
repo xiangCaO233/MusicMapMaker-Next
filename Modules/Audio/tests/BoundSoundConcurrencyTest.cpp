@@ -12,6 +12,8 @@
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <ice/manage/dec/IDecoderFactory.hpp>
+#include <ice/manage/dec/IDecoderInstance.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <memory>
 #include <set>
@@ -20,6 +22,41 @@
 
 namespace
 {
+/// @brief 显式提供空 PCM，避免测试依赖尚未实现的解码策略。
+class EmptyDecoder final : public ice::IDecoderInstance
+{
+public:
+    /// @brief 空资源允许定位但始终没有样本。
+    bool seek(std::size_t) override { return true; }
+    /// @brief 不写目标内存，以零帧表示空资源。
+    std::size_t read(float**, std::size_t) override { return 0; }
+    /// @brief 沿用测试初始化后的内部格式。
+    const ice::AudioDataFormat& get_source_format() const override
+    {
+        return ice::ICEConfig::internal_format;
+    }
+    /// @brief 空 PCM 的总帧数固定为零。
+    std::size_t get_source_total_frames() const override { return 0; }
+};
+/// @brief 将探测成功与解码零帧分别建模，覆盖无有效声音的加载结果。
+class EmptyDecoderFactory final : public ice::IDecoderFactory
+{
+public:
+    /// @brief 填充可用元信息，解码内容仍由空实例决定。
+    bool probe(std::string_view, ice::MediaInfo& info) const override
+    {
+        info        = {};
+        info.format = ice::ICEConfig::internal_format;
+        return true;
+    }
+    /// @brief 返回独立空实例，无文件访问或后台共享游标。
+    std::unique_ptr<ice::IDecoderInstance> create_instance(
+        std::string_view, const ice::AudioDataFormat&) const override
+    {
+        return std::make_unique<EmptyDecoder>();
+    }
+};
+
 /// @brief 从测试上下文读取当前参考帧。
 std::size_t readReferenceFrame(const void* context) noexcept
 {
@@ -133,20 +170,19 @@ bool testPreviewSpeedScheduleRouting()
 }
 
 /// @brief 验证空帧音轨不会创建或永久占用音效 voice。
-/// @param samplePath 可由流式解码器探测的测试资源。
+/// @param samplePath 用作测试音轨身份的资源路径。
 /// @return 重复播放后池中仍无实例时返回 true。
 bool testZeroFrameTrackDoesNotOccupyVoice(
     const std::filesystem::path& samplePath)
 {
     ice::ThreadPool threadPool(2);
-    ice::AudioPool  streamingPool;
-    auto zeroFrameTrack = streamingPool
-                              .get_or_load(threadPool,
-                                           samplePath.string(),
-                                           ice::CachingStrategy::STREAMING)
-                              .lock();
+    auto            zeroFrameTrack =
+        ice::AudioTrack::create(samplePath.string(),
+                                threadPool,
+                                std::make_shared<EmptyDecoderFactory>(),
+                                ice::CachingStrategy::CACHY);
     if ( !zeroFrameTrack || zeroFrameTrack->num_frames() != 0U ) {
-        XERROR("Failed to create zero-frame streaming track");
+        XERROR("Failed to create explicit zero-frame track");
         return false;
     }
 

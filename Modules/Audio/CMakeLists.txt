@@ -152,3 +152,18 @@ if(SOURCES_BUILD)
       SourceNodeScheduledRealtimeTest
       "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
 endif()
+
+# 流式回归必须链接本次引擎源码，旧预编译包不具备当前能力。
+if(SOURCES_BUILD)
+  # 覆盖阻塞 IO 下回调立即返回、页淘汰与精确回退，以及真实文件策略切换。
+  mmm_add_test_executable(Audio StreamingDecoderTest
+                          tests/StreamingDecoderTest.cpp)
+  target_link_libraries(StreamingDecoderTest PRIVATE Audio Config Log)
+  add_test(
+    NAME StreamingDecoderTest
+    COMMAND
+      StreamingDecoderTest
+      "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav")
+  # 门闩或析构协议回归不能让整个 CTest 无期限挂起。
+  set_tests_properties(StreamingDecoderTest PROPERTIES TIMEOUT 30)
+endif()

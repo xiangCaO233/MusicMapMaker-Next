@@ -1,3 +1,4 @@
+#include "config/AudioPlaybackConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
 
@@ -754,6 +755,10 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "defaultCreator", normalizeCreatorIdentity(settings.defaultCreator) },
         { "frameLimit", settings.frameLimit },
         { "audioPlaybackBackend", settings.audioPlaybackBackend },
+        { "audioDecodingMode",
+          settings.audioDecodingMode == AudioDecodingMode::Streaming
+              ? "streaming"
+              : "cached" },
         { "sdlAudioOutputDeviceName", settings.sdlAudioOutputDeviceName },
         { "openALAudioOutputDeviceName", settings.openALAudioOutputDeviceName },
         { "openALSpatialConfig", settings.openALSpatialConfig },
@@ -868,6 +873,11 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
             ? (json.value("vsync", false) ? FrameLimitPreference::VSync
                                           : FrameLimitPreference::Unlimited)
             : FrameLimitPreference::Refresh2x);
+    // 未知值沿用完整缓存，确保旧配置及未来扩展都不会意外启用流式。
+    settings.audioDecodingMode =
+        json.value("audioDecodingMode", std::string("cached")) == "streaming"
+            ? AudioDecodingMode::Streaming
+            : AudioDecodingMode::Cached;
     settings.audioPlaybackBackend =
         json.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
     settings.sdlAudioOutputDeviceName =

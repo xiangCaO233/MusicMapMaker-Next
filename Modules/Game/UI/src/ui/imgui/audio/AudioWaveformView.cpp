@@ -471,11 +471,19 @@ void AudioWaveformView::syncEQ()
     }
 }
 
+/// @brief 在显式重算时准备完整 PCM，避免把流式缺页静音写入波形缓存。
+/// @warning 低频离线操作，可能等待完整解码；不能作为逐帧读取入口。
 void AudioWaveformView::fullRecalculate()
 {
     auto& audioManager = Audio::AudioManager::instance();
     auto  track        = audioManager.getBGMTrack();
     if ( !track ) return;
+
+    if ( track->cachingStrategy() == ice::CachingStrategy::STREAMING ) {
+        // 分析音轨与正在播放的流式音轨分别保活，不驱逐预读页或改变播放游标。
+        track = audioManager.loadTrackForAnalysis(track->path());
+        if ( !track ) return;
+    }
 
     m_isCalculating   = true;
     double totalTime  = audioManager.getTotalTime();

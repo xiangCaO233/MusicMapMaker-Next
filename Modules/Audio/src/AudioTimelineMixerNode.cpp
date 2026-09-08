@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <ice/config/config.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <limits>
 #include <ranges>
@@ -103,6 +104,12 @@ std::shared_ptr<const PreparedTimelineAudio> PreparedTimelineAudio::fromTrack(
 
     std::vector<std::span<const float>> channelViews;
     static_cast<void>(track->origin(channelViews, 0.0, frameCount));
+    if ( channelViews.empty() &&
+         track->cachingStrategy() == ice::CachingStrategy::STREAMING ) {
+        // 流式资源不借用可被淘汰的页，回调通过音轨接口读取。
+        return std::make_shared<const PreparedTimelineAudio>(
+            std::move(track), std::move(channelViews));
+    }
     if ( channelViews.empty() ) return {};
 
     const std::size_t availableFrames = std::ranges::min(
@@ -141,7 +148,9 @@ PreparedTimelineAudio::PreparedTimelineAudio(
     std::vector<std::span<const float>> channelViews)
     : m_sourceOwner(std::move(track))
     , m_channelViews(std::move(channelViews))
-    , m_frameCount(m_channelViews.empty() ? 0U : m_channelViews.front().size())
+    , m_frameCount(m_channelViews.empty()
+                       ? (m_sourceOwner ? m_sourceOwner->num_frames() : 0U)
+                       : m_channelViews.front().size())
 {
 }
 
@@ -166,7 +175,9 @@ std::size_t PreparedTimelineAudio::numFrames() const noexcept
 
 std::size_t PreparedTimelineAudio::numChannels() const noexcept
 {
-    return m_channelViews.size();
+    return m_channelViews.empty() && m_sourceOwner
+               ? ice::ICEConfig::internal_format.channels
+               : m_channelViews.size();
 }
 
 std::span<const float> PreparedTimelineAudio::channel(
@@ -180,6 +191,11 @@ std::size_t PreparedTimelineAudio::read(ice::AudioBuffer& buffer,
                                         std::size_t       startFrame,
                                         std::size_t frameCount) const noexcept
 {
+    if ( m_channelViews.empty() && m_sourceOwner ) {
+        // 流式读取只复制已就绪页，缺页静音，不在回调等待解码线程。
+        return m_sourceOwner->read(
+            buffer, startFrame, std::min(frameCount, buffer.num_frames()));
+    }
     if ( startFrame >= m_frameCount || frameCount == 0U ||
          buffer.raw_ptrs() == nullptr || m_channelViews.empty() ) {
         return 0U;

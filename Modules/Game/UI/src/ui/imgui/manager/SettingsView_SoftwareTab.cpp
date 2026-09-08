@@ -1,6 +1,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/AudioPlaybackConfig.h"
 #include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -373,6 +374,39 @@ void SettingsView::drawSoftwareSettings()
                     settings.pgoProfileUploadConsentAsked = true;
                     changed                               = true;
                 }
+            });
+
+        // 偏好仅影响新加载资源，避免在设置回调中同步重建当前播放图。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.audio_decoding").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         mode = settings.audioDecodingMode ==
+                                           Config::AudioDecodingMode::Streaming
+                                       ? 1
+                                       : 0;
+                const char* modes[] = {
+                    TR_CACHE("ui.settings.software.audio_decoding.cached")
+                        .data(),
+                    TR_CACHE("ui.settings.software.audio_decoding.streaming")
+                        .data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackCombo(
+                         "##AudioDecodingMode", &mode, modes, 2) ) {
+                    settings.audioDecodingMode =
+                        mode == 1 ? Config::AudioDecodingMode::Streaming
+                                  : Config::AudioDecodingMode::Cached;
+                    Audio::AudioManager::instance().setDecodingMode(
+                        settings.audioDecodingMode);
+                    changed = true;
+                }
+                ImGui::SetItemTooltip(
+                    "%s",
+                    TR_CACHE("ui.settings.software.audio_decoding.help")
+                        .data());
             });
 
         // 3. 音频播放后端

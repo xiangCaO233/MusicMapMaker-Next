@@ -819,6 +819,8 @@ void AudioSpectrumView::startAsyncRecalculate()
     });
 }
 
+/// @brief 后台频谱重算使用完整缓存，多个 FFT 工作者不能竞争流式预读页。
+/// @warning 仅由低频后台任务调用，允许加载和等待 PCM，不能移入绘制回调。
 void AudioSpectrumView::backgroundRecalculate(
     std::stop_token stopToken, const EQSettings& eq, float maxFreq,
     float logBias, Config::SpectrumDetailLevel detailLevel,
@@ -831,6 +833,11 @@ void AudioSpectrumView::backgroundRecalculate(
 
     auto& audioManager = Audio::AudioManager::instance();
     auto  track        = audioManager.getBGMTrack();
+    if ( track &&
+         track->cachingStrategy() == ice::CachingStrategy::STREAMING ) {
+        // 缺页返回正长度静音，离线 FFT 不能以 read 返回值判断完整音频已到达。
+        track = audioManager.loadTrackForAnalysis(track->path());
+    }
     if ( !track ) {
         m_isCalculating.store(false);
         return;

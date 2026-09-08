@@ -5,6 +5,7 @@
 #include "audio/StereoGainEnvelope.h"
 #include "config/AudioPlaybackConfig.h"
 #include "mmm/project/AudioResource.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -180,6 +181,19 @@ struct AudioOutputDevice {
 class AudioManager
 {
 public:
+    /// @brief 设置后续加载的时间线和试听音频解码方式，既有音轨在重载后生效。
+    /// 离线分析、资源级 DSP 和音效保持完整缓存，保证稳定视图和低延迟。
+    /// @warning 低频控制接口；只发布独立枚举，不替换正在播放的资源。
+    void setDecodingMode(Config::AudioDecodingMode mode) noexcept
+    {
+        m_decodingMode.store(mode, std::memory_order_relaxed);
+    }
+    /// @brief 查询后续资源加载使用的解码方式。
+    Config::AudioDecodingMode decodingMode() const noexcept
+    {
+        return m_decodingMode.load(std::memory_order_relaxed);
+    }
+
     static AudioManager& instance();
 
     /// @brief 初始化音频后端和引擎
@@ -943,6 +957,11 @@ private:
 
     /// @brief 音频资源池，负责加载和缓存音频文件。
     std::unique_ptr<ice::AudioPool> m_audioPool;
+    /// @brief 控制侧设置，资源加载侧读取的独立偏好，不承担其他状态发布。
+    /// @warning 仅低频加载访问；relaxed 原子避免设置与后台加载之间的数据竞争。
+    std::atomic<Config::AudioDecodingMode> m_decodingMode{
+        Config::AudioDecodingMode::Cached
+    };
 
     /// @brief 当前播放后端抽象接收器。
     std::unique_ptr<ice::IReceiver> m_player;

@@ -180,10 +180,11 @@ AudioManager::AudioManager()
     m_interactionSfxGain = settings.interactionSfxGain;
     m_interactionSfxGainMuted = settings.interactionSfxGainMuted;
     m_mainTrackVolume         = 1.0f;
-    m_playbackBackend         = settings.audioPlaybackBackend;
-    m_sdlOutputDeviceName     = settings.sdlAudioOutputDeviceName;
-    m_openALOutputDeviceName  = settings.openALAudioOutputDeviceName;
-    m_openALSpatialConfig     = settings.openALSpatialConfig;
+    setDecodingMode(settings.audioDecodingMode);
+    m_playbackBackend        = settings.audioPlaybackBackend;
+    m_sdlOutputDeviceName    = settings.sdlAudioOutputDeviceName;
+    m_openALOutputDeviceName = settings.openALAudioOutputDeviceName;
+    m_openALSpatialConfig    = settings.openALSpatialConfig;
     m_keySoundControls->setPlayerAreaMuted(!settings.sfxConfig.enableHitSfx);
     m_keySoundControls->setEffectGroupMuted(
         KeySoundEffectGroup::Unbound, !settings.sfxConfig.enableUnboundHitSfx);

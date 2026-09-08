@@ -575,6 +575,31 @@ bool testTimelineUnloadReleasesDecodedTrack(MMM::Audio::AudioManager& manager,
     return true;
 }
 
+/// @brief 流式偏好必须到达真实时间线与试听，分析仍返回完整缓存。
+bool testStreamingSelection(MMM::Audio::AudioManager& manager,
+                            const std::string&        path)
+{
+    manager.setDecodingMode(MMM::Config::AudioDecodingMode::Streaming);
+    // 现有集成用例覆盖实际播放时钟、复合事件和资源级 DSP 的加载成功。
+    // 在相同管理器上切换，能发现路径缓存命中时忽略新策略的问题。
+    const bool streamedBgm = manager.loadBGM(path, MMM::AudioTrackConfig{}) &&
+                             manager.getBGMTrack() &&
+                             manager.getBGMTrack()->cachingStrategy() ==
+                                 ice::CachingStrategy::STREAMING;
+    const bool audition =
+        manager.loadAuditionTrack(path, MMM::AudioTrackConfig{});
+    manager.unloadAuditionTrack();
+    const bool playback = streamedBgm && audition &&
+                          testCompositePlayback(manager, path) &&
+                          testSingleClipResourceProcessing(manager, path);
+    const auto analysis = manager.loadTrackForAnalysis(path);
+    const bool cachedAnalysis =
+        analysis && analysis->cachingStrategy() == ice::CachingStrategy::CACHY;
+    manager.unloadAudioTimeline();
+    manager.setDecodingMode(MMM::Config::AudioDecodingMode::Cached);
+    return playback && cachedAnalysis && testLegacyBgmWrapper(manager, path);
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -609,7 +634,8 @@ int main(int argc, char** argv)
         testDualUseEffectSharesPreparedAudio(manager, samplePath) &&
         testLegacyBgmWrapper(manager, samplePath) &&
         testCompositePlayback(manager, samplePath) &&
-        testTimelineUnloadReleasesDecodedTrack(manager, samplePath);
+        testTimelineUnloadReleasesDecodedTrack(manager, samplePath) &&
+        testStreamingSelection(manager, samplePath);
 
     manager.shutdown();
     MMM::Runtime::AppThreadPool::instance().shutdown();

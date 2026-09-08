@@ -40,8 +40,8 @@ struct AudioTimelineInputBoundary {
 
 /// @brief 已在非实时线程固定下来的只读时间线 PCM 数据。
 ///
-/// 原始音轨会在工厂函数中完成解码等待并取得稳定只读视图；经过资源级 DSP
-/// 的音轨则由本对象持有处理后的 PCM。音频回调只执行边界检查和内存复制。
+/// 完整缓存音轨提供稳定视图；流式音轨保留所有者并按块读取就绪页。
+/// 经过资源级 DSP 的音轨持有处理后的 PCM，处理前必须选择完整缓存。
 class PreparedTimelineAudio final
 {
 public:
@@ -85,7 +85,7 @@ public:
 
     /// @brief 获取指定声道的只读 PCM。
     /// @param channel 声道索引。
-    /// @return 越界时返回空 span。
+    /// @return 越界或流式音轨时返回空 span，离线处理应请求完整缓存。
     [[nodiscard]] std::span<const float> channel(
         std::size_t channel) const noexcept;
 
@@ -94,7 +94,8 @@ public:
     /// @param startFrame 源起始帧。
     /// @param frameCount 最多复制帧数。
     /// @return 实际复制帧数。
-    /// @warning 音频回调热路径；不执行分配、锁、解码或文件访问。
+    /// @warning 音频回调热路径；不分配、不等待、不执行解码或文件访问。
+    /// 流式读取尝试缓存锁，竞争时立即返回静音。
     std::size_t read(ice::AudioBuffer& buffer, std::size_t startFrame,
                      std::size_t frameCount) const noexcept;
 

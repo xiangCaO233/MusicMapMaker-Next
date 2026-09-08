@@ -756,6 +756,9 @@ struct EditorSettings {
     /// @brief 音频播放后端偏好。
     AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
 
+    /// @brief 新加载播放资源的解码方式，默认完整缓存以保证编辑跳转稳定。
+    AudioDecodingMode audioDecodingMode{ AudioDecodingMode::Cached };
+
     /// @brief SDL 音频后端的输出设备名称，空字符串表示默认设备。
     std::string sdlAudioOutputDeviceName;
 

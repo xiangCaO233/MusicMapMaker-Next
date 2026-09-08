@@ -454,7 +454,8 @@ bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
           registration->second.m_defaultVolume);
     m_pendingSoundEffectLoads.erase(key);
     auto trackWeak = m_audioPool->get_or_load(*m_threadPool,
-                                              registration->second.m_filePath);
+                                              registration->second.m_filePath,
+                                              ice::CachingStrategy::CACHY);
     auto track     = trackWeak.lock();
     if ( !track ) {
         XERROR("Failed to load SFX track: {}", registration->second.m_filePath);
@@ -598,7 +599,9 @@ void AudioManager::updateQueuedSoundEffectLoads(
         m_soundEffectLoadTasks.push_back(m_threadPool->enqueue(
             [this, request = std::move(request)]() mutable {
                 auto trackWeak =
-                    m_audioPool->get_or_load(*m_threadPool, request.filePath);
+                    m_audioPool->get_or_load(*m_threadPool,
+                                             request.filePath,
+                                             ice::CachingStrategy::CACHY);
                 auto                    track = trackWeak.lock();
                 PreparedSoundEffectLoad preparedResult{
                     .key           = std::move(request.key),

@@ -15,6 +15,7 @@
 #include <memory>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <ice/core/MixBus.hpp>
@@ -215,13 +216,29 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     });
     std::shared_ptr<ice::AudioTrack> firstLoadedTrack;
 
+    // 同一文件可能被多个事件使用；一次收集离线需求，避免逐资源扫描整张事件表。
+    std::unordered_set<std::string> offlinePaths;
+    for ( const auto& event : events ) {
+        if ( event.resourceConfig.eqEnabled ||
+             event.resourceConfig.playbackSpeed != 1.0 ||
+             event.resourceConfig.playbackPitch != 0.0 )
+            offlinePaths.insert(event.filePath);
+    }
     // 先提交全部唯一文件的解码任务，避免逐文件启动后立即等待导致串行化。
     for ( const auto& event : events ) {
         if ( event.filePath.empty() || tracksByPath.contains(event.filePath) ) {
             continue;
         }
+        // 同一文件只要有资源级离线 DSP，就完整缓存以提供稳定 PCM 视图。
+        const bool needsOfflinePcm = offlinePaths.contains(event.filePath);
+        const auto strategy =
+            !needsOfflinePcm &&
+                    decodingMode() == Config::AudioDecodingMode::Streaming
+                ? ice::CachingStrategy::STREAMING
+                : ice::CachingStrategy::CACHY;
         auto track =
-            m_audioPool->get_or_load(*m_threadPool, event.filePath).lock();
+            m_audioPool->get_or_load(*m_threadPool, event.filePath, strategy)
+                .lock();
         tracksByPath.emplace(event.filePath, std::move(track));
     }
     result.requestedSourceCount = tracksByPath.size();
@@ -645,8 +662,12 @@ bool AudioManager::loadAuditionTrack(const std::string&      filePath,
     }
 
     XINFO("Loading audition track: {}", filePath);
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
+    const auto strategy = decodingMode() == Config::AudioDecodingMode::Streaming
+                              ? ice::CachingStrategy::STREAMING
+                              : ice::CachingStrategy::CACHY;
+    auto       trackWeak =
+        m_audioPool->get_or_load(*m_threadPool, filePath, strategy);
+    auto track = trackWeak.lock();
     if ( !track ) {
         XERROR("Failed to load audition track: {}", filePath);
         return false;
@@ -760,8 +781,9 @@ std::shared_ptr<ice::AudioTrack> AudioManager::loadTrackForAnalysis(
         return nullptr;
     }
 
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
+    auto trackWeak = m_audioPool->get_or_load(
+        *m_threadPool, filePath, ice::CachingStrategy::CACHY);
+    auto track = trackWeak.lock();
     if ( !track ) {
         XERROR("Failed to load analysis audio track: {}", filePath);
         return nullptr;
