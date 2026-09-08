@@ -1,15 +1,23 @@
 # cmake/modules/FindVulkan.cmake 包装器 (Wrapper)。 在 Windows 上，它会尝试设置路径提示以使用项目内置的
-# Vulkan SDK。 在 Linux/macOS 上，它直接透传给系统的标准 FindVulkan。
+# Vulkan SDK。 在 Linux/macOS 上，它直接透传给系统的标准 FindVulkan。 将首次配置选择的 SDK 保存到构建缓存，后续
+# Ninja 自动重配置不依赖原 shell。 环境变量仍允许显式覆盖；旧构建目录可从已验证的头文件位置恢复 SDK 根目录。
 function(mmm_set_vulkan_sdk_from_env)
   set(_MMM_VULKAN_SDK_ROOT_SET
       FALSE
       PARENT_SCOPE)
 
-  if(NOT DEFINED ENV{VULKAN_SDK} OR "$ENV{VULKAN_SDK}" STREQUAL "")
+  if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}" VULKAN_SDK_ROOT)
+  elseif(MMM_VULKAN_SDK_ROOT)
+    set(VULKAN_SDK_ROOT "${MMM_VULKAN_SDK_ROOT}")
+  elseif(
+    CMAKE_CROSSCOMPILING
+    AND Vulkan_INCLUDE_DIR
+    AND Vulkan_LIBRARY)
+    get_filename_component(VULKAN_SDK_ROOT "${Vulkan_INCLUDE_DIR}" DIRECTORY)
+  else()
     return()
   endif()
-
-  file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}" VULKAN_SDK_ROOT)
   set(_MMM_VULKAN_INCLUDE_DIR "${VULKAN_SDK_ROOT}/Include")
   set(_MMM_VULKAN_LIBRARY "${VULKAN_SDK_ROOT}/Lib/vulkan-1.lib")
 
@@ -24,6 +32,9 @@ function(mmm_set_vulkan_sdk_from_env)
   endif()
 
   set(ENV{VULKAN_SDK} "${VULKAN_SDK_ROOT}")
+  set(MMM_VULKAN_SDK_ROOT
+      "${VULKAN_SDK_ROOT}"
+      CACHE PATH "Windows Vulkan SDK selected for this build." FORCE)
   set(VULKAN_SDK_ROOT
       "${VULKAN_SDK_ROOT}"
       PARENT_SCOPE)
