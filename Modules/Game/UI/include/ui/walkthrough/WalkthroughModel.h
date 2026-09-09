@@ -13,9 +13,12 @@ struct Text {
     /// @brief 语言与 Markdown 文本。
     std::map<std::string, std::string, std::less<>> m_translations;
     /// @brief 查询文本，不分配、不访问文件。
+    /// @return 借用已存文本或静态空串；修改翻译表前应结束借用。
     const std::string& get(std::string_view language) const;
 };
 /// @brief 一个可单独确认了解的演练步骤。
+/// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。
+/// 手动确认跳过前置限制；自动完成则同时检查前置步骤与信号。
 struct Step {
     std::string              m_id;       ///< 稳定步骤标识。
     Text                     m_title;    ///< 步骤标题。
@@ -33,6 +36,7 @@ struct Branch {
     std::vector<Step> m_steps;  ///< 有序步骤，可独立手动确认。
 };
 /// @brief 主题目录中的章节，允许暂时没有主题。
+/// 顺序仅用于展示，不代表访问权限或学习完成条件。
 struct Chapter {
     std::string m_id;          ///< 稳定章节标识。
     Text        m_title;       ///< 本地化章节标题。
@@ -54,8 +58,12 @@ struct Topic {
     std::vector<Branch> m_branches;  ///< 操作分支。
 };
 /// @brief 解析并验证主题，拒绝重复标识、无效引用、循环前置依赖和超大输入。
+/// @return 完整主题或中文错误原因，失败不发布部分解析结果。
+/// @warning 低频资源加载入口，构造容器并遍历依赖图，不应逐帧解析。
 std::expected<Topic, std::string> parseTopic(std::string_view json);
 /// @brief 与窗口生命周期无关的学习记录及纯状态归约器。
+/// 调用方串行访问；持久化只记录完成来源，不保存窗口或业务对象。
+/// 内容版本不进入记录键，改写步骤含义时需由资产作者更新步骤 ID。
 class Progress
 {
 public:
@@ -66,6 +74,8 @@ public:
     /// @brief 任意步骤均允许独立手动确认，不受前置步骤限制。
     bool acknowledge(const Topic& topic, const Step& step);
     /// @brief 根据已注册业务信号推进自动完成，返回是否改变持久化进度。
+    /// 空信号只重新计算既有信号，供手动完成前置步骤后传播进度。
+    /// @warning 业务事件路径可能分配并多轮扫描步骤，不作逐帧查询使用。
     bool signal(const Topic& topic, std::string_view signal);
     /// @brief 清除此主题的学习和本次实操信号，不影响其他主题。
     void reset(const Topic& topic);
