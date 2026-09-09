@@ -121,10 +121,10 @@ struct VisualConfig {
     /// @warning 逻辑热路径：配置刷新时调用；仅在存在独立布局时执行值复制。
     void applyKeyCountLayout(std::int32_t keyCount);
 
-    /// @brief 音符 X 轴缩放。
-    float noteScaleX{ 1.0f };
-    /// @brief 音符 Y 轴缩放。
-    float noteScaleY{ 1.0f };
+    /// @brief 音符 X 轴缩放，默认按基准宽度的 95% 显示。
+    float noteScaleX{ 0.95f };
+    /// @brief 音符 Y 轴缩放，默认按基准高度的 95% 显示。
+    float noteScaleY{ 0.95f };
     /// @brief 是否在玩家物件上方显示绑定音效资源标签。
     bool showBoundSampleLabels{ true };
     /// @brief 音符填充模式。
