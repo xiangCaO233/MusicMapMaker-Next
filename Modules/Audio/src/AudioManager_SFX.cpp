@@ -16,6 +16,7 @@
 #include <ice/core/MixBus.hpp>
 #include <ice/core/SourceNode.hpp>
 #include <ice/manage/AudioPool.hpp>
+#include <ice/thread/ThreadPool.hpp>
 
 namespace MMM::Audio
 {
