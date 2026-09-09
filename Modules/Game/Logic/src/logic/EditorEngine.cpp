@@ -298,7 +298,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -846,6 +846,10 @@ void applyToolbarWorkspaceState(
 void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
+    // 皮肤选择先由设置页写入 AppConfig；配色刷新可能仍携带旧引擎快照。
+    // 保留软件级选择，避免当前已热加载新皮肤却把旧目录保存供下次启动。
+    target.settings.selectedSkinDirectory =
+        source.settings.selectedSkinDirectory;
     target.settings.defaultCreator     = source.settings.defaultCreator;
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
     target.settings.professionalMode   = source.settings.professionalMode;
@@ -1241,10 +1245,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -2641,10 +2645,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
                 sessions[i].mainAudioSyncFingerprint =
@@ -2919,8 +2923,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
     const bool timelineReady = !sessions[index].isLogoPlaceholder &&
                                SessionUtils::activateAudioTimeline(ctx, false);
-    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
-    double minTime   = -editorConfig.visual.getEffectiveVisualOffset();
+    double     totalTime     = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    double     minTime       = -editorConfig.visual.getEffectiveVisualOffset();
     if ( minTime > totalTime ) minTime = totalTime;
     ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
     if ( timelineReady ) {

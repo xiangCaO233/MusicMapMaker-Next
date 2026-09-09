@@ -2,6 +2,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 
+#include "config/AppConfig.h"
 #include "log/colorful-log.h"
 
 #include <array>
@@ -83,11 +84,11 @@ bool testPaletteRestoredAfterSessionClose()
     // 读取目标会话落地后的画笔状态，而非仅检查编辑器暂存的命令或配置。
     const auto& restored = session->getContext().brushState.customColors;
     const bool  matches  = colorMatches(restored.tap, colors[0]) &&
-                         colorMatches(restored.head, colors[1]) &&
-                         colorMatches(restored.hold, colors[2]) &&
-                         colorMatches(restored.end, colors[3]) &&
-                         colorMatches(restored.flickArrow, colors[4]) &&
-                         colorMatches(restored.node, colors[5]);
+                           colorMatches(restored.head, colors[1]) &&
+                           colorMatches(restored.hold, colors[2]) &&
+                           colorMatches(restored.end, colors[3]) &&
+                           colorMatches(restored.flickArrow, colors[4]) &&
+                           colorMatches(restored.node, colors[5]);
     // 在关闭前完成所有引用读取，后面只保留布尔结果用于报告。
     engine.closeSession(0, false);
     if ( !matches ) {
@@ -194,7 +195,7 @@ bool testBackgroundCanvasMousePositionRouting()
     const auto& activeContext = activeSession->getContext();
     // 同时检查目标收到事件、非目标未被污染，比只检查后台坐标更严格。
     const auto& backgroundContext = backgroundSession->getContext();
-    const bool  routed            = activeContext.mouseCameraId.empty() &&
+    const bool routed = activeContext.mouseCameraId.empty() &&
                         // 空相机标识是初始状态，用作活动会话未接收输入的证据。
                         backgroundContext.mouseCameraId == backgroundCameraId &&
                         backgroundContext.isMouseInCanvas &&
@@ -277,6 +278,44 @@ bool testConcurrentEditorConfigSnapshots()
     return consistent;
 }
 
+/// @brief 验证切换皮肤后的旧配色快照不能覆盖全局选择及其持久化值。
+/// @return 引擎、全局配置和重新读取的配置都保留新选择时返回 true。
+/// @note 默认配置路径由测试启动器隔离，禁止读取或保存个人设置。
+bool testSkinSelectionSurvivesPaletteRefresh()
+{
+    auto& app    = MMM::Config::AppConfig::instance();
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 保存值副本，setEditorConfig 会同步改写全局对象，不能保留借用引用。
+    const auto originalApp    = app.getEditorConfig();
+    const auto originalEngine = engine.getEditorConfig();
+    // 快照明确包含旧目录，不能用刚更新的全局配置绕过覆盖路径。
+    auto stalePaletteConfig                           = originalEngine;
+    stalePaletteConfig.settings.selectedSkinDirectory = "mmm-default";
+    // 模拟设置页先更新软件皮肤，再用旧引擎快照发布拍线配色。
+    app.getEditorSettings().selectedSkinDirectory    = "rm";
+    stalePaletteConfig.visual.overrideBeatLineColors = true;
+    engine.setEditorConfig(stalePaletteConfig);
+    // 同时断言新配色仍生效，禁止通过丢弃整份配置来保住皮肤。
+    // 两侧都必须一致，否则下一次引擎快照仍会继续传播旧值。
+    bool ok = app.getEditorSettings().selectedSkinDirectory == "rm" &&
+              engine.getEditorConfig().settings.selectedSkinDirectory == "rm" &&
+              engine.getEditorConfig().visual.overrideBeatLineColors;
+    // 完整走生产保存和读取路径，防止只修复当前窗口却仍保存旧选择。
+    if ( ok ) {
+        // 写入后清除内存选择，读取结果必须真正来自持久化文件。
+        ok                                            = app.save();
+        app.getEditorSettings().selectedSkinDirectory = "mmm-default";
+        ok = app.load() && ok &&
+             app.getEditorSettings().selectedSkinDirectory == "rm";
+    }
+    // 测试结束恢复单例，后续会话及并发测试不继承本场景状态。
+    // 即使断言失败也执行恢复，避免污染同进程内后续测试。
+    app.getEditorConfig() = originalApp;
+    engine.setEditorConfig(originalEngine);
+    if ( !ok ) XERROR("Palette refresh overwrote persisted skin selection");
+    return ok;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -286,7 +325,8 @@ bool testConcurrentEditorConfigSnapshots()
 int main()
 {
     // 先验证跨会话共享状态，再验证目标路由隔离，最后执行配置并发读取回归。
-    return testPaletteRestoredAfterSessionClose() &&
+    return testSkinSelectionSurvivesPaletteRefresh() &&
+                   testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&
                    testConcurrentEditorConfigSnapshots()
