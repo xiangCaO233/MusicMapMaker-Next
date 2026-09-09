@@ -10,6 +10,10 @@
 namespace MMM::Logic::System
 {
 
+/// @brief 根据皮肤纹理相对基础 Note 的尺寸比换算绘制宽高。
+/// @pre snapshot 非空；图集中基础 Note 的宽高为正。
+/// @return 缺少基础或目标纹理记录时返回调用方的基础尺寸。
+/// @warning 端点绘制热路径，只查询已准备的图集，不加载纹理。
 static glm::vec2 getDrawSize(RenderSnapshot* snapshot, TextureID id,
                              float baseW, float baseH)
 {
@@ -19,12 +23,16 @@ static glm::vec2 getDrawSize(RenderSnapshot* snapshot, TextureID id,
     auto it = snapshot->uvMap.find(static_cast<uint32_t>(id));
     if ( it == snapshot->uvMap.end() ) return { baseW, baseH };
 
+    // 两条轴分别按图集记录换算，保留不同皮肤部件相对 Note 的大小。
     float wRatio = it->second.z / itBase->second.z;
     float hRatio = it->second.w / itBase->second.w;
 
     return { baseW * wRatio, baseH * hRatio };
 }
 
+/// @brief 读取填充算法使用的纹理宽高比；缺失记录时采用正方形。
+/// @pre snapshot 非空，已登记纹理的高度为正。
+/// @warning 逐物件调用，仅访问快照中现有图集记录。
 static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 {
     auto it = snapshot->uvMap.find(static_cast<uint32_t>(id));
@@ -32,12 +40,18 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
     return it->second.z / it->second.w;
 }
 
+/// @brief 将点按物件按皮肤填充方式绘制在给定中心高度。
+/// @param x 绘制框左边界。
+/// @param y 物件中心的纵向坐标。
+/// @param aspect 纹理宽高比，与绘制框宽高分开传递。
+/// @warning 逐物件绘制热路径，不得引入资源加载或阻塞等待。
 void NoteRenderSystem::renderTap(Batcher&                           batcher,
                                  const ::MMM::Logic::NoteComponent& note,
                                  const Config::EditorConfig& config, float x,
                                  float y, float w, float h, float aspect,
                                  glm::vec4 color)
 {
+    // Batcher 使用底边坐标，中心高度需加上半高后再提交。
     batcher.setTexture(TextureID::Note);
     batcher.pushFilledQuad(x,
                            y + h * 0.5f,
@@ -48,6 +62,24 @@ void NoteRenderSystem::renderTap(Batcher&                           batcher,
                            color);
 }
 
+/// @brief 绘制纯长条的连接体与固定尺寸端点，支持仅提交指定高亮部件。
+/// @param note 提供起点时间和持续时间的物件。
+/// @param snapshot 提供皮肤图集尺寸，调用方保证非空。
+/// @param x 基础头部绘制框左边界。
+/// @param w 基础音符宽度，其他部件相对于此尺寸换算。
+/// @param h 基础音符高度，与轨道纵向滚动倍率无关。
+/// @param singleTrackW 保留的轨宽接口参数，本实现不参与尺寸计算。
+/// @param headColor 头部乘色。
+/// @param bodyColor 连接体乘色。
+/// @param endColor 尾部乘色。
+/// @param cache 已准备好的滚动映射缓存，调用方保证非空。
+/// @param currentAbsY 当前显示时刻对应的积分位置。
+/// @param judgmentLineY 判定线的画布坐标。
+/// @param renderScaleY 积分距离到画布纵向距离的缩放。
+/// @param topY 可绘制轨道的一侧纵向边界。
+/// @param bottomY 另一侧边界，允许与 topY 顺序相反。
+/// @param glowPart None 绘制全部部件，其余值仅选择对应部件。
+/// @warning 逐物件热路径；只使用现有快照和缓存，不执行资源访问或同步等待。
 void NoteRenderSystem::renderHold(
     Batcher& batcher, const ::MMM::Logic::NoteComponent& note,
     const Config::EditorConfig& config, RenderSnapshot* snapshot, float x,
@@ -117,6 +149,7 @@ void NoteRenderSystem::renderHold(
     }
 
     // 固定尺寸端点只在与视口相交时提交，离屏端点不再携带超大坐标。
+    /// @brief 判断固定高度端点是否与轨道裁剪区相交，不改变端点几何。
     const auto isEndpointVisible = [clipTop, clipBottom](double y, float size) {
         // 端点按中心与半高判断相交，边缘露出时仍应完整交给 Scissor 裁剪。
         const double halfSize = static_cast<double>(size) * 0.5;
@@ -156,6 +189,14 @@ void NoteRenderSystem::renderHold(
     }
 }
 
+/// @brief 绘制滑键头部、横向连接体与终点箭头。
+/// @param y 头部和箭头共用的中心高度。
+/// @param endpointCenterX 已解析到真实终点轨道的中心坐标。
+/// @param endpointW 终点轨道对应的基础音符宽度。
+/// @param endpointH 终点轨道对应的基础音符高度。
+/// @param glowPart None 绘制全部部件，其余值仅选择对应部件。
+/// @pre snapshot 非空；绘制连接体时图集中须有有效的基础 Note 记录。
+/// @warning 逐物件热路径；轨道投影由调用方完成，此处仅生成图元。
 void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    const ::MMM::Logic::NoteComponent& note,
                                    const Config::EditorConfig&        config,
@@ -169,11 +210,13 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
     float     headX    = x;
 
     // 1. 横向连接体。
+    // 零轨道偏移只画头部，不生成退化连接体或方向箭头。
     if ( note.m_dtrack != 0 &&
          (glowPart == HoverPart::None || glowPart == HoverPart::HoldBody) ) {
         auto itBodyH = snapshot->uvMap.find(
             static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
         if ( itBodyH != snapshot->uvMap.end() ) {
+            // 横向主体只按皮肤比例调整厚度，跨度由两端实际中心决定。
             float drawH = h * (itBodyH->second.w /
                                snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
             // 连接体直接跨越根节点与真实终点中心，保留独立区域之间的间隙。
@@ -200,6 +243,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
     }
 
     // 3. 箭头。
+    // 方向使用谱面轨道偏移符号，不通过画布坐标差重新推断。
     if ( note.m_dtrack != 0 &&
          (glowPart == HoverPart::None || glowPart == HoverPart::FlickArrow) ) {
         TextureID arrowId = (note.m_dtrack < 0) ? TextureID::FlickArrowLeft

@@ -19,6 +19,7 @@ inline constexpr std::string_view LEGACY_MAGIC_V3 = "MMM_CLIPBOARD_V3";
 inline constexpr std::string_view LEGACY_MAGIC = "MMM_CLIPBOARD_V2";
 
 /// @brief 从系统剪贴板文本解析出的编辑器剪贴板载荷。
+/// @note 结果持有条目值，不依赖输入文本或源会话的 ECS 实体生命周期。
 struct ParsedClipboard {
     /// @brief 载荷中的音符剪贴板条目。
     std::vector<ClipboardItem> notes;
@@ -56,6 +57,8 @@ std::string serializeTimelines(const std::vector<TimelineClipboardItem>& items);
 /// @param preserveCollaborationIdentity 是否接受载荷中的协作稳定身份；系统
 /// 剪贴板必须保持 false，仅可信项目内部载荷可以启用。
 /// @return 文本符合协议时返回解析后的剪贴板内容。
+/// @note 无效协议头返回空值；有效头但没有可接受条目时返回空集合。
+/// @details 可选扩展行采用容错解析，调用方仍须检查条目数量和目标项目适用性。
 std::optional<ParsedClipboard> parse(
     std::string_view text, bool preserveCollaborationIdentity = false);
 

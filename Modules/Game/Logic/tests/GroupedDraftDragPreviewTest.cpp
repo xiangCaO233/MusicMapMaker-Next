@@ -17,6 +17,7 @@ namespace
 {
 /// @brief 配置四轨玩家区与四轨草稿区，复现多选拖动边界。
 /// @param context 待配置会话。
+/// @note 玩家区与草稿区刻意采用不同轨宽，防止错误复用玩家区投影也通过断言。
 void configureDragContext(MMM::Logic::SessionContext& context)
 {
     // 创建最小谱面对象，让工具链按真实会话路径检查可编辑状态。
@@ -70,17 +71,20 @@ void configureDragContext(MMM::Logic::SessionContext& context)
 /// @param entity 待检查音符实体。
 /// @param expectedX 预期横坐标。
 /// @return 横向误差小于测试容差时返回 true。
+/// @pre 实体已经经过一次拖动更新，Transform 组件存在。
 bool transformXNear(const MMM::Logic::SessionContext& context,
                     entt::entity entity, float expectedX)
 {
     const auto& transform =
         context.noteRegistry.get<const MMM::Logic::TransformComponent>(entity);
+    // 检查即时渲染缓存而非重新投影组件，才能发现逻辑已移动但画面仍滞后的问题。
     return std::abs(transform.m_pos.x - expectedX) < 1e-4F;
 }
 
 /// @brief 创建横跨四条玩家轨道的选中折线。
 /// @param context 当前会话。
 /// @return 折线根实体。
+/// @note 不生成派生子实体，测试焦点是父组件内嵌节点的整组移动。
 entt::entity createSelectedWidePolyline(MMM::Logic::SessionContext& context)
 {
     MMM::Logic::NoteComponent polyline{
@@ -176,6 +180,7 @@ entt::entity createStandaloneBoundaryPolyline(
 /// @param entity 折线根实体。
 /// @param deltaTrack 相对初态的预期轨道增量。
 /// @return 根、节点、Flick 终点与草稿标记均一致时返回 true。
+/// @note 检查预览状态而非持久化合法性，跨域节点暂存于同一折线是允许的。
 bool standalonePreviewMatchesDelta(const MMM::Logic::SessionContext& context,
                                    entt::entity entity, std::int32_t deltaTrack)
 {
@@ -193,6 +198,7 @@ bool standalonePreviewMatchesDelta(const MMM::Logic::SessionContext& context,
         return false;
     }
     // 末端断言可防止只移动 Flick 起点而遗漏其横向覆盖范围。
+    // 使用带符号的 dtrack 保留向左滑动方向，不能只验证覆盖宽度的绝对值。
     return polyline.m_subNotes[2].trackIndex + polyline.m_subNotes[2].dtrack ==
            deltaTrack;
 }
@@ -238,6 +244,7 @@ bool previewMatchesDelta(const MMM::Logic::SessionContext& context,
 
 /// @brief 验证未预选中的单个宽折线不会被玩家域钳制。
 /// @return 玩家区内跨边界预览和完整草稿区提交都连续时返回 true。
+/// @note 与多选用例分别初始化，不能依赖前一个用例建立的选中状态。
 bool testStandalonePolylineDoesNotBlockDraftPreview()
 {
     // 独立 Session 隔离多选用例，保证实体从未预选状态进入 Mode B。
@@ -271,6 +278,7 @@ bool testStandalonePolylineDoesNotBlockDraftPreview()
     }
 
     // 继续移入最右草稿轨后，整条折线均位于草稿域，可以正常提交。
+    // 根轨从 2 到 -1，总增量是 -3，而不是在上一帧的 -2 上再次叠加。
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
@@ -283,6 +291,7 @@ bool testStandalonePolylineDoesNotBlockDraftPreview()
     tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
 
     // 单物件提交仍只生成一条撤销记录，并清理全部即时渲染固定项。
+    // 不在提交后重跑预览更新，让断言能发现结束命令将位置回滚的错误。
     return standalonePreviewMatchesDelta(context, polylineEntity, -3) &&
            context.actionStack.getUndoStackSize() == 1U &&
            !context.isDragging && context.dragRenderPinnedEntities.empty();
@@ -290,6 +299,7 @@ bool testStandalonePolylineDoesNotBlockDraftPreview()
 
 /// @brief 验证宽折线不会阻塞以单键为焦点的跨区拖动虚影。
 /// @return 玩家区、草稿区及返回玩家区的每次更新均连续时返回 true。
+/// @note 覆盖同一手势内的往返切换，不能用多次独立拖动替代这条序列。
 bool testWidePolylineDoesNotBlockDraftPreview()
 {
     // 每次测试使用全新 SessionContext，避免动作栈或选择状态跨用例泄漏。
@@ -322,6 +332,7 @@ bool testWidePolylineDoesNotBlockDraftPreview()
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 350.0F, 300.0F, true });
     // 分域状态下组件轨号与两个根实体的缓存 Transform 必须同时正确。
+    // 此时 Tap 仍在玩家区、折线根已进草稿区，两者不能共用同一轨宽。
     if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -1) ||
          !transformXNear(context, tapEntity, 300.0F) ||
          !transformXNear(context, polylineEntity, 10.0F) ) {
@@ -331,6 +342,7 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     }
 
     // 30 对应独立布局最靠近玩家区的草稿轨 -1；整组此时完整进入草稿区。
+    // 以 Tap 为锚点得到 -4 的公共增量，折线根应随之落到最左草稿轨。
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
@@ -340,6 +352,7 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     }
 
     // 返回玩家轨后必须恢复相同增量，不能在求解器切换点发生跳变。
+    // 重用第一次的鼠标坐标，直接比较同一初态映射，排除运动方向依赖。
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 350.0F, 300.0F, true });
@@ -349,6 +362,7 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     }
 
     // 再次进入有效草稿位置并松开，整组应提交为一个撤销动作。
+    // 中间预览不应各自入栈，只有结束手势才形成可撤销的编辑边界。
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
@@ -363,6 +377,7 @@ bool testWidePolylineDoesNotBlockDraftPreview()
         XERROR("Grouped draft drag did not commit atomically");
         return false;
     }
+    // 提交不能顺带清除原有选择，否则后续连续拖动会退化为单物件操作。
     return context.noteRegistry.get<MMM::Logic::InteractionComponent>(tapEntity)
                .isSelected &&
            context.noteRegistry
@@ -373,8 +388,10 @@ bool testWidePolylineDoesNotBlockDraftPreview()
 
 /// @brief 运行单物件与多选组跨入草稿区的即时虚影回归测试。
 /// @return 测试通过时返回 0。
+/// @note 两个分支分别执行，再汇总退出码，避免前一失败令后一分支被短路跳过。
 int main()
 {
+    // 测试只构造内存会话并派发工具命令，不需要图形窗口或外部谱面资源。
     const bool standalonePassed =
         testStandalonePolylineDoesNotBlockDraftPreview();
     const bool groupedPassed = testWidePolylineDoesNotBlockDraftPreview();

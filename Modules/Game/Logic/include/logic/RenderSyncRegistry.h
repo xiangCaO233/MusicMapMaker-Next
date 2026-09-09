@@ -20,6 +20,8 @@ namespace MMM::Logic
 using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 
 /// @brief 渲染同步注册表，封装画布同步缓冲区、图集 UV 映射和视口尺寸缓存。
+/// 缓冲区和视口使用共享锁访问，图集则发布不可变副本供逻辑侧读取。
+/// cameraId 同时关联三类状态，关闭画布时应统一调用 eraseCamera。
 class RenderSyncRegistry
 {
 public:
@@ -64,6 +66,7 @@ public:
     /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
     /// @param cameraId 目标画布 cameraId。
     /// @return 当前可用的图集 UV 映射共享读取句柄。
+    /// 句柄通过别名共享所有权持有整份快照，不能仅缓存返回容器的裸地址。
     /// @warning 逻辑交互路径使用；acquire 读取会产生一次 shared_ptr
     /// 引用计数变更，用于保证 UI 线程替换图集快照时返回的 UV 表不悬空。
     std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
@@ -73,6 +76,7 @@ public:
     /// @param cameraId 目标画布 cameraId。
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// UV、字体度量与修订号必须作为一组缓存，不应单独修改修订号。
     /// @param targetAsciiFontAtlasMetrics 目标快照中的多档 ASCII 字体度量。
     /// @param targetUnicodeFontMetrics 目标快照中的按需 Unicode 字体度量。
     /// @warning
@@ -102,6 +106,7 @@ public:
 
     /// @brief 移除指定画布的同步缓存、图集映射和视口尺寸。
     /// @param cameraId 待移除的画布 cameraId。
+    /// 已借出的同步缓冲和图集快照仍由读者持有，本操作不等待这些读者退出。
     void eraseCamera(const std::string& cameraId);
 
 private:

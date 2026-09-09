@@ -41,6 +41,7 @@ struct NoteLaneGeometry {
     float fallbackLeftX, float fallbackWidth, float fallbackNoteW = 0.0F,
     float fallbackNoteH = 0.0F)
 {
+    // 先构造兼容投影：没有统一轨道信息或查不到目标轨道时保留此结果。
     NoteLaneGeometry result{
         .leftX =
             fallbackLeftX + static_cast<float>(absoluteTrack) * fallbackWidth,
@@ -51,6 +52,7 @@ struct NoteLaneGeometry {
 
     // 主画布端点必须逐轨解析，不能按根节点所在区域的宽度连续外推。
     if ( laneProjection ) {
+        // 绝对索引先转成区域地址，允许折线端点跨越轨宽不同的区域。
         const auto address = CanvasLaneAddress::fromAbsoluteTrack(
             absoluteTrack,
             laneProjection->playerLaneCount,
@@ -62,6 +64,8 @@ struct NoteLaneGeometry {
     }
 
     // 音符尺寸随端点自身轨宽缩放；未请求尺寸时保持零值。
+    // 宽高共用同一倍率，保持基础音符的宽高比，而不是只拉伸横向尺寸。
+    // 无效或非正轨宽不参与除法，此时原样保留调用方提供的基础尺寸。
     if ( std::isfinite(fallbackWidth) && fallbackWidth > 0.0F &&
          std::isfinite(result.width) && result.width > 0.0F ) {
         const float scale = result.width / fallbackWidth;

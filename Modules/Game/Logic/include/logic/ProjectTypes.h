@@ -11,6 +11,7 @@ namespace MMM::Logic
 {
 
 /// @brief 音效资源按需加载登记请求。
+/// @details 描述待登记资源，不持有解码器；由打开流程调用方交给音频系统。
 struct AudioRegistrationRequest {
     /// @brief 需要登记的项目音频资源。
     AudioResource m_resource;
@@ -20,6 +21,7 @@ struct AudioRegistrationRequest {
 };
 
 /// @brief 打开项目后的结果信息。
+/// @details 项目本身由控制器持有，此值仅交付后续会话和音频接入所需信息。
 struct OpenProjectResult {
     /// @brief 是否成功打开项目。
     bool m_opened{ false };
@@ -27,7 +29,7 @@ struct OpenProjectResult {
     /// @brief 实际打开的项目目录路径。
     std::filesystem::path m_actualProjectPath;
 
-    /// @brief 打开项目时若传入谱面文件，则记录需要自动打开的谱面路径。
+    /// @brief 待自动打开的谱面；文件入口取指定文件，临时谱包可取首个谱面。
     std::filesystem::path m_targetBeatmapPath;
 
     /// @brief 项目显示标题。
@@ -41,6 +43,7 @@ struct OpenProjectResult {
 };
 
 /// @brief 新建项目时需要写入项目描述文件的初始设置。
+/// @note 只用于无既有配置的项目；空标题、曲作者、谱师由创建入口补默认值。
 struct ProjectCreationOptions {
     /// @brief 项目显示标题。
     std::string m_title;
@@ -59,6 +62,7 @@ struct ProjectCreationOptions {
 };
 
 /// @brief 当前临时项目的运行时信息。
+/// @note 路径快照不管理缓存寿命；持有此值不阻止项目关闭或缓存清理。
 struct TemporaryProjectInfo {
     /// @brief 是否存在临时项目。
     bool m_isTemporary{ false };

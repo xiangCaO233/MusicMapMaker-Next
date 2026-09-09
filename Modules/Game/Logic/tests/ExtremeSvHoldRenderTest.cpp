@@ -27,6 +27,7 @@ constexpr double EXTREME_SV = 10000.0;
 /// @param vertex 待检查的画布顶点。
 /// @param region 图集中的起点与尺寸。
 /// @return UV 位于区域内部时返回 true。
+/// @note 只用于本用例互不重叠的纹理区域，不是通用纹理身份查询接口。
 bool isInsideUvRegion(const MMM::Common::Render::CanvasVertex& vertex,
                       const glm::vec4&                         region)
 {
@@ -37,6 +38,7 @@ bool isInsideUvRegion(const MMM::Common::Render::CanvasVertex& vertex,
 
 /// @brief 验证极大 SV 下 Hold 主体只提交视口内矩形。
 /// @return 主体纵坐标有界、宽度稳定且离屏尾部未提交时返回 true。
+/// @note 使用正向极大 SV；反向滚动、Jump 和跨段长条不在此用例覆盖范围。
 bool testExtremeSvHoldIsClippedBeforeBatching()
 {
     // 三个 Registry 与编辑器会话中的数据边界一致。
@@ -109,6 +111,7 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     // 正式会话会维护按时间排序的实体缓存，测试显式提供同样的观察指针。
     // 单实体顺序是确定的，避免排序逻辑掩盖渲染回归。
     const std::vector<entt::entity> sortedNotes{ holdEntity };
+    // 注册表只借用此向量地址，向量必须保持存活且不搬移到快照生成结束。
     noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
 
     // 快照直接收集 CPU 端顶点，因此测试无需依赖 Vulkan 驱动结果。
@@ -120,6 +123,7 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     const glm::vec4 noteUv{ 0.1F, 0.1F, 0.1F, 0.1F };
     const glm::vec4 bodyUv{ 0.4F, 0.2F, 0.05F, 0.2F };
     const glm::vec4 endUv{ 0.7F, 0.3F, 0.1F, 0.1F };
+    // None 与普通 Note 同样分配独立区域，防止辅助几何被误计为长条主体。
     // 主体区域较窄可同时检查皮肤宽度换算后仍保持两个固定 X 边界。
     // 尾部区域单独保留，用于证明离屏端点没有进入批次。
     snapshot.uvMap.emplace(
@@ -160,18 +164,21 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     std::vector<glm::vec2> bodyPositions;
     bool                   foundEndVertex = false;
     for ( const auto& vertex : snapshot.vertices ) {
+        // 从最终顶点缓冲筛选，不能仅检查绘制命令上的 scissor 来代替 CPU 裁剪。
         if ( isInsideUvRegion(vertex, bodyUv) ) {
             bodyPositions.push_back({ vertex.pos.x, vertex.pos.y });
         }
         if ( isInsideUvRegion(vertex, endUv) ) foundEndVertex = true;
     }
     if ( bodyPositions.size() != 4U ) {
+        // 空主体同样失败，避免通过剔除整个长条来绕过极端坐标问题。
         XERROR("Extreme-SV Hold body vertex count mismatch: {}",
                bodyPositions.size());
         return false;
     }
 
     // CPU 裁剪后所有主体顶点都必须落在画布纵向范围内。
+    // 先检查有限值，NaN 会令普通大小比较失效，不能只检查是否越过上下界。
     for ( const auto& position : bodyPositions ) {
         if ( !std::isfinite(position.x) || !std::isfinite(position.y) ||
              position.y < 0.0F || position.y > VIEWPORT_HEIGHT ) {
@@ -182,7 +189,8 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
         }
     }
 
-    // 左右边界在两端各出现一次，证明裁剪没有改变主体宽度或形成斜边。
+    // 提取横向极值，检查主体没有塌缩且所有顶点均落在这两条边界上。
+    // 这里不硬编码皮肤宽度，只验证输出仍具有非零且一致的横向跨度。
     const auto [minXIt, maxXIt] = std::minmax_element(
         bodyPositions.begin(),
         bodyPositions.end(),
@@ -204,6 +212,7 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     }
 
     // 远离视口的尾部不应进入顶点缓冲，避免继续携带极端坐标。
+    // GPU 裁剪可能隐藏错误尾部，但无法满足本测试对提交前几何范围的约束。
     if ( foundEndVertex ) {
         XERROR("Extreme-SV Hold emitted its off-screen end geometry");
         return false;
@@ -214,7 +223,10 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
 
 /// @brief 运行极大 SV 下 Hold 几何裁剪回归测试。
 /// @return 测试通过时返回 0。
+/// @note 结果证明指定输入下的 CPU 几何约束，不替代实际驱动和画面验收。
 int main()
 {
+    // 使用内存实体与人工图集坐标复现，不依赖用户皮肤或外部谱面文件。
+    // 用例日志区分主体缺失、坐标越界、宽度异常及离屏尾部泄漏。
     return testExtremeSvHoldIsClippedBeforeBatching() ? 0 : 1;
 }

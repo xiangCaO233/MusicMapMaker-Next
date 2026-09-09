@@ -49,6 +49,8 @@ public:
     /// @brief 返回自动采样及其实际扩展的 BGM 轨道元数据类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        // 只有已记录的前后轨道数确实不同，才额外宣告元数据变更。
+        // 尚未执行时不凭采样所在轨道推测扩容，实际扩容结果由执行流程记录。
         return m_beforeBgmTrackCount && m_afterBgmTrackCount &&
                        *m_beforeBgmTrackCount != *m_afterBgmTrackCount
                    ? ::MMM::BeatmapMutationFlags::AudioSamples |
@@ -105,6 +107,7 @@ public:
     /// @brief 返回批量自动采样及其实际扩展的 BGM 轨道元数据类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        // 批量操作共用一次轨道数快照，避免逐条采样合并出不一致的类别。
         return m_beforeBgmTrackCount && m_afterBgmTrackCount &&
                        *m_beforeBgmTrackCount != *m_afterBgmTrackCount
                    ? ::MMM::BeatmapMutationFlags::AudioSamples |
@@ -159,6 +162,7 @@ public:
     /// @brief 轨道数操作修改元数据，并在存在自动采样时迁移其绝对轨道。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        // 没有采样迁移条目时只修改玩家轨道数，不额外声明采样数据变更。
         return m_sampleChanges.empty()
                    ? ::MMM::BeatmapMutationFlags::Metadata
                    : ::MMM::BeatmapMutationFlags::Metadata |
@@ -206,6 +210,7 @@ public:
     /// @brief BGM 轨道数量同时影响元数据与自动采样轨道投影。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
+        // 此类操作固定宣告两类影响，不以当前是否存在采样实体缩小通知范围。
         return ::MMM::BeatmapMutationFlags::Metadata |
                ::MMM::BeatmapMutationFlags::AudioSamples;
     }

@@ -70,6 +70,8 @@ struct PublishedSessionSnapshot {
 };
 
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
+/// 可变条目受递归锁保护；逻辑循环使用已发布快照保持锁外会话生命周期。
+/// 索引随删除移动，不是永久身份；跨结构变更定位画布应使用 cameraId。
 class SessionRegistry
 {
 public:
@@ -125,11 +127,14 @@ public:
     /// @brief 获取指定索引的 SessionEntry。
     /// @param index 目标 Session 索引。
     /// @return 指定索引的 SessionEntry；索引无效时返回 nullptr。
+    /// @warning 返回的是容器内借用指针；需要跨调用访问时，调用方须保持外层
+    /// mutex() 锁且避免修改容器结构，内部短锁不会延长条目地址的有效期。
     SessionEntry* entry(int32_t index);
 
     /// @brief 获取指定索引的只读 SessionEntry。
     /// @param index 目标 Session 索引。
     /// @return 指定索引的只读 SessionEntry；索引无效时返回 nullptr。
+    /// @warning 只读指针同样依赖外层锁与容器地址稳定性，不是快照。
     const SessionEntry* entry(int32_t index) const;
 
     /// @brief 获取所有 Session 条目的只读快照。
@@ -200,6 +205,7 @@ public:
 
     /// @brief 获取可变 SessionEntry 列表，调用者必须已持有 mutex()。
     /// @return 内部 SessionEntry 列表引用。
+    /// 修改逻辑侧需要观察的字段后，应在同一临界区调用 publishSnapshotUnsafe。
     std::vector<SessionEntry>& entriesUnsafe();
 
     /// @brief 获取只读 SessionEntry 列表，调用者必须已持有 mutex()。

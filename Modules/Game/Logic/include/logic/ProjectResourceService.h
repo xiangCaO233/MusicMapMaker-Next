@@ -22,8 +22,11 @@ namespace MMM::Logic
 
 /// @brief 谱面中音频资源引用的用途。
 enum class BeatmapAudioReferenceKind {
+    /// @brief 歌曲文件提示，用于识别主音轨。
     SongFileHint,
+    /// @brief 玩家物件触发的音效绑定。
     NoteSampleBinding,
+    /// @brief 按时间自动播放的采样事件。
     AudioSampleEvent,
 };
 
@@ -59,6 +62,7 @@ struct BeatmapAudioReferenceRemapResult {
     /// @return 至少存在一个匹配引用时返回 true。
     [[nodiscard]] bool referencesResource() const
     {
+        // 匹配不等于改写：已使用稳定 ID 的引用也应参与资源占用判断。
         return m_noteBindingReferenceCount > 0U ||
                m_audioSampleReferenceCount > 0U ||
                m_songFileHintReferenceCount > 0U;
@@ -83,8 +87,11 @@ struct ProjectBeatmapAudioIdRemapResult {
 
 /// @brief 保存前 song_file_hint 的选取来源。
 enum class BeatmapSongFileHintSource {
+    /// @brief 没有可解析的主音轨提示。
     None,
+    /// @brief 沿用已有且可解析的提示。
     ExistingHint,
+    /// @brief 从最早主音轨采样生成提示。
     EarliestMainSample,
 };
 
@@ -128,6 +135,7 @@ public:
     /// @brief 根据初次目录扫描结果填充项目的谱面和音频资源列表。
     /// @param project 需要写入资源列表的项目实例。
     /// @param scanResult 项目目录扫描结果。
+    /// @note 重建列表而非增量合并；持久化配置和排除项由后续步骤恢复。
     void buildInitialResources(
         Project&                                   project,
         const ProjectDirectoryScanner::ScanResult& scanResult) const;
@@ -146,6 +154,7 @@ public:
     /// @param project 以目录扫描结果为基础的项目实例。
     /// @param persistedProject 从项目描述文件读取的持久化项目。
     /// @param legacyAudioResourceKeys 需要保留扫描音轨类型的旧版资源键。
+    /// @note 路径优先于 ID 匹配；玩家物件绑定仍强制资源保持音效类型。
     void mergePersistedAudioResources(
         Project& project, const Project& persistedProject,
         const std::unordered_set<std::string>& legacyAudioResourceKeys) const;
@@ -154,6 +163,7 @@ public:
     /// @param project 需要同步资源列表的项目实例。
     /// @param scanResult 项目目录扫描结果。
     /// @return 同步是否改变项目，以及需要预加载的新增音效资源。
+    /// @warning 目录变更后的低频同步，包含谱面读取；不得直接逐帧执行。
     DirectorySyncResult syncDirectoryResources(
         Project&                                   project,
         const ProjectDirectoryScanner::ScanResult& scanResult) const;

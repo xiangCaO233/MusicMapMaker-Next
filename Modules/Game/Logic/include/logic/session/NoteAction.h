@@ -21,29 +21,39 @@ public:
     /// @param entity 关联的实体
     /// @param before 变更前数据
     /// @param after 变更后数据
+    /// @note 前后快照按值保存，不借用外部组件的可变存储。
     NoteAction(Type type, entt::entity entity,
                std::optional<NoteComponent> before,
                std::optional<NoteComponent> after)
         : m_type(type), m_entity(entity), m_before(before), m_after(after)
     {
         if ( m_type == Type::Create && m_after ) {
+            // 新建可能来自复制，不能沿用来源物件的协作身份。
+            // 这里只清理动作持有的快照，不改动调用方的原始数据。
             m_after->m_collaborationId.clear();
             for ( auto& subNote : m_after->m_subNotes ) {
+                // 折线子节点也有独立身份，需要与根物件一起重新分配。
                 subNote.collaborationId.clear();
             }
         }
     }
 
-    void        execute(SessionContext& ctx) override;
-    void        undo(SessionContext& ctx) override;
-    void        redo(SessionContext& ctx) override;
+    /// @brief 首次应用音符变化，建立后续撤销所需的状态。
+    void execute(SessionContext& ctx) override;
+    /// @brief 恢复变化前的音符及相关草稿轨道状态。
+    void undo(SessionContext& ctx) override;
+    /// @brief 重新应用变化后的音符状态。
+    void redo(SessionContext& ctx) override;
+    /// @brief 获取该操作类型的可读名称。
     std::string getName() const override;
     /// @brief 草稿专属操作不发布谱面变更，其余操作修改主谱面物件。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
         const bool hasFormalBefore = m_before && !m_before->m_isDraft;
-        const bool hasFormalAfter  = m_after && !m_after->m_isDraft;
+        // 前后任一侧属于正式谱面就必须通知，包括正式物件删除或转为草稿。
+        const bool hasFormalAfter = m_after && !m_after->m_isDraft;
         if ( !hasFormalBefore && !hasFormalAfter ) {
+            // 纯草稿由项目草稿同步处理，不触发主谱面物件类别通知。
             return ::MMM::BeatmapMutationFlags::None;
         }
         return ::MMM::BeatmapMutationFlags::Objects;
@@ -79,6 +89,7 @@ public:
     /// @param entries 批量操作条目列表
     /// @param name 操作描述名称
     /// @param mutationFlags 动作对协作谱面造成的精确变更类别。
+    /// @note entries 转交动作持有，调用方后续编辑原列表不会改变撤销快照。
     BatchNoteAction(std::vector<Entry>          entries,
                     std::string                 name = "Batch Note Action",
                     ::MMM::BeatmapMutationFlags mutationFlags =
@@ -88,27 +99,38 @@ public:
         , m_mutationFlags(mutationFlags)
     {
         for ( auto& entry : m_entries ) {
+            // 只有无 before 且有 after 的条目是新建，更新必须保留原身份。
             if ( entry.before || !entry.after ) continue;
             entry.after->m_collaborationId.clear();
             for ( auto& subNote : entry.after->m_subNotes ) {
+                // 粘贴整条折线时，子节点也不能与来源折线共享协作 ID。
                 subNote.collaborationId.clear();
             }
         }
     }
 
-    void        execute(SessionContext& ctx) override;
-    void        undo(SessionContext& ctx) override;
-    void        redo(SessionContext& ctx) override;
+    /// @brief 应用本批音符变化，作为单个撤销历史条目处理。
+    void execute(SessionContext& ctx) override;
+    /// @brief 恢复本批条目的 before 快照和已记录的选中状态。
+    void undo(SessionContext& ctx) override;
+    /// @brief 恢复本批条目的 after 快照和已记录的选中状态。
+    void redo(SessionContext& ctx) override;
+    /// @brief 获取调用方指定的批量操作名称。
     std::string getName() const override;
     /// @brief 返回该批量动作声明的精确谱面变更类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
     {
         const bool hasFormalNote = std::any_of(
-            m_entries.begin(), m_entries.end(), [](const Entry& entry) {
+            // 前态也参与判断，保证仅含正式物件删除的批次仍会发出通知。
+            // 混合批次只要包含正式物件变化，就不能按纯草稿忽略。
+            m_entries.begin(),
+            m_entries.end(),
+            [](const Entry& entry) {
                 return (entry.before && !entry.before->m_isDraft) ||
                        (entry.after && !entry.after->m_isDraft);
             });
         if ( !hasFormalNote ) return ::MMM::BeatmapMutationFlags::None;
+        // 保留调用方声明的精确类别，避免扩大为完整物件变更。
         return m_mutationFlags;
     }
 
