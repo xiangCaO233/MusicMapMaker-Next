@@ -1,0 +1,561 @@
+{
+  "source": "effects-source-atlas.png",
+  "atlas": "effects-atlas.png",
+  "size": [
+    256,
+    768
+  ],
+  "rect_format": "x, y, width, height",
+  "frames": [
+    {
+      "output": "../image/note/effect/note/1.png",
+      "source_rect": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        0,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/2.png",
+      "source_rect": [
+        32,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        32,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/3.png",
+      "source_rect": [
+        64,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        64,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/4.png",
+      "source_rect": [
+        96,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        96,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/5.png",
+      "source_rect": [
+        128,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        128,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/6.png",
+      "source_rect": [
+        160,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        160,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/1.png",
+      "source_rect": [
+        192,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        192,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/2.png",
+      "source_rect": [
+        224,
+        0,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        224,
+        0,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/3.png",
+      "source_rect": [
+        0,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        0,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/4.png",
+      "source_rect": [
+        32,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        32,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/5.png",
+      "source_rect": [
+        64,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        64,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/6.png",
+      "source_rect": [
+        96,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        96,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/7.png",
+      "source_rect": [
+        128,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        128,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/8.png",
+      "source_rect": [
+        160,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        160,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/9.png",
+      "source_rect": [
+        192,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        192,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/10.png",
+      "source_rect": [
+        224,
+        256,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        224,
+        256,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/11.png",
+      "source_rect": [
+        0,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        0,
+        512,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/12.png",
+      "source_rect": [
+        32,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        32,
+        512,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/13.png",
+      "source_rect": [
+        64,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        64,
+        512,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/14.png",
+      "source_rect": [
+        96,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        96,
+        512,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/15.png",
+      "source_rect": [
+        128,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        128,
+        512,
+        32,
+        256
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/16.png",
+      "source_rect": [
+        160,
+        512,
+        32,
+        256
+      ],
+      "crop": [
+        0,
+        0,
+        32,
+        256
+      ],
+      "size": [
+        32,
+        256
+      ],
+      "rect": [
+        160,
+        512,
+        32,
+        256
+      ]
+    }
+  ]
+}

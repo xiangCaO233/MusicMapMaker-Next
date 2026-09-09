@@ -1,0 +1,561 @@
+{
+  "source": "effects-source-atlas.png",
+  "atlas": "effects-atlas.png",
+  "size": [
+    3248,
+    3160
+  ],
+  "rect_format": "x, y, width, height",
+  "frames": [
+    {
+      "output": "../image/note/effect/note/1.png",
+      "source_rect": [
+        0,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        0,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/2.png",
+      "source_rect": [
+        512,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        512,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/3.png",
+      "source_rect": [
+        1024,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        1024,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/4.png",
+      "source_rect": [
+        1536,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        1536,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/5.png",
+      "source_rect": [
+        2048,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        2048,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/note/6.png",
+      "source_rect": [
+        2560,
+        0,
+        512,
+        232
+      ],
+      "crop": [
+        48,
+        9,
+        415,
+        214
+      ],
+      "size": [
+        400,
+        194
+      ],
+      "rect": [
+        2560,
+        0,
+        400,
+        194
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/1.png",
+      "source_rect": [
+        0,
+        232,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        0,
+        232,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/2.png",
+      "source_rect": [
+        812,
+        232,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        812,
+        232,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/3.png",
+      "source_rect": [
+        1624,
+        232,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        1624,
+        232,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/4.png",
+      "source_rect": [
+        2436,
+        232,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        2436,
+        232,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/5.png",
+      "source_rect": [
+        0,
+        964,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        0,
+        964,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/6.png",
+      "source_rect": [
+        812,
+        964,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        812,
+        964,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/7.png",
+      "source_rect": [
+        1624,
+        964,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        1624,
+        964,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/8.png",
+      "source_rect": [
+        2436,
+        964,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        2436,
+        964,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/9.png",
+      "source_rect": [
+        0,
+        1696,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        0,
+        1696,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/10.png",
+      "source_rect": [
+        812,
+        1696,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        812,
+        1696,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/11.png",
+      "source_rect": [
+        1624,
+        1696,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        1624,
+        1696,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/12.png",
+      "source_rect": [
+        2436,
+        1696,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        2436,
+        1696,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/13.png",
+      "source_rect": [
+        0,
+        2428,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        0,
+        2428,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/14.png",
+      "source_rect": [
+        812,
+        2428,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        812,
+        2428,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/15.png",
+      "source_rect": [
+        1624,
+        2428,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        1624,
+        2428,
+        682,
+        674
+      ]
+    },
+    {
+      "output": "../image/note/effect/flick/16.png",
+      "source_rect": [
+        2436,
+        2428,
+        812,
+        732
+      ],
+      "crop": [
+        65,
+        29,
+        682,
+        674
+      ],
+      "size": [
+        682,
+        674
+      ],
+      "rect": [
+        2436,
+        2428,
+        682,
+        674
+      ]
+    }
+  ]
+}

@@ -122,9 +122,9 @@ struct VisualConfig {
     void applyKeyCountLayout(std::int32_t keyCount);
 
     /// @brief 音符 X 轴缩放。
-    float noteScaleX{ 1.2f };
+    float noteScaleX{ 1.0f };
     /// @brief 音符 Y 轴缩放。
-    float noteScaleY{ 1.2f };
+    float noteScaleY{ 1.0f };
     /// @brief 是否在玩家物件上方显示绑定音效资源标签。
     bool showBoundSampleLabels{ true };
     /// @brief 音符填充模式。
