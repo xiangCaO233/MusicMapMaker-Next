@@ -17,15 +17,19 @@ set(_MMM_SOURCE_TRANSLATIONS "${MMM_SYNC_SOURCE_ASSETS_ROOT}/translations")
 set(_MMM_SOURCE_DEFAULT_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/mmm-default")
 # IVM 内置皮肤拥有独立入口和资源树，同时复用 mmm-default 的通用资源。
 set(_MMM_SOURCE_IVM_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/ivm")
+# RM 游玩皮肤包含经过矩形适配的物件和原包音效。
+set(_MMM_SOURCE_RM_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/rm")
 # 目标统一落在 AppPaths 使用的 assets 子目录。
 set(_MMM_DESTINATION_ASSETS "${MMM_SYNC_DESTINATION_CONFIG_ROOT}/assets")
 
-# 默认中英文和两套内置皮肤入口缺失时立即失败，避免生成不完整的本机资源目录。
+# 默认中英文和三套内置皮肤入口缺失时立即失败，避免生成不完整的本机资源目录。
 foreach(
   _MMM_REQUIRED_FILE
   "${_MMM_SOURCE_TRANSLATIONS}/en_us.lua"
   "${_MMM_SOURCE_TRANSLATIONS}/zh_cn.lua"
-  "${_MMM_SOURCE_DEFAULT_SKIN}/skin.lua" "${_MMM_SOURCE_IVM_SKIN}/skin.lua")
+  "${_MMM_SOURCE_DEFAULT_SKIN}/skin.lua"
+  "${_MMM_SOURCE_IVM_SKIN}/skin.lua"
+  "${_MMM_SOURCE_RM_SKIN}/skin.lua")
   # 任一基础入口缺失都说明源码资源不完整，不能继续部分同步。
   if(NOT EXISTS "${_MMM_REQUIRED_FILE}")
     message(
@@ -56,7 +60,7 @@ function(_mmm_sync_managed_directory SOURCE_ROOT DESTINATION_ROOT)
   # 不清理目标中的多余文件是保护用户扩展的关键约束。
 endfunction()
 
-# 三个受管资源根分别增量写入，所有目标都固定在 assets 下；用户配置文件和 ImGui 布局文件不属于同步输入，也不允许成为写入目标。
+# 四个受管资源根分别增量写入，所有目标都固定在 assets 下；用户配置文件和 ImGui 布局文件不属于同步输入，也不允许成为写入目标。
 _mmm_sync_managed_directory("${_MMM_SOURCE_TRANSLATIONS}"
                             "${_MMM_DESTINATION_ASSETS}/translations")
 # 默认皮肤独立写入固定名称，避免影响同级自定义皮肤。
@@ -65,6 +69,11 @@ _mmm_sync_managed_directory("${_MMM_SOURCE_DEFAULT_SKIN}"
 # IVM 内置皮肤同样按完整目录树同步，确保入口、字体和物件纹理同时可用。
 _mmm_sync_managed_directory("${_MMM_SOURCE_IVM_SKIN}"
                             "${_MMM_DESTINATION_ASSETS}/skins/ivm")
+
+# RM 只覆盖自身受管文件，不修改用户选择的皮肤或配色方案。 入口和 PNG 必须在同一次构建中同步，避免新的 holdhead 映射引用旧目录。
+# 默认公共字体仍放在同级 mmm-default 内，不为 RM 复制第二套字体。
+_mmm_sync_managed_directory("${_MMM_SOURCE_RM_SKIN}"
+                            "${_MMM_DESTINATION_ASSETS}/skins/rm")
 
 # 演练定义及只读示例源独立分发，用户练习副本和学习进度不属于受管资源。
 if(EXISTS "${MMM_SYNC_SOURCE_ASSETS_ROOT}/walkthroughs")

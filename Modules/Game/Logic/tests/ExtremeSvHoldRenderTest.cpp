@@ -39,7 +39,10 @@ bool isInsideUvRegion(const MMM::Common::Render::CanvasVertex& vertex,
 /// @brief 验证极大 SV 下 Hold 主体只提交视口内矩形。
 /// @return 主体纵坐标有界、宽度稳定且离屏尾部未提交时返回 true。
 /// @note 使用正向极大 SV；反向滚动、Jump 和跨段长条不在此用例覆盖范围。
-bool testExtremeSvHoldIsClippedBeforeBatching()
+/// @param independentHead 是否使用与 Tap 分离的长条头图集区域。
+/// @note 两个用例共享相同音符、滚动映射及布局，唯一差异是可选图集项。
+/// @note 缺失项模拟旧皮肤，存在项模拟 RM 的独立绿色长条头。
+bool testExtremeSvHoldIsClippedBeforeBatching(bool independentHead)
 {
     // 三个 Registry 与编辑器会话中的数据边界一致。
     // 音符、采样和时间线分离可避免测试构造偏离正式渲染入口。
@@ -136,6 +139,14 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     snapshot.uvMap.emplace(
         static_cast<std::uint32_t>(MMM::Logic::TextureID::HoldEnd), endUv);
 
+    // 独立 UV 能发现长条头仍误用蓝色 Tap 贴图，缺省用例验证旧皮肤回退。
+    const glm::vec4 headUv{ 0.82F, 0.6F, 0.1F, 0.1F };
+    if ( independentHead ) {
+        snapshot.uvMap.emplace(
+            static_cast<std::uint32_t>(MMM::Logic::TextureID::HoldHead),
+            headUv);
+    }
+
     // 走完整主画布快照路径，确保测试覆盖调用方传入的真实裁剪边界。
     // 当前时间与 Hold 头部一致，使主体从判定线贯穿可见轨道区。
     // cameraId 选择主画布路径，预览区压缩投影不参与本测试。
@@ -163,12 +174,26 @@ bool testExtremeSvHoldIsClippedBeforeBatching()
     // 尾部使用布尔标记，因为预期正确结果是完全没有对应顶点。
     std::vector<glm::vec2> bodyPositions;
     bool                   foundEndVertex = false;
+    // 头部在判定线上必须出现，不能通过不绘制头部规避贴图选择断言。
+    // 人工 UV 不重叠，主轨底板与连接体不会被误识别为头部。
+    // 每个头部提交一个四边形，所以检查四个顶点而非仅检查至少一个。
+    std::size_t headVertexCount = 0;
+    std::size_t tapVertexCount  = 0;
     for ( const auto& vertex : snapshot.vertices ) {
         // 从最终顶点缓冲筛选，不能仅检查绘制命令上的 scissor 来代替 CPU 裁剪。
         if ( isInsideUvRegion(vertex, bodyUv) ) {
             bodyPositions.push_back({ vertex.pos.x, vertex.pos.y });
         }
         if ( isInsideUvRegion(vertex, endUv) ) foundEndVertex = true;
+        if ( isInsideUvRegion(vertex, independentHead ? headUv : noteUv) ) {
+            ++headVertexCount;
+        }
+        if ( isInsideUvRegion(vertex, noteUv) ) ++tapVertexCount;
+    }
+    // 新皮肤只用独立头部；缺失可选纹理的旧快照仍产生四个 Note 顶点。
+    if ( headVertexCount != 4U || (independentHead && tapVertexCount != 0U) ) {
+        XERROR("Hold head texture selection mismatch");
+        return false;
     }
     if ( bodyPositions.size() != 4U ) {
         // 空主体同样失败，避免通过剔除整个长条来绕过极端坐标问题。
@@ -228,5 +253,8 @@ int main()
 {
     // 使用内存实体与人工图集坐标复现，不依赖用户皮肤或外部谱面文件。
     // 用例日志区分主体缺失、坐标越界、宽度异常及离屏尾部泄漏。
-    return testExtremeSvHoldIsClippedBeforeBatching() ? 0 : 1;
+    return testExtremeSvHoldIsClippedBeforeBatching(false) &&
+                   testExtremeSvHoldIsClippedBeforeBatching(true)
+               ? 0
+               : 1;
 }

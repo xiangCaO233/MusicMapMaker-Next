@@ -431,11 +431,11 @@ void NoteRenderSystem::drawPolylineBody(
                     next.timestamp, currentAbsY, next.timestamp)) *
                     renderScaleY;
             const auto      nextLane = resolveNoteLaneGeometry(next.trackIndex,
-                                                          laneProjection,
-                                                          leftX,
-                                                          singleTrackW,
-                                                          noteW,
-                                                          noteH);
+                                                               laneProjection,
+                                                               leftX,
+                                                               singleTrackW,
+                                                               noteW,
+                                                               noteH);
             const glm::vec2 curBodySize =
                 getDrawSize(snapshot,
                             TextureID::HoldBodyVertical,
@@ -696,8 +696,14 @@ void NoteRenderSystem::drawPolylineHead(
 
     float headY =
         judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
+    // 折线起点与普通长条共享可选头部纹理，旧图集仍使用 Note。
+    // 尺寸与填充宽高比必须来自同一纹理，否则会使透明边距与命中框错位。
+    const auto headTexture =
+        snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
+            ? TextureID::HoldHead
+            : TextureID::Note;
     const glm::vec2 headSize =
-        getDrawSize(snapshot, TextureID::Note, lane.noteW, lane.noteH);
+        getDrawSize(snapshot, headTexture, lane.noteW, lane.noteH);
     const float headX = lane.leftX + (lane.width - headSize.x) * 0.5F;
 
     // 头部几何以轨中心与时间中心对齐，用户缩放不改变它对应的拍位。
@@ -708,13 +714,13 @@ void NoteRenderSystem::drawPolylineHead(
         finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHead.a * 0.5f };
     }
 
-    batcher.setTexture(TextureID::Note);
+    batcher.setTexture(headTexture);
     // 填充模式可能留白或裁纹理，头部命中框仍按完整布局矩形登记。
     batcher.pushFilledQuad(headX,
                            headY + headSize.y * 0.5f,
                            headSize.x,
                            headSize.y,
-                           { getTexAspect(snapshot, TextureID::Note), 1.0f },
+                           { getTexAspect(snapshot, headTexture), 1.0f },
                            config.visual.noteFillMode,
                            finalHeadColor);
 

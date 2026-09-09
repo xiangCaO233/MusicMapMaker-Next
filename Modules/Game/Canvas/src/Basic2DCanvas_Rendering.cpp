@@ -703,6 +703,13 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Common::Render::TextureID::Note),
         skin.getAssetPath("note.note"));
+    // 长条头为可选资源；旧皮肤不增加重复图集项，渲染时回退到 Note。
+    if ( const auto it = skin.getData().assetPaths.find("note.holdhead");
+         it != skin.getData().assetPaths.end() && !it->second.empty() ) {
+        m_textureAtlas->addTexture(
+            static_cast<uint32_t>(Common::Render::TextureID::HoldHead),
+            it->second);
+    }
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Common::Render::TextureID::Node),
         skin.getAssetPath("note.node"));
@@ -861,6 +868,17 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
+
+    // 可选头部位于既有连续纹理区之后，必须显式发布给逻辑线程。
+    // 只发布已加载且尺寸有效的区域，旧皮肤继续通过缺失项回退到 Note。
+    if ( const auto it = skin.getData().assetPaths.find("note.holdhead");
+         it != skin.getData().assetPaths.end() && !it->second.empty() ) {
+        const auto id =
+            static_cast<uint32_t>(Common::Render::TextureID::HoldHead);
+        const auto uv = m_textureAtlas->getUV(id);
+        if ( uv.z > 0.0F && uv.w > 0.0F ) m_atlasUVs[id] = uv;
+    }
+
 
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         for ( uint32_t i = 0; i < seq.frames.size(); ++i ) {

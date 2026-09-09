@@ -47,6 +47,9 @@ enum class TextureID : uint32_t {
     JudgeArea,
     Logo,
 
+    /// @brief 独立长条头纹理；未提供的皮肤继续使用 Note。
+    HoldHead,
+
     NoteSelectionBorder = 100,
 
     EffectStart = 1000,

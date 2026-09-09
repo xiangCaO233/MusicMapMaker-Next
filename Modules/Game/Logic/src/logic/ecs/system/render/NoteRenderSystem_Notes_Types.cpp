@@ -90,14 +90,19 @@ void NoteRenderSystem::renderHold(
 {
     // 三种纹理分别按 Note 基准尺寸换算，裁剪不得改变其横向比例。
     // 主体宽度仅由皮肤 UV 和 noteScaleX 决定，与 SV 数值完全无关。
-    glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
+    // 图集无独立长条头时保持原 Note 纹理，不在热路径查询皮肤或文件。
+    const auto headTexture =
+        snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
+            ? TextureID::HoldHead
+            : TextureID::Note;
+    glm::vec2 headSize = getDrawSize(snapshot, headTexture, w, h);
     glm::vec2 endSize  = getDrawSize(snapshot, TextureID::HoldEnd, w, h);
     glm::vec2 bodySize =
         getDrawSize(snapshot, TextureID::HoldBodyVertical, w, h);
 
     // 头尾与主体各自在轨道内居中，左右边界不参与纵向裁剪。
     // 固定 X 可保证裁剪后的四边形仍是等宽矩形。
-    float headX = x;
+    float headX = x + (w - headSize.x) * 0.5f;
     float endX  = x + (w - endSize.x) * 0.5f;
     float bodyX = x + (w - bodySize.x) * 0.5f;
     // 结束时间保持 double，避免长持续时间在投影前损失精度。
@@ -162,15 +167,14 @@ void NoteRenderSystem::renderHold(
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::Head) &&
          isEndpointVisible(headY, headSize.y) ) {
         // 可见头部保持原始中心坐标，不对固定尺寸纹理进行拉伸。
-        batcher.setTexture(TextureID::Note);
-        batcher.pushFilledQuad(
-            headX,
-            static_cast<float>(headY) + headSize.y * 0.5f,
-            headSize.x,
-            headSize.y,
-            { getTexAspect(snapshot, TextureID::Note), 1.0f },
-            config.visual.noteFillMode,
-            headColor);
+        batcher.setTexture(headTexture);
+        batcher.pushFilledQuad(headX,
+                               static_cast<float>(headY) + headSize.y * 0.5f,
+                               headSize.x,
+                               headSize.y,
+                               { getTexAspect(snapshot, headTexture), 1.0f },
+                               config.visual.noteFillMode,
+                               headColor);
     }
 
     // 3. 尾部。
@@ -206,8 +210,13 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    glm::vec4 headColor, glm::vec4 bodyColor,
                                    glm::vec4 arrowColor, HoverPart glowPart)
 {
-    glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
-    float     headX    = x;
+    // 单滑键也使用绿色起点；缺少独立贴图时兼容已有皮肤。
+    const auto headTexture =
+        snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
+            ? TextureID::HoldHead
+            : TextureID::Note;
+    glm::vec2 headSize = getDrawSize(snapshot, headTexture, w, h);
+    float     headX    = x + (w - headSize.x) * 0.5f;
 
     // 1. 横向连接体。
     // 零轨道偏移只画头部，不生成退化连接体或方向箭头。
@@ -231,15 +240,14 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
 
     // 2. 头部。
     if ( glowPart == HoverPart::None || glowPart == HoverPart::Head ) {
-        batcher.setTexture(TextureID::Note);
-        batcher.pushFilledQuad(
-            headX,
-            y + headSize.y * 0.5f,
-            headSize.x,
-            headSize.y,
-            { getTexAspect(snapshot, TextureID::Note), 1.0f },
-            config.visual.noteFillMode,
-            headColor);
+        batcher.setTexture(headTexture);
+        batcher.pushFilledQuad(headX,
+                               y + headSize.y * 0.5f,
+                               headSize.x,
+                               headSize.y,
+                               { getTexAspect(snapshot, headTexture), 1.0f },
+                               config.visual.noteFillMode,
+                               headColor);
     }
 
     // 3. 箭头。

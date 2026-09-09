@@ -714,6 +714,11 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     };
 
     addTex(Common::Render::TextureID::Note, "note.note");
+    // 与主画布使用同一可选长条头；缺失时由渲染器兼容旧皮肤。
+    if ( const auto it = skin.getData().assetPaths.find("note.holdhead");
+         it != skin.getData().assetPaths.end() && !it->second.empty() ) {
+        addTex(Common::Render::TextureID::HoldHead, "note.holdhead");
+    }
     addTex(Common::Render::TextureID::Node, "note.node");
     addTex(Common::Render::TextureID::HoldEnd, "note.holdend");
     addTex(Common::Render::TextureID::HoldBodyVertical,
@@ -744,6 +749,17 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
             continue;
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
+
+    // 可选头部位于既有连续纹理区之后，必须显式发布给逻辑线程。
+    // 只发布已加载且尺寸有效的区域，旧皮肤继续通过缺失项回退到 Note。
+    if ( const auto it = skin.getData().assetPaths.find("note.holdhead");
+         it != skin.getData().assetPaths.end() && !it->second.empty() ) {
+        const auto id =
+            static_cast<uint32_t>(Common::Render::TextureID::HoldHead);
+        const auto uv = m_textureAtlas->getUV(id);
+        if ( uv.z > 0.0F && uv.w > 0.0F ) m_atlasUVs[id] = uv;
+    }
+
 
     // 更新特序列帧 UV
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {

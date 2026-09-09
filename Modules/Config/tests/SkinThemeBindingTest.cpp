@@ -428,6 +428,65 @@ bool verifyDefaultSkinEffectFrameRate(
                 "默认内置皮肤序列帧动画必须以 120 FPS 播放");
     return ok;
 }
+/// @brief 验证 RM 的真实入口、独立头部和完整打击序列可加载。
+/// @param skinPath 仓库中 RM 皮肤入口。
+/// @param translationsRoot 与皮肤分离的公共翻译根。
+/// @return 资源路径、尺寸、配色及序列帧全部有效时返回 true。
+/// @note 只读仓库资源，不启动图形设备或保存个人配置。
+bool verifyRmSkin(const std::filesystem::path& skinPath,
+                  const std::filesystem::path& translationsRoot)
+{
+    auto& manager = MMM::Config::SkinManager::instance();
+    // 使用生产加载器解析 Lua，覆盖嵌套资源路径及默认资源复用。
+    if ( !check(manager.loadSkin(MMM::Config::pathToUtf8(skinPath),
+                                 translationsRoot),
+                "RM 皮肤必须成功加载") )
+        return false;
+    bool ok = check(manager.getData().themeName == "RM", "RM 显示名必须准确");
+    // 贴图自身携带色彩，额外的米黄乘色会破坏蓝键和绿色长条。
+    for ( const auto* key : { "note_tap",
+                              "note_head",
+                              "note_hold",
+                              "note_node",
+                              "note_flick_arrow" } ) {
+        const auto color = manager.getColor(key);
+        ok &= check(color.r == 1.0F && color.g == 1.0F && color.b == 1.0F &&
+                        color.a == 1.0F,
+                    "RM 正式物件必须保持原图色彩");
+    }
+    // 两张头部纹理分开加载但共享尺寸，防止切换物件类型时发生布局跳变。
+    for ( const auto* key : { "note.note", "note.holdhead" } ) {
+        std::uint32_t width = 0U, height = 0U;
+        ok &= check(readPngDimensions(manager.getAssetPath(key), width, height),
+                    "RM 头部必须是可读 PNG");
+        ok &= check(width == 256U && height == 112U, "RM 头部布局尺寸必须一致");
+    }
+    // 路径必须指向真实文件；独立头部不能意外别名到蓝色 Tap。
+    ok &= check(manager.getAssetPath("note.note") !=
+                    manager.getAssetPath("note.holdhead"),
+                "RM 长条头不能复用单键贴图");
+    for ( const auto& [key, path] : manager.getData().assetPaths ) {
+        std::error_code error;
+        ok &= check(std::filesystem::is_regular_file(path, error) && !error,
+                    "RM 资产引用必须落到真实文件");
+    }
+    // 原包两组连续序列长度不同，分别检查可避免错接到默认六帧特效。
+    for ( const auto* key : { "note.effect.note", "note.effect.flick" } ) {
+        const auto*       sequence = manager.getEffectSequence(key);
+        const std::size_t expected =
+            std::string_view(key) == "note.effect.note" ? 17U : 18U;
+        ok &= check(sequence && sequence->frames.size() == expected,
+                    "RM 原包帧序必须完整");
+        if ( !sequence ) continue;
+        // 校验落盘帧而非仅检查 Lua 的范围字符串，缺失末帧也应失败。
+        for ( const auto& frame : sequence->frames ) {
+            std::uint32_t width = 0U, height = 0U;
+            ok &= check(readPngDimensions(frame, width, height),
+                        "RM 特效帧必须是可读 PNG");
+        }
+    }
+    return ok;
+}
 }  // namespace
 
 /// @brief 皮肤亮暗主题绑定与旧配置兼容回归测试入口。
@@ -504,5 +563,10 @@ int main(int argc, char* argv[])
     ok &= verifyIvmSkin(MMM::Config::utf8ToPath(argv[2]),
                         MMM::Config::utf8ToPath(argv[4]),
                         translationsRoot);
+    // RM 与默认皮肤共同分发，从已传入的资源根定位，避免依赖运行目录。
+    ok &= verifyRmSkin(
+        MMM::Config::utf8ToPath(argv[4]).parent_path().parent_path() /
+            "rm/skin.lua",
+        translationsRoot);
     return ok ? 0 : 1;
 }

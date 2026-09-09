@@ -58,6 +58,8 @@ file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/translations")
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/mmm-default/resources/image")
 # IVM 皮肤使用独立嵌套资源验证完整目录树同步。
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/ivm/resources/image")
+# RM 使用独立目录，验证新内置皮肤不会混入 IVM 或默认皮肤。 嵌套层级保留资源相对路径，模拟实际贴图加载。
+file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/rm/resources/image")
 # 预建翻译目标以覆盖已有用户目录升级场景。
 file(MAKE_DIRECTORY "${_MMM_CONFIG_ROOT}/assets/translations")
 # 自定义皮肤目录用于验证默认同步不会执行破坏性清理。
@@ -72,8 +74,13 @@ file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/resources/image/marker.txt"
      "image-v1")
 # IVM 入口和独立纹理都必须随内置资源同步。
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/skin.lua" "ivm-v1")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。 RM 入口参与生产脚本的完整性检查，缺失时应在复制前报错。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm/skin.lua" "rm-v1")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/resources/image/note.txt"
      "ivm-image-v1")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。 标记文件内容区分两个内置皮肤，防止源目录误接而测试仍通过。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm/resources/image/note.txt"
+     "rm-image-v1")
 
 # 目标目录预置旧默认文件和用户扩展，覆盖与保留语义必须同时验证。 同名旧默认文件必须被源码版本覆盖。
 file(WRITE "${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua" "stale")
@@ -99,9 +106,16 @@ _mmm_assert_file_content(
   "image-v1" "默认皮肤嵌套资源同步")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/ivm/skin.lua"
                          "ivm-v1" "IVM 皮肤入口同步")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/rm/skin.lua" "rm-v1"
+                         "RM 皮肤入口同步")
 _mmm_assert_file_content(
   "${_MMM_CONFIG_ROOT}/assets/skins/ivm/resources/image/note.txt"
   "ivm-image-v1" "IVM 皮肤嵌套资源同步")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。
+_mmm_assert_file_content(
+  "${_MMM_CONFIG_ROOT}/assets/skins/rm/resources/image/note.txt" "rm-image-v1"
+  "RM 皮肤嵌套资源同步")
 
 # 用户额外语言与自定义皮肤不属于受管默认文件，必须原样保留。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/custom.lua"
@@ -118,6 +132,8 @@ file(WRITE "${_MMM_SOURCE_ROOT}/translations/en_us.lua" "en-v2-longer")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v2-longer")
 # IVM 内置入口也应随仓库版本正常增量更新。
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/skin.lua" "ivm-v2-longer")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。 同名入口升级不能要求用户手动删除已安装的 RM。 改变长度排除时间戳相同造成的缓存假阳性。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm/skin.lua" "rm-v2-longer")
 # 重复运行同一生产脚本验证增量同步幂等边界。
 _mmm_run_sync("${_MMM_SOURCE_ROOT}" "${_MMM_CONFIG_ROOT}")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua"
@@ -126,6 +142,10 @@ _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/mmm-default/skin.lua"
                          "skin-v2-longer" "增量默认皮肤同步")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/ivm/skin.lua"
                          "ivm-v2-longer" "增量 IVM 皮肤同步")
+# RM 使用同一增量复制契约，入口与嵌套资源都必须保留。
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/rm/skin.lua"
+                         "rm-v2-longer" "增量 RM 皮肤同步")
+# 新增 RM 后仍检查非皮肤文件，确保受管目录边界没有扩大。 这些哨兵是用户持久状态，不应被资源同步重新生成。
 # 第二次同步仍必须证明根目录用户状态没有被资源更新波及。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/user_config.json" "user-config"
                          "增量同步保留用户配置")
