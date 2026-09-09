@@ -160,6 +160,8 @@ local Skin = {
 		hit_effect = {
 			-- fixed 保留判定线中心的固定尺寸序列帧；也可设为 track_fill 填满单轨。
 			layout = "fixed",
+			-- 爆炸光只增加背景亮度；矩形判定反馈仍使用普通透明覆盖。
+			blend = { ["note.effect.flick"] = "additive" },
 		},
 		glow = {
 			passes = 6,

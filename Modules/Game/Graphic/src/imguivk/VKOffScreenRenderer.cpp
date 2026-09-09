@@ -8,6 +8,19 @@
 namespace MMM::Graphic
 {
 
+/// @brief 选择预先创建且布局兼容的主画布混合管线。
+/// @warning 录制热路径仅绑定句柄，不进行资源分配或 GPU 同步。
+void VKOffScreenRenderer::bindMainBlendPipeline(vk::CommandBuffer& cmdBuf,
+                                                bool               additive)
+{
+    // 两条管线使用相同描述符与推送常量布局，无需重复上传绘制状态。
+    const auto& pipeline =
+        additive ? m_additiveBrushRenderPipeline : m_mainBrushRenderPipeline;
+    cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                        pipeline->m_graphicsPipeline);
+}
+
+
 VKOffScreenRenderer::VKOffScreenRenderer() {}
 
 VKOffScreenRenderer::~VKOffScreenRenderer()
@@ -35,6 +48,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     const bool resourcesReady =
         m_device && m_framebuffer && m_offScreenRenderPass &&
         m_mainBrushRenderPipeline && m_mainBrushRenderPipeline->isValid() &&
+        m_additiveBrushRenderPipeline &&
+        m_additiveBrushRenderPipeline->isValid() &&
         frameIndex < m_vertexBuffers.size() &&
         frameIndex < m_indexBuffers.size() &&
         frameIndex < m_uniformBuffers.size() &&

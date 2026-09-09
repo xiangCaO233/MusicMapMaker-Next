@@ -3,6 +3,7 @@
 #include "audio/StereoGainEnvelope.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
+#include "logic/ecs/system/render/Batcher.h"
 
 #include <algorithm>
 #include <cmath>
@@ -438,6 +439,43 @@ bool testRestoreActiveHoldEffectsFromMiddle()
     return true;
 }
 
+/// @brief 验证同图集在透明覆盖、加法、透明覆盖之间切换时保持命令边界。
+/// @return 三个连续批次保留各自混合状态且重复设置不会产生空批次。
+/// @note 使用真实 Batcher 提交几何，不模拟渲染命令或依赖 GPU。
+bool testEffectBlendBatchBoundaries()
+{
+    MMM::Logic::RenderSnapshot  snapshot;
+    MMM::Logic::System::Batcher batcher(&snapshot);
+    using TextureID = MMM::Logic::TextureID;
+    // 两个纹理共享图集，原纹理切批规则会合并它们，必须由混合状态切分。
+    snapshot.uvMap[static_cast<uint32_t>(TextureID::Note)] = {
+        0, 0, 0.1F, 0.1F
+    };
+    snapshot.uvMap[1000] = { 0.2F, 0, 0.1F, 0.1F };
+    batcher.setTexture(TextureID::Note);
+    batcher.pushQuad(0, 10, 10, 10, { 1, 1, 1, 1 });
+    batcher.setAdditiveBlend(true);
+    batcher.setTexture(static_cast<TextureID>(1000));
+    batcher.pushQuad(10, 10, 10, 10, { 1, 1, 1, 0.5F });
+    // 同状态不应切分加法批次；恢复覆盖后同纹理仍需生成新命令。
+    batcher.setAdditiveBlend(true);
+    batcher.pushQuad(20, 10, 10, 10, { 1, 1, 1, 0.5F });
+    batcher.setAdditiveBlend(false);
+    batcher.pushQuad(30, 10, 10, 10, { 1, 1, 1, 1 });
+    batcher.flush();
+    if ( snapshot.cmds.size() != 3 || snapshot.cmds[0].additiveBlend ||
+         !snapshot.cmds[1].additiveBlend || snapshot.cmds[2].additiveBlend ||
+         snapshot.cmds[0].indexCount != 6 ||
+         snapshot.cmds[1].indexCount != 12 ||
+         snapshot.cmds[2].indexCount != 6 ||
+         snapshot.cmds[1].indexOffset != 6 ||
+         snapshot.cmds[2].indexOffset != 18 ) {
+        XERROR("Effect blend modes merged across atlas batches");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
@@ -450,7 +488,8 @@ int main()
     // 纯计算用例先执行，状态恢复用例最后执行，顺序不表示状态应跨场景传递。
     // 短路执行；只有退出零才能证明全部场景都已执行且通过。
     // 非零退出由首个失败场景的日志定位，不把尚未运行的后续场景算作成功。
-    return testStaticTrackPosition() && testFlickMovesAcrossChannels() &&
+    return testEffectBlendBatchBoundaries() && testStaticTrackPosition() &&
+                   testFlickMovesAcrossChannels() &&
                    testDraftTrackMappingAndStereo() &&
                    testDynamicDraftTrackMappingAndStereo() &&
                    testTrackSidesMatchChannels() &&

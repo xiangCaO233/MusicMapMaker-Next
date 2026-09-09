@@ -360,6 +360,24 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
             }
         }
 
+        // 混合规则只在加载时解析；序列缓存布尔值供渲染热路径直接读取。
+        if ( hitEffectOpt ) {
+            sol::optional<sol::table> blendOpt = hitEffectOpt.value()["blend"];
+            if ( blendOpt ) {
+                for ( auto& [key, sequence] : m_data.effectSequences ) {
+                    const auto mode =
+                        blendOpt.value()[key].get_or<std::string>("alpha");
+                    sequence.additiveBlend = mode == "additive";
+                    // 未声明或拼写错误的模式保持旧皮肤覆盖语义。
+                    if ( mode != "alpha" && mode != "additive" ) {
+                        XWARN("未知的特效混合模式 '{}': {}，已回退到 alpha",
+                              mode,
+                              key);
+                    }
+                }
+            }
+        }
+
         sol::optional<sol::table> glowOpt = effectsTable["glow"];
         if ( glowOpt ) {
             m_data.effects.glow.passes = glowOpt.value()["passes"].get_or(8);

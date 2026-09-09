@@ -20,7 +20,8 @@ namespace MMM::Graphic
 VKRenderPipeline::VKRenderPipeline(
     vk::Device& logicalDevice, VKShader& shader, VKRenderPass& renderPass,
     VKSwapchain& swapchain, bool is2DCanvas, int w, int h, bool additiveBlend,
-    bool blendEnable, vk::DescriptorSetLayout sharedLayout, bool useVertexInput)
+    bool blendEnable, vk::DescriptorSetLayout sharedLayout, bool useVertexInput,
+    bool alphaWeightedAdditive)
     : m_logicalDevice(logicalDevice)
 {
     if ( sharedLayout != VK_NULL_HANDLE ) {
@@ -174,7 +175,17 @@ VKRenderPipeline::VKRenderPipeline(
     vk::PipelineColorBlendAttachmentState pipelineColorBlendAttachmentState;
     pipelineColorBlendAttachmentState.setBlendEnable(blendEnable);
 
-    if ( additiveBlend ) {
+    if ( alphaWeightedAdditive ) {
+        // 直通 RGBA 贴图只在此乘一次 Alpha；目标颜色不衰减，暗边不会压黑背景。
+        // Alpha 保持目标值，避免发光层破坏后续离屏画布的透明合成。
+        pipelineColorBlendAttachmentState
+            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+            .setDstColorBlendFactor(vk::BlendFactor::eOne)
+            .setColorBlendOp(vk::BlendOp::eAdd)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eZero)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setAlphaBlendOp(vk::BlendOp::eAdd);
+    } else if ( additiveBlend ) {
         pipelineColorBlendAttachmentState
             .setSrcColorBlendFactor(vk::BlendFactor::eOne)
             .setDstColorBlendFactor(vk::BlendFactor::eOne)

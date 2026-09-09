@@ -395,6 +395,11 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
         }
     }
 
+    for ( const auto& [key, sequence] :
+          skinManager.getData().effectSequences ) {
+        ok &=
+            check(!sequence.additiveBlend, "IVM 未声明混合模式时必须保持覆盖");
+    }
     const auto      fontPath = skinManager.getFontPath("ascii");
     std::error_code fontError;
     ok &= check(fontPath.filename() == "LiberationSans-Regular.ttf" &&
@@ -426,6 +431,11 @@ bool verifyDefaultSkinEffectFrameRate(
                      "默认内置皮肤应成功加载");
     ok &= check(skinManager.getEffectBaseFps() == 120.0F,
                 "默认内置皮肤序列帧动画必须以 120 FPS 播放");
+    // 同一个图集可同时包含覆盖型判定反馈与加法型爆炸光。
+    const auto* note  = skinManager.getEffectSequence("note.effect.note");
+    const auto* flick = skinManager.getEffectSequence("note.effect.flick");
+    ok &= check(note && flick && !note->additiveBlend && flick->additiveBlend,
+                "默认皮肤只对爆炸光启用加法混合");
     return ok;
 }
 /// @brief 验证 RM 的真实入口、独立头部和完整打击序列可加载。
@@ -478,6 +488,7 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
         ok &= check(sequence && sequence->frames.size() == expected,
                     "RM 原包帧序必须完整");
         if ( !sequence ) continue;
+        ok &= check(sequence->additiveBlend, "RM 打击光应使用加法混合");
         // 校验落盘帧而非仅检查 Lua 的范围字符串，缺失末帧也应失败。
         for ( const auto& frame : sequence->frames ) {
             std::uint32_t width = 0U, height = 0U;

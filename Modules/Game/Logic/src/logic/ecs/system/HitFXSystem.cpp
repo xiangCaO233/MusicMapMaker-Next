@@ -584,6 +584,8 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
                                   fixedWidth,
                                   fixedHeight);
 
+        // 同图集中的覆盖与发光序列也要切批，模式不依赖帧的纹理 ID。
+        batcher.setAdditiveBlend(seq->additiveBlend);
         batcher.setTexture(static_cast<TextureID>(textureId));
         // 特效以纹理自身颜色显示，不叠加物件自定义颜色或音量可视化乘色。
         // 整轨模式必须完整拉伸；固定模式继续服从原有物件填充设置。
@@ -602,6 +604,8 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
 
     // 保证末尾同纹理图元形成完整命令，调用方随后可切换其他渲染职责。
     batcher.flush();
+    // 防止后续普通物件继承最后一个打击特效的加法状态。
+    batcher.setAdditiveBlend(false);
 }
 
 }  // namespace MMM::Logic::System

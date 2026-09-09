@@ -83,6 +83,9 @@ public:
     }
 
 protected:
+    /// @brief 在兼容布局的预建画笔管线之间切换混合规则。
+    /// @warning 每个绘制批次最多调用一次，不创建资源或等待 GPU。
+    void bindMainBlendPipeline(vk::CommandBuffer& cmdBuf, bool additive);
     /// @brief 画布尺寸
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };
@@ -392,6 +395,9 @@ private:
 
     // 离屏渲染流程
     std::unique_ptr<VKRenderPass> m_offScreenRenderPass{ nullptr };
+
+    /// @brief 非预乘打击特效使用的 Alpha 加权加法管线。
+    std::unique_ptr<VKRenderPipeline> m_additiveBrushRenderPipeline;
 
     // 画笔管线
     std::unique_ptr<VKRenderPipeline> m_mainBrushRenderPipeline{ nullptr };

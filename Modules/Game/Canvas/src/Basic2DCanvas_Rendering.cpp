@@ -420,7 +420,13 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
     Common::Render::CanvasScissor lastScissor;
 
+    bool additiveBlend = false;
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
+        // 图集纹理可共用描述符，但混合模式改变时必须切换兼容管线。
+        if ( additiveBlend != cmd.additiveBlend ) {
+            bindMainBlendPipeline(cmdBuf, cmd.additiveBlend);
+            additiveBlend = cmd.additiveBlend;
+        }
         vk::DescriptorSet actualTexture{};
 
         const bool isBackground =
@@ -464,6 +470,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         cmdBuf.drawIndexed(
             cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
+    // 恢复普通绘制，避免后续覆盖层继承发光状态。
+    if ( additiveBlend ) bindMainBlendPipeline(cmdBuf, false);
 }
 
 /// @brief 录制主画布发光层离屏绘制命令。

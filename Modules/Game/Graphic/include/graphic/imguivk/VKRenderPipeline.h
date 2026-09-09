@@ -24,13 +24,16 @@ public:
      * @param swapchain 交换链引用
      * @param w 视口宽度
      * @param h 视口高度
+     * @param alphaWeightedAdditive 加法源为非预乘贴图时乘一次 Alpha，并保留目标
+     * Alpha。
      */
     VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                      VKRenderPass& renderPass, VKSwapchain& swapchain,
                      bool is2DCanvas, int w = 0, int h = 0,
                      bool additiveBlend = false, bool blendEnable = true,
                      vk::DescriptorSetLayout sharedLayout   = VK_NULL_HANDLE,
-                     bool                    useVertexInput = true);
+                     bool                    useVertexInput = true,
+                     bool                    alphaWeightedAdditive = false);
 
     // 禁用拷贝和移动
     VKRenderPipeline(VKRenderPipeline&&) = delete;

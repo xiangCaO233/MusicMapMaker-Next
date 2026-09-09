@@ -88,6 +88,8 @@ struct SkinData {
     struct EffectSequence {
         std::vector<std::filesystem::path> frames;
         uint32_t startId{ 0 };  // 对应的起始 TextureID
+        /// @brief 非预乘贴图按 Alpha 加权后加亮背景，默认保持普通覆盖。
+        bool additiveBlend{ false };
     };
     std::unordered_map<std::string, EffectSequence> effectSequences;
 

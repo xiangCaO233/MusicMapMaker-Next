@@ -250,6 +250,21 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
                                            true,
                                            sharedLayout);
 
+    // 与主管线共用着色器、渲染流程和描述符布局，切换时保留顶点及常量绑定。
+    m_additiveBrushRenderPipeline =
+        std::make_unique<VKRenderPipeline>(logicalDevice,
+                                           *m_vkShaders[getShaderName("main")],
+                                           *m_offScreenRenderPass,
+                                           swapchain,
+                                           true,
+                                           0,
+                                           0,
+                                           false,
+                                           true,
+                                           sharedLayout,
+                                           true,
+                                           true);
+
     m_glowBrushRenderPipeline = std::make_unique<VKRenderPipeline>(
         logicalDevice,
         *m_vkShaders[getShaderName("main")],
@@ -792,6 +807,7 @@ void VKOffScreenRenderer::releaseResources()
         m_glowWidth = m_glowHeight = 0;
         m_scissorScaleX = m_scissorScaleY = 0.0f;
 
+        m_additiveBrushRenderPipeline.reset();
         m_mainBrushRenderPipeline.reset();
         m_glowBrushRenderPipeline.reset();
         m_blurRenderPipeline.reset();

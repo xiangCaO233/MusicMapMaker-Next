@@ -110,6 +110,16 @@ struct Batcher {
         // 即使无需切批，也必须更新逻辑纹理，否则后续 UV 会沿用旧条目。
     }
 
+    /// @brief 切换后续图元的混合规则，即使共用图集也必须切批。
+    /// @warning 热路径只提交已有几何，禁止加载资源或创建管线。
+    void setAdditiveBlend(bool additive)
+    {
+        if ( currentCmd.additiveBlend == additive ) return;
+        // 先提交旧状态，避免新的混合方式回溯影响同图集中的普通物件。
+        flush();
+        currentCmd.additiveBlend = additive;
+    }
+
     /// @brief 推送一个矩形 (y 为底边坐标，向上绘制)
     /// @param x 矩形左边界。
     /// @param y 矩形底边坐标，高度向负 Y 方向展开。

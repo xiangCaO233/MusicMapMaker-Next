@@ -55,6 +55,8 @@ struct CanvasDrawCmd {
     std::uint32_t vertexOffset{};
     std::uint32_t customTextureId{};
     CanvasScissor scissor{};
+    /// @brief 按源 Alpha 加权的加法混合；不同模式禁止合并批次。
+    bool additiveBlend{ false };
 };
 
 }  // namespace MMM::Common::Render

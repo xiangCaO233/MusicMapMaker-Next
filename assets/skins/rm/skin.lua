@@ -92,7 +92,11 @@ return {
     -- 固定判定点序列帧不会像轨道填充效果一样拉伸整幅爆闪。
     -- 光效帧只承担视觉表现，判定时机与音效事件继续由软件管理。
     effects = {
-        hit_effect = { layout = "fixed" },
+        -- 两组打击光使用加法叠加，贴图 RGB 已反预乘，渲染时只乘一次 Alpha。
+        hit_effect = {
+            layout = "fixed",
+            blend = { ["note.effect.note"] = "additive", ["note.effect.flick"] = "additive" },
+        },
         glow = { passes = 6, intensity = 0.5 },
     },
 
